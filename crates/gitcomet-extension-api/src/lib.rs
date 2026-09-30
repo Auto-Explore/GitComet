@@ -28,8 +28,8 @@ pub use contributions::{
     SettingsPageDescriptor, StatusItemDescriptor, ViewBuilder,
 };
 pub use host::{
-    DialogContent, DialogHandle, HostError, RepositoryHandle, StateObserver, StateSubscription,
-    WindowHost, WindowHostImpl,
+    DialogContent, DialogHandle, HostError, RepositoryHandle, RepositoryWatch, StateObserver,
+    StateSubscription, WindowHost, WindowHostImpl,
 };
 pub use id::{ContributionId, ExtensionId, IdError};
 pub use registry::{Registrar, RegistrationError, Registry};

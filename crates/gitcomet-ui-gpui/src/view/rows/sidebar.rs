@@ -2900,7 +2900,8 @@ impl DetailsPaneView {
         let ui_scale_percent = this.ui_scale_percent;
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let repo_id = repo.id;
-        let from = range_selection.from.clone();
+        // A merge-base comparison's file diffs start at the resolved base.
+        let from = range_selection.diff_from().clone();
         let to = range_selection.to.clone();
         let file_rows =
             this.cached_range_file_rows(repo_id, repo.history_state.range_files_rev, &files);

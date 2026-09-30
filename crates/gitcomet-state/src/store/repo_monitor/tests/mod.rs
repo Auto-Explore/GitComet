@@ -218,6 +218,14 @@ fn cache_key(rel: impl Into<PathBuf>, is_dir_hint: Option<bool>) -> IgnoreCacheK
 
 /// Test helper: classify an event and return just the coalesced change (dropping the
 /// `gitignore_changed` signal), matching the pre-`ClassifiedEvent` return shape these tests use.
+/// A worktree change the watcher attributes to exactly `paths`.
+fn worktree_change(paths: &[&str]) -> RepoExternalChange {
+    RepoExternalChange {
+        paths: crate::msg::ChangedPaths::known(paths.iter().map(PathBuf::from).collect()),
+        ..RepoExternalChange::worktree()
+    }
+}
+
 fn classify_change(
     workdir: &Path,
     git_dir: Option<&Path>,
@@ -297,6 +305,7 @@ fn merge_change_coalesces_to_both() {
             tags: false,
             verification_context: false,
             text_attributes: false,
+            paths: crate::msg::ChangedPaths::Unknown,
         }
     );
     assert_eq!(
@@ -308,6 +317,7 @@ fn merge_change_coalesces_to_both() {
             tags: false,
             verification_context: false,
             text_attributes: false,
+            paths: crate::msg::ChangedPaths::Unknown,
         }
     );
     assert_eq!(
@@ -353,7 +363,7 @@ fn classify_repo_change_distinguishes_gitdir_from_worktree() {
             &mut TestRules::default(),
             &event
         ),
-        Some(RepoExternalChange::Worktree)
+        Some(worktree_change(&["file.txt"]))
     );
 
     let event = notify::Event {
@@ -375,6 +385,7 @@ fn classify_repo_change_distinguishes_gitdir_from_worktree() {
             tags: false,
             verification_context: false,
             text_attributes: false,
+            paths: crate::msg::ChangedPaths::known(vec!["file.txt".into()]),
         })
     );
 }
@@ -437,7 +448,7 @@ fn classify_repo_change_ignoring_index_lock_does_not_drop_real_worktree_events()
     };
     assert_eq!(
         classify_change(&workdir, Some(&workdir.join(".git")), &mut rules, &event),
-        Some(RepoExternalChange::Worktree),
+        Some(worktree_change(&["file.txt"])),
         "ignoring index.lock should still classify real worktree changes"
     );
 }
@@ -530,7 +541,7 @@ fn access_events_do_not_trigger_refresh_loops() {
             &mut TestRules::default(),
             &event
         ),
-        Some(RepoExternalChange::Worktree)
+        Some(worktree_change(&["file.txt"]))
     );
 }
 
@@ -618,7 +629,7 @@ fn tracked_paths_are_not_treated_as_ignored() {
     };
     assert_eq!(
         classify_change(&workdir, git_dir.as_deref(), &mut rules, &tracked_event),
-        Some(RepoExternalChange::Worktree)
+        Some(worktree_change(&["tracked.tracked-ignore"]))
     );
 
     let ignored_event = notify::Event {

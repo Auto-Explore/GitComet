@@ -3582,6 +3582,8 @@ fn global_nav_enters_and_leaves_a_range_comparison() {
         to: Some(to.clone()),
         from_label: "base".into(),
         to_label: "tip".into(),
+        options: Default::default(),
+        base: None,
     };
 
     // Step 0: the history log. Step 1: a comparison (which clears the diff pane).
@@ -5644,7 +5646,7 @@ mod text_override {
                 &mut state,
                 Msg::RepoExternallyChanged {
                     repo_id: RepoId(1),
-                    change,
+                    change: change.clone(),
                 },
             );
             assert_eq!(

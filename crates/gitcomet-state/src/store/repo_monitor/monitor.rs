@@ -1,6 +1,7 @@
 //! Monitor orchestration: input reloads and coverage decisions meet at one flush.
 use super::native_watcher::WATCH_MODE;
 use super::*;
+use crate::msg::ChangedPaths;
 
 pub(super) const MAX_WORKTREE_WATCH_DIRS: usize = 4096;
 
@@ -19,6 +20,9 @@ pub(super) struct MonitorConfig {
     pub setup_passes: usize,
     pub dir_limit: usize,
     pub before_registration: Option<Box<dyn FnMut() + Send>>,
+    /// Set while a watch lease holds this repository: its changes are
+    /// delivered even when another repository is active.
+    pub leased: Arc<AtomicBool>,
     #[cfg(test)]
     pub native_events: Option<Arc<AtomicU64>>,
     #[cfg(test)]
@@ -34,6 +38,7 @@ impl Default for MonitorConfig {
             setup_passes: 3,
             dir_limit: MAX_WORKTREE_WATCH_DIRS,
             before_registration: None,
+            leased: Arc::default(),
             #[cfg(test)]
             native_events: None,
             #[cfg(test)]
@@ -297,7 +302,11 @@ pub(super) fn summarize(
         tags: false,
         verification_context: false,
         text_attributes: false,
+        paths: ChangedPaths::none(),
     };
+    // The worktree paths behind `change.worktree`; `None` once a change here
+    // cannot be pinned to paths (a rule or control file moved).
+    let mut worktree_paths: Option<Vec<PathBuf>> = Some(Vec::new());
     let structural = structural_event(event);
     for path in &event.paths {
         let class = snapshot.classify(path);
@@ -341,6 +350,7 @@ pub(super) fn summarize(
                 Ok(metadata) if !rules.is_ignored_rel(relative, Some(metadata.is_dir())) => {
                     effect.policy_dirty = true;
                     change.worktree = true;
+                    worktree_paths = None;
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                     effect.dir_removed.push(path.clone());
@@ -364,6 +374,7 @@ pub(super) fn summarize(
             PathClass::Control => {
                 effect.policy_dirty = true;
                 change.worktree = true;
+                worktree_paths = None;
             }
             PathClass::ControlEntry => {
                 effect.policy_dirty |= structural;
@@ -384,6 +395,8 @@ pub(super) fn summarize(
                     {
                         effect.policy_dirty = true;
                         change.worktree = true;
+                        // New ignore rules can reveal or hide any path.
+                        worktree_paths = None;
                     }
                     continue;
                 }
@@ -428,6 +441,9 @@ pub(super) fn summarize(
                     continue;
                 }
                 change.worktree = true;
+                if let Some(paths) = worktree_paths.as_mut() {
+                    paths.push(relative.to_path_buf());
+                }
             }
             _ => {}
         }
@@ -443,6 +459,10 @@ pub(super) fn summarize(
                 .push((path.clone(), class == PathClass::Worktree));
         }
     }
+    change.paths = match worktree_paths {
+        Some(paths) => ChangedPaths::known(paths),
+        None => ChangedPaths::Unknown,
+    };
     effect.change = (!change.is_empty()).then_some(change);
     effect
 }
@@ -486,10 +506,11 @@ pub(super) fn repo_monitor_thread(
     let mut index_dirty = false;
     let mut rebuild = None;
     let mut idle_at = Instant::now() + config.idle_tick;
+    let leased = Arc::clone(&config.leased);
     let flush = |change| {
         let active = active_repo_id.load(Ordering::Relaxed);
-        if active == repo_id.0 {
-            trace_repo_monitor_flush("flush", repo_id, change, active);
+        if active == repo_id.0 || leased.load(Ordering::Relaxed) {
+            trace_repo_monitor_flush("flush", repo_id, &change, active);
             msg_tx.send_repo_monitor_or_log(
                 Msg::RepoExternallyChanged { repo_id, change },
                 "repo monitor flush",
@@ -647,22 +668,16 @@ pub(super) fn repo_monitor_thread(
                 {
                     rebuild = Some("index-coverage");
                 }
+                // The index is not a worktree path: no paths are added.
                 due_change = Some(merge_change(
                     due_change.unwrap_or(RepoExternalChange {
-                        worktree: false,
-                        index: false,
-                        git_state: false,
-                        tags: false,
-                        verification_context: false,
-                        text_attributes: false,
+                        paths: ChangedPaths::none(),
+                        ..RepoExternalChange::default()
                     }),
                     RepoExternalChange {
-                        worktree: false,
                         index: true,
-                        git_state: false,
-                        tags: false,
-                        verification_context: false,
-                        text_attributes: false,
+                        paths: ChangedPaths::none(),
+                        ..RepoExternalChange::default()
                     },
                 ));
             }

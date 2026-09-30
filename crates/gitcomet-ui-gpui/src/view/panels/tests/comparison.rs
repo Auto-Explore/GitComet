@@ -87,6 +87,8 @@ fn draw_comparison(
                 to: Some(CommitId(sha(0).into())),
                 from_label: "base".into(),
                 to_label: "tip".into(),
+                options: Default::default(),
+                base: None,
             });
             repo.history_state.range_files = files.into_loadable();
 

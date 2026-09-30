@@ -99,6 +99,21 @@ pub type DialogContent = Box<dyn FnOnce(&mut Window, &mut App) -> AnyView>;
 /// Called after the window's state changes.
 pub type StateObserver = Rc<dyn Fn(&WindowHost, &mut App)>;
 
+/// Keeps a repository's file watcher running while it is not the active one
+/// (a view of a linked worktree, say); dropping it releases the watch.
+/// Watches count, so several views can hold one repository.
+#[must_use = "dropping the watch releases it"]
+pub struct RepositoryWatch {
+    _lease: Box<dyn std::any::Any>,
+}
+
+impl RepositoryWatch {
+    /// For hosts: wraps whatever keeps the watch alive.
+    pub fn new(lease: Box<dyn std::any::Any>) -> Self {
+        Self { _lease: lease }
+    }
+}
+
 /// Keeps a state observer registered; dropping it unregisters the observer.
 #[must_use = "dropping the subscription unregisters the observer"]
 pub struct StateSubscription {
@@ -134,6 +149,13 @@ pub trait WindowHostImpl {
     fn observe_state(&self, observer: StateObserver) -> Result<u64, HostError>;
 
     fn unobserve_state(&self, id: u64);
+
+    /// Watches `repository` until the returned value drops.
+    fn watch_repository(
+        &self,
+        repository: &RepositoryHandle,
+        cx: &App,
+    ) -> Result<RepositoryWatch, HostError>;
 
     /// Whether `repository` is still the repository it named when issued.
     fn is_current(&self, repository: &RepositoryHandle, cx: &App) -> bool;
@@ -217,6 +239,17 @@ impl WindowHost {
 
     pub fn dispatch(&self, msg: Msg, cx: &mut App) -> Result<(), HostError> {
         self.0.dispatch(msg, cx)
+    }
+
+    /// Keeps `repository`'s file watcher running (and its changes delivered)
+    /// while it is not the active repository, until the watch drops.
+    pub fn watch_repository(
+        &self,
+        repository: &RepositoryHandle,
+        cx: &App,
+    ) -> Result<RepositoryWatch, HostError> {
+        self.check(repository, cx)?;
+        self.0.watch_repository(repository, cx)
     }
 
     /// Calls `observer` after this window's state changes, coalesced to once

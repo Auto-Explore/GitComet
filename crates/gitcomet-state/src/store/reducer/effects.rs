@@ -13,10 +13,10 @@ use gitcomet_core::conflict_session::{
     ConflictResolverStrategy, ConflictSession, reconstruct_conflict_marker_sides,
 };
 use gitcomet_core::domain::{
-    Branch, Commit, CommitDetails, CommitFileChange, CommitId, CommitSignature, EMPTY_TREE_ID,
-    FileEntry, FileSource, FileStatusKind, LogCursor, LogPage, RecentCommitMessage, RefMetadata,
-    ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoStatus, StashEntry, Submodule, Tag,
-    UpstreamDivergence, Worktree, WorktreeDirtySummary,
+    Branch, Commit, CommitDetails, CommitId, CommitSignature, EMPTY_TREE_ID, FileEntry, FileSource,
+    FileStatusKind, LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote,
+    RemoteBranch, RemoteTag, RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence, Worktree,
+    WorktreeDirtySummary,
 };
 use gitcomet_core::error::Error;
 use gitcomet_core::merge::{MergeSource, OrderedSelection};
@@ -1122,6 +1122,29 @@ pub(super) fn compare_range(
     to_label: String,
     source: ComparisonSource,
 ) -> Vec<Effect> {
+    compare_range_with_options(
+        state,
+        repo_id,
+        from,
+        to,
+        from_label,
+        to_label,
+        Default::default(),
+        source,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn compare_range_with_options(
+    state: &mut AppState,
+    repo_id: RepoId,
+    from: CommitId,
+    to: Option<CommitId>,
+    from_label: String,
+    to_label: String,
+    options: gitcomet_core::services::ComparisonOptions,
+    source: ComparisonSource,
+) -> Vec<Effect> {
     let request = {
         let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
             return Vec::new();
@@ -1130,10 +1153,8 @@ pub(super) fn compare_range(
             repo_state.set_commit_multi_selection(CommitMultiSelection::default());
         }
         repo_state.set_range_selection(Some(RangeSelection {
-            from: from.clone(),
-            to: to.clone(),
-            from_label,
-            to_label,
+            options,
+            ..RangeSelection::new(from.clone(), to.clone(), from_label, to_label)
         }));
         repo_state.set_range_files(Loadable::Loading);
         repo_state.begin_range_files_load()
@@ -1144,6 +1165,7 @@ pub(super) fn compare_range(
         repo_id,
         from,
         to,
+        options,
         request,
     });
     effects
@@ -1222,7 +1244,7 @@ pub(super) fn range_files_loaded(
     from: CommitId,
     to: Option<CommitId>,
     request: u64,
-    result: std::result::Result<Vec<CommitFileChange>, Error>,
+    result: std::result::Result<gitcomet_core::services::Comparison, Error>,
 ) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
@@ -1251,7 +1273,18 @@ pub(super) fn range_files_loaded(
     }
 
     let next = match result {
-        Ok(files) => Loadable::Ready(Arc::new(files)),
+        Ok(comparison) => {
+            if let Some(range) = repo_state.history_state.range_selection.as_ref()
+                && range.base.as_ref() != Some(&comparison.base)
+            {
+                let range = RangeSelection {
+                    base: Some(comparison.base),
+                    ..range.clone()
+                };
+                repo_state.set_range_selection(Some(range));
+            }
+            Loadable::Ready(Arc::new(comparison.files))
+        }
         Err(e) => {
             push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
             Loadable::Error(e.to_string())
@@ -1264,10 +1297,17 @@ pub(super) fn range_files_loaded(
     if !std::mem::take(&mut repo_state.history_state.range_files_refresh_queued) {
         return Vec::new();
     }
+    let options = repo_state
+        .history_state
+        .range_selection
+        .as_ref()
+        .map(|range| range.options)
+        .unwrap_or_default();
     vec![Effect::LoadRangeFiles {
         repo_id,
         from,
         to,
+        options,
         request: repo_state.begin_range_files_load(),
     }]
 }

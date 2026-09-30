@@ -170,7 +170,7 @@ fn worktree_only_change_updates_counts_and_failed_lane_never_uses_combined_fallb
         &mut state,
         Msg::RepoExternallyChanged {
             repo_id: id,
-            change,
+            change: change.clone(),
         },
     );
     no_stats(&requested);

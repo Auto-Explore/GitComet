@@ -143,7 +143,7 @@ pub(super) fn reload_repo(
 /// user is looking at the tree, and is deferred as `stale` otherwise.
 fn file_browser_refresh_for_external_change(
     repo_state: &mut crate::model::RepoState,
-    change: RepoExternalChange,
+    change: &RepoExternalChange,
     sidebar_shows_this_files_tree: bool,
 ) -> Option<Effect> {
     if !(change.worktree || change.index || change.git_state) {
@@ -191,11 +191,14 @@ pub(super) fn repo_externally_changed(
     // Outside the index/worktree chain below: an event that touched both must
     // still tell the view to look at the open file.
     if change.worktree {
-        repo_state.bump_worktree_change_rev();
+        repo_state.record_worktree_change(change.paths.clone());
     }
 
-    let file_browser_effect =
-        file_browser_refresh_for_external_change(repo_state, change, sidebar_shows_this_files_tree);
+    let file_browser_effect = file_browser_refresh_for_external_change(
+        repo_state,
+        &change,
+        sidebar_shows_this_files_tree,
+    );
 
     // Coalesce refreshes while a refresh is already in flight.
     let mut effects = if change.git_state {
@@ -315,12 +318,12 @@ pub(super) fn repo_externally_changed(
     // results are dropped if the selection no longer matches (see
     // `range_files_loaded`), so a late reply after the user re-selects is safe.
     if (change.git_state || change.index || change.worktree)
-        && let Some(from) = repo_state
+        && let Some((from, options)) = repo_state
             .history_state
             .range_selection
             .as_ref()
             .filter(|range| range.to.is_none())
-            .map(|range| range.from.clone())
+            .map(|range| (range.from.clone(), range.options))
         // A refresh means two full-tree `git diff` calls, so a debounced save
         // storm must not stack them up. One in flight absorbs the rest and is
         // re-run once when it lands, the same coalescing the status and tag
@@ -333,6 +336,7 @@ pub(super) fn repo_externally_changed(
             repo_id,
             from,
             to: None,
+            options,
             request,
         });
     }

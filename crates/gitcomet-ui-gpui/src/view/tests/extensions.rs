@@ -514,3 +514,36 @@ fn state_observers_are_notified_once_per_update_cycle(cx: &mut gpui::TestAppCont
     cx.run_until_parked();
     assert_eq!(calls.get(), 2, "a dropped subscription is not called");
 }
+
+#[gpui::test]
+fn repository_watches_lease_the_watcher_until_dropped(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    cx.update(install_example);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let store_for_assert = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    store_for_assert.dispatch(Msg::OpenRepo(PathBuf::from("/tmp/extension-watched-repo")));
+    wait_until("the repository to open", || {
+        !store_for_assert.snapshot().repos.is_empty()
+    });
+    sync_view_snapshot(cx, &view);
+    let (host, repository) = cx.update(|_window, app| {
+        let host = view.read(app).extension_window.as_ref().unwrap().host();
+        let repository = host
+            .active_repository(app)
+            .unwrap()
+            .expect("an open repository");
+        (host, repository)
+    });
+
+    let watch = cx.update(|_window, app| host.watch_repository(&repository, app).unwrap());
+    let repo_id = repository.repo_id();
+    wait_until("the lease to count", || {
+        store_for_assert.snapshot().watch_leases.get(&repo_id) == Some(&1)
+    });
+    drop(watch);
+    wait_until("the lease to be released", || {
+        store_for_assert.snapshot().watch_leases.is_empty()
+    });
+}

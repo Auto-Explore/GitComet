@@ -194,3 +194,42 @@ Test inventory (`inventory.py compare`, the CI workspace selection): all
 7,688 tests from Milestone 2 map unchanged; 19 are new (session namespaces,
 extension hosting, the extension settings page and shortcut labels, and one
 shared render guard). The close-guard move changed no test paths.
+
+## Milestone 4: comparison services
+
+- `CommitFileChange`, `SubmoduleInnerChange`, and the `DiffTarget` variants
+  are non-exhaustive and built through constructors (the migration was
+  compiler-driven), so the fields below were added without touching callers.
+- Changes carry rename/copy sources, blob ids, and modes. Commit and range
+  targets carry the rename source (equality ignores it: it is derived from
+  the commit and path), and every loader reads the old side from it, so a
+  renamed file shows its edit, decoded by the source path's attributes,
+  instead of a whole-file addition. History's commit rows, range rows, file
+  navigation, and submodule ranges pass it through.
+- `GitRepository::compare_files` (direct or merge-base; untracked files
+  opt-in), `merge_base`, and `is_ancestor` have defaults that delegate where
+  they can and return `Unsupported` where an option cannot be honored.
+  `repo/comparison.rs` holds the shared implementation, including the
+  commit-to-worktree helpers that used to live in submodule code. History's
+  range loads call `compare_files`; `Msg::CompareWithOptions` starts a
+  comparison with options, and a merge-base comparison's file diffs start at
+  the resolved base (`RangeSelection::diff_from`).
+- `Msg::FetchRefspecs` fetches exact refspecs through the command pipeline a
+  full fetch uses: in-flight tracking, auth prompt and replay, errors, and the
+  remote-branch refresh.
+- `HistoryRefFilter` (names, prefixes, globs) is part of the immutable
+  `RepositoryOptions` a repository opens with; the default excludes nothing.
+  The gix backend applies it where every all-branches reader collects tips
+  (pages, authors, index, snapshots, and their caches). `ConfiguredBackend`
+  and `AppLaunch::repository_options` let a product set it; a backend that
+  cannot honor an option refuses to open.
+- Watcher changes carry `ChangedPaths`: the worktree paths behind them, up to
+  `MAX_CHANGED_PATHS`, or `Unknown` past the bound, on rescans and ignore-rule
+  or control-file changes, and for changes not from the watcher.
+  `RepoState::worktree_paths_changed_since` answers exactly one change back
+  and `Unknown` beyond, so a truncated or missed list is never taken as
+  complete.
+- `AppStore::watch_repository` returns a counted `WatchLease` that keeps a
+  non-active repository's watcher running and delivering until dropped;
+  extensions get it as `WindowHost::watch_repository`. Leases never keep the
+  store alive and leave with their repository.

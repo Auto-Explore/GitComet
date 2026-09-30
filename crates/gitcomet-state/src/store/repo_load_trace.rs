@@ -114,7 +114,7 @@ pub(super) fn msg_repo_id(msg: &Msg) -> Option<RepoId> {
 
 pub(super) fn msg_external_change(msg: &Msg) -> Option<crate::msg::RepoExternalChange> {
     match msg {
-        Msg::RepoExternallyChanged { change, .. } => Some(*change),
+        Msg::RepoExternallyChanged { change, .. } => Some(change.clone()),
         _ => None,
     }
 }

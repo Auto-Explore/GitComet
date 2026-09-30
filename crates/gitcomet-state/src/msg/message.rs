@@ -293,6 +293,14 @@ pub enum Msg {
     RepoActivated {
         repo_id: RepoId,
     },
+    /// A [`WatchLease`](crate::store::WatchLease) was taken or dropped. Sent
+    /// by the lease itself; not meant for dispatch by hand.
+    AcquireWatchLease {
+        repo_id: RepoId,
+    },
+    ReleaseWatchLease {
+        repo_id: RepoId,
+    },
     RepoExternallyChanged {
         repo_id: RepoId,
         change: RepoExternalChange,
@@ -349,6 +357,16 @@ pub enum Msg {
         repo_id: RepoId,
         from: CommitId,
         from_label: String,
+    },
+    /// A comparison with explicit options (a merge-base comparison, or one
+    /// that lists untracked files). `to: None` is the working tree.
+    CompareWithOptions {
+        repo_id: RepoId,
+        from: CommitId,
+        to: Option<CommitId>,
+        options: gitcomet_core::services::ComparisonOptions,
+        from_label: String,
+        to_label: String,
     },
     /// Clear an active range comparison, returning to single/empty selection.
     ClearComparison {
@@ -1396,7 +1414,7 @@ pub enum InternalMsg {
         to: Option<CommitId>,
         /// The `Effect::LoadRangeFiles` request this answers.
         request: u64,
-        result: Result<Vec<CommitFileChange>, Error>,
+        result: Result<gitcomet_core::services::Comparison, Error>,
     },
     SquashMessagePreviewLoaded {
         repo_id: RepoId,

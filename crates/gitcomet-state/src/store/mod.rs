@@ -258,38 +258,45 @@ impl WorkerLoopContext<'_> {
             self.thread_msg_tx.is_alive(),
         );
 
-        // Keep filesystem monitoring scoped to the active repository only, to minimize
-        // OS watcher load in large multi-repo sessions.
-        let (active_repo, active_workdir) = {
+        // Keep filesystem monitoring scoped to the active repository, plus any
+        // a watch lease holds, to minimize OS watcher load in large multi-repo
+        // sessions.
+        let (active_repo, watched): (Option<RepoId>, Vec<(RepoId, std::path::PathBuf, bool)>) = {
             let state = self.thread_state.read().unwrap_or_else(|e| e.into_inner());
-            let active_repo = state.active_repo;
-            let active_workdir = active_repo.and_then(|repo_id| {
-                state
-                    .repos
-                    .iter()
-                    .find(|r| r.id == repo_id)
-                    .map(|r| r.spec.workdir.clone())
-            });
-            (active_repo, active_workdir)
+            let watched = state
+                .repos
+                .iter()
+                .filter(|repo| {
+                    state.active_repo == Some(repo.id) || state.watch_leases.contains_key(&repo.id)
+                })
+                .map(|repo| {
+                    let leased = state.watch_leases.contains_key(&repo.id);
+                    (repo.id, repo.spec.workdir.clone(), leased)
+                })
+                .collect();
+            (state.active_repo, watched)
         };
 
         for repo_id in self.repo_monitors.running_repo_ids() {
-            if Some(repo_id) != active_repo {
+            if !watched
+                .iter()
+                .any(|(watched_id, _, _)| *watched_id == repo_id)
+            {
                 self.repo_monitors.stop(repo_id);
             }
         }
 
-        if let Some(repo_id) = active_repo
-            && let Some(workdir) = active_workdir
-            && repos.contains_key(&repo_id)
-        {
-            self.repo_monitors.start(
-                repo_id,
-                workdir,
-                self.thread_msg_tx.clone(),
-                Arc::clone(self.active_repo_id),
-                Arc::clone(self.backend),
-            );
+        for (repo_id, workdir, leased) in watched {
+            if repos.contains_key(&repo_id) {
+                self.repo_monitors.start(
+                    repo_id,
+                    workdir,
+                    self.thread_msg_tx.clone(),
+                    Arc::clone(self.active_repo_id),
+                    Arc::clone(self.backend),
+                );
+                self.repo_monitors.set_leased(repo_id, leased);
+            }
         }
 
         for effect in effects {
@@ -332,6 +339,37 @@ impl WorkerLoopContext<'_> {
                 effect,
             );
         }
+    }
+}
+
+/// Keeps a repository's file watcher running while it is not the active
+/// repository. Leases count: the watcher stops when the last is dropped
+/// (unless the repository is active). A lease never keeps the store alive.
+#[must_use = "dropping the lease releases the watch"]
+pub struct WatchLease {
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+}
+
+impl WatchLease {
+    pub fn repo_id(&self) -> RepoId {
+        self.repo_id
+    }
+}
+
+impl Drop for WatchLease {
+    fn drop(&mut self) {
+        self.msg_tx.dispatch(Msg::ReleaseWatchLease {
+            repo_id: self.repo_id,
+        });
+    }
+}
+
+impl std::fmt::Debug for WatchLease {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WatchLease")
+            .field("repo_id", &self.repo_id)
+            .finish()
     }
 }
 
@@ -675,6 +713,16 @@ impl AppStore {
 
     pub fn dispatch(&self, msg: Msg) {
         self.msg_tx.dispatch(msg);
+    }
+
+    /// Watches `repo_id` for external changes until the lease is dropped. A
+    /// repository closed meanwhile simply stops counting the lease.
+    pub fn watch_repository(&self, repo_id: RepoId) -> WatchLease {
+        self.msg_tx.dispatch(Msg::AcquireWatchLease { repo_id });
+        WatchLease {
+            msg_tx: self.msg_tx.clone(),
+            repo_id,
+        }
     }
 
     pub fn snapshot(&self) -> Arc<AppState> {

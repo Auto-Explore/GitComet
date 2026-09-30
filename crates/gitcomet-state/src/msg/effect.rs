@@ -199,6 +199,7 @@ pub enum Effect {
         from: CommitId,
         /// `None` lists files between `from` and the working tree.
         to: Option<CommitId>,
+        options: gitcomet_core::services::ComparisonOptions,
         /// Echoed back on the reply so a completion that lost a race against a
         /// newer load can be dropped. See `HistoryState::range_files_request`.
         request: u64,

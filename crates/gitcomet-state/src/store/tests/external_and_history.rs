@@ -4399,7 +4399,7 @@ fn external_worktree_change_bumps_worktree_change_rev() {
             &mut state,
             Msg::RepoExternallyChanged {
                 repo_id: RepoId(1),
-                change,
+                change: change.clone(),
             },
         );
         assert_eq!(
@@ -4566,4 +4566,136 @@ fn repo_command_finished_bumps_local_worktree_write_rev_only_for_checkout_writer
     assert!(!state.repos[0].git_operation_in_flight());
     assert_eq!(state.repos[0].worktree_pull_in_flight, 0);
     assert_eq!(rev(&state), before + 1);
+}
+
+#[test]
+fn watcher_paths_are_readable_one_change_back_and_unknown_beyond() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    let seen = state.repos[0].worktree_change_rev;
+    let paths = crate::msg::ChangedPaths::known(vec!["src/lib.rs".into()]);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: RepoExternalChange {
+                paths: paths.clone(),
+                ..RepoExternalChange::worktree()
+            },
+        },
+    );
+    let repo = &state.repos[0];
+    assert_eq!(repo.worktree_paths_changed_since(seen), paths);
+    assert_eq!(
+        repo.worktree_paths_changed_since(repo.worktree_change_rev),
+        crate::msg::ChangedPaths::none()
+    );
+
+    // A change without paths (window activation) is unknown, and so is
+    // anything a consumer missed two changes back.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: RepoExternalChange::worktree(),
+        },
+    );
+    assert_eq!(
+        state.repos[0].worktree_paths_changed_since(seen),
+        crate::msg::ChangedPaths::Unknown
+    );
+}
+
+#[test]
+fn a_merge_base_comparison_loads_with_its_options_and_diffs_from_the_base() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    let (main, feature, fork) = (
+        CommitId("main".into()),
+        CommitId("feature".into()),
+        CommitId("fork".into()),
+    );
+    let options = gitcomet_core::services::ComparisonOptions::merge_base();
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CompareWithOptions {
+            repo_id,
+            from: main.clone(),
+            to: Some(feature.clone()),
+            options,
+            from_label: "main".into(),
+            to_label: "feature".into(),
+        },
+    );
+    let request = effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::LoadRangeFiles {
+                options: sent,
+                request,
+                ..
+            } => {
+                assert_eq!(*sent, options);
+                Some(*request)
+            }
+            _ => None,
+        })
+        .expect("the comparison loads its files");
+    let range = state.repos[0]
+        .history_state
+        .range_selection
+        .clone()
+        .unwrap();
+    assert_eq!(
+        range.diff_from(),
+        &main,
+        "until loaded, diffs start at from"
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
+            repo_id,
+            from: main.clone(),
+            to: Some(feature),
+            request,
+            result: Ok(gitcomet_core::services::Comparison::new(
+                fork.clone(),
+                Vec::new(),
+            )),
+        }),
+    );
+    let range = state.repos[0]
+        .history_state
+        .range_selection
+        .clone()
+        .unwrap();
+    assert_eq!(range.base, Some(fork.clone()));
+    assert_eq!(range.diff_from(), &fork);
 }

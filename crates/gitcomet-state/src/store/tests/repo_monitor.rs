@@ -478,3 +478,141 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
         .recv_timeout(std::time::Duration::from_secs(1))
         .expect("test monitor thread should exit after release");
 }
+
+/// Leases count per repository, drop with it when it closes, and ignore
+/// repositories that are not open.
+#[test]
+fn watch_leases_count_and_leave_with_their_repository() {
+    let mut repos: FxHashMap<RepoId, std::sync::Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = std::sync::atomic::AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    repos.insert(repo_id, std::sync::Arc::new(DummyRepo::new("/tmp/leased")));
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/leased"),
+        },
+    ));
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AcquireWatchLease { repo_id },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AcquireWatchLease { repo_id },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AcquireWatchLease { repo_id: RepoId(9) },
+    );
+    assert_eq!(state.watch_leases.get(&repo_id), Some(&2));
+    assert!(!state.watch_leases.contains_key(&RepoId(9)));
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ReleaseWatchLease { repo_id },
+    );
+    assert_eq!(state.watch_leases.get(&repo_id), Some(&1));
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseRepo { repo_id },
+    );
+    assert!(
+        state.watch_leases.is_empty(),
+        "a closed repository's leases go"
+    );
+    // The outstanding lease's release is then a no-op.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ReleaseWatchLease { repo_id },
+    );
+    assert!(state.watch_leases.is_empty());
+}
+
+/// A leased repository keeps its monitor while another is active; the
+/// monitor stops once the lease is gone.
+#[test]
+fn a_watch_lease_keeps_a_background_repositorys_monitor_running() {
+    let active = RepoId(1);
+    let leased = RepoId(2);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut open_repos = Vec::new();
+    for repo_id in [active, leased] {
+        let workdir = dir.path().join(format!("repo-{}", repo_id.0));
+        std::fs::create_dir_all(&workdir).unwrap();
+        let mut repo = RepoState::new_opening(repo_id, RepoSpec { workdir });
+        repo.set_open(Loadable::Ready(()));
+        open_repos.push(repo);
+    }
+    let state_with = |leases: &[(RepoId, u32)]| AppState {
+        repos: open_repos.clone(),
+        active_repo: Some(active),
+        watch_leases: std::sync::Arc::new(leases.iter().copied().collect()),
+        ..AppState::test_default()
+    };
+    let thread_state =
+        std::sync::Arc::new(std::sync::RwLock::new(std::sync::Arc::new(state_with(&[
+            (leased, 1),
+        ]))));
+    let active_repo_id = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(active.0));
+    let (event_tx, _event_rx) = smol::channel::bounded(8);
+    let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
+    let thread_msg_tx =
+        super::super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
+    let executor = TaskExecutor::new(1);
+    let repo_load_executor = TaskExecutor::new(1);
+    let metadata_executor = TaskExecutor::new(1);
+    let session_persist_executor = TaskExecutor::new(1);
+    let backend: std::sync::Arc<dyn GitBackend> = std::sync::Arc::new(FailingBackend);
+    let mut repos: FxHashMap<RepoId, std::sync::Arc<dyn GitRepository>> = FxHashMap::default();
+    for repo in &open_repos {
+        repos.insert(
+            repo.id,
+            std::sync::Arc::new(DummyRepo::new(repo.spec.workdir.to_str().unwrap())),
+        );
+    }
+    let mut repo_task_tokens: FxHashMap<RepoId, RepoTaskToken> = FxHashMap::default();
+    let mut repo_monitors = monitor_impl::RepoMonitorManager::new();
+
+    let mut handle = |repo_monitors: &mut monitor_impl::RepoMonitorManager| {
+        super::super::WorkerLoopContext {
+            thread_state: &thread_state,
+            active_repo_id: &active_repo_id,
+            event_tx: &event_tx,
+            repo_monitors,
+            repo_task_tokens: &mut repo_task_tokens,
+            thread_msg_tx: &thread_msg_tx,
+            executor: &executor,
+            repo_load_executor: &repo_load_executor,
+            metadata_executor: &metadata_executor,
+            signature_executor: &metadata_executor,
+            session_persist_executor: &session_persist_executor,
+            backend: &backend,
+        }
+        .handle_effects(&repos, std::iter::empty::<Effect>());
+    };
+    handle(&mut repo_monitors);
+    let mut running = repo_monitors.running_repo_ids();
+    running.sort_by_key(|repo_id| repo_id.0);
+    assert_eq!(running, vec![active, leased]);
+
+    *thread_state.write().unwrap() = std::sync::Arc::new(state_with(&[]));
+    handle(&mut repo_monitors);
+    assert_eq!(repo_monitors.running_repo_ids(), vec![active]);
+    repo_monitors.stop_all();
+}

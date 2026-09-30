@@ -63,6 +63,8 @@ fn fixture_with_count(selected: &[usize], count: u32) -> (RepoState, Vec<Commit>
         to: Some(commits[300].id.clone()),
         from_label: "base".into(),
         to_label: "tip".into(),
+        options: Default::default(),
+        base: None,
     });
     (repo, commits)
 }

@@ -239,7 +239,7 @@ pub(super) fn record_stop_send_failure(repo_id: RepoId, context: &'static str) {
     send_stop_or_log(&tx, repo_id, context);
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct DebouncedChange {
     pending: Option<RepoExternalChange>,
     first_event_at: Option<Instant>,
@@ -264,7 +264,10 @@ impl DebouncedChange {
     }
 
     fn push(&mut self, change: RepoExternalChange, now: Instant) -> Option<RepoExternalChange> {
-        self.pending = Some(merge_change(self.pending.unwrap_or(change), change));
+        self.pending = Some(match self.pending.take() {
+            Some(pending) => merge_change(pending, change),
+            None => change,
+        });
         self.first_event_at.get_or_insert(now);
         self.last_event_at = Some(now);
         self.take_if_max_delay_elapsed(now)
@@ -362,6 +365,8 @@ impl RepoMonitorManager {
         let monitor_tx_for_notify = monitor_tx.clone();
         let monitor_enabled = Arc::new(AtomicBool::new(true));
         let monitor_enabled_for_thread = Arc::clone(&monitor_enabled);
+        let config = MonitorConfig::default();
+        let leased = Arc::clone(&config.leased);
         let join = thread::spawn(move || {
             repo_monitor_thread(
                 repo_id,
@@ -372,14 +377,23 @@ impl RepoMonitorManager {
                 active_repo_id,
                 monitor_enabled_for_thread,
                 backend,
-                MonitorConfig::default(),
+                config,
             )
         });
         entry.insert(RepoMonitorHandle {
             msg_tx: monitor_tx,
             join,
             monitor_enabled,
+            leased,
         });
+    }
+
+    /// Whether a watch lease holds `repo_id`, so its changes are delivered
+    /// while another repository is active.
+    pub(super) fn set_leased(&self, repo_id: RepoId, leased: bool) {
+        if let Some(handle) = self.handles.get(&repo_id) {
+            handle.leased.store(leased, Ordering::Relaxed);
+        }
     }
 
     #[cfg(test)]
@@ -402,6 +416,7 @@ impl RepoMonitorManager {
                 msg_tx: monitor_tx,
                 join,
                 monitor_enabled: Arc::clone(&monitor_enabled),
+                leased: Arc::default(),
             },
         );
         monitor_enabled
@@ -412,6 +427,7 @@ struct RepoMonitorHandle {
     msg_tx: mpsc::Sender<MonitorMsg>,
     join: thread::JoinHandle<()>,
     monitor_enabled: Arc<AtomicBool>,
+    leased: Arc<AtomicBool>,
 }
 
 fn stop_monitor_handle(repo_id: RepoId, handle: RepoMonitorHandle, context: &'static str) {
@@ -485,7 +501,7 @@ fn recovery_recheck_due(last_attempt: Option<Instant>, now: Instant, interval: D
 fn trace_repo_monitor_flush(
     source: &'static str,
     repo_id: RepoId,
-    change: RepoExternalChange,
+    change: &RepoExternalChange,
     active_repo: u64,
 ) {
     repo_load_trace::trace!(
@@ -534,6 +550,7 @@ fn merge_change(a: RepoExternalChange, b: RepoExternalChange) -> RepoExternalCha
         tags: a.tags || b.tags,
         verification_context: a.verification_context || b.verification_context,
         text_attributes: a.text_attributes || b.text_attributes,
+        paths: a.paths.merge(&b.paths),
     }
 }
 

@@ -729,6 +729,10 @@ pub struct AppState {
     pub file_browser_settings: FileBrowserSettings,
     pub sidebar_mode: SidebarMode,
     pub default_tag_type: DefaultTagType,
+    /// Outstanding [`WatchLease`](crate::store::WatchLease)s per open
+    /// repository. A leased repository keeps its file watcher running while
+    /// it is not the active one (a hosted view of a linked worktree, say).
+    pub watch_leases: Arc<FxHashMap<RepoId, u32>>,
 }
 
 impl AppState {
@@ -1279,6 +1283,30 @@ pub struct RangeSelection {
     pub to: Option<CommitId>,
     pub from_label: String,
     pub to_label: String,
+    /// How the comparison measures; direct unless asked otherwise.
+    pub options: gitcomet_core::services::ComparisonOptions,
+    /// The commit the loaded list was measured from: the merge base of a
+    /// merge-base comparison. `None` until the list loads.
+    pub base: Option<CommitId>,
+}
+
+impl RangeSelection {
+    pub fn new(from: CommitId, to: Option<CommitId>, from_label: String, to_label: String) -> Self {
+        Self {
+            from,
+            to,
+            from_label,
+            to_label,
+            options: Default::default(),
+            base: None,
+        }
+    }
+
+    /// Where a file's diff in this comparison starts: the resolved base once
+    /// known, else `from`.
+    pub fn diff_from(&self) -> &CommitId {
+        self.base.as_ref().unwrap_or(&self.from)
+    }
 }
 
 /// Backend-built default message for the squash confirmation prompt.
@@ -1823,9 +1851,11 @@ pub struct RepoState {
     pub open_rev: u64,
     pub ops_rev: u64,
     /// Bumped when the watcher (or the window-focus full refresh) reports a
-    /// working-tree write. The view stats the open file when this moves; the
-    /// watcher itself carries no paths.
+    /// working-tree write. The view stats the open file when this moves.
     pub worktree_change_rev: u64,
+    /// The worktree paths of the change that set `worktree_change_rev`; see
+    /// [`RepoState::worktree_paths_changed_since`].
+    pub worktree_changed_paths: crate::msg::ChangedPaths,
     /// Bumped when a GitComet-run git command that may have rewritten
     /// worktree files completes. Not `ops_rev`: that one also moves when a
     /// command *starts*, which would spend the signal before the disk changed.
@@ -1935,6 +1965,7 @@ impl RepoState {
             open_rev: 0,
             ops_rev: 0,
             worktree_change_rev: 0,
+            worktree_changed_paths: crate::msg::ChangedPaths::Unknown,
             local_worktree_write_rev: 0,
             last_active_at: None,
             feedback: RepoFeedbackState::default(),
@@ -2941,8 +2972,24 @@ impl RepoState {
         self.ops_rev = self.ops_rev.wrapping_add(1);
     }
 
-    pub(crate) fn bump_worktree_change_rev(&mut self) {
+    pub(crate) fn record_worktree_change(&mut self, paths: crate::msg::ChangedPaths) {
         self.worktree_change_rev = self.worktree_change_rev.wrapping_add(1);
+        self.worktree_changed_paths = paths;
+    }
+
+    /// Which worktree paths changed after `seen_rev`, for a consumer that
+    /// last looked at `worktree_change_rev == seen_rev`. Exact only one
+    /// change back; a consumer that missed more than that gets
+    /// [`ChangedPaths::Unknown`](crate::msg::ChangedPaths::Unknown) and must
+    /// refresh broadly.
+    pub fn worktree_paths_changed_since(&self, seen_rev: u64) -> crate::msg::ChangedPaths {
+        if seen_rev == self.worktree_change_rev {
+            crate::msg::ChangedPaths::none()
+        } else if seen_rev.wrapping_add(1) == self.worktree_change_rev {
+            self.worktree_changed_paths.clone()
+        } else {
+            crate::msg::ChangedPaths::Unknown
+        }
     }
 
     pub(crate) fn bump_local_worktree_write_rev(&mut self) {

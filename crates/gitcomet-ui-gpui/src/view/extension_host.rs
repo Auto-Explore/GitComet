@@ -330,6 +330,17 @@ impl WindowHostImpl for HostWindow {
         Ok(id)
     }
 
+    fn watch_repository(
+        &self,
+        repository: &RepositoryHandle,
+        _cx: &App,
+    ) -> Result<gitcomet_extension_api::RepositoryWatch, HostError> {
+        let store = self.store.upgrade().ok_or(HostError::WindowClosed)?;
+        Ok(gitcomet_extension_api::RepositoryWatch::new(Box::new(
+            store.watch_repository(repository.repo_id()),
+        )))
+    }
+
     fn unobserve_state(&self, id: u64) {
         self.observers
             .observers

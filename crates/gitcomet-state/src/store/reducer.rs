@@ -244,6 +244,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::LoadMoreHistory { .. }
             | Msg::SelectCommit { .. }
             | Msg::CompareCommitRange { .. }
+            | Msg::CompareWithOptions { .. }
             | Msg::CompareWithMarked { .. }
             | Msg::CompareWithWorkingTree { .. }
             | Msg::SelectDiff { .. }
@@ -938,6 +939,16 @@ fn finalize_reduced_state(state: &mut AppState, nav_push: Option<bool>) {
     for repo in &mut state.repos {
         repo.prepare_history_squash_plan();
     }
+    // A closed repository's leases go with it; releasing them later is a
+    // no-op. Free when nothing is leased.
+    if state
+        .watch_leases
+        .keys()
+        .any(|repo_id| !state.repos.iter().any(|repo| repo.id == *repo_id))
+    {
+        let open: Vec<RepoId> = state.repos.iter().map(|repo| repo.id).collect();
+        Arc::make_mut(&mut state.watch_leases).retain(|repo_id, _| open.contains(repo_id));
+    }
 
     if let Some(push) = nav_push {
         reconcile_active_nav_history(state, push);
@@ -958,6 +969,7 @@ fn is_view_navigation(msg: &Msg) -> bool {
             // history selection; it just is not a commit.
             | Msg::SelectWorktreeUncommitted { .. }
             | Msg::CompareCommitRange { .. }
+            | Msg::CompareWithOptions { .. }
             | Msg::CompareWithMarked { .. }
             | Msg::CompareWithWorkingTree { .. }
             | Msg::OpenFileContent { .. }
@@ -1030,6 +1042,27 @@ fn reduce_inner(
             open_repos,
             active_repo,
         } => repo_management::restore_session(repos, id_alloc, state, open_repos, active_repo),
+        Msg::AcquireWatchLease { repo_id } => {
+            // Only an open repository can be watched; a lease on a closed
+            // one is a no-op, and so is its release.
+            if state.repos.iter().any(|repo| repo.id == repo_id) {
+                *Arc::make_mut(&mut state.watch_leases)
+                    .entry(repo_id)
+                    .or_default() += 1;
+            }
+            Vec::new()
+        }
+        Msg::ReleaseWatchLease { repo_id } => {
+            if let Some(count) = state.watch_leases.get(&repo_id).copied() {
+                let leases = Arc::make_mut(&mut state.watch_leases);
+                if count <= 1 {
+                    leases.remove(&repo_id);
+                } else {
+                    leases.insert(repo_id, count - 1);
+                }
+            }
+            Vec::new()
+        }
         Msg::CloseRepo { repo_id } => repo_management::close_repo(repos, state, repo_id),
         Msg::MoveRepoOut { repo_id } => repo_management::move_repo_out(repos, state, repo_id),
         Msg::CloseRepos {
@@ -1326,6 +1359,23 @@ fn reduce_inner(
             None,
             from_label,
             "Working tree".to_string(),
+            effects::ComparisonSource::Explicit,
+        ),
+        Msg::CompareWithOptions {
+            repo_id,
+            from,
+            to,
+            options,
+            from_label,
+            to_label,
+        } => effects::compare_range_with_options(
+            state,
+            repo_id,
+            from,
+            to,
+            from_label,
+            to_label,
+            options,
             effects::ComparisonSource::Explicit,
         ),
         Msg::ClearComparison { repo_id } => effects::clear_comparison(state, repo_id),
@@ -3685,7 +3735,10 @@ mod comparison_tests {
                 from: CommitId("c9".into()),
                 to: Some(CommitId("c3".into())),
                 request,
-                result: Ok(files.clone()),
+                result: Ok(gitcomet_core::services::Comparison::new(
+                    CommitId("c9".into()),
+                    files.clone(),
+                )),
             }),
         );
         assert!(matches!(
@@ -3704,7 +3757,10 @@ mod comparison_tests {
                 from: CommitId("c0".into()),
                 to: Some(CommitId("c3".into())),
                 request: request.wrapping_sub(1),
-                result: Ok(files.clone()),
+                result: Ok(gitcomet_core::services::Comparison::new(
+                    CommitId("c0".into()),
+                    files.clone(),
+                )),
             }),
         );
         assert!(matches!(
@@ -3720,7 +3776,10 @@ mod comparison_tests {
                 from: CommitId("c0".into()),
                 to: Some(CommitId("c3".into())),
                 request,
-                result: Ok(files.clone()),
+                result: Ok(gitcomet_core::services::Comparison::new(
+                    CommitId("c0".into()),
+                    files.clone(),
+                )),
             }),
         );
         match &repo(&state, repo_id).history_state.range_files {
@@ -4051,7 +4110,10 @@ mod comparison_tests {
                 from: from.clone(),
                 to: None,
                 request: first,
-                result: Ok(Vec::new()),
+                result: Ok(gitcomet_core::services::Comparison::new(
+                    from.clone(),
+                    Vec::new(),
+                )),
             }),
         );
         let second = load_request(&effects).expect("the folded refresh runs once the load lands");
@@ -4065,7 +4127,10 @@ mod comparison_tests {
                 from: from.clone(),
                 to: None,
                 request: second,
-                result: Ok(Vec::new()),
+                result: Ok(gitcomet_core::services::Comparison::new(
+                    from.clone(),
+                    Vec::new(),
+                )),
             }),
         );
         assert!(load_request(&effects).is_none());
