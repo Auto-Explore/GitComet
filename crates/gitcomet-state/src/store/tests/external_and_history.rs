@@ -3301,6 +3301,7 @@ fn external_tags_change_reloads_tags() {
         name: "v1.0.0".to_string(),
         target: CommitId("abc123".into()),
     }]));
+    let tags_rev = state.repos[0].tags_rev;
 
     let effects = reduce(
         &mut repos,
@@ -3317,15 +3318,33 @@ fn external_tags_change_reloads_tags() {
     );
 
     assert!(
-        matches!(state.repos[0].tags, Loadable::NotLoaded),
-        "tags should be reset to NotLoaded on external tags change"
+        matches!(&state.repos[0].tags, Loadable::Ready(tags) if tags.len() == 1),
+        "the loaded tags stay shown while they reload"
     );
+    assert_eq!(state.repos[0].tags_rev, tags_rev);
     assert!(
         effects
             .iter()
             .any(|e| matches!(e, Effect::LoadTags { repo_id: id } if *id == repo_id)),
         "expected LoadTags effect on external tags change"
     );
+
+    // An unchanged reload leaves the revision alone too: history keys its
+    // tag decorations on it.
+    let loaded = state.repos[0].tags.clone();
+    let Loadable::Ready(loaded) = loaded else {
+        unreachable!()
+    };
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::TagsLoaded {
+            repo_id,
+            result: Ok(loaded.as_ref().clone()),
+        }),
+    );
+    assert_eq!(state.repos[0].tags_rev, tags_rev);
 }
 
 #[test]
@@ -3401,8 +3420,8 @@ fn external_tags_change_without_git_state_flag_reloads_tags() {
     );
 
     assert!(
-        matches!(state.repos[0].tags, Loadable::NotLoaded),
-        "tags should be reset to NotLoaded when only the tags flag is set"
+        matches!(state.repos[0].tags, Loadable::Ready(_)),
+        "the loaded tags stay shown while they reload"
     );
     assert!(
         effects

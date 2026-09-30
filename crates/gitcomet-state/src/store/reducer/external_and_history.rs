@@ -261,9 +261,10 @@ pub(super) fn repo_externally_changed(
 
     // Tag reloads are driven by the `tags` flag alone, independent of
     // `git_state`, so any change that sets `tags` refreshes them regardless of
-    // which other lanes the event touched.
+    // which other lanes the event touched. The loaded list stays until the
+    // reload lands: every activation sets the flag, and a reset showed no tags
+    // in history for that window and rebuilt its decorations twice.
     if change.tags {
-        repo_state.set_tags(Loadable::NotLoaded);
         if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
             effects.push(Effect::LoadTags { repo_id });
         }
