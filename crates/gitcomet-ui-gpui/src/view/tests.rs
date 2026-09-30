@@ -3872,6 +3872,8 @@ fn collapsed_rail_offers_git_annex_only_in_annex_repos(cx: &mut gpui::TestAppCon
         here: true,
     }];
     state.repos[0].large_file_support = Loadable::Ready(Arc::new(support));
+    // As `set_large_file_support` does: the Annex rows are cached by this rev.
+    state.repos[0].branch_sidebar_rev += 1;
     store.replace_snapshot_for_test(Arc::new(state.clone()));
     sync_view_snapshot(cx, &view);
     test_support::redraw(cx);
@@ -3909,6 +3911,7 @@ fn collapsed_rail_offers_git_annex_only_in_annex_repos(cx: &mut gpui::TestAppCon
     state.repos[0].large_file_support = Loadable::Ready(Arc::new(
         gitcomet_core::large_files::LargeFileSupport::default(),
     ));
+    state.repos[0].branch_sidebar_rev += 1;
     store.replace_snapshot_for_test(Arc::new(state));
     sync_view_snapshot(cx, &view);
     pump_for(
