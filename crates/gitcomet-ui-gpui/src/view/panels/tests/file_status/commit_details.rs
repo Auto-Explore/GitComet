@@ -1490,3 +1490,44 @@ fn commit_links_cancel_cross_link_and_outside_releases(cx: &mut gpui::TestAppCon
         matches!(menu, Some(PopoverKind::WebLinkMenu { ref url, .. }) if url.as_ref() == first_url)
     );
 }
+
+/// Frames caused elsewhere must not re-render the cached details pane. The
+/// commit link menus used to notify on every `sync`, which the details render
+/// calls, so after its first re-render the pane re-rendered on every frame
+/// (5 -> 15 renders over these 10 frames).
+#[gpui::test]
+fn commit_details_pane_ignores_unrelated_frames(cx: &mut gpui::TestAppContext) {
+    let _cache_guard = crate::view::enable_stable_cached_views_for_test();
+    let (view, cx, _sha, _date, _parent) = commit_details_metadata_fixture(cx);
+    // One legitimate re-render, as any status publication causes: the menus
+    // are tracked by the window from here on.
+    cx.update(|_window, app| {
+        let details = view.read(app).details_pane.clone();
+        details.update(app, |_, cx| cx.notify());
+    });
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    }
+    let render_count = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| view.read(app).details_pane.read(app).render_count)
+    };
+    let before = render_count(cx);
+
+    for _ in 0..5 {
+        cx.update(|_window, app| {
+            let sidebar = view.read(app).sidebar_pane.clone();
+            sidebar.update(app, |_, cx| cx.notify());
+        });
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    }
+
+    assert_eq!(
+        render_count(cx),
+        before,
+        "an unrelated frame re-rendered the details pane"
+    );
+}

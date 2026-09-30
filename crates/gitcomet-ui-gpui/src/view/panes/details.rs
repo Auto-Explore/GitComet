@@ -158,6 +158,8 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) range_files_path_alignment_group: components::PathTruncationAlignmentGroup,
     pub(in super::super) worktree_files_path_alignment_group:
         components::PathTruncationAlignmentGroup,
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub(in crate::view) render_count: usize,
 }
 
 pub(in super::super) struct DetailsPaneInit {
@@ -505,6 +507,8 @@ impl DetailsPaneView {
             range_files_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
             worktree_files_path_alignment_group: components::PathTruncationAlignmentGroup::default(
             ),
+            #[cfg(any(test, feature = "benchmarks"))]
+            render_count: 0,
         };
         pane.sync_scaled_section_heights_from_design();
         pane.set_theme(theme, cx);
@@ -2380,6 +2384,10 @@ impl DetailsPaneView {
 
 impl Render for DetailsPaneView {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        #[cfg(any(test, feature = "benchmarks"))]
+        {
+            self.render_count += 1;
+        }
         div()
             .size_full()
             .child(self.commit_details_view(cx))

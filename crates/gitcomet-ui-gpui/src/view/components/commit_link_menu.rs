@@ -68,13 +68,20 @@ impl CommitLinkMenu {
         id: impl Into<SharedString>,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.input != input || self.links != links || self.repo_id != repo_id {
+        let id = id.into();
+        let target_changed = self.input != input || self.links != links || self.repo_id != repo_id;
+        // Called from the details render: an unconditional notify there dirties
+        // the pane again on every later frame.
+        if !target_changed && self.id == id {
+            return;
+        }
+        if target_changed {
             self.click = Default::default();
         }
         self.input = input;
         self.repo_id = repo_id;
         self.links = links;
-        self.id = id.into();
+        self.id = id;
         cx.notify();
     }
 
