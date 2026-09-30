@@ -161,7 +161,9 @@ def tracked_files(repository, count):
 
 def lifecycle_cycle(secondary):
     """Open a second repository, select through its history, close it."""
+    # Select only once its history is shown; `open_repo` witnesses the open alone.
     return [{"do": "open_repo", "path": str(secondary)},
+            {"do": "wait_ready", "timeout_ms": 60_000},
             {"do": "focus", "target": "history"},
             {"do": "keys", "key": "down", "repeat": 3, "interval_ms": 60,
              "witness": {"kind": "commit_details"}},

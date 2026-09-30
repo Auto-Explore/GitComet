@@ -298,6 +298,10 @@ class LiveUiMeasurementTests(unittest.TestCase):
         phases = [ix for ix, step in enumerate(steps) if step["do"] == "phase"]
         opens = lambda start, end: sum(step["do"] == "open_repo" for step in steps[start:end])  # noqa: E731
         self.assertEqual((opens(phases[0], phases[1]), opens(phases[1], phases[2])), (10, 3))
+        # Each open waits for the history before selecting in it.
+        for ix, step in enumerate(steps):
+            if step["do"] == "open_repo":
+                self.assertEqual([s["do"] for s in steps[ix + 1:ix + 3]], ["wait_ready", "focus"])
 
     def test_process_sample_survives_a_thread_exiting_mid_read(self):
         real = Path.read_text
