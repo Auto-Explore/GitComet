@@ -25,7 +25,7 @@ crates/gitcomet-git-gix/src/repo/history.rs identifier 6 rebase state files in .
 crates/gitcomet-git-gix/src/repo/mergetool.rs identifier 3 temporary prefixes and the shared per-repo trust config key
 crates/gitcomet-git-gix/src/repo/submodules.rs identifier 1 shared per-repo submodule trust config key
 crates/gitcomet-git-gix/src/repo/text_decode.rs identifier 1 temporary file prefix
-crates/gitcomet-git-gix/src/util.rs identifier 1 Git trace2 temporary file prefix
+crates/gitcomet-git-gix/src/util/trace2.rs identifier 1 Git trace2 temporary file prefix
 crates/gitcomet-state/src/session/mod.rs identifier 2 session path encoding markers (file format)
 crates/gitcomet-state/src/store/executor.rs identifier 5 worker thread names and diagnostic prefix
 crates/gitcomet-state/src/store/repo_load_trace.rs identifier 1 diagnostic prefix
