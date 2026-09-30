@@ -305,6 +305,25 @@ class LiveUiMeasurementTests(unittest.TestCase):
             if step["do"] == "command":
                 self.assertEqual(step["witness"], {"kind": "repo_closed", "path": "/other"})
 
+    def test_lifecycle_growth_is_per_measured_cycle(self):
+        phase = lambda at, name, state: {"event": "scenario_phase", "at_ms": at,  # noqa: E731
+                                         "detail": {"name": name, "state": state}}
+        records = [{"event": "start", "unix_ms": 10_000, "run_id": self.RUN_ID, "main_tid": 7},
+                   {"event": "scenario_ready", "at_ms": 900, "unix_ms": 10_900, "detail": {}},
+                   phase(1000, "warmup_cycles", "begin"), phase(2000, "warmup_cycles", "end"),
+                   phase(2000, "cycles", "begin"), phase(4000, "cycles", "end"),
+                   phase(4000, "after_cycles", "begin"), phase(5000, "after_cycles", "end"),
+                   {"event": "scenario_end", "at_ms": 5000, "detail": {"outcome": "passed", "errors": []}}]
+        sample = lambda at, pss: {"unix_ms": 10_000 + at, "rss_kib": pss, "pss_kib": pss,  # noqa: E731
+                                  "threads": 10, "fds": 20, "cpu_s": 1.0, "children_cpu_s": 0,
+                                  "voluntary_switches": 0}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_run(root, records=records, capture={"scenario": "lifecycle", "cycles": 20},
+                           process=[sample(1500, 1000), sample(3500, 2000), sample(4500, 3000)])
+            retention = live_ui.summarize(root)["retention"]
+        self.assertEqual(retention["pss_kib"]["growth_per_cycle"], 100)
+
     def test_process_sample_survives_a_thread_exiting_mid_read(self):
         real = Path.read_text
 

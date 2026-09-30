@@ -518,7 +518,8 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
                "window_size": WINDOW_SIZE, "display": display,
                "refresh_hz": REFRESH_HZ if display == "headless" else None,
                "ping_ms": ping_ms, "wrap": wrap, "gpu_cache": "cold" if cold_gpu_cache else "warm",
-               "load_before": load_average(), "outcome": "failed"}
+               "load_before": load_average(), "outcome": "failed",
+               "cycles": cycles if name == "lifecycle" else None}
     if metadata:
         (output / "environment.json").write_text(json.dumps(perf_metadata.collect(
             binaries=[("gitcomet", binary)], fixtures=[("repository", repository)],
@@ -670,13 +671,14 @@ def summarize(directory):
     retention = None
     if capture["scenario"] == "lifecycle" and all(name in phases for name in
                                                   ("warmup_cycles", "cycles", "after_cycles")):
-        # Resources must return to a plateau: the 100 measured cycles may not
-        # keep what the 10 warm-up cycles did not.
+        # Resources must return to a plateau: the measured cycles may not
+        # keep what the 10 warm-up cycles did not. Older captures ran 100.
         warm, cycles, after = (phases[name]["end_sample"] or {} for name in
                                ("warmup_cycles", "cycles", "after_cycles"))
+        count = capture.get("cycles") or 100
         retention = {key: {"after_warmup": warm.get(key), "after_cycles": cycles.get(key),
                            "settled": after.get(key),
-                           "growth_per_cycle": (after.get(key) - warm.get(key)) / 100
+                           "growth_per_cycle": (after.get(key) - warm.get(key)) / count
                            if after.get(key) is not None and warm.get(key) is not None else None}
                      for key in ("pss_kib", "rss_kib", "threads", "fds")}
     summary = {"run_id": capture["run_id"], "scenario": capture["scenario"], "startup": startup,
