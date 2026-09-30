@@ -310,6 +310,44 @@ pub enum SequencerState {
 /// the branch no longer has the reverted changes, so no commit was created.
 pub const REVERT_NOTHING_TO_REVERT_SENTINEL: &str = "GITCOMET_REVERT_NOTHING_TO_REVERT";
 
+/// Marker an applied file change puts in its output when the branch already has
+/// that change, so nothing was applied or committed.
+pub const APPLY_FILE_CHANGE_ALREADY_APPLIED_SENTINEL: &str =
+    "GITCOMET_APPLY_CHANGE_ALREADY_APPLIED";
+
+/// Marker for a file change that is already staged but not yet committed, and
+/// no commit was requested.
+pub const APPLY_FILE_CHANGE_ALREADY_STAGED_SENTINEL: &str = "GITCOMET_APPLY_CHANGE_ALREADY_STAGED";
+
+/// The file an applied change touches and the revision it comes from, as
+/// messages name them: `abc1234`, or `abc1234..def5678` for a comparison.
+/// `None` for a target "Apply change" does not support.
+pub fn apply_file_change_source(target: &DiffTarget) -> Option<(&Path, String)> {
+    match target {
+        DiffTarget::Commit { commit_id, path } => Some((path, commit_id.short().to_owned())),
+        DiffTarget::CommitRange {
+            from_commit_id,
+            to_commit_id: Some(to_commit_id),
+            path: Some(path),
+        } => Some((
+            path,
+            format!("{}..{}", from_commit_id.short(), to_commit_id.short()),
+        )),
+        _ => None,
+    }
+}
+
+/// Commit message for a file change applied from a comparison, which has no
+/// single source commit message to reuse.
+pub fn apply_file_change_range_message(from: &CommitId, to: &CommitId, path: &Path) -> String {
+    format!(
+        "Apply {} from {}..{}",
+        path.display(),
+        from.short(),
+        to.short()
+    )
+}
+
 /// Command label of a Continue that skipped a revert its resolution left empty.
 pub const REVERT_SKIP_COMMAND: &str = "git revert --skip";
 
@@ -1089,6 +1127,19 @@ pub trait GitRepository: Send + Sync {
     ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "git revert is not implemented for this backend",
+        )))
+    }
+
+    /// Applies one file's change from a `Commit` or `CommitRange` file diff to
+    /// the index and worktree with a 3-way fallback, then with `commit`
+    /// commits just that path.
+    fn apply_file_change_with_output(
+        &self,
+        _target: &DiffTarget,
+        _commit: bool,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "applying a file change is not implemented for this backend",
         )))
     }
 
@@ -2014,6 +2065,13 @@ mod tests {
         assert_unsupported(repo.topologically_order_commits(std::slice::from_ref(&commit)));
         assert_unsupported(repo.cherry_pick_with_output(&commit, true, None));
         assert_unsupported(repo.revert_with_output(&commit, true, None));
+        assert_unsupported(repo.apply_file_change_with_output(
+            &DiffTarget::Commit {
+                commit_id: commit.clone(),
+                path: path.to_path_buf(),
+            },
+            false,
+        ));
         assert_unsupported(repo.rebase_with_output("main"));
         assert_unsupported(repo.rebase_continue_with_output());
         assert_unsupported(repo.rebase_abort_with_output());

@@ -209,6 +209,11 @@ pub(crate) enum PopoverKind {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    /// "Apply change": `target` is the file diff whose change is applied.
+    ApplyFileChangeConfirm {
+        repo_id: RepoId,
+        target: DiffTarget,
+    },
     MergeCommitConfirm {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -425,6 +430,14 @@ pub(crate) enum PopoverKind {
     CommitFileMenu {
         repo_id: RepoId,
         commit_id: CommitId,
+        path: std::path::PathBuf,
+    },
+    /// A file row of the comparison view; `to_commit_id` is `None` when the
+    /// comparison runs to the working tree.
+    CommitRangeFileMenu {
+        repo_id: RepoId,
+        from_commit_id: CommitId,
+        to_commit_id: Option<CommitId>,
         path: std::path::PathBuf,
     },
     FileBrowserFileMenu {
@@ -773,7 +786,7 @@ pub(crate) fn normalize_bootstrap_diff_target(
         },
         DiffTarget::Commit { commit_id, path } => DiffTarget::Commit {
             commit_id,
-            path: path.map(|path| normalize_bootstrap_target_path(repo_path, path)),
+            path: normalize_bootstrap_target_path(repo_path, path),
         },
         DiffTarget::CommitRange {
             from_commit_id,

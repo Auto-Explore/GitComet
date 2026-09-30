@@ -334,19 +334,6 @@ fn model_with_header(
         items.push(ContextMenuItem::Separator);
     }
     items.push(ContextMenuItem::Entry {
-        label: "Open diff".into(),
-        icon: Some("icons/open_external.svg".into()),
-        shortcut: None,
-        disabled: false,
-        action: Box::new(ContextMenuAction::SelectDiff {
-            repo_id,
-            target: DiffTarget::Commit {
-                commit_id: commit_id.clone(),
-                path: None,
-            },
-        }),
-    });
-    items.push(ContextMenuItem::Entry {
         label: "Start file browsing".into(),
         icon: Some("icons/history.svg".into()),
         shortcut: None,

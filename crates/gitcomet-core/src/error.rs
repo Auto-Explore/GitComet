@@ -22,6 +22,10 @@ pub enum GitFailureId {
     Timeout,
     BranchAlreadyExists,
     StashApplyConflict,
+    /// `git apply --3way` left the file conflicted in the index and worktree.
+    ApplyChangeConflict,
+    /// An applied file change is staged, but committing it failed.
+    ApplyChangeCommitFailed,
     UntrackedRestoreConflict,
     WorktreeWouldBeOverwritten,
 }

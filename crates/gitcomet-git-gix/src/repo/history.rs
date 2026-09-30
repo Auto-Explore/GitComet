@@ -40,7 +40,7 @@ const PERSISTED_CHERRY_PICK_MAINLINE_STAGING: &str = "gitcomet-cherry-pick-mainl
 // re-spawns it via `cmd.exe /c` with the path unquoted.
 const MSG_EDITOR_NAME: &str = "gitcomet-msg-editor.sh";
 
-fn peel_commit<'r>(repo: &'r gix::Repository, spec: &str) -> Result<gix::Commit<'r>> {
+pub(super) fn peel_commit<'r>(repo: &'r gix::Repository, spec: &str) -> Result<gix::Commit<'r>> {
     repo.rev_parse_single(spec)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}"))))?
         .object()
@@ -108,7 +108,7 @@ fn commit_author_env(repo: &gix::Repository, spec: &str) -> Result<(String, Stri
     Ok((author.name.to_string(), author.email.to_string(), date))
 }
 
-fn append_command_output(acc: &mut CommandOutput, output: CommandOutput) {
+pub(super) fn append_command_output(acc: &mut CommandOutput, output: CommandOutput) {
     if !acc.stdout.is_empty() && !output.stdout.is_empty() {
         acc.stdout.push('\n');
     }
@@ -120,7 +120,7 @@ fn append_command_output(acc: &mut CommandOutput, output: CommandOutput) {
     acc.exit_code = output.exit_code;
 }
 
-fn append_raw_output(acc: &mut CommandOutput, output: &std::process::Output) {
+pub(super) fn append_raw_output(acc: &mut CommandOutput, output: &std::process::Output) {
     append_command_output(
         acc,
         CommandOutput {
@@ -651,7 +651,7 @@ impl GixRepo {
     /// The in-progress operation a new pick or revert would collide with.
     /// Matches what git itself reports: a sequencer directory whose todo git
     /// cannot read is not an operation, even though it blocks new sequences.
-    fn operation_in_progress_label(&self) -> Option<&'static str> {
+    pub(super) fn operation_in_progress_label(&self) -> Option<&'static str> {
         use gix::state::InProgress;
         match self.repo().state() {
             Some(InProgress::Rebase | InProgress::RebaseInteractive) => Some("a rebase"),

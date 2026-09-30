@@ -102,10 +102,9 @@ impl GixRepo {
                     .arg("-m")
                     .arg("--first-parent")
                     .arg("--pretty=format:")
-                    .arg(commit_id.as_ref());
-                if let Some(path) = path {
-                    cmd.arg("--").arg(path);
-                }
+                    .arg(commit_id.as_ref())
+                    .arg("--")
+                    .arg(path);
             }
             DiffTarget::CommitRange {
                 from_commit_id,
@@ -505,10 +504,6 @@ impl GixRepo {
                 Ok(Some(FileDiffText::new_sources(path.clone(), old, new)))
             }
             DiffTarget::Commit { commit_id, path } => {
-                let Some(path) = path else {
-                    return Ok(None);
-                };
-
                 let parent = gix_first_parent_optional(&repo, commit_id.as_ref())?;
 
                 let old = match parent {
@@ -623,10 +618,6 @@ impl GixRepo {
                 }
             }
             DiffTarget::Commit { commit_id, path } => {
-                let Some(path) = path else {
-                    return Ok(None);
-                };
-
                 let repo = self.repo();
                 let blob_id = match side {
                     DiffPreviewTextSide::New => {
@@ -797,10 +788,6 @@ impl GixRepo {
                 }))
             }
             DiffTarget::Commit { commit_id, path } => {
-                let Some(path) = path else {
-                    return Ok(None);
-                };
-
                 let repo = self.repo();
                 let parent = gix_first_parent_optional(&repo, commit_id.as_ref())?;
 
@@ -1126,10 +1113,7 @@ fn commit_path_diff_revisions(
     repo: &gix::Repository,
 ) -> Result<Option<(std::path::PathBuf, Option<String>, String)>> {
     match target {
-        DiffTarget::Commit {
-            commit_id,
-            path: Some(path),
-        } => Ok(Some((
+        DiffTarget::Commit { commit_id, path } => Ok(Some((
             path.clone(),
             gix_first_parent_optional(repo, commit_id.as_ref())?,
             commit_id.as_ref().to_string(),

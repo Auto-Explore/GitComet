@@ -2498,7 +2498,7 @@ impl DetailsPaneView {
                     .is_some_and(|t| match t {
                         DiffTarget::Commit {
                             commit_id: t_commit_id,
-                            path: Some(t_path),
+                            path: t_path,
                         } => t_commit_id == &commit_id && t_path == &f.path,
                         _ => false,
                     });
@@ -2586,7 +2586,7 @@ impl DetailsPaneView {
                             }
                             let target = DiffTarget::Commit {
                                 commit_id: commit_id_for_click.clone(),
-                                path: Some((*path_for_click).clone()),
+                                path: (*path_for_click).clone(),
                             };
                             let selected = this.active_repo().is_some_and(|repo| {
                                 repo.id == repo_id
@@ -2634,10 +2634,6 @@ impl DetailsPaneView {
             .collect()
     }
 
-    /// Render the changed-file rows for an active two-point comparison. Mirrors
-    /// [`Self::render_commit_file_rows`] but sources the file list from
-    /// `history_state.range_files` and builds `DiffTarget::CommitRange` targets,
-    /// so clicking a file loads its diff through the normal diff pipeline.
     /// Changed files of a linked worktree that is not this tab.
     ///
     /// Clicking one opens it through the inline foreign-diff machinery — the
@@ -2875,6 +2871,10 @@ impl DetailsPaneView {
             .collect()
     }
 
+    /// Render the changed-file rows for an active two-point comparison. Mirrors
+    /// [`Self::render_commit_file_rows`] but sources the file list from
+    /// `history_state.range_files` and builds `DiffTarget::CommitRange` targets,
+    /// so clicking a file loads its diff through the normal diff pipeline.
     pub(in super::super) fn render_range_file_rows(
         this: &mut Self,
         range: Range<usize>,
@@ -2898,6 +2898,7 @@ impl DetailsPaneView {
         let repo_id = repo.id;
         let from = range_selection.from.clone();
         let to = range_selection.to.clone();
+        let has_active_menu = this.active_context_menu_invoker.is_some();
         let file_rows =
             this.cached_range_file_rows(repo_id, repo.history_state.range_files_rev, &files);
         let projection =
@@ -3007,12 +3008,21 @@ impl DetailsPaneView {
                     path: Some(f.path.clone()),
                 };
                 let selected = repo.diff_state.diff_target.as_ref() == Some(&target);
-                let target_for_click = target.clone();
+                let context_menu_active = has_active_menu
+                    && this.active_context_menu_invoker.as_ref()
+                        == Some(&range_file_menu_invoker(repo_id, &target));
+                // One owned copy shared by both handlers instead of one each.
+                let target_for_click = Arc::new(target);
+                let target_for_menu = Arc::clone(&target_for_click);
                 let tooltip = path_label.clone();
 
                 let row_group: SharedString = format!("range_file_row_{ix}").into();
-                let interaction =
-                    crate::view::rows::FileRowInteraction::new(theme, tint, selected, false);
+                let interaction = crate::view::rows::FileRowInteraction::new(
+                    theme,
+                    tint,
+                    selected,
+                    context_menu_active,
+                );
                 let badge_disc = interaction.badge_disc(row_group.clone());
 
                 let row = div()
@@ -3084,7 +3094,7 @@ impl DetailsPaneView {
                             let selected = this.active_repo().is_some_and(|repo| {
                                 repo.id == repo_id
                                     && repo.diff_state.diff_target.as_ref()
-                                        == Some(&target_for_click)
+                                        == Some(&*target_for_click)
                             });
                             if selected {
                                 this.store.dispatch(Msg::ClearDiffSelection { repo_id });
@@ -3092,18 +3102,68 @@ impl DetailsPaneView {
                                 this.focus_diff_panel(window, cx);
                                 this.store.dispatch(Msg::SelectDiff {
                                     repo_id,
-                                    target: target_for_click.clone(),
+                                    target: (*target_for_click).clone(),
                                 });
                             }
                             cx.notify();
                         }),
                     )
                     .gitcomet_tooltip(theme, tooltip.clone());
+                let row = row.on_pointer_click(
+                    MouseButton::Right,
+                    cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        let DiffTarget::CommitRange {
+                            from_commit_id,
+                            to_commit_id,
+                            path: Some(path),
+                        } = &*target_for_menu
+                        else {
+                            return;
+                        };
+                        let kind = PopoverKind::CommitRangeFileMenu {
+                            repo_id,
+                            from_commit_id: from_commit_id.clone(),
+                            to_commit_id: to_commit_id.clone(),
+                            path: path.clone(),
+                        };
+                        this.open_popover_at(
+                            kind.invoked_by(range_file_menu_invoker(repo_id, &target_for_menu)),
+                            e.position,
+                            window,
+                            cx,
+                        );
+                        cx.notify();
+                    }),
+                );
 
                 Some(row.into_any_element())
             })
             .collect()
     }
+}
+
+/// Identifies the comparison file row whose menu is open, so the row can show
+/// it as active.
+fn range_file_menu_invoker(repo_id: RepoId, target: &DiffTarget) -> SharedString {
+    let DiffTarget::CommitRange {
+        from_commit_id,
+        to_commit_id,
+        path,
+    } = target
+    else {
+        return SharedString::default();
+    };
+    format!(
+        "range_file_menu_{}_{}_{}_{}",
+        repo_id.0,
+        from_commit_id.as_ref(),
+        to_commit_id.as_ref().map_or("worktree", |to| to.as_ref()),
+        path.as_deref()
+            .unwrap_or(std::path::Path::new(""))
+            .display()
+    )
+    .into()
 }
 
 #[cfg(test)]
@@ -4661,7 +4721,7 @@ mod tests {
             repo_id,
             target: DiffTarget::Commit {
                 commit_id: commit_id("previous"),
-                path: None,
+                path: std::path::PathBuf::from("previous.txt"),
             },
         });
         wait_until(cx, "sidebar repo data", |_cx| {

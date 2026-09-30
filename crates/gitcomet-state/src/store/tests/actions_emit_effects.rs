@@ -610,6 +610,81 @@ fn revert_commit_emits_effect() {
 }
 
 #[test]
+fn apply_file_change_emits_effect_and_keeps_the_diff_target() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+    let target = DiffTarget::CommitRange {
+        from_commit_id: CommitId("1111111111111111111111111111111111111111".into()),
+        to_commit_id: Some(CommitId("2222222222222222222222222222222222222222".into())),
+        path: Some(PathBuf::from("src/lib.rs")),
+    };
+
+    for commit in [false, true] {
+        state.repos[0].set_diff_target(Some(target.clone()));
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::ApplyFileChange {
+                repo_id,
+                target: target.clone(),
+                commit,
+            },
+        );
+        assert!(
+            matches!(
+                effects.as_slice(),
+                [Effect::ApplyFileChange {
+                    repo_id: RepoId(1),
+                    target: effect_target,
+                    commit: effect_commit,
+                    auth: None,
+                }] if effect_target == &target && *effect_commit == commit
+            ),
+            "commit={commit}: {effects:?}"
+        );
+        assert_eq!(state.repos[0].local_actions_in_flight, 1);
+        // A committing apply counts as a git operation while it runs, so the
+        // worktree write it makes is not taken for an outside edit.
+        assert_eq!(
+            state.repos[0].sequencer_actions_in_flight,
+            u32::from(commit)
+        );
+        assert_eq!(state.repos[0].git_operation_in_flight(), commit);
+
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::ApplyFileChange {
+                    target: target.clone(),
+                    commit,
+                },
+                result: Ok(CommandOutput::default()),
+            }),
+        );
+        assert_eq!(state.repos[0].local_actions_in_flight, 0);
+        assert_eq!(state.repos[0].sequencer_actions_in_flight, 0);
+        // The source diff did not change, so the user keeps their place.
+        assert_eq!(
+            state.repos[0].diff_state.diff_target.as_ref(),
+            Some(&target)
+        );
+    }
+}
+
+#[test]
 fn commit_amend_emits_effect() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
@@ -4390,6 +4465,23 @@ fn sequencer_commands_release_their_in_flight_count() {
             },
         ),
         (
+            Msg::ApplyFileChange {
+                repo_id,
+                target: DiffTarget::Commit {
+                    commit_id: commit_id.clone(),
+                    path: PathBuf::from("a.txt"),
+                },
+                commit: true,
+            },
+            RepoCommandKind::ApplyFileChange {
+                target: DiffTarget::Commit {
+                    commit_id: commit_id.clone(),
+                    path: PathBuf::from("a.txt"),
+                },
+                commit: true,
+            },
+        ),
+        (
             Msg::RebaseContinue { repo_id },
             RepoCommandKind::RebaseContinue,
         ),
@@ -4810,7 +4902,7 @@ fn stage_hunk_command_finished_reloads_commit_png_image_preview_only() {
     let repo_id = RepoId(1);
     let target = DiffTarget::Commit {
         commit_id: CommitId("abc123".into()),
-        path: Some(PathBuf::from("assets/icon.png")),
+        path: PathBuf::from("assets/icon.png"),
     };
     let mut repo_state = RepoState::new_opening(
         repo_id,

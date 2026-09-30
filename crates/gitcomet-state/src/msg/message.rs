@@ -639,6 +639,12 @@ pub enum Msg {
         mainline: Option<usize>,
         summary: String,
     },
+    /// Applies one file's change from a commit or comparison diff.
+    ApplyFileChange {
+        repo_id: RepoId,
+        target: DiffTarget,
+        commit: bool,
+    },
     CreateBranch {
         repo_id: RepoId,
         name: String,

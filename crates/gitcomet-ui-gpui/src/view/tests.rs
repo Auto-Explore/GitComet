@@ -3093,15 +3093,16 @@ fn diff_target_rendered_preview_kind_reads_diff_target_paths() {
 
     let markdown_target = DiffTarget::Commit {
         commit_id: CommitId("deadbeef".into()),
-        path: Some(PathBuf::from("README.md")),
+        path: PathBuf::from("README.md"),
     };
     assert_eq!(
         diff_target_rendered_preview_kind(Some(&markdown_target)),
         Some(RenderedPreviewKind::Markdown)
     );
 
-    let no_path_target = DiffTarget::Commit {
-        commit_id: CommitId("deadbeef".into()),
+    let no_path_target = DiffTarget::CommitRange {
+        from_commit_id: gitcomet_core::domain::CommitId("parent".into()),
+        to_commit_id: Some(CommitId("deadbeef".into())),
         path: None,
     };
     assert_eq!(

@@ -872,7 +872,7 @@ fn select_diff_for_deleted_commit_file_skips_patch_diff_and_loads_file_preview()
     let commit_id = CommitId("deadbeef".into());
     let target = gitcomet_core::domain::DiffTarget::Commit {
         commit_id: commit_id.clone(),
-        path: Some(PathBuf::from("report.json")),
+        path: PathBuf::from("report.json"),
     };
     repo_state.history_state.commit_details = Loadable::Ready(Arc::new(CommitDetails {
         id: commit_id,
@@ -1399,7 +1399,7 @@ fn commit_details_loaded_replans_selected_deleted_commit_file_to_preview_text_fi
     let commit_id = CommitId("deadbeef".into());
     let target = gitcomet_core::domain::DiffTarget::Commit {
         commit_id: commit_id.clone(),
-        path: Some(PathBuf::from("report.json")),
+        path: PathBuf::from("report.json"),
     };
     repo_state.set_selected_commit(Some(commit_id.clone()));
     repo_state.diff_state.diff_target = Some(target.clone());
@@ -1614,7 +1614,7 @@ fn select_diff_for_conflicted_svg_prefers_conflict_loader_over_preview_effects()
 }
 
 #[test]
-fn select_diff_for_commit_without_path_only_loads_patch() {
+fn select_diff_for_a_range_without_path_only_loads_patch() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::test_default();
@@ -1626,8 +1626,9 @@ fn select_diff_for_commit_without_path_only_loads_patch() {
     ));
     state.active_repo = Some(RepoId(1));
 
-    let target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: CommitId("deadbeef".into()),
+    let target = gitcomet_core::domain::DiffTarget::CommitRange {
+        from_commit_id: CommitId("deadbeef".into()),
+        to_commit_id: Some(CommitId("feedface".into())),
         path: None,
     };
 
@@ -1680,7 +1681,7 @@ fn select_diff_for_commit_svg_path_loads_text_and_image_previews() {
 
     let target = gitcomet_core::domain::DiffTarget::Commit {
         commit_id: CommitId("deadbeef".into()),
-        path: Some(PathBuf::from("diagram.svg")),
+        path: PathBuf::from("diagram.svg"),
     };
 
     let effects = reduce(
@@ -2171,7 +2172,7 @@ fn status_actions_preserve_historical_and_other_repository_views() {
         working.clone(),
         DiffTarget::Commit {
             commit_id: CommitId("head".into()),
-            path: Some("shown.rs".into()),
+            path: "shown.rs".into(),
         },
         DiffTarget::CommitRange {
             from_commit_id: CommitId("base".into()),
@@ -3222,7 +3223,7 @@ fn open_file_content_sets_diff_target_and_content_preview() {
         repo_state.diff_state.diff_target,
         Some(DiffTarget::Commit {
             commit_id,
-            path: Some(commit_path),
+            path: commit_path,
         })
     );
     assert!(repo_state.diff_state.content_preview);
@@ -3425,7 +3426,7 @@ fn exiting_edit_mode_restores_the_originating_diff_or_content_preview() {
     let commit_id = CommitId("deadbeef".into());
     let commit_target = DiffTarget::Commit {
         commit_id: commit_id.clone(),
-        path: Some(path.clone()),
+        path: path.clone(),
     };
 
     // A diff remains a diff, including its historical target, after editing
@@ -3486,7 +3487,7 @@ fn exiting_edit_mode_restores_the_originating_diff_or_content_preview() {
         state.repos[0].diff_state.diff_target,
         Some(DiffTarget::Commit {
             commit_id,
-            path: Some(PathBuf::from("src/main.rs")),
+            path: PathBuf::from("src/main.rs"),
         })
     );
     assert!(state.repos[0].diff_state.content_preview);
@@ -3544,7 +3545,7 @@ fn global_nav_realigns_viewer_history_onto_restored_file_view() {
     );
     assert_eq!(state.repos[0].navigation.view_history.cursor, 2);
 
-    // Leave the viewer for a full-tree commit diff (not a file-content view): the
+    // Leave the viewer for a full-tree diff (not a file-content view): the
     // global stack records it, but view_history stops tracking and stays at c.
     reduce(
         &mut repos,
@@ -3552,8 +3553,9 @@ fn global_nav_realigns_viewer_history_onto_restored_file_view() {
         &mut state,
         Msg::SelectDiff {
             repo_id,
-            target: DiffTarget::Commit {
-                commit_id: CommitId("c3".into()),
+            target: DiffTarget::CommitRange {
+                from_commit_id: CommitId("c2".into()),
+                to_commit_id: Some(CommitId("c3".into())),
                 path: None,
             },
         },
@@ -3609,9 +3611,9 @@ fn global_nav_reloads_commit_details_when_a_stale_load_is_in_flight() {
     state.active_repo = Some(repo_id);
 
     let commit_y = CommitId("yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy".into());
-    // Two back/forward entries for the SAME commit (full diff, then one file), so
+    // Two back/forward entries for the SAME commit (two of its files), so
     // stepping back keeps `selected_commit` == Y and `select_commit` no-ops.
-    let snap = |path: Option<PathBuf>| crate::model::MainViewSnapshot {
+    let snap = |path: PathBuf| crate::model::MainViewSnapshot {
         diff_target: Some(DiffTarget::Commit {
             commit_id: commit_y.clone(),
             path,
@@ -3622,16 +3624,19 @@ fn global_nav_reloads_commit_details_when_a_stale_load_is_in_flight() {
         range_selection: None,
         worktree_selection: None,
     };
-    state.repos[0].navigation.main_history.record(snap(None));
     state.repos[0]
         .navigation
         .main_history
-        .record(snap(Some(PathBuf::from("src/lib.rs"))));
+        .record(snap(PathBuf::from("src/main.rs")));
+    state.repos[0]
+        .navigation
+        .main_history
+        .record(snap(PathBuf::from("src/lib.rs")));
     // Live view matches the nav tail; commit Y is selected but its details are
     // stuck Loading (the relevant load was cancelled / is for another commit).
     state.repos[0].diff_state.diff_target = Some(DiffTarget::Commit {
         commit_id: commit_y.clone(),
-        path: Some(PathBuf::from("src/lib.rs")),
+        path: PathBuf::from("src/lib.rs"),
     });
     state.repos[0].set_selected_commit(Some(commit_y.clone()));
     state.repos[0].set_commit_details(Loadable::Loading);
@@ -4175,7 +4180,7 @@ fn retiring_a_worktrees_inline_diff_leaves_the_commit_diff_behind_it_intact() {
     let worktree = PathBuf::from("/tmp/wt/a");
     let commit_target = gitcomet_core::domain::DiffTarget::Commit {
         commit_id: CommitId("c0".into()),
-        path: Some(PathBuf::from("src/main.rs")),
+        path: PathBuf::from("src/main.rs"),
     };
     let inline_target = gitcomet_core::domain::DiffTarget::WorkingTree {
         path: PathBuf::from("src/lib.rs"),
@@ -5764,7 +5769,7 @@ mod text_override {
             let (mut repos, mut state) = selected("a.txt");
             state.repos[0].set_diff_target(Some(DiffTarget::Commit {
                 commit_id: CommitId("abc123".into()),
-                path: Some("a.txt".into()),
+                path: "a.txt".into(),
             }));
             let effects = reduce(
                 &mut repos,

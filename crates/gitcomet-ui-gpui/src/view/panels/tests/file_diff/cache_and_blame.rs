@@ -4241,8 +4241,9 @@ fn yaml_commit_file_diff_transition_from_patch_clears_stale_split_cache(
     let commit_id =
         gitcomet_core::domain::CommitId("bd8b4a04b4d7a04caf97392d6a66cbeebd665606".into());
     let patch_text = COMMIT_PATCH.to_owned();
-    let patch_target = DiffTarget::Commit {
-        commit_id: commit_id.clone(),
+    let patch_target = DiffTarget::CommitRange {
+        from_commit_id: gitcomet_core::domain::CommitId("parent".into()),
+        to_commit_id: Some(commit_id.clone()),
         path: None,
     };
     let patch_diff = gitcomet_core::domain::Diff::from_unified(patch_target.clone(), &patch_text);
@@ -4297,7 +4298,7 @@ fn yaml_commit_file_diff_transition_from_patch_clears_stale_split_cache(
     let unified = DEPLOYMENT_CI.unified_diff().to_owned();
     let file_target = DiffTarget::Commit {
         commit_id,
-        path: Some(path.clone()),
+        path: path.clone(),
     };
     let file_diff = gitcomet_core::domain::Diff::from_unified(file_target.clone(), &unified);
 

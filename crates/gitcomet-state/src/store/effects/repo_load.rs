@@ -1982,7 +1982,7 @@ pub(super) fn schedule_open_file_at_commit(
                 repo_id,
                 target: gitcomet_core::domain::DiffTarget::Commit {
                     commit_id,
-                    path: Some(resolved),
+                    path: resolved,
                 },
             }
         };

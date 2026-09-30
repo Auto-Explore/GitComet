@@ -39,6 +39,11 @@ impl std::fmt::Display for CommitId {
 }
 
 impl CommitId {
+    /// The id abbreviated to git's default seven characters.
+    pub fn short(&self) -> &str {
+        self.0.get(..7).unwrap_or(&self.0)
+    }
+
     /// Whether this id is git's "not committed yet" marker rather than a real
     /// commit. See [`is_uncommitted_commit_id`].
     pub fn is_uncommitted(&self) -> bool {
@@ -591,9 +596,10 @@ pub enum DiffTarget {
         path: PathBuf,
         area: DiffArea,
     },
+    /// One file's change in a commit, against its first parent.
     Commit {
         commit_id: CommitId,
-        path: Option<PathBuf>,
+        path: PathBuf,
     },
     CommitRange {
         from_commit_id: CommitId,
@@ -609,8 +615,8 @@ impl DiffTarget {
     /// The single file this target shows, if it shows one.
     pub fn file_path(&self) -> Option<&std::path::Path> {
         match self {
-            Self::WorkingTree { path, .. } => Some(path),
-            Self::Commit { path, .. } | Self::CommitRange { path, .. } => path.as_deref(),
+            Self::WorkingTree { path, .. } | Self::Commit { path, .. } => Some(path),
+            Self::CommitRange { path, .. } => path.as_deref(),
         }
     }
 }

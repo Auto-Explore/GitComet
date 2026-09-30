@@ -16,9 +16,7 @@ fn preview_abs_path(
 ) -> Option<std::path::PathBuf> {
     let rel_path = match target? {
         DiffTarget::WorkingTree { path, .. } => path.clone(),
-        DiffTarget::Commit {
-            path: Some(path), ..
-        }
+        DiffTarget::Commit { path, .. }
         | DiffTarget::CommitRange {
             path: Some(path), ..
         } => path.clone(),

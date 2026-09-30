@@ -131,26 +131,6 @@ pub(super) fn model(
     items.push(ContextMenuItem::Separator);
 
     items.push(ContextMenuItem::Entry {
-        label: "Open diff".into(),
-        icon: Some("icons/open_external.svg".into()),
-        shortcut: None,
-        disabled: false,
-        action: if area == DiffArea::Unstaged && is_unstaged_conflicted {
-            Box::new(ContextMenuAction::SelectConflictDiff {
-                repo_id,
-                path: path.to_path_buf(),
-            })
-        } else {
-            Box::new(ContextMenuAction::SelectDiff {
-                repo_id,
-                target: DiffTarget::WorkingTree {
-                    path: path.to_path_buf(),
-                    area,
-                },
-            })
-        },
-    });
-    items.push(ContextMenuItem::Entry {
         label: "Open file".into(),
         icon: Some("icons/file.svg".into()),
         shortcut: None,

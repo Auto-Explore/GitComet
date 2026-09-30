@@ -236,7 +236,7 @@ fn config_changes_refresh_attributes_and_decoding_without_reopening() {
     let repo = open(workdir);
     let target = DiffTarget::Commit {
         commit_id: commit,
-        path: Some("ru.txt".into()),
+        path: "ru.txt".into(),
     };
     let original = file_text(&*repo, &target, None);
     assert_eq!(
@@ -530,7 +530,7 @@ fn commit_converting_latin1_to_utf8_decodes_each_side_in_its_own_encoding() {
     let repo = open(repo_dir);
     let target = DiffTarget::Commit {
         commit_id: converted,
-        path: Some(PathBuf::from("readme.txt")),
+        path: PathBuf::from("readme.txt"),
     };
     assert_eq!(
         changed_lines(&patch(&*repo, &target, None)),

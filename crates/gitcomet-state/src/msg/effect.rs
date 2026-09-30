@@ -328,6 +328,13 @@ pub enum Effect {
         /// Signing or fetch auth staged when a failed revert is replayed.
         auth: Option<StagedGitAuth>,
     },
+    ApplyFileChange {
+        repo_id: RepoId,
+        target: DiffTarget,
+        commit: bool,
+        /// Signing auth staged when a failed commit step is replayed.
+        auth: Option<StagedGitAuth>,
+    },
     CreateBranch {
         repo_id: RepoId,
         name: String,

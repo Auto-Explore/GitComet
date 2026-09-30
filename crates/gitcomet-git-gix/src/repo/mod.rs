@@ -40,6 +40,7 @@ pub(super) fn bstr_to_arc_str(bytes: &[u8]) -> Arc<str> {
     }
 }
 
+mod apply_change;
 mod blame;
 mod config;
 mod conflict_stages;
@@ -475,6 +476,7 @@ pub(crate) struct GixRepo {
     signature_format_cache: std::sync::Mutex<
         lru::LruCache<gix::ObjectId, Option<gitcomet_core::domain::SignatureFormat>>,
     >,
+    staged_applied_change: std::sync::Mutex<Option<apply_change::StagedAppliedChange>>,
 }
 
 impl GixRepo {
@@ -502,6 +504,7 @@ impl GixRepo {
             signature_format_cache: std::sync::Mutex::new(lru::LruCache::new(
                 std::num::NonZeroUsize::new(signatures::SIGNATURE_CACHE_LIMIT).unwrap(),
             )),
+            staged_applied_change: std::sync::Mutex::new(None),
         }
     }
 
@@ -1124,6 +1127,14 @@ impl GitRepository for GixRepo {
         mainline: Option<usize>,
     ) -> Result<CommandOutput> {
         self.revert_with_output_impl(id, commit, mainline)
+    }
+
+    fn apply_file_change_with_output(
+        &self,
+        target: &DiffTarget,
+        commit: bool,
+    ) -> Result<CommandOutput> {
+        self.apply_file_change_with_output_impl(target, commit)
     }
 
     fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()> {

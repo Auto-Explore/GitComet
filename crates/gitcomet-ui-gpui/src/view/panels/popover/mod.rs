@@ -5,6 +5,7 @@ use gitcomet_core::services::InteractiveRebaseAction;
 mod add_repo_menu;
 mod add_to_gitignore_prompt;
 mod app_menu;
+mod apply_file_change_confirm;
 mod author_filter;
 mod branch_exists_prompt;
 mod branch_picker;
@@ -545,6 +546,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
                 ..
             }
             | PopoverKind::CommitFileMenu { .. }
+            | PopoverKind::CommitRangeFileMenu { .. }
             | PopoverKind::FileBrowserFileMenu { .. }
             | PopoverKind::FileBrowserFolderMenu { .. }
             | PopoverKind::BranchGroupMenu { .. }
@@ -562,6 +564,7 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
             | PopoverKind::ForcePushConfirm { .. }
             | PopoverKind::CherryPickCommitConfirm { .. }
             | PopoverKind::RevertCommitConfirm { .. }
+            | PopoverKind::ApplyFileChangeConfirm { .. }
             | PopoverKind::MergeCommitConfirm { .. }
             | PopoverKind::MergeAbortConfirm { .. }
             | PopoverKind::RebaseOntoConfirm { .. }
@@ -861,6 +864,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::ForcePushConfirm { .. }
         | PopoverKind::CherryPickCommitConfirm { .. }
         | PopoverKind::RevertCommitConfirm { .. }
+        | PopoverKind::ApplyFileChangeConfirm { .. }
         | PopoverKind::MergeCommitConfirm { .. }
         | PopoverKind::MergeAbortConfirm { .. }
         | PopoverKind::BranchExistsPrompt { .. }
@@ -935,6 +939,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::RebaseOntoConfirm { .. }
         | PopoverKind::CherryPickCommitConfirm { .. }
         | PopoverKind::RevertCommitConfirm { .. }
+        | PopoverKind::ApplyFileChangeConfirm { .. }
         | PopoverKind::MergeCommitConfirm { .. } => Some(DIALOG_380_WIDTH),
         PopoverKind::BranchExistsPrompt { .. } => Some(DIALOG_540_WIDTH),
         PopoverKind::MergeAbortConfirm { .. } => Some(DIALOG_360_WIDTH),
@@ -1028,6 +1033,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
             ..
         }
         | PopoverKind::CommitFileMenu { .. }
+        | PopoverKind::CommitRangeFileMenu { .. }
         | PopoverKind::FileBrowserFileMenu { .. }
         | PopoverKind::FileBrowserFolderMenu { .. }
         | PopoverKind::BranchGroupMenu { .. }

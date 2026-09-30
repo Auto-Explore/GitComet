@@ -1010,6 +1010,29 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
         );
     }
 
+    // Replayed whole: the backend finds the change already staged and only
+    // commits it.
+    let apply_target = gitcomet_core::domain::DiffTarget::Commit {
+        commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
+        path: PathBuf::from("a.txt"),
+    };
+    let apply_effects = replay_case(RepoCommandKind::ApplyFileChange {
+        target: apply_target.clone(),
+        commit: true,
+    });
+    assert!(
+        matches!(
+            apply_effects.as_slice(),
+            [Effect::ApplyFileChange {
+                repo_id: RepoId(1),
+                target,
+                commit: true,
+                auth: Some(_),
+            }] if target == &apply_target
+        ),
+        "{apply_effects:?}"
+    );
+
     let non_replayable_effects = replay_case(RepoCommandKind::StageHunk);
     assert!(non_replayable_effects.is_empty());
 }

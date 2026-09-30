@@ -2350,10 +2350,10 @@ impl RepoState {
     /// a diff of a file still means that file is the one open.
     pub fn open_file_path(&self) -> Option<&std::path::Path> {
         match self.diff_state.diff_target.as_ref()? {
-            DiffTarget::WorkingTree { path, .. } => Some(path.as_path()),
-            DiffTarget::Commit { path, .. } | DiffTarget::CommitRange { path, .. } => {
-                path.as_deref()
+            DiffTarget::WorkingTree { path, .. } | DiffTarget::Commit { path, .. } => {
+                Some(path.as_path())
             }
+            DiffTarget::CommitRange { path, .. } => path.as_deref(),
         }
     }
 
@@ -3142,7 +3142,7 @@ mod tests {
         let file_view = MainViewSnapshot {
             diff_target: Some(DiffTarget::Commit {
                 commit_id: CommitId("aaa".into()),
-                path: Some(PathBuf::from("src/lib.rs")),
+                path: PathBuf::from("src/lib.rs"),
             }),
             edit_mode: false,
             content_preview: false,
@@ -3343,7 +3343,7 @@ mod tests {
         let file_diff = MainViewSnapshot {
             diff_target: Some(DiffTarget::Commit {
                 commit_id: CommitId("aaa".into()),
-                path: Some(PathBuf::from("src/lib.rs")),
+                path: PathBuf::from("src/lib.rs"),
             }),
             edit_mode: false,
             content_preview: false,
@@ -3492,7 +3492,7 @@ mod tests {
         repo.diff_state.diff = Loadable::Ready(Arc::new(Diff {
             target: DiffTarget::Commit {
                 commit_id: CommitId("c1".into()),
-                path: None,
+                path: "a.txt".into(),
             },
             lines: Vec::new(),
         }));

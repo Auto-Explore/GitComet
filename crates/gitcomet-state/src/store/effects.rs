@@ -911,6 +911,18 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::ApplyFileChange {
+            repo_id,
+            target,
+            commit,
+            ..
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::ApplyFileChange { target, commit },
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::CreateBranch { repo_id, .. } => {
             send_repo_action_unavailable(repo_id, RepoActionKind::CreateBranch, runtime, &send)
         }
@@ -2462,6 +2474,16 @@ pub(super) fn schedule_effect(
         } => {
             repo_commands::schedule_revert_commit(
                 executor, repos, msg_tx, repo_id, commit_id, commit, mainline, summary, auth,
+            );
+        }
+        Effect::ApplyFileChange {
+            repo_id,
+            target,
+            commit,
+            auth,
+        } => {
+            repo_commands::schedule_apply_file_change(
+                executor, repos, msg_tx, repo_id, target, commit, auth,
             );
         }
         Effect::CreateBranch {

@@ -454,8 +454,9 @@ pub(super) fn push_raw_patch_diff_state_with_rev(
         fixture_name
     ));
     let _ = std::fs::create_dir_all(&workdir);
-    let target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: gitcomet_core::domain::CommitId("feedface".into()),
+    let target = gitcomet_core::domain::DiffTarget::CommitRange {
+        from_commit_id: gitcomet_core::domain::CommitId("parent".into()),
+        to_commit_id: Some(gitcomet_core::domain::CommitId("feedface".into())),
         path: None,
     };
     let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), &unified);

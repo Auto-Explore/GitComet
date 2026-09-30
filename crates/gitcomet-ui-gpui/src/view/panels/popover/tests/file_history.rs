@@ -270,7 +270,7 @@ fn file_history_rows_are_reused_until_their_data_changes(cx: &mut gpui::TestAppC
             let mut state = (*host.state).clone();
             state.repos[0].diff_state.diff_target = Some(DiffTarget::Commit {
                 commit_id: commit(1).id,
-                path: Some(std::path::PathBuf::from("src/main.rs")),
+                path: std::path::PathBuf::from("src/main.rs"),
             });
             host.state = Arc::new(state);
         }),
@@ -445,6 +445,7 @@ fn file_history_row_menu_offers_file_and_commit_actions_and_routes_keyboard(
                 "Open file at this commit",
                 "Open file at parent",
                 "Show changes to this file",
+                "Apply change",
                 "Reveal in history",
                 "Copy SHA",
                 "Checkout (detached)",
@@ -452,6 +453,7 @@ fn file_history_row_menu_offers_file_and_commit_actions_and_routes_keyboard(
             ] {
                 assert!(labels.contains(&expected), "missing {expected}");
             }
+            assert!(!labels.contains(&"Open diff"), "{labels:?}");
         })
     });
     cx.simulate_keystrokes("down");
@@ -543,7 +545,7 @@ fn file_history_enter_activates_row_and_closes_picker(cx: &mut gpui::TestAppCont
         state.repos[0].diff_state.diff_target,
         Some(DiffTarget::Commit {
             commit_id: commit(0).id,
-            path: Some("src/main.rs".into())
+            path: "src/main.rs".into()
         })
     );
     assert_eq!(state.repos[0].navigation.view_history.entries.len(), 1);
@@ -579,7 +581,7 @@ fn file_history_show_changes_opens_a_file_diff_and_closes_picker(cx: &mut gpui::
     });
     let expected = DiffTarget::Commit {
         commit_id: commit(1).id,
-        path: Some("src/main.rs".into()),
+        path: "src/main.rs".into(),
     };
     super::branch::wait_until("file changes", || {
         store.snapshot().repos[0].diff_state.diff_target.as_ref() == Some(&expected)

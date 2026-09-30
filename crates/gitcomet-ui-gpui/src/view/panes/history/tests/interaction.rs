@@ -153,7 +153,7 @@ fn selecting_the_working_tree_preserves_a_file_preview_when_following(
         let commit_id = CommitId("tip".into());
         let target = DiffTarget::Commit {
             commit_id: commit_id.clone(),
-            path: Some(PathBuf::from("src/lib.rs")),
+            path: PathBuf::from("src/lib.rs"),
         };
         let mut repo = RepoState::new_opening(
             repo_id,

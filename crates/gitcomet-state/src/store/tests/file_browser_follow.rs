@@ -700,7 +700,7 @@ fn following_reopens_the_file_at_the_latest_selection_and_closes_it_when_missing
         state.repos[0].diff_state.diff_target,
         Some(DiffTarget::Commit {
             commit_id: latest,
-            path: Some(path),
+            path,
         })
     );
     assert!(

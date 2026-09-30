@@ -205,6 +205,9 @@ impl PopoverHost {
             PopoverKind::RevertCommitConfirm { repo_id, commit_id } => {
                 revert_commit_confirm::panel(self, repo_id, commit_id, cx)
             }
+            PopoverKind::ApplyFileChangeConfirm { repo_id, target } => {
+                apply_file_change_confirm::panel(self, repo_id, target, cx)
+            }
             PopoverKind::MergeCommitConfirm { repo_id, commit_id } => {
                 merge_commit_confirm::panel(self, repo_id, commit_id, cx)
             }
@@ -475,6 +478,7 @@ impl PopoverHost {
                 },
                 cx,
             ),
+            kind @ PopoverKind::CommitRangeFileMenu { .. } => self.context_menu_view(kind, cx),
             PopoverKind::FileBrowserFileMenu { repo_id, path } => {
                 self.context_menu_view(PopoverKind::FileBrowserFileMenu { repo_id, path }, cx)
             }

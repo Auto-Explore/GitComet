@@ -2579,6 +2579,7 @@ impl PopoverHost {
                 PopoverKind::StageConflictMarkersConfirm { .. }
                     | PopoverKind::CherryPickCommitConfirm { .. }
                     | PopoverKind::RevertCommitConfirm { .. }
+                    | PopoverKind::ApplyFileChangeConfirm { .. }
             ) {
             window
                 .focused(cx)

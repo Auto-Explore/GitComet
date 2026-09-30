@@ -106,7 +106,7 @@ fn notify_fingerprint_tracks_disk_revs_only_for_working_tree_targets() {
 
     state.repos[0].diff_state.diff_target = Some(DiffTarget::Commit {
         commit_id: gitcomet_core::domain::CommitId(std::sync::Arc::from("abc")),
-        path: Some("a.rs".into()),
+        path: "a.rs".into(),
     });
     let commit_before = MainPaneView::notify_fingerprint_for(&state);
     state.repos[0].worktree_change_rev += 1;

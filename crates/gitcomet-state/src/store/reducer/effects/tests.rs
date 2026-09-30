@@ -2350,7 +2350,7 @@ fn browse_open_content_path_captures_previews_only() {
     repo.diff_state.content_preview = true;
     repo.set_diff_target(Some(DiffTarget::Commit {
         commit_id: commit_id.clone(),
-        path: Some(path.clone()),
+        path: path.clone(),
     }));
     assert_eq!(
         browse_open_content_path(repo),
@@ -2375,13 +2375,6 @@ fn browse_open_content_path_captures_previews_only() {
     assert!(browse_open_content_path(repo).is_none());
     repo.diff_state.edit_mode = false;
 
-    // Commit with path: None → None
-    repo.set_diff_target(Some(DiffTarget::Commit {
-        commit_id,
-        path: None,
-    }));
-    assert!(browse_open_content_path(repo).is_none());
-
     // diff_target is None → None
     repo.set_diff_target(None);
     assert!(browse_open_content_path(repo).is_none());
@@ -2394,7 +2387,7 @@ fn open_preview_at(state: &mut AppState, repo_id: RepoId, commit: &CommitId, pat
     repo.diff_state.edit_mode = false;
     repo.set_diff_target(Some(DiffTarget::Commit {
         commit_id: commit.clone(),
-        path: Some(PathBuf::from(path)),
+        path: PathBuf::from(path),
     }));
 }
 
@@ -2451,7 +2444,7 @@ fn browse_repository_at_commit_reopens_active_file_once_the_listing_lands() {
         repo.diff_state.diff_target,
         Some(DiffTarget::Commit {
             commit_id: commit_b,
-            path: Some(PathBuf::from("src/lib.rs")),
+            path: PathBuf::from("src/lib.rs"),
         })
     );
     assert!(repo.diff_state.content_preview);
@@ -2807,7 +2800,7 @@ fn browse_repository_at_commit_same_commit_with_file_open_does_not_reopen() {
         repo.diff_state.content_preview = true;
         repo.diff_state.diff_target = Some(DiffTarget::Commit {
             commit_id: commit_id.clone(),
-            path: Some(file_path),
+            path: file_path,
         });
     }
 

@@ -638,7 +638,26 @@ impl PopoverHost {
                 repo_id,
                 commit_id,
                 path,
-            } => Some(commit_file::model(self, *repo_id, commit_id, path)),
+            } => Some(commit_file::model(
+                self,
+                *repo_id,
+                commit_file::FileMenuSource::Commit(commit_id),
+                path,
+            )),
+            PopoverKind::CommitRangeFileMenu {
+                repo_id,
+                from_commit_id,
+                to_commit_id,
+                path,
+            } => Some(commit_file::model(
+                self,
+                *repo_id,
+                commit_file::FileMenuSource::Range {
+                    from: from_commit_id,
+                    to: to_commit_id.as_ref(),
+                },
+                path,
+            )),
             PopoverKind::CommitFileSortMenu { list } => {
                 Some(commit_file_sort::model(self, *list, cx))
             }
@@ -1225,6 +1244,16 @@ impl PopoverHost {
                 let anchor = self.popover_anchor_point();
                 self.open_popover_at(
                     PopoverKind::CherryPickCommitConfirm { repo_id, commit_id },
+                    anchor,
+                    window,
+                    cx,
+                );
+                return;
+            }
+            ContextMenuAction::ApplyFileChange { repo_id, target } => {
+                let anchor = self.popover_anchor_point();
+                self.open_popover_at(
+                    PopoverKind::ApplyFileChangeConfirm { repo_id, target },
                     anchor,
                     window,
                     cx,

@@ -2207,7 +2207,7 @@ fn browse_open_content_path(repo: &RepoState) -> Option<PendingFileBrowserReopen
         return None;
     }
     let path = match &repo.diff_state.diff_target {
-        Some(gitcomet_core::domain::DiffTarget::Commit { path: Some(p), .. }) => p.clone(),
+        Some(gitcomet_core::domain::DiffTarget::Commit { path: p, .. }) => p.clone(),
         Some(gitcomet_core::domain::DiffTarget::WorkingTree { path, .. }) => path.clone(),
         _ => return None,
     };

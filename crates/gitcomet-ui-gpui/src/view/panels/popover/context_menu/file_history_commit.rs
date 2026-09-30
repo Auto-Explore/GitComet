@@ -78,6 +78,15 @@ pub(in super::super) fn model(
         },
     );
     items.push(ContextMenuItem::Separator);
+    items.push(super::commit_file::apply_change_entry(
+        this,
+        repo_id,
+        DiffTarget::Commit {
+            commit_id: commit_id.clone(),
+            path: path.to_path_buf(),
+        },
+    ));
+    items.push(ContextMenuItem::Separator);
     let actions = super::commit::action_items(this, repo_id, commit_id);
     let offset = items.len();
     items.extend(actions.items);

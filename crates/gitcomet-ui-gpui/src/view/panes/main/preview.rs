@@ -710,7 +710,7 @@ impl MainPaneView {
             target,
             Some(
                 DiffTarget::WorkingTree { .. }
-                    | DiffTarget::Commit { path: Some(_), .. }
+                    | DiffTarget::Commit { path: _, .. }
                     | DiffTarget::CommitRange { path: Some(_), .. }
             )
         )
@@ -1269,10 +1269,8 @@ impl MainPaneView {
         let repo = self.active_repo()?;
         let workdir = repo.spec.workdir.clone();
         let path = match repo.diff_state.diff_target.as_ref()? {
-            DiffTarget::WorkingTree { path, .. } => path.clone(),
-            DiffTarget::Commit { path, .. } | DiffTarget::CommitRange { path, .. } => {
-                path.clone()?
-            }
+            DiffTarget::WorkingTree { path, .. } | DiffTarget::Commit { path, .. } => path.clone(),
+            DiffTarget::CommitRange { path, .. } => path.clone()?,
         };
         let document = crate::view::rows::markdown_preview_document_path(&workdir, &path)?;
         Some(crate::view::rows::MarkdownImageRoot {
@@ -1774,10 +1772,7 @@ impl MainPaneView {
                     workdir.join(path)
                 })
             }
-            DiffTarget::Commit {
-                commit_id,
-                path: Some(path),
-            } => {
+            DiffTarget::Commit { commit_id, path } => {
                 let details = match &repo.history_state.commit_details {
                     Loadable::Ready(d) => d,
                     _ => return None,
@@ -1819,10 +1814,7 @@ impl MainPaneView {
                     workdir.join(path)
                 })
             }
-            DiffTarget::Commit {
-                commit_id,
-                path: Some(path),
-            } => {
+            DiffTarget::Commit { commit_id, path } => {
                 let details = match &repo.history_state.commit_details {
                     Loadable::Ready(d) => d,
                     _ => return None,
@@ -1857,9 +1849,7 @@ impl MainPaneView {
             } else {
                 workdir.join(path)
             }),
-            DiffTarget::Commit {
-                path: Some(path), ..
-            } => Some(workdir.join(path)),
+            DiffTarget::Commit { path, .. } => Some(workdir.join(path)),
             _ => None,
         }
     }

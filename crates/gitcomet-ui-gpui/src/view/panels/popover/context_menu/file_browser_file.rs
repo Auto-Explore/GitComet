@@ -1,5 +1,5 @@
 use super::*;
-use gitcomet_core::domain::{DiffArea, FileSource};
+use gitcomet_core::domain::FileSource;
 
 /// Context menu for a file row in the sidebar file browser. The browsed source
 /// (working directory / commit) is read from state so the menu offers the right
@@ -40,16 +40,6 @@ pub(super) fn model(
             path: path.to_path_buf(),
         }),
     });
-
-    if let Some(target) = diff_target_for_source(&source, path) {
-        items.push(ContextMenuItem::Entry {
-            label: "Open diff".into(),
-            icon: Some("icons/open_external.svg".into()),
-            shortcut: None,
-            disabled: false,
-            action: Box::new(ContextMenuAction::SelectDiff { repo_id, target }),
-        });
-    }
 
     items.push(ContextMenuItem::Entry {
         label: "Edit file".into(),
@@ -177,18 +167,4 @@ pub(super) fn model(
     push_copy_path_entries(&mut items, this, repo_id, path, None);
 
     ContextMenuModel::new(items)
-}
-
-fn diff_target_for_source(source: &FileSource, path: &std::path::Path) -> Option<DiffTarget> {
-    match source {
-        FileSource::WorkingDirectory => Some(DiffTarget::WorkingTree {
-            path: path.to_path_buf(),
-            area: DiffArea::Unstaged,
-        }),
-        FileSource::Commit(commit_id) => Some(DiffTarget::Commit {
-            commit_id: commit_id.clone(),
-            path: Some(path.to_path_buf()),
-        }),
-        FileSource::Branch(_) => None,
-    }
 }

@@ -82,6 +82,15 @@ pub(super) fn revert_commit(
     }]
 }
 
+pub(super) fn apply_file_change(repo_id: RepoId, target: DiffTarget, commit: bool) -> Vec<Effect> {
+    vec![Effect::ApplyFileChange {
+        repo_id,
+        target,
+        commit,
+        auth: None,
+    }]
+}
+
 pub(super) fn create_branch(repo_id: RepoId, name: String, target: String) -> Vec<Effect> {
     vec![Effect::CreateBranch {
         repo_id,
@@ -1026,6 +1035,7 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::InteractiveCherryPick { .. }
             | RepoCommandKind::CherryPick { .. }
             | RepoCommandKind::Revert { .. }
+            | RepoCommandKind::ApplyFileChange { .. }
             | RepoCommandKind::MergeAbort
             | RepoCommandKind::CreateTag { .. }
             | RepoCommandKind::DeleteTag { .. }
@@ -1069,6 +1079,7 @@ pub(super) fn command_touches_sequencer_state(command: &RepoCommandKind) -> bool
             | RepoCommandKind::InteractiveCherryPick { .. }
             | RepoCommandKind::CherryPick { .. }
             | RepoCommandKind::Revert { .. }
+            | RepoCommandKind::ApplyFileChange { commit: true, .. }
             | RepoCommandKind::MergeAbort
     )
 }
@@ -1094,6 +1105,7 @@ fn command_clears_pending_force_push_lease(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::InteractiveCherryPick { .. }
             | RepoCommandKind::CherryPick { .. }
             | RepoCommandKind::Revert { .. }
+            | RepoCommandKind::ApplyFileChange { commit: true, .. }
             | RepoCommandKind::MergeAbort
     )
 }

@@ -1825,7 +1825,7 @@ fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
             let mut repo = opening_repo_state(repo_id, &workdir);
             repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::Commit {
                 commit_id: commit_id.clone(),
-                path: Some(file_rel.clone()),
+                path: file_rel.clone(),
             });
             repo.diff_state.diff_state_rev = 1;
             repo.diff_state.diff = gitcomet_state::model::Loadable::Error(

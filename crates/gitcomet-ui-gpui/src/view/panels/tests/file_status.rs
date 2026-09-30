@@ -15,8 +15,9 @@ fn patch_diff_search_query_keeps_stable_style_cache_entries(cx: &mut gpui::TestA
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            let target = gitcomet_core::domain::DiffTarget::Commit {
-                commit_id: gitcomet_core::domain::CommitId("feedface".into()),
+            let target = gitcomet_core::domain::DiffTarget::CommitRange {
+                from_commit_id: gitcomet_core::domain::CommitId("parent".into()),
+                to_commit_id: Some(gitcomet_core::domain::CommitId("feedface".into())),
                 path: None,
             };
 
@@ -616,7 +617,7 @@ fn committed_deleted_file_preview_uses_preview_text_file_without_patch_fallback(
             let mut repo = opening_repo_state(repo_id, &workdir);
             repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::Commit {
                 commit_id: commit_id.clone(),
-                path: Some(file_rel.clone()),
+                path: file_rel.clone(),
             });
             repo.diff_state.diff = gitcomet_state::model::Loadable::Error(
                 "parsed patch diff should not be consulted for deleted file preview".into(),

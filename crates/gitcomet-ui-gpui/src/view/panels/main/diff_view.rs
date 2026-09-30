@@ -730,8 +730,9 @@ impl MainPaneView {
             && let Some(diff_target) = repo.diff_state.diff_target.clone()
         {
             let path = match &diff_target {
-                DiffTarget::WorkingTree { path, .. } => Some(path.clone()),
-                DiffTarget::Commit { path, .. } => path.clone(),
+                DiffTarget::WorkingTree { path, .. } | DiffTarget::Commit { path, .. } => {
+                    Some(path.clone())
+                }
                 DiffTarget::CommitRange { path, .. } => path.clone(),
             };
             if let Some(path) = path {

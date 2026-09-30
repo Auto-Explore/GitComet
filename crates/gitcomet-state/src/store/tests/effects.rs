@@ -81,7 +81,7 @@ fn attribute_refresh_redecodes_staged_and_commit_diffs() {
         (
             DiffTarget::Commit {
                 commit_id: head.clone(),
-                path: Some("menu.txt".into()),
+                path: "menu.txt".into(),
             },
             "Привет!\n",
         ),
@@ -4028,6 +4028,177 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
     assert_eq!(*calls.lock().unwrap(), vec!["drop 4".to_string()]);
 }
 
+/// A repo on `main` whose `feature` commit edits `a.txt`; returns that commit.
+fn apply_file_change_fixture(repo: &Path) -> String {
+    run_git(repo, &["init", "-q", "-b", "main"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, &["config", "user.name", "Test User"]);
+    run_git(repo, &["config", "user.email", "test@example.com"]);
+    fs::write(repo.join("a.txt"), "one\ntwo\n").expect("write base");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(repo, &["commit", "-q", "-m", "base"]);
+    run_git(repo, &["checkout", "-q", "-b", "feature"]);
+    fs::write(repo.join("a.txt"), "one\nTWO\n").expect("write feature");
+    run_git(repo, &["commit", "-q", "-am", "feature subject\n\nbody"]);
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .expect("rev-parse");
+    run_git(repo, &["checkout", "-q", "main"]);
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+/// Runs one `ApplyFileChange` effect and returns every message it sent, in
+/// order, ending with its `RepoCommandFinished` unwrapped from the operation.
+fn run_apply_file_change_effect(repo: &Path, target: DiffTarget, commit: bool) -> Vec<Msg> {
+    struct Backend;
+    impl GitBackend for Backend {
+        fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            panic!("open should not be called in this test")
+        }
+    }
+    let repo_id = RepoId(9);
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    repos.insert(
+        repo_id,
+        gitcomet_git_gix::GixBackend
+            .open(repo)
+            .expect("open repository through backend"),
+    );
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend);
+    let executor = super::executor::TaskExecutor::new(1);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::ApplyFileChange {
+            repo_id,
+            target,
+            commit,
+            auth: None,
+        },
+    );
+    let mut msgs = Vec::new();
+    loop {
+        let msg = msg_rx
+            .recv_timeout(Duration::from_secs(20))
+            .expect("apply file change should finish");
+        if let Msg::Internal(crate::msg::InternalMsg::GitOperationFinished { message, .. }) = msg {
+            msgs.push(Msg::Internal(*message));
+            return msgs;
+        }
+        msgs.push(msg);
+    }
+}
+
+fn suggested_messages(msgs: &[Msg]) -> Vec<&str> {
+    msgs.iter()
+        .filter_map(|msg| match msg {
+            Msg::Internal(crate::msg::InternalMsg::CommitMessageSuggested { message, .. }) => {
+                Some(message.as_str())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn apply_file_change_offers_the_source_message_only_while_uncommitted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let picked = apply_file_change_fixture(dir.path());
+    let target = DiffTarget::Commit {
+        commit_id: CommitId(picked.as_str().into()),
+        path: PathBuf::from("a.txt"),
+    };
+
+    let staged = run_apply_file_change_effect(dir.path(), target.clone(), false);
+    assert_eq!(suggested_messages(&staged), ["feature subject\n\nbody"]);
+    assert!(matches!(
+        staged.last(),
+        Some(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished { result: Ok(_), .. }
+        ))
+    ));
+
+    // Committing needs no message from the user.
+    let committed = run_apply_file_change_effect(dir.path(), target, true);
+    assert!(suggested_messages(&committed).is_empty(), "{committed:?}");
+    assert!(matches!(
+        committed.last(),
+        Some(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished { result: Ok(_), .. }
+        ))
+    ));
+}
+
+#[test]
+fn a_conflicted_apply_file_change_still_offers_the_message() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let picked = apply_file_change_fixture(dir.path());
+    fs::write(dir.path().join("a.txt"), "one\nMAIN\n").expect("write main edit");
+    run_git(dir.path(), &["commit", "-q", "-am", "main edit"]);
+    let target = DiffTarget::Commit {
+        commit_id: CommitId(picked.as_str().into()),
+        path: PathBuf::from("a.txt"),
+    };
+
+    let msgs = run_apply_file_change_effect(dir.path(), target, true);
+
+    assert_eq!(suggested_messages(&msgs), ["feature subject\n\nbody"]);
+    assert!(matches!(
+        msgs.last(),
+        Some(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished { result: Err(_), .. }
+        ))
+    ));
+}
+
+#[test]
+fn an_already_applied_change_offers_no_message() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let picked = apply_file_change_fixture(dir.path());
+    fs::write(dir.path().join("a.txt"), "one\nTWO\n").expect("write same edit");
+    run_git(dir.path(), &["commit", "-q", "-am", "same edit"]);
+    let target = DiffTarget::Commit {
+        commit_id: CommitId(picked.as_str().into()),
+        path: PathBuf::from("a.txt"),
+    };
+
+    let msgs = run_apply_file_change_effect(dir.path(), target, false);
+
+    assert!(suggested_messages(&msgs).is_empty(), "{msgs:?}");
+}
+
+/// The change stays staged when committing it fails, so the commit box gets
+/// the message the user now has to commit with.
+#[cfg(unix)]
+#[test]
+fn a_failed_commit_step_offers_the_message() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let picked = apply_file_change_fixture(dir.path());
+    run_git(dir.path(), &["config", "commit.gpgsign", "true"]);
+    run_git(dir.path(), &["config", "gpg.program", "false"]);
+    let target = DiffTarget::Commit {
+        commit_id: CommitId(picked.as_str().into()),
+        path: PathBuf::from("a.txt"),
+    };
+
+    let msgs = run_apply_file_change_effect(dir.path(), target, true);
+
+    assert_eq!(suggested_messages(&msgs), ["feature subject\n\nbody"]);
+    assert!(matches!(
+        msgs.last(),
+        Some(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished { result: Err(_), .. }
+        ))
+    ));
+}
+
 fn unique_temp_path(prefix: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "{prefix}-{}-{}",
@@ -6459,6 +6630,18 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 commit: true,
                 mainline: None,
                 summary: "revert me".into(),
+                auth: None,
+            },
+            1,
+        ),
+        (
+            Effect::ApplyFileChange {
+                repo_id,
+                target: DiffTarget::Commit {
+                    commit_id: commit_id.clone(),
+                    path: PathBuf::from("tracked.txt"),
+                },
+                commit: false,
                 auth: None,
             },
             1,

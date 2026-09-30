@@ -1,4 +1,4 @@
-use gitcomet_core::domain::{CommitId, Upstream};
+use gitcomet_core::domain::{CommitId, DiffTarget, Upstream};
 use gitcomet_core::services::{
     ConflictSide, ForcePushLease, InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode,
     SafePushAfterCommitTarget, SubmoduleTrustTarget,
@@ -92,6 +92,10 @@ pub enum RepoCommandKind {
         /// Git's 1-based mainline parent for a merge commit.
         mainline: Option<usize>,
         summary: String,
+    },
+    ApplyFileChange {
+        target: DiffTarget,
+        commit: bool,
     },
     MergeAbort,
     CreateTag {
@@ -211,6 +215,7 @@ impl RepoCommandKind {
             | Self::InteractiveCherryPick { .. }
             | Self::CherryPick { .. }
             | Self::Revert { .. }
+            | Self::ApplyFileChange { .. }
             | Self::MergeAbort
             | Self::CheckoutConflict { .. }
             | Self::AcceptConflictDeletion { .. }
@@ -279,6 +284,7 @@ impl RepoCommandKind {
             | Self::InteractiveRebase { .. } => "Rebase",
             Self::InteractiveCherryPick { .. } | Self::CherryPick { .. } => "Cherry-pick",
             Self::Revert { .. } => "Revert",
+            Self::ApplyFileChange { .. } => "Apply change",
             Self::MergeAbort => "Abort merge",
             Self::CreateTag { .. } => "Create tag",
             Self::DeleteTag { .. } => "Delete tag",

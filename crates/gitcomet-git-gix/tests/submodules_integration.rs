@@ -841,7 +841,7 @@ fn submodule_commit_summary_treats_missing_submodule_history_as_unavailable() {
     let summary = opened
         .submodule_diff_summary(&DiffTarget::Commit {
             commit_id: CommitId(parent_commit.into()),
-            path: Some(submodule_path.to_path_buf()),
+            path: submodule_path.to_path_buf(),
         })
         .expect("load committed submodule summary");
     let range = summary

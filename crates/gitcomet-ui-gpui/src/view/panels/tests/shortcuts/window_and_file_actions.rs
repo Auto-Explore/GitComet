@@ -695,7 +695,7 @@ fn ctrl_h_opens_file_history_for_a_file_at_a_commit(cx: &mut gpui::TestAppContex
 
     repo.diff_state.diff_target = Some(DiffTarget::Commit {
         commit_id: commit_id.clone(),
-        path: Some(path.clone()),
+        path: path.clone(),
     });
     apply_state(cx, &view, app_state_with_active_repo(repo));
     bind_app_keys_and_global_diff_fallback_for_test(cx);

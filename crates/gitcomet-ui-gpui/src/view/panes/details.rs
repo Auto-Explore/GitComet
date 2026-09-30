@@ -1287,17 +1287,23 @@ impl DetailsPaneView {
             repo.history_state.commit_details_rev,
             &details.files,
         );
-        if !plan.is_tree() {
-            return Some(projection.source_indices.clone());
-        }
-        // Tree order, and deliberately every file: a collapsed folder hides
-        // rows, it does not narrow what prev/next file steps through.
-        Some(
-            plan.ordered()
-                .iter()
-                .filter_map(|ordinal| projection.source_indices.get(ordinal).copied())
-                .collect(),
-        )
+        Some(drawn_file_source_indices(&projection, &plan))
+    }
+
+    /// The comparison view's files as source indices in drawn order — the
+    /// counterpart to [`Self::active_commit_file_source_indices`].
+    pub(in super::super) fn active_range_file_source_indices(
+        &self,
+        repo_id: RepoId,
+    ) -> Option<Arc<[usize]>> {
+        let repo = self.active_repo().filter(|repo| repo.id == repo_id)?;
+        let Loadable::Ready(files) = &repo.history_state.range_files else {
+            return None;
+        };
+        let rev = repo.history_state.range_files_rev;
+        let projection = self.cached_range_file_projection(repo_id, rev, files);
+        let plan = self.cached_range_file_plan(repo_id, rev, files);
+        Some(drawn_file_source_indices(&projection, &plan))
     }
 
     /// A linked worktree's changed files as source indices in *drawn* order —
@@ -1829,19 +1835,56 @@ impl DetailsPaneView {
         position: usize,
         cx: &mut gpui::Context<Self>,
     ) -> Option<usize> {
+        self.reveal_file_list_row(crate::view::rows::FileListId::CommitFiles, position, cx)
+    }
+
+    /// [`Self::reveal_commit_file_row`] for the comparison view's list.
+    pub(in super::super) fn reveal_range_file_row(
+        &mut self,
+        position: usize,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<usize> {
+        self.reveal_file_list_row(crate::view::rows::FileListId::RangeFiles, position, cx)
+    }
+
+    /// The plan of a commit-diff file list: commit details or comparison.
+    fn commit_diff_file_plan(
+        &self,
+        list: crate::view::rows::FileListId,
+    ) -> Option<Arc<crate::view::rows::FileListPlan>> {
+        let repo = self.active_repo()?;
+        match list {
+            crate::view::rows::FileListId::RangeFiles => {
+                let Loadable::Ready(files) = &repo.history_state.range_files else {
+                    return None;
+                };
+                Some(self.cached_range_file_plan(
+                    repo.id,
+                    repo.history_state.range_files_rev,
+                    files,
+                ))
+            }
+            _ => {
+                let Loadable::Ready(details) = &repo.history_state.commit_details else {
+                    return None;
+                };
+                Some(self.cached_commit_file_plan(
+                    repo.id,
+                    repo.history_state.commit_details_rev,
+                    &details.files,
+                ))
+            }
+        }
+    }
+
+    fn reveal_file_list_row(
+        &mut self,
+        list: crate::view::rows::FileListId,
+        position: usize,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<usize> {
         let repo_id = self.active_repo_id()?;
-        let list = crate::view::rows::FileListId::CommitFiles;
-        let plan = {
-            let repo = self.active_repo()?;
-            let Loadable::Ready(details) = &repo.history_state.commit_details else {
-                return None;
-            };
-            self.cached_commit_file_plan(
-                repo_id,
-                repo.history_state.commit_details_rev,
-                &details.files,
-            )
-        };
+        let plan = self.commit_diff_file_plan(list)?;
         if !plan.is_tree() {
             return Some(position);
         }
@@ -1854,15 +1897,7 @@ impl DetailsPaneView {
                 entry.expand(&chain);
             }
             cx.notify();
-            let repo = self.active_repo()?;
-            let Loadable::Ready(details) = &repo.history_state.commit_details else {
-                return None;
-            };
-            let plan = self.cached_commit_file_plan(
-                repo_id,
-                repo.history_state.commit_details_rev,
-                &details.files,
-            );
+            let plan = self.commit_diff_file_plan(list)?;
             return plan.row_ix_for_ordinal(ordinal).map(|row| row.0);
         }
         plan.row_ix_for_ordinal(ordinal).map(|row| row.0)
@@ -2418,6 +2453,22 @@ impl Render for DetailsPaneView {
             .child(self.commit_details_view(cx))
             .child(StatusSectionResizeTracker { view: cx.entity() })
     }
+}
+
+/// A file list's source indices in drawn order. In a tree this is tree order,
+/// and deliberately every file: a collapsed folder hides rows, it does not
+/// narrow what prev/next file steps through.
+fn drawn_file_source_indices(
+    projection: &crate::view::rows::CommitFileProjection,
+    plan: &crate::view::rows::FileListPlan,
+) -> Arc<[usize]> {
+    if !plan.is_tree() {
+        return projection.source_indices.clone();
+    }
+    plan.ordered()
+        .iter()
+        .filter_map(|ordinal| projection.source_indices.get(ordinal).copied())
+        .collect()
 }
 
 #[cfg(test)]

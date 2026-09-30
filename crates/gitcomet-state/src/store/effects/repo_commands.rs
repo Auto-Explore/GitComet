@@ -110,6 +110,10 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
         | RepoCommandKind::Revert {
             commit_id, summary, ..
         } => message_subject(summary).unwrap_or_else(|| short_commit_id(commit_id.as_ref())),
+        RepoCommandKind::ApplyFileChange { target, .. } => {
+            let (path, revision) = gitcomet_core::services::apply_file_change_source(target)?;
+            format!("{} · {revision}", path.display())
+        }
         RepoCommandKind::MergeAbort => "Current merge".to_string(),
         RepoCommandKind::CreateTag { name, target, .. } => format!("{name} at {target}"),
         RepoCommandKind::DeleteTag { name } => name.clone(),
@@ -1492,6 +1496,85 @@ pub(super) fn schedule_revert_commit(
             output
         },
     );
+}
+
+pub(super) fn schedule_apply_file_change(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    target: gitcomet_core::domain::DiffTarget,
+    commit: bool,
+    auth: Option<StagedGitAuth>,
+) {
+    let command_target = target.clone();
+    let suggestion_tx = msg_tx.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::ApplyFileChange {
+            target: command_target,
+            commit,
+        },
+        move |repo| {
+            let output =
+                run_with_git_auth(auth, || repo.apply_file_change_with_output(&target, commit));
+            // A change left staged or conflicted still needs a commit the user
+            // types, so offer the message the committing path would use.
+            let awaits_commit = match &output {
+                Ok(output) => {
+                    !commit
+                        && !output.stdout.contains(
+                            gitcomet_core::services::APPLY_FILE_CHANGE_ALREADY_APPLIED_SENTINEL,
+                        )
+                }
+                Err(error) => matches!(
+                    error.kind(),
+                    gitcomet_core::error::ErrorKind::Git(failure) if matches!(
+                        failure.id(),
+                        gitcomet_core::error::GitFailureId::ApplyChangeConflict
+                            | gitcomet_core::error::GitFailureId::ApplyChangeCommitFailed
+                    )
+                ),
+            };
+            if awaits_commit && let Some(message) = applied_change_commit_message(&*repo, &target) {
+                send_or_log(
+                    &suggestion_tx,
+                    Msg::Internal(InternalMsg::CommitMessageSuggested { repo_id, message }),
+                );
+            }
+            output
+        },
+    );
+}
+
+/// The message "Apply change" commits with: the source commit's own message,
+/// or for a comparison one naming the range.
+fn applied_change_commit_message(
+    repo: &dyn gitcomet_core::services::GitRepository,
+    target: &gitcomet_core::domain::DiffTarget,
+) -> Option<String> {
+    use gitcomet_core::domain::DiffTarget;
+    match target {
+        DiffTarget::Commit { commit_id, .. } => repo
+            .commit_messages(std::slice::from_ref(commit_id))
+            .ok()?
+            .pop()
+            .map(|message| message.trim_end().to_string())
+            .filter(|message| !message.is_empty()),
+        DiffTarget::CommitRange {
+            from_commit_id,
+            to_commit_id: Some(to_commit_id),
+            path: Some(path),
+        } => Some(gitcomet_core::services::apply_file_change_range_message(
+            from_commit_id,
+            to_commit_id,
+            path,
+        )),
+        _ => None,
+    }
 }
 
 pub(super) fn schedule_merge_abort(

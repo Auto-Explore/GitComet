@@ -201,14 +201,12 @@ impl GitOpsFixture {
             .open(repo_root.path())
             .expect("open git_ops diff_rename_heavy benchmark repo");
 
+        let target = commit_patch_target(repo_root.path(), commit_id);
         Self {
             _repo_root: repo_root,
             repo,
             scenario: GitOpsScenario::DiffCommit {
-                target: DiffTarget::Commit {
-                    commit_id,
-                    path: None,
-                },
+                target,
                 changed_files: renamed_files,
                 renamed_files,
                 binary_files: 0,
@@ -226,14 +224,12 @@ impl GitOpsFixture {
             .open(repo_root.path())
             .expect("open git_ops diff_binary_heavy benchmark repo");
 
+        let target = commit_patch_target(repo_root.path(), commit_id);
         Self {
             _repo_root: repo_root,
             repo,
             scenario: GitOpsScenario::DiffCommit {
-                target: DiffTarget::Commit {
-                    commit_id,
-                    path: None,
-                },
+                target,
                 changed_files: binary_files,
                 renamed_files: 0,
                 binary_files,
@@ -251,14 +247,12 @@ impl GitOpsFixture {
             .open(repo_root.path())
             .expect("open git_ops diff_large_single_file benchmark repo");
 
+        let target = commit_patch_target(repo_root.path(), commit_id);
         Self {
             _repo_root: repo_root,
             repo,
             scenario: GitOpsScenario::DiffCommit {
-                target: DiffTarget::Commit {
-                    commit_id,
-                    path: None,
-                },
+                target,
                 changed_files: 1,
                 renamed_files: 0,
                 binary_files: 0,
@@ -1099,6 +1093,17 @@ fn init_git_ops_repo(repo: &Path) {
 
 fn git_ops_head_commit_id(repo: &Path) -> CommitId {
     CommitId(git_stdout(repo, &["rev-parse", "HEAD"]).into())
+}
+
+/// A commit's whole patch against its first parent. Commit targets name one
+/// file, so the whole-patch benchmarks compare the two commits instead.
+fn commit_patch_target(repo: &Path, commit_id: CommitId) -> DiffTarget {
+    let parent = git_stdout(repo, &["rev-parse", &format!("{}^", commit_id.as_ref())]);
+    DiffTarget::CommitRange {
+        from_commit_id: CommitId(parent.into()),
+        to_commit_id: Some(commit_id),
+        path: None,
+    }
 }
 
 pub(crate) fn run_git(repo: &Path, args: &[&str]) {

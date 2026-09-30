@@ -947,7 +947,7 @@ fn local_link_target_reads_from_the_tree_the_document_came_from() {
     // A document shown at a commit links into that commit.
     let at_commit = DiffTarget::Commit {
         commit_id: CommitId("deadbeef".into()),
-        path: Some(PathBuf::from("docs/preview.md")),
+        path: PathBuf::from("docs/preview.md"),
     };
     assert_eq!(
         resolve(&at_commit, "./other.md"),
@@ -957,12 +957,7 @@ fn local_link_target_reads_from_the_tree_the_document_came_from() {
         ))
     );
 
-    // Neither a whole-commit view nor a range has one document to resolve from.
-    let whole_commit = DiffTarget::Commit {
-        commit_id: CommitId("deadbeef".into()),
-        path: None,
-    };
-    assert_eq!(resolve(&whole_commit, "other.md"), None);
+    // A range has no one document to resolve from.
     let range = DiffTarget::CommitRange {
         from_commit_id: CommitId("aaaa".into()),
         to_commit_id: Some(CommitId("bbbb".into())),

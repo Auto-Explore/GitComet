@@ -2,10 +2,69 @@ use super::*;
 
 use crate::view::shortcut_labels::secondary_shortcut;
 
+/// What a commit-diff file row belongs to: one commit's details, or the
+/// comparison view (`to: None` compares against the working tree).
+#[derive(Clone, Copy)]
+pub(super) enum FileMenuSource<'a> {
+    Commit(&'a CommitId),
+    Range {
+        from: &'a CommitId,
+        to: Option<&'a CommitId>,
+    },
+}
+
+impl<'a> FileMenuSource<'a> {
+    fn diff_target(self, path: &std::path::Path) -> DiffTarget {
+        let path = path.to_path_buf();
+        match self {
+            Self::Commit(commit_id) => DiffTarget::Commit {
+                commit_id: commit_id.clone(),
+                path,
+            },
+            Self::Range { from, to } => DiffTarget::CommitRange {
+                from_commit_id: from.clone(),
+                to_commit_id: to.cloned(),
+                path: Some(path),
+            },
+        }
+    }
+
+    /// The revision the file content is at, for a permalink. A comparison to
+    /// the working tree has none.
+    fn tip(self) -> Option<&'a CommitId> {
+        match self {
+            Self::Commit(commit_id) => Some(commit_id),
+            Self::Range { to, .. } => to,
+        }
+    }
+}
+
+/// "Apply change" for a commit or comparison file diff. Shares cherry-pick's
+/// icon and is disabled while history is being rewritten, like cherry-pick.
+pub(super) fn apply_change_entry(
+    this: &PopoverHost,
+    repo_id: RepoId,
+    target: DiffTarget,
+) -> ContextMenuItem {
+    let busy = this
+        .state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .is_none_or(|repo| repo.history_rewrite_busy());
+    ContextMenuItem::Entry {
+        label: "Apply change".into(),
+        icon: Some("icons/arrow_up.svg".into()),
+        shortcut: Some("A".into()),
+        disabled: busy,
+        action: Box::new(ContextMenuAction::ApplyFileChange { repo_id, target }),
+    }
+}
+
 pub(super) fn model(
     this: &PopoverHost,
     repo_id: RepoId,
-    commit_id: &CommitId,
+    source: FileMenuSource<'_>,
     path: &std::path::Path,
 ) -> ContextMenuModel {
     let is_submodule = this
@@ -13,13 +72,21 @@ pub(super) fn model(
         .repos
         .iter()
         .find(|repo| repo.id == repo_id)
-        .and_then(|repo| match &repo.history_state.commit_details {
-            Loadable::Ready(details) if details.id == *commit_id => details
-                .files
+        .and_then(|repo| {
+            let files = match source {
+                FileMenuSource::Commit(commit_id) => match &repo.history_state.commit_details {
+                    Loadable::Ready(details) if details.id == *commit_id => &details.files,
+                    _ => return None,
+                },
+                FileMenuSource::Range { .. } => match &repo.history_state.range_files {
+                    Loadable::Ready(files) => files.as_ref(),
+                    _ => return None,
+                },
+            };
+            files
                 .iter()
                 .find(|file| file.path == path)
-                .map(|file| file.is_submodule),
-            _ => None,
+                .map(|file| file.is_submodule)
         })
         .unwrap_or(false);
 
@@ -45,10 +112,7 @@ pub(super) fn model(
             disabled: false,
             action: Box::new(ContextMenuAction::SelectDiff {
                 repo_id,
-                target: DiffTarget::Commit {
-                    commit_id: commit_id.clone(),
-                    path: Some(path.to_path_buf()),
-                },
+                target: source.diff_target(path),
             }),
         });
         items.push(ContextMenuItem::Entry {
@@ -89,19 +153,6 @@ pub(super) fn model(
     }
 
     items.push(ContextMenuItem::Separator);
-    items.push(ContextMenuItem::Entry {
-        label: "Open diff".into(),
-        icon: Some("icons/open_external.svg".into()),
-        shortcut: None,
-        disabled: false,
-        action: Box::new(ContextMenuAction::SelectDiff {
-            repo_id,
-            target: DiffTarget::Commit {
-                commit_id: commit_id.clone(),
-                path: Some(path.to_path_buf()),
-            },
-        }),
-    });
     items.push(ContextMenuItem::Entry {
         label: "Open file".into(),
         icon: Some("icons/file.svg".into()),
@@ -156,20 +207,24 @@ pub(super) fn model(
             },
         }),
     });
-    if let Some(permalink) = this
-        .state
-        .repos
-        .iter()
-        .find(|repo| repo.id == repo_id)
-        .and_then(|repo| match &repo.remotes {
+    // A comparison to the working tree has no change to apply: it is
+    // already in the checkout.
+    if source.tip().is_some() {
+        items.push(ContextMenuItem::Separator);
+        items.push(apply_change_entry(this, repo_id, source.diff_target(path)));
+        items.push(ContextMenuItem::Separator);
+    }
+    if let Some(permalink) = source.tip().and_then(|tip| {
+        let repo = this.state.repos.iter().find(|repo| repo.id == repo_id)?;
+        match &repo.remotes {
             Loadable::Ready(remotes) => crate::view::permalink::file_permalink(
                 remotes,
-                commit_id.as_ref(),
+                tip.as_ref(),
                 &path.display().to_string(),
             ),
             _ => None,
-        })
-    {
+        }
+    }) {
         items.push(ContextMenuItem::Entry {
             label: "Copy file permalink".into(),
             icon: Some("icons/copy.svg".into()),

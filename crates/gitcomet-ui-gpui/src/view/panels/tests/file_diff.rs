@@ -122,7 +122,7 @@ fn push_regular_diff_content_mode_state_with_rev(
     let _ = std::fs::create_dir_all(&workdir);
     let target = gitcomet_core::domain::DiffTarget::Commit {
         commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
-        path: Some(path.clone()),
+        path: path.clone(),
     };
     let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), &unified);
     let file_diff =
@@ -756,7 +756,7 @@ fn push_collapsed_diff_loading_fixture_state(
     let path = PathBuf::from("src/lib.rs");
     let target = gitcomet_core::domain::DiffTarget::Commit {
         commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
-        path: Some(path.clone()),
+        path: path.clone(),
     };
     let (unified, old_text, new_text) = build_collapsed_diff_fixture_texts();
     let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), &unified);
@@ -3418,7 +3418,7 @@ fn diff_content_mode_switches_regular_file_diff_between_patch_and_content(
     let path = PathBuf::from("src/lib.rs");
     let target = gitcomet_core::domain::DiffTarget::Commit {
         commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
-        path: Some(path.clone()),
+        path: path.clone(),
     };
     let unified = "\
 diff --git a/src/lib.rs b/src/lib.rs

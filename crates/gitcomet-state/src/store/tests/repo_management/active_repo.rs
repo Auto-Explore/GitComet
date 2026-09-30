@@ -1162,7 +1162,7 @@ fn set_active_repo_plans_retained_commit_submodule_diff_before_clearing_details(
     let path = PathBuf::from("vendor/dependency");
     let target = DiffTarget::Commit {
         commit_id: commit_id.clone(),
-        path: Some(path.clone()),
+        path: path.clone(),
     };
     let repo1_state = state
         .repos

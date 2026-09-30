@@ -952,7 +952,7 @@ fn repo_action_finished_reissues_selected_commit_diff() {
     // re-issued WorkingTree diffs, leaving this one stranded.
     state.repos[0].diff_state.diff_target = Some(DiffTarget::Commit {
         commit_id: CommitId("abc123".into()),
-        path: Some(PathBuf::from("src/main.rs")),
+        path: PathBuf::from("src/main.rs"),
     });
     state.repos[0].diff_state.diff = Loadable::Loading;
 

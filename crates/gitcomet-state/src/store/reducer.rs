@@ -163,6 +163,12 @@ fn sequencer_effect_repo(effect: &Effect) -> Option<RepoId> {
         | Effect::InteractiveCherryPick { repo_id, .. }
         | Effect::CherryPickCommit { repo_id, .. }
         | Effect::RevertCommit { repo_id, .. }
+        // Its commit step can wait on a signer after the worktree changed.
+        | Effect::ApplyFileChange {
+            repo_id,
+            commit: true,
+            ..
+        }
         | Effect::MergeAbort { repo_id } => Some(*repo_id),
         _ => None,
     }
@@ -288,6 +294,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::CheckoutCommit { .. }
             | Msg::CherryPickCommit { .. }
             | Msg::RevertCommit { .. }
+            | Msg::ApplyFileChange { .. }
             | Msg::CreateBranch { .. }
             | Msg::CreateBranchAndCheckout { .. }
             | Msg::RenameBranch { .. }
@@ -598,6 +605,13 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
             mainline,
             summary,
         },
+        // Replayed whole: a run whose commit step failed finds the change
+        // already staged and goes straight to the commit.
+        RepoCommandKind::ApplyFileChange { target, commit } => Msg::ApplyFileChange {
+            repo_id,
+            target,
+            commit,
+        },
         RepoCommandKind::MergeAbort => Msg::MergeAbort { repo_id },
         RepoCommandKind::CreateTag {
             name,
@@ -736,7 +750,8 @@ fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> 
         | Effect::PushTag { auth: slot, .. }
         | Effect::DeleteRemoteTag { auth: slot, .. }
         | Effect::RebaseContinue { auth: slot, .. }
-        | Effect::RevertCommit { auth: slot, .. } => {
+        | Effect::RevertCommit { auth: slot, .. }
+        | Effect::ApplyFileChange { auth: slot, .. } => {
             *slot = Some(auth);
         }
         _ => {}
@@ -1558,6 +1573,18 @@ fn reduce_inner(
         } => {
             begin_head_changing_local_action(state, repo_id);
             actions_emit_effects::revert_commit(repo_id, commit_id, commit, mainline, summary)
+        }
+        Msg::ApplyFileChange {
+            repo_id,
+            target,
+            commit,
+        } => {
+            if commit {
+                begin_head_changing_local_action(state, repo_id);
+            } else {
+                begin_local_action(state, repo_id);
+            }
+            actions_emit_effects::apply_file_change(repo_id, target, commit)
         }
         Msg::CreateBranch {
             repo_id,
@@ -3172,11 +3199,11 @@ mod nav_history_tests {
         let commit_a = CommitId("aaa".into());
         let file1 = DiffTarget::Commit {
             commit_id: commit_a.clone(),
-            path: Some(std::path::PathBuf::from("file1.rs")),
+            path: std::path::PathBuf::from("file1.rs"),
         };
         let file2 = DiffTarget::Commit {
             commit_id: commit_a.clone(),
-            path: Some(std::path::PathBuf::from("file2.rs")),
+            path: std::path::PathBuf::from("file2.rs"),
         };
 
         dispatch(
@@ -3345,7 +3372,7 @@ mod nav_history_tests {
         let commit_a = CommitId("aaa".into());
         let file = DiffTarget::Commit {
             commit_id: commit_a.clone(),
-            path: Some(std::path::PathBuf::from("file1.rs")),
+            path: std::path::PathBuf::from("file1.rs"),
         };
 
         dispatch(
@@ -3397,7 +3424,7 @@ mod nav_history_tests {
         let commit_b = CommitId("bbb".into());
         let file = DiffTarget::Commit {
             commit_id: commit_a.clone(),
-            path: Some(std::path::PathBuf::from("file1.rs")),
+            path: std::path::PathBuf::from("file1.rs"),
         };
 
         dispatch(
@@ -3450,15 +3477,15 @@ mod nav_history_tests {
         let commit_a = CommitId("aaa".into());
         let file_a = DiffTarget::Commit {
             commit_id: commit_a.clone(),
-            path: Some(std::path::PathBuf::from("src/a.rs")),
+            path: std::path::PathBuf::from("src/a.rs"),
         };
         let file_b = DiffTarget::Commit {
             commit_id: commit_a.clone(),
-            path: Some(std::path::PathBuf::from("src/b.rs")),
+            path: std::path::PathBuf::from("src/b.rs"),
         };
         let file_c = DiffTarget::Commit {
             commit_id: commit_a.clone(),
-            path: Some(std::path::PathBuf::from("src/c.rs")),
+            path: std::path::PathBuf::from("src/c.rs"),
         };
 
         dispatch(

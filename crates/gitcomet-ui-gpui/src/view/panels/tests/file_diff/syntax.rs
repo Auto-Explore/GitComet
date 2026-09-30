@@ -13,8 +13,9 @@ fn patch_view_applies_syntax_highlighting_to_context_lines(cx: &mut gpui::TestAp
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            let target = gitcomet_core::domain::DiffTarget::Commit {
-                commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
+            let target = gitcomet_core::domain::DiffTarget::CommitRange {
+                from_commit_id: gitcomet_core::domain::CommitId("parent".into()),
+                to_commit_id: Some(gitcomet_core::domain::CommitId("deadbeef".into())),
                 path: None,
             };
 
@@ -456,7 +457,7 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
 
     let target = gitcomet_core::domain::DiffTarget::Commit {
         commit_id: commit_id.clone(),
-        path: Some(path.clone()),
+        path: path.clone(),
     };
     let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), &unified);
 
@@ -949,8 +950,9 @@ fn yaml_commit_patch_diff_keeps_consistent_highlighting_for_added_paths_and_keys
         gitcomet_core::domain::CommitId("bd8b4a04b4d7a04caf97392d6a66cbeebd665606".into());
     let unified = DEPLOYMENT_CI.unified_diff().to_owned();
 
-    let target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: commit_id.clone(),
+    let target = gitcomet_core::domain::DiffTarget::CommitRange {
+        from_commit_id: gitcomet_core::domain::CommitId("parent".into()),
+        to_commit_id: Some(commit_id.clone()),
         path: None,
     };
     let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), &unified);
@@ -1785,8 +1787,9 @@ fn yaml_commit_patch_diff_full_fixture_keeps_consistent_highlighting_across_file
     let commit_id =
         gitcomet_core::domain::CommitId("bd8b4a04b4d7a04caf97392d6a66cbeebd665606".into());
     let unified = COMMIT_PATCH.to_owned();
-    let target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: commit_id.clone(),
+    let target = gitcomet_core::domain::DiffTarget::CommitRange {
+        from_commit_id: gitcomet_core::domain::CommitId("parent".into()),
+        to_commit_id: Some(commit_id.clone()),
         path: None,
     };
     let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), &unified);
@@ -2625,11 +2628,12 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
 
     let file_target = gitcomet_core::domain::DiffTarget::Commit {
         commit_id: commit_id.clone(),
-        path: Some(path.clone()),
+        path: path.clone(),
     };
     let file_diff = gitcomet_core::domain::Diff::from_unified(file_target.clone(), &unified);
-    let patch_target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: commit_id.clone(),
+    let patch_target = gitcomet_core::domain::DiffTarget::CommitRange {
+        from_commit_id: gitcomet_core::domain::CommitId("parent".into()),
+        to_commit_id: Some(commit_id.clone()),
         path: None,
     };
     let patch_diff = gitcomet_core::domain::Diff::from_unified(patch_target.clone(), &unified);
