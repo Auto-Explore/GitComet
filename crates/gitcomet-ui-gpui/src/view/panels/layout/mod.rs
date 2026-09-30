@@ -12,6 +12,7 @@ mod commit_metadata;
 mod comparison;
 mod file_lists;
 mod status_sections;
+mod status_view;
 mod worktree_uncommitted;
 
 // Free helpers the sibling modules and the tests share.
