@@ -5,10 +5,15 @@ use super::{
     actions_emit_effects, begin_commit_action, reduce, refresh_selected_head_gitlink,
     repo_management, util,
 };
+use crate::model::AuthPromptKind;
 use crate::model::{AppState, AuthPromptState, AuthRetryOperation, PendingCommitRetry, RepoId};
 use crate::msg::{Effect, Msg, RepoCommandKind};
-use gitcomet_core::auth::StagedGitAuth;
-use gitcomet_core::error::Error;
+#[cfg(test)]
+use gitcomet_core::auth::stage_git_auth;
+use gitcomet_core::auth::{
+    GitAuthKind, SSH_PASSPHRASE_PROMPT_MARKER, StagedGitAuth, clear_staged_git_auth,
+};
+use gitcomet_core::error::{Error, ErrorKind, GitFailure};
 use gitcomet_core::services::{
     CommandOutput, CommitOperationOutcome, GitRepository, SafePushAfterCommitContext,
     SafePushAfterCommitDecision,
@@ -23,7 +28,7 @@ fn auth_prompt_for_repo_command(
     command: &RepoCommandKind,
     error: &gitcomet_core::error::Error,
 ) -> Option<AuthPromptState> {
-    let kind = util::detect_auth_prompt_kind(error)?;
+    let kind = detect_auth_prompt_kind(error)?;
     let operation = AuthRetryOperation::RepoCommand {
         repo_id,
         command: command.clone(),
@@ -41,7 +46,7 @@ fn auth_prompt_for_safe_push_after_commit(
     context: SafePushAfterCommitContext,
     error: &gitcomet_core::error::Error,
 ) -> Option<AuthPromptState> {
-    let kind = util::detect_auth_prompt_kind(error)?;
+    let kind = detect_auth_prompt_kind(error)?;
     Some(AuthPromptState {
         kind,
         reason: util::format_error_for_user(error),
@@ -54,7 +59,7 @@ fn auth_prompt_for_commit(
     pending: Option<PendingCommitRetry>,
     error: &gitcomet_core::error::Error,
 ) -> Option<AuthPromptState> {
-    let kind = util::detect_auth_prompt_kind(error)?;
+    let kind = detect_auth_prompt_kind(error)?;
     let pending = pending?;
     Some(AuthPromptState {
         kind,
@@ -73,7 +78,7 @@ fn auth_prompt_for_clone(
     dest: &std::path::Path,
     error: &gitcomet_core::error::Error,
 ) -> Option<AuthPromptState> {
-    let kind = util::detect_auth_prompt_kind(error)?;
+    let kind = detect_auth_prompt_kind(error)?;
     Some(AuthPromptState {
         kind,
         reason: util::format_error_for_user(error),
@@ -390,7 +395,7 @@ pub(super) fn submit_auth_prompt(
     let username = username
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty());
-    let auth = match util::prepare_staged_git_auth(prompt.kind, username.as_deref(), &secret) {
+    let auth = match prepare_staged_git_auth(prompt.kind, username.as_deref(), &secret) {
         Ok(auth) => auth,
         Err(err) => {
             state.auth_prompt = Some(prompt);
@@ -418,7 +423,7 @@ pub(super) fn submit_auth_prompt(
 
 pub(super) fn cancel_auth_prompt(state: &mut AppState) -> Vec<Effect> {
     state.auth_prompt = None;
-    util::clear_staged_git_auth_env();
+    clear_staged_git_auth_env();
     Vec::new()
 }
 
@@ -434,7 +439,7 @@ pub(super) fn clone_repo_finished(
         .and_then(|error| auth_prompt_for_clone(&url, &dest, error));
     let effects = repo_management::clone_repo_finished(state, url, dest, result);
     if let Some(prompt) = auth_prompt {
-        util::clear_staged_git_auth_env();
+        clear_staged_git_auth_env();
         state.auth_prompt = Some(prompt);
     }
     effects
@@ -499,7 +504,7 @@ pub(super) fn commit_finished(
         repo_state.pending.commit_retry = None;
     }
     if let Some(prompt) = auth_prompt {
-        util::clear_staged_git_auth_env();
+        clear_staged_git_auth_env();
         state.auth_prompt = Some(prompt);
     }
     if push_after_commit && let (Some(outcome), Some(pending_commit)) = (outcome, pending_commit) {
@@ -541,7 +546,7 @@ pub(super) fn commit_amend_finished(
         repo_state.pending.commit_retry = None;
     }
     if let Some(prompt) = auth_prompt {
-        util::clear_staged_git_auth_env();
+        clear_staged_git_auth_env();
         state.auth_prompt = Some(prompt);
     }
     if push_after_commit && let (Some(outcome), Some(pending_commit)) = (outcome, pending_commit) {
@@ -573,7 +578,7 @@ pub(super) fn safe_push_after_commit_finished(
     let effects =
         actions_emit_effects::safe_push_after_commit_finished(repos, state, repo_id, auth, result);
     if let Some(prompt) = auth_prompt {
-        util::clear_staged_git_auth_env();
+        clear_staged_git_auth_env();
         state.auth_prompt = Some(prompt);
     }
     effects
@@ -621,9 +626,125 @@ pub(super) fn repo_command_finished(
     }
 
     if let Some(prompt) = auth_prompt {
-        util::clear_staged_git_auth_env();
+        clear_staged_git_auth_env();
         state.auth_prompt = Some(prompt);
     }
 
     effects
+}
+
+// Recognizing auth failures and staging the credentials the user enters.
+
+pub(super) fn detect_auth_prompt_kind(error: &Error) -> Option<AuthPromptKind> {
+    match error.kind() {
+        ErrorKind::Git(failure) => detect_auth_prompt_kind_from_git_failure(failure),
+        ErrorKind::Backend(message) => detect_auth_prompt_kind_from_message(message),
+        _ => None,
+    }
+}
+
+pub(super) fn detect_auth_prompt_kind_from_message(message: &str) -> Option<AuthPromptKind> {
+    let lower = message.to_ascii_lowercase();
+
+    let host_verification = lower.contains("host key verification failed")
+        || lower.contains("the authenticity of host")
+        || lower.contains("this key is not known by any other names")
+        || (lower.contains("are you sure you want to continue connecting")
+            && lower.contains("yes/no"));
+    if host_verification {
+        return Some(AuthPromptKind::HostVerification);
+    }
+
+    let passphrase = lower.contains("could not read passphrase")
+        // OpenSSH uses "for key '<path>'", while ssh-keygen signing uses
+        // "for \"<path>\"".
+        || lower.contains("enter passphrase for")
+        || lower.contains("read_passphrase")
+        || lower.contains("passphrase for key")
+        || lower.contains("incorrect passphrase supplied to decrypt private key")
+        || lower.contains(&SSH_PASSPHRASE_PROMPT_MARKER.to_ascii_lowercase())
+        || (lower.contains("passphrase") && lower.contains("terminal prompts disabled"));
+    let ssh_publickey = lower.contains("permission denied (publickey")
+        || (lower.contains("could not read from remote repository") && lower.contains("publickey"));
+    if passphrase || ssh_publickey {
+        return Some(AuthPromptKind::Passphrase);
+    }
+
+    let user_password = lower.contains("could not read username")
+        || lower.contains("could not read password")
+        || lower.contains("authentication failed")
+        || lower.contains("invalid username or password")
+        || lower.contains("http basic: access denied")
+        || (lower.contains("terminal prompts disabled")
+            && (lower.contains("https://")
+                || lower.contains("http://")
+                || lower.contains("username")
+                || lower.contains("password")));
+    if user_password {
+        return Some(AuthPromptKind::UsernamePassword);
+    }
+
+    None
+}
+
+pub(super) fn clear_staged_git_auth_env() {
+    clear_staged_git_auth();
+}
+
+pub(super) fn prepare_staged_git_auth(
+    kind: AuthPromptKind,
+    username: Option<&str>,
+    secret: &str,
+) -> Result<StagedGitAuth, Error> {
+    let normalized_secret = match kind {
+        AuthPromptKind::HostVerification => {
+            let trimmed = secret.trim();
+            if trimmed.eq_ignore_ascii_case("yes") {
+                "yes".to_string()
+            } else {
+                trimmed.to_string()
+            }
+        }
+        AuthPromptKind::UsernamePassword | AuthPromptKind::Passphrase => secret.to_string(),
+    };
+
+    if normalized_secret.trim().is_empty() {
+        return Err(Error::new(ErrorKind::Backend(
+            "credential/passphrase/confirmation cannot be empty".to_string(),
+        )));
+    }
+    if kind.requires_username() && username.unwrap_or_default().trim().is_empty() {
+        return Err(Error::new(ErrorKind::Backend(
+            "username cannot be empty".to_string(),
+        )));
+    }
+
+    Ok(StagedGitAuth {
+        kind: match kind {
+            AuthPromptKind::UsernamePassword => GitAuthKind::UsernamePassword,
+            AuthPromptKind::Passphrase => GitAuthKind::Passphrase,
+            AuthPromptKind::HostVerification => GitAuthKind::HostVerification,
+        },
+        username: username.map(ToOwned::to_owned),
+        secret: normalized_secret,
+    })
+}
+
+#[cfg(test)]
+pub(super) fn stage_git_auth_env(
+    kind: AuthPromptKind,
+    username: Option<&str>,
+    secret: &str,
+) -> Result<(), Error> {
+    stage_git_auth(prepare_staged_git_auth(kind, username, secret)?);
+    Ok(())
+}
+
+fn detect_auth_prompt_kind_from_git_failure(failure: &GitFailure) -> Option<AuthPromptKind> {
+    let stderr = String::from_utf8_lossy(failure.stderr());
+    detect_auth_prompt_kind_from_message(&stderr)
+        .or_else(|| {
+            detect_auth_prompt_kind_from_message(&String::from_utf8_lossy(failure.stdout()))
+        })
+        .or_else(|| detect_auth_prompt_kind_from_message(&failure.to_string()))
 }
