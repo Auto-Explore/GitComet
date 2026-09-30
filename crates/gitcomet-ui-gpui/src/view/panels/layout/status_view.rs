@@ -3,8 +3,136 @@
 
 use super::*;
 
+/// One status section's numbers, as its header and body read them.
+#[derive(Clone, Copy)]
+struct StatusSectionState {
+    count: usize,
+    selected: usize,
+    loading: bool,
+    labels: StatusActionLabels,
+}
+
+/// What every piece of the status view reads, gathered once per render.
+struct StatusViewInputs {
+    theme: AppTheme,
+    ui_scale: ui_scale::UiScale,
+    ui_scale_percent: u32,
+    repo_id: Option<RepoId>,
+    repo_key: u64,
+    local_actions_in_flight: bool,
+    split_change_tracking: bool,
+    icon_muted: gpui::Rgba,
+    unstaged: StatusSectionState,
+    untracked: StatusSectionState,
+    split_unstaged: StatusSectionState,
+    staged: StatusSectionState,
+    untracked_paths: Vec<std::path::PathBuf>,
+    split_unstaged_paths: Vec<std::path::PathBuf>,
+}
+
+impl StatusViewInputs {
+    fn state(&self, section: StatusSection) -> StatusSectionState {
+        match section {
+            StatusSection::CombinedUnstaged => self.unstaged,
+            StatusSection::Untracked => self.untracked,
+            StatusSection::Unstaged => self.split_unstaged,
+            StatusSection::Staged => self.staged,
+        }
+    }
+}
+
+/// A split's (top, bottom) heights; `None` until the container is measured.
+type SplitHeights = Option<(Pixels, Pixels)>;
+
+/// The fixed ids and wording of one status section's pieces.
+#[derive(Clone, Copy)]
+struct StatusSectionNames {
+    section: StatusSection,
+    header_id: &'static str,
+    controls_id_prefix: &'static str,
+    spinner_id: &'static str,
+    empty_message: &'static str,
+}
+
+const COMBINED_UNSTAGED_NAMES: StatusSectionNames = StatusSectionNames {
+    section: StatusSection::CombinedUnstaged,
+    header_id: "unstaged_header",
+    controls_id_prefix: "status_unstaged",
+    spinner_id: "unstaged_actions_spinner",
+    empty_message: "No unstaged changes.",
+};
+
+const UNTRACKED_NAMES: StatusSectionNames = StatusSectionNames {
+    section: StatusSection::Untracked,
+    header_id: "untracked_header",
+    controls_id_prefix: "status_untracked",
+    spinner_id: "untracked_actions_spinner",
+    empty_message: "No untracked files.",
+};
+
+const SPLIT_UNSTAGED_NAMES: StatusSectionNames = StatusSectionNames {
+    section: StatusSection::Unstaged,
+    header_id: "split_unstaged_header",
+    controls_id_prefix: "status_split_unstaged",
+    spinner_id: "split_unstaged_actions_spinner",
+    empty_message: "No unstaged changes.",
+};
+
+const STAGED_NAMES: StatusSectionNames = StatusSectionNames {
+    section: StatusSection::Staged,
+    header_id: "staged_header",
+    controls_id_prefix: "status_staged",
+    spinner_id: "staged_actions_spinner",
+    empty_message: "Nothing staged yet.",
+};
+
 impl DetailsPaneView {
     pub(super) fn status_sections_view(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
+        let v = self.status_view_inputs(cx);
+        // All four are built every frame; the column keeps the ones the
+        // change-tracking view shows.
+        let unstaged_section = self.combined_unstaged_status_section(&v, cx);
+        let untracked_section = self.untracked_status_section(&v, cx);
+        let split_unstaged_section = self.split_unstaged_status_section(&v, cx);
+        let staged_section = self.staged_status_section(&v, cx);
+        let status_sections = self.status_sections_column(
+            &v,
+            unstaged_section,
+            untracked_section,
+            split_unstaged_section,
+            staged_section,
+            cx,
+        );
+
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h(px(0.0))
+            .h_full()
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _e, _w, cx| {
+                    this.finish_status_section_resize(cx);
+                }),
+            )
+            .child(if v.repo_id.is_some() {
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .child(status_sections)
+                    .child(div().px_2().py_2().child(self.commit_box(cx)))
+                    .into_any_element()
+            } else {
+                components::empty_state(v.theme, "Changes", "No repository selected.")
+                    .into_any_element()
+            })
+            .into_any_element()
+    }
+
+    fn status_view_inputs(&self, cx: &mut gpui::Context<Self>) -> StatusViewInputs {
         let theme = self.theme;
         let ui_scale = self.ui_scale();
         let local_actions_in_flight = self
@@ -75,8 +203,6 @@ impl DetailsPaneView {
             })
             .unwrap_or(0);
 
-        let spinner =
-            |id: (&'static str, u64), color: gpui::Rgba| svg_spinner(id, color, ui_scale.px(14.0));
         let repo_key = repo_id.map(|id| id.0).unwrap_or(0);
         let split_change_tracking = self.change_tracking_view == ChangeTrackingView::SplitUntracked;
         let icon_muted = with_alpha(
@@ -85,7 +211,7 @@ impl DetailsPaneView {
         );
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
 
-        // Measured last frame by the probe on the sections container below; the
+        // Measured last frame by the probe on the sections container; the
         // prepaint callback refreshes the window when it changes. Unmeasured on
         // the very first frame, which reads as "plenty of room" and settles on
         // the next one.
@@ -159,12 +285,321 @@ impl DetailsPaneView {
             labels_for("Staged".len(), false, &["Unstage all changes".len()])
         };
 
-        let stage_all = components::Button::new(
+        StatusViewInputs {
+            theme,
+            ui_scale,
+            ui_scale_percent,
+            repo_id,
+            repo_key,
+            local_actions_in_flight,
+            split_change_tracking,
+            icon_muted,
+            unstaged: StatusSectionState {
+                count: unstaged_count,
+                selected: selected_combined_unstaged,
+                loading: unstaged_loading,
+                labels: unstaged_labels,
+            },
+            untracked: StatusSectionState {
+                count: untracked_count,
+                selected: selected_untracked,
+                loading: untracked_loading,
+                labels: untracked_labels,
+            },
+            split_unstaged: StatusSectionState {
+                count: split_unstaged_count,
+                selected: selected_split_unstaged,
+                loading: split_unstaged_loading,
+                labels: split_unstaged_labels,
+            },
+            staged: StatusSectionState {
+                count: staged_count,
+                selected: selected_staged,
+                loading: staged_loading,
+                labels: staged_labels,
+            },
+            untracked_paths,
+            split_unstaged_paths,
+        }
+    }
+
+    /// The combined view's "Unstaged" section: tracked and untracked changes.
+    fn combined_unstaged_status_section(
+        &mut self,
+        v: &StatusViewInputs,
+        cx: &mut gpui::Context<Self>,
+    ) -> Div {
+        let names = COMBINED_UNSTAGED_NAMES;
+        let stage_all = Self::stage_all_button(v, cx);
+        let stage_selected = Self::stage_selected_button(
+            v,
+            "stage_selected",
+            Some("stage_selected_button"),
+            names.section,
+            cx,
+        );
+        let discard_selected =
+            Self::discard_selected_button(v, "discard_selected", names.section, cx);
+        let actions = self.status_section_actions(
+            v,
+            names,
+            [stage_selected, discard_selected],
+            stage_all,
+            cx,
+        );
+        let body = self.status_section_body(v, names, cx);
+        let title = self.change_tracking_header_title(
+            v,
+            "change_tracking_unstaged_header",
+            "change_tracking_unstaged_header",
+            "Unstaged",
+            cx,
+        );
+        self.status_section_frame(v, names, title, actions, body, cx)
+    }
+
+    /// The split view's "Untracked" section.
+    fn untracked_status_section(
+        &mut self,
+        v: &StatusViewInputs,
+        cx: &mut gpui::Context<Self>,
+    ) -> Div {
+        let names = UNTRACKED_NAMES;
+        let stage_all = Self::stage_all_untracked_button(v, cx);
+        let stage_selected =
+            Self::stage_selected_button(v, "stage_selected_untracked", None, names.section, cx);
+        let discard_selected =
+            Self::discard_selected_button(v, "discard_selected_untracked", names.section, cx);
+        let actions = self.status_section_actions(
+            v,
+            names,
+            [stage_selected, discard_selected],
+            stage_all,
+            cx,
+        );
+        let body = self.status_section_body(v, names, cx);
+        let title = self.change_tracking_header_title(
+            v,
+            "change_tracking_untracked_header",
+            "change_tracking_untracked_header",
+            "Untracked",
+            cx,
+        );
+        self.status_section_frame(v, names, title, actions, body, cx)
+    }
+
+    /// The split view's "Unstaged" section: tracked changes only.
+    fn split_unstaged_status_section(
+        &mut self,
+        v: &StatusViewInputs,
+        cx: &mut gpui::Context<Self>,
+    ) -> Div {
+        let names = SPLIT_UNSTAGED_NAMES;
+        let stage_all = Self::stage_all_split_unstaged_button(v, cx);
+        let stage_selected = Self::stage_selected_button(
+            v,
+            "stage_selected_split_unstaged",
+            None,
+            names.section,
+            cx,
+        );
+        let discard_selected =
+            Self::discard_selected_button(v, "discard_selected_split_unstaged", names.section, cx);
+        let actions = self.status_section_actions(
+            v,
+            names,
+            [stage_selected, discard_selected],
+            stage_all,
+            cx,
+        );
+        let body = self.status_section_body(v, names, cx);
+        let title = self.change_tracking_header_title(
+            v,
+            "change_tracking_unstaged_header",
+            "change_tracking_unstaged_header",
+            "Unstaged",
+            cx,
+        );
+        self.status_section_frame(v, names, title, actions, body, cx)
+    }
+
+    fn staged_status_section(&mut self, v: &StatusViewInputs, cx: &mut gpui::Context<Self>) -> Div {
+        let names = STAGED_NAMES;
+        let unstage_all = Self::unstage_all_button(v, cx);
+        let unstage_selected = Self::unstage_selected_button(v, cx);
+        let actions = self.status_section_actions(v, names, [unstage_selected], unstage_all, cx);
+        let body = self.status_section_body(v, names, cx);
+        let title = status_section_title(v.theme, "Staged");
+        self.status_section_frame(v, names, title, actions, body, cx)
+    }
+
+    /// A header's action group: list controls, the busy spinner, the buttons
+    /// for the current selection (only while there is one), then the
+    /// section-wide button.
+    fn status_section_actions<const N: usize>(
+        &mut self,
+        v: &StatusViewInputs,
+        names: StatusSectionNames,
+        selection_buttons: [Stateful<Div>; N],
+        all_button: Stateful<Div>,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let controls = v.repo_id.map(|repo_id| {
+            self.file_list_controls(
+                crate::view::rows::FileListId::Status(names.section),
+                repo_id,
+                names.controls_id_prefix,
+                false,
+                cx,
+            )
+        });
+        let mut actions = div().flex().items_center().gap_2();
+        if let Some(controls) = controls {
+            actions = actions.child(controls);
+        }
+        if v.local_actions_in_flight {
+            actions = actions.child(
+                svg_spinner(
+                    (names.spinner_id, v.repo_key),
+                    with_alpha(
+                        v.theme.colors.accent.foreground,
+                        if v.theme.is_dark { 0.72 } else { 0.82 },
+                    ),
+                    v.ui_scale.px(14.0),
+                )
+                .into_any_element(),
+            );
+        }
+        if v.state(names.section).selected > 0 {
+            for button in selection_buttons {
+                actions = actions.child(button);
+            }
+        }
+        actions.child(all_button).into_any_element()
+    }
+
+    /// A section's file list, or its loading or empty message.
+    fn status_section_body(
+        &mut self,
+        v: &StatusViewInputs,
+        names: StatusSectionNames,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let state = v.state(names.section);
+        if state.loading {
+            components::empty_state_message(v.theme, "Loading…").into_any_element()
+        } else if state.count == 0 {
+            components::empty_state_message(v.theme, names.empty_message).into_any_element()
+        } else {
+            self.status_list(cx, names.section, state.count)
+        }
+    }
+
+    /// The section's focusable container: header on top, list filling the rest.
+    fn status_section_frame(
+        &self,
+        v: &StatusViewInputs,
+        names: StatusSectionNames,
+        title: AnyElement,
+        actions: AnyElement,
+        body: AnyElement,
+        cx: &gpui::Context<Self>,
+    ) -> Div {
+        self.status_section_container(names.section, cx)
+            .flex()
+            .flex_col()
+            .min_h(px(STATUS_SECTION_MIN_HEIGHT_PX))
+            .overflow_hidden()
+            .child(status_section_header(
+                v,
+                names.header_id,
+                title,
+                v.state(names.section).count > 0,
+                actions,
+            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .overflow_hidden()
+                    .child(body),
+            )
+    }
+
+    /// The "Unstaged" / "Untracked" title chip that opens the change-tracking
+    /// settings.
+    fn change_tracking_header_title(
+        &self,
+        v: &StatusViewInputs,
+        id: &'static str,
+        invoker_key: &'static str,
+        label: &'static str,
+        cx: &gpui::Context<Self>,
+    ) -> AnyElement {
+        let theme = v.theme;
+        let ui_scale = v.ui_scale;
+        let change_tracking_invoker: SharedString = invoker_key.into();
+        let change_tracking_active =
+            self.active_context_menu_invoker.as_ref() == Some(&change_tracking_invoker);
+        let change_tracking_invoker = change_tracking_invoker.clone();
+        div()
+            .id(id)
+            .debug_selector(move || id.to_string())
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_1()
+            .h(ui_scale.row_height(
+                CHANGE_TRACKING_HEADER_CHIP_HEIGHT_PX,
+                CHANGE_TRACKING_HEADER_CHIP_COMFORTABLE_HEIGHT_PX,
+            ))
+            .rounded(px(theme.radii.row))
+            .tab_index(0)
+            .control_interaction(
+                InteractionStyle::header(theme),
+                InteractionState::default().open(change_tracking_active),
+            )
+            .child(
+                div()
+                    .text_size(theme.ui_text(14.0))
+                    .font_weight(FontWeight::BOLD)
+                    .line_clamp(1)
+                    .whitespace_nowrap()
+                    .child(label),
+            )
+            .child(
+                svg_icon("icons/chevron_down.svg", v.icon_muted, ui_scale.px(12.0))
+                    .debug_selector(move || format!("{id}_chevron")),
+            )
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(move |this, e: &ClickEvent, window, cx| {
+                    this.open_popover_at(
+                        PopoverKind::ChangeTrackingSettings
+                            .invoked_by(change_tracking_invoker.clone()),
+                        e.position(),
+                        window,
+                        cx,
+                    );
+                    cx.notify();
+                }),
+            )
+            .into_any_element()
+    }
+
+    // Action buttons. Every one is built each frame, shown or not.
+
+    fn stage_all_button(v: &StatusViewInputs, cx: &mut gpui::Context<Self>) -> Stateful<Div> {
+        let theme = v.theme;
+        components::Button::new(
             "stage_all",
-            status_action_all_label(unstaged_labels, "Stage all changes"),
+            status_action_all_label(v.unstaged.labels, "Stage all changes"),
         )
         .style(components::ButtonStyle::Subtle)
-        .disabled(local_actions_in_flight)
+        .disabled(v.local_actions_in_flight)
         .on_click(theme, cx, |this, _e, _w, cx| {
             let Some(repo_id) = this.active_repo_id() else {
                 return;
@@ -173,22 +608,33 @@ impl DetailsPaneView {
             this.stage_all_with_conflict_confirmation(repo_id, Vec::new(), _w, cx);
         })
         .debug_selector(|| "stage_all_button".to_string())
-        .gitcomet_tooltip(theme, "Stage all changes".into());
+        .gitcomet_tooltip(theme, "Stage all changes".into())
+    }
 
-        let stage_selected = components::Button::new(
-            "stage_selected",
-            status_action_count_label(unstaged_labels, "Stage", selected_combined_unstaged),
+    /// Stages the section's selection; shared by the three unstaged sections.
+    fn stage_selected_button(
+        v: &StatusViewInputs,
+        id: &'static str,
+        debug_selector: Option<&'static str>,
+        section: StatusSection,
+        cx: &mut gpui::Context<Self>,
+    ) -> Stateful<Div> {
+        let theme = v.theme;
+        let state = v.state(section);
+        let selected = state.selected;
+        let button = components::Button::new(
+            id,
+            status_action_count_label(state.labels, "Stage", selected),
         )
         .style(components::ButtonStyle::Subtle)
-        .disabled(local_actions_in_flight)
-        .on_click(theme, cx, |this, _e, _w, cx| {
+        .disabled(v.local_actions_in_flight)
+        .on_click(theme, cx, move |this, _e, _w, cx| {
             let Some(repo_id) = this.active_repo_id() else {
                 return;
             };
             // Read without consuming: the confirmation below can still be
             // cancelled, and that must leave the selection as the user built it.
-            let selection =
-                this.status_section_action_selection(repo_id, StatusSection::CombinedUnstaged);
+            let selection = this.status_section_action_selection(repo_id, section);
             let paths = selection.paths;
             if paths.is_empty() {
                 return;
@@ -214,29 +660,43 @@ impl DetailsPaneView {
                 paths,
             );
             cx.notify();
-        })
-        .debug_selector(|| "stage_selected_button".to_string())
-        .gitcomet_tooltip(
+        });
+        let button = match debug_selector {
+            Some(selector) => button.debug_selector(move || selector.to_string()),
+            None => button,
+        };
+        button.gitcomet_tooltip(
             theme,
             format!(
-                "Stage {selected_combined_unstaged} selected {}",
-                status_action_file_count(selected_combined_unstaged)
+                "Stage {selected} selected {}",
+                status_action_file_count(selected)
             )
             .into(),
-        );
+        )
+    }
 
-        let discard_selected = components::Button::new(
-            "discard_selected",
-            status_action_count_label(unstaged_labels, "Discard", selected_combined_unstaged),
+    /// Asks to discard the section's selection; shared by the three unstaged
+    /// sections.
+    fn discard_selected_button(
+        v: &StatusViewInputs,
+        id: &'static str,
+        section: StatusSection,
+        cx: &mut gpui::Context<Self>,
+    ) -> Stateful<Div> {
+        let theme = v.theme;
+        let state = v.state(section);
+        let selected = state.selected;
+        components::Button::new(
+            id,
+            status_action_count_label(state.labels, "Discard", selected),
         )
         .style(components::ButtonStyle::Subtle)
-        .disabled(local_actions_in_flight)
-        .on_click(theme, cx, |this, e, window, cx| {
+        .disabled(v.local_actions_in_flight)
+        .on_click(theme, cx, move |this, e, window, cx| {
             let Some(repo_id) = this.active_repo_id() else {
                 return;
             };
-            let selection =
-                this.status_section_action_selection(repo_id, StatusSection::CombinedUnstaged);
+            let selection = this.status_section_action_selection(repo_id, section);
             if selection.paths.is_empty() {
                 return;
             }
@@ -255,20 +715,26 @@ impl DetailsPaneView {
         .gitcomet_tooltip(
             theme,
             format!(
-                "Discard changes in {selected_combined_unstaged} selected {}",
-                status_action_file_count(selected_combined_unstaged)
+                "Discard changes in {selected} selected {}",
+                status_action_file_count(selected)
             )
             .into(),
-        );
+        )
+    }
 
+    fn stage_all_untracked_button(
+        v: &StatusViewInputs,
+        cx: &mut gpui::Context<Self>,
+    ) -> Stateful<Div> {
+        let theme = v.theme;
         let untracked_paths_for_stage_all =
-            gitcomet_state::msg::RepoPathList::from(untracked_paths.clone());
-        let stage_all_untracked = components::Button::new(
+            gitcomet_state::msg::RepoPathList::from(v.untracked_paths.clone());
+        components::Button::new(
             "stage_all_untracked",
-            status_action_all_label(untracked_labels, "Stage all"),
+            status_action_all_label(v.untracked.labels, "Stage all"),
         )
         .style(components::ButtonStyle::Subtle)
-        .disabled(local_actions_in_flight || untracked_paths_for_stage_all.is_empty())
+        .disabled(v.local_actions_in_flight || untracked_paths_for_stage_all.is_empty())
         .on_click(theme, cx, move |this, _e, _w, cx| {
             let Some(repo_id) = this.active_repo_id() else {
                 return;
@@ -286,98 +752,21 @@ impl DetailsPaneView {
             cx.notify();
         })
         .debug_selector(|| "stage_all_untracked_button".to_string())
-        .gitcomet_tooltip(theme, "Stage all untracked files".into());
+        .gitcomet_tooltip(theme, "Stage all untracked files".into())
+    }
 
-        let stage_selected_untracked = components::Button::new(
-            "stage_selected_untracked",
-            status_action_count_label(untracked_labels, "Stage", selected_untracked),
-        )
-        .style(components::ButtonStyle::Subtle)
-        .disabled(local_actions_in_flight)
-        .on_click(theme, cx, |this, _e, _w, cx| {
-            let Some(repo_id) = this.active_repo_id() else {
-                return;
-            };
-            // Read without consuming: the confirmation below can still be
-            // cancelled, and that must leave the selection as the user built it.
-            let selection = this.status_section_action_selection(repo_id, StatusSection::Untracked);
-            let paths = selection.paths;
-            if paths.is_empty() {
-                return;
-            }
-            if let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
-                &this.state,
-                repo_id,
-                paths.clone(),
-                selection.from_explicit_selection,
-            ) {
-                let anchor = crate::view::conflict_markers::centered_dialog_anchor(_w);
-                this.open_popover_at(confirm, anchor, _w, cx);
-                cx.notify();
-                return;
-            }
-            if selection.from_explicit_selection {
-                this.clear_status_multi_selection(repo_id);
-            }
-            crate::view::status_actions::stage_or_unstage_paths(
-                &this.store,
-                repo_id,
-                DiffArea::Unstaged,
-                paths,
-            );
-            cx.notify();
-        })
-        .gitcomet_tooltip(
-            theme,
-            format!(
-                "Stage {selected_untracked} selected {}",
-                status_action_file_count(selected_untracked)
-            )
-            .into(),
-        );
-
-        let discard_selected_untracked = components::Button::new(
-            "discard_selected_untracked",
-            status_action_count_label(untracked_labels, "Discard", selected_untracked),
-        )
-        .style(components::ButtonStyle::Subtle)
-        .disabled(local_actions_in_flight)
-        .on_click(theme, cx, |this, e, window, cx| {
-            let Some(repo_id) = this.active_repo_id() else {
-                return;
-            };
-            let selection = this.status_section_action_selection(repo_id, StatusSection::Untracked);
-            if selection.paths.is_empty() {
-                return;
-            }
-            this.open_popover_at(
-                PopoverKind::DiscardChangesConfirm {
-                    repo_id,
-                    area: DiffArea::Unstaged,
-                    path: selection.popover_path(),
-                },
-                e.position(),
-                window,
-                cx,
-            );
-            cx.notify();
-        })
-        .gitcomet_tooltip(
-            theme,
-            format!(
-                "Discard changes in {selected_untracked} selected {}",
-                status_action_file_count(selected_untracked)
-            )
-            .into(),
-        );
-
-        let split_unstaged_paths_for_stage_all = split_unstaged_paths.clone();
-        let stage_all_split_unstaged = components::Button::new(
+    fn stage_all_split_unstaged_button(
+        v: &StatusViewInputs,
+        cx: &mut gpui::Context<Self>,
+    ) -> Stateful<Div> {
+        let theme = v.theme;
+        let split_unstaged_paths_for_stage_all = v.split_unstaged_paths.clone();
+        components::Button::new(
             "stage_all_split_unstaged",
-            status_action_all_label(split_unstaged_labels, "Stage all"),
+            status_action_all_label(v.split_unstaged.labels, "Stage all"),
         )
         .style(components::ButtonStyle::Subtle)
-        .disabled(local_actions_in_flight || split_unstaged_paths_for_stage_all.is_empty())
+        .disabled(v.local_actions_in_flight || split_unstaged_paths_for_stage_all.is_empty())
         .on_click(theme, cx, move |this, _e, _w, cx| {
             let Some(repo_id) = this.active_repo_id() else {
                 return;
@@ -396,97 +785,17 @@ impl DetailsPaneView {
             );
         })
         .debug_selector(|| "stage_all_split_unstaged_button".to_string())
-        .gitcomet_tooltip(theme, "Stage all unstaged changes".into());
+        .gitcomet_tooltip(theme, "Stage all unstaged changes".into())
+    }
 
-        let stage_selected_split_unstaged = components::Button::new(
-            "stage_selected_split_unstaged",
-            status_action_count_label(split_unstaged_labels, "Stage", selected_split_unstaged),
-        )
-        .style(components::ButtonStyle::Subtle)
-        .disabled(local_actions_in_flight)
-        .on_click(theme, cx, |this, _e, _w, cx| {
-            let Some(repo_id) = this.active_repo_id() else {
-                return;
-            };
-            // Read without consuming: the confirmation below can still be
-            // cancelled, and that must leave the selection as the user built it.
-            let selection = this.status_section_action_selection(repo_id, StatusSection::Unstaged);
-            let paths = selection.paths;
-            if paths.is_empty() {
-                return;
-            }
-            if let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
-                &this.state,
-                repo_id,
-                paths.clone(),
-                selection.from_explicit_selection,
-            ) {
-                let anchor = crate::view::conflict_markers::centered_dialog_anchor(_w);
-                this.open_popover_at(confirm, anchor, _w, cx);
-                cx.notify();
-                return;
-            }
-            if selection.from_explicit_selection {
-                this.clear_status_multi_selection(repo_id);
-            }
-            crate::view::status_actions::stage_or_unstage_paths(
-                &this.store,
-                repo_id,
-                DiffArea::Unstaged,
-                paths,
-            );
-            cx.notify();
-        })
-        .gitcomet_tooltip(
-            theme,
-            format!(
-                "Stage {selected_split_unstaged} selected {}",
-                status_action_file_count(selected_split_unstaged)
-            )
-            .into(),
-        );
-
-        let discard_selected_split_unstaged = components::Button::new(
-            "discard_selected_split_unstaged",
-            status_action_count_label(split_unstaged_labels, "Discard", selected_split_unstaged),
-        )
-        .style(components::ButtonStyle::Subtle)
-        .disabled(local_actions_in_flight)
-        .on_click(theme, cx, |this, e, window, cx| {
-            let Some(repo_id) = this.active_repo_id() else {
-                return;
-            };
-            let selection = this.status_section_action_selection(repo_id, StatusSection::Unstaged);
-            if selection.paths.is_empty() {
-                return;
-            }
-            this.open_popover_at(
-                PopoverKind::DiscardChangesConfirm {
-                    repo_id,
-                    area: DiffArea::Unstaged,
-                    path: selection.popover_path(),
-                },
-                e.position(),
-                window,
-                cx,
-            );
-            cx.notify();
-        })
-        .gitcomet_tooltip(
-            theme,
-            format!(
-                "Discard changes in {selected_split_unstaged} selected {}",
-                status_action_file_count(selected_split_unstaged)
-            )
-            .into(),
-        );
-
-        let unstage_all = components::Button::new(
+    fn unstage_all_button(v: &StatusViewInputs, cx: &mut gpui::Context<Self>) -> Stateful<Div> {
+        let theme = v.theme;
+        components::Button::new(
             "unstage_all",
-            status_action_all_label(staged_labels, "Unstage all changes"),
+            status_action_all_label(v.staged.labels, "Unstage all changes"),
         )
         .style(components::ButtonStyle::Subtle)
-        .disabled(local_actions_in_flight)
+        .disabled(v.local_actions_in_flight)
         .on_click(theme, cx, |this, _e, _w, cx| {
             let Some(repo_id) = this.active_repo_id() else {
                 return;
@@ -501,14 +810,21 @@ impl DetailsPaneView {
             cx.notify();
         })
         .debug_selector(|| "unstage_all_button".to_string())
-        .gitcomet_tooltip(theme, "Unstage all changes".into());
+        .gitcomet_tooltip(theme, "Unstage all changes".into())
+    }
 
-        let unstage_selected = components::Button::new(
+    fn unstage_selected_button(
+        v: &StatusViewInputs,
+        cx: &mut gpui::Context<Self>,
+    ) -> Stateful<Div> {
+        let theme = v.theme;
+        let selected_staged = v.staged.selected;
+        components::Button::new(
             "unstage_selected",
-            status_action_count_label(staged_labels, "Unstage", selected_staged),
+            status_action_count_label(v.staged.labels, "Unstage", selected_staged),
         )
         .style(components::ButtonStyle::Subtle)
-        .disabled(local_actions_in_flight)
+        .disabled(v.local_actions_in_flight)
         .on_click(theme, cx, |this, _e, _w, cx| {
             let Some(repo_id) = this.active_repo_id() else {
                 return;
@@ -535,350 +851,19 @@ impl DetailsPaneView {
                 status_action_file_count(selected_staged)
             )
             .into(),
-        );
+        )
+    }
 
-        let section_controls = |pane: &mut Self,
-                                section: StatusSection,
-                                id_prefix: &'static str,
-                                cx: &mut gpui::Context<Self>|
-         -> Option<gpui::AnyElement> {
-            let repo_id = repo_id?;
-            Some(pane.file_list_controls(
-                crate::view::rows::FileListId::Status(section),
-                repo_id,
-                id_prefix,
-                false,
-                cx,
-            ))
-        };
-        let unstaged_controls =
-            section_controls(self, StatusSection::CombinedUnstaged, "status_unstaged", cx);
-        let untracked_controls =
-            section_controls(self, StatusSection::Untracked, "status_untracked", cx);
-        let split_unstaged_controls =
-            section_controls(self, StatusSection::Unstaged, "status_split_unstaged", cx);
-        let staged_controls = section_controls(self, StatusSection::Staged, "status_staged", cx);
+    // Layout: split heights, resize handles, and the sections column.
 
-        let section_header = |id: &'static str,
-                              title: gpui::AnyElement,
-                              show_action: bool,
-                              action: gpui::AnyElement|
-         -> gpui::AnyElement {
-            div()
-                .id(id)
-                .debug_selector(move || id.to_string())
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap_2()
-                .h(components::content_header_height(
-                    ui_scale::UiScale::from_percent(ui_scale_percent)
-                        .with_appearance(theme.metrics),
-                ))
-                .px_2()
-                .overflow_hidden()
-                // The labels shrink before this matters, but a UI zoom or a font
-                // wider than the budget assumes can still overrun the header —
-                // and then the title, not the actions, is what gives way.
-                .child(
-                    div()
-                        .flex()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .overflow_hidden()
-                        .child(title),
-                )
-                .when(show_action, |d| d.child(div().flex_none().child(action)))
-                .into_any_element()
-        };
-
-        let normal_header_title = |label: &'static str| {
-            div()
-                .text_size(theme.ui_text(14.0))
-                .font_weight(FontWeight::BOLD)
-                .line_clamp(1)
-                .whitespace_nowrap()
-                .child(label)
-                .into_any_element()
-        };
-
+    /// The (change tracking, staged) and (untracked, split unstaged) splits,
+    /// from last frame's measurements.
+    fn status_section_split_heights(
+        &self,
+        split_change_tracking: bool,
+    ) -> (SplitHeights, SplitHeights) {
         let section_min_h = px(STATUS_SECTION_MIN_HEIGHT_PX);
         let resize_handle_h = px(PANE_RESIZE_HANDLE_PX);
-
-        let unstaged_actions = {
-            let mut actions = div().flex().items_center().gap_2();
-            if let Some(controls) = unstaged_controls {
-                actions = actions.child(controls);
-            }
-            if local_actions_in_flight {
-                actions = actions.child(
-                    spinner(
-                        ("unstaged_actions_spinner", repo_key),
-                        with_alpha(
-                            theme.colors.accent.foreground,
-                            if theme.is_dark { 0.72 } else { 0.82 },
-                        ),
-                    )
-                    .into_any_element(),
-                );
-            }
-            if selected_combined_unstaged > 0 {
-                actions = actions.child(stage_selected).child(discard_selected);
-            }
-            actions.child(stage_all).into_any_element()
-        };
-
-        let untracked_actions = {
-            let mut actions = div().flex().items_center().gap_2();
-            if let Some(controls) = untracked_controls {
-                actions = actions.child(controls);
-            }
-            if local_actions_in_flight {
-                actions = actions.child(
-                    spinner(
-                        ("untracked_actions_spinner", repo_key),
-                        with_alpha(
-                            theme.colors.accent.foreground,
-                            if theme.is_dark { 0.72 } else { 0.82 },
-                        ),
-                    )
-                    .into_any_element(),
-                );
-            }
-            if selected_untracked > 0 {
-                actions = actions
-                    .child(stage_selected_untracked)
-                    .child(discard_selected_untracked);
-            }
-            actions.child(stage_all_untracked).into_any_element()
-        };
-
-        let split_unstaged_actions = {
-            let mut actions = div().flex().items_center().gap_2();
-            if let Some(controls) = split_unstaged_controls {
-                actions = actions.child(controls);
-            }
-            if local_actions_in_flight {
-                actions = actions.child(
-                    spinner(
-                        ("split_unstaged_actions_spinner", repo_key),
-                        with_alpha(
-                            theme.colors.accent.foreground,
-                            if theme.is_dark { 0.72 } else { 0.82 },
-                        ),
-                    )
-                    .into_any_element(),
-                );
-            }
-            if selected_split_unstaged > 0 {
-                actions = actions
-                    .child(stage_selected_split_unstaged)
-                    .child(discard_selected_split_unstaged);
-            }
-            actions.child(stage_all_split_unstaged).into_any_element()
-        };
-
-        let staged_actions = {
-            let mut actions = div().flex().items_center().gap_2();
-            if let Some(controls) = staged_controls {
-                actions = actions.child(controls);
-            }
-            if local_actions_in_flight {
-                actions = actions.child(
-                    spinner(
-                        ("staged_actions_spinner", repo_key),
-                        with_alpha(
-                            theme.colors.accent.foreground,
-                            if theme.is_dark { 0.72 } else { 0.82 },
-                        ),
-                    )
-                    .into_any_element(),
-                );
-            }
-            if selected_staged > 0 {
-                actions = actions.child(unstage_selected);
-            }
-            actions.child(unstage_all).into_any_element()
-        };
-
-        let unstaged_body = if unstaged_loading {
-            components::empty_state_message(theme, "Loading…").into_any_element()
-        } else if unstaged_count == 0 {
-            components::empty_state_message(theme, "No unstaged changes.").into_any_element()
-        } else {
-            self.status_list(cx, StatusSection::CombinedUnstaged, unstaged_count)
-        };
-
-        let untracked_body = if untracked_loading {
-            components::empty_state_message(theme, "Loading…").into_any_element()
-        } else if untracked_count == 0 {
-            components::empty_state_message(theme, "No untracked files.").into_any_element()
-        } else {
-            self.status_list(cx, StatusSection::Untracked, untracked_count)
-        };
-
-        let split_unstaged_body = if split_unstaged_loading {
-            components::empty_state_message(theme, "Loading…").into_any_element()
-        } else if split_unstaged_count == 0 {
-            components::empty_state_message(theme, "No unstaged changes.").into_any_element()
-        } else {
-            self.status_list(cx, StatusSection::Unstaged, split_unstaged_count)
-        };
-
-        let staged_list = if staged_loading {
-            components::empty_state_message(theme, "Loading…").into_any_element()
-        } else if staged_count == 0 {
-            components::empty_state_message(theme, "Nothing staged yet.").into_any_element()
-        } else {
-            self.status_list(cx, StatusSection::Staged, staged_count)
-        };
-
-        let build_change_tracking_header_title =
-            |id: &'static str, invoker_key: &'static str, label: &'static str| {
-                let change_tracking_invoker: SharedString = invoker_key.into();
-                let change_tracking_active =
-                    self.active_context_menu_invoker.as_ref() == Some(&change_tracking_invoker);
-                let change_tracking_invoker = change_tracking_invoker.clone();
-                div()
-                    .id(id)
-                    .debug_selector(move || id.to_string())
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .px_1()
-                    .h(ui_scale.row_height(
-                        CHANGE_TRACKING_HEADER_CHIP_HEIGHT_PX,
-                        CHANGE_TRACKING_HEADER_CHIP_COMFORTABLE_HEIGHT_PX,
-                    ))
-                    .rounded(px(theme.radii.row))
-                    .tab_index(0)
-                    .control_interaction(
-                        InteractionStyle::header(theme),
-                        InteractionState::default().open(change_tracking_active),
-                    )
-                    .child(
-                        div()
-                            .text_size(theme.ui_text(14.0))
-                            .font_weight(FontWeight::BOLD)
-                            .line_clamp(1)
-                            .whitespace_nowrap()
-                            .child(label),
-                    )
-                    .child(
-                        svg_icon("icons/chevron_down.svg", icon_muted, ui_scale.px(12.0))
-                            .debug_selector(move || format!("{id}_chevron")),
-                    )
-                    .on_activate(
-                        false,
-                        controls::ControlActivation::Action,
-                        cx.listener(move |this, e: &ClickEvent, window, cx| {
-                            this.open_popover_at(
-                                PopoverKind::ChangeTrackingSettings
-                                    .invoked_by(change_tracking_invoker.clone()),
-                                e.position(),
-                                window,
-                                cx,
-                            );
-                            cx.notify();
-                        }),
-                    )
-                    .into_any_element()
-            };
-
-        let build_unstaged_header_title = || {
-            build_change_tracking_header_title(
-                "change_tracking_unstaged_header",
-                "change_tracking_unstaged_header",
-                "Unstaged",
-            )
-        };
-
-        let build_untracked_header_title = || {
-            build_change_tracking_header_title(
-                "change_tracking_untracked_header",
-                "change_tracking_untracked_header",
-                "Untracked",
-            )
-        };
-
-        let active_status_resize = self.status_section_resize;
-        let build_status_resize_handle = |id: &'static str, handle: StatusSectionResizeHandle| {
-            let dragging = active_status_resize.is_some_and(|state| state.handle == handle);
-            div()
-                .id(id)
-                .debug_selector(move || id.to_string())
-                .group(id)
-                .w_full()
-                .h(resize_handle_h)
-                .flex_none()
-                .cursor(CursorStyle::ResizeUpDown)
-                .child(components::resize_grip(
-                    theme,
-                    ui_scale,
-                    id,
-                    components::ResizeGripAxis::Horizontal,
-                    dragging,
-                    Some(theme.colors.stroke.default),
-                ))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, e: &MouseDownEvent, window, cx| {
-                        cx.stop_propagation();
-                        crate::press_gesture::claim_press(cx);
-                        crate::text_selection_owner::preserve(cx);
-                        this.start_status_section_resize(handle, e.position.y, cx);
-                        window.refresh();
-                    }),
-                )
-                .on_mouse_up(
-                    MouseButton::Left,
-                    cx.listener(move |this, _e, window, cx| {
-                        if this
-                            .status_section_resize
-                            .is_some_and(|state| state.handle == handle)
-                        {
-                            this.finish_status_section_resize(cx);
-                            window.refresh();
-                        }
-                    }),
-                )
-                .on_mouse_up_out(
-                    MouseButton::Left,
-                    cx.listener(move |this, _e, window, cx| {
-                        if this
-                            .status_section_resize
-                            .is_some_and(|state| state.handle == handle)
-                        {
-                            this.finish_status_section_resize(cx);
-                            window.refresh();
-                        }
-                    }),
-                )
-        };
-
-        let with_split_sizing = |mut section: gpui::Div,
-                                 exact_height: Option<Pixels>,
-                                 fallback_grow: f32,
-                                 min_h: Pixels| {
-            section = section.min_h(min_h);
-            if let Some(exact_height) = exact_height {
-                let exact_height = exact_height.max(min_h);
-                section = section.h(exact_height).max_h(exact_height);
-                section.style().flex_grow = Some(0.0);
-                section.style().flex_shrink = Some(0.0);
-                section.style().flex_basis = Some(exact_height.into());
-            } else {
-                section.style().flex_grow = Some(fallback_grow.max(1.0));
-                section.style().flex_shrink = Some(1.0);
-                section.style().flex_basis = Some(relative(0.0).into());
-            }
-            section
-        };
-        let px_to_grow = |value: Pixels| -> f32 {
-            let px_value: f32 = value.into();
-            px_value.max(1.0)
-        };
-
         let change_tracking_total_height =
             self.measured_status_sections_total_height(resize_handle_h);
         let change_tracking_heights = change_tracking_total_height.map(|total_height| {
@@ -902,149 +887,163 @@ impl DetailsPaneView {
             );
             (top_height, (total_height - top_height).max(section_min_h))
         });
-        let unstaged_section = self
-            .status_section_container(StatusSection::CombinedUnstaged, cx)
-            .flex()
-            .flex_col()
-            .min_h(section_min_h)
-            .overflow_hidden()
-            .child(section_header(
-                "unstaged_header",
-                build_unstaged_header_title(),
-                unstaged_count > 0,
-                unstaged_actions,
-            ))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .overflow_hidden()
-                    .child(unstaged_body),
-            );
+        (change_tracking_heights, untracked_heights)
+    }
 
-        let untracked_section = self
-            .status_section_container(StatusSection::Untracked, cx)
-            .flex()
-            .flex_col()
-            .min_h(section_min_h)
-            .overflow_hidden()
-            .child(section_header(
-                "untracked_header",
-                build_untracked_header_title(),
-                untracked_count > 0,
-                untracked_actions,
+    fn status_resize_handle(
+        &self,
+        v: &StatusViewInputs,
+        id: &'static str,
+        handle: StatusSectionResizeHandle,
+        cx: &gpui::Context<Self>,
+    ) -> Stateful<Div> {
+        let theme = v.theme;
+        let dragging = self
+            .status_section_resize
+            .is_some_and(|state| state.handle == handle);
+        div()
+            .id(id)
+            .debug_selector(move || id.to_string())
+            .group(id)
+            .w_full()
+            .h(px(PANE_RESIZE_HANDLE_PX))
+            .flex_none()
+            .cursor(CursorStyle::ResizeUpDown)
+            .child(components::resize_grip(
+                theme,
+                v.ui_scale,
+                id,
+                components::ResizeGripAxis::Horizontal,
+                dragging,
+                Some(theme.colors.stroke.default),
             ))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .overflow_hidden()
-                    .child(untracked_body),
-            );
-
-        let split_unstaged_section = self
-            .status_section_container(StatusSection::Unstaged, cx)
-            .flex()
-            .flex_col()
-            .min_h(section_min_h)
-            .overflow_hidden()
-            .child(section_header(
-                "split_unstaged_header",
-                build_unstaged_header_title(),
-                split_unstaged_count > 0,
-                split_unstaged_actions,
-            ))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .overflow_hidden()
-                    .child(split_unstaged_body),
-            );
-
-        let staged_section = self
-            .status_section_container(StatusSection::Staged, cx)
-            .flex()
-            .flex_col()
-            .min_h(section_min_h)
-            .overflow_hidden()
-            .child(section_header(
-                "staged_header",
-                normal_header_title("Staged"),
-                staged_count > 0,
-                staged_actions,
-            ))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .overflow_hidden()
-                    .child(staged_list),
-            );
-
-        let change_tracking_section = if split_change_tracking {
-            let change_tracking_stack_bounds_for_prepaint =
-                std::rc::Rc::clone(&self.change_tracking_stack_bounds_ref);
-            let stack_container = div()
-                .relative()
-                .flex()
-                .flex_col()
-                .w_full()
-                .min_w_full()
-                .max_w_full()
-                .h_full()
-                .min_h(min_change_tracking_stack_height(
-                    split_change_tracking,
-                    resize_handle_h,
-                ))
-                .overflow_hidden()
-                .on_children_prepainted(move |children_bounds, window, _app| {
-                    let next_bounds = children_bounds.first().copied();
-                    let mut measured = change_tracking_stack_bounds_for_prepaint.borrow_mut();
-                    if *measured != next_bounds {
-                        *measured = next_bounds;
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    crate::press_gesture::claim_press(cx);
+                    crate::text_selection_owner::preserve(cx);
+                    this.start_status_section_resize(handle, e.position.y, cx);
+                    window.refresh();
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(move |this, _e, window, cx| {
+                    if this
+                        .status_section_resize
+                        .is_some_and(|state| state.handle == handle)
+                    {
+                        this.finish_status_section_resize(cx);
                         window.refresh();
                     }
-                });
-            let untracked_top_height = untracked_heights.map(|(top_height, _)| top_height);
-            let split_unstaged_height = untracked_heights.map(|(_, bottom_height)| bottom_height);
-            let (untracked_grow, split_unstaged_grow) = untracked_heights
-                .map(|(top_height, bottom_height)| {
-                    (px_to_grow(top_height), px_to_grow(bottom_height))
-                })
-                .unwrap_or((1.0, 1.0));
-            stack_container
-                .child(visible_bounds_probe())
-                .child(
-                    with_split_sizing(
-                        untracked_section,
-                        untracked_top_height,
-                        untracked_grow,
-                        section_min_h,
-                    )
-                    .debug_selector(|| "status_untracked_wrapper".to_string()),
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(move |this, _e, window, cx| {
+                    if this
+                        .status_section_resize
+                        .is_some_and(|state| state.handle == handle)
+                    {
+                        this.finish_status_section_resize(cx);
+                        window.refresh();
+                    }
+                }),
+            )
+    }
+
+    /// The split view's change-tracking stack: untracked over tracked, with
+    /// its own resize handle and bounds probe.
+    fn split_change_tracking_stack(
+        &self,
+        v: &StatusViewInputs,
+        untracked_section: Div,
+        split_unstaged_section: Div,
+        untracked_heights: SplitHeights,
+        cx: &gpui::Context<Self>,
+    ) -> Div {
+        let section_min_h = px(STATUS_SECTION_MIN_HEIGHT_PX);
+        let resize_handle_h = px(PANE_RESIZE_HANDLE_PX);
+        let change_tracking_stack_bounds_for_prepaint =
+            std::rc::Rc::clone(&self.change_tracking_stack_bounds_ref);
+        let stack_container = div()
+            .relative()
+            .flex()
+            .flex_col()
+            .w_full()
+            .min_w_full()
+            .max_w_full()
+            .h_full()
+            .min_h(min_change_tracking_stack_height(
+                v.split_change_tracking,
+                resize_handle_h,
+            ))
+            .overflow_hidden()
+            .on_children_prepainted(move |children_bounds, window, _app| {
+                let next_bounds = children_bounds.first().copied();
+                let mut measured = change_tracking_stack_bounds_for_prepaint.borrow_mut();
+                if *measured != next_bounds {
+                    *measured = next_bounds;
+                    window.refresh();
+                }
+            });
+        let untracked_top_height = untracked_heights.map(|(top_height, _)| top_height);
+        let split_unstaged_height = untracked_heights.map(|(_, bottom_height)| bottom_height);
+        let (untracked_grow, split_unstaged_grow) = untracked_heights
+            .map(|(top_height, bottom_height)| (px_to_grow(top_height), px_to_grow(bottom_height)))
+            .unwrap_or((1.0, 1.0));
+        stack_container
+            .child(visible_bounds_probe())
+            .child(
+                with_split_sizing(
+                    untracked_section,
+                    untracked_top_height,
+                    untracked_grow,
+                    section_min_h,
                 )
-                .child(build_status_resize_handle(
-                    "status_resize_untracked_unstaged",
-                    StatusSectionResizeHandle::UntrackedAndUnstaged,
-                ))
-                .child(
-                    with_split_sizing(
-                        split_unstaged_section,
-                        split_unstaged_height,
-                        split_unstaged_grow,
-                        section_min_h,
-                    )
-                    .debug_selector(|| "status_split_unstaged_wrapper".to_string()),
+                .debug_selector(|| "status_untracked_wrapper".to_string()),
+            )
+            .child(self.status_resize_handle(
+                v,
+                "status_resize_untracked_unstaged",
+                StatusSectionResizeHandle::UntrackedAndUnstaged,
+                cx,
+            ))
+            .child(
+                with_split_sizing(
+                    split_unstaged_section,
+                    split_unstaged_height,
+                    split_unstaged_grow,
+                    section_min_h,
                 )
+                .debug_selector(|| "status_split_unstaged_wrapper".to_string()),
+            )
+    }
+
+    /// Change tracking over staged, split by a resize handle. The container's
+    /// probe measures it for next frame's split heights and header wording.
+    fn status_sections_column(
+        &self,
+        v: &StatusViewInputs,
+        unstaged_section: Div,
+        untracked_section: Div,
+        split_unstaged_section: Div,
+        staged_section: Div,
+        cx: &gpui::Context<Self>,
+    ) -> Div {
+        let section_min_h = px(STATUS_SECTION_MIN_HEIGHT_PX);
+        let resize_handle_h = px(PANE_RESIZE_HANDLE_PX);
+        let (change_tracking_heights, untracked_heights) =
+            self.status_section_split_heights(v.split_change_tracking);
+        let change_tracking_section = if v.split_change_tracking {
+            self.split_change_tracking_stack(
+                v,
+                untracked_section,
+                split_unstaged_section,
+                untracked_heights,
+                cx,
+            )
         } else {
             unstaged_section
         };
@@ -1055,7 +1054,7 @@ impl DetailsPaneView {
             change_tracking_section,
             change_tracking_heights.map(|(top_height, _)| top_height),
             change_tracking_grow,
-            min_change_tracking_stack_height(split_change_tracking, resize_handle_h),
+            min_change_tracking_stack_height(v.split_change_tracking, resize_handle_h),
         );
         let staged_section = with_split_sizing(
             staged_section,
@@ -1085,42 +1084,92 @@ impl DetailsPaneView {
                     window.refresh();
                 }
             });
-        let status_sections = status_sections_container
+        status_sections_container
             .child(visible_bounds_probe())
             .flex()
             .flex_col()
             .child(change_tracking_section)
-            .child(build_status_resize_handle(
+            .child(self.status_resize_handle(
+                v,
                 "status_resize_change_tracking_staged",
                 StatusSectionResizeHandle::ChangeTrackingAndStaged,
+                cx,
             ))
-            .child(staged_section);
-
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h(px(0.0))
-            .h_full()
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, _e, _w, cx| {
-                    this.finish_status_section_resize(cx);
-                }),
-            )
-            .child(if repo_id.is_some() {
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .child(status_sections)
-                    .child(div().px_2().py_2().child(self.commit_box(cx)))
-                    .into_any_element()
-            } else {
-                components::empty_state(theme, "Changes", "No repository selected.")
-                    .into_any_element()
-            })
-            .into_any_element()
+            .child(staged_section)
     }
+}
+
+/// A section header: the title takes the slack and clips, the actions keep
+/// their width.
+fn status_section_header(
+    v: &StatusViewInputs,
+    id: &'static str,
+    title: AnyElement,
+    show_action: bool,
+    action: AnyElement,
+) -> AnyElement {
+    div()
+        .id(id)
+        .debug_selector(move || id.to_string())
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .h(components::content_header_height(
+            ui_scale::UiScale::from_percent(v.ui_scale_percent).with_appearance(v.theme.metrics),
+        ))
+        .px_2()
+        .overflow_hidden()
+        // The labels shrink before this matters, but a UI zoom or a font
+        // wider than the budget assumes can still overrun the header —
+        // and then the title, not the actions, is what gives way.
+        .child(
+            div()
+                .flex()
+                .flex_1()
+                .min_w(px(0.0))
+                .overflow_hidden()
+                .child(title),
+        )
+        .when(show_action, |d| d.child(div().flex_none().child(action)))
+        .into_any_element()
+}
+
+/// A plain bold section title (the staged section's).
+fn status_section_title(theme: AppTheme, label: &'static str) -> AnyElement {
+    div()
+        .text_size(theme.ui_text(14.0))
+        .font_weight(FontWeight::BOLD)
+        .line_clamp(1)
+        .whitespace_nowrap()
+        .child(label)
+        .into_any_element()
+}
+
+/// Pins a section to `exact_height` once measured; until then it grows by
+/// `fallback_grow` against its sibling.
+fn with_split_sizing(
+    mut section: Div,
+    exact_height: Option<Pixels>,
+    fallback_grow: f32,
+    min_h: Pixels,
+) -> Div {
+    section = section.min_h(min_h);
+    if let Some(exact_height) = exact_height {
+        let exact_height = exact_height.max(min_h);
+        section = section.h(exact_height).max_h(exact_height);
+        section.style().flex_grow = Some(0.0);
+        section.style().flex_shrink = Some(0.0);
+        section.style().flex_basis = Some(exact_height.into());
+    } else {
+        section.style().flex_grow = Some(fallback_grow.max(1.0));
+        section.style().flex_shrink = Some(1.0);
+        section.style().flex_basis = Some(relative(0.0).into());
+    }
+    section
+}
+
+fn px_to_grow(value: Pixels) -> f32 {
+    let px_value: f32 = value.into();
+    px_value.max(1.0)
 }
