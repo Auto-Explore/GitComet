@@ -1146,3 +1146,46 @@ fn tag_file_changes_refresh_tags() {
         "branch ref file should produce tags: false"
     );
 }
+
+/// Cost of the monitor's index-only reload, which every index write (stage,
+/// unstage, commit, an external `git add`) triggers, on real repositories:
+/// `GITCOMET_PROBE_REPOS=/a:/b`.
+#[test]
+#[ignore = "timing probe"]
+fn timing_monitor_index_reload_real_repos() {
+    let Ok(repos) = std::env::var("GITCOMET_PROBE_REPOS") else {
+        eprintln!("GITCOMET_PROBE_REPOS not set");
+        return;
+    };
+    let backend = gitcomet_git_gix::GixBackend;
+    let best = |mut run: Box<dyn FnMut() + '_>| {
+        run();
+        (0..5)
+            .map(|_| {
+                let start = Instant::now();
+                run();
+                start.elapsed().as_secs_f64() * 1e3
+            })
+            .fold(f64::MAX, f64::min)
+    };
+    for path in repos.split(':') {
+        let workdir = Path::new(path);
+        let name = workdir.file_name().unwrap().to_string_lossy();
+        let mut state = MonitorState::default();
+        assert!(state.reload(workdir, &backend, false));
+        let reload = best(Box::new(|| {
+            state.reload(workdir, &backend, true);
+        }));
+        let inputs = best(Box::new(|| {
+            WatchInputs::load(workdir, &backend).unwrap();
+        }));
+        let info = WatchInputs::load(workdir, &backend).unwrap().info;
+        let mut rules = IgnoreRules::default();
+        let rules_ms = best(Box::new(|| {
+            rules.reload(workdir, &backend, &info);
+        }));
+        println!(
+            "timing monitor_index_reload {name} reload={reload:.2}ms watch_inputs={inputs:.2}ms ignore_rules={rules_ms:.2}ms"
+        );
+    }
+}
