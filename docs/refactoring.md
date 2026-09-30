@@ -149,6 +149,11 @@ The host side lives in `view/extension_host.rs`:
   handles carry the repository's lifetime, since `RepoId`s are reused.
 - UI mutations from extensions are deferred: dialogs, notifications, and
   commands run after the current update.
+- `WindowHost::observe_state` subscribes to a window's state: observers run
+  once per update cycle however many snapshots land in it, nothing is
+  scheduled while none are registered, and dropping the subscription
+  unregisters it. A closed window's handles hold neither its store nor its
+  last snapshot.
 - Contributions: repository views (`view/repository_views.rs`, a router that
   shows History or one extension view per repository; inactive History is not
   rendered but keeps its state; views are built on first selection and

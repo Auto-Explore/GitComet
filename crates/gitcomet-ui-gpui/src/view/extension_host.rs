@@ -9,8 +9,8 @@ use super::shortcut_labels::Shortcut;
 use super::*;
 use gitcomet_extension_api::{
     CommandContext, DialogContent, DialogHandle, EntryOrigin, ExtensionId, GateDecision, HostError,
-    MenuLocation, Registry, RepositoryEntryRequest, RepositoryHandle, WindowHost, WindowHostImpl,
-    storage::StorageError,
+    MenuLocation, Registry, RepositoryEntryRequest, RepositoryHandle, StateObserver, WindowHost,
+    WindowHostImpl, storage::StorageError,
 };
 use gitcomet_state::msg::Msg;
 use gitcomet_state::session::WorkspaceId;
@@ -228,9 +228,52 @@ struct HostWindow {
     window_id: WindowId,
     window_handle: gpui::AnyWindowHandle,
     view: WeakEntity<GitCometView>,
-    store: Arc<AppStore>,
+    /// Weak: an extension holding this handle must not keep a closed
+    /// window's store alive.
+    store: std::sync::Weak<AppStore>,
     state: Rc<std::cell::RefCell<Arc<AppState>>>,
     theme: Rc<std::cell::Cell<AppTheme>>,
+    observers: Rc<StateObservers>,
+}
+
+/// State observers of one window, notified at most once per update cycle.
+#[derive(Default)]
+struct StateObservers {
+    next_id: std::cell::Cell<u64>,
+    observers: std::cell::RefCell<Vec<(u64, StateObserver)>>,
+    pending: std::cell::Cell<bool>,
+    /// The window's host, weak so observers never keep it alive.
+    host: std::cell::RefCell<Option<std::rc::Weak<HostWindow>>>,
+}
+
+impl StateObservers {
+    /// Schedules one notification for however many changes land before it.
+    fn changed(self: &Rc<Self>, cx: &mut App) {
+        if self.observers.borrow().is_empty() || self.pending.replace(true) {
+            return;
+        }
+        let this = Rc::clone(self);
+        cx.defer(move |cx| {
+            this.pending.set(false);
+            let Some(host) = this.host.borrow().as_ref().and_then(std::rc::Weak::upgrade) else {
+                return;
+            };
+            let host = WindowHost::new(host);
+            // A snapshot of the list: callbacks may subscribe or unsubscribe.
+            let observers: Vec<StateObserver> = this
+                .observers
+                .borrow()
+                .iter()
+                .map(|(_, observer)| Rc::clone(observer))
+                .collect();
+            for observer in observers {
+                if !host.is_open(cx) {
+                    return;
+                }
+                observer(&host, cx);
+            }
+        });
+    }
 }
 
 impl HostWindow {
@@ -279,6 +322,21 @@ impl WindowHostImpl for HostWindow {
         self.theme.get()
     }
 
+    fn observe_state(&self, observer: StateObserver) -> Result<u64, HostError> {
+        self.live()?;
+        let id = self.observers.next_id.get() + 1;
+        self.observers.next_id.set(id);
+        self.observers.observers.borrow_mut().push((id, observer));
+        Ok(id)
+    }
+
+    fn unobserve_state(&self, id: u64) {
+        self.observers
+            .observers
+            .borrow_mut()
+            .retain(|(observer_id, _)| *observer_id != id);
+    }
+
     fn is_current(&self, repository: &RepositoryHandle, _cx: &App) -> bool {
         self.live().is_ok()
             && self.state.borrow().repos.iter().any(|repo| {
@@ -288,7 +346,8 @@ impl WindowHostImpl for HostWindow {
 
     fn dispatch(&self, msg: Msg, _cx: &mut App) -> Result<(), HostError> {
         self.live()?;
-        self.store.dispatch(msg);
+        let store = self.store.upgrade().ok_or(HostError::WindowClosed)?;
+        store.dispatch(msg);
         Ok(())
     }
 
@@ -369,6 +428,7 @@ pub(in crate::view) struct ExtensionWindow {
     host: WindowHost,
     state: Rc<std::cell::RefCell<Arc<AppState>>>,
     theme: Rc<std::cell::Cell<AppTheme>>,
+    observers: Rc<StateObservers>,
 }
 
 impl ExtensionWindow {
@@ -382,29 +442,51 @@ impl ExtensionWindow {
         registry(cx)?;
         let state = Rc::new(std::cell::RefCell::new(state));
         let theme = Rc::new(std::cell::Cell::new(theme));
+        let observers = Rc::new(StateObservers::default());
         let window_handle = window.window_handle();
-        let host = WindowHost::new(Rc::new(HostWindow {
+        let host_window = Rc::new(HostWindow {
             window_id: window_handle.window_id(),
             window_handle,
             view: cx.weak_entity(),
-            store: Arc::clone(store),
+            store: Arc::downgrade(store),
             state: Rc::clone(&state),
             theme: Rc::clone(&theme),
-        }));
-        Some(Self { host, state, theme })
-    }
-
-    pub(in crate::view) fn set_theme(&self, theme: AppTheme) {
-        self.theme.set(theme);
+            observers: Rc::clone(&observers),
+        });
+        *observers.host.borrow_mut() = Some(Rc::downgrade(&host_window));
+        Some(Self {
+            host: WindowHost::new(host_window),
+            state,
+            theme,
+            observers,
+        })
     }
 
     pub(in crate::view) fn host(&self) -> WindowHost {
         self.host.clone()
     }
 
-    /// Publishes the view's latest state to extension handles.
-    pub(in crate::view) fn set_state(&self, state: &Arc<AppState>) {
+    /// Publishes the view's latest state to extension handles and schedules
+    /// one notification for its observers, if any.
+    pub(in crate::view) fn set_state(&self, state: &Arc<AppState>, cx: &mut App) {
+        if Arc::ptr_eq(&self.state.borrow(), state) {
+            return;
+        }
         *self.state.borrow_mut() = Arc::clone(state);
+        self.observers.changed(cx);
+    }
+
+    pub(in crate::view) fn set_theme(&self, theme: AppTheme) {
+        self.theme.set(theme);
+    }
+}
+
+impl Drop for ExtensionWindow {
+    /// The window is gone: handles extensions still hold keep neither its
+    /// last snapshot nor their observers.
+    fn drop(&mut self) {
+        *self.state.borrow_mut() = Arc::default();
+        self.observers.observers.borrow_mut().clear();
     }
 }
 

@@ -153,23 +153,44 @@ impl Render for ReviewView {
     }
 }
 
-/// The status item: how many reviews this window has.
+/// The status item: reviews in this window, out of its open repositories.
+/// It follows the window's state through a subscription, not polling.
 pub struct ReviewStatus {
     window: WindowHost,
     reviews: Entity<Reviews>,
     _observe: gitcomet_ui_kit::gpui::Subscription,
+    _state: Option<gitcomet_extension_api::StateSubscription>,
+}
+
+impl ReviewStatus {
+    fn new(window: WindowHost, cx: &mut Context<Self>) -> Self {
+        let reviews = reviews(cx);
+        let view = cx.weak_entity();
+        let state = window
+            .observe_state(move |_, cx| {
+                let _ = view.update(cx, |_, cx| cx.notify());
+            })
+            .ok();
+        Self {
+            _observe: cx.observe(&reviews, |_, _, cx| cx.notify()),
+            _state: state,
+            window,
+            reviews,
+        }
+    }
 }
 
 impl Render for ReviewStatus {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.window.theme(cx);
         let total = self.reviews.read(cx).window_total(self.window.id());
+        let open = self.window.state(cx).map_or(0, |state| state.repos.len());
         div()
             .id("example_review_status")
             .debug_selector(|| "example_review_status".to_string())
             .text_size(theme.ui_text(12.0))
             .text_color(theme.colors.foreground.secondary)
-            .child(format!("{total} reviewed"))
+            .child(format!("{total} reviewed · {open} open"))
     }
 }
 
@@ -288,13 +309,7 @@ impl Extension for ReviewExtension {
                 "review-status",
                 StatusItemDescriptor {
                     build: Rc::new(|window, _, cx| {
-                        let reviews = reviews(cx);
-                        cx.new(|cx| ReviewStatus {
-                            _observe: cx.observe(&reviews, |_, _, cx| cx.notify()),
-                            window,
-                            reviews,
-                        })
-                        .into()
+                        cx.new(|cx| ReviewStatus::new(window, cx)).into()
                     }),
                 },
             )

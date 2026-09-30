@@ -96,6 +96,22 @@ impl DialogHandle {
 /// Builds a dialog's content once the host is ready to show it.
 pub type DialogContent = Box<dyn FnOnce(&mut Window, &mut App) -> AnyView>;
 
+/// Called after the window's state changes.
+pub type StateObserver = Rc<dyn Fn(&WindowHost, &mut App)>;
+
+/// Keeps a state observer registered; dropping it unregisters the observer.
+#[must_use = "dropping the subscription unregisters the observer"]
+pub struct StateSubscription {
+    host: WindowHost,
+    id: u64,
+}
+
+impl Drop for StateSubscription {
+    fn drop(&mut self) {
+        self.host.0.unobserve_state(self.id);
+    }
+}
+
 /// What the host implements behind a [`WindowHost`]. Every method is weak:
 /// a closed window answers [`HostError::WindowClosed`].
 pub trait WindowHostImpl {
@@ -111,6 +127,13 @@ pub trait WindowHostImpl {
 
     /// The window's theme; read it while rendering so views follow changes.
     fn theme(&self, cx: &App) -> AppTheme;
+
+    /// Registers `observer`, returning its id. The host calls observers after
+    /// state changes, at most once per update cycle however many changes
+    /// land in it, and never polls while none are registered.
+    fn observe_state(&self, observer: StateObserver) -> Result<u64, HostError>;
+
+    fn unobserve_state(&self, id: u64);
 
     /// Whether `repository` is still the repository it named when issued.
     fn is_current(&self, repository: &RepositoryHandle, cx: &App) -> bool;
@@ -194,6 +217,19 @@ impl WindowHost {
 
     pub fn dispatch(&self, msg: Msg, cx: &mut App) -> Result<(), HostError> {
         self.0.dispatch(msg, cx)
+    }
+
+    /// Calls `observer` after this window's state changes, coalesced to once
+    /// per update cycle, until the subscription is dropped.
+    pub fn observe_state(
+        &self,
+        observer: impl Fn(&WindowHost, &mut App) + 'static,
+    ) -> Result<StateSubscription, HostError> {
+        let id = self.0.observe_state(Rc::new(observer))?;
+        Ok(StateSubscription {
+            host: self.clone(),
+            id,
+        })
     }
 
     pub fn open_dialog(

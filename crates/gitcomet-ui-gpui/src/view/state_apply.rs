@@ -546,7 +546,7 @@ impl GitCometView {
             .any(|repo| !next.repos.iter().any(|next_repo| next_repo.id == repo.id));
         self.state = next;
         if let Some(extension_window) = self.extension_window.as_ref() {
-            extension_window.set_state(&self.state);
+            extension_window.set_state(&self.state, cx);
         }
         if let Some(router) = self.repository_views.as_mut() {
             router.retain_open(&self.state);

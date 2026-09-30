@@ -458,3 +458,49 @@ fn running_git_operations_ask_before_the_window_closes(cx: &mut gpui::TestAppCon
         });
     });
 }
+
+#[gpui::test]
+fn state_observers_are_notified_once_per_update_cycle(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    cx.update(install_example);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    test_support::redraw(cx);
+    let host = cx.update(|_window, app| view.read(app).extension_window.as_ref().unwrap().host());
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let seen = std::rc::Rc::clone(&calls);
+    let subscription = host
+        .observe_state(move |_, _| seen.set(seen.get() + 1))
+        .expect("the window is open");
+
+    // Two snapshots applied in one update are one notification.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            for repo in 1..=2 {
+                let state = state_with_repo(RepoId(repo), Path::new("/tmp/observed"));
+                test_support::apply_state_snapshot_for_test(this, state, cx);
+            }
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(calls.get(), 1);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            test_support::apply_state_snapshot_for_test(this, empty_state(), cx)
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(calls.get(), 2);
+
+    drop(subscription);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let state = state_with_repo(RepoId(3), Path::new("/tmp/observed"));
+            test_support::apply_state_snapshot_for_test(this, state, cx);
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(calls.get(), 2, "a dropped subscription is not called");
+}
