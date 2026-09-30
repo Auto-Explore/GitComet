@@ -5,10 +5,12 @@ use crate::id::ExtensionId;
 use crate::storage::StorageError;
 use gitcomet_state::model::{AppState, RepoId};
 use gitcomet_state::msg::Msg;
-use gitcomet_ui_kit::gpui::{AnyView, App, SharedString, Window, WindowId};
+use gitcomet_ui_kit::gpui::{AnyView, App, HighlightStyle, SharedString, Window, WindowId};
 use gitcomet_ui_kit::theme::AppTheme;
+use std::cell::RefCell;
 use std::fmt;
-use std::path::PathBuf;
+use std::ops::Range;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -150,12 +152,48 @@ pub trait WindowHostImpl {
 
     fn unobserve_state(&self, id: u64);
 
+    /// A diff pane on `target` in `repository`, owned by the returned handle.
+    fn create_diff_pane(
+        &self,
+        repository: &RepositoryHandle,
+        target: gitcomet_core::domain::DiffTarget,
+        options: crate::panes::DiffPaneOptions,
+        cx: &mut App,
+    ) -> Result<crate::panes::DiffPane, HostError>;
+
+    /// A diff pane over `snapshot`, with no repository behind it.
+    fn create_snapshot_pane(
+        &self,
+        snapshot: crate::panes::DiffSnapshot,
+        options: crate::panes::DiffPaneOptions,
+        cx: &mut App,
+    ) -> Result<crate::panes::DiffPane, HostError>;
+
+    /// A file list of `source`'s changes in `repository`, owned by the
+    /// returned handle; `on_select` runs when the user picks a file.
+    fn create_file_list(
+        &self,
+        repository: &RepositoryHandle,
+        source: gitcomet_state::diff_session::ChangeSource,
+        on_select: crate::panes::FileSelected,
+        cx: &mut App,
+    ) -> Result<crate::panes::FileList, HostError>;
+
     /// Watches `repository` until the returned value drops.
     fn watch_repository(
         &self,
         repository: &RepositoryHandle,
         cx: &App,
     ) -> Result<RepositoryWatch, HostError>;
+
+    /// Syntax highlights for one line of `path`'s text in the window's
+    /// theme; empty when the language is unknown.
+    fn highlight_line(
+        &self,
+        path: &Path,
+        text: &str,
+        cx: &App,
+    ) -> Vec<(Range<usize>, HighlightStyle)>;
 
     /// Whether `repository` is still the repository it named when issued.
     fn is_current(&self, repository: &RepositoryHandle, cx: &App) -> bool;
@@ -241,6 +279,46 @@ impl WindowHost {
         self.0.dispatch(msg, cx)
     }
 
+    /// A diff pane on `target`, independent of History and every other pane.
+    pub fn create_diff_pane(
+        &self,
+        repository: &RepositoryHandle,
+        target: gitcomet_core::domain::DiffTarget,
+        options: crate::panes::DiffPaneOptions,
+        cx: &mut App,
+    ) -> Result<crate::panes::DiffPane, HostError> {
+        self.check(repository, cx)?;
+        self.0.create_diff_pane(repository, target, options, cx)
+    }
+
+    /// A diff pane over two texts rather than a repository; blame is
+    /// unavailable.
+    pub fn create_snapshot_pane(
+        &self,
+        snapshot: crate::panes::DiffSnapshot,
+        options: crate::panes::DiffPaneOptions,
+        cx: &mut App,
+    ) -> Result<crate::panes::DiffPane, HostError> {
+        self.0.create_snapshot_pane(snapshot, options, cx)
+    }
+
+    /// A file list of `source`'s changes; `on_select` gets each pick's target.
+    pub fn create_file_list(
+        &self,
+        repository: &RepositoryHandle,
+        source: gitcomet_state::diff_session::ChangeSource,
+        on_select: impl Fn(
+            &gitcomet_core::domain::CommitFileChange,
+            gitcomet_core::domain::DiffTarget,
+            &mut App,
+        ) + 'static,
+        cx: &mut App,
+    ) -> Result<crate::panes::FileList, HostError> {
+        self.check(repository, cx)?;
+        self.0
+            .create_file_list(repository, source, Rc::new(on_select), cx)
+    }
+
     /// Keeps `repository`'s file watcher running (and its changes delivered)
     /// while it is not the active repository, until the watch drops.
     pub fn watch_repository(
@@ -263,6 +341,40 @@ impl WindowHost {
             host: self.clone(),
             id,
         })
+    }
+
+    /// Like [`Self::observe_state`], but calls `observer` only when
+    /// `select`'s result differs from the one it last saw (the current state's
+    /// at subscription), and hands it that result.
+    pub fn observe_selected<K: PartialEq + 'static>(
+        &self,
+        select: impl Fn(&AppState) -> K + 'static,
+        observer: impl Fn(&WindowHost, &K, &mut App) + 'static,
+        cx: &App,
+    ) -> Result<StateSubscription, HostError> {
+        let last = RefCell::new(select(self.state(cx)?.as_ref()));
+        self.observe_state(move |host, cx| {
+            let Ok(state) = host.state(cx) else {
+                return;
+            };
+            let next = select(&state);
+            if *last.borrow() == next {
+                return;
+            }
+            observer(host, &next, cx);
+            *last.borrow_mut() = next;
+        })
+    }
+
+    /// Syntax highlights for one line of `path`'s text in the window's
+    /// theme, for views that draw file text themselves.
+    pub fn highlight_line(
+        &self,
+        path: &Path,
+        text: &str,
+        cx: &App,
+    ) -> Vec<(Range<usize>, HighlightStyle)> {
+        self.0.highlight_line(path, text, cx)
     }
 
     pub fn open_dialog(

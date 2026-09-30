@@ -1,7 +1,8 @@
 //! The example's extension: marking repositories reviewed.
 //!
-//! It registers one of every contribution through the public API only: a
-//! repository view, a status item, a settings page, commands with a key
+//! It registers one of every contribution through the public API only:
+//! repository views (one of them hosting diff panes and a file list, see
+//! [`crate::changes`]), a status item, a settings page, commands with a key
 //! binding and menu entries, an asset, a repository-entry gate, a close
 //! guard, and a hosted dialog. Review counts are per window and saved in
 //! that window's workspace, so they survive a restart.
@@ -305,6 +306,17 @@ impl Extension for ReviewExtension {
                     }),
                 },
             )
+            .repository_view(
+                "changes",
+                RepositoryViewDescriptor {
+                    title: "Changes".into(),
+                    icon: ICON_PATH.into(),
+                    build: Rc::new(|context, _window, cx| {
+                        cx.new(|cx| crate::changes::ChangesView::new(context, cx))
+                            .into()
+                    }),
+                },
+            )
             .status_item(
                 "review-status",
                 StatusItemDescriptor {
@@ -392,7 +404,7 @@ mod tests {
     #[test]
     fn every_contribution_registers_and_validates() {
         let registry = Registry::build(&[Box::new(ReviewExtension)]).expect("valid registration");
-        assert_eq!(registry.repository_views().len(), 1);
+        assert_eq!(registry.repository_views().len(), 2);
         assert_eq!(registry.status_items().len(), 1);
         assert_eq!(registry.settings_pages().len(), 1);
         assert_eq!(registry.commands().len(), 2);

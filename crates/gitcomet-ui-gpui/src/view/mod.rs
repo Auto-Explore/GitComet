@@ -235,6 +235,7 @@ mod history_graph;
 pub(crate) mod history_mode;
 mod history_refs_hover;
 mod home;
+pub(crate) mod hosted;
 #[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 mod linux_desktop_integration;
 mod markdown_preview;

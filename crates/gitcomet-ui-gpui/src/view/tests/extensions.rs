@@ -516,6 +516,64 @@ fn state_observers_are_notified_once_per_update_cycle(cx: &mut gpui::TestAppCont
 }
 
 #[gpui::test]
+fn selective_observers_hear_only_changes_to_their_selection(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    cx.update(install_example);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    test_support::redraw(cx);
+    let host = cx.update(|_window, app| view.read(app).extension_window.as_ref().unwrap().host());
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let record = std::rc::Rc::clone(&seen);
+    let _subscription = cx
+        .update(|_window, app| {
+            host.observe_selected(
+                |state| state.repos.len(),
+                move |_, count, _| record.borrow_mut().push(*count),
+                app,
+            )
+        })
+        .expect("the window is open");
+    let apply = |cx: &mut gpui::VisualTestContext, state: Arc<AppState>| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                test_support::apply_state_snapshot_for_test(this, state, cx)
+            });
+        });
+        cx.run_until_parked();
+    };
+
+    apply(cx, state_with_repo(RepoId(1), Path::new("/tmp/selected")));
+    // Another repository, same count: the selection did not change.
+    apply(cx, state_with_repo(RepoId(2), Path::new("/tmp/selected-2")));
+    apply(cx, empty_state());
+    assert_eq!(*seen.borrow(), vec![1, 0]);
+}
+
+#[gpui::test]
+fn the_syntax_service_highlights_known_languages_only(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    cx.update(install_example);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    test_support::redraw(cx);
+    let host = cx.update(|_window, app| view.read(app).extension_window.as_ref().unwrap().host());
+    cx.update(|_window, app| {
+        let rust = host.highlight_line(Path::new("src/lib.rs"), "fn main() {}", app);
+        assert!(
+            rust.iter().any(|(range, _)| *range == (0..2)),
+            "the keyword is highlighted: {rust:?}"
+        );
+        assert!(
+            host.highlight_line(Path::new("notes.unknown-ext"), "fn main() {}", app)
+                .is_empty()
+        );
+    });
+}
+
+#[gpui::test]
 fn repository_watches_lease_the_watcher_until_dropped(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(install_example);

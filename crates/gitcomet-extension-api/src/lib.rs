@@ -18,6 +18,7 @@
 pub mod contributions;
 pub mod host;
 pub mod id;
+pub mod panes;
 pub mod registry;
 pub mod storage;
 
@@ -27,11 +28,18 @@ pub use contributions::{
     RepositoryEntryRequest, RepositoryViewContext, RepositoryViewDescriptor,
     SettingsPageDescriptor, StatusItemDescriptor, ViewBuilder,
 };
+/// Revision-pinned state types hosted panes take.
+pub use gitcomet_state::diff_session::ChangeSource;
 pub use host::{
     DialogContent, DialogHandle, HostError, RepositoryHandle, RepositoryWatch, StateObserver,
     StateSubscription, WindowHost, WindowHostImpl,
 };
 pub use id::{ContributionId, ExtensionId, IdError};
+pub use panes::{
+    DiffLineRange, DiffLineSide, DiffPane, DiffPaneImpl, DiffPaneOptions, DiffPanePolicy,
+    DiffRowDecor, DiffRowDecorProvider, DiffRowStyle, DiffSnapshot, FileList, FileListImpl,
+    FileSelected,
+};
 pub use registry::{Registrar, RegistrationError, Registry};
 
 /// A compiled-in extension. The host calls [`Extension::register`] once, before

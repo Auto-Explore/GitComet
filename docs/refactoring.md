@@ -233,3 +233,52 @@ shared render guard). The close-guard move changed no test paths.
   non-active repository's watcher running and delivering until dropped;
   extensions get it as `WindowHost::watch_repository`. Leases never keep the
   store alive and leave with their repository.
+
+## Milestone 5: independently owned panes
+
+- `DiffSession`s live beside History's selected diff, keyed by `DiffViewId`
+  in `RepoState::diff_sessions`. Each has its own target, encoding,
+  generation, revision, content, blame, and cancellation token (a child of
+  the repository's). Completions carry repository, lifetime, view, and
+  generation, so a stale, cancelled, or closed-repository load is dropped.
+  Sessions reuse the selected diff's backend readers and preview flags, and
+  worktree changes reload only sessions that follow the worktree.
+- `ChangeListSession`s load a commit's files or a comparison
+  (`ChangeSource`) the same way; the base they resolve (first parent or merge
+  base) turns each file into a `DiffTarget`.
+- `WindowHost::create_diff_pane` / `create_snapshot_pane` / `create_file_list`
+  return owning handles (`DiffPane`, `FileList`); dropping the handle and its
+  mounted view closes the session and cancels its work. The views
+  (`view/hosted/`) observe the window's state through the extension host and
+  rebuild only when their own session's revision moves; rows are built off
+  the UI thread, and a retarget drops a build still running for the old
+  target.
+- A pane's selection, reveal anchor, and search are file side + file line
+  (`DiffLineRange`, `DiffLineSide`), never display rows. `DiffPanePolicy` is
+  checked in the click and search handlers, not only when drawing.
+  `DiffRowStyle` overrides row backgrounds, and a `DiffRowDecorProvider` is
+  asked for gutter marks and tints only for drawn rows.
+- A snapshot pane diffs two texts with no repository (`DiffSnapshot`); a
+  pane keeps the kind of source it was created with.
+- `FileListController` reuses the details pane's projection and tree plan,
+  with its own filter, sort, collapse, selection, and scroll per list.
+- `WindowHost::observe_selected` notifies only when a projection of the
+  state changes; `WindowHost::highlight_line` exposes the per-line syntax
+  highlighter in the window's theme.
+- The example's Changes view mounts a file list (the worktree against HEAD)
+  and two diff panes; UI tests click through it and check that retargeting
+  or dropping one pane leaves the other, the list, and History unchanged.
+  Another opens a pane per file of a commit with a rename (showing its
+  edit, not a whole-file add), an addition, a deletion, and a binary change
+  while History keeps its own selected diff and target revision.
+
+Still to do, deliberately kept out of this step:
+
+- History's main pane keeps its own selected diff (`diff_state`); moving it
+  onto a `DiffSession` needs its navigation, conflict, and preview paths
+  migrated with parity tests.
+- The details pane's commit, range, worktree, and status lists still render
+  through their own code; they share the projection with hosted lists but
+  not the rendering.
+- The focused difftool keeps its window; snapshot panes are the intended
+  replacement once the Milestone 6 parity tests exist.

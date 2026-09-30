@@ -277,6 +277,17 @@ impl StateObservers {
 }
 
 impl HostWindow {
+    /// This window's `WindowHost`, for panes that observe it.
+    fn host(&self) -> Result<WindowHost, HostError> {
+        self.observers
+            .host
+            .borrow()
+            .as_ref()
+            .and_then(std::rc::Weak::upgrade)
+            .map(|host| WindowHost::new(host))
+            .ok_or(HostError::WindowClosed)
+    }
+
     fn live(&self) -> Result<(), HostError> {
         if self.view.upgrade().is_some() {
             Ok(())
@@ -330,6 +341,61 @@ impl WindowHostImpl for HostWindow {
         Ok(id)
     }
 
+    fn create_diff_pane(
+        &self,
+        repository: &RepositoryHandle,
+        target: gitcomet_core::domain::DiffTarget,
+        options: gitcomet_extension_api::DiffPaneOptions,
+        cx: &mut App,
+    ) -> Result<gitcomet_extension_api::DiffPane, HostError> {
+        let store = self.store.upgrade().ok_or(HostError::WindowClosed)?;
+        let host = self.host()?;
+        let repository = repository.clone();
+        let entity = cx.new(|cx| {
+            super::hosted::diff_pane::DiffPaneView::new(
+                host, store, repository, target, options, cx,
+            )
+        });
+        Ok(gitcomet_extension_api::DiffPane::new(Rc::new(
+            super::hosted::diff_pane::HostedDiffPane { entity },
+        )))
+    }
+
+    fn create_snapshot_pane(
+        &self,
+        snapshot: gitcomet_extension_api::DiffSnapshot,
+        options: gitcomet_extension_api::DiffPaneOptions,
+        cx: &mut App,
+    ) -> Result<gitcomet_extension_api::DiffPane, HostError> {
+        let host = self.host()?;
+        let entity = cx.new(|cx| {
+            super::hosted::diff_pane::DiffPaneView::snapshot(host, snapshot, options, cx)
+        });
+        Ok(gitcomet_extension_api::DiffPane::new(Rc::new(
+            super::hosted::diff_pane::HostedDiffPane { entity },
+        )))
+    }
+
+    fn create_file_list(
+        &self,
+        repository: &RepositoryHandle,
+        source: gitcomet_extension_api::ChangeSource,
+        on_select: gitcomet_extension_api::FileSelected,
+        cx: &mut App,
+    ) -> Result<gitcomet_extension_api::FileList, HostError> {
+        let store = self.store.upgrade().ok_or(HostError::WindowClosed)?;
+        let host = self.host()?;
+        let repository = repository.clone();
+        let entity = cx.new(|cx| {
+            super::hosted::file_list::FileListView::new(
+                host, store, repository, source, on_select, cx,
+            )
+        });
+        Ok(gitcomet_extension_api::FileList::new(Rc::new(
+            super::hosted::file_list::HostedFileList { entity },
+        )))
+    }
+
     fn watch_repository(
         &self,
         repository: &RepositoryHandle,
@@ -339,6 +405,23 @@ impl WindowHostImpl for HostWindow {
         Ok(gitcomet_extension_api::RepositoryWatch::new(Box::new(
             store.watch_repository(repository.repo_id()),
         )))
+    }
+
+    fn highlight_line(
+        &self,
+        path: &std::path::Path,
+        text: &str,
+        _cx: &App,
+    ) -> Vec<(std::ops::Range<usize>, gpui::HighlightStyle)> {
+        let Some(language) = crate::view::rows::diff_syntax_language_for_path(path) else {
+            return Vec::new();
+        };
+        crate::view::rows::syntax_highlights_for_line(
+            self.theme.get(),
+            text,
+            language,
+            crate::view::rows::DiffSyntaxMode::HeuristicOnly,
+        )
     }
 
     fn unobserve_state(&self, id: u64) {

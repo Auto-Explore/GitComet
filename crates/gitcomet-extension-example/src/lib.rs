@@ -5,6 +5,7 @@
 
 use gitcomet_core::identity::{ProductIdentity, ProductLinks};
 
+pub mod changes;
 pub mod review;
 pub mod review_counter;
 
