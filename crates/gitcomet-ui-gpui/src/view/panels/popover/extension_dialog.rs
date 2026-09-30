@@ -7,7 +7,8 @@ use super::*;
 pub(in crate::view) struct ExtensionDialog {
     pub(super) id: u64,
     pub(super) title: SharedString,
-    pub(super) content: gpui::AnyView,
+    pub(super) content: Option<gpui::AnyView>,
+    pub(super) menu: Option<ContextMenuModel>,
 }
 
 pub(super) fn panel(
@@ -24,7 +25,9 @@ pub(super) fn panel(
         return div();
     };
     let title = dialog.title.clone();
-    let content = dialog.content.clone();
+    let Some(content) = dialog.content.clone() else {
+        return div();
+    };
     ConfirmDialog::new(title, DIALOG_440_WIDTH)
         .section(
             div()
@@ -49,6 +52,20 @@ pub(super) fn panel(
 }
 
 impl PopoverHost {
+    pub(in crate::view) fn close_for_gate(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self
+            .popover
+            .as_ref()
+            .is_some_and(|kind| !kind.survives_gate())
+        {
+            self.close_popover_and_restore_focus(window, cx);
+        }
+    }
+
     pub(in crate::view) fn open_extension_dialog(
         &mut self,
         dialog_id: u64,
@@ -60,9 +77,67 @@ impl PopoverHost {
         self.extension_dialog = Some(ExtensionDialog {
             id: dialog_id,
             title,
-            content,
+            content: Some(content),
+            menu: None,
         });
-        self.open_popover_centered(PopoverKind::ExtensionDialog { id: dialog_id }, window, cx);
+        self.open_popover_centered(
+            PopoverKind::Hosted {
+                id: dialog_id,
+                menu: false,
+            },
+            window,
+            cx,
+        );
+    }
+
+    pub(in crate::view) fn open_hosted_menu(
+        &mut self,
+        id: u64,
+        items: Vec<gitcomet_extension_api::HostedMenuItem>,
+        anchor: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        use gitcomet_extension_api::HostedMenuItem;
+        let items = items
+            .into_iter()
+            .map(|item| match item {
+                HostedMenuItem::Action {
+                    action,
+                    icon,
+                    disabled,
+                } => ContextMenuItem::Entry {
+                    label: action.label().clone(),
+                    icon,
+                    shortcut: None,
+                    disabled,
+                    action: Box::new(ContextMenuAction::Hosted(action)),
+                },
+                HostedMenuItem::Header(label) => ContextMenuItem::Header(label.into()),
+                HostedMenuItem::Separator => ContextMenuItem::Separator,
+            })
+            .collect();
+        self.extension_dialog = Some(ExtensionDialog {
+            id,
+            title: "".into(),
+            content: None,
+            menu: Some(ContextMenuModel::new(items)),
+        });
+        self.open_popover_at(PopoverKind::Hosted { id, menu: true }, anchor, window, cx);
+    }
+
+    pub(in crate::view) fn reanchor_hosted(
+        &mut self,
+        id: u64,
+        anchor: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if let Some(kind @ PopoverKind::Hosted { id: current, .. }) = self.popover.clone()
+            && id == current
+        {
+            self.open_popover_at(kind, anchor, window, cx);
+        }
     }
 
     /// Closes dialog `dialog_id` if it is still the one showing.
@@ -72,7 +147,7 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        if matches!(self.popover, Some(PopoverKind::ExtensionDialog { id }) if id == dialog_id) {
+        if matches!(self.popover, Some(PopoverKind::Hosted { id, .. }) if id == dialog_id) {
             self.close_popover_and_restore_focus(window, cx);
         }
     }

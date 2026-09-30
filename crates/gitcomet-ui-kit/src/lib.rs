@@ -13,6 +13,9 @@
 /// dependency so versions cannot drift.
 pub use gpui;
 
+/// The exact GPUI revision used by this kit and its host.
+pub const GPUI_REVISION: &str = "bdd090f243921570bc0c28855ebd2ff105cd225c";
+
 pub mod appearance;
 pub mod assets;
 pub mod bundled_fonts;
@@ -76,4 +79,23 @@ pub use text_input::ShowCharacterPalette;
 pub fn restrict_scroll_to_vertical_axis<E: gpui::Styled>(mut element: E) -> E {
     element.style().restrict_scroll_to_axis = Some(true);
     element
+}
+
+#[cfg(test)]
+mod version_contract {
+    #[test]
+    fn exported_gpui_revision_matches_both_workspace_dependencies() {
+        let manifest = include_str!("../../../Cargo.toml");
+        let pins: Vec<_> = manifest
+            .lines()
+            .filter(|line| line.starts_with("gpui = ") || line.starts_with("gpui_platform = "))
+            .collect();
+        assert_eq!(pins.len(), 2);
+        for pin in pins {
+            assert!(
+                pin.contains(super::GPUI_REVISION),
+                "GPUI_REVISION must track {pin}"
+            );
+        }
+    }
 }

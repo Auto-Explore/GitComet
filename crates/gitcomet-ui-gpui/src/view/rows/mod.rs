@@ -660,9 +660,14 @@ impl<K: Eq + Clone> CommitFileRowPresentationCache<K> {
         key: &K,
         files: &[gitcomet_core::domain::CommitFileChange],
     ) -> Arc<[CommitFileRowPresentation]> {
+        if let Some(entry) = &self.cached
+            && entry.key == *key
+        {
+            return Arc::clone(&entry.rows);
+        }
         let signature = commit_file_row_presentation_signature(files);
         if let Some(reused_rows) = self.cached.as_ref().and_then(|entry| {
-            if entry.key == *key || entry.signature == signature {
+            if entry.signature == signature {
                 Some(entry.rows.clone())
             } else {
                 None

@@ -539,6 +539,8 @@ impl TextInputStyle {
 
 #[derive(Clone, Debug, Default)]
 pub struct TextInputOptions {
+    /// Text size in design pixels. `None` follows the surrounding font role.
+    pub text_size: Option<f32>,
     pub placeholder: SharedString,
     /// Optional icon rendered before the editable text using the input's
     /// placeholder color.
@@ -883,6 +885,7 @@ impl ContentWidthCache {
 }
 
 pub struct TextInput {
+    pub(super) text_size: Option<f32>,
     pub(super) probe_action: u64,
     pub(super) appearance_metrics: crate::appearance::Appearance,
     pub(super) editor_font: bool,

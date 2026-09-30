@@ -663,3 +663,50 @@ fn a_watch_lease_keeps_a_background_repositorys_monitor_running() {
     assert_eq!(repo_monitors.running_repo_ids(), vec![active]);
     repo_monitors.stop_all();
 }
+
+#[test]
+fn linked_worktree_leases_count_and_do_not_cross_repository_lifetimes() {
+    let mut repos = FxHashMap::default();
+    let ids = AtomicU64::new(1);
+    let repo_id = RepoId(1);
+    let mut state = AppState::test_default();
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: "/tmp/main-worktree".into(),
+        },
+    ));
+    let old_lifetime = state.repos[0].lifetime();
+    let path = PathBuf::from("/tmp/linked-worktree");
+    let event = |lifetime, watch| Msg::WatchWorktree {
+        repo_id,
+        lifetime,
+        path: path.clone(),
+        watch,
+    };
+    reduce(&mut repos, &ids, &mut state, event(old_lifetime, true));
+    reduce(&mut repos, &ids, &mut state, event(old_lifetime, true));
+    assert_eq!(
+        state.worktree_watch_leases[&(repo_id, old_lifetime, path.clone())],
+        2
+    );
+    reduce(&mut repos, &ids, &mut state, event(old_lifetime, false));
+    assert_eq!(
+        state.worktree_watch_leases[&(repo_id, old_lifetime, path.clone())],
+        1
+    );
+    state.repos[0] = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: "/tmp/main-worktree".into(),
+        },
+    );
+    let new_lifetime = state.repos[0].lifetime();
+    reduce(&mut repos, &ids, &mut state, event(new_lifetime, true));
+    reduce(&mut repos, &ids, &mut state, event(old_lifetime, false));
+    assert_eq!(state.worktree_watch_leases.len(), 1);
+    assert_eq!(
+        state.worktree_watch_leases[&(repo_id, new_lifetime, path.clone())],
+        1
+    );
+}

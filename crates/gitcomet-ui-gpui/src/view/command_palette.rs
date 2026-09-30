@@ -365,6 +365,15 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
+        id: "fetch-ref",
+        label: "Fetch ref…",
+        shortcut: Shortcut::None,
+        category: "Repository",
+        keywords: "fetch refspec branch tag change",
+        requires_repo: true,
+        needs: Needs::Nothing,
+    },
+    CommandEntry {
         id: "fetch-all",
         label: "Fetch All",
         shortcut: Shortcut::None,

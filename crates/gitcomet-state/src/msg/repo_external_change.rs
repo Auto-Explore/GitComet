@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 /// The most worktree paths one change reports; past it the change says
 /// [`ChangedPaths::Unknown`].
-pub const MAX_CHANGED_PATHS: usize = 512;
+pub const MAX_CHANGED_PATHS: usize = 256;
 
 /// Which worktree paths (relative to the workdir) a change touched.
 ///

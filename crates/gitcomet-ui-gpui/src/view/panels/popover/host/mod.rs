@@ -207,7 +207,7 @@ impl PopoverHost {
                     this.context_menu_selected_ix
                         .and_then(|ix| context_menu::selection_key(&model, ix))
                 });
-            let next_state = Arc::clone(&model.read(cx).state);
+            let next_state = this.store.project(Arc::clone(&model.read(cx).state));
             let next_hook_activity_rev = hook_activity_repo_id.and_then(|repo_id| {
                 next_state
                     .repos
@@ -795,7 +795,9 @@ impl PopoverHost {
         let submodule_focus = DialogFocus::new(cx);
 
         Self {
-            store,
+            history_store: store.clone().into(),
+            store: store.into(),
+            history_pane: main_pane.clone(),
             extension_dialog: None,
             state,
             theme,
@@ -1274,6 +1276,20 @@ impl PopoverHost {
         }
     }
 
+    pub(in crate::view) fn bind_diff_pane(&mut self, pane: Entity<MainPaneView>, cx: &App) {
+        self.store = pane.read(cx).store.clone();
+        self.state = self.store.snapshot();
+        self.main_pane = pane;
+    }
+
+    pub(in crate::view) fn restore_history_binding(&mut self) {
+        if self.store.binding.is_some() {
+            self.store = self.history_store.clone();
+            self.main_pane = self.history_pane.clone();
+            self.state = self.store.snapshot();
+        }
+    }
+
     pub(in crate::view) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
         let dismissing_unsaved_prompt = self.showing_unsaved_file_edits_prompt();
         let dismissing_hook_activity = self.is_hook_activity_workflow_open();
@@ -1288,6 +1304,16 @@ impl PopoverHost {
         crate::view::tooltip::set_tooltips_suppressed_by_overlay(false, cx);
         self.popover = None;
         self.popover_anchor = None;
+        if self.store.binding.is_some() {
+            let pane = cx.weak_entity();
+            cx.defer(move |cx| {
+                let _ = pane.update(cx, |this, _| {
+                    if this.popover.is_none() {
+                        this.restore_history_binding();
+                    }
+                });
+            });
+        }
         self.cancel_tag_push_previews();
         self.push_upstream_tag_mode = None;
         self.context_menu_scroll.set_offset(point(px(0.0), px(0.0)));

@@ -73,6 +73,7 @@ fn is_control_command(command: &StoreWorkerCommand) -> bool {
     match command {
         StoreWorkerCommand::Msg(msg) => is_control_msg(msg),
         StoreWorkerCommand::Shutdown => true,
+        StoreWorkerCommand::Repository { .. } => true,
         #[cfg(any(test, feature = "test-support"))]
         StoreWorkerCommand::InsertRepoForTest { .. } => true,
     }
@@ -299,6 +300,33 @@ impl WorkerLoopContext<'_> {
             }
         }
 
+        let worktrees = {
+            let state = self
+                .thread_state
+                .read()
+                .unwrap_or_else(|error| error.into_inner());
+            let mut wanted: Vec<_> = state.worktree_watch_leases.keys().cloned().collect();
+            if let Some(repo) = state
+                .repos
+                .iter()
+                .find(|repo| state.active_repo == Some(repo.id))
+                && let Some(path) = &repo.history_state.worktree_selection
+                && path != &repo.spec.workdir
+            {
+                let selected = (repo.id, repo.lifetime(), path.clone());
+                if !wanted.contains(&selected) {
+                    wanted.push(selected);
+                }
+            }
+            wanted
+        };
+        self.repo_monitors.reconcile_worktrees(
+            worktrees,
+            self.thread_msg_tx.clone(),
+            Arc::clone(self.active_repo_id),
+            Arc::clone(self.backend),
+        );
+
         for effect in effects {
             if repo_load_trace::enabled() {
                 let effect_repo_id = repo_load_trace::effect_repo_id(&effect);
@@ -345,6 +373,26 @@ impl WorkerLoopContext<'_> {
 /// Keeps a repository's file watcher running while it is not the active
 /// repository. Leases count: the watcher stops when the last is dropped
 /// (unless the repository is active). A lease never keeps the store alive.
+#[must_use = "dropping the lease releases the watch"]
+pub struct WorktreeWatchLease {
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    lifetime: u64,
+    path: std::path::PathBuf,
+}
+
+impl Drop for WorktreeWatchLease {
+    fn drop(&mut self) {
+        self.msg_tx.dispatch(Msg::WatchWorktree {
+            repo_id: self.repo_id,
+            lifetime: self.lifetime,
+            path: self.path.clone(),
+            watch: false,
+        });
+    }
+}
+
+/// A counted watch of one open repository lifetime.
 #[must_use = "dropping the lease releases the watch"]
 pub struct WatchLease {
     msg_tx: StoreWorkerSender,
@@ -465,6 +513,21 @@ impl AppStore {
                 let msg = match command {
                     StoreWorkerCommand::Msg(msg) => *msg,
                     StoreWorkerCommand::Shutdown => break,
+                    StoreWorkerCommand::Repository {
+                        repo_id,
+                        lifetime,
+                        reply,
+                    } => {
+                        let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
+                        let repository = state
+                            .repos
+                            .iter()
+                            .any(|repo| repo.id == repo_id && repo.lifetime() == lifetime)
+                            .then(|| repos.get(&repo_id).cloned())
+                            .flatten();
+                        let _ = reply.send(repository);
+                        continue;
+                    }
                     #[cfg(any(test, feature = "test-support"))]
                     StoreWorkerCommand::InsertRepoForTest { repo_id, repo } => {
                         repos.insert(repo_id, repo);
@@ -720,6 +783,26 @@ impl AppStore {
 
     /// Watches this lifetime of `repo_id` until the lease is dropped. Closing
     /// and reopening the repository never transfers an outstanding lease.
+    pub fn watch_worktree(
+        &self,
+        repo_id: RepoId,
+        lifetime: u64,
+        path: std::path::PathBuf,
+    ) -> WorktreeWatchLease {
+        self.msg_tx.dispatch(Msg::WatchWorktree {
+            repo_id,
+            lifetime,
+            path: path.clone(),
+            watch: true,
+        });
+        WorktreeWatchLease {
+            msg_tx: self.msg_tx.clone(),
+            repo_id,
+            lifetime,
+            path,
+        }
+    }
+
     pub fn watch_repository(&self, repo_id: RepoId, lifetime: u64) -> WatchLease {
         self.msg_tx
             .dispatch(Msg::AcquireWatchLease { repo_id, lifetime });
@@ -733,6 +816,13 @@ impl AppStore {
     pub fn snapshot(&self) -> Arc<AppState> {
         let state = self.state.read().unwrap_or_else(|e| e.into_inner());
         Arc::clone(&state)
+    }
+
+    /// Reads a backend handle for this repository lifetime on a worker thread.
+    /// This waits for the store worker; do not call from the UI thread or a reducer.
+    /// An old handle never resolves to a reopened repository with the same id.
+    pub fn repository(&self, repo_id: RepoId, lifetime: u64) -> Option<Arc<dyn GitRepository>> {
+        self.msg_tx.repository(repo_id, lifetime)
     }
 
     /// [`Self::snapshot`] without blocking: `None` while the reducer holds

@@ -2,7 +2,6 @@
 
 use super::{CommitSignatureMap, Loadable, RepoState, Shared};
 use gitcomet_core::domain::*;
-use gitcomet_core::services::BlameLine;
 use rustc_hash::FxHashSet;
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -27,12 +26,6 @@ pub struct HistoryState {
     pub log_rev: u64,
     pub file_history_path: Option<PathBuf>,
     pub file_history: Loadable<Shared<LogPage>>,
-    pub blame_path: Option<PathBuf>,
-    pub blame_source: Option<BlameSource>,
-    pub blame: Loadable<Shared<Vec<BlameLine>>>,
-    /// Annotations to keep painting while blame reloads for the same target, so
-    /// the annotation column does not blank out on every refresh.
-    pub retained_blame_while_loading: Option<Shared<Vec<BlameLine>>>,
     pub selected_commit: Option<CommitId>,
     pub selected_commit_rev: u64,
     /// The commit a "reveal in history" is currently walking toward.
@@ -179,10 +172,6 @@ impl Default for HistoryState {
             log_rev: 0,
             file_history_path: None,
             file_history: Loadable::NotLoaded,
-            blame_path: None,
-            blame_source: None,
-            blame: Loadable::NotLoaded,
-            retained_blame_while_loading: None,
             selected_commit: None,
             selected_commit_rev: 0,
             reveal_target: None,
@@ -352,17 +341,17 @@ impl RepoState {
     /// Only valid while `blame_path`/`blame_source` still describe them —
     /// callers that re-target blame must call [`Self::clear_retained_blame`].
     pub(crate) fn retain_blame_while_loading(&mut self) {
-        if self.history_state.retained_blame_while_loading.is_some() {
+        if self.diff_state.retained_blame_while_loading.is_some() {
             return;
         }
 
-        if let Loadable::Ready(lines) = &self.history_state.blame {
-            self.history_state.retained_blame_while_loading = Some(Arc::clone(lines));
+        if let Loadable::Ready(lines) = &self.diff_state.blame {
+            self.diff_state.retained_blame_while_loading = Some(Arc::clone(lines));
         }
     }
 
     pub(crate) fn clear_retained_blame(&mut self) {
-        self.history_state.retained_blame_while_loading = None;
+        self.diff_state.retained_blame_while_loading = None;
     }
 
     pub(crate) fn set_log_loading_more(&mut self, v: bool) {

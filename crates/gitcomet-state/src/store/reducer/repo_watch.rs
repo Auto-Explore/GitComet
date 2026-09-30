@@ -60,3 +60,67 @@ pub(super) fn watch_degraded(state: &mut AppState, reason: RepoWatchDegradedReas
     util::push_notification(state, crate::model::AppNotificationKind::Warning, message);
     Vec::new()
 }
+
+pub(super) fn watch_worktree(
+    state: &mut AppState,
+    repo_id: RepoId,
+    lifetime: u64,
+    path: std::path::PathBuf,
+    watch: bool,
+) -> Vec<Effect> {
+    if !state
+        .repos
+        .iter()
+        .any(|repo| repo.id == repo_id && repo.lifetime() == lifetime)
+    {
+        return Vec::new();
+    }
+    let leases = Arc::make_mut(&mut state.worktree_watch_leases);
+    let key = (repo_id, lifetime, path);
+    if watch {
+        *leases.entry(key).or_default() += 1;
+    } else if let Some(count) = leases.get_mut(&key) {
+        *count -= 1;
+        if *count == 0 {
+            leases.remove(&key);
+        }
+    }
+    Vec::new()
+}
+
+pub(super) fn worktree_changed(
+    state: &mut AppState,
+    repo_id: RepoId,
+    lifetime: u64,
+    path: std::path::PathBuf,
+    change: crate::msg::RepoExternalChange,
+) -> Vec<Effect> {
+    let Some(repo) = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id && repo.lifetime() == lifetime)
+    else {
+        return Vec::new();
+    };
+    let refresh_diff = repo
+        .diff_state
+        .inline_submodule_diff
+        .as_ref()
+        .is_some_and(|inline| {
+            inline.submodule_repo_path == path
+                && (change.index
+                    || change.git_state
+                    || change.text_attributes
+                    || change.worktree
+                        && inline
+                            .target
+                            .file_path()
+                            .is_none_or(|file| change.paths.may_contain(file)))
+        });
+    let mut effects = super::effects::load_worktree_dirty(state, repo_id);
+    if refresh_diff {
+        effects
+            .extend(super::diff_selection::refresh_inline_submodule_selected_diff(state, repo_id));
+    }
+    effects
+}

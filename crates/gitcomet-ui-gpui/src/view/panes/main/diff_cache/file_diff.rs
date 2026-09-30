@@ -1868,7 +1868,7 @@ fn build_file_diff_plan_from_patch(
     file_diff_plan_from_runs(runs)
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(in crate::view) struct FileDiffCacheRebuild {
     pub(in crate::view) file_path: Option<std::path::PathBuf>,
     pub(in crate::view) language: Option<rows::DiffSyntaxLanguage>,

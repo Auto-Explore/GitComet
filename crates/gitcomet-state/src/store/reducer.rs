@@ -304,8 +304,8 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::Commit { .. }
             | Msg::CommitAmend { .. }
             | Msg::SafePushAfterCommit { .. }
-            | Msg::FetchAll { .. }
-            | Msg::FetchRefspecs { .. }
+            | Msg::Fetch(crate::msg::FetchMsg::All { .. })
+            | Msg::Fetch(crate::msg::FetchMsg::Refspecs { .. })
             | Msg::PruneMergedBranches { .. }
             | Msg::PruneLocalTags { .. }
             | Msg::Pull { .. }
@@ -539,6 +539,21 @@ fn finalize_reduced_state(state: &mut AppState, nav_push: Option<bool>) {
         Arc::make_mut(&mut state.watch_leases).retain(|repo_id, _| open.contains(repo_id));
     }
 
+    if state.worktree_watch_leases.keys().any(|(id, lifetime, _)| {
+        !state
+            .repos
+            .iter()
+            .any(|repo| repo.id == *id && repo.lifetime() == *lifetime)
+    }) {
+        let open: Vec<_> = state
+            .repos
+            .iter()
+            .map(|repo| (repo.id, repo.lifetime()))
+            .collect();
+        Arc::make_mut(&mut state.worktree_watch_leases)
+            .retain(|(id, lifetime, _), _| open.contains(&(*id, *lifetime)));
+    }
+
     if let Some(push) = nav_push {
         reconcile_active_nav_history(state, push);
     }
@@ -739,6 +754,18 @@ fn reduce_inner(
         }
         Msg::ReloadRepo { repo_id } => external_and_history::reload_repo(repos, state, repo_id),
         Msg::RepoActivated { .. } => Vec::new(),
+        Msg::WatchWorktree {
+            repo_id,
+            lifetime,
+            path,
+            watch,
+        } => repo_watch::watch_worktree(state, repo_id, lifetime, path, watch),
+        Msg::WorktreeExternallyChanged {
+            repo_id,
+            lifetime,
+            path,
+            change,
+        } => repo_watch::worktree_changed(state, repo_id, lifetime, path, change),
         Msg::RepoExternallyChanged { repo_id, change } => {
             external_and_history::repo_externally_changed(repos, state, repo_id, change)
         }
@@ -1271,12 +1298,14 @@ fn reduce_inner(
         Msg::SafePushAfterCommit { repo_id, context } => {
             actions_emit_effects::safe_push_after_commit(repo_id, context)
         }
-        Msg::FetchAll { repo_id } => actions_emit_effects::fetch_all(repos, state, repo_id),
-        Msg::FetchRefspecs {
+        Msg::Fetch(crate::msg::FetchMsg::All { repo_id }) => {
+            actions_emit_effects::fetch_all(repos, state, repo_id)
+        }
+        Msg::Fetch(crate::msg::FetchMsg::Refspecs {
             repo_id,
             remote,
             refspecs,
-        } => actions_emit_effects::fetch_refspecs(repos, state, repo_id, remote, refspecs),
+        }) => actions_emit_effects::fetch_refspecs(repos, state, repo_id, remote, refspecs),
         Msg::PruneMergedBranches { repo_id } => {
             actions_emit_effects::prune_merged_branches(repos, state, repo_id)
         }

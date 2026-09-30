@@ -559,6 +559,10 @@ enum ExternalEditorOptionsState {
 }
 
 pub(crate) struct SettingsWindowView {
+    extension_window: Option<extension_host::SettingsExtensions>,
+    window_gates: Option<super::window_gates::WindowGates>,
+    extension_dialog: Option<extension_host::SettingsDialog>,
+    extension_notice: Option<(SharedString, Vec<gitcomet_extension_api::HostedAction>)>,
     theme_mode: ThemeMode,
     theme: AppTheme,
     ui_scale_percent: u32,
@@ -698,8 +702,7 @@ pub(crate) fn open_settings_window(cx: &mut App) {
         move |window, cx| {
             ui_scale::apply_to_window(window, ui_scale_percent);
             window.on_window_should_close(cx, |window, cx| {
-                crate::app::mark_clean_shutdown_if_last_window(cx);
-                window.remove_window();
+                close_guards::request_native_close(window, cx);
                 false
             });
             cx.new(|cx| SettingsWindowView::new(window, cx))
@@ -727,6 +730,54 @@ pub(crate) fn open_settings_window_to_workspace(
         view.current_view = SettingsView::Root;
         view.select_category(SettingsCategory::Workspaces, cx);
         view.select_workspace(workspace_id, cx);
+        cx.notify();
+    });
+}
+
+pub(in crate::view) fn open_settings_at(
+    target: gitcomet_extension_api::SettingsTarget,
+    cx: &mut App,
+) {
+    open_settings_window(cx);
+    let Some(handle) = cx
+        .windows()
+        .into_iter()
+        .find_map(|window| window.downcast::<SettingsWindowView>())
+    else {
+        return;
+    };
+    let _ = handle.update(cx, |view, window, cx| {
+        view.current_view = SettingsView::Root;
+        match target {
+            gitcomet_extension_api::SettingsTarget::Extension(id) => {
+                if let Some(index) = view
+                    .extension_pages
+                    .iter()
+                    .position(|(candidate, _)| *candidate == id)
+                {
+                    view.select_extension_page(index, window, cx);
+                }
+            }
+            gitcomet_extension_api::SettingsTarget::Builtin(name) => {
+                let page = match name.as_ref() {
+                    "general" => SettingsCategory::General,
+                    "workspaces" => SettingsCategory::Workspaces,
+                    "security-privacy" => SettingsCategory::SecurityPrivacy,
+                    "terminal" => SettingsCategory::Terminal,
+                    "change-tracking" => SettingsCategory::ChangeTracking,
+                    "diff" => SettingsCategory::Diff,
+                    "file-editing" => SettingsCategory::FileEditing,
+                    "git-log" => SettingsCategory::GitLog,
+                    "remotes" => SettingsCategory::Remotes,
+                    "tags" => SettingsCategory::Tags,
+                    "executables" => SettingsCategory::GitExecutable,
+                    "environment" => SettingsCategory::Environment,
+                    "links" => SettingsCategory::Links,
+                    _ => return,
+                };
+                view.select_category(page, cx);
+            }
+        }
         cx.notify();
     });
 }
@@ -968,7 +1019,7 @@ fn initial_external_editor_setting(
 }
 
 impl SettingsWindowView {
-    fn new(window: &mut Window, cx: &mut gpui::Context<Self>) -> Self {
+    pub(in crate::view) fn new(window: &mut Window, cx: &mut gpui::Context<Self>) -> Self {
         window.set_window_title(&settings_window_title());
 
         let ui_session = session::load();
@@ -1292,6 +1343,10 @@ impl SettingsWindowView {
             input.set_text(workspace_name_draft.clone(), cx);
         });
         Self {
+            extension_window: extension_host::SettingsExtensions::new(window, theme, cx),
+            window_gates: super::window_gates::WindowGates::new(cx),
+            extension_dialog: None,
+            extension_notice: None,
             theme_mode,
             appearance_metrics,
             font_size_inputs,
@@ -1493,6 +1548,8 @@ impl SettingsWindowView {
 }
 
 mod cards;
+pub(crate) mod close_guards;
+mod extension_host;
 mod extension_pages;
 mod prefs;
 mod render;

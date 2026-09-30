@@ -15,19 +15,6 @@ struct PendingCommitAmend {
 /// repo, worktree-dirty revision, and the worktree's own path.
 /// One status section's display order, keyed by the projection it was built for.
 type StatusSectionOrderSlot = Option<(u64, Arc<[usize]>)>;
-type WorktreeFileProjectionCache = crate::view::rows::CommitFileProjectionCache<(
-    RepoId,
-    u64,
-    std::path::PathBuf,
-    crate::view::rows::CommitFileSort,
-    crate::view::rows::CommitFileFilter,
-)>;
-type RangeFileProjectionCache = crate::view::rows::CommitFileProjectionCache<(
-    RepoId,
-    u64,
-    crate::view::rows::CommitFileSort,
-    crate::view::rows::CommitFileFilter,
-)>;
 
 type WorktreeFileListInputsCacheEntry = (
     (RepoId, u64, std::path::PathBuf),
@@ -56,6 +43,12 @@ pub(in crate::view) struct ComparisonCardCache {
 }
 
 pub(in super::super) struct DetailsPaneView {
+    pub(in crate::view) file_controllers: std::cell::RefCell<
+        FxHashMap<
+            (RepoId, crate::view::rows::FileListId),
+            crate::view::changed_file_list::BuiltinFileList,
+        >,
+    >,
     pub(in super::super) store: Arc<AppStore>,
     pub(in super::super) state: Arc<AppState>,
     pub(in super::super) theme: AppTheme,
@@ -132,29 +125,15 @@ pub(in super::super) struct DetailsPaneView {
         std::cell::RefCell<Option<ComparisonCardCache>>,
     pub(in super::super) comparison_order: Option<ComparisonOrderCache>,
     pub(in super::super) comparison_order_pending: Option<u64>,
-    commit_file_rows:
-        std::cell::RefCell<crate::view::rows::CommitFileRowPresentationCache<(RepoId, u64)>>,
-    commit_file_projection: std::cell::RefCell<
-        crate::view::rows::CommitFileProjectionCache<(
-            RepoId,
-            u64,
-            crate::view::rows::CommitFileSort,
-            crate::view::rows::CommitFileFilter,
-        )>,
-    >,
     pub(in super::super) commit_file_sort: crate::view::rows::CommitFileSort,
     pub(in super::super) commit_file_filter: crate::view::rows::CommitFileFilter,
     /// Global default; a list may override it until its context changes.
     pub(in super::super) file_list_layout: crate::view::FileListLayout,
     pub(in super::super) file_list_layout_override:
         FxHashMap<(RepoId, crate::view::rows::FileListId), crate::view::FileListLayout>,
-    pub(in super::super) file_list_collapsed:
-        FxHashMap<(RepoId, crate::view::rows::FileListId), crate::view::rows::CollapsedDirs>,
-    commit_file_plan: std::cell::RefCell<crate::view::rows::FileListPlanCache>,
     /// One slot per status section: three of them render every frame and a
     /// single slot would have them evicting each other's sort.
     status_section_order: std::cell::RefCell<[StatusSectionOrderSlot; 4]>,
-    status_file_plan: std::cell::RefCell<[crate::view::rows::FileListPlanCache; 4]>,
     pub(in super::super) status_file_sort:
         FxHashMap<StatusSection, crate::view::rows::CommitFileSort>,
     /// Sort and filter for the lists without dedicated fields. Repo-keyed like
@@ -163,19 +142,10 @@ pub(in super::super) struct DetailsPaneView {
         FxHashMap<(RepoId, crate::view::rows::FileListId), crate::view::rows::CommitFileSort>,
     list_filter:
         FxHashMap<(RepoId, crate::view::rows::FileListId), crate::view::rows::CommitFileFilter>,
-    worktree_file_plan: std::cell::RefCell<crate::view::rows::FileListPlanCache>,
-    range_file_plan: std::cell::RefCell<crate::view::rows::FileListPlanCache>,
-    worktree_file_projection: std::cell::RefCell<WorktreeFileProjectionCache>,
-    range_file_projection: std::cell::RefCell<RangeFileProjectionCache>,
-    range_file_rows:
-        std::cell::RefCell<crate::view::rows::CommitFileRowPresentationCache<(RepoId, u64)>>,
     /// Keyed by the worktree as well as the scan revision: `rows_for` returns
     /// cached rows on a key match alone, and `worktree_dirty_rev` bumps per
     /// repo-wide scan, so without the path a different worktree would be served
     /// the previous one's rows.
-    worktree_file_rows: std::cell::RefCell<
-        crate::view::rows::CommitFileRowPresentationCache<(RepoId, u64, std::path::PathBuf)>,
-    >,
     /// The per-file inputs the worktree file list is built from, derived once per
     /// scan rather than per frame. Same key as `worktree_file_rows`, and for the
     /// same reason.
@@ -512,33 +482,15 @@ impl DetailsPaneView {
             range_comparison_commits_cache: std::cell::RefCell::new(None),
             comparison_order: None,
             comparison_order_pending: None,
-            commit_file_rows: std::cell::RefCell::new(
-                crate::view::rows::CommitFileRowPresentationCache::default(),
-            ),
-            commit_file_projection: std::cell::RefCell::new(
-                crate::view::rows::CommitFileProjectionCache::default(),
-            ),
             commit_file_sort: crate::view::rows::CommitFileSort::default(),
             file_list_layout,
             file_list_layout_override: FxHashMap::default(),
-            file_list_collapsed: FxHashMap::default(),
-            commit_file_plan: std::cell::RefCell::new(Default::default()),
+            file_controllers: Default::default(),
             status_section_order: std::cell::RefCell::new(Default::default()),
-            status_file_plan: std::cell::RefCell::new(Default::default()),
             status_file_sort: FxHashMap::default(),
             list_sort: FxHashMap::default(),
             list_filter: FxHashMap::default(),
-            worktree_file_plan: std::cell::RefCell::new(Default::default()),
-            range_file_plan: std::cell::RefCell::new(Default::default()),
-            worktree_file_projection: std::cell::RefCell::new(Default::default()),
-            range_file_projection: std::cell::RefCell::new(Default::default()),
             commit_file_filter: crate::view::rows::CommitFileFilter::default(),
-            range_file_rows: std::cell::RefCell::new(
-                crate::view::rows::CommitFileRowPresentationCache::default(),
-            ),
-            worktree_file_rows: std::cell::RefCell::new(
-                crate::view::rows::CommitFileRowPresentationCache::default(),
-            ),
             worktree_file_inputs: std::cell::RefCell::new(None),
             untracked_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
             unstaged_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
@@ -979,14 +931,49 @@ impl DetailsPaneView {
         path_display::cached_path_display(&mut cache, path)
     }
 
+    fn file_controller(
+        &self,
+        repo_id: RepoId,
+        list: crate::view::rows::FileListId,
+    ) -> crate::view::changed_file_list::SharedFileListController {
+        std::rc::Rc::clone(
+            &self
+                .file_controllers
+                .borrow_mut()
+                .entry((repo_id, list))
+                .or_default()
+                .controller,
+        )
+    }
+
+    fn file_source_key(
+        &self,
+        repo_id: RepoId,
+        revision: u64,
+        path: Option<&std::path::Path>,
+    ) -> u64 {
+        let lifetime = self
+            .state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .map(RepoState::lifetime);
+        let mut hasher = FxHasher::default();
+        (repo_id, lifetime, revision, path).hash(&mut hasher);
+        hasher.finish()
+    }
+
     pub(in super::super) fn cached_commit_file_rows(
         &self,
         repo_id: RepoId,
         commit_details_rev: u64,
         files: &[gitcomet_core::domain::CommitFileChange],
     ) -> Arc<[crate::view::rows::CommitFileRowPresentation]> {
-        let mut cache = self.commit_file_rows.borrow_mut();
-        cache.rows_for(&(repo_id, commit_details_rev), files)
+        let key = self.file_source_key(repo_id, commit_details_rev, None);
+        self.file_controller(repo_id, crate::view::rows::FileListId::CommitFiles)
+            .borrow_mut()
+            .presentations
+            .rows_for(&key, files)
     }
 
     pub(in super::super) fn cached_commit_file_projection(
@@ -995,15 +982,18 @@ impl DetailsPaneView {
         commit_details_rev: u64,
         files: &[gitcomet_core::domain::CommitFileChange],
     ) -> Arc<crate::view::rows::CommitFileProjection> {
+        let list = crate::view::rows::FileListId::CommitFiles;
         let sort = self.commit_file_sort;
         let filter = self.commit_file_filter;
-        let mut cache = self.commit_file_projection.borrow_mut();
-        cache.projection_for(
-            &(repo_id, commit_details_rev, sort, filter),
-            files,
-            sort,
-            filter,
-        )
+        let source = self.file_source_key(repo_id, commit_details_rev, None);
+        let key = crate::view::rows::file_list_projection_key(repo_id.0, source, sort, filter);
+        let controller = self.file_controller(repo_id, list);
+        let mut controller = controller.borrow_mut();
+        controller.sort = sort;
+        controller.kind_filter = filter;
+        controller
+            .projection_cache
+            .projection_for(&key, files, sort, filter)
     }
 
     /// Drop a list's transient layout flip and collapse set, so the next time it
@@ -1011,7 +1001,8 @@ impl DetailsPaneView {
     fn forget_file_list_view_state(&mut self, list: crate::view::rows::FileListId) {
         self.file_list_layout_override
             .retain(|(_, entry), _| *entry != list);
-        self.file_list_collapsed
+        self.file_controllers
+            .borrow_mut()
             .retain(|(_, entry), _| *entry != list);
         // The filter too: a stale "Renamed" empties the list under a header
         // still counting changes.
@@ -1046,10 +1037,12 @@ impl DetailsPaneView {
         repo_id: RepoId,
         list: crate::view::rows::FileListId,
     ) -> std::borrow::Cow<'_, crate::view::rows::CollapsedDirs> {
-        self.file_list_collapsed
-            .get(&(repo_id, list))
-            .map(std::borrow::Cow::Borrowed)
-            .unwrap_or_else(|| std::borrow::Cow::Owned(Default::default()))
+        std::borrow::Cow::Owned(
+            self.file_controller(repo_id, list)
+                .borrow()
+                .collapsed
+                .clone(),
+        )
     }
 
     pub(in super::super) fn toggle_file_list_dir(
@@ -1061,7 +1054,9 @@ impl DetailsPaneView {
         collapsed: bool,
         cx: &mut gpui::Context<Self>,
     ) {
-        let entry = self.file_list_collapsed.entry((repo_id, list)).or_default();
+        let controller = self.file_controller(repo_id, list);
+        let mut controller = controller.borrow_mut();
+        let entry = &mut controller.collapsed;
         if collapsed {
             entry.expand(&chain);
         } else {
@@ -1076,37 +1071,14 @@ impl DetailsPaneView {
         commit_details_rev: u64,
         files: &[gitcomet_core::domain::CommitFileChange],
     ) -> Arc<crate::view::rows::FileListPlan> {
-        let list = crate::view::rows::FileListId::CommitFiles;
-        let layout = self.file_list_layout_for(repo_id, list);
-        let sort = self.commit_file_sort;
         let projection = self.cached_commit_file_projection(repo_id, commit_details_rev, files);
-        let key = crate::view::rows::file_list_projection_key(
-            repo_id.0,
+        self.file_list_plan_from_projection(
+            crate::view::rows::FileListId::CommitFiles,
+            repo_id,
             commit_details_rev,
-            sort,
-            self.commit_file_filter,
-        );
-        let collapsed = self.file_list_collapsed_for(repo_id, list);
-        let mut cache = self.commit_file_plan.borrow_mut();
-        cache.plan_for(
-            key,
-            layout,
-            &collapsed,
-            projection.source_indices.len(),
-            || {
-                crate::view::rows::FileTree::build(
-                    projection.source_indices.iter().filter_map(|source_ix| {
-                        files
-                            .get(*source_ix)
-                            .map(|file| crate::view::rows::FileTreeItem {
-                                path: file.path.as_path(),
-                                additions: file.additions,
-                                deletions: file.deletions,
-                            })
-                    }),
-                    sort,
-                )
-            },
+            None,
+            &projection,
+            files,
         )
     }
 
@@ -1120,19 +1092,15 @@ impl DetailsPaneView {
         let list = crate::view::rows::FileListId::WorktreeFiles;
         let sort = self.file_list_sort_for(list);
         let filter = self.file_list_filter_for(list);
-        let mut cache = self.worktree_file_projection.borrow_mut();
-        cache.projection_for(
-            &(
-                repo_id,
-                worktree_dirty_rev,
-                worktree_path.to_path_buf(),
-                sort,
-                filter,
-            ),
-            files,
-            sort,
-            filter,
-        )
+        let source = self.file_source_key(repo_id, worktree_dirty_rev, Some(worktree_path));
+        let key = crate::view::rows::file_list_projection_key(repo_id.0, source, sort, filter);
+        let controller = self.file_controller(repo_id, list);
+        let mut controller = controller.borrow_mut();
+        controller.sort = sort;
+        controller.kind_filter = filter;
+        controller
+            .projection_cache
+            .projection_for(&key, files, sort, filter)
     }
 
     pub(in super::super) fn cached_range_file_projection(
@@ -1144,18 +1112,19 @@ impl DetailsPaneView {
         let list = crate::view::rows::FileListId::RangeFiles;
         let sort = self.file_list_sort_for(list);
         let filter = self.file_list_filter_for(list);
-        let mut cache = self.range_file_projection.borrow_mut();
-        cache.projection_for(
-            &(repo_id, range_files_rev, sort, filter),
-            files,
-            sort,
-            filter,
-        )
+        let source = self.file_source_key(repo_id, range_files_rev, None);
+        let key = crate::view::rows::file_list_projection_key(repo_id.0, source, sort, filter);
+        let controller = self.file_controller(repo_id, list);
+        let mut controller = controller.borrow_mut();
+        controller.sort = sort;
+        controller.kind_filter = filter;
+        controller
+            .projection_cache
+            .projection_for(&key, files, sort, filter)
     }
 
     fn file_list_plan_from_projection(
         &self,
-        cache: &std::cell::RefCell<crate::view::rows::FileListPlanCache>,
         list: crate::view::rows::FileListId,
         repo_id: RepoId,
         rev: u64,
@@ -1168,14 +1137,15 @@ impl DetailsPaneView {
         let sort = self.file_list_sort_for(list);
         let key = crate::view::rows::file_list_projection_key_scoped(
             repo_id.0,
-            rev,
+            self.file_source_key(repo_id, rev, scope),
             sort,
             self.file_list_filter_for(list),
             scope,
         );
         let collapsed = self.file_list_collapsed_for(repo_id, list);
-        let mut cache = cache.borrow_mut();
-        cache.plan_for(
+        let controller = self.file_controller(repo_id, list);
+        let mut controller = controller.borrow_mut();
+        controller.plan_cache.plan_for(
             key,
             layout,
             &collapsed,
@@ -1207,7 +1177,6 @@ impl DetailsPaneView {
         let projection =
             self.cached_worktree_file_projection(repo_id, worktree_dirty_rev, worktree_path, files);
         self.file_list_plan_from_projection(
-            &self.worktree_file_plan,
             crate::view::rows::FileListId::WorktreeFiles,
             repo_id,
             worktree_dirty_rev,
@@ -1225,7 +1194,6 @@ impl DetailsPaneView {
     ) -> Arc<crate::view::rows::FileListPlan> {
         let projection = self.cached_range_file_projection(repo_id, range_files_rev, files);
         self.file_list_plan_from_projection(
-            &self.range_file_plan,
             crate::view::rows::FileListId::RangeFiles,
             repo_id,
             range_files_rev,
@@ -1240,6 +1208,22 @@ impl DetailsPaneView {
         repo_id: RepoId,
     ) -> Option<Arc<[usize]>> {
         let repo = self.active_repo().filter(|repo| repo.id == repo_id)?;
+        if repo.history_state.range_selection.is_some() {
+            let Loadable::Ready(files) = &repo.history_state.range_files else {
+                return None;
+            };
+            let rev = repo.history_state.range_files_rev;
+            let projection = self.cached_range_file_projection(repo_id, rev, files);
+            let plan = self.cached_range_file_plan(repo_id, rev, files);
+            return Some(if plan.is_tree() {
+                plan.ordered()
+                    .iter()
+                    .filter_map(|ordinal| projection.source_indices.get(ordinal).copied())
+                    .collect()
+            } else {
+                projection.source_indices.clone()
+            });
+        }
         let Loadable::Ready(details) = &repo.history_state.commit_details else {
             return None;
         };
@@ -1353,8 +1337,11 @@ impl DetailsPaneView {
         range_files_rev: u64,
         files: &[gitcomet_core::domain::CommitFileChange],
     ) -> Arc<[crate::view::rows::CommitFileRowPresentation]> {
-        let mut cache = self.range_file_rows.borrow_mut();
-        cache.rows_for(&(repo_id, range_files_rev), files)
+        let key = self.file_source_key(repo_id, range_files_rev, None);
+        self.file_controller(repo_id, crate::view::rows::FileListId::RangeFiles)
+            .borrow_mut()
+            .presentations
+            .rows_for(&key, files)
     }
 
     /// The scan entry for the worktree row the history selection is on.
@@ -1433,11 +1420,11 @@ impl DetailsPaneView {
         worktree_path: &std::path::Path,
         files: &[gitcomet_core::domain::CommitFileChange],
     ) -> Arc<[crate::view::rows::CommitFileRowPresentation]> {
-        let mut cache = self.worktree_file_rows.borrow_mut();
-        cache.rows_for(
-            &(repo_id, worktree_dirty_rev, worktree_path.to_path_buf()),
-            files,
-        )
+        let key = self.file_source_key(repo_id, worktree_dirty_rev, Some(worktree_path));
+        self.file_controller(repo_id, crate::view::rows::FileListId::WorktreeFiles)
+            .borrow_mut()
+            .presentations
+            .rows_for(&key, files)
     }
 
     /// Path-truncation signature for a linked worktree's file rows.
@@ -1640,7 +1627,7 @@ impl DetailsPaneView {
         let sort = self.status_file_sort_for(section);
         let key = crate::view::rows::file_list_projection_key(
             repo.id.0,
-            status_section_content_rev(repo, section),
+            self.file_source_key(repo.id, status_section_content_rev(repo, section), None),
             sort,
             crate::view::rows::CommitFileFilter::All,
         );
@@ -1697,10 +1684,13 @@ impl DetailsPaneView {
         let ordinal = crate::view::rows::FileOrdinal(plan.ordered().iter().nth(position)?);
         let chains = plan.reveal(ordinal);
         if !chains.is_empty() {
-            let entry = self.file_list_collapsed.entry((repo_id, list)).or_default();
+            let controller = self.file_controller(repo_id, list);
+            let mut controller = controller.borrow_mut();
+            let entry = &mut controller.collapsed;
             for chain in chains {
                 entry.expand(&chain);
             }
+            drop(controller);
             cx.notify();
             let repo = self.active_repo()?;
             let plan = self.status_file_plan(repo, section);
@@ -1810,10 +1800,13 @@ impl DetailsPaneView {
         let ordinal = crate::view::rows::FileOrdinal(plan.ordered().iter().nth(position)?);
         let chains = plan.reveal(ordinal);
         if !chains.is_empty() {
-            let entry = self.file_list_collapsed.entry((repo_id, list)).or_default();
+            let controller = self.file_controller(repo_id, list);
+            let mut controller = controller.borrow_mut();
+            let entry = &mut controller.collapsed;
             for chain in chains {
                 entry.expand(&chain);
             }
+            drop(controller);
             cx.notify();
             let repo = self.active_repo()?;
             let Loadable::Ready(details) = &repo.history_state.commit_details else {
@@ -1872,7 +1865,7 @@ impl DetailsPaneView {
         let order = self.status_section_order(repo, section).unwrap_or_default();
         let key = crate::view::rows::file_list_projection_key(
             repo.id.0,
-            status_section_content_rev(repo, section),
+            self.file_source_key(repo.id, status_section_content_rev(repo, section), None),
             sort,
             crate::view::rows::CommitFileFilter::All,
         );
@@ -1882,28 +1875,30 @@ impl DetailsPaneView {
             _ => repo.worktree_status_entries(),
         };
         let line_stats = status_section_line_stats(repo, section);
-        let slot = Self::status_section_alignment_key(section) as usize;
-        let mut cache = self.status_file_plan.borrow_mut();
-        cache[slot].plan_for(key, layout, &collapsed, order.len(), || {
-            crate::view::rows::FileTree::build(
-                order.iter().filter_map(|source_ix| {
-                    entries
-                        .and_then(|entries| entries.get(*source_ix))
-                        .map(|entry| {
-                            let stats = line_stats
-                                .and_then(|stats| stats.get(&entry.path))
-                                .copied()
-                                .unwrap_or_default();
-                            crate::view::rows::FileTreeItem {
-                                path: entry.path.as_path(),
-                                additions: stats.additions,
-                                deletions: stats.deletions,
-                            }
-                        })
-                }),
-                sort,
-            )
-        })
+        let controller = self.file_controller(repo.id, list);
+        let mut controller = controller.borrow_mut();
+        controller
+            .plan_cache
+            .plan_for(key, layout, &collapsed, order.len(), || {
+                crate::view::rows::FileTree::build(
+                    order.iter().filter_map(|source_ix| {
+                        entries
+                            .and_then(|entries| entries.get(*source_ix))
+                            .map(|entry| {
+                                let stats = line_stats
+                                    .and_then(|stats| stats.get(&entry.path))
+                                    .copied()
+                                    .unwrap_or_default();
+                                crate::view::rows::FileTreeItem {
+                                    path: entry.path.as_path(),
+                                    additions: stats.additions,
+                                    deletions: stats.deletions,
+                                }
+                            })
+                    }),
+                    sort,
+                )
+            })
     }
 
     fn status_section_alignment_key(section: StatusSection) -> u8 {
@@ -1916,6 +1911,9 @@ impl DetailsPaneView {
     }
 
     fn apply_state_snapshot(&mut self, next: Arc<AppState>, cx: &mut gpui::Context<Self>) {
+        self.file_controllers
+            .borrow_mut()
+            .retain(|(id, _), _| next.repos.iter().any(|repo| repo.id == *id));
         let prev_active_repo_id = self.state.active_repo;
         let prev_selected_commit = prev_active_repo_id.and_then(|repo_id| {
             self.state
@@ -2023,7 +2021,8 @@ impl DetailsPaneView {
             // a different commit re-reads the global default.
             self.file_list_layout_override
                 .retain(|(_, list), _| *list != crate::view::rows::FileListId::CommitFiles);
-            self.file_list_collapsed
+            self.file_controllers
+                .borrow_mut()
                 .retain(|(_, list), _| *list != crate::view::rows::FileListId::CommitFiles);
         }
         if switched_repo || prev_worktree_selection != next_worktree_selection {
@@ -2035,7 +2034,8 @@ impl DetailsPaneView {
         if switched_repo {
             self.file_list_layout_override
                 .retain(|(_, list), _| !matches!(list, crate::view::rows::FileListId::Status(_)));
-            self.file_list_collapsed
+            self.file_controllers
+                .borrow_mut()
                 .retain(|(_, list), _| !matches!(list, crate::view::rows::FileListId::Status(_)));
         }
         let mut restored_commit_message: Option<SharedString> = None;

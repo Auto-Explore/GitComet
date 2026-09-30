@@ -90,7 +90,17 @@ impl BottomPanels {
         }
     }
 
+    fn view(&self, key: RepoKey, index: usize) -> Option<gpui::AnyView> {
+        self.open
+            .get(&key)?
+            .iter()
+            .find(|(candidate, _)| *candidate == index)?
+            .1
+            .clone()
+    }
+
     /// The open panels of `key` that have views, in opening order.
+    #[cfg(test)]
     pub(in crate::view) fn shown(&self, key: RepoKey) -> Vec<(usize, gpui::AnyView)> {
         self.open
             .get(&key)
@@ -118,6 +128,12 @@ impl BottomPanels {
 }
 
 impl GitCometView {
+    pub(in crate::view) fn extension_panel_view(&self, index: usize) -> Option<gpui::AnyView> {
+        self.bottom_panels()?
+            .borrow()
+            .view(repo_key(self.active_repo()?), index)
+    }
+
     fn bottom_panels(&self) -> Option<SharedBottomPanels> {
         self.extension_window
             .as_ref()
@@ -172,6 +188,7 @@ impl GitCometView {
                 ),
             };
             // Not borrowed while the extension builds: it may ask the host.
+            super::perf::extension_dispatch();
             let view = build(context, window, cx);
             panels.borrow_mut().set_view(key, index, view);
         }
@@ -191,30 +208,6 @@ impl GitCometView {
             self.active_bottom_panel.remove(&key.0);
         }
         cx.notify();
-    }
-
-    /// The active repository's extension panels that are ready to show:
-    /// (index, view, title, icon).
-    pub(in crate::view) fn shown_extension_bottom_panels(
-        &self,
-    ) -> Vec<(usize, gpui::AnyView, SharedString, SharedString)> {
-        let (Some(panels), Some(repo)) = (self.bottom_panels(), self.active_repo()) else {
-            return Vec::new();
-        };
-        let panels = panels.borrow();
-        panels
-            .shown(repo_key(repo))
-            .into_iter()
-            .filter_map(|(index, view)| {
-                let descriptor = panels.descriptor(index)?;
-                Some((
-                    index,
-                    view,
-                    descriptor.title.clone(),
-                    descriptor.icon.clone(),
-                ))
-            })
-            .collect()
     }
 
     /// Closes extension panel `index` of the active repository from its tab.

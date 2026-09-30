@@ -75,7 +75,12 @@ fn pull_and_push_mark_in_flight_until_command_finished() {
     );
     assert_eq!(state.repos[0].pull_in_flight, 1);
 
-    reduce(&mut repos, &id_alloc, &mut state, Msg::FetchAll { repo_id });
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Fetch(crate::msg::FetchMsg::All { repo_id }),
+    );
     assert_eq!(state.repos[0].pull_in_flight, 2);
 
     reduce(
@@ -297,7 +302,12 @@ fn pull_and_push_do_not_mark_in_flight_before_repo_is_opened() {
             mode: PullMode::Default,
         },
     );
-    reduce(&mut repos, &id_alloc, &mut state, Msg::FetchAll { repo_id });
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Fetch(crate::msg::FetchMsg::All { repo_id }),
+    );
     reduce(&mut repos, &id_alloc, &mut state, Msg::Push { repo_id });
 
     assert_eq!(state.repos[0].pull_in_flight, 0);
@@ -367,7 +377,12 @@ fn fetch_all_emits_effect_with_global_prune_setting() {
     state.repos.push(repo_state);
     state.remote_settings.prune_deleted_remote_branches_on_fetch = false;
 
-    let fetch_without_prune = reduce(&mut repos, &id_alloc, &mut state, Msg::FetchAll { repo_id });
+    let fetch_without_prune = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Fetch(crate::msg::FetchMsg::All { repo_id }),
+    );
     assert!(matches!(
         fetch_without_prune.as_slice(),
         [Effect::FetchAll {
@@ -379,7 +394,12 @@ fn fetch_all_emits_effect_with_global_prune_setting() {
     assert_eq!(state.repos[0].pull_in_flight, 1);
 
     state.remote_settings.prune_deleted_remote_branches_on_fetch = true;
-    let fetch_with_prune = reduce(&mut repos, &id_alloc, &mut state, Msg::FetchAll { repo_id });
+    let fetch_with_prune = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Fetch(crate::msg::FetchMsg::All { repo_id }),
+    );
     assert!(matches!(
         fetch_with_prune.as_slice(),
         [Effect::FetchAll {
@@ -410,11 +430,11 @@ fn a_refspec_fetch_is_a_fetch_in_flight_and_refreshes_remote_branches_when_done(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::FetchRefspecs {
+        Msg::Fetch(crate::msg::FetchMsg::Refspecs {
             repo_id,
             remote: "origin".to_string(),
             refspecs: refspecs.clone(),
-        },
+        }),
     );
     assert!(matches!(
         effects.as_slice(),
@@ -1976,11 +1996,11 @@ fn repo_command_finished_stage_hunk_invalidates_loaded_blame() {
         PathBuf::from("src/lib.rs"),
         DiffArea::Unstaged,
     ));
-    state.repos[0].history_state.blame_path = Some(PathBuf::from("src/lib.rs"));
-    state.repos[0].history_state.blame_source = Some(
-        gitcomet_core::domain::BlameSource::WorkingTree(DiffArea::Unstaged),
-    );
-    state.repos[0].history_state.blame = ready_working_tree_blame();
+    state.repos[0].diff_state.blame_path = Some(PathBuf::from("src/lib.rs"));
+    state.repos[0].diff_state.blame_source = Some(gitcomet_core::domain::BlameSource::WorkingTree(
+        DiffArea::Unstaged,
+    ));
+    state.repos[0].diff_state.blame = ready_working_tree_blame();
 
     reduce(
         &mut repos,
@@ -1994,16 +2014,16 @@ fn repo_command_finished_stage_hunk_invalidates_loaded_blame() {
     );
 
     assert!(
-        matches!(state.repos[0].history_state.blame, Loadable::NotLoaded),
+        matches!(state.repos[0].diff_state.blame, Loadable::NotLoaded),
         "blame must be invalidated so the annotation column reloads after staging"
     );
     // The target is preserved so the reload re-blames the same file/source.
     assert_eq!(
-        state.repos[0].history_state.blame_path.as_deref(),
+        state.repos[0].diff_state.blame_path.as_deref(),
         Some(std::path::Path::new("src/lib.rs"))
     );
     assert_eq!(
-        state.repos[0].history_state.blame_source,
+        state.repos[0].diff_state.blame_source,
         Some(gitcomet_core::domain::BlameSource::WorkingTree(
             DiffArea::Unstaged
         ))
@@ -2026,11 +2046,11 @@ fn commit_finished_invalidates_loaded_blame() {
     ));
     state.repos[0].local_actions_in_flight = 1;
     state.repos[0].commit_in_flight = 1;
-    state.repos[0].history_state.blame_path = Some(PathBuf::from("src/lib.rs"));
-    state.repos[0].history_state.blame_source = Some(
-        gitcomet_core::domain::BlameSource::WorkingTree(DiffArea::Staged),
-    );
-    state.repos[0].history_state.blame = ready_working_tree_blame();
+    state.repos[0].diff_state.blame_path = Some(PathBuf::from("src/lib.rs"));
+    state.repos[0].diff_state.blame_source = Some(gitcomet_core::domain::BlameSource::WorkingTree(
+        DiffArea::Staged,
+    ));
+    state.repos[0].diff_state.blame = ready_working_tree_blame();
 
     reduce(
         &mut repos,
@@ -2043,7 +2063,7 @@ fn commit_finished_invalidates_loaded_blame() {
     );
 
     assert!(
-        matches!(state.repos[0].history_state.blame, Loadable::NotLoaded),
+        matches!(state.repos[0].diff_state.blame, Loadable::NotLoaded),
         "blame must be invalidated after a commit so the annotation column reloads"
     );
 }

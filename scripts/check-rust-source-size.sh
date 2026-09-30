@@ -21,9 +21,10 @@ done
 # limit. Small cohesive inline tests may stay.
 failed=0
 checked=0
-# `git ls-files` rather than `find`: it lists exactly the tracked sources, so a
-# nested `target/` or any other build output can never be measured.
-while IFS= read -r file; do
+# Include new sources during local development, and skip tracked deletions.
+# Git's excludes keep build output out of this inventory.
+while IFS= read -r -d '' file; do
+  [[ -f "$file" ]] || continue
   checked=$((checked + 1))
   case "$file" in
     */tests/* | */benches/* | */tests.rs | *_tests.rs)
@@ -42,7 +43,7 @@ while IFS= read -r file; do
       "$file" "$lines" "$kind" "$limit" >&2
     failed=1
   fi
-done < <(git ls-files -z -- 'crates/**/*.rs' | tr '\0' '\n')
+done < <(git ls-files --cached --others --exclude-standard -z -- 'crates/**/*.rs')
 
 if ((failed)); then
   echo "Split the reported file into cohesive modules before adding more code." >&2

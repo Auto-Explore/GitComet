@@ -1032,6 +1032,8 @@ pub struct GitCometView {
     pub(super) action_bar: Entity<ActionBarView>,
     pub(super) bottom_status_bar: Entity<BottomStatusBarView>,
     /// Present only when an extension is registered.
+    pub(super) window_gates: Option<super::window_gates::WindowGates>,
+    pub(super) window_gated: bool,
     pub(super) extension_window: Option<super::extension_host::ExtensionWindow>,
     /// Present only when an extension registers a repository view.
     pub(super) repository_views: Option<super::repository_views::RepositoryViewRouter>,
@@ -1052,6 +1054,7 @@ pub struct GitCometView {
     /// Focus to hand back when an overlay opened from a background window
     /// closes. Shared by the command palette and the Reveal Commit dialog.
     pub(super) pre_palette_focus: Option<FocusHandle>,
+    pub(super) focused_diff_pane: Option<gitcomet_extension_api::DiffPane>,
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
     pub(super) submodule_diff_bootstrap: Option<SubmoduleDiffBootstrap>,
     pub(super) deferred_repo_bootstrap: Option<DeferredRepoBootstrap>,
@@ -1100,6 +1103,7 @@ pub struct GitCometView {
     /// Which of the bottom panel's contents is currently visible for a repo,
     /// when more than one is open. Absent (and single-panel repos) fall back
     /// to whichever panel is actually open.
+    pub(super) bottom_panel_providers: super::bottom_panel_providers::Providers,
     pub(super) active_bottom_panel: FxHashMap<RepoId, BottomPanelTab>,
     pub(super) commit_push_after_enabled: bool,
     pub(super) diff_scroll_sync: DiffScrollSync,

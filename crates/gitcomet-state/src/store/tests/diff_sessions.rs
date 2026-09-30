@@ -70,6 +70,13 @@ fn two_sessions_load_retarget_and_close_without_touching_each_other_or_history()
         }),
     );
     let first_a = session_effect(&open_a).clone();
+    assert!(
+        matches!(
+            state.repos[0].diff_sessions[&a].diff_file_image,
+            Loadable::NotLoaded
+        ),
+        "a text pane must not activate the image viewer"
+    );
     assert!(matches!(
         first_a.work,
         DiffSessionWork::Content {
@@ -276,6 +283,18 @@ fn encoding_blame_and_worktree_edits_reload_the_right_sessions() {
         Msg::DiffSession(DiffSessionMsg::Loaded {
             repo_id,
             view: live,
+            lifetime: lifetime,
+            generation: generation,
+            content: DiffSessionContent::Attributes(Ok(Default::default())),
+        }),
+    );
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::Loaded {
+            repo_id,
+            view: live,
             lifetime,
             generation,
             content: DiffSessionContent::FileText(Ok(None)),
@@ -444,6 +463,18 @@ fn watcher_edits_do_not_cancel_a_session_load_or_reload_unrelated_files() {
         patch_loaded(repo_id, view, load.lifetime, load.generation),
     );
     assert!(effects.is_empty(), "wait for the file text too");
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::Loaded {
+            repo_id,
+            view: view,
+            lifetime: load.lifetime,
+            generation: load.generation,
+            content: DiffSessionContent::Attributes(Ok(Default::default())),
+        }),
+    );
     let effects = reduce(
         &mut repos,
         &ids,
@@ -770,4 +801,181 @@ fn known_worktree_paths_include_rename_sources_and_leave_staged_and_pinned_targe
             view != pinned
         );
     }
+}
+
+#[test]
+fn session_encoding_is_part_of_its_diff_state_and_does_not_change_history() {
+    use gitcomet_core::text_format::{TextEncoding, TextOverride};
+    let (mut repos, ids, mut state, repo_id) = setup();
+    let lifetime = state.repos[0].lifetime();
+    let view = DiffViewId::next();
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::Open {
+            repo_id,
+            lifetime,
+            view,
+            target: worktree("a.rs"),
+        }),
+    );
+    let value = TextOverride {
+        encoding: Some(TextEncoding::UTF_16LE),
+        tab_size: Some(8),
+    };
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::SetTextOverride {
+            repo_id,
+            lifetime,
+            view,
+            path: "a.rs".into(),
+            value,
+        }),
+    );
+    let session = &state.repos[0].diff_sessions[&view];
+    assert_eq!(
+        session.diff_state.selected_encoding_override(),
+        value.encoding
+    );
+    assert_eq!(
+        session.diff_state.text_override_for(Path::new("a.rs")),
+        Some(value)
+    );
+    assert!(state.repos[0].diff_state.text_override.is_none());
+    assert!(state.repos[0].diff_state.diff_target.is_none());
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::Open {
+            repo_id,
+            lifetime,
+            view,
+            target: worktree("b.rs"),
+        }),
+    );
+    let session = &state.repos[0].diff_sessions[&view];
+    assert_eq!(session.encoding, None);
+    assert_eq!(session.diff_state.selected_encoding_override(), None);
+}
+
+#[test]
+fn clearing_a_session_cancels_work_and_reload_cannot_reopen_it() {
+    let (mut repos, ids, mut state, repo_id) = setup();
+    let lifetime = state.repos[0].lifetime();
+    let view = DiffViewId::next();
+    let work = reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::Open {
+            repo_id,
+            lifetime,
+            view,
+            target: worktree("a.rs"),
+        }),
+    );
+    let first = session_effect(&work).clone();
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::Clear {
+            repo_id,
+            lifetime,
+            view,
+        }),
+    );
+    assert!(first.cancellation.is_cancelled());
+    for event in [
+        DiffSessionMsg::Reload {
+            repo_id,
+            lifetime,
+            view,
+        },
+        DiffSessionMsg::LoadBlame {
+            repo_id,
+            lifetime,
+            view,
+        },
+    ] {
+        assert!(reduce(&mut repos, &ids, &mut state, Msg::DiffSession(event)).is_empty());
+    }
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        patch_loaded(repo_id, view, lifetime, first.generation),
+    );
+    let session = &state.repos[0].diff_sessions[&view];
+    assert!(session.diff_target.is_none());
+    assert!(!session.is_loading());
+    assert!(matches!(session.diff, Loadable::NotLoaded));
+}
+
+#[test]
+fn session_editor_restores_its_previous_commit_without_changing_history() {
+    let (mut repos, ids, mut state, repo_id) = setup();
+    let lifetime = state.repos[0].lifetime();
+    let view = DiffViewId::next();
+    let original = DiffTarget::commit(CommitId("abc123".into()), Some("a.rs".into()));
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::Open {
+            repo_id,
+            lifetime,
+            view,
+            target: original.clone(),
+        }),
+    );
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::SetContentMode {
+            repo_id,
+            lifetime,
+            view,
+            preview: true,
+            edit: false,
+        }),
+    );
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::OpenEditor {
+            repo_id,
+            lifetime,
+            view,
+            path: "a.rs".into(),
+        }),
+    );
+    let session = &state.repos[0].diff_sessions[&view];
+    assert_eq!(session.diff_target.as_ref(), Some(&worktree("a.rs")));
+    assert!(session.edit_mode);
+    assert!(session.content_preview);
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::ExitEditor {
+            repo_id,
+            lifetime,
+            view,
+        }),
+    );
+    let session = &state.repos[0].diff_sessions[&view];
+    assert_eq!(session.diff_target.as_ref(), Some(&original));
+    assert!(!session.edit_mode);
+    assert!(session.content_preview);
+    assert!(session.edit_return_view.is_none());
+    assert!(state.repos[0].diff_state.diff_target.is_none());
+    assert!(!state.repos[0].diff_state.edit_mode);
 }

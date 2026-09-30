@@ -14,7 +14,9 @@ pub(in crate::view::panes::main) fn clear_diff_selection_action(
     view_mode: GitCometViewMode,
 ) -> ClearDiffSelectionAction {
     match view_mode {
-        GitCometViewMode::Normal => ClearDiffSelectionAction::ClearSelection,
+        GitCometViewMode::Normal | GitCometViewMode::FocusedDiff => {
+            ClearDiffSelectionAction::ClearSelection
+        }
         GitCometViewMode::FocusedMergetool => ClearDiffSelectionAction::ExitFocusedMergetool,
     }
 }

@@ -390,7 +390,13 @@ impl MainPaneView {
         let scaled_px = crate::ui_scale::scaler(crate::ui_scale::current(cx).percent);
 
         let inline_neighbors = self.inline_diff_file_neighbors(repo_id, cx);
-        let (has_prev, has_next) = if let Some((prev_ix, next_ix)) = inline_neighbors {
+        let (has_prev, has_next) = if let Some(decor) = &self.hosted_decor {
+            (
+                self.store.policy.file_navigation
+                    && decor.options.file_navigation.previous.is_some(),
+                self.store.policy.file_navigation && decor.options.file_navigation.next.is_some(),
+            )
+        } else if let Some((prev_ix, next_ix)) = inline_neighbors {
             (prev_ix.is_some(), next_ix.is_some())
         } else {
             let commit_file_source_indices = self
@@ -408,7 +414,7 @@ impl MainPaneView {
             let Some(repo) = self.active_repo() else {
                 return (None, None);
             };
-            let Some(diff_target) = repo.diff_state.diff_target.as_ref() else {
+            let Some(diff_target) = self.bound_diff_state(repo).diff_target.as_ref() else {
                 return (None, None);
             };
             (

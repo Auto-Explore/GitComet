@@ -164,7 +164,9 @@ impl DialogFocus {
 }
 
 pub(in super::super) struct PopoverHost {
-    store: Arc<AppStore>,
+    store: crate::view::pane_store::PaneStore,
+    history_store: crate::view::pane_store::PaneStore,
+    history_pane: Entity<MainPaneView>,
     extension_dialog: Option<extension_dialog::ExtensionDialog>,
     state: Arc<AppState>,
     theme: AppTheme,
@@ -501,7 +503,8 @@ pub(in super::super) fn focusable_toggle_row<V: 'static>(
 fn popover_is_context_menu(kind: &PopoverKind) -> bool {
     matches!(
         kind,
-        PopoverKind::AppMenu
+        PopoverKind::Hosted { menu: true, .. }
+            | PopoverKind::AppMenu
             | PopoverKind::AddRepoMenu
             | PopoverKind::PullPicker
             | PopoverKind::PushPicker
@@ -1061,9 +1064,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::ConflictResolverChunkMenu { .. } => Some(CONFLICT_CHUNK_MENU_WIDTH),
         PopoverKind::ConflictResolverOutputMenu { .. } => Some(CONFLICT_OUTPUT_MENU_WIDTH),
         PopoverKind::StashMenu { .. } => Some(STASH_MENU_WIDTH),
-        PopoverKind::RebaseReword { .. } | PopoverKind::ExtensionDialog { .. } => {
-            Some(DIALOG_440_WIDTH)
-        }
+        PopoverKind::RebaseReword { .. } | PopoverKind::Hosted { .. } => Some(DIALOG_440_WIDTH),
         PopoverKind::InteractiveRebaseActionMenu { .. } => Some(REBASE_ACTION_MENU_WIDTH),
         PopoverKind::InteractiveRebaseAutosquashMenu => Some(REBASE_AUTOSQUASH_MENU_WIDTH),
     }

@@ -248,7 +248,7 @@ impl GitCometView {
     }
 
     pub(crate) fn blocks_repository_management_actions(&self) -> bool {
-        matches!(self.view_mode, GitCometViewMode::Normal) && !self.state.git_runtime.is_available()
+        !self.shell_action_allowed(super::shell_policy::ShellAction::RepositoryEntry)
     }
 
     pub(crate) fn is_home_screen_active(&self) -> bool {
@@ -825,6 +825,14 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        if let Some(pane) = &self.focused_diff_pane {
+            return div()
+                .flex_1()
+                .min_h(px(0.0))
+                .child(pane.view())
+                .into_any_element();
+        }
+
         let theme = self.theme;
         let ui_scale_percent = self.ui_scale_percent;
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);

@@ -6,12 +6,19 @@ use gitcomet_core::conflict_session::{
     ConflictPayload, ConflictSession, ConflictStageParts, canonicalize_stage_parts,
 };
 use gitcomet_core::domain::*;
+use gitcomet_core::services::BlameLine;
 use gitcomet_core::text_format::{TextAttributes, TextEncoding, TextOverride};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct DiffState {
+    pub blame_path: Option<PathBuf>,
+    pub blame_source: Option<BlameSource>,
+    pub blame: Loadable<Shared<Vec<BlameLine>>>,
+    /// Annotations to keep painting while blame reloads for the same target, so
+    /// the annotation column does not blank out on every refresh.
+    pub retained_blame_while_loading: Option<Shared<Vec<BlameLine>>>,
     pub diff_target: Option<DiffTarget>,
     /// When true, the selected `diff_target` is rendered as a full-content file
     /// preview (the same renderer used for added/removed files — syntax
@@ -84,6 +91,10 @@ impl DiffState {
 impl Default for DiffState {
     fn default() -> Self {
         Self {
+            blame_path: None,
+            blame_source: None,
+            blame: Loadable::NotLoaded,
+            retained_blame_while_loading: None,
             diff_target: None,
             content_preview: false,
             edit_mode: false,

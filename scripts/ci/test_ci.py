@@ -1242,6 +1242,21 @@ class BoundaryTests(unittest.TestCase):
 
 
 class IdentityLiteralTests(unittest.TestCase):
+    def test_scan_includes_new_files_and_tolerates_deleted_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "crates/example/src"
+            source.mkdir(parents=True)
+            deleted = source / "deleted.rs"
+            deleted.write_text('const NAME: &str = "GitComet";')
+            subprocess.run(["git", "init", "-q", directory], check=True)
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            deleted.unlink()
+            (source / "new.rs").write_text('const NAME: &str = "GitComet";')
+            with patch.object(identity_literals, "ROOT", root):
+                self.assertEqual(identity_literals.scan(),
+                                 {("crates/example/src/new.rs", "display-name"): 1})
+
     def test_only_production_string_literals_count(self):
         source = """
 // GitComet in a comment is fine

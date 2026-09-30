@@ -18,6 +18,6 @@ use rustfs_mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-fn main() {
-    std::process::exit(gitcomet_app::AppLaunch::gitcomet().run());
+fn main() -> ! {
+    gitcomet_app::App::new().run()
 }

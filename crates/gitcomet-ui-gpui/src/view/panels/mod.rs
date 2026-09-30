@@ -56,6 +56,7 @@ pub(in crate::view) enum HistoryMenuRef {
 
 #[derive(Clone)]
 pub(in crate::view) enum ContextMenuAction {
+    Hosted(gitcomet_extension_api::HostedAction),
     /// An extension command for one repository tab.
     RunExtensionCommand {
         id: SharedString,
@@ -267,6 +268,11 @@ pub(in crate::view) enum ContextMenuAction {
         label: String,
     },
     CompareWithMarked {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        label: String,
+    },
+    CompareWithMergeBase {
         repo_id: RepoId,
         commit_id: CommitId,
         label: String,

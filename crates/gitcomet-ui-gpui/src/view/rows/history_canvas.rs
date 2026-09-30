@@ -1129,6 +1129,7 @@ pub(super) fn history_commit_row_canvas(
     active_context_menu_invoker: Option<SharedString>,
     // The same resolver paints the row and its graph-node cutouts.
     row_paint: InteractionPaint,
+    annotation: gitcomet_extension_api::HistoryRowAnnotation,
 ) -> AnyElement {
     super::canvas::keyed_canvas(
         ("history_commit_row_canvas", row_id),
@@ -1181,6 +1182,27 @@ pub(super) fn history_commit_row_canvas(
                 bounds.top() + extra * 0.5
             };
 
+            if let Some(range) = &annotation.range {
+                let color: gpui::Rgba = range.color.into_color();
+                let start = if range.starts {
+                    bounds.size.height * 0.5
+                } else {
+                    px(0.0)
+                };
+                let end = if range.ends {
+                    bounds.size.height * 0.5
+                } else {
+                    bounds.size.height
+                };
+                window.paint_quad(fill(
+                    Bounds::new(
+                        point(bounds.left(), bounds.top() + start),
+                        size(px(3.0), (end - start).max(px(2.0))),
+                    ),
+                    color,
+                ));
+            }
+
             let column_layout = history_canvas_column_layout(
                 bounds,
                 window.rem_size() * 0.5,
@@ -1201,10 +1223,51 @@ pub(super) fn history_commit_row_canvas(
             );
             let branch_bounds = column_layout.branch;
             let graph_bounds = column_layout.graph;
-            let summary_bounds = column_layout.summary;
+            let mut summary_bounds = column_layout.summary;
             let author_bounds = column_layout.author;
             let date_bounds = column_layout.date;
             let sha_bounds = column_layout.sha;
+
+            // Marks share the existing summary canvas, reserving their text width
+            // so neither the commit subject nor adjacent columns are obscured.
+            for (leading, mark) in [
+                (true, annotation.leading.as_ref()),
+                (false, annotation.trailing.as_ref()),
+            ] {
+                if let Some(mark) = mark {
+                    let mut hasher = FxHasher::default();
+                    mark.label.hash(&mut hasher);
+                    let available = (summary_bounds.size.width * 0.3).min(scaled_px(96.0));
+                    let text = shape_truncated_line_cached(
+                        window,
+                        &base_style,
+                        xxs_font,
+                        &mark.label,
+                        hasher.finish(),
+                        available,
+                        mark.color.into_color(),
+                        None,
+                    );
+                    let width = (text.width + scaled_px(8.0)).min(summary_bounds.size.width);
+                    let x = if leading {
+                        summary_bounds.left() + scaled_px(4.0)
+                    } else {
+                        summary_bounds.right() - width
+                    };
+                    let _ = text.paint(
+                        point(x, center_y(xxs_line_height)),
+                        xxs_line_height,
+                        gpui::TextAlign::Left,
+                        None,
+                        window,
+                        cx,
+                    );
+                    summary_bounds.size.width -= width;
+                    if leading {
+                        summary_bounds.origin.x += width;
+                    }
+                }
+            }
 
             // Everything coloured from this row's lane -- the node, the
             // message border, the fade wash and the hover badge -- washes with

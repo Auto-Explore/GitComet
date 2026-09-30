@@ -6,344 +6,86 @@
 
 use super::*;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
-use crate::view::rows::{
-    CollapsedDirs, CommitFileFilter, CommitFileProjectionCache, CommitFileSort, FileListPlan,
-    FileListPlanCache, FileListRow, FileTree, FileTreeItem, RowIx,
-};
-use gitcomet_core::domain::{CommitFileChange, CommitId, FileStatusKind};
+use crate::view::rows::{CommitFileFilter, CommitFileSort, FileListRow, RowIx};
+use gitcomet_core::domain::{CommitFileChange, CommitId};
 use gitcomet_extension_api::{
     ChangeSource, FileListImpl, FileListMode, FileSelected, RepositoryHandle, StateSubscription,
     WindowHost,
 };
 use gitcomet_state::diff_session::{DiffSessionMsg, DiffViewId};
-use std::hash::{Hash, Hasher};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 use std::rc::Rc;
 
-/// Change kinds in the order grouped lists show them.
-const GROUP_ORDER: [FileStatusKind; 6] = [
-    FileStatusKind::Conflicted,
-    FileStatusKind::Added,
-    FileStatusKind::Modified,
-    FileStatusKind::Renamed,
-    FileStatusKind::Deleted,
-    FileStatusKind::Untracked,
-];
-
-fn group_of(kind: FileStatusKind) -> usize {
-    GROUP_ORDER
-        .iter()
-        .position(|candidate| *candidate == kind)
-        .unwrap_or(GROUP_ORDER.len() - 1)
-}
-
-fn group_label(group: usize) -> &'static str {
-    match GROUP_ORDER.get(group) {
-        Some(FileStatusKind::Conflicted) => "Conflicted",
-        Some(FileStatusKind::Added) => "Added",
-        Some(FileStatusKind::Modified) => "Modified",
-        Some(FileStatusKind::Renamed) => "Renamed",
-        Some(FileStatusKind::Deleted) => "Deleted",
-        _ => "Untracked",
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::view) enum GroupedRow {
-    Header {
-        group: usize,
-        count: usize,
-        collapsed: bool,
-    },
-    /// The file at this position of the shown files.
-    File { ordinal: usize },
-}
-
-/// A grouped list's rows, all one height.
-#[derive(Debug, Default)]
-pub(in crate::view) struct GroupedRows {
-    pub(in crate::view) rows: Vec<GroupedRow>,
-    /// The row of each header, ascending.
-    headers: Vec<usize>,
-}
-
-impl GroupedRows {
-    /// The header of the group holding `row`.
-    pub(in crate::view) fn header_for(&self, row: usize) -> Option<usize> {
-        let after = self.headers.partition_point(|&header| header <= row);
-        after.checked_sub(1).map(|ix| self.headers[ix])
-    }
-
-    /// The first header below `row`.
-    pub(in crate::view) fn next_header(&self, row: usize) -> Option<usize> {
-        let after = self.headers.partition_point(|&header| header <= row);
-        self.headers.get(after).copied()
-    }
-}
-
-/// One list's presentation state, independent of every other list.
-pub(in crate::view) struct FileListController {
-    files: Arc<Vec<CommitFileChange>>,
-    files_rev: u64,
-    sort: CommitFileSort,
-    kind_filter: CommitFileFilter,
-    query: SharedString,
-    mode: FileListMode,
-    collapsed: CollapsedDirs,
-    collapsed_groups: [bool; GROUP_ORDER.len()],
-    selected: Option<PathBuf>,
-    projection_cache: CommitFileProjectionCache<u64>,
-    presentations: crate::view::rows::CommitFileRowPresentationCache<u64>,
-    plan_cache: FileListPlanCache,
-    shown: Option<(u64, Arc<[usize]>)>,
-    grouped: Option<(u64, Arc<GroupedRows>)>,
-    #[cfg(test)]
-    pub(in crate::view) group_builds: usize,
-}
-
-impl FileListController {
-    pub(in crate::view) fn new(mode: FileListMode) -> Self {
-        Self {
-            files: Arc::default(),
-            files_rev: 0,
-            sort: CommitFileSort::default(),
-            kind_filter: CommitFileFilter::default(),
-            query: SharedString::default(),
-            mode,
-            collapsed: CollapsedDirs::default(),
-            collapsed_groups: [false; GROUP_ORDER.len()],
-            selected: None,
-            projection_cache: CommitFileProjectionCache::default(),
-            presentations: Default::default(),
-            plan_cache: FileListPlanCache::default(),
-            shown: None,
-            grouped: None,
-            #[cfg(test)]
-            group_builds: 0,
-        }
-    }
-
-    pub(in crate::view) fn set_mode(&mut self, mode: FileListMode) {
-        self.mode = mode;
-    }
-
-    fn plan_layout(&self) -> FileListLayout {
-        match self.mode {
-            FileListMode::Tree => FileListLayout::Tree,
-            _ => FileListLayout::Flat,
-        }
-    }
-
-    /// Rows in the current mode.
-    pub(in crate::view) fn row_count(&mut self) -> usize {
-        match self.mode {
-            FileListMode::Grouped => self.grouped().rows.len(),
-            _ => self.plan().row_len(),
-        }
-    }
-
-    /// The shown files by change kind; rebuilt only when the shown files or
-    /// the collapsed groups change.
-    pub(in crate::view) fn grouped(&mut self) -> Arc<GroupedRows> {
-        let mut hasher = rustc_hash::FxHasher::default();
-        self.projection_key().hash(&mut hasher);
-        self.collapsed_groups.hash(&mut hasher);
-        let key = hasher.finish();
-        if let Some((cached, grouped)) = &self.grouped
-            && *cached == key
-        {
-            return Arc::clone(grouped);
-        }
-        let shown = self.shown();
-        let mut groups = vec![Vec::new(); GROUP_ORDER.len()];
-        for (ordinal, &ix) in shown.iter().enumerate() {
-            groups[group_of(self.files[ix].kind)].push(ordinal);
-        }
-        let mut grouped = GroupedRows::default();
-        for (group, ordinals) in groups.into_iter().enumerate() {
-            if ordinals.is_empty() {
-                continue;
-            }
-            let collapsed = self.collapsed_groups[group];
-            grouped.headers.push(grouped.rows.len());
-            grouped.rows.push(GroupedRow::Header {
-                group,
-                count: ordinals.len(),
-                collapsed,
-            });
-            if !collapsed {
-                grouped.rows.extend(
-                    ordinals
-                        .into_iter()
-                        .map(|ordinal| GroupedRow::File { ordinal }),
-                );
-            }
-        }
-        #[cfg(test)]
-        {
-            self.group_builds += 1;
-        }
-        let grouped = Arc::new(grouped);
-        self.grouped = Some((key, Arc::clone(&grouped)));
-        grouped
-    }
-
-    pub(in crate::view) fn toggle_group(&mut self, group: usize) {
-        if let Some(collapsed) = self.collapsed_groups.get_mut(group) {
-            *collapsed = !*collapsed;
-        }
-    }
-
-    pub(in crate::view) fn set_files(&mut self, files: Arc<Vec<CommitFileChange>>, rev: u64) {
-        self.files = files;
-        self.files_rev = rev;
-    }
-
-    pub(in crate::view) fn set_query(&mut self, query: SharedString) {
-        self.query = query;
-    }
-
-    pub(in crate::view) fn set_sort(&mut self, sort: CommitFileSort) {
-        self.sort = sort;
-    }
-
-    fn projection_key(&self) -> u64 {
-        let mut hasher = rustc_hash::FxHasher::default();
-        self.files_rev.hash(&mut hasher);
-        Arc::as_ptr(&self.files).hash(&mut hasher);
-        self.sort.hash(&mut hasher);
-        self.kind_filter.hash(&mut hasher);
-        self.query.hash(&mut hasher);
-        hasher.finish()
-    }
-
-    /// Source indices of the files shown, in display order before grouping.
-    pub(in crate::view) fn shown(&mut self) -> Arc<[usize]> {
-        let key = self.projection_key();
-        if let Some((cached, shown)) = &self.shown
-            && *cached == key
-        {
-            return Arc::clone(shown);
-        }
-        let projection =
-            self.projection_cache
-                .projection_for(&key, &self.files, self.sort, self.kind_filter);
-        let query = self.query.to_lowercase();
-        let shown: Arc<[usize]> = if query.is_empty() {
-            Arc::clone(&projection.source_indices)
-        } else {
-            projection
-                .source_indices
-                .iter()
-                .copied()
-                .filter(|&ix| {
-                    self.files[ix]
-                        .path
-                        .to_string_lossy()
-                        .to_lowercase()
-                        .contains(&query)
-                })
-                .collect()
-        };
-        self.shown = Some((key, Arc::clone(&shown)));
-        shown
-    }
-
-    pub(in crate::view) fn plan(&mut self) -> Arc<FileListPlan> {
-        let shown = self.shown();
-        let key = self.projection_key();
-        let files = Arc::clone(&self.files);
-        let sort = self.sort;
-        self.plan_cache.plan_for(
-            key,
-            self.plan_layout(),
-            &self.collapsed,
-            shown.len(),
-            || {
-                FileTree::build(
-                    shown.iter().map(|&ix| FileTreeItem {
-                        path: &files[ix].path,
-                        additions: files[ix].additions,
-                        deletions: files[ix].deletions,
-                    }),
-                    sort,
-                )
-            },
-        )
-    }
-
-    /// The change a file row shows.
-    /// The change a file row shows, with its label and icon.
-    pub(in crate::view) fn presentation_at_ordinal(
-        &mut self,
-        ordinal: usize,
-    ) -> Option<(
-        CommitFileChange,
-        crate::view::rows::CommitFileRowPresentation,
-    )> {
-        let shown = self.shown();
-        let source = *shown.get(ordinal)?;
-        let presentations = self.presentations.rows_for(&self.files_rev, &self.files);
-        Some((
-            self.files.get(source)?.clone(),
-            presentations.get(source)?.clone(),
-        ))
-    }
-
-    pub(in crate::view) fn shown_changes(&mut self) -> Vec<CommitFileChange> {
-        let shown = self.shown();
-        shown.iter().map(|&ix| self.files[ix].clone()).collect()
-    }
-
-    pub(in crate::view) fn toggle_dir(
-        &mut self,
-        key: Arc<Path>,
-        chain: &[Arc<Path>],
-        collapsed: bool,
-    ) {
-        if collapsed {
-            self.collapsed.expand(chain);
-        } else {
-            self.collapsed.collapse(key, chain);
-        }
-    }
-
-    /// Selects `path` if it is shown.
-    pub(in crate::view) fn select(&mut self, path: &Path) -> Option<CommitFileChange> {
-        let change = self
-            .shown_changes()
-            .into_iter()
-            .find(|change| change.path == path)?;
-        self.selected = Some(change.path.clone());
-        Some(change)
-    }
-
-    pub(in crate::view) fn selected(&self) -> Option<CommitFileChange> {
-        let selected = self.selected.as_ref()?;
-        self.files
-            .iter()
-            .find(|change| &change.path == selected)
-            .cloned()
-    }
-}
+use crate::view::changed_file_list::{ChangedFileListView, SharedFileListController};
+use crate::view::file_list_controller::*;
 
 pub(crate) struct FileListView {
     host: WindowHost,
     store: std::sync::Weak<AppStore>,
     repository: RepositoryHandle,
     view_id: DiffViewId,
-    controller: FileListController,
+    controller: SharedFileListController,
+    body: Entity<ChangedFileListView>,
     source: ChangeSource,
+    marks: gitcomet_extension_api::FileListMarks,
+    chips: Vec<gitcomet_extension_api::FileListFilterChip>,
     base: Option<CommitId>,
     list_rev: Option<u64>,
     loading: bool,
     error: Option<SharedString>,
     on_select: FileSelected,
+    #[cfg(test)]
     scroll: UniformListScrollHandle,
     _state: Option<StateSubscription>,
 }
 
 impl FileListView {
+    #[cfg(feature = "benchmarks")]
+    pub(in crate::view) fn benchmark_snapshot(
+        host: WindowHost,
+        repository: RepositoryHandle,
+        files: Arc<Vec<CommitFileChange>>,
+        cx: &mut gpui::Context<Self>,
+    ) -> Self {
+        let mut view = Self::new(
+            host,
+            std::sync::Weak::new(),
+            repository,
+            ChangeSource::Commit(CommitId("HEAD".into())),
+            Rc::new(|_, _, _| {}),
+            cx,
+        );
+        view.controller.borrow_mut().set_files(files, 1);
+        view.loading = false;
+        view
+    }
+    #[cfg(feature = "benchmarks")]
+    pub(in crate::view) fn benchmark_plan(&mut self, rebuild: bool) -> usize {
+        if rebuild {
+            let mut controller = self.controller.borrow_mut();
+            let files = controller.files.clone();
+            let revision = controller.files_rev.wrapping_add(1);
+            controller.set_files(files, revision);
+        }
+        self.controller.borrow_mut().plan().row_len()
+    }
+    #[cfg(feature = "benchmarks")]
+    pub(in crate::view) fn benchmark_window(
+        &mut self,
+        decor: bool,
+        cx: &mut gpui::Context<Self>,
+    ) -> usize {
+        let plan = self.controller.borrow_mut().plan();
+        if decor {
+            self.marks.revision = self.marks.revision.wrapping_add(1);
+        }
+        let rows = self.render_rows(0..60, cx);
+        assert!(Arc::ptr_eq(&plan, &self.controller.borrow_mut().plan()));
+        std::hint::black_box(rows).len()
+    }
+
     pub(crate) fn new(
         host: WindowHost,
         store: std::sync::Weak<AppStore>,
@@ -367,19 +109,40 @@ impl FileListView {
                 let _ = weak.update(cx, |list, cx| list.sync(cx));
             })
             .ok();
+        let controller = Rc::new(std::cell::RefCell::new(FileListController::new(
+            FileListMode::Tree,
+        )));
+        let scroll = UniformListScrollHandle::default();
+        let parent = cx.weak_entity();
+        let body = cx.new(|_| {
+            ChangedFileListView::new(
+                Rc::clone(&controller),
+                "hosted_file_list_rows",
+                scroll.clone(),
+                move |range, _, cx| {
+                    parent
+                        .update(cx, |list, cx| list.render_rows(range, cx))
+                        .unwrap_or_default()
+                },
+            )
+        });
         Self {
             host,
             store,
             repository,
             view_id,
-            controller: FileListController::new(FileListMode::Tree),
+            controller,
+            body,
             source,
+            marks: Default::default(),
+            chips: Vec::new(),
             base: None,
             list_rev: None,
             loading: true,
             error: None,
             on_select,
-            scroll: UniformListScrollHandle::default(),
+            #[cfg(test)]
+            scroll,
             _state: state,
         }
     }
@@ -409,12 +172,16 @@ impl FileListView {
         match &list.files {
             Loadable::Ready(files) => {
                 self.base = list.base.clone();
-                self.controller.set_files(Arc::clone(files), list.rev);
+                self.controller
+                    .borrow_mut()
+                    .set_files(Arc::clone(files), list.rev);
             }
             Loadable::Error(error) => {
                 self.base = None;
-                self.controller.selected = None;
-                self.controller.set_files(Arc::default(), list.rev);
+                self.controller.borrow_mut().selected = None;
+                self.controller
+                    .borrow_mut()
+                    .set_files(Arc::default(), list.rev);
                 self.error = Some(error.clone().into());
             }
             Loadable::Loading | Loadable::NotLoaded => {}
@@ -427,9 +194,11 @@ impl FileListView {
         self.loading = true;
         self.error = None;
         self.base = None;
-        self.controller.selected = None;
+        self.controller.borrow_mut().selected = None;
+        let revision = self.controller.borrow().files_rev.wrapping_add(1);
         self.controller
-            .set_files(Arc::default(), self.controller.files_rev.wrapping_add(1));
+            .borrow_mut()
+            .set_files(Arc::default(), revision);
         if let Some(store) = self.store.upgrade() {
             store.dispatch(Msg::DiffSession(DiffSessionMsg::OpenChanges {
                 repo_id: self.repository.repo_id(),
@@ -446,7 +215,7 @@ impl FileListView {
         (
             self.view_id.0,
             self.scroll.clone(),
-            self.controller.group_builds,
+            self.controller.borrow_mut().group_builds,
         )
     }
 
@@ -474,8 +243,11 @@ impl FileListView {
         let theme = self.host.theme(cx);
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let list_id = self.view_id.0;
-        let (change, presentation) = self.controller.presentation_at_ordinal(ordinal)?;
-        let selected = self.controller.selected.as_ref() == Some(&change.path);
+        let (change, presentation) = self
+            .controller
+            .borrow_mut()
+            .presentation_at_ordinal(ordinal)?;
+        let selected = self.controller.borrow_mut().selected.as_ref() == Some(&change.path);
         let path = change.path.clone();
         let (row, tooltip) = crate::view::rows::changed_file_row(
             crate::view::rows::ChangedFileRow {
@@ -496,15 +268,20 @@ impl FileListView {
             cx,
         );
         let picked = change.path.clone();
+        let mark = self.marks.rows.get(&change.path).cloned();
         Some(
-            row.on_activate(
+            row.when_some(mark, |row, mark| {
+                row.child(div().flex_none().text_color(mark.color).child(mark.label))
+            })
+            .on_activate(
                 false,
                 controls::ControlActivation::Composite,
                 cx.listener(move |this, e: &gpui::ClickEvent, _, cx| {
                     if !e.standard_click() {
                         return;
                     }
-                    if let Some(change) = this.controller.select(&picked) {
+                    let change = this.controller.borrow_mut().select(&picked);
+                    if let Some(change) = change {
                         this.pick(change, cx);
                     }
                 }),
@@ -525,8 +302,8 @@ impl FileListView {
         let row_height =
             crate::view::rows::sidebar::sidebar_list_row_height(theme, ui_scale_percent);
         let list_id = self.view_id.0;
-        if self.controller.mode == FileListMode::Grouped {
-            let grouped = self.controller.grouped();
+        if self.controller.borrow_mut().mode == FileListMode::Grouped {
+            let grouped = self.controller.borrow_mut().grouped();
             let list = cx.weak_entity();
             return range
                 .filter_map(|ix| match *grouped.rows.get(ix)? {
@@ -551,7 +328,7 @@ impl FileListView {
                 })
                 .collect();
         }
-        let plan = self.controller.plan();
+        let plan = self.controller.borrow_mut().plan();
         range
             .filter_map(|ix| {
                 let row = plan.row_at(RowIx(ix))?;
@@ -581,7 +358,7 @@ impl FileListView {
                                         if !e.standard_click() {
                                             return;
                                         }
-                                        this.controller.toggle_dir(
+                                        this.controller.borrow_mut().toggle_dir(
                                             Arc::clone(&key),
                                             &chain,
                                             collapsed,
@@ -657,7 +434,7 @@ fn group_header(
             move |_, _, cx| {
                 cx.stop_propagation();
                 let _ = list.update(cx, |list, cx| {
-                    list.controller.toggle_group(group);
+                    list.controller.borrow_mut().toggle_group(group);
                     cx.notify();
                 });
             },
@@ -668,6 +445,7 @@ fn group_header(
 /// Pins the header of the group at the top of the list over its rows; the
 /// next header pushes it up as it arrives. Computed per frame from the
 /// grouped rows it was given, so scrolling never replans.
+#[derive(Clone)]
 struct StickyGroupHeader {
     list: gpui::WeakEntity<FileListView>,
     list_id: u64,
@@ -738,14 +516,25 @@ impl gpui::UniformListDecoration for StickyGroupHeader {
 impl Render for FileListView {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.host.theme(cx);
-        let rows = self.controller.row_count();
+        let rows = self.controller.borrow_mut().row_count();
         let list_id = self.view_id.0;
-        let sticky = (self.controller.mode == FileListMode::Grouped).then(|| StickyGroupHeader {
+        let grouped = self.controller.borrow().mode == FileListMode::Grouped;
+        let sticky = grouped.then(|| StickyGroupHeader {
             list: cx.weak_entity(),
             list_id,
-            grouped: self.controller.grouped(),
+            grouped: self.controller.borrow_mut().grouped(),
             theme,
             ui_scale: ui_scale::UiScale::current(cx),
+        });
+        self.body.update(cx, |body, cx| {
+            body.refresh(
+                None,
+                sticky.map(|sticky| {
+                    Rc::new(move |list: gpui::UniformList| list.with_decoration(sticky.clone()))
+                        as _
+                }),
+                cx,
+            )
         });
         div()
             .id(("hosted_file_list", self.view_id.0))
@@ -754,6 +543,21 @@ impl Render for FileListView {
             .flex()
             .flex_col()
             .bg(theme.colors.surface.canvas)
+            .when(!self.chips.is_empty(), |list| {
+                list.child(div().flex().flex_wrap().gap_1().children(
+                    self.chips.iter().enumerate().map(|(ix, chip)| {
+                        let query = chip.query.clone();
+                        components::Button::new(
+                            format!("file_filter_{list_id}_{ix}"),
+                            chip.label.clone(),
+                        )
+                        .on_click(theme, cx, move |list, _, _, cx| {
+                            list.controller.borrow_mut().set_query(query.clone());
+                            cx.notify();
+                        })
+                    }),
+                ))
+            })
             .when_some(
                 self.error.clone().or_else(|| {
                     (rows == 0).then(|| {
@@ -773,19 +577,7 @@ impl Render for FileListView {
                     )
                 },
             )
-            .child(
-                uniform_list(
-                    "hosted_file_list_rows",
-                    rows,
-                    cx.processor(|this, range, _window, cx| this.render_rows(range, cx)),
-                )
-                .track_scroll(&self.scroll)
-                .flex_1()
-                .map(|list| match sticky {
-                    Some(sticky) => list.with_decoration(sticky),
-                    None => list,
-                }),
-            )
+            .child(self.body.clone())
     }
 }
 
@@ -818,44 +610,92 @@ impl FileListImpl for HostedFileList {
 
     fn set_mode(&self, mode: FileListMode, cx: &mut App) {
         self.entity.update(cx, |list, cx| {
-            list.controller.set_mode(mode);
+            list.controller.borrow_mut().set_mode(mode);
+            cx.notify();
+        });
+    }
+
+    fn set_sort(&self, sort: gitcomet_extension_api::FileListSort, cx: &mut App) {
+        let sort = match sort {
+            gitcomet_extension_api::FileListSort::PathAscending => CommitFileSort::PathAscending,
+            gitcomet_extension_api::FileListSort::PathDescending => CommitFileSort::PathDescending,
+            gitcomet_extension_api::FileListSort::FileTypeAscending => {
+                CommitFileSort::FileTypeAscending
+            }
+            gitcomet_extension_api::FileListSort::FileTypeDescending => {
+                CommitFileSort::FileTypeDescending
+            }
+            gitcomet_extension_api::FileListSort::EditSizeAscending => {
+                CommitFileSort::EditSizeAscending
+            }
+            gitcomet_extension_api::FileListSort::EditSizeDescending => {
+                CommitFileSort::EditSizeDescending
+            }
+        };
+        self.entity.update(cx, |list, cx| {
+            list.controller.borrow_mut().set_sort(sort);
+            cx.notify();
+        });
+    }
+    fn set_kind_filter(&self, filter: gitcomet_extension_api::FileListFilter, cx: &mut App) {
+        let filter = match filter {
+            gitcomet_extension_api::FileListFilter::All => CommitFileFilter::All,
+            gitcomet_extension_api::FileListFilter::Modified => CommitFileFilter::Modified,
+            gitcomet_extension_api::FileListFilter::Removed => CommitFileFilter::Removed,
+            gitcomet_extension_api::FileListFilter::Added => CommitFileFilter::Added,
+            gitcomet_extension_api::FileListFilter::Renamed => CommitFileFilter::Renamed,
+        };
+        self.entity.update(cx, |list, cx| {
+            list.controller.borrow_mut().kind_filter = filter;
+            cx.notify();
+        });
+    }
+    fn set_marks(&self, marks: gitcomet_extension_api::FileListMarks, cx: &mut App) {
+        self.entity.update(cx, |list, cx| {
+            if list.marks.revision != marks.revision || !Arc::ptr_eq(&list.marks.rows, &marks.rows)
+            {
+                list.marks = marks;
+                cx.notify();
+            }
+        });
+    }
+    fn set_filter_chips(
+        &self,
+        chips: Vec<gitcomet_extension_api::FileListFilterChip>,
+        cx: &mut App,
+    ) {
+        self.entity.update(cx, |list, cx| {
+            list.chips = chips;
             cx.notify();
         });
     }
 
     fn set_filter(&self, query: SharedString, cx: &mut App) {
         self.entity.update(cx, |list, cx| {
-            list.controller.set_query(query);
+            list.controller.borrow_mut().set_query(query);
             cx.notify();
         });
     }
 
     fn files(&self, cx: &App) -> Vec<CommitFileChange> {
-        // Reading needs the projection cache; clone the controller's inputs.
-        let list = self.entity.read(cx);
-        let mut controller = FileListController::new(list.controller.mode);
-        controller.set_files(
-            Arc::clone(&list.controller.files),
-            list.controller.files_rev,
-        );
-        controller.set_query(list.controller.query.clone());
-        controller.set_sort(list.controller.sort);
-        controller.shown_changes()
+        self.entity.read(cx).controller.borrow_mut().shown_changes()
     }
 
     fn selected(&self, cx: &App) -> Option<CommitFileChange> {
-        self.entity.read(cx).controller.selected()
+        self.entity.read(cx).controller.borrow().selected()
     }
 
     fn select_path(&self, path: &Path, cx: &mut App) -> bool {
-        self.entity
-            .update(cx, |list, cx| match list.controller.select(path) {
+        self.entity.update(cx, |list, cx| {
+            let change = list.controller.borrow_mut().select(path);
+            match change {
                 Some(change) => {
                     list.pick(change, cx);
                     true
                 }
                 None => false,
-            })
+            }
+        })
     }
 
     fn is_loading(&self, cx: &App) -> bool {
@@ -870,6 +710,25 @@ mod tests {
 
     fn change(path: &str, kind: FileStatusKind) -> CommitFileChange {
         CommitFileChange::new(PathBuf::from(path), kind)
+    }
+
+    #[test]
+    fn replacing_files_at_the_same_revision_updates_row_presentations() {
+        let mut list = FileListController::new(FileListMode::Flat);
+        list.set_files(
+            Arc::new(vec![change("before.rs", FileStatusKind::Added)]),
+            1,
+        );
+        let before = list.presentation_at_ordinal(0).unwrap().1;
+        assert_eq!(before.label, "before.rs");
+        list.set_files(
+            Arc::new(vec![change("after.rs", FileStatusKind::Deleted)]),
+            1,
+        );
+        let (file, presentation) = list.presentation_at_ordinal(0).unwrap();
+        assert_eq!(file.path, Path::new("after.rs"));
+        assert_eq!(presentation.label, "after.rs");
+        assert_ne!(presentation.visuals.icon, before.visuals.icon);
     }
 
     #[test]

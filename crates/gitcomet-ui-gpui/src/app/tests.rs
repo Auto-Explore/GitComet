@@ -1018,6 +1018,7 @@ fn review_regression_move_noop_check_ignores_closed_windows(cx: &mut gpui::TestA
             registry.windows.insert(
                 closed_handle.window_id(),
                 GitCometWindowEntry {
+                    diff_fallback_enabled: true,
                     handle: closed_handle,
                     view: gpui::WeakEntity::new_invalid(),
                     main_pane: gpui::WeakEntity::new_invalid(),

@@ -221,7 +221,7 @@ pub struct PickerPromptLayout {
 ///
 /// The shorthand for a picker with no sections to fold — one flat list, so there
 /// is nothing for a collapsed set to name. Sectioned pickers go through
-/// [`picker_prompt_layout_with_collapsed`].
+/// `picker_prompt_layout_with_collapsed`.
 pub fn picker_prompt_layout(items: &[PickerPromptItem], query: &str) -> PickerPromptLayout {
     picker_prompt_layout_with_collapsed(items, query, &BTreeSet::new())
 }
@@ -1059,7 +1059,7 @@ impl PickerPromptItem {
     }
 
     /// Groups the item under a labelled section header. Items sharing a label
-    /// must be contiguous in the list passed to [`PickerPrompt::items`].
+    /// must be contiguous in the list passed to `PickerPrompt::items`.
     pub fn section(mut self, section: impl Into<SharedString>) -> Self {
         self.section = Some(section.into());
         self

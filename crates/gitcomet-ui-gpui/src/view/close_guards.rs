@@ -379,6 +379,7 @@ impl GitCometView {
         }
         let mut reasons = self.late_close_guard_reasons(action, cx);
         if matches!(action, TerminalShutdownAction::QuitApp) {
+            reasons.extend(super::settings_window::close_guards::quit_reasons(cx));
             // A quit closes every window; the others' reasons count too.
             let this = cx.entity_id();
             for view in self
@@ -457,6 +458,16 @@ impl GitCometView {
                 })
             })
             .collect();
+        if matches!(scope, CloseScope::Application | CloseScope::Window)
+            && self.state.clone.as_ref().is_some_and(|operation| {
+                matches!(
+                    operation.status,
+                    gitcomet_state::model::CloneOpStatus::Running
+                )
+            })
+        {
+            reasons.push("A repository clone is still running.".into());
+        }
         for reason in self.extension_close_reasons(scope, &repos, cx) {
             if !reasons.contains(&reason) {
                 reasons.push(reason);
@@ -501,6 +512,7 @@ impl GitCometView {
         let mut reasons: Vec<SharedString> = Vec::new();
         for request in &requests {
             for (_, guard) in registry.close_guards() {
+                super::perf::extension_dispatch();
                 if let CloseDecision::Confirm { reason } = guard(request, cx)
                     && !reasons.contains(&reason)
                 {

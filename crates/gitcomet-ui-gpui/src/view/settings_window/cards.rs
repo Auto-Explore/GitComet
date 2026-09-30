@@ -12,6 +12,7 @@ impl SettingsWindowView {
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> Stateful<gpui::Div> {
+        crate::view::perf::settings_page_rendered();
         match category {
             SettingsCategory::General => self.general_card(theme, cx),
             SettingsCategory::Workspaces => self.workspaces_card(theme, cx),

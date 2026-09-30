@@ -148,7 +148,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::ChangeTrackingSettings
-        | PopoverKind::ExtensionDialog { .. }
+        | PopoverKind::Hosted { .. }
         | PopoverKind::ErrorDetails { .. } => None,
 
         // Popovers that implicitly use the currently active repo.
@@ -487,7 +487,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::CloneRepo
         | PopoverKind::ReflogEntryMenu { .. }
         | PopoverKind::ErrorDetails { .. }
-        | PopoverKind::ExtensionDialog { .. }
+        | PopoverKind::Hosted { .. }
         | PopoverKind::CommitPrompt { .. } => {}
     }
 }
@@ -576,7 +576,7 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             message.hash(hasher);
         }
         PopoverKind::CloneRepo => 4u8.hash(hasher),
-        PopoverKind::ExtensionDialog { id } => {
+        PopoverKind::Hosted { id, .. } => {
             111u8.hash(hasher);
             id.hash(hasher);
         }

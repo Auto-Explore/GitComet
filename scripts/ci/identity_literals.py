@@ -140,9 +140,9 @@ def test_module_files(path, text):
 
 
 def scan():
-    files = subprocess.run(["git", "ls-files", "-z", "--", "crates/**/*.rs"], cwd=ROOT,
+    files = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "crates/**/*.rs"], cwd=ROOT,
                            stdout=subprocess.PIPE, check=True).stdout.decode().split("\0")
-    files = [path for path in files if path]
+    files = sorted({path for path in files if path and (ROOT / path).is_file()})
     texts = {path: (ROOT / path).read_text(encoding="utf-8") for path in files}
     test_files = set()
     for path, text in texts.items():

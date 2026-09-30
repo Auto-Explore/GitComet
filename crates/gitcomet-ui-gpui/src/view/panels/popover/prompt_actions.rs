@@ -51,7 +51,7 @@ impl PopoverHost {
         anchor = anchor_for_corner(anchor_corner);
 
         let panel = match kind {
-            PopoverKind::ExtensionDialog { id } => extension_dialog::panel(self, id, cx),
+            PopoverKind::Hosted { id, .. } => extension_dialog::panel(self, id, cx),
             PopoverKind::HookActivity {
                 repo_id,
                 operation_id,

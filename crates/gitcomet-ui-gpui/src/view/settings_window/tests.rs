@@ -3946,7 +3946,7 @@ fn settings_window_renders_every_category_within_a_bounded_stack() {
 fn settings_pages_are_listed_and_built_only_when_selected(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     cx.update(|app| {
-        let registry = gitcomet_extension_api::Registry::build(&[Box::new(
+        let registry = gitcomet_extension_api::Registry::build(vec![Box::new(
             gitcomet_extension_example::review::ReviewExtension,
         )])
         .expect("valid registration");
@@ -3974,4 +3974,97 @@ fn settings_pages_are_listed_and_built_only_when_selected(cx: &mut gpui::TestApp
     crate::view::test_support::redraw(cx);
     assert!(cx.debug_bounds("example_review_settings").is_none());
     assert!(cx.debug_bounds("settings_window_general").is_some());
+}
+
+#[gpui::test]
+fn settings_extensions_have_a_host_revisioned_gates_and_window_lifetime(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_extension_api::*;
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
+    let _guard = lock_visual_test();
+    struct Instance(Rc<Cell<usize>>);
+    impl WindowExtension for Instance {}
+    impl Drop for Instance {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+    struct ExtensionProbe {
+        host: Rc<RefCell<Option<WindowHost>>>,
+        drops: Rc<Cell<usize>>,
+        active: Rc<Cell<bool>>,
+        calls: Rc<Cell<usize>>,
+        signal: SlotSignal,
+    }
+    impl Extension for ExtensionProbe {
+        fn id(&self) -> ExtensionId {
+            ExtensionId::new("com.example.settings-test").unwrap()
+        }
+        fn register(&self, r: &mut Registrar) {
+            let active = self.active.clone();
+            let calls = self.calls.clone();
+            r.window_gate(
+                "gate",
+                WindowGateDescriptor {
+                    signal: self.signal.clone(),
+                    active: Rc::new(move |host, _| {
+                        assert_eq!(host.kind(), gitcomet_core::identity::WindowKind::Settings);
+                        calls.set(calls.get() + 1);
+                        active.get()
+                    }),
+                    build: Rc::new(|_, _, cx| cx.new(|_| gpui::Empty).into()),
+                },
+            );
+        }
+        fn window_opened(
+            &self,
+            host: WindowHost,
+            _: &mut Window,
+            _: &mut App,
+        ) -> Option<Box<dyn WindowExtension>> {
+            *self.host.borrow_mut() = Some(host);
+            Some(Box::new(Instance(self.drops.clone())))
+        }
+    }
+    let host = Rc::new(RefCell::new(None));
+    let drops = Rc::new(Cell::new(0));
+    let active = Rc::new(Cell::new(true));
+    let calls = Rc::new(Cell::new(0));
+    let signal = SlotSignal::default();
+    cx.update(|app| {
+        crate::view::extension_host::install(
+            Registry::build(vec![Box::new(ExtensionProbe {
+                host: host.clone(),
+                drops: drops.clone(),
+                active: active.clone(),
+                calls: calls.clone(),
+                signal: signal.clone(),
+            })])
+            .unwrap(),
+            app,
+        )
+    });
+    let (_, cx) = cx.add_window_view(SettingsWindowView::new);
+    cx.run_until_parked();
+    let host = host.borrow().clone().expect("settings window host");
+    for _ in 0..3 {
+        crate::view::test_support::redraw(cx);
+    }
+    assert_eq!(calls.get(), 1, "unchanged gates are not reevaluated");
+    assert!(cx.debug_bounds("settings_window_general").is_none());
+    active.set(false);
+    signal.bump();
+    host.notifier().notify(Slot::Gate);
+    cx.run_until_parked();
+    crate::view::test_support::redraw(cx);
+    assert!(cx.debug_bounds("settings_window_general").is_some());
+    assert_eq!(calls.get(), 2);
+    cx.update(|window, _| window.remove_window());
+    cx.run_until_parked();
+    assert_eq!(drops.get(), 1);
+    cx.cx.update(|app| assert!(!host.is_open(app)));
 }

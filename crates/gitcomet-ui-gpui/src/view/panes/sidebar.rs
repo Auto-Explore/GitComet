@@ -1,3 +1,4 @@
+mod contributions;
 use super::super::branch_sidebar::{BranchSection, BranchSidebarRow};
 use super::super::caches::BranchSidebarFingerprint;
 use super::super::file_icons;
@@ -48,10 +49,13 @@ type FileSearchMatcherCache =
 #[derive(Clone, Debug)]
 enum FileBrowserVisibleRow {
     /// Header of the unsaved-edits section. Click toggles the section.
-    UnsavedHeader { count: usize },
+    FileSetHeader { count: usize },
     /// A file with an unsaved editor buffer, shown by its full repo-relative
     /// path since it is out of its folder here.
-    UnsavedFile { path: Arc<PathBuf> },
+    FileSetFile {
+        path: Arc<PathBuf>,
+        open: gitcomet_extension_api::HostedAction,
+    },
     Entry {
         entry_index: usize,
         depth: usize,
@@ -255,6 +259,7 @@ impl CollapsedSidebarSection {
 }
 
 pub(in super::super) struct SidebarPaneView {
+    contributions: Option<contributions::SidebarContributions>,
     pub(in super::super) store: Arc<AppStore>,
     state: Arc<AppState>,
     pub(in super::super) theme: AppTheme,
@@ -487,6 +492,7 @@ impl SidebarPaneView {
         );
 
         let mut this = Self {
+            contributions: contributions::SidebarContributions::new(cx),
             store,
             state,
             theme,
@@ -1110,11 +1116,20 @@ impl SidebarPaneView {
             self.collapsed_popover_section
                 .and_then(|section| section.storage_key()),
         )?;
+        let presentation = if self.collapsed_popover_section.is_none() {
+            match &mut self.contributions {
+                Some(contributions) => contributions.project(presentation),
+                None => presentation,
+            }
+        } else {
+            presentation
+        };
         self.update_sticky_context(&presentation);
         Some(presentation)
     }
 
     pub(in super::super) fn sidebar(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
+        self.sync_contributed_rows(cx);
         let theme = self.theme;
 
         self.apply_pending_file_browser_reveal(cx);
@@ -2034,17 +2049,31 @@ impl SidebarPaneView {
         if unsaved.is_empty() {
             return Vec::new();
         }
-        let mut rows = vec![FileBrowserVisibleRow::UnsavedHeader {
-            count: unsaved.len(),
+        let Some(repo_id) = self.active_repo_id() else {
+            return Vec::new();
+        };
+        let weak_store = Arc::downgrade(&self.store);
+        let files = gitcomet_extension_api::SidebarFileSet {
+            paths: unsaved.into(),
+            open: Rc::new(move |path, _| {
+                if let Some(store) = weak_store.upgrade() {
+                    store.dispatch(Msg::OpenFileEditor {
+                        repo_id,
+                        path: path.clone(),
+                    });
+                }
+            }),
+        };
+        let mut rows = vec![FileBrowserVisibleRow::FileSetHeader {
+            count: files.paths.len(),
         }];
         if !self.unsaved_section_is_collapsed() {
-            rows.extend(
-                unsaved
-                    .into_iter()
-                    .map(|path| FileBrowserVisibleRow::UnsavedFile {
-                        path: Arc::new(path),
-                    }),
-            );
+            rows.extend(files.paths.iter().zip(files.rows()).map(|(path, row)| {
+                FileBrowserVisibleRow::FileSetFile {
+                    path: Arc::new(path.clone()),
+                    open: row.action,
+                }
+            }));
         }
         rows
     }
@@ -2208,7 +2237,7 @@ impl SidebarPaneView {
                 let (entry_index, depth, is_directory, is_expanded) = match row {
                     // The pinned section shares the list with the tree but not
                     // its shape, so both rows are built here and return early.
-                    FileBrowserVisibleRow::UnsavedHeader { count } => {
+                    FileBrowserVisibleRow::FileSetHeader { count } => {
                         return Some(
                             div()
                                 .id(ElementId::Name(format!("file_browser_row_{ix}").into()))
@@ -2251,7 +2280,7 @@ impl SidebarPaneView {
                                 .into_any_element(),
                         );
                     }
-                    FileBrowserVisibleRow::UnsavedFile { path } => {
+                    FileBrowserVisibleRow::FileSetFile { path, open } => {
                         return Some(unsaved_file_row(
                             UnsavedFileRowCtx {
                                 theme,
@@ -2265,7 +2294,7 @@ impl SidebarPaneView {
                             scaled_px(6.0 + INDENT_STEP_PX),
                             row_height,
                             scaled_px(ICON_SLOT_PX),
-                            Arc::clone(&store),
+                            open.clone(),
                             cx,
                         ));
                     }
@@ -2597,7 +2626,7 @@ fn unsaved_file_row(
     left_pad: Pixels,
     row_height: Pixels,
     icon_slot_px: Pixels,
-    store: Arc<AppStore>,
+    open: gitcomet_extension_api::HostedAction,
     cx: &mut gpui::Context<SidebarPaneView>,
 ) -> AnyElement {
     let UnsavedFileRowCtx {
@@ -2615,7 +2644,6 @@ fn unsaved_file_row(
     // different folders are indistinguishable here, and this row is the only
     // place they appear side by side.
     let label = path.display().to_string();
-    let open_path = (*path).clone();
 
     div()
         .id(ElementId::Name(format!("file_browser_row_{ix}").into()))
@@ -2638,12 +2666,7 @@ fn unsaved_file_row(
         .on_activate(
             false,
             controls::ControlActivation::Composite,
-            cx.listener(move |_this, _e: &gpui::ClickEvent, _window, _cx| {
-                store.dispatch(Msg::OpenFileEditor {
-                    repo_id,
-                    path: open_path.clone(),
-                });
-            }),
+            cx.listener(move |_this, _e: &gpui::ClickEvent, _window, cx| open.invoke(cx)),
         )
         .child(
             div()

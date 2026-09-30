@@ -17,7 +17,35 @@ const HISTORY_HEADER_CHIP_COMFORTABLE_HEIGHT_PX: f32 = 26.0;
 impl Render for HistoryView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         self.last_window_size = window.viewport_size();
-        self.history_view_inner(cx)
+        let headers = self.sync_history_annotations(window, cx);
+        let content = self.history_view_inner(cx);
+        if headers.is_empty() && self.history_find.is_none() {
+            return content.into_any_element();
+        }
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .children(headers)
+            .when(self.history_find.is_some(), |body| {
+                body.child(
+                    div()
+                        .p_1()
+                        .child(self.history_find_input.as_ref().unwrap().clone())
+                        .on_key_down(cx.listener(
+                            |this, event: &gpui::KeyDownEvent, window, cx| {
+                                if event.keystroke.key == "escape" {
+                                    this.history_find = None;
+                                    window.focus(&this.history_panel_focus_handle, cx);
+                                    cx.stop_propagation();
+                                    cx.notify();
+                                }
+                            },
+                        )),
+                )
+            })
+            .child(content)
+            .into_any_element()
     }
 }
 

@@ -64,14 +64,13 @@ impl GitCometView {
         tab: BottomPanelTab,
         cx: &mut gpui::Context<Self>,
     ) {
-        match tab {
-            BottomPanelTab::Terminal => {
-                if !self.request_close_terminal_for_repo(repo_id, cx) {
-                    self.close_terminal_for_repo(repo_id, cx);
-                }
-            }
-            BottomPanelTab::Reflog => self.close_reflog_panel(repo_id, cx),
-            BottomPanelTab::Extension(index) => self.close_extension_bottom_panel(index, cx),
+        if let Some(provider) = self
+            .bottom_panel_providers
+            .iter()
+            .find(|provider| provider.tab() == tab)
+            .cloned()
+        {
+            provider.close(self, repo_id, cx);
         }
     }
 
@@ -114,50 +113,30 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) -> Option<AnyElement> {
         let repo_id = self.active_repo_id()?;
-        let reflog_open = self.reflog_panel_is_open(repo_id, cx);
-        let extensions = self.shown_extension_bottom_panels();
-
-        if !reflog_open && extensions.is_empty() {
-            return self.render_terminal_panel(theme, window, cx);
-        }
-
-        let terminal_open = self
-            .terminal_sessions
-            .get(&repo_id)
-            .and_then(|s| s.active_instance())
-            .is_some();
-        let tabs: Vec<BottomPanelTab> = terminal_open
-            .then_some(BottomPanelTab::Terminal)
-            .into_iter()
-            .chain(reflog_open.then_some(BottomPanelTab::Reflog))
-            .chain(
-                extensions
-                    .iter()
-                    .map(|(index, ..)| BottomPanelTab::Extension(*index)),
-            )
+        let providers = self.bottom_panel_providers.clone();
+        let tabs: Vec<BottomPanelTab> = providers
+            .iter()
+            .filter(|provider| provider.is_open(self, repo_id, cx))
+            .map(|provider| provider.tab())
             .collect();
-        let extension_view = |index: usize| {
-            extensions
-                .iter()
-                .find(|(open, ..)| *open == index)
-                .map(|(_, view, ..)| view.clone())
-        };
         let content_for = |this: &mut Self,
                            tab: BottomPanelTab,
                            window: &mut Window,
-                           cx: &mut gpui::Context<Self>| match tab {
-            BottomPanelTab::Terminal => this.render_terminal_panel(theme, window, cx),
-            BottomPanelTab::Reflog => Some(this.reflog_pane.clone().into_any_element()),
-            BottomPanelTab::Extension(index) => Some(
-                div()
-                    .size_full()
-                    .child(extension_view(index)?)
-                    .into_any_element(),
-            ),
+                           cx: &mut gpui::Context<Self>| {
+            providers
+                .iter()
+                .find(|provider| provider.tab() == tab)?
+                .render(this, theme, window, cx)
         };
 
         if let [only] = tabs[..] {
             let content = content_for(self, only, window, cx)?;
+            if providers
+                .iter()
+                .any(|provider| provider.tab() == only && provider.owns_height())
+            {
+                return Some(content);
+            }
             return Some(
                 div()
                     .flex()
@@ -178,12 +157,7 @@ impl GitCometView {
             .or(tabs.last().copied())?;
 
         let tab_bar_height = bottom_panel_tab_bar_height(self.ui_scale());
-        let labels: Vec<(SharedString, SharedString)> = extensions
-            .iter()
-            .map(|(_, _, title, icon)| (title.clone(), icon.clone()))
-            .collect();
-        let tab_bar =
-            self.render_bottom_panel_tab_bar(theme, repo_id, active_tab, &tabs, &labels, cx);
+        let tab_bar = self.render_bottom_panel_tab_bar(theme, repo_id, active_tab, &tabs, cx);
         let content = content_for(self, active_tab, window, cx)?;
 
         Some(
@@ -211,46 +185,23 @@ impl GitCometView {
         repo_id: RepoId,
         active_tab: BottomPanelTab,
         tabs: &[BottomPanelTab],
-        labels: &[(SharedString, SharedString)],
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let ui_scale = self.ui_scale();
-        let mut extension_labels = labels.iter();
+        let providers = self.bottom_panel_providers.clone();
         let tab_elements: Vec<_> = tabs
             .iter()
             .filter_map(|&this_tab| {
-                let (id, close_id, icon, label, close_tip): (
-                    SharedString,
-                    SharedString,
-                    SharedString,
-                    SharedString,
-                    SharedString,
-                ) = match this_tab {
-                    BottomPanelTab::Terminal => (
-                        "bottom_panel_tab_terminal".into(),
-                        "bottom_panel_tab_terminal_close".into(),
-                        "icons/terminal.svg".into(),
-                        "Terminal".into(),
-                        "Close terminal".into(),
-                    ),
-                    BottomPanelTab::Reflog => (
-                        "bottom_panel_tab_reflog".into(),
-                        "bottom_panel_tab_reflog_close".into(),
-                        "icons/history.svg".into(),
-                        "Reflog".into(),
-                        "Close reflog".into(),
-                    ),
-                    BottomPanelTab::Extension(index) => {
-                        let (title, icon) = extension_labels.next()?;
-                        (
-                            format!("bottom_panel_tab_extension_{index}").into(),
-                            format!("bottom_panel_tab_extension_{index}_close").into(),
-                            icon.clone(),
-                            title.clone(),
-                            format!("Close {title}").into(),
-                        )
-                    }
-                };
+                let provider = providers
+                    .iter()
+                    .find(|provider| provider.tab() == this_tab)?;
+                let super::bottom_panel_providers::PanelLabels {
+                    id,
+                    title: label,
+                    icon,
+                } = provider.labels();
+                let close_id: SharedString = format!("{id}_close").into();
+                let close_tip: SharedString = format!("Close {}", label.to_lowercase()).into();
                 let is_active = this_tab == active_tab;
                 let text_color = components::panel_tab_text_color(theme, is_active);
                 Some(

@@ -158,15 +158,16 @@ impl DetailsPaneView {
                 .child("Loading files…")
                 .into_any_element()
         } else {
-            Self::vertical_scroll_frame(
+            Self::vertical_scroll_frame_content(
                 theme,
                 ("worktree_files_container", repo_id.0),
                 ("worktree_files_scrollbar", repo_id.0),
                 &self.worktree_files_scroll,
-                uniform_list(
-                    ("worktree_files_list", repo_id.0),
+                self.changed_file_list(
+                    repo_id,
+                    crate::view::rows::FileListId::WorktreeFiles,
                     worktree_row_count,
-                    cx.processor(Self::render_worktree_file_rows),
+                    cx,
                 ),
             )
             .into_any_element()

@@ -127,6 +127,8 @@ pub struct AppState {
     /// repository. A leased repository keeps its file watcher running while
     /// it is not the active one (a hosted view of a linked worktree, say).
     pub watch_leases: Arc<FxHashMap<RepoId, u32>>,
+    /// Leases for linked worktrees, scoped to the owning repository lifetime.
+    pub worktree_watch_leases: Arc<FxHashMap<(RepoId, u64, std::path::PathBuf), u32>>,
 }
 
 impl AppState {

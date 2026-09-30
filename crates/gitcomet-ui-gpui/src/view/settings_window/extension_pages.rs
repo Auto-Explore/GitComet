@@ -37,6 +37,7 @@ impl SettingsWindowView {
             return;
         };
         let build = Rc::clone(&page.build);
+        crate::view::perf::extension_dispatch();
         let view = build(self.theme, window, cx);
         self.extension_page = Some((index, view));
         self.set_expanded_section(None, cx);
@@ -49,6 +50,7 @@ impl SettingsWindowView {
     pub(super) fn extension_page_card(&self, theme: AppTheme) -> Option<Stateful<gpui::Div>> {
         let (index, view) = self.extension_page.as_ref()?;
         let (id, page) = self.extension_pages.get(*index)?;
+        crate::view::perf::settings_page_rendered();
         Some(
             components::settings_card(
                 format!("settings_window_extension_{id}"),

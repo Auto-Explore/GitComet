@@ -327,7 +327,9 @@ fn named_saved_workspace(name: &str, repo: &str) -> gitcomet_state::session::Wor
     workspace
 }
 
+mod extension_signals;
 mod extensions;
+mod focused_diff_host;
 mod hosted_panes;
 mod invalidation;
 mod notifications;

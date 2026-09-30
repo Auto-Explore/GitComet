@@ -153,6 +153,10 @@ pub(super) fn status_navigation_context_for_repo<'a>(
 
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum AdjacentDiffFileTarget {
+    Range {
+        target: DiffTarget,
+        target_ix: usize,
+    },
     WorkingTree {
         section: StatusSection,
         area: DiffArea,
@@ -269,7 +273,43 @@ pub(super) fn adjacent_diff_file_target_for_repo(
             })
         }
         DiffTarget::Commit { path: None, .. } => None,
-        DiffTarget::CommitRange { .. } => None,
+        DiffTarget::CommitRange {
+            from_commit_id,
+            to_commit_id,
+            path,
+            ..
+        } => {
+            let range = repo.history_state.range_selection.as_ref()?;
+            if range.diff_from() != from_commit_id || &range.to != to_commit_id {
+                return None;
+            }
+            let Loadable::Ready(files) = &repo.history_state.range_files else {
+                return None;
+            };
+            let path = path.as_ref()?;
+            let fallback;
+            let order = match commit_file_source_indices {
+                Some(order) => order,
+                None => {
+                    fallback = (0..files.len()).collect::<Vec<_>>();
+                    &fallback
+                }
+            };
+            let current = order
+                .iter()
+                .position(|ix| files.get(*ix).is_some_and(|file| &file.path == path))?;
+            let next = adjacent_inline_diff_ix(current, order.len(), None, direction)?;
+            let file = files.get(*order.get(next)?)?;
+            Some(AdjacentDiffFileTarget::Range {
+                target: DiffTarget::commit_range(
+                    from_commit_id.clone(),
+                    to_commit_id.clone(),
+                    None,
+                )
+                .for_change(file),
+                target_ix: next,
+            })
+        }
     }
 }
 
@@ -284,7 +324,8 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Option<std::sync::Arc<[usize]>> {
         let repo = self.active_repo()?;
-        let DiffTarget::WorkingTree { path, area, .. } = repo.diff_state.diff_target.as_ref()?
+        let DiffTarget::WorkingTree { path, area, .. } =
+            self.bound_diff_state(repo).diff_target.as_ref()?
         else {
             return None;
         };
@@ -339,6 +380,23 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
+        if self.store.binding.is_some() {
+            if !self.store.policy.file_navigation {
+                return false;
+            }
+            let action = self.hosted_decor.as_ref().and_then(|decor| {
+                if direction < 0 {
+                    decor.options.file_navigation.previous.clone()
+                } else {
+                    decor.options.file_navigation.next.clone()
+                }
+            });
+            if let Some(action) = action {
+                action.invoke(cx);
+                return true;
+            }
+            return false;
+        }
         if let Some((prev_ix, next_ix)) = self.inline_diff_file_neighbors(repo_id, cx) {
             let Some(next_ix) = (match direction {
                 d if d < 0 => prev_ix,
@@ -371,7 +429,7 @@ impl MainPaneView {
             self.active_status_section_order(repo_id, change_tracking_view, cx);
         let Some(target) = (|| {
             let repo = self.active_repo()?;
-            let diff_target = repo.diff_state.diff_target.as_ref()?;
+            let diff_target = self.bound_diff_state(repo).diff_target.as_ref()?;
             adjacent_diff_file_target_for_repo(
                 repo,
                 diff_target,
@@ -388,6 +446,12 @@ impl MainPaneView {
             window.focus(&self.diff_panel_focus_handle, cx);
         }
         match target {
+            AdjacentDiffFileTarget::Range {
+                target,
+                target_ix: _,
+            } => {
+                self.store.dispatch(Msg::SelectDiff { repo_id, target });
+            }
             AdjacentDiffFileTarget::WorkingTree {
                 section,
                 area,

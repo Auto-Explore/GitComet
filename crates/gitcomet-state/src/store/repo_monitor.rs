@@ -312,12 +312,14 @@ impl DebouncedChange {
 
 pub(super) struct RepoMonitorManager {
     handles: FxHashMap<RepoId, RepoMonitorHandle>,
+    worktree_handles: FxHashMap<(RepoId, u64, PathBuf), RepoMonitorHandle>,
 }
 
 impl RepoMonitorManager {
     pub(super) fn new() -> Self {
         Self {
             handles: FxHashMap::default(),
+            worktree_handles: FxHashMap::default(),
         }
     }
 
@@ -328,6 +330,9 @@ impl RepoMonitorManager {
     }
 
     pub(super) fn stop_all(&mut self) {
+        for ((repo_id, _, _), handle) in self.worktree_handles.drain() {
+            stop_monitor_handle(repo_id, handle, "RepoMonitorManager::stop_all worktree");
+        }
         for (repo_id, handle) in self.handles.drain() {
             stop_monitor_handle(repo_id, handle, "RepoMonitorManager::stop_all");
         }
@@ -386,6 +391,66 @@ impl RepoMonitorManager {
             monitor_enabled,
             leased,
         });
+    }
+
+    pub(super) fn reconcile_worktrees(
+        &mut self,
+        wanted: Vec<(RepoId, u64, PathBuf)>,
+        msg_tx: StoreWorkerSender,
+        active_repo_id: Arc<AtomicU64>,
+        backend: Arc<dyn GitBackend>,
+    ) {
+        let obsolete: Vec<_> = self
+            .worktree_handles
+            .keys()
+            .filter(|key| !wanted.contains(key))
+            .cloned()
+            .collect();
+        for key in obsolete {
+            if let Some(handle) = self.worktree_handles.remove(&key) {
+                stop_monitor_handle(key.0, handle, "worktree watch closed");
+            }
+        }
+        for key in wanted {
+            let std::collections::hash_map::Entry::Vacant(entry) =
+                self.worktree_handles.entry(key.clone())
+            else {
+                continue;
+            };
+            let (repo_id, lifetime, workdir) = key;
+            let (monitor_tx, monitor_rx) = mpsc::channel();
+            let enabled = Arc::new(AtomicBool::new(true));
+            let config = MonitorConfig {
+                leased: Arc::new(AtomicBool::new(true)),
+                worktree_owner: Some((lifetime, workdir.clone())),
+                ..Default::default()
+            };
+            let leased = config.leased.clone();
+            let thread_enabled = enabled.clone();
+            let thread_tx = monitor_tx.clone();
+            let msg_tx = msg_tx.clone();
+            let active = active_repo_id.clone();
+            let backend = backend.clone();
+            let join = thread::spawn(move || {
+                repo_monitor_thread(
+                    repo_id,
+                    workdir,
+                    msg_tx,
+                    monitor_rx,
+                    thread_tx,
+                    active,
+                    thread_enabled,
+                    backend,
+                    config,
+                )
+            });
+            entry.insert(RepoMonitorHandle {
+                msg_tx: monitor_tx,
+                join,
+                monitor_enabled: enabled,
+                leased,
+            });
+        }
     }
 
     /// Whether a watch lease holds `repo_id`, so its changes are delivered

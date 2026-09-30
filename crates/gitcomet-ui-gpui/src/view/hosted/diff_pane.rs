@@ -4,14 +4,16 @@
 //! closes the session when dropped.
 
 use super::projection::{DisplayRow, PaneProjection, selected_text};
-use super::rows::{PaneRow, PaneRowKind, rows_from_file_text, rows_from_patch, side_text};
+use super::rows::{PaneRow, PaneRowKind, rows_from_file_rows, rows_from_patch};
 use super::*;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
-use gitcomet_core::domain::DiffTarget;
+use crate::view::panes::main::diff_cache::SharedFileDiffCache;
+use gitcomet_core::domain::{DiffRowProvider as _, DiffTarget};
 use gitcomet_core::text_format::TextEncoding;
 use gitcomet_extension_api::{
-    DiffAnnotations, DiffInset, DiffLegendItem, DiffLineRange, DiffLineSide, DiffPaneImpl,
-    DiffPaneOptions, DiffSnapshot, RepositoryHandle, StateSubscription, WindowHost,
+    DiffAnnotations, DiffInset, DiffLayout, DiffLegendItem, DiffLineRange, DiffLineSide,
+    DiffPaneEvent, DiffPaneImpl, DiffPaneOptions, DiffPanePolicy, DiffScrollAnchor, DiffSnapshot,
+    RepositoryHandle, StateSubscription, WindowHost,
 };
 use gitcomet_state::diff_session::{DiffSession, DiffSessionMsg, DiffViewId};
 use palette::IntoColor;
@@ -30,10 +32,16 @@ enum PaneSource {
 
 pub(crate) struct DiffPaneView {
     host: WindowHost,
+    root: Option<WeakEntity<GitCometView>>,
+    renderer: Option<Entity<MainPaneView>>,
+    renderer_model: Option<Entity<AppUiModel>>,
+    file_cache: Option<Arc<SharedFileDiffCache>>,
     source: PaneSource,
     view_id: DiffViewId,
     options: DiffPaneOptions,
     rows: Arc<Vec<PaneRow>>,
+    raw: [Option<super::raw_lines::RawLines>; 2],
+    renderer_subscription: Option<gpui::Subscription>,
     /// `rows` with insets; search, selection, and markers index it.
     projection: Arc<PaneProjection>,
     insets: Arc<[DiffInset]>,
@@ -46,6 +54,8 @@ pub(crate) struct DiffPaneView {
     /// The session revision `rows` were built from.
     rows_rev: Option<u64>,
     loading: bool,
+    pending_target: Option<DiffTarget>,
+    snapshot_rev: u64,
     error: Option<SharedString>,
     blame: Option<Arc<Vec<gitcomet_core::services::BlameLine>>>,
     language: Option<crate::view::rows::DiffSyntaxLanguage>,
@@ -57,17 +67,55 @@ pub(crate) struct DiffPaneView {
     search: SharedString,
     matches: Vec<usize>,
     pending_reveal: Option<(DiffLineSide, u32)>,
+    pending_scroll_top: bool,
     _state: Option<StateSubscription>,
 }
 
 impl DiffPaneView {
-    fn with_source(host: WindowHost, source: PaneSource, options: DiffPaneOptions) -> Self {
+    #[cfg(feature = "benchmarks")]
+    pub(in crate::view) fn benchmark_ready(&self, cx: &mut App) -> bool {
+        self.renderer
+            .as_ref()
+            .is_some_and(|pane| pane.update(cx, |pane, _| pane.diff_list_len() >= 400))
+    }
+    #[cfg(feature = "benchmarks")]
+    pub(in crate::view) fn benchmark_window(
+        &mut self,
+        start: usize,
+        count: usize,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> usize {
+        self.prepare_renderer(window, cx);
+        self.renderer.as_ref().map_or(0, |renderer| {
+            renderer.update(cx, |pane, cx| {
+                let end = (start + count).min(pane.diff_list_len());
+                let rows = MainPaneView::render_projected_inline(pane, start..end, window, cx);
+                std::hint::black_box(rows).len()
+            })
+        })
+    }
+
+    fn with_source(host: WindowHost, source: PaneSource, mut options: DiffPaneOptions) -> Self {
+        if matches!(source, PaneSource::Snapshot(_)) {
+            options.policy.allow_edit = false;
+            options.policy.allow_stage = false;
+            options.policy.allow_annotate = false;
+            options.policy.blame = false;
+            options.policy.file_navigation = false;
+        }
         Self {
             host,
+            root: None,
+            renderer: None,
+            renderer_model: None,
+            file_cache: None,
             source,
             view_id: DiffViewId::next(),
             options,
             rows: Arc::default(),
+            raw: [None, None],
+            renderer_subscription: None,
             projection: Arc::default(),
             insets: Arc::from([]),
             annotations: Arc::default(),
@@ -77,6 +125,8 @@ impl DiffPaneView {
             marker_builds: 0,
             rows_rev: None,
             loading: true,
+            pending_target: None,
+            snapshot_rev: 0,
             error: None,
             blame: None,
             language: None,
@@ -87,6 +137,7 @@ impl DiffPaneView {
             search: SharedString::default(),
             matches: Vec::new(),
             pending_reveal: None,
+            pending_scroll_top: false,
             _state: None,
         }
     }
@@ -127,11 +178,188 @@ impl DiffPaneView {
         pane
     }
 
+    pub(crate) fn attach_root(&mut self, root: WeakEntity<GitCometView>) {
+        self.root = Some(root);
+    }
+
+    fn prepare_renderer(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        if self.renderer.is_some() {
+            return;
+        }
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        let Ok((mut preferences, tooltip, store)) = root.read_with(cx, |root, cx| {
+            (
+                root.ui_model.read(cx).preferences.clone(),
+                root.tooltip_host.downgrade(),
+                root.store.clone(),
+            )
+        }) else {
+            return;
+        };
+        let mut pane_store = crate::view::pane_store::PaneStore::from(store.clone());
+        let state = match &self.source {
+            PaneSource::Session { repository, .. } => {
+                pane_store.bind(
+                    crate::view::pane_store::DiffBinding {
+                        repo_id: repository.repo_id(),
+                        lifetime: repository.lifetime(),
+                        view: self.view_id,
+                    },
+                    self.options.policy,
+                );
+                pane_store.snapshot()
+            }
+            PaneSource::Snapshot(snapshot) => {
+                let state = self.snapshot_state(snapshot);
+                self.options.policy.allow_edit = false;
+                self.options.policy.allow_stage = false;
+                self.options.policy.allow_annotate = false;
+                self.options.policy.blame = false;
+                self.options.policy.file_navigation = false;
+                pane_store.bind_snapshot(state.clone(), self.view_id, self.options.policy);
+                state
+            }
+        };
+        preferences.diff.content_mode = DiffContentMode::Full;
+        let model = cx.new(|_| AppUiModel::new_with_preferences(state, preferences));
+        let theme = self.host.theme(cx);
+        let renderer = cx.new(|cx| {
+            let mut pane = MainPaneView::new(
+                store,
+                model.clone(),
+                super::super::panes::main::MainPaneInit {
+                    theme,
+                    view_mode: GitCometViewMode::Normal,
+                    focused_mergetool_labels: None,
+                    focused_mergetool_exit_code: None,
+                    root_view: root,
+                    tooltip_host: tooltip,
+                },
+                window,
+                cx,
+            );
+            pane.store = pane_store;
+            pane.set_hosted_decor(
+                self.view_id.0,
+                self.options.clone(),
+                self.annotations.clone(),
+                self.insets.clone(),
+            );
+            pane.hosted_decor.as_mut().unwrap().file_cache = self.file_cache.clone();
+            pane.annotate_enabled = self.options.policy.blame;
+            pane.diff_view = match self.options.layout {
+                DiffLayout::Inline => DiffViewMode::Inline,
+                DiffLayout::Split => DiffViewMode::Split,
+            };
+            pane.hosted_content_width = Some(
+                self.options
+                    .content_width
+                    .map(px)
+                    .unwrap_or(window.viewport_size().width),
+            );
+            pane
+        });
+        self.renderer_subscription = Some(cx.observe(&renderer, |this, renderer, cx| {
+            let selection = renderer.read(cx).hosted_selection();
+            if this.selection != selection {
+                this.selection = selection;
+                this.emit(DiffPaneEvent::SelectionChanged(selection), cx);
+            }
+            if let Some((side, line)) = this.pending_reveal {
+                let found = renderer.update(cx, |pane, _| {
+                    pane.hosted_reveal_at(side, line, this.pending_scroll_top)
+                });
+                if found {
+                    this.pending_reveal = None;
+                }
+            }
+            cx.notify();
+        }));
+        self.renderer = Some(renderer);
+        self.renderer_model = Some(model);
+    }
+
+    fn snapshot_state(&self, snapshot: &DiffSnapshot) -> Arc<AppState> {
+        let mut repo = RepoState::new_opening(
+            RepoId(u64::MAX),
+            gitcomet_core::domain::RepoSpec {
+                workdir: std::path::PathBuf::new(),
+            },
+        );
+        let target = snapshot
+            .patch
+            .as_ref()
+            .map(|patch| patch.target.clone())
+            .unwrap_or_else(|| DiffTarget::working_tree(snapshot.path.clone(), DiffArea::Unstaged));
+        repo.open = Loadable::Ready(());
+        repo.diff_state.diff_target = Some(target.clone());
+        repo.diff_state.diff_target_rev = self.snapshot_rev;
+        repo.diff_state.diff_rev = self.snapshot_rev;
+        repo.diff_state.diff_file_rev = self.snapshot_rev;
+        repo.diff_state.diff = Loadable::Ready(snapshot.patch.clone().unwrap_or_else(|| {
+            Arc::new(gitcomet_core::domain::Diff {
+                target,
+                lines: Vec::new(),
+            })
+        }));
+        repo.diff_state.diff_file =
+            Loadable::Ready(self.file_cache.as_ref().map(|cache| cache.file.clone()));
+        Arc::new(AppState {
+            active_repo: Some(repo.id),
+            repos: vec![repo],
+            ..Default::default()
+        })
+    }
+
+    fn sync_renderer(&mut self, state: Arc<AppState>, cx: &mut gpui::Context<Self>) {
+        if let (Some(renderer), Some(model)) = (&self.renderer, &self.renderer_model) {
+            let state = renderer.read(cx).store.project(state);
+            model.update(cx, |model, cx| model.set_state(state, cx));
+        }
+    }
+
+    fn set_file_cache(
+        &mut self,
+        cache: Option<Arc<SharedFileDiffCache>>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.file_cache = cache;
+        if let Some(renderer) = &self.renderer {
+            renderer.update(cx, |pane, _| {
+                pane.hosted_decor.as_mut().unwrap().file_cache = self.file_cache.clone();
+            });
+        }
+    }
+
+    fn emit(&self, event: DiffPaneEvent, cx: &mut gpui::Context<Self>) {
+        if let Some(handler) = &self.options.on_event {
+            let handler = handler.clone();
+            cx.defer(move |cx| handler(event, cx));
+        }
+    }
+
+    fn sync_decor(&self, cx: &mut gpui::Context<Self>) {
+        if let Some(renderer) = &self.renderer {
+            renderer.update(cx, |pane, cx| {
+                pane.set_hosted_decor(
+                    self.view_id.0,
+                    self.options.clone(),
+                    self.annotations.clone(),
+                    self.insets.clone(),
+                );
+                cx.notify();
+            });
+        }
+    }
+
     /// Clears what the pane showed, dropping any build still running for it.
     fn reset(&mut self, path: Option<&std::path::Path>) {
         self.language = path.and_then(crate::view::rows::diff_syntax_language_for_path);
         self.build = None;
         self.building_rev = None;
+        self.file_cache = None;
         self.rows = Arc::default();
         self.loading = true;
         self.error = None;
@@ -163,12 +391,14 @@ impl DiffPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         self.annotations = annotations;
+        self.sync_decor(cx);
         self.place_markers();
         cx.notify();
     }
 
     pub(crate) fn set_insets(&mut self, insets: Vec<DiffInset>, cx: &mut gpui::Context<Self>) {
         self.insets = insets.into();
+        self.sync_decor(cx);
         self.reproject();
         cx.notify();
     }
@@ -183,6 +413,7 @@ impl DiffPaneView {
             return;
         }
         self.reset(target.file_path());
+        self.pending_target = Some(target.clone());
         let PaneSource::Session {
             store,
             repository,
@@ -215,18 +446,57 @@ impl DiffPaneView {
             return;
         };
         *shown = snapshot.clone();
+        self.snapshot_rev = self.snapshot_rev.wrapping_add(1);
         self.reset(Some(&snapshot.path));
+        let cache = snapshot.patch.is_none().then(|| {
+            Arc::new(SharedFileDiffCache::new(
+                Arc::new(gitcomet_core::domain::FileDiffText::new_shared(
+                    snapshot.path.clone(),
+                    Some(snapshot.old.clone()),
+                    Some(snapshot.new.clone()),
+                )),
+                None,
+                std::path::PathBuf::new(),
+            ))
+        });
+        self.set_file_cache(cache.clone(), cx);
+        if let Some(model) = &self.renderer_model {
+            let state = self.snapshot_state(&snapshot);
+            if let Some(renderer) = &self.renderer {
+                renderer.read(cx).store.replace_snapshot(state.clone());
+            }
+            model.update(cx, |model, cx| model.set_state(state, cx));
+        }
         self.build_rows(None, false, None, cx, move || {
-            rows_from_file_text(&snapshot.old, &snapshot.new)
+            if let Some(patch) = snapshot.patch {
+                return Ok((rows_from_patch(&patch), [None, None]));
+            }
+            let raw = [
+                Some(super::raw_lines::RawLines::new(
+                    Arc::from(snapshot.old.as_bytes()),
+                    TextEncoding::UTF_8,
+                )),
+                Some(super::raw_lines::RawLines::new(
+                    Arc::from(snapshot.new.as_bytes()),
+                    TextEncoding::UTF_8,
+                )),
+            ];
+            let cache = cache.expect("text snapshots have a prepared file");
+            let prepared = cache.build().map_err(Clone::clone)?;
+            Ok((
+                rows_from_file_rows(
+                    prepared
+                        .row_provider
+                        .slice(0, prepared.row_provider.len_hint()),
+                ),
+                raw,
+            ))
         });
         cx.notify();
     }
 
     fn session<'a>(&self, state: &'a AppState) -> Option<&'a DiffSession> {
-        let PaneSource::Session {
-            repository, target, ..
-        } = &self.source
-        else {
+        let PaneSource::Session { repository, .. } = &self.source else {
             return None;
         };
         state
@@ -238,8 +508,10 @@ impl DiffPaneView {
             .diff_sessions
             .get(&self.view_id)
             .filter(|session| {
-                session.target == *target
-                    && session.target.old_file_path() == target.old_file_path()
+                self.pending_target.as_ref().is_none_or(|target| {
+                    session.target == *target
+                        && session.target.old_file_path() == target.old_file_path()
+                })
             })
     }
 
@@ -252,7 +524,21 @@ impl DiffPaneView {
         let Some(session) = self.session(&state) else {
             return;
         };
+        self.pending_target = None;
+        if let PaneSource::Session { target, .. } = &mut self.source {
+            *target = session.target.clone();
+        }
         if self.rows_rev == Some(session.rev) || self.building_rev == Some(session.rev) {
+            return;
+        }
+        if session.diff_target.is_none() {
+            self.reset(None);
+            self.set_file_cache(None, cx);
+            self.sync_renderer(Arc::clone(&state), cx);
+            self.loading = false;
+            self.rows_rev = Some(session.rev);
+            self.emit(DiffPaneEvent::TargetChanged(None), cx);
+            cx.notify();
             return;
         }
         let rev = session.rev;
@@ -260,7 +546,7 @@ impl DiffPaneView {
             Loadable::Ready(lines) => Some(Arc::clone(lines)),
             _ => None,
         };
-        let file_text = match &session.file_text {
+        let file_text = match &session.diff_file {
             Loadable::Ready(Some(text)) => Some(Arc::clone(text)),
             _ => None,
         };
@@ -268,12 +554,36 @@ impl DiffPaneView {
             Loadable::Ready(diff) => Some(Arc::clone(diff)),
             _ => None,
         };
-        let error = match (&session.diff, &session.file_text) {
+        let cache = file_text.as_ref().map(|text| {
+            let workdir = match &self.source {
+                PaneSource::Session { repository, .. } => repository.workdir().to_path_buf(),
+                PaneSource::Snapshot(_) => unreachable!(),
+            };
+            self.file_cache
+                .as_ref()
+                .filter(|cache| cache.matches(text, patch.as_ref(), &workdir))
+                .cloned()
+                .unwrap_or_else(|| {
+                    Arc::new(SharedFileDiffCache::new(
+                        text.clone(),
+                        patch.as_ref(),
+                        workdir,
+                    ))
+                })
+        });
+        self.set_file_cache(cache.clone(), cx);
+        self.sync_renderer(Arc::clone(&state), cx);
+        let error = match (&session.diff, &session.diff_file) {
             (Loadable::Error(error), _) | (_, Loadable::Error(error)) => {
                 Some(SharedString::from(error.clone()))
             }
             _ => None,
         };
+        if let Some(error) = &error
+            && self.error.as_ref() != Some(error)
+        {
+            self.emit(DiffPaneEvent::Error(error.clone()), cx);
+        }
         let loading = session.is_loading();
         if file_text.is_none() && patch.is_none() {
             // A reload can overtake a row build. Do not let that build put
@@ -286,13 +596,22 @@ impl DiffPaneView {
             cx.notify();
             return;
         }
-        self.build_rows(Some(rev), loading, error, cx, move || match file_text {
-            Some(text) => {
-                let old = side_text(&text, DiffLineSide::Old).unwrap_or_default();
-                let new = side_text(&text, DiffLineSide::New).unwrap_or_default();
-                rows_from_file_text(&old, &new)
+        self.build_rows(Some(rev), loading, error, cx, move || match cache {
+            Some(cache) => {
+                let prepared = cache.build().map_err(Clone::clone)?;
+                Ok((
+                    rows_from_file_rows(
+                        prepared
+                            .row_provider
+                            .slice(0, prepared.row_provider.len_hint()),
+                    ),
+                    super::raw_lines::RawLines::file(&cache.file),
+                ))
             }
-            None => patch.map(|diff| rows_from_patch(&diff)).unwrap_or_default(),
+            None => Ok((
+                patch.map(|diff| rows_from_patch(&diff)).unwrap_or_default(),
+                [None, None],
+            )),
         });
     }
 
@@ -304,13 +623,33 @@ impl DiffPaneView {
         loading: bool,
         error: Option<SharedString>,
         cx: &mut gpui::Context<Self>,
-        build: impl FnOnce() -> Vec<PaneRow> + Send + 'static,
+        build: impl FnOnce() -> Result<(Vec<PaneRow>, [Option<super::raw_lines::RawLines>; 2]), String>
+        + Send
+        + 'static,
     ) {
         self.building_rev = rev;
         self.build = Some(cx.spawn(async move |this, cx| {
-            let rows = cx.background_executor().spawn(async move { build() }).await;
+            let result = cx.background_executor().spawn(async move { build() }).await;
             let _ = this.update(cx, |pane, cx| {
+                let (rows, raw) = match result {
+                    Ok(result) => result,
+                    Err(error) => {
+                        let error = SharedString::from(error);
+                        pane.error = Some(error.clone());
+                        pane.loading = false;
+                        pane.rows_rev = rev;
+                        pane.build = None;
+                        pane.building_rev = None;
+                        pane.emit(DiffPaneEvent::Error(error), cx);
+                        cx.notify();
+                        return;
+                    }
+                };
                 pane.rows = Arc::new(rows);
+                pane.raw = raw;
+                if !loading {
+                    pane.emit(DiffPaneEvent::Loaded, cx);
+                }
                 pane.rows_rev = rev;
                 pane.loading = loading;
                 pane.error = error;
@@ -318,7 +657,7 @@ impl DiffPaneView {
                 pane.building_rev = None;
                 pane.reproject();
                 if let Some((side, line)) = pane.pending_reveal.take() {
-                    pane.reveal(side, line, cx);
+                    pane.reveal_at(side, line, pane.pending_scroll_top, cx);
                 }
                 cx.notify();
             });
@@ -326,7 +665,15 @@ impl DiffPaneView {
     }
 
     pub(crate) fn set_target(&mut self, target: DiffTarget, cx: &mut gpui::Context<Self>) {
-        self.open(target);
+        self.open(target.clone());
+        if let (Some(renderer), Some(model)) = (&self.renderer, &self.renderer_model) {
+            let mut state = (*renderer.read(cx).store.snapshot()).clone();
+            for repo in &mut state.repos {
+                repo.diff_state = Default::default();
+            }
+            model.update(cx, |model, cx| model.set_state(Arc::new(state), cx));
+        }
+        self.emit(DiffPaneEvent::TargetChanged(Some(target)), cx);
         cx.notify();
     }
 
@@ -346,9 +693,37 @@ impl DiffPaneView {
     }
 
     pub(crate) fn reveal(&mut self, side: DiffLineSide, line: u32, cx: &mut gpui::Context<Self>) {
+        self.reveal_at(side, line, false, cx);
+    }
+    fn reveal_at(
+        &mut self,
+        side: DiffLineSide,
+        line: u32,
+        top: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.pending_scroll_top = top;
+        if let Some(renderer) = &self.renderer {
+            let found = renderer.update(cx, |pane, cx| {
+                let found = pane.hosted_reveal_at(side, line, top);
+                cx.notify();
+                found
+            });
+            if !found {
+                self.pending_reveal = Some((side, line));
+            }
+            return;
+        }
         match self.projection.display_ix(side, line) {
             Some(ix) => {
-                self.scroll.scroll_to_item(ix, gpui::ScrollStrategy::Center);
+                self.scroll.scroll_to_item(
+                    ix,
+                    if top {
+                        gpui::ScrollStrategy::Top
+                    } else {
+                        gpui::ScrollStrategy::Center
+                    },
+                );
                 cx.notify();
             }
             None => self.pending_reveal = Some((side, line)),
@@ -359,7 +734,17 @@ impl DiffPaneView {
         if !self.options.policy.search {
             return;
         }
-        self.search = query;
+        self.search = query.clone();
+        if let Some(renderer) = &self.renderer {
+            renderer.update(cx, |pane, cx| {
+                pane.diff_search_query = query.clone();
+                pane.diff_search_active = !query.is_empty();
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text(query.to_string(), cx));
+                pane.diff_search_recompute_matches_and_scroll_to_first();
+                cx.notify();
+            });
+        }
         self.refresh_search();
         cx.notify();
     }
@@ -425,8 +810,21 @@ impl DiffPaneView {
         self.view_id.0
     }
 
-    pub(crate) fn selected_text(&self) -> Option<String> {
-        Some(selected_text(&self.rows, self.selection?))
+    #[cfg(test)]
+    pub(crate) fn shares_renderer_rows(&self, cx: &App) -> bool {
+        self.file_cache.as_ref().is_some_and(|cache| {
+            self.renderer.as_ref().is_some_and(|renderer| {
+                renderer
+                    .read(cx)
+                    .file_diff_row_provider
+                    .as_ref()
+                    .is_some_and(|rows| {
+                        cache
+                            .build()
+                            .is_ok_and(|prepared| Arc::ptr_eq(rows, &prepared.row_provider))
+                    })
+            })
+        })
     }
 
     fn render_inset_row(
@@ -662,7 +1060,8 @@ impl DiffPaneView {
 }
 
 impl Render for DiffPaneView {
-    fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        self.prepare_renderer(window, cx);
         let theme = self.host.theme(cx);
         let ui_scale = ui_scale::UiScale::current(cx);
         let pane_id = self.view_id.0;
@@ -732,7 +1131,11 @@ impl Render for DiffPaneView {
                         },
                     ))
             });
-        let markers = Arc::clone(&self.markers);
+        let markers = self
+            .renderer
+            .as_ref()
+            .map(|renderer| renderer.update(cx, |pane, _| pane.hosted_markers()))
+            .unwrap_or_else(|| self.markers.clone());
         div()
             .id(("hosted_diff_pane", self.view_id.0))
             .debug_selector(move || format!("hosted_diff_{pane_id}"))
@@ -755,15 +1158,40 @@ impl Render for DiffPaneView {
                     .flex_1()
                     .min_h(px(0.0))
                     .relative()
-                    .child(
+                    .child(if let Some(renderer) = &self.renderer {
+                        let measured = renderer.downgrade();
+                        let explicit = self.options.content_width;
+                        div()
+                            .size_full()
+                            .relative()
+                            .child(renderer.clone())
+                            .child(
+                                gpui::canvas(
+                                    move |bounds, _, cx| {
+                                        let width = explicit.map(px).unwrap_or(bounds.size.width);
+                                        let _ = measured.update(cx, |pane, cx| {
+                                            if pane.hosted_content_width != Some(width) {
+                                                pane.hosted_content_width = Some(width);
+                                                cx.notify();
+                                            }
+                                        });
+                                    },
+                                    |_, _, _, _| {},
+                                )
+                                .absolute()
+                                .size_full(),
+                            )
+                            .into_any_element()
+                    } else {
                         uniform_list(
                             "hosted_diff_rows",
                             self.projection.len(),
                             cx.processor(|this, range, _window, cx| this.render_rows(range, cx)),
                         )
                         .track_scroll(&self.scroll)
-                        .size_full(),
-                    )
+                        .size_full()
+                        .into_any_element()
+                    })
                     .when(!markers.is_empty(), |list| {
                         list.child(
                             div()
@@ -815,10 +1243,12 @@ impl DiffPaneImpl for HostedDiffPane {
     }
 
     fn target(&self, cx: &App) -> Option<DiffTarget> {
-        match &self.entity.read(cx).source {
-            PaneSource::Session { target, .. } => Some(target.clone()),
-            PaneSource::Snapshot(_) => None,
+        let pane = self.entity.read(cx);
+        if let Some(target) = &pane.pending_target {
+            return Some(target.clone());
         }
+        let state = pane.host.state(cx).ok()?;
+        pane.session(&state)?.diff_target.clone()
     }
 
     fn set_target(&self, target: DiffTarget, cx: &mut App) {
@@ -842,7 +1272,11 @@ impl DiffPaneImpl for HostedDiffPane {
     }
 
     fn selection(&self, cx: &App) -> Option<DiffLineRange> {
-        self.entity.read(cx).selection
+        let pane = self.entity.read(cx);
+        pane.renderer
+            .as_ref()
+            .and_then(|renderer| renderer.read(cx).hosted_selection())
+            .or(pane.selection)
     }
 
     fn reveal(&self, side: DiffLineSide, line: u32, cx: &mut App) {
@@ -875,6 +1309,106 @@ impl DiffPaneImpl for HostedDiffPane {
     }
 
     fn selected_text(&self, cx: &App) -> Option<String> {
-        self.entity.read(cx).selected_text()
+        let pane = self.entity.read(cx);
+        self.selection(cx)
+            .map(|range| selected_text(&pane.rows, range))
+    }
+    fn selected_bytes(&self, cx: &App) -> Option<Arc<[u8]>> {
+        let range = self.selection(cx)?;
+        let pane = self.entity.read(cx);
+        pane.raw[match range.side {
+            DiffLineSide::Old => 0,
+            DiffLineSide::New => 1,
+        }]
+        .as_ref()?
+        .range(range.start, range.end)
+    }
+    fn set_policy(&self, policy: DiffPanePolicy, cx: &mut App) {
+        self.entity.update(cx, |pane, cx| {
+            let mut policy = policy;
+            if matches!(pane.source, PaneSource::Snapshot(_)) {
+                policy.allow_edit = false;
+                policy.allow_stage = false;
+                policy.allow_annotate = false;
+                policy.blame = false;
+                policy.file_navigation = false;
+            }
+            pane.options.policy = policy;
+            if let Some(renderer) = &pane.renderer {
+                renderer.update(cx, |renderer, cx| {
+                    renderer.annotate_enabled = policy.blame;
+                    cx.notify();
+                });
+            }
+            if policy.blame
+                && let PaneSource::Session {
+                    store, repository, ..
+                } = &pane.source
+                && let Some(store) = store.upgrade()
+            {
+                store.dispatch(Msg::DiffSession(DiffSessionMsg::LoadBlame {
+                    repo_id: repository.repo_id(),
+                    lifetime: repository.lifetime(),
+                    view: pane.view_id,
+                }));
+            }
+            pane.sync_decor(cx);
+            cx.notify();
+        });
+    }
+    fn set_layout(&self, layout: DiffLayout, cx: &mut App) {
+        self.entity.update(cx, |pane, cx| {
+            pane.options.layout = layout;
+            if let Some(renderer) = &pane.renderer {
+                renderer.update(cx, |pane, cx| {
+                    pane.set_diff_view_mode(
+                        match layout {
+                            DiffLayout::Inline => DiffViewMode::Inline,
+                            DiffLayout::Split => DiffViewMode::Split,
+                        },
+                        cx,
+                    )
+                });
+            }
+            cx.notify();
+        });
+    }
+    fn set_content_width(&self, width: Option<f32>, cx: &mut App) {
+        self.entity.update(cx, |pane, cx| {
+            let width = width.filter(|width| width.is_finite() && *width > 0.0);
+            pane.options.content_width = width;
+            if let Some(renderer) = &pane.renderer {
+                renderer.update(cx, |pane, cx| {
+                    pane.hosted_content_width = width.map(px);
+                    cx.notify();
+                });
+            }
+            cx.notify();
+        });
+    }
+    fn restore_scroll_anchor(&self, anchor: DiffScrollAnchor, cx: &mut App) {
+        self.entity.update(cx, |pane, cx| {
+            pane.reveal_at(anchor.side, anchor.line, true, cx)
+        });
+    }
+    fn set_file_navigation(
+        &self,
+        navigation: gitcomet_extension_api::DiffFileNavigation,
+        cx: &mut App,
+    ) {
+        self.entity.update(cx, |pane, cx| {
+            pane.options.file_navigation = navigation;
+            pane.sync_decor(cx);
+            cx.notify();
+        });
+    }
+    fn scroll_anchor(&self, cx: &App) -> Option<DiffScrollAnchor> {
+        let pane = self.entity.read(cx);
+        if let Some(renderer) = &pane.renderer {
+            return renderer.read(cx).hosted_scroll_anchor();
+        }
+        let (side, line) =
+            pane.anchor_at(pane.scroll.0.borrow().base_handle.logical_scroll_top().0)?;
+        Some(DiffScrollAnchor { side, line })
     }
 }

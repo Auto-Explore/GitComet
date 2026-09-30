@@ -1,13 +1,13 @@
 //! Collecting, validating, and freezing extension declarations.
 
-use crate::Extension;
 use crate::contributions::{
-    BottomPanelDescriptor, CloseGuard, CommandDescriptor, DetailsTabDescriptor, MenuLocation,
-    RepositoryEntryGate, RepositoryViewDescriptor, SettingsPageDescriptor,
-    SidebarSectionDescriptor, StatusItemDescriptor,
+    BottomPanelDescriptor, ChromeDescriptor, CloseGuard, CommandDescriptor, DetailsTabDescriptor,
+    MenuLocation, RepositoryEntryGate, RepositoryViewDescriptor, SettingsPageDescriptor,
+    SidebarSectionDescriptor, StatusItemDescriptor, WindowGateDescriptor,
 };
 use crate::host::WindowHost;
 use crate::id::{ContributionId, ExtensionId};
+use crate::{Extension, HistoryAnnotator};
 use gitcomet_ui_kit::gpui::{App, Keystroke, SharedString};
 use std::borrow::Cow;
 use std::collections::BTreeSet;
@@ -45,6 +45,21 @@ pub struct MenuItemDeclaration {
 
 pub type WindowOpened = Rc<dyn Fn(WindowHost, &mut App)>;
 
+#[cfg(test)]
+mod key_context_contract {
+    use gitcomet_ui_kit::gpui::{KeyBindingContextPredicate, KeyContext};
+
+    #[test]
+    fn not_excludes_text_input_at_every_depth() {
+        let predicate = KeyBindingContextPredicate::parse("RepositoryView && !TextInput").unwrap();
+        let view = KeyContext::parse("RepositoryView").unwrap();
+        let input = KeyContext::parse("TextInput").unwrap();
+        assert!(predicate.eval(std::slice::from_ref(&view)));
+        assert!(!predicate.eval(&[view.clone(), input.clone()]));
+        assert!(!predicate.eval(&[input, view]));
+    }
+}
+
 /// Collects one extension's declarations. Invalid names are recorded and
 /// reported when the host builds the [`Registry`].
 pub struct Registrar {
@@ -53,6 +68,10 @@ pub struct Registrar {
     bottom_panels: Vec<(ContributionId, BottomPanelDescriptor)>,
     details_tabs: Vec<(ContributionId, DetailsTabDescriptor)>,
     sidebar_sections: Vec<(ContributionId, SidebarSectionDescriptor)>,
+    history_annotators: Vec<(ContributionId, HistoryAnnotator)>,
+    sidebar_providers: Vec<(ContributionId, crate::SidebarProvider)>,
+    edition_strip: Vec<(ContributionId, ChromeDescriptor)>,
+    title_bar_brand: Vec<(ContributionId, ChromeDescriptor)>,
     status_items: Vec<(ContributionId, StatusItemDescriptor)>,
     settings_pages: Vec<(ContributionId, SettingsPageDescriptor)>,
     commands: Vec<(ContributionId, CommandDescriptor)>,
@@ -60,6 +79,7 @@ pub struct Registrar {
     menu_items: Vec<MenuItemDeclaration>,
     assets: Vec<(String, &'static [u8])>,
     entry_gates: Vec<(ContributionId, RepositoryEntryGate)>,
+    window_gates: Vec<(ContributionId, WindowGateDescriptor)>,
     close_guards: Vec<(ContributionId, CloseGuard)>,
     window_opened: Vec<WindowOpened>,
     errors: Vec<String>,
@@ -73,6 +93,10 @@ impl Registrar {
             bottom_panels: Vec::new(),
             details_tabs: Vec::new(),
             sidebar_sections: Vec::new(),
+            history_annotators: Vec::new(),
+            sidebar_providers: Vec::new(),
+            edition_strip: Vec::new(),
+            title_bar_brand: Vec::new(),
             status_items: Vec::new(),
             settings_pages: Vec::new(),
             commands: Vec::new(),
@@ -80,6 +104,7 @@ impl Registrar {
             menu_items: Vec::new(),
             assets: Vec::new(),
             entry_gates: Vec::new(),
+            window_gates: Vec::new(),
             close_guards: Vec::new(),
             window_opened: Vec::new(),
             errors: Vec::new(),
@@ -98,6 +123,17 @@ impl Registrar {
                 None
             }
         }
+    }
+
+    pub fn window_gate(
+        &mut self,
+        local: impl Into<Cow<'static, str>>,
+        descriptor: WindowGateDescriptor,
+    ) -> &mut Self {
+        if let Some(id) = self.id(local) {
+            self.window_gates.push((id, descriptor));
+        }
+        self
     }
 
     pub fn repository_view(
@@ -133,6 +169,27 @@ impl Registrar {
         self
     }
 
+    pub fn sidebar_provider(
+        &mut self,
+        local: impl Into<Cow<'static, str>>,
+        provider: crate::SidebarProvider,
+    ) {
+        if let Some(id) = self.id(local) {
+            self.sidebar_providers.push((id, provider));
+        }
+    }
+
+    pub fn history_annotator(
+        &mut self,
+        local: impl Into<Cow<'static, str>>,
+        provider: HistoryAnnotator,
+    ) -> &mut Self {
+        if let Some(id) = self.id(local) {
+            self.history_annotators.push((id, provider));
+        }
+        self
+    }
+
     pub fn sidebar_section(
         &mut self,
         local: impl Into<Cow<'static, str>>,
@@ -140,6 +197,28 @@ impl Registrar {
     ) -> &mut Self {
         if let Some(id) = self.id(local) {
             self.sidebar_sections.push((id, descriptor));
+        }
+        self
+    }
+
+    pub fn edition_strip(
+        &mut self,
+        local: impl Into<Cow<'static, str>>,
+        descriptor: ChromeDescriptor,
+    ) -> &mut Self {
+        if let Some(id) = self.id(local) {
+            self.edition_strip.push((id, descriptor));
+        }
+        self
+    }
+
+    pub fn title_bar_brand(
+        &mut self,
+        local: impl Into<Cow<'static, str>>,
+        descriptor: ChromeDescriptor,
+    ) -> &mut Self {
+        if let Some(id) = self.id(local) {
+            self.title_bar_brand.push((id, descriptor));
         }
         self
     }
@@ -260,11 +339,16 @@ impl Registrar {
 /// registration order.
 #[derive(Clone, Default)]
 pub struct Registry {
+    instances: Vec<Rc<dyn Extension>>,
     extensions: Vec<ExtensionId>,
     repository_views: Vec<(ContributionId, RepositoryViewDescriptor)>,
     bottom_panels: Vec<(ContributionId, BottomPanelDescriptor)>,
     details_tabs: Vec<(ContributionId, DetailsTabDescriptor)>,
     sidebar_sections: Vec<(ContributionId, SidebarSectionDescriptor)>,
+    history_annotators: Vec<(ContributionId, HistoryAnnotator)>,
+    sidebar_providers: Vec<(ContributionId, crate::SidebarProvider)>,
+    edition_strip: Vec<(ContributionId, ChromeDescriptor)>,
+    title_bar_brand: Vec<(ContributionId, ChromeDescriptor)>,
     status_items: Vec<(ContributionId, StatusItemDescriptor)>,
     settings_pages: Vec<(ContributionId, SettingsPageDescriptor)>,
     commands: Vec<(ContributionId, CommandDescriptor)>,
@@ -272,6 +356,7 @@ pub struct Registry {
     menu_items: Vec<MenuItemDeclaration>,
     assets: Vec<(String, &'static [u8])>,
     entry_gates: Vec<(ContributionId, RepositoryEntryGate)>,
+    window_gates: Vec<(ContributionId, WindowGateDescriptor)>,
     close_guards: Vec<(ContributionId, CloseGuard)>,
     window_opened: Vec<(ExtensionId, WindowOpened)>,
 }
@@ -280,7 +365,7 @@ impl Registry {
     /// Registers `extensions` in order and validates the result: extension
     /// ids, contribution ids per kind, and asset paths must be unique, and key
     /// bindings and menu items must name a declared command.
-    pub fn build(extensions: &[Box<dyn Extension>]) -> Result<Self, Vec<RegistrationError>> {
+    pub fn build(extensions: Vec<Box<dyn Extension>>) -> Result<Self, Vec<RegistrationError>> {
         let mut registry = Self::default();
         let mut errors = Vec::new();
         let mut error = |extension: &ExtensionId, message: String| {
@@ -291,6 +376,7 @@ impl Registry {
         };
         let mut seen_extensions = BTreeSet::new();
         for extension in extensions {
+            let extension: Rc<dyn Extension> = Rc::from(extension);
             let id = extension.id();
             if !seen_extensions.insert(id.clone()) {
                 error(&id, "registered twice".to_string());
@@ -302,10 +388,19 @@ impl Registry {
                 error(&id, message);
             }
             registry.extensions.push(id.clone());
+            registry.instances.push(extension);
             registry.repository_views.extend(registrar.repository_views);
             registry.bottom_panels.extend(registrar.bottom_panels);
             registry.details_tabs.extend(registrar.details_tabs);
             registry.sidebar_sections.extend(registrar.sidebar_sections);
+            registry
+                .history_annotators
+                .extend(registrar.history_annotators);
+            registry
+                .sidebar_providers
+                .extend(registrar.sidebar_providers);
+            registry.edition_strip.extend(registrar.edition_strip);
+            registry.title_bar_brand.extend(registrar.title_bar_brand);
             registry.status_items.extend(registrar.status_items);
             registry.settings_pages.extend(registrar.settings_pages);
             registry.commands.extend(registrar.commands);
@@ -313,6 +408,7 @@ impl Registry {
             registry.menu_items.extend(registrar.menu_items);
             registry.assets.extend(registrar.assets);
             registry.entry_gates.extend(registrar.entry_gates);
+            registry.window_gates.extend(registrar.window_gates);
             registry.close_guards.extend(registrar.close_guards);
             registry.window_opened.extend(
                 registrar
@@ -330,6 +426,10 @@ impl Registry {
         }
         for (kind, dupes) in [
             (
+                "window gate",
+                duplicates(registry.window_gates.iter().map(|(id, _)| id)),
+            ),
+            (
                 "repository view",
                 duplicates(registry.repository_views.iter().map(|(id, _)| id)),
             ),
@@ -344,6 +444,14 @@ impl Registry {
             (
                 "sidebar section",
                 duplicates(registry.sidebar_sections.iter().map(|(id, _)| id)),
+            ),
+            (
+                "history annotator",
+                duplicates(registry.history_annotators.iter().map(|(id, _)| id)),
+            ),
+            (
+                "sidebar provider",
+                duplicates(registry.sidebar_providers.iter().map(|(id, _)| id)),
             ),
             (
                 "status item",
@@ -381,6 +489,22 @@ impl Registry {
                 if let Some(extension) = extension {
                     error(&extension, format!("asset {path} is declared twice"));
                 }
+            }
+        }
+        if registry.edition_strip.len() > 1 {
+            for (id, _) in registry.edition_strip.iter().skip(1) {
+                error(
+                    id.extension(),
+                    "edition_strip has more than one provider".to_string(),
+                );
+            }
+        }
+        if registry.title_bar_brand.len() > 1 {
+            for (id, _) in registry.title_bar_brand.iter().skip(1) {
+                error(
+                    id.extension(),
+                    "title_bar_brand has more than one provider".to_string(),
+                );
             }
         }
         let commands: BTreeSet<&ContributionId> =
@@ -426,6 +550,15 @@ impl Registry {
         &self.extensions
     }
 
+    #[doc(hidden)]
+    pub fn instances(&self) -> &[Rc<dyn Extension>] {
+        &self.instances
+    }
+
+    pub fn window_gates(&self) -> &[(ContributionId, WindowGateDescriptor)] {
+        &self.window_gates
+    }
+
     pub fn repository_views(&self) -> &[(ContributionId, RepositoryViewDescriptor)] {
         &self.repository_views
     }
@@ -438,8 +571,26 @@ impl Registry {
         &self.details_tabs
     }
 
+    pub fn sidebar_providers(&self) -> &[(ContributionId, crate::SidebarProvider)] {
+        &self.sidebar_providers
+    }
+
+    pub fn history_annotators(&self) -> &[(ContributionId, HistoryAnnotator)] {
+        &self.history_annotators
+    }
+
     pub fn sidebar_sections(&self) -> &[(ContributionId, SidebarSectionDescriptor)] {
         &self.sidebar_sections
+    }
+
+    pub fn edition_strip(&self) -> Option<&ChromeDescriptor> {
+        self.edition_strip.first().map(|(_, descriptor)| descriptor)
+    }
+
+    pub fn title_bar_brand(&self) -> Option<&ChromeDescriptor> {
+        self.title_bar_brand
+            .first()
+            .map(|(_, descriptor)| descriptor)
     }
 
     pub fn status_items(&self) -> &[(ContributionId, StatusItemDescriptor)] {
@@ -534,7 +685,7 @@ mod tests {
             .into_iter()
             .map(|fixture| Box::new(fixture) as Box<dyn Extension>)
             .collect();
-        Registry::build(&extensions)
+        Registry::build(extensions)
     }
 
     #[test]

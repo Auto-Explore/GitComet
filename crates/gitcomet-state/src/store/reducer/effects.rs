@@ -107,11 +107,11 @@ pub(super) fn blame_loaded(
     result: std::result::Result<Vec<gitcomet_core::services::BlameLine>, Error>,
 ) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-        && repo_state.history_state.blame_path.as_ref() == Some(&path)
-        && repo_state.history_state.blame_source.as_ref() == Some(&source)
+        && repo_state.diff_state.blame_path.as_ref() == Some(&path)
+        && repo_state.diff_state.blame_source.as_ref() == Some(&source)
     {
-        let retained = repo_state.history_state.retained_blame_while_loading.take();
-        repo_state.history_state.blame = match result {
+        let retained = repo_state.diff_state.retained_blame_while_loading.take();
+        repo_state.diff_state.blame = match result {
             // Reuse the retained allocation when the reload produced identical
             // annotations, so the view's `Arc`-identity fingerprints and the
             // memoized blame time range stay valid and nothing repaints.
@@ -1729,9 +1729,9 @@ pub(super) fn load_blame(
     // frames forks another `git blame --line-porcelain` for the same file.
     // `blame_path` + `blame_source` identify the request exactly, which a
     // repo-wide `RepoLoadsInFlight` bit could not.
-    let same_target = repo_state.history_state.blame_path.as_ref() == Some(&path)
-        && repo_state.history_state.blame_source.as_ref() == Some(&source);
-    if same_target && repo_state.history_state.blame.is_loading() {
+    let same_target = repo_state.diff_state.blame_path.as_ref() == Some(&path)
+        && repo_state.diff_state.blame_source.as_ref() == Some(&source);
+    if same_target && repo_state.diff_state.blame.is_loading() {
         return Vec::new();
     }
     if same_target {
@@ -1742,9 +1742,9 @@ pub(super) fn load_blame(
         // Re-targeting: anything held over describes a different file.
         repo_state.clear_retained_blame();
     }
-    repo_state.history_state.blame_path = Some(path.clone());
-    repo_state.history_state.blame_source = Some(source.clone());
-    repo_state.history_state.blame = Loadable::Loading;
+    repo_state.diff_state.blame_path = Some(path.clone());
+    repo_state.diff_state.blame_source = Some(source.clone());
+    repo_state.diff_state.blame = Loadable::Loading;
     vec![Effect::LoadBlame {
         repo_id,
         path,

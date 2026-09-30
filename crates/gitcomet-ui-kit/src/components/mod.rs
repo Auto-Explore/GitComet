@@ -49,7 +49,7 @@ pub use interactive_row::{InteractiveRowExt, InteractiveRowState, InteractiveRow
 pub use interstitial::{INTERSTITIAL_CARD_MAX_WIDTH_PX, interstitial};
 pub use modal::{modal_scrim, modal_surface, popover_surface};
 pub use navigation::{
-    navigation_tab, navigation_tab_metrics, navigation_tab_strip, selectable_field,
+    NavTab, navigation_tab, navigation_tab_metrics, navigation_tab_strip, selectable_field,
 };
 pub use panel_tab::{on_nested_control_click, panel_tab, panel_tab_close, panel_tab_text_color};
 /// Public field type of [`PickerPromptLayout::headers`], carried out of the

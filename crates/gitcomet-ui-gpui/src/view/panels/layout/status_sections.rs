@@ -580,149 +580,38 @@ impl DetailsPaneView {
             .active_repo()
             .map(|repo| self.status_file_plan(repo, section).row_len())
             .unwrap_or(count);
-        match section {
-            StatusSection::CombinedUnstaged => {
-                let list =
-                    uniform_list("unstaged", count, cx.processor(Self::render_unstaged_rows))
-                        .h_full()
-                        .min_h(px(0.0))
-                        .track_scroll(&self.unstaged_scroll);
-                let list = restrict_scroll_to_vertical_axis(list);
-                let list = div()
-                    .flex_1()
-                    .h_full()
-                    .min_h(px(0.0))
-                    .pr(components::Scrollbar::visible_gutter(
-                        self.unstaged_scroll.clone(),
-                        components::ScrollbarAxis::Vertical,
-                    ))
-                    .child(list);
-                div()
-                    .id("unstaged_scroll_container")
-                    .relative()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .h_full()
-                    .min_h(px(0.0))
-                    .overflow_hidden()
-                    .child(list)
-                    .child(
-                        components::Scrollbar::new(
-                            "unstaged_scrollbar",
-                            self.unstaged_scroll.clone(),
-                        )
-                        .render(theme),
-                    )
-                    .into_any_element()
-            }
-            StatusSection::Untracked => {
-                let list = uniform_list(
-                    "untracked",
-                    count,
-                    cx.processor(Self::render_untracked_rows),
-                )
-                .h_full()
-                .min_h(px(0.0))
-                .track_scroll(&self.untracked_scroll);
-                let list = restrict_scroll_to_vertical_axis(list);
-                let list = div()
-                    .flex_1()
-                    .h_full()
-                    .min_h(px(0.0))
-                    .pr(components::Scrollbar::visible_gutter(
-                        self.untracked_scroll.clone(),
-                        components::ScrollbarAxis::Vertical,
-                    ))
-                    .child(list);
-                div()
-                    .id("untracked_scroll_container")
-                    .relative()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .h_full()
-                    .min_h(px(0.0))
-                    .overflow_hidden()
-                    .child(list)
-                    .child(
-                        components::Scrollbar::new(
-                            "untracked_scrollbar",
-                            self.untracked_scroll.clone(),
-                        )
-                        .render(theme),
-                    )
-                    .into_any_element()
-            }
-            StatusSection::Unstaged => {
-                let list = uniform_list(
-                    "split_unstaged",
-                    count,
-                    cx.processor(Self::render_split_unstaged_rows),
-                )
-                .h_full()
-                .min_h(px(0.0))
-                .track_scroll(&self.unstaged_scroll);
-                let list = restrict_scroll_to_vertical_axis(list);
-                let list = div()
-                    .flex_1()
-                    .h_full()
-                    .min_h(px(0.0))
-                    .pr(components::Scrollbar::visible_gutter(
-                        self.unstaged_scroll.clone(),
-                        components::ScrollbarAxis::Vertical,
-                    ))
-                    .child(list);
-                div()
-                    .id("split_unstaged_scroll_container")
-                    .relative()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .h_full()
-                    .min_h(px(0.0))
-                    .overflow_hidden()
-                    .child(list)
-                    .child(
-                        components::Scrollbar::new(
-                            "split_unstaged_scrollbar",
-                            self.unstaged_scroll.clone(),
-                        )
-                        .render(theme),
-                    )
-                    .into_any_element()
-            }
-            StatusSection::Staged => {
-                let list = uniform_list("staged", count, cx.processor(Self::render_staged_rows))
-                    .h_full()
-                    .min_h(px(0.0))
-                    .track_scroll(&self.staged_scroll);
-                let list = restrict_scroll_to_vertical_axis(list);
-                let list = div()
-                    .flex_1()
-                    .h_full()
-                    .min_h(px(0.0))
-                    .pr(components::Scrollbar::visible_gutter(
-                        self.staged_scroll.clone(),
-                        components::ScrollbarAxis::Vertical,
-                    ))
-                    .child(list);
-                div()
-                    .id("staged_scroll_container")
-                    .relative()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .h_full()
-                    .min_h(px(0.0))
-                    .overflow_hidden()
-                    .child(list)
-                    .child(
-                        components::Scrollbar::new("staged_scrollbar", self.staged_scroll.clone())
-                            .render(theme),
-                    )
-                    .into_any_element()
-            }
-        }
+        let Some(repo_id) = self.active_repo_id() else {
+            return div().into_any_element();
+        };
+        let (container, scrollbar, scroll) = match section {
+            StatusSection::CombinedUnstaged => (
+                "unstaged_scroll_container",
+                "unstaged_scrollbar",
+                &self.unstaged_scroll,
+            ),
+            StatusSection::Untracked => (
+                "untracked_scroll_container",
+                "untracked_scrollbar",
+                &self.untracked_scroll,
+            ),
+            StatusSection::Unstaged => (
+                "split_unstaged_scroll_container",
+                "split_unstaged_scrollbar",
+                &self.unstaged_scroll,
+            ),
+            StatusSection::Staged => (
+                "staged_scroll_container",
+                "staged_scrollbar",
+                &self.staged_scroll,
+            ),
+        };
+        let list = self.changed_file_list(
+            repo_id,
+            crate::view::rows::FileListId::Status(section),
+            count,
+            cx,
+        );
+        Self::vertical_scroll_frame_content(theme, container, scrollbar, scroll, list)
+            .into_any_element()
     }
 }

@@ -104,7 +104,7 @@ fn time_label(this: &PopoverHost, notice: &ErrorNotice) -> String {
 }
 
 /// The errors the toast host holds, newest first.
-fn notices(this: &PopoverHost, cx: &App) -> Vec<(u64, Arc<ErrorNotice>)> {
+fn notices(this: &PopoverHost, cx: &App) -> Vec<(u64, std::rc::Rc<ErrorNotice>)> {
     this.root_view
         .upgrade()
         .map(|root| root.read(cx).toast_host.read(cx).error_notices())
@@ -123,7 +123,7 @@ pub(super) fn select(this: &mut PopoverHost, toast_id: u64, cx: &mut gpui::Conte
 
 fn rail(
     this: &mut PopoverHost,
-    notices: &[(u64, Arc<ErrorNotice>)],
+    notices: &[(u64, std::rc::Rc<ErrorNotice>)],
     width: Pixels,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> AnyElement {
@@ -446,6 +446,10 @@ fn run_action(
     cx: &mut gpui::Context<PopoverHost>,
 ) {
     match action {
+        ErrorAction::Hosted(action) => {
+            this.close_popover_and_restore_focus(window, cx);
+            action.invoke(cx);
+        }
         ErrorAction::SaveEditorAs { format, .. } => {
             let saved = this
                 .main_pane

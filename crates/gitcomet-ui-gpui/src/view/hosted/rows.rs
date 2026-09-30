@@ -1,8 +1,8 @@
 //! A hosted diff pane's rows: file lines with their numbers on each side,
 //! built from a session's file text (preferred) or its patch.
 
-use gitcomet_core::domain::{Diff, DiffLineKind, FileDiffText};
-use gitcomet_core::file_diff::{FileDiffRowKind, side_by_side_rows};
+use gitcomet_core::domain::{Diff, DiffLineKind};
+use gitcomet_core::file_diff::{FileDiffRow, FileDiffRowKind};
 use gitcomet_extension_api::DiffLineSide;
 use gpui::SharedString;
 
@@ -48,24 +48,15 @@ impl PaneRow {
     }
 }
 
-/// Reads a side of a session's file text: inline, or the decoded copy the
-/// backend wrote.
-pub(crate) fn side_text(text: &FileDiffText, side: DiffLineSide) -> Option<String> {
-    let (inline, source) = match side {
-        DiffLineSide::Old => (&text.old, &text.old_source),
-        DiffLineSide::New => (&text.new, &text.new_source),
-    };
-    if let Some(inline) = inline {
-        return Some(inline.to_string());
-    }
-    let source = source.as_ref()?;
-    std::fs::read_to_string(&source.path).ok()
+/// Every line of both sides, a change's removals before its additions.
+#[cfg(test)]
+pub(crate) fn rows_from_file_text(old: &str, new: &str) -> Vec<PaneRow> {
+    rows_from_file_rows(gitcomet_core::file_diff::side_by_side_rows(old, new))
 }
 
-/// Every line of both sides, a change's removals before its additions.
-pub(crate) fn rows_from_file_text(old: &str, new: &str) -> Vec<PaneRow> {
+pub(crate) fn rows_from_file_rows(source: impl IntoIterator<Item = FileDiffRow>) -> Vec<PaneRow> {
     let mut rows = Vec::new();
-    for row in side_by_side_rows(old, new) {
+    for row in source {
         let old_text = row
             .old
             .as_ref()

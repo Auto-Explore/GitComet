@@ -278,6 +278,7 @@ impl HistoryView {
                         base_row_vm.is_head,
                         is_stash_node,
                         this.active_context_menu_invoker.as_ref(),
+                        this.history_row_annotation(repo, commit, cx),
                         cx,
                     ))
                 })()
@@ -501,6 +502,7 @@ fn history_table_row(
     is_head: bool,
     is_stash_node: bool,
     active_context_menu_invoker: Option<&SharedString>,
+    annotation: gitcomet_extension_api::HistoryRowAnnotation,
     cx: &mut gpui::Context<HistoryView>,
 ) -> AnyElement {
     // Compared without formatting: this ran once per visible commit per frame
@@ -556,6 +558,7 @@ fn history_table_row(
         short_sha,
         active_context_menu_invoker.cloned(),
         row_paint.clone(),
+        annotation.clone(),
     );
 
     let commit_id = commit.id.clone();
@@ -567,6 +570,7 @@ fn history_table_row(
         .h(row_height)
         .w_full()
         .map(|row| row_paint.apply(row))
+        .opacity(annotation.opacity)
         .child(commit_row)
         // A completed click owns its press; a text-selection drag ending on
         // the row must not select the commit.

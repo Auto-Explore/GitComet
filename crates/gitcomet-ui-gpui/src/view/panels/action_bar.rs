@@ -234,6 +234,10 @@ fn push_tooltip_text(push_count: usize, tracking_branch_name: Option<&str>) -> S
 }
 
 pub(in super::super) struct ActionBarView {
+    extension_navigation: Option<(
+        gitcomet_extension_api::RepositoryViewContext,
+        Option<gitcomet_extension_api::ViewNavigation>,
+    )>,
     store: Arc<AppStore>,
     state: Arc<AppState>,
     theme: AppTheme,
@@ -294,6 +298,7 @@ impl ActionBarView {
         });
 
         Self {
+            extension_navigation: None,
             store,
             state,
             theme,
@@ -309,6 +314,44 @@ impl ActionBarView {
     pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
         cx.notify();
+    }
+
+    pub(in crate::view) fn set_extension_navigation(
+        &mut self,
+        navigation: Option<(
+            gitcomet_extension_api::RepositoryViewContext,
+            Option<gitcomet_extension_api::ViewNavigation>,
+        )>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.extension_navigation.is_none() && navigation.is_none() {
+            return;
+        }
+        self.extension_navigation = navigation;
+        cx.notify();
+    }
+
+    fn extension_navigate(&self, forward: bool, cx: &mut gpui::Context<Self>) -> bool {
+        let Some((context, navigation)) = &self.extension_navigation else {
+            return false;
+        };
+        if let Some(navigation) = navigation {
+            let can = if forward {
+                &navigation.can_forward
+            } else {
+                &navigation.can_back
+            };
+            if can(context, cx) {
+                let run = if forward {
+                    navigation.forward.clone()
+                } else {
+                    navigation.back.clone()
+                };
+                let context = context.clone();
+                cx.defer(move |cx| run(context, cx));
+            }
+        }
+        true
     }
 
     pub(in super::super) fn set_active_context_menu_invoker(
@@ -559,6 +602,17 @@ impl Render for ActionBarView {
                 )
             })
             .unwrap_or((false, false));
+        let (nav_can_back, nav_can_forward) = self.extension_navigation.as_ref().map_or(
+            (nav_can_back, nav_can_forward),
+            |(context, navigation)| {
+                navigation.as_ref().map_or((false, false), |navigation| {
+                    (
+                        (navigation.can_back)(context, cx),
+                        (navigation.can_forward)(context, cx),
+                    )
+                })
+            },
+        );
         let nav_back = components::Button::new("global_nav_back", "")
             .start_slot(icon(
                 "icons/arrow_left.svg",
@@ -570,7 +624,10 @@ impl Render for ActionBarView {
             ))
             .style(components::ButtonStyle::Transparent)
             .disabled(!nav_can_back)
-            .on_click(theme, cx, |this, _e, _w, _cx| {
+            .on_click(theme, cx, |this, _e, _w, cx| {
+                if this.extension_navigate(false, cx) {
+                    return;
+                }
                 if let Some(repo_id) = this.active_repo_id() {
                     this.store.dispatch(Msg::GlobalNavBack { repo_id });
                 }
@@ -594,7 +651,10 @@ impl Render for ActionBarView {
             ))
             .style(components::ButtonStyle::Transparent)
             .disabled(!nav_can_forward)
-            .on_click(theme, cx, |this, _e, _w, _cx| {
+            .on_click(theme, cx, |this, _e, _w, cx| {
+                if this.extension_navigate(true, cx) {
+                    return;
+                }
                 if let Some(repo_id) = this.active_repo_id() {
                     this.store.dispatch(Msg::GlobalNavForward { repo_id });
                 }

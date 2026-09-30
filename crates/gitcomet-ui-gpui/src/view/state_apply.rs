@@ -549,6 +549,9 @@ impl GitCometView {
             extension_window.set_state(&self.state, cx);
         }
         self.retain_open_repository_views();
+        if self.repository_views.is_some() {
+            self.sync_extension_navigation(cx);
+        }
         if repos_closed {
             // A closed repo's errors name what no longer exists.
             let repos = Arc::clone(&self.state);

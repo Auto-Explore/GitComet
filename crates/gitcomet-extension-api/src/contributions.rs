@@ -32,6 +32,32 @@ pub struct RepositoryViewDescriptor {
     pub title: SharedString,
     pub icon: SharedString,
     pub build: ViewBuilder<RepositoryViewContext>,
+    /// Navigation belongs to the selected view, including mouse side buttons.
+    pub navigation: Option<ViewNavigation>,
+}
+
+pub type NavigationAvailability = Rc<dyn Fn(&RepositoryViewContext, &App) -> bool>;
+pub type Navigate = Rc<dyn Fn(RepositoryViewContext, &mut App)>;
+
+#[derive(Clone)]
+pub struct ViewNavigation {
+    pub can_back: NavigationAvailability,
+    pub can_forward: NavigationAvailability,
+    pub back: Navigate,
+    pub forward: Navigate,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ViewTarget {
+    History,
+    Extension(crate::ContributionId),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SettingsTarget {
+    /// A built-in page's stable name, such as `general`, `diff`, or `git-log`.
+    Builtin(SharedString),
+    Extension(crate::ContributionId),
 }
 
 /// A panel in the repository's bottom area beside the terminal and reflog,
@@ -63,6 +89,8 @@ pub struct SidebarSectionDescriptor {
 /// An item in the window's status bar, built once per window.
 #[derive(Clone)]
 pub struct StatusItemDescriptor {
+    /// Restricts the item to a repository view; `None` shows it in every view.
+    pub view: Option<ViewTarget>,
     pub build: ViewBuilder<WindowHost>,
 }
 
@@ -164,3 +192,20 @@ pub enum CloseDecision {
 /// Runs before a close, after the host's own unsaved-edit, terminal, and Git
 /// operation guards.
 pub type CloseGuard = Rc<dyn Fn(&CloseRequest, &App) -> CloseDecision>;
+
+/// A full-window gate. Bump `signal` and notify `Slot::Gate` when its condition changes.
+/// Gates are tested in registration order; only the first active gate is built.
+pub type WindowGatePredicate = Rc<dyn Fn(&WindowHost, &App) -> bool>;
+
+#[derive(Clone)]
+pub struct WindowGateDescriptor {
+    pub signal: crate::SlotSignal,
+    pub active: WindowGatePredicate,
+    pub build: ViewBuilder<WindowHost>,
+}
+
+/// Replaces one of the host's static chrome slots for the life of a window.
+#[derive(Clone)]
+pub struct ChromeDescriptor {
+    pub build: ViewBuilder<WindowHost>,
+}

@@ -84,7 +84,9 @@ pub(in super::super) struct BottomStatusBarView {
     pro_launch_label: SharedString,
     /// Extension status items in registration order, built once the window
     /// has opened. Empty without extensions.
-    extension_items: Vec<gpui::AnyView>,
+    extension_items: Vec<(Option<gitcomet_extension_api::ViewTarget>, gpui::AnyView)>,
+    active_view: gitcomet_extension_api::ViewTarget,
+    edition_strip: Option<gpui::AnyView>,
 }
 
 impl BottomStatusBarView {
@@ -114,6 +116,8 @@ impl BottomStatusBarView {
             // Use local calendar days and keep the startup label for this window.
             pro_launch_label: pro_launch_label(jiff::Zoned::now().date()),
             extension_items: Vec::new(),
+            active_view: gitcomet_extension_api::ViewTarget::History,
+            edition_strip: None,
         }
     }
 
@@ -124,10 +128,30 @@ impl BottomStatusBarView {
 
     pub(in super::super) fn set_extension_items(
         &mut self,
-        items: Vec<gpui::AnyView>,
+        items: Vec<(Option<gitcomet_extension_api::ViewTarget>, gpui::AnyView)>,
         cx: &mut gpui::Context<Self>,
     ) {
         self.extension_items = items;
+        cx.notify();
+    }
+
+    pub(in crate::view) fn set_active_view(
+        &mut self,
+        view: gitcomet_extension_api::ViewTarget,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.active_view != view {
+            self.active_view = view;
+            cx.notify();
+        }
+    }
+
+    pub(in crate::view) fn set_edition_strip(
+        &mut self,
+        view: Option<gpui::AnyView>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.edition_strip = view;
         cx.notify();
     }
 
@@ -523,23 +547,41 @@ impl Render for BottomStatusBarView {
                     .gap(scaled_px(2.0))
                     // Extension indicators sit with the host's own status
                     // controls, never between the branding chips.
-                    .children(self.extension_items.iter().cloned())
+                    .children(
+                        self.extension_items
+                            .iter()
+                            .filter(|(view, _)| {
+                                view.as_ref().is_none_or(|view| view == &self.active_view)
+                            })
+                            .map(|(_, view)| view.clone()),
+                    )
                     .child(details_toggle)
                     .child(hook_activity_button)
-                    .child(
-                        // Branding chips want more air between them than the
-                        // toggles, which read as one control group.
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(scaled_px(6.0))
-                            .pl(scaled_px(6.0))
-                            .children(discord_badge)
-                            .children(free_badge)
-                            .children(pro_link)
-                            .child(brand)
-                            .child(version_link),
-                    ),
+                    .children(self.edition_strip.clone())
+                    .when(self.edition_strip.is_none(), |row| {
+                        row.child(
+                            // Branding chips want more air between them than the
+                            // toggles, which read as one control group.
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(scaled_px(6.0))
+                                .pl(scaled_px(6.0))
+                                .children(discord_badge)
+                                .children(free_badge)
+                                .children(pro_link)
+                                .child(brand)
+                                .child(version_link)
+                                .when(cfg!(debug_assertions), |row| {
+                                    row.child(
+                                        div()
+                                            .id("build_dev_badge")
+                                            .text_size(theme.ui_text(10.0))
+                                            .child("DEV"),
+                                    )
+                                }),
+                        )
+                    }),
             )
     }
 }

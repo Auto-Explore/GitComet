@@ -334,7 +334,7 @@ const DENIED_URL_SCHEMES: [&str; 4] = ["javascript", "data", "vbscript", "file"]
 /// Anything with a hierarchical `scheme://` part qualifies (`ssh://`, `git://`,
 /// `vscode://`, …) plus the flat `mailto:`. Requiring `://` is what keeps the
 /// script schemes out structurally — they are written `javascript:…`, never with
-/// an authority — and [`DENIED_URL_SCHEMES`] covers the rest.
+/// an authority — and `DENIED_URL_SCHEMES` covers the rest.
 pub fn is_supported_link_url(url: &str) -> bool {
     let Some((scheme, rest)) = url.split_once(':') else {
         return false;

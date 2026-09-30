@@ -9,7 +9,9 @@ use rustc_hash::FxHasher;
 mod file_diff;
 mod image_cache;
 mod patch_diff;
+mod shared_file;
 mod word_highlight;
+pub(in crate::view) use shared_file::SharedFileDiffCache;
 
 #[cfg(any(test, feature = "benchmarks"))]
 #[allow(unused_imports)]
@@ -424,10 +426,21 @@ impl MainPaneView {
         let seq = self.file_diff_cache_seq;
         self.file_diff_cache_inflight = Some(seq);
         let whitespace_mode = self.diff_whitespace_mode;
+        let shared_file = self
+            .hosted_decor
+            .as_ref()
+            .and_then(|decor| decor.file_cache.clone())
+            .filter(|cache| {
+                whitespace_mode == DiffWhitespaceMode::Show
+                    && cache.matches(&file, patch_diff.as_ref(), &workdir)
+            });
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
                 let rebuild_cache = move || {
+                    if let Some(cache) = shared_file {
+                        return cache.build().cloned().map_err(Clone::clone);
+                    }
                     build_file_diff_cache_rebuild_with_patch(
                         file.as_ref(),
                         &workdir,

@@ -47,6 +47,13 @@ impl DiffLineRange {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct DiffPanePolicy {
+    pub close_button: bool,
+    pub escape_clears_target: bool,
+    pub allow_edit: bool,
+    pub allow_stage: bool,
+    pub allow_annotate: bool,
+    pub file_navigation: bool,
+    pub line_action: bool,
     pub select_lines: bool,
     pub search: bool,
     pub line_numbers: bool,
@@ -57,6 +64,13 @@ pub struct DiffPanePolicy {
 impl Default for DiffPanePolicy {
     fn default() -> Self {
         Self {
+            close_button: true,
+            escape_clears_target: true,
+            allow_edit: true,
+            allow_stage: true,
+            allow_annotate: true,
+            file_navigation: true,
+            line_action: true,
             select_lines: true,
             search: true,
             line_numbers: true,
@@ -69,6 +83,13 @@ impl DiffPanePolicy {
     /// A pane that only shows the diff.
     pub fn read_only() -> Self {
         Self {
+            close_button: false,
+            escape_clears_target: false,
+            allow_edit: false,
+            allow_stage: false,
+            allow_annotate: false,
+            file_navigation: false,
+            line_action: false,
             select_lines: false,
             search: false,
             ..Self::default()
@@ -259,14 +280,50 @@ impl DiffInset {
     }
 }
 
+/// The presentation of the two sides; changing it preserves file-line anchors.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DiffLayout {
+    #[default]
+    Inline,
+    Split,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiffScrollAnchor {
+    pub side: DiffLineSide,
+    pub line: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DiffPaneEvent {
+    SelectionChanged(Option<DiffLineRange>),
+    TargetChanged(Option<DiffTarget>),
+    Loaded,
+    Error(SharedString),
+}
+
+pub type DiffPaneEventHandler = Rc<dyn Fn(DiffPaneEvent, &mut App)>;
+
 /// Build with `..DiffPaneOptions::default()`; fields are added over time.
 #[derive(Clone, Default)]
 pub struct DiffPaneOptions {
+    pub file_navigation: DiffFileNavigation,
+    pub layout: DiffLayout,
+    /// Optional explicit width in logical pixels; otherwise follows its bounds.
+    pub content_width: Option<f32>,
+    pub on_event: Option<DiffPaneEventHandler>,
     pub policy: DiffPanePolicy,
     pub style: DiffRowStyle,
     pub decor: Option<DiffRowDecorProvider>,
     pub on_gutter_click: Option<DiffGutterAction>,
     pub selection_actions: Vec<DiffSelectionAction>,
+}
+
+/// File navigation belongs to the pane's owner and its ordered file list.
+#[derive(Clone, Default)]
+pub struct DiffFileNavigation {
+    pub previous: Option<crate::HostedAction>,
+    pub next: Option<crate::HostedAction>,
 }
 
 /// Two texts compared without a repository, such as the files a difftool
@@ -277,9 +334,19 @@ pub struct DiffSnapshot {
     pub path: PathBuf,
     pub old: Arc<str>,
     pub new: Arc<str>,
+    pub patch: Option<Arc<gitcomet_core::domain::Diff>>,
 }
 
 impl DiffSnapshot {
+    pub fn from_patch(path: impl Into<PathBuf>, patch: gitcomet_core::domain::Diff) -> Self {
+        Self {
+            path: path.into(),
+            old: Arc::from(""),
+            new: Arc::from(""),
+            patch: Some(Arc::new(patch)),
+        }
+    }
+
     pub fn new(
         path: impl Into<PathBuf>,
         old: impl Into<Arc<str>>,
@@ -289,6 +356,7 @@ impl DiffSnapshot {
             path: path.into(),
             old: old.into(),
             new: new.into(),
+            patch: None,
         }
     }
 }
@@ -320,6 +388,14 @@ pub trait DiffPaneImpl {
     fn set_insets(&self, insets: Vec<DiffInset>, cx: &mut App);
     /// The selected file lines' text, one line each; insets never included.
     fn selected_text(&self, cx: &App) -> Option<String>;
+    /// Original file bytes for the selected whole lines, including line endings.
+    fn selected_bytes(&self, cx: &App) -> Option<Arc<[u8]>>;
+    fn set_policy(&self, policy: DiffPanePolicy, cx: &mut App);
+    fn set_layout(&self, layout: DiffLayout, cx: &mut App);
+    fn set_content_width(&self, width: Option<f32>, cx: &mut App);
+    fn scroll_anchor(&self, cx: &App) -> Option<DiffScrollAnchor>;
+    fn restore_scroll_anchor(&self, anchor: DiffScrollAnchor, cx: &mut App);
+    fn set_file_navigation(&self, navigation: DiffFileNavigation, cx: &mut App);
 }
 
 /// An owning handle to a hosted diff pane. Mount [`DiffPane::view`] in a view
@@ -387,6 +463,27 @@ impl DiffPane {
     pub fn selected_text(&self, cx: &App) -> Option<String> {
         self.0.selected_text(cx)
     }
+    pub fn selected_bytes(&self, cx: &App) -> Option<Arc<[u8]>> {
+        self.0.selected_bytes(cx)
+    }
+    pub fn set_policy(&self, policy: DiffPanePolicy, cx: &mut App) {
+        self.0.set_policy(policy, cx);
+    }
+    pub fn set_layout(&self, layout: DiffLayout, cx: &mut App) {
+        self.0.set_layout(layout, cx);
+    }
+    pub fn set_content_width(&self, width: Option<f32>, cx: &mut App) {
+        self.0.set_content_width(width, cx);
+    }
+    pub fn scroll_anchor(&self, cx: &App) -> Option<DiffScrollAnchor> {
+        self.0.scroll_anchor(cx)
+    }
+    pub fn restore_scroll_anchor(&self, anchor: DiffScrollAnchor, cx: &mut App) {
+        self.0.restore_scroll_anchor(anchor, cx);
+    }
+    pub fn set_file_navigation(&self, navigation: DiffFileNavigation, cx: &mut App) {
+        self.0.set_file_navigation(navigation, cx);
+    }
 }
 
 /// How a file list arranges its files.
@@ -411,6 +508,10 @@ pub trait FileListImpl {
     fn view(&self) -> AnyView;
     fn set_source(&self, source: ChangeSource, cx: &mut App);
     fn set_mode(&self, mode: FileListMode, cx: &mut App);
+    fn set_sort(&self, sort: crate::FileListSort, cx: &mut App);
+    fn set_kind_filter(&self, filter: crate::FileListFilter, cx: &mut App);
+    fn set_marks(&self, marks: crate::FileListMarks, cx: &mut App);
+    fn set_filter_chips(&self, chips: Vec<crate::FileListFilterChip>, cx: &mut App);
     /// Shows only files whose path contains `query` (case-insensitive).
     fn set_filter(&self, query: SharedString, cx: &mut App);
     /// The files as shown: sorted, filtered.
@@ -427,6 +528,22 @@ pub trait FileListImpl {
 pub struct FileList(Rc<dyn FileListImpl>);
 
 impl FileList {
+    pub fn set_sort(&self, sort: crate::FileListSort, cx: &mut App) {
+        self.0.set_sort(sort, cx)
+    }
+    pub fn set_kind_filter(&self, filter: crate::FileListFilter, cx: &mut App) {
+        self.0.set_kind_filter(filter, cx)
+    }
+    pub fn set_marks(&self, marks: crate::FileListMarks, cx: &mut App) {
+        self.0.set_marks(marks, cx)
+    }
+    pub fn set_filter_chips(&self, chips: Vec<crate::FileListFilterChip>, cx: &mut App) {
+        self.0.set_filter_chips(chips, cx)
+    }
+    /// Paths in navigation order, including files inside collapsed directories.
+    pub fn ordered_paths(&self, cx: &App) -> Vec<PathBuf> {
+        self.0.files(cx).into_iter().map(|file| file.path).collect()
+    }
     pub fn new(list: Rc<dyn FileListImpl>) -> Self {
         Self(list)
     }

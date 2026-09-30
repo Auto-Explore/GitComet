@@ -253,7 +253,7 @@ impl ToastHost {
         if let Some(ix) = existing {
             let mut toast = self.toasts.remove(ix);
             if let ToastBody::Error(notice) = &mut toast.body {
-                Arc::make_mut(notice).repeat(report);
+                std::rc::Rc::make_mut(notice).repeat(report);
             }
             self.toasts.push(toast);
             cx.notify();
@@ -263,7 +263,7 @@ impl ToastHost {
         self.toasts.push(ToastState {
             id,
             kind: components::ToastKind::Error,
-            body: ToastBody::Error(Arc::new(ErrorNotice::new(report))),
+            body: ToastBody::Error(std::rc::Rc::new(ErrorNotice::new(report))),
             actions: Vec::new(),
             dismiss_behavior: ToastDismissBehavior::Remove,
             ttl: None,
@@ -272,12 +272,12 @@ impl ToastHost {
     }
 
     /// Errors on screen, newest first.
-    pub(super) fn error_notices(&self) -> Vec<(u64, Arc<ErrorNotice>)> {
+    pub(super) fn error_notices(&self) -> Vec<(u64, std::rc::Rc<ErrorNotice>)> {
         self.toasts
             .iter()
             .rev()
             .filter_map(|toast| match &toast.body {
-                ToastBody::Error(notice) => Some((toast.id, Arc::clone(notice))),
+                ToastBody::Error(notice) => Some((toast.id, std::rc::Rc::clone(notice))),
                 ToastBody::Text { .. } => None,
             })
             .collect()
@@ -441,6 +441,23 @@ impl ToastHost {
         );
     }
 
+    pub(in crate::view) fn push_hosted_toast(
+        &mut self,
+        kind: components::ToastKind,
+        message: String,
+        actions: Vec<gitcomet_extension_api::HostedAction>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.push_toast_inner(
+            kind,
+            message,
+            actions.into_iter().map(ToastAction::Hosted).collect(),
+            ToastDismissBehavior::Remove,
+            toast_ttl(kind),
+            cx,
+        );
+    }
+
     fn push_toast_inner(
         &mut self,
         kind: components::ToastKind,
@@ -575,6 +592,10 @@ impl ToastHost {
         cx: &mut gpui::Context<Self>,
     ) {
         match action {
+            ToastAction::Hosted(action) => {
+                self.remove_toast(id, cx);
+                action.invoke(cx);
+            }
             ToastAction::OpenUrl { url, .. } => {
                 // Keep the toast until the open succeeds: it carries the URL and
                 // its button, so dismissing it up front would leave a user whose
@@ -1300,6 +1321,7 @@ impl Render for ToastHost {
                         .gap_2()
                         .children(t.actions.iter().enumerate().map(|(ix, action)| {
                             let label = match action {
+                                ToastAction::Hosted(action) => action.label().to_string(),
                                 ToastAction::OpenUrl { label, .. }
                                 | ToastAction::OpenSurvey { label, .. }
                                 | ToastAction::PostponeSurvey { label, .. }
@@ -1309,7 +1331,8 @@ impl Render for ToastHost {
                                 ToastAction::PostponeSurvey { .. } => {
                                     components::ButtonStyle::Transparent
                                 }
-                                ToastAction::OpenUrl { .. }
+                                ToastAction::Hosted(_)
+                                | ToastAction::OpenUrl { .. }
                                 | ToastAction::OpenSurvey { .. }
                                 | ToastAction::OpenHookActivity { .. } => {
                                     components::ButtonStyle::Outlined

@@ -1,6 +1,6 @@
 use gitcomet_ui_gpui::{BrowserOpenRequest, BrowserOpenTarget};
+use gitcomet_ui_gpui::{BrowserRequestReceiver, BrowserRequestSender, browser_request_channel};
 use serde::{Deserialize, Serialize};
-use smol::channel::{Receiver, Sender};
 use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream};
@@ -29,11 +29,11 @@ struct InstanceDescriptor {
     pid: u32,
     /// App id of the product that owns the broker. Descriptors written before
     /// the field existed belong to GitComet.
-    #[serde(default = "gitcomet_product")]
+    #[serde(default = "upstream_product_id")]
     product: String,
 }
 
-fn gitcomet_product() -> String {
+fn upstream_product_id() -> String {
     gitcomet_core::identity::ProductIdentity::gitcomet()
         .app_id()
         .to_string()
@@ -129,7 +129,7 @@ impl WirePath {
 struct WireRequest {
     version: u32,
     token: String,
-    #[serde(default = "gitcomet_product")]
+    #[serde(default = "upstream_product_id")]
     product: String,
     path: Option<WirePath>,
     target: WireTarget,
@@ -141,12 +141,12 @@ pub(crate) enum StartResult {
 }
 
 pub(crate) struct PrimaryBrowserInstance {
-    requests: Option<Receiver<BrowserOpenRequest>>,
+    requests: Option<BrowserRequestReceiver>,
     _server: BrowserInstanceServer,
 }
 
 impl PrimaryBrowserInstance {
-    pub(crate) fn take_requests(&mut self) -> Option<Receiver<BrowserOpenRequest>> {
+    pub(crate) fn take_requests(&mut self) -> Option<BrowserRequestReceiver> {
         self.requests.take()
     }
 }
@@ -312,7 +312,7 @@ fn start_primary(
     };
     write_descriptor(descriptor_path, &descriptor)?;
 
-    let (requests_tx, requests_rx) = smol::channel::unbounded();
+    let (requests_tx, requests_rx) = browser_request_channel();
     let stop = Arc::new(AtomicBool::new(false));
     let server_stop = Arc::clone(&stop);
     let server_descriptor = descriptor.clone();
@@ -335,7 +335,7 @@ fn start_primary(
 fn server_loop(
     listener: TcpListener,
     descriptor: InstanceDescriptor,
-    requests: Sender<BrowserOpenRequest>,
+    requests: BrowserRequestSender,
     stop: Arc<AtomicBool>,
 ) {
     while !stop.load(Ordering::Acquire) {
@@ -365,7 +365,7 @@ fn accept_error_is_retryable(_error: &io::Error) -> bool {
 fn handle_connection(
     mut stream: TcpStream,
     descriptor: &InstanceDescriptor,
-    requests: &Sender<BrowserOpenRequest>,
+    requests: &BrowserRequestSender,
 ) -> io::Result<()> {
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
@@ -721,7 +721,7 @@ mod tests {
 
     #[test]
     fn a_descriptor_of_another_product_is_never_forwarded_to() {
-        let (requests, _receiver) = smol::channel::unbounded();
+        let (requests, _receiver) = browser_request_channel();
         let listener =
             TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).expect("bind listener");
         let port = listener.local_addr().expect("address").port();
@@ -762,7 +762,7 @@ mod tests {
     fn descriptors_without_a_product_belong_to_gitcomet() {
         let descriptor: InstanceDescriptor =
             serde_json::from_str(r#"{"version":1,"port":1,"token":"t","pid":1}"#).unwrap();
-        assert_eq!(descriptor.product, gitcomet_product());
+        assert_eq!(descriptor.product, upstream_product_id());
     }
 
     #[test]
@@ -990,7 +990,7 @@ mod tests {
         let (stream, _address) = listener.accept().expect("accept");
         // Read timeouts must also work if a caller supplies a non-blocking socket.
         stream.set_nonblocking(true).expect("non-blocking stream");
-        let (requests_tx, requests_rx) = smol::channel::unbounded();
+        let (requests_tx, requests_rx) = browser_request_channel();
         handle_connection(stream, &descriptor, &requests_tx).expect("serve split request");
 
         assert_eq!(client.join().expect("join client"), "ok\n");

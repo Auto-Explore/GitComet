@@ -12,6 +12,7 @@ use smallvec::SmallVec;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
+mod annotations;
 mod history_panel;
 mod indexed;
 pub(in crate::view) mod indexed_graph;
@@ -1054,7 +1055,7 @@ fn decide_pending_history_reveal(
 }
 
 pub(in super::super) struct HistoryView {
-    pub(in super::super) store: Arc<AppStore>,
+    pub(in super::super) store: crate::view::pane_store::PaneStore,
     state: Arc<AppState>,
     pub(in super::super) theme: AppTheme,
     pub(in super::super) ui_scale_percent: u32,
@@ -1117,6 +1118,10 @@ pub(in super::super) struct HistoryView {
     pub(in super::super) history_stash_ids_cache: Option<HistoryStashIdsCache>,
     pub(in super::super) history_scroll: UniformListScrollHandle,
     pub(in super::super) history_panel_focus_handle: FocusHandle,
+    pub(in crate::view) history_annotations: Option<annotations::HistoryAnnotations>,
+    pub(in crate::view) history_find: Option<SharedString>,
+    pub(in crate::view) history_find_input: Option<Entity<components::TextInput>>,
+    _history_find_subscription: Option<gpui::Subscription>,
     /// Minute tick that re-renders the table while the relative date format is
     /// active, so "2 mins ago" labels don't freeze. `None` for absolute formats.
     relative_time_tick: Option<gpui::Task<()>>,
@@ -1369,8 +1374,15 @@ impl HistoryView {
         let scale = ui_scale::UiScale::from_percent(ui_scale_percent);
         let default_widths = scaled_history_column_widths(default_design_widths, scale);
 
+        let history_annotations = super::super::extension_host::registry(cx)
+            .filter(|registry| !registry.history_annotators().is_empty())
+            .map(|registry| annotations::HistoryAnnotations::new(registry.history_annotators()));
         Self {
-            store,
+            history_annotations,
+            history_find: None,
+            history_find_input: None,
+            _history_find_subscription: None,
+            store: store.into(),
             state,
             theme,
             ui_scale_percent,

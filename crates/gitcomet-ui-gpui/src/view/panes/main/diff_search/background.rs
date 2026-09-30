@@ -601,7 +601,7 @@ impl MainPaneView {
             tab_width: self.display_tab_width,
             repo: self
                 .active_repo()
-                .map(|repo| (repo.id, repo.diff_state.diff_target_rev)),
+                .map(|repo| (repo.id, self.bound_diff_state(repo).diff_target_rev)),
             patch: (self.diff_cache_repo_id, self.diff_cache_rev),
             file: (
                 self.file_diff_cache_repo_id,

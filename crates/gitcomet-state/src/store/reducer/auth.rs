@@ -121,12 +121,14 @@ fn retry_msg_for_auth_operation(operation: AuthRetryOperation) -> Option<Msg> {
 
 fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Option<Msg> {
     Some(match command {
-        RepoCommandKind::FetchAll => Msg::FetchAll { repo_id },
-        RepoCommandKind::FetchRefspecs { remote, refspecs } => Msg::FetchRefspecs {
-            repo_id,
-            remote,
-            refspecs,
-        },
+        RepoCommandKind::FetchAll => Msg::Fetch(crate::msg::FetchMsg::All { repo_id }),
+        RepoCommandKind::FetchRefspecs { remote, refspecs } => {
+            Msg::Fetch(crate::msg::FetchMsg::Refspecs {
+                repo_id,
+                remote,
+                refspecs,
+            })
+        }
         RepoCommandKind::PruneMergedBranches => Msg::PruneMergedBranches { repo_id },
         RepoCommandKind::PruneLocalTags => Msg::PruneLocalTags { repo_id },
         RepoCommandKind::Pull { mode } => Msg::Pull { repo_id, mode },

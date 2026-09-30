@@ -100,9 +100,9 @@ pub(super) fn reload_repo(
     repo_state.set_merge_commit_message(Loadable::Loading);
     repo_state.history_state.file_history_path = None;
     repo_state.history_state.file_history = Loadable::NotLoaded;
-    repo_state.history_state.blame_path = None;
-    repo_state.history_state.blame_source = None;
-    repo_state.history_state.blame = Loadable::NotLoaded;
+    repo_state.diff_state.blame_path = None;
+    repo_state.diff_state.blame_source = None;
+    repo_state.diff_state.blame = Loadable::NotLoaded;
     repo_state.clear_retained_blame();
     repo_state.set_worktrees(Loadable::NotLoaded);
     repo_state.set_submodules(Loadable::NotLoaded);

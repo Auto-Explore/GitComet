@@ -12,12 +12,15 @@ use gitcomet_extension_api::{
     MenuLocation, Registry, RepositoryEntryRequest, RepositoryHandle, StateObserver, WindowHost,
     WindowHostImpl, storage::StorageError,
 };
+use gitcomet_extension_api::{HostNotifier, ShellEvent, Slot, WindowExtension};
 use gitcomet_state::msg::Msg;
 use gitcomet_state::session::WorkspaceId;
 use gpui::{Action, KeyBinding, WindowId};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::rc::Rc;
+
+type WindowExtensions = Rc<std::cell::RefCell<Vec<Box<dyn WindowExtension>>>>;
 
 /// Runs extension command `id` (a `<extension>/<local>` contribution id) in
 /// the focused window. Extension key bindings dispatch it.
@@ -136,7 +139,10 @@ pub(crate) fn entry_decision(
     };
     gates
         .iter()
-        .map(|(_, gate)| gate(&request, cx))
+        .map(|(_, gate)| {
+            super::perf::extension_dispatch();
+            gate(&request, cx)
+        })
         .find(|decision| matches!(decision, GateDecision::Deny { .. }))
         .unwrap_or(GateDecision::Allow)
 }
@@ -225,6 +231,9 @@ pub(in crate::view) fn repository_handle(window: WindowId, repo: &RepoState) -> 
 /// state comes from a snapshot the view publishes, so extension code may use
 /// its handles from inside the host's own updates (close guards, gates).
 struct HostWindow {
+    open: Rc<std::cell::Cell<bool>>,
+    kind: gitcomet_core::identity::WindowKind,
+    notifier: HostNotifier,
     window_id: WindowId,
     window_handle: gpui::AnyWindowHandle,
     view: WeakEntity<GitCometView>,
@@ -278,6 +287,45 @@ impl StateObservers {
 }
 
 impl HostWindow {
+    fn present_dialog(
+        &self,
+        title: SharedString,
+        content: DialogContent,
+        anchor: Option<Point<Pixels>>,
+        cx: &mut App,
+    ) -> Result<DialogHandle, HostError> {
+        let view = self.view.upgrade().ok_or(HostError::WindowClosed)?;
+        let window = self.window_handle;
+        let dialog_id = next_dialog_id();
+        // Deferred: an extension may call this from inside the host's own
+        // update, and the popover host is updated through the root view.
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |_, window, cx| {
+                view.update(cx, |root, cx| {
+                    root.open_extension_dialog(dialog_id, title, content, window, cx);
+                    if let Some(anchor) = anchor {
+                        root.popover_host.update(cx, |host, cx| {
+                            host.reanchor_hosted(dialog_id, anchor, window, cx)
+                        });
+                    }
+                });
+            });
+        });
+        let weak = self.view.clone();
+        Ok(DialogHandle::new(move |cx| {
+            let Some(view) = weak.upgrade() else {
+                return;
+            };
+            cx.defer(move |cx| {
+                let _ = window.update(cx, |_, window, cx| {
+                    view.update(cx, |root, cx| {
+                        root.close_extension_dialog(dialog_id, window, cx);
+                    });
+                });
+            });
+        }))
+    }
+
     /// This window's `WindowHost`, for panes that observe it.
     fn host(&self) -> Result<WindowHost, HostError> {
         self.observers
@@ -290,7 +338,7 @@ impl HostWindow {
     }
 
     fn live(&self) -> Result<(), HostError> {
-        if self.view.upgrade().is_some() {
+        if self.open.get() && self.view.upgrade().is_some() {
             Ok(())
         } else {
             Err(HostError::WindowClosed)
@@ -305,12 +353,68 @@ impl HostWindow {
 }
 
 impl WindowHostImpl for HostWindow {
+    fn repository_reader(&self) -> gitcomet_extension_api::RepositoryReader {
+        let store = self.store.clone();
+        gitcomet_extension_api::RepositoryReader::new(self.window_id, move |repo_id, lifetime| {
+            store.upgrade()?.repository(repo_id, lifetime)
+        })
+    }
+
+    fn navigate(
+        &self,
+        repository: &RepositoryHandle,
+        target: gitcomet_extension_api::ViewTarget,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.live()?;
+        let view = self.view.clone();
+        let handle = self.window_handle;
+        let repository = repository.clone();
+        cx.defer(move |cx| {
+            let _ = handle.update(cx, |_, window, cx| {
+                let _ = view.update(cx, |root, cx| {
+                    if !root.state.repos.iter().any(|repo| {
+                        repo.id == repository.repo_id() && repo.lifetime() == repository.lifetime()
+                    }) {
+                        return;
+                    }
+                    let index = match target {
+                        gitcomet_extension_api::ViewTarget::History => None,
+                        gitcomet_extension_api::ViewTarget::Extension(ref id) => {
+                            let Some(index) = root.repository_view_index(id) else {
+                                return;
+                            };
+                            Some(index)
+                        }
+                    };
+                    root.select_repository_view(&repository, index, window, cx);
+                });
+            });
+        });
+        Ok(())
+    }
+
+    fn open_settings_at(
+        &self,
+        target: gitcomet_extension_api::SettingsTarget,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.live()?;
+        cx.defer(move |cx| super::settings_window::open_settings_at(target, cx));
+        Ok(())
+    }
+    fn kind(&self) -> gitcomet_core::identity::WindowKind {
+        self.kind
+    }
+    fn notifier(&self) -> HostNotifier {
+        self.notifier.clone()
+    }
     fn window_id(&self) -> WindowId {
         self.window_id
     }
 
     fn is_open(&self, _cx: &App) -> bool {
-        self.view.upgrade().is_some()
+        self.live().is_ok()
     }
 
     fn active_repository(&self, _cx: &App) -> Result<Option<RepositoryHandle>, HostError> {
@@ -353,9 +457,11 @@ impl WindowHostImpl for HostWindow {
         let store = self.store.clone();
         let repository = repository.clone();
         let entity = cx.new(|cx| {
-            super::hosted::diff_pane::DiffPaneView::new(
+            let mut pane = super::hosted::diff_pane::DiffPaneView::new(
                 host, store, repository, target, options, cx,
-            )
+            );
+            pane.attach_root(self.view.clone());
+            pane
         });
         Ok(gitcomet_extension_api::DiffPane::new(Rc::new(
             super::hosted::diff_pane::HostedDiffPane { entity },
@@ -370,7 +476,10 @@ impl WindowHostImpl for HostWindow {
     ) -> Result<gitcomet_extension_api::DiffPane, HostError> {
         let host = self.host()?;
         let entity = cx.new(|cx| {
-            super::hosted::diff_pane::DiffPaneView::snapshot(host, snapshot, options, cx)
+            let mut pane =
+                super::hosted::diff_pane::DiffPaneView::snapshot(host, snapshot, options, cx);
+            pane.attach_root(self.view.clone());
+            pane
         });
         Ok(gitcomet_extension_api::DiffPane::new(Rc::new(
             super::hosted::diff_pane::HostedDiffPane { entity },
@@ -469,6 +578,23 @@ impl WindowHostImpl for HostWindow {
         )))
     }
 
+    fn watch_worktree(
+        &self,
+        repository: &RepositoryHandle,
+        path: &std::path::Path,
+        _cx: &App,
+    ) -> Result<gitcomet_extension_api::RepositoryWatch, HostError> {
+        let store = self.store.upgrade().ok_or(HostError::WindowClosed)?;
+        let path = if path.is_absolute() {
+            path.to_owned()
+        } else {
+            repository.workdir().join(path)
+        };
+        Ok(gitcomet_extension_api::RepositoryWatch::new(Box::new(
+            store.watch_worktree(repository.repo_id(), repository.lifetime(), path),
+        )))
+    }
+
     fn highlight_line(
         &self,
         path: &std::path::Path,
@@ -513,31 +639,81 @@ impl WindowHostImpl for HostWindow {
         content: DialogContent,
         cx: &mut App,
     ) -> Result<DialogHandle, HostError> {
-        let view = self.view.upgrade().ok_or(HostError::WindowClosed)?;
+        self.present_dialog(title, content, None, cx)
+    }
+
+    fn open_popover(
+        &self,
+        title: SharedString,
+        anchor: Point<Pixels>,
+        content: DialogContent,
+        cx: &mut App,
+    ) -> Result<DialogHandle, HostError> {
+        self.present_dialog(title, content, Some(anchor), cx)
+    }
+
+    fn open_menu(
+        &self,
+        anchor: Point<Pixels>,
+        items: Vec<gitcomet_extension_api::HostedMenuItem>,
+        cx: &mut App,
+    ) -> Result<DialogHandle, HostError> {
+        self.live()?;
+        let weak = self.view.clone();
         let window = self.window_handle;
-        let dialog_id = next_dialog_id();
-        // Deferred: an extension may call this from inside the host's own
-        // update, and the popover host is updated through the root view.
+        let id = next_dialog_id();
         cx.defer(move |cx| {
             let _ = window.update(cx, |_, window, cx| {
-                view.update(cx, |root, cx| {
-                    root.open_extension_dialog(dialog_id, title, content, window, cx);
+                let _ = weak.update(cx, |root, cx| {
+                    root.popover_host.update(cx, |host, cx| {
+                        host.open_hosted_menu(id, items, anchor, window, cx)
+                    });
                 });
             });
         });
         let weak = self.view.clone();
         Ok(DialogHandle::new(move |cx| {
-            let Some(view) = weak.upgrade() else {
-                return;
-            };
             cx.defer(move |cx| {
                 let _ = window.update(cx, |_, window, cx| {
-                    view.update(cx, |root, cx| {
-                        root.close_extension_dialog(dialog_id, window, cx);
-                    });
+                    let _ = weak.update(cx, |root, cx| root.close_extension_dialog(id, window, cx));
                 });
-            });
+            })
         }))
+    }
+
+    fn toast(
+        &self,
+        kind: gitcomet_extension_api::NotificationKind,
+        message: SharedString,
+        actions: Vec<gitcomet_extension_api::HostedAction>,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.live()?;
+        let weak = self.view.clone();
+        cx.defer(move |cx| {
+            let _ = weak.update(cx, |root, cx| {
+                use gitcomet_extension_api::NotificationKind;
+                if kind == NotificationKind::Error {
+                    root.report_error(
+                        ErrorReport {
+                            repo_id: root.active_repo_id(),
+                            message: message.to_string(),
+                            actions: actions.into_iter().map(ErrorAction::Hosted).collect(),
+                        },
+                        cx,
+                    );
+                } else {
+                    let kind = match kind {
+                        NotificationKind::Success => components::ToastKind::Success,
+                        _ => components::ToastKind::Warning,
+                    };
+                    root.toast_host.update(cx, |host, cx| {
+                        host.push_hosted_toast(kind, message.to_string(), actions, cx)
+                    });
+                }
+            });
+        });
+        Ok(())
     }
 
     fn open_window(
@@ -592,6 +768,10 @@ impl WindowHostImpl for HostWindow {
 /// A main window's side of the extension host: its [`WindowHost`] and the
 /// state snapshot behind it. Only exists when an extension is registered.
 pub(in crate::view) struct ExtensionWindow {
+    instances: WindowExtensions,
+    notifier: HostNotifier,
+    _notifications: gpui::Task<()>,
+    _closed: gpui::Subscription,
     host: WindowHost,
     state: Rc<std::cell::RefCell<Arc<AppState>>>,
     theme: Rc<std::cell::Cell<AppTheme>>,
@@ -605,17 +785,49 @@ impl ExtensionWindow {
         store: &Arc<AppStore>,
         state: Arc<AppState>,
         theme: AppTheme,
-        cx: &gpui::Context<GitCometView>,
+        kind: gitcomet_core::identity::WindowKind,
+        cx: &mut gpui::Context<GitCometView>,
     ) -> Option<Self> {
-        let registry = registry(cx)?;
+        let registry = registry(cx).or_else(|| {
+            (kind != gitcomet_core::identity::WindowKind::Main)
+                .then(|| Rc::new(Registry::default()))
+        })?;
         let bottom_panels = Rc::new(std::cell::RefCell::new(
             super::extension_panels::BottomPanels::new(registry.bottom_panels()),
         ));
         let state = Rc::new(std::cell::RefCell::new(state));
         let theme = Rc::new(std::cell::Cell::new(theme));
         let observers = Rc::new(StateObservers::default());
+        let open = Rc::new(std::cell::Cell::new(true));
+        let instances: WindowExtensions = Rc::default();
+        let (wake, notifications) = smol::channel::bounded(1);
+        let sender = wake.clone();
+        let notifier = HostNotifier::new(move || {
+            let _ = sender.try_send(());
+        });
+        let pending = notifier.clone();
+        let notification_task = cx.spawn(async move |view, cx| {
+            while notifications.recv().await.is_ok() {
+                let slots = pending.take_pending();
+                if view
+                    .update(cx, |view, cx| {
+                        for slot in Slot::ALL {
+                            if slots & slot.mask() != 0 {
+                                view.invalidate_extension_slot(slot, cx);
+                            }
+                        }
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
         let window_handle = window.window_handle();
         let host_window = Rc::new(HostWindow {
+            open: open.clone(),
+            kind,
+            notifier: notifier.clone(),
             window_id: window_handle.window_id(),
             window_handle,
             view: cx.weak_entity(),
@@ -626,7 +838,33 @@ impl ExtensionWindow {
             bottom_panels: Rc::clone(&bottom_panels),
         });
         *observers.host.borrow_mut() = Some(Rc::downgrade(&host_window));
+        let closing_host = Rc::downgrade(&host_window);
+        let closing_instances = instances.clone();
+        let closing_notifier = notifier.clone();
+        let closed = cx.on_window_closed(move |cx, closed| {
+            if closed != window_handle.window_id() {
+                return;
+            }
+            open.set(false);
+            closing_notifier.close();
+            wake.close();
+            if let Some(host) = closing_host.upgrade() {
+                let handle = WindowHost::new(host.clone());
+                for instance in closing_instances.borrow_mut().iter_mut() {
+                    crate::view::perf::extension_dispatch();
+                    instance.on_event(&ShellEvent::WindowClosed, &handle, cx);
+                }
+                closing_instances.borrow_mut().clear();
+                *host.state.borrow_mut() = Arc::default();
+                host.observers.observers.borrow_mut().clear();
+                *host.bottom_panels.borrow_mut() = Default::default();
+            }
+        });
         Some(Self {
+            instances,
+            notifier,
+            _notifications: notification_task,
+            _closed: closed,
             host: WindowHost::new(host_window),
             state,
             theme,
@@ -649,12 +887,66 @@ impl ExtensionWindow {
         if Arc::ptr_eq(&self.state.borrow(), state) {
             return;
         }
-        *self.state.borrow_mut() = Arc::clone(state);
+        let previous = self.state.replace(Arc::clone(state));
         self.observers.changed(cx);
+        if !self.instances.borrow().is_empty() {
+            let handle = |repo: &RepoState| repository_handle(self.host.id(), repo);
+            let mut events = Vec::new();
+            for old in &previous.repos {
+                if !state
+                    .repos
+                    .iter()
+                    .any(|repo| repo.id == old.id && repo.lifetime() == old.lifetime())
+                {
+                    events.push(ShellEvent::RepositoryClosed(handle(old)));
+                }
+            }
+            for repo in &state.repos {
+                if !previous
+                    .repos
+                    .iter()
+                    .any(|old| repo.id == old.id && repo.lifetime() == old.lifetime())
+                {
+                    events.push(ShellEvent::RepositoryOpened(handle(repo)));
+                }
+            }
+            if previous.active_repo != state.active_repo {
+                events.push(ShellEvent::ActiveRepositoryChanged(
+                    state
+                        .active_repo
+                        .and_then(|id| state.repos.iter().find(|repo| repo.id == id))
+                        .map(handle),
+                ));
+            }
+            events.push(ShellEvent::StateChanged);
+            for event in events {
+                self.emit(event, cx);
+            }
+        }
     }
 
-    pub(in crate::view) fn set_theme(&self, theme: AppTheme) {
+    pub(in crate::view) fn set_theme(&self, theme: AppTheme, cx: &mut App) {
         self.theme.set(theme);
+        self.emit(ShellEvent::ThemeChanged, cx);
+    }
+
+    pub(in crate::view) fn emit(&self, event: ShellEvent, cx: &mut App) {
+        if self.instances.borrow().is_empty() {
+            return;
+        }
+        let instances = Rc::downgrade(&self.instances);
+        let host = self.host.clone();
+        cx.defer(move |cx| {
+            if !host.is_open(cx) {
+                return;
+            }
+            if let Some(instances) = instances.upgrade() {
+                for instance in instances.borrow_mut().iter_mut() {
+                    crate::view::perf::extension_dispatch();
+                    instance.on_event(&event, &host, cx);
+                }
+            }
+        });
     }
 }
 
@@ -662,6 +954,8 @@ impl Drop for ExtensionWindow {
     /// The window is gone: handles extensions still hold keep neither its
     /// last snapshot nor their observers.
     fn drop(&mut self) {
+        self.notifier.close();
+        self.instances.borrow_mut().clear();
         *self.state.borrow_mut() = Arc::default();
         self.observers.observers.borrow_mut().clear();
         // Built panels can hold host handles, which share this same panel map.
@@ -670,7 +964,7 @@ impl Drop for ExtensionWindow {
     }
 }
 
-fn next_dialog_id() -> u64 {
+pub(in crate::view) fn next_dialog_id() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)
@@ -688,12 +982,32 @@ pub(crate) fn window_opened(view: &Entity<GitCometView>, cx: &mut App) {
     let window_handle = view.read(cx).window_handle;
     let view = view.downgrade();
     cx.defer(move |cx| {
+        let _ = window_handle.update(cx, |_, window, cx| {
+            let instances: Vec<_> = registry
+                .instances()
+                .iter()
+                .filter_map(|extension| {
+                    crate::view::perf::extension_dispatch();
+                    extension.window_opened(host.clone(), window, cx)
+                })
+                .collect();
+            if let Some(view) = view.upgrade() {
+                view.update(cx, |root, _| {
+                    if let Some(extension) = &root.extension_window {
+                        *extension.instances.borrow_mut() = instances;
+                    }
+                });
+            }
+        });
         if !registry.status_items().is_empty() {
             let _ = window_handle.update(cx, |_, window, cx| {
                 let items = registry
                     .status_items()
                     .iter()
-                    .map(|(_, item)| (item.build)(host.clone(), window, cx))
+                    .map(|(_, item)| {
+                        super::perf::extension_dispatch();
+                        (item.view.clone(), (item.build)(host.clone(), window, cx))
+                    })
                     .collect();
                 if let Some(view) = view.upgrade() {
                     view.update(cx, |root, cx| {
@@ -703,7 +1017,26 @@ pub(crate) fn window_opened(view: &Entity<GitCometView>, cx: &mut App) {
                 }
             });
         }
+        if registry.edition_strip().is_some() || registry.title_bar_brand().is_some() {
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let edition = registry.edition_strip().map(|item| {
+                    super::perf::extension_dispatch();
+                    (item.build)(host.clone(), window, cx)
+                });
+                let brand = registry.title_bar_brand().map(|item| {
+                    super::perf::extension_dispatch();
+                    (item.build)(host.clone(), window, cx)
+                });
+                let _ = view.update(cx, |root, cx| {
+                    root.bottom_status_bar
+                        .update(cx, |bar, cx| bar.set_edition_strip(edition, cx));
+                    root.title_bar
+                        .update(cx, |bar, cx| bar.set_brand(brand, cx));
+                });
+            });
+        }
         for (_, callback) in registry.window_opened() {
+            crate::view::perf::extension_dispatch();
             callback(host.clone(), cx);
         }
     });
@@ -718,6 +1051,29 @@ pub(in crate::view) fn command_id_from_palette(palette_id: &str) -> Option<&str>
 }
 
 impl GitCometView {
+    pub(in crate::view) fn invalidate_extension_slot(
+        &mut self,
+        slot: Slot,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        match slot {
+            Slot::Gate => {
+                if let Some(gates) = &mut self.window_gates {
+                    gates.invalidate();
+                }
+                cx.notify();
+            }
+            Slot::ActionBar | Slot::Navigation => self.action_bar.update(cx, |_, cx| cx.notify()),
+            Slot::TitleBar => self.title_bar.update(cx, |_, cx| cx.notify()),
+            Slot::Status => self.bottom_status_bar.update(cx, |_, cx| cx.notify()),
+            Slot::Details => self.details_pane.update(cx, |_, cx| cx.notify()),
+            Slot::Sidebar => self.sidebar_pane.update(cx, |_, cx| cx.notify()),
+            Slot::History => self.main_pane.update(cx, |pane, cx| {
+                pane.history_view.update(cx, |_, cx| cx.notify());
+            }),
+            _ => cx.notify(),
+        }
+    }
     /// Runs extension command `id` (`<extension>/<local>`) in this window,
     /// for the active repository. Returns whether `id` named a command.
     pub(in crate::view) fn run_extension_command(
@@ -778,6 +1134,7 @@ impl GitCometView {
                 if requires_repository && repository.is_none() {
                     return;
                 }
+                crate::view::perf::extension_dispatch();
                 run(
                     CommandContext {
                         window: host,

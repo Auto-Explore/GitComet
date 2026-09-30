@@ -1,6 +1,5 @@
 use crate::msg::Msg;
 use gitcomet_core::services::CancellationToken;
-#[cfg(any(test, feature = "test-support"))]
 use gitcomet_core::services::GitRepository;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
@@ -26,6 +25,11 @@ impl StoreInstanceId {
 pub(super) enum StoreWorkerCommand {
     Msg(Box<Msg>),
     Shutdown,
+    Repository {
+        repo_id: RepoId,
+        lifetime: u64,
+        reply: mpsc::Sender<Option<Arc<dyn GitRepository>>>,
+    },
     #[cfg(any(test, feature = "test-support"))]
     InsertRepoForTest {
         repo_id: RepoId,
@@ -56,6 +60,30 @@ struct RepoLoadGuard {
 }
 
 impl StoreWorkerSender {
+    pub(super) fn repository(
+        &self,
+        repo_id: RepoId,
+        lifetime: u64,
+    ) -> Option<Arc<dyn GitRepository>> {
+        if !self.is_alive() {
+            return None;
+        }
+        let (reply, receive) = mpsc::channel();
+        match &self.inner {
+            StoreWorkerSenderInner::Command(sender) => {
+                sender
+                    .send(StoreWorkerCommand::Repository {
+                        repo_id,
+                        lifetime,
+                        reply,
+                    })
+                    .ok()?;
+                receive.recv().ok().flatten()
+            }
+            #[cfg(test)]
+            StoreWorkerSenderInner::MsgForTest(_) => None,
+        }
+    }
     pub(super) fn new(
         tx: mpsc::Sender<StoreWorkerCommand>,
         alive: Arc<AtomicBool>,

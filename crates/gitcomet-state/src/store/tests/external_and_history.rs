@@ -1243,11 +1243,11 @@ fn state_with_blamed_unstaged_diff() -> (AppState, RepoId) {
         PathBuf::from("src/lib.rs"),
         DiffArea::Unstaged,
     ));
-    state.repos[0].history_state.blame_path = Some(PathBuf::from("src/lib.rs"));
-    state.repos[0].history_state.blame_source = Some(
-        gitcomet_core::domain::BlameSource::WorkingTree(DiffArea::Unstaged),
-    );
-    state.repos[0].history_state.blame = Loadable::Ready(std::sync::Arc::new(vec![
+    state.repos[0].diff_state.blame_path = Some(PathBuf::from("src/lib.rs"));
+    state.repos[0].diff_state.blame_source = Some(gitcomet_core::domain::BlameSource::WorkingTree(
+        DiffArea::Unstaged,
+    ));
+    state.repos[0].diff_state.blame = Loadable::Ready(std::sync::Arc::new(vec![
         gitcomet_core::services::BlameLine {
             commit_id: Arc::from("1111111111111111111111111111111111111111"),
             author: Arc::from("Ada"),
@@ -1292,7 +1292,7 @@ fn repo_externally_changed_worktree_keeps_blame_until_content_changes() {
     );
     // ...but the annotations stay painted until that reload proves them stale.
     assert!(
-        matches!(state.repos[0].history_state.blame, Loadable::Ready(_)),
+        matches!(state.repos[0].diff_state.blame, Loadable::Ready(_)),
         "a worktree event alone must not invalidate blame"
     );
 }
@@ -1306,7 +1306,7 @@ fn repo_externally_changed_git_state_invalidates_loaded_blame() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let (mut state, repo_id) = state_with_blamed_unstaged_diff();
-    let previous = match &state.repos[0].history_state.blame {
+    let previous = match &state.repos[0].diff_state.blame {
         Loadable::Ready(lines) => Arc::clone(lines),
         other => panic!("expected a loaded blame, got {other:?}"),
     };
@@ -1328,25 +1328,25 @@ fn repo_externally_changed_git_state_invalidates_loaded_blame() {
         "a git-state change must reload the diff"
     );
     assert!(
-        matches!(state.repos[0].history_state.blame, Loadable::NotLoaded),
+        matches!(state.repos[0].diff_state.blame, Loadable::NotLoaded),
         "blame must be invalidated when refs may have moved"
     );
     // The outgoing annotations are held over so the column does not blank while
     // the reload runs.
     assert!(
         state.repos[0]
-            .history_state
+            .diff_state
             .retained_blame_while_loading
             .as_ref()
             .is_some_and(|held| Arc::ptr_eq(held, &previous)),
         "the previous annotations must be retained while blame reloads"
     );
     assert_eq!(
-        state.repos[0].history_state.blame_path.as_deref(),
+        state.repos[0].diff_state.blame_path.as_deref(),
         Some(std::path::Path::new("src/lib.rs"))
     );
     assert_eq!(
-        state.repos[0].history_state.blame_source,
+        state.repos[0].diff_state.blame_source,
         Some(gitcomet_core::domain::BlameSource::WorkingTree(
             DiffArea::Unstaged
         ))
@@ -4532,7 +4532,7 @@ fn repo_command_finished_bumps_local_worktree_write_rev_only_for_checkout_writer
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::FetchAll { repo_id: RepoId(1) },
+        Msg::Fetch(crate::msg::FetchMsg::All { repo_id: RepoId(1) }),
     );
     assert!(state.repos[0].pull_in_flight > 0);
     assert!(!state.repos[0].git_operation_in_flight());

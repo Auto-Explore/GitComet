@@ -1137,6 +1137,8 @@ impl From<SharedLineText> for Arc<str> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileDiffTextSource {
+    /// The original, content-addressed bytes before transcoding.
+    pub raw_path: Option<PathBuf>,
     /// UTF-8 content, transcoded from the file's encoding when needed.
     pub path: PathBuf,
     pub identity: Arc<str>,
@@ -1148,6 +1150,7 @@ impl FileDiffTextSource {
     pub fn new(path: PathBuf) -> Self {
         let identity = Self::filesystem_identity(&path);
         Self {
+            raw_path: None,
             path,
             identity,
             format: None,
@@ -1156,10 +1159,16 @@ impl FileDiffTextSource {
 
     pub fn with_identity(path: PathBuf, identity: impl Into<Arc<str>>) -> Self {
         Self {
+            raw_path: None,
             path,
             identity: identity.into(),
             format: None,
         }
+    }
+
+    pub fn with_raw_path(mut self, path: PathBuf) -> Self {
+        self.raw_path = Some(path);
+        self
     }
 
     pub fn with_format(mut self, format: crate::text_format::SideTextFormat) -> Self {

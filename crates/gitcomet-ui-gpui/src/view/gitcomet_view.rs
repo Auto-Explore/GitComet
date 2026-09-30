@@ -74,11 +74,15 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) {
         let mut kind: PopoverRequest = kind.into();
+        if self.window_gated && !kind.kind.survives_gate() {
+            return;
+        }
         kind.new_source = true;
         self.set_hook_activity_dialog_repo(Self::hook_activity_workflow_repo(&kind.kind), cx);
         self.history_refs_hover_host
             .update(cx, |host, cx| host.close(cx));
         self.popover_host.update(cx, |host, cx| {
+            host.restore_history_binding();
             host.open_popover_at(kind, anchor, window, cx)
         });
     }
@@ -107,6 +111,9 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) {
         let mut kind: PopoverRequest = kind.into();
+        if self.window_gated && !kind.kind.survives_gate() {
+            return;
+        }
         kind.new_source = true;
         if let PopoverKind::HookActivity { repo_id, .. } = &kind.kind {
             self.pending_hook_activity_open = None;
@@ -116,8 +123,10 @@ impl GitCometView {
         self.set_hook_activity_dialog_repo(Self::hook_activity_workflow_repo(&kind.kind), cx);
         self.history_refs_hover_host
             .update(cx, |host, cx| host.close(cx));
-        self.popover_host
-            .update(cx, |host, cx| host.open_popover_centered(kind, window, cx));
+        self.popover_host.update(cx, |host, cx| {
+            host.restore_history_binding();
+            host.open_popover_centered(kind, window, cx);
+        });
     }
 
     #[cfg(target_os = "macos")]
@@ -137,11 +146,15 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) {
         let mut kind: PopoverRequest = kind.into();
+        if self.window_gated && !kind.kind.survives_gate() {
+            return;
+        }
         kind.new_source = true;
         self.set_hook_activity_dialog_repo(Self::hook_activity_workflow_repo(&kind.kind), cx);
         self.history_refs_hover_host
             .update(cx, |host, cx| host.close(cx));
         self.popover_host.update(cx, |host, cx| {
+            host.restore_history_binding();
             host.open_popover_for_bounds(kind, anchor_bounds, window, cx)
         });
     }
@@ -282,7 +295,9 @@ impl GitCometView {
             return;
         }
         // Nothing to reveal outside a normal window, or without a repository.
-        if !command_palette_available(self.view_mode) || self.active_repo_id().is_none() {
+        if !command_palette_available(self.view_mode)
+            || !self.shell_action_allowed(super::shell_policy::ShellAction::Repository)
+        {
             return;
         }
         self.open_reveal_commit(window, cx);
@@ -294,6 +309,23 @@ impl GitCometView {
         window: Option<&mut Window>,
         cx: &mut gpui::Context<Self>,
     ) {
+        let action = match command_id {
+            "open-repository"
+            | "switch-repository"
+            | "open-workspace"
+            | "clone-repository"
+            | "initialize-repository" => super::shell_policy::ShellAction::RepositoryEntry,
+            _ if command_palette::COMMANDS
+                .iter()
+                .any(|command| command.id == command_id && command.requires_repo) =>
+            {
+                super::shell_policy::ShellAction::Repository
+            }
+            _ => super::shell_policy::ShellAction::Application,
+        };
+        if !self.shell_action_allowed(action) {
+            return;
+        }
         match command_id {
             "new-window" => cx.defer(|cx| cx.dispatch_action(&NewWindow)),
             "open-settings" => cx.defer(crate::view::open_settings_window),
@@ -344,9 +376,15 @@ impl GitCometView {
                     self.store.dispatch(Msg::ReloadRepo { repo_id });
                 }
             }
+            "fetch-ref" => {
+                if let Some(window) = window {
+                    self.open_fetch_ref(window, cx);
+                }
+            }
             "fetch-all" => {
                 if let Some(repo_id) = self.active_repo_id() {
-                    self.store.dispatch(Msg::FetchAll { repo_id });
+                    self.store
+                        .dispatch(Msg::Fetch(gitcomet_state::msg::FetchMsg::All { repo_id }));
                 }
             }
             "previous-repo-tab" => {
@@ -815,16 +853,8 @@ impl GitCometView {
             "blame" => {
                 self.set_annotate_enabled(!self.annotate_enabled, cx);
             }
-            "back" => {
-                if let Some(repo_id) = self.active_repo_id() {
-                    self.store.dispatch(Msg::GlobalNavBack { repo_id });
-                }
-            }
-            "forward" => {
-                if let Some(repo_id) = self.active_repo_id() {
-                    self.store.dispatch(Msg::GlobalNavForward { repo_id });
-                }
-            }
+            "back" => self.dispatch_global_nav(false, cx),
+            "forward" => self.dispatch_global_nav(true, cx),
             other => {
                 if let Some(id) = super::extension_host::command_id_from_palette(other) {
                     self.run_extension_command(id, cx);
@@ -1010,6 +1040,7 @@ impl GitCometView {
             mut initial_path,
             initial_repository_launch_mode,
             view_mode,
+            focused_diff,
             focused_mergetool,
             focused_mergetool_exit_code,
             startup_crash_report,
@@ -1245,8 +1276,42 @@ impl GitCometView {
             &store,
             Arc::clone(&initial_state),
             initial_theme,
+            if view_mode == GitCometViewMode::FocusedMergetool {
+                gitcomet_core::identity::WindowKind::FocusedMergetool
+            } else if view_mode == GitCometViewMode::FocusedDiff {
+                gitcomet_core::identity::WindowKind::FocusedDiff
+            } else {
+                gitcomet_core::identity::WindowKind::Main
+            },
             cx,
         );
+        let focused_diff_pane = focused_diff.and_then(|config| {
+            let host = extension_window.as_ref()?.host();
+            let path = config
+                .display_path
+                .unwrap_or_else(|| format!("{} vs {}", config.label_left, config.label_right));
+            let target = gitcomet_core::domain::DiffTarget::commit(
+                gitcomet_core::domain::CommitId("snapshot".into()),
+                None,
+            );
+            let patch = gitcomet_core::domain::Diff::from_unified_owned(target, config.diff_text);
+            let mut policy = gitcomet_extension_api::DiffPanePolicy::default();
+            policy.allow_edit = false;
+            policy.allow_stage = false;
+            policy.allow_annotate = false;
+            policy.close_button = false;
+            policy.escape_clears_target = false;
+            policy.file_navigation = false;
+            host.create_snapshot_pane(
+                gitcomet_extension_api::DiffSnapshot::from_patch(path, patch),
+                gitcomet_extension_api::DiffPaneOptions {
+                    policy,
+                    ..Default::default()
+                },
+                cx,
+            )
+            .ok()
+        });
         if !initial_state.repos.is_empty() {
             startup_repo_bootstrap_pending = false;
         }
@@ -1705,6 +1770,8 @@ impl GitCometView {
             repo_tabs_bar,
             action_bar,
             bottom_status_bar,
+            window_gates: super::window_gates::WindowGates::new(cx),
+            window_gated: false,
             extension_window,
             repository_views: Self::repository_view_router(cx),
             details_tabs: Self::details_tab_router(cx),
@@ -1719,6 +1786,7 @@ impl GitCometView {
             reveal_commit_dialog,
             reveal_commit_open: false,
             pre_palette_focus: None,
+            focused_diff_pane,
             focused_mergetool_bootstrap,
             submodule_diff_bootstrap: None,
             deferred_repo_bootstrap,
@@ -1754,6 +1822,7 @@ impl GitCometView {
             terminal_cursor_blink_task_scheduled: false,
             terminal_cursor_blink_seq: 0,
             reflog_pane,
+            bottom_panel_providers: super::bottom_panel_providers::registered(cx),
             active_bottom_panel: FxHashMap::default(),
             commit_push_after_enabled,
             diff_scroll_sync,
@@ -1865,7 +1934,7 @@ impl GitCometView {
         self.splash_backdrop_image = splash::load_splash_backdrop_image(theme.is_dark);
         self.theme = theme;
         if let Some(extension_window) = self.extension_window.as_ref() {
-            extension_window.set_theme(theme);
+            extension_window.set_theme(theme, cx);
         }
         for session in self.terminal_sessions.values() {
             for instance in &session.instances {
@@ -2910,6 +2979,12 @@ impl GitCometView {
     /// history (diffs, file content, commit selections). Active anywhere in the
     /// window.
     pub(super) fn dispatch_global_nav(&self, forward: bool, cx: &mut gpui::Context<Self>) {
+        if !self.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
+            return;
+        }
+        if self.route_extension_navigation(forward, cx) {
+            return;
+        }
         let Some(repo_id) = self.main_pane.read(cx).active_repo_id() else {
             return;
         };

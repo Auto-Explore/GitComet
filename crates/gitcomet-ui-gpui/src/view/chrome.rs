@@ -107,7 +107,15 @@ pub(crate) fn macos_traffic_light_position() -> Point<Pixels> {
     )
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::view) enum TitleBarMode {
+    Standard,
+    Gated,
+}
+
 pub(super) struct TitleBarView {
+    mode: TitleBarMode,
+    brand: Option<gpui::AnyView>,
     theme: AppTheme,
     root_view: WeakEntity<GitCometView>,
     title_drag_state: TitleBarDragState,
@@ -558,12 +566,30 @@ impl TitleBarView {
         Self {
             theme,
             root_view,
+            mode: TitleBarMode::Standard,
+            brand: None,
             title_drag_state: TitleBarDragState::default(),
             app_menu_open: false,
             app_menu_focus_handle: cx.focus_handle().tab_index(0).tab_stop(true),
             repo_picker_open: false,
             repo_tab_actions_enabled,
             repo_picker_toggle_bounds: Rc::new(Cell::new(None)),
+        }
+    }
+
+    pub(in crate::view) fn set_brand(
+        &mut self,
+        brand: Option<gpui::AnyView>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.brand = brand;
+        cx.notify();
+    }
+
+    pub(in crate::view) fn set_mode(&mut self, mode: TitleBarMode, cx: &mut gpui::Context<Self>) {
+        if self.mode != mode {
+            self.mode = mode;
+            cx.notify();
         }
     }
 
@@ -649,7 +675,8 @@ impl Render for TitleBarView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let is_macos = cfg!(target_os = "macos");
-        let repo_tab_actions_enabled = self.repo_tab_actions_enabled;
+        let repo_tab_actions_enabled =
+            self.mode == TitleBarMode::Standard && self.repo_tab_actions_enabled;
         let root_view_mode = self.root_view.upgrade().map(|root| root.read(cx).view_mode);
         let repo_tabs_enabled =
             repo_tab_actions_enabled && root_view_mode.is_some_and(show_titlebar_repo_tabs);
@@ -674,7 +701,7 @@ impl Render for TitleBarView {
             window.window_handle().window_id(),
             |workspace| (workspace.display_name(), workspace.color),
         );
-        let workspace_chip_visible = workspace.is_some();
+        let workspace_chip_visible = self.mode == TitleBarMode::Standard && workspace.is_some();
         let bar_bg = title_bar_background(
             theme,
             window.is_window_active(),
@@ -923,6 +950,7 @@ impl Render for TitleBarView {
                 )
             })
             .when(!is_macos && app_menu_enabled, |d| d.child(menu_toggle))
+            .children(self.brand.clone())
             // An empty customized workspace keeps its name and colour on Home.
             .when(repo_tab_actions_enabled || workspace_chip_visible, |d| {
                 d.child(repo_picker_toggle)

@@ -42,7 +42,7 @@ pub struct AppTheme {
     /// Interned rather than inlined: the palette is 64 colours, and `AppTheme` is
     /// `Copy` and captured by value into every per-row paint closure. Carrying the
     /// array here made each of those closures a kilobyte heavier for data every
-    /// theme shares. See [`intern_lane_palette`].
+    /// theme shares. See `intern_lane_palette`.
     pub graph_lane_palette: &'static GraphLanePalette,
     pub radii: Radii,
 }

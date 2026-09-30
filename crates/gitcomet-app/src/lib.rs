@@ -50,22 +50,42 @@ pub struct AppLaunch {
     on_prepare: Option<PrepareHook>,
     extensions: Extensions,
     repository_options: gitcomet_core::services::RepositoryOptions,
+    repository_options_customized: bool,
+    backend: Option<std::sync::Arc<dyn gitcomet_core::services::GitBackend>>,
 }
 
 impl AppLaunch {
     pub fn new(identity: ProductIdentity) -> Self {
+        let repository_options = gitcomet_core::services::RepositoryOptions::default()
+            .with_history_ref_filter(gitcomet_core::services::HistoryRefFilter::excluding(
+                identity.hidden_ref_prefixes().iter().copied(),
+            ));
         Self {
             identity,
             about: cli::DEFAULT_ABOUT.to_string(),
             on_prepare: None,
             extensions: Extensions::default(),
-            repository_options: Default::default(),
+            repository_options,
+            repository_options_customized: false,
+            backend: None,
         }
     }
 
     /// GitComet's own launch.
     pub fn gitcomet() -> Self {
         Self::new(ProductIdentity::gitcomet())
+    }
+
+    /// Installs a product's identity before logging and any path resolution.
+    pub fn identity(mut self, identity: ProductIdentity) -> Self {
+        if !self.repository_options_customized {
+            self.repository_options = gitcomet_core::services::RepositoryOptions::default()
+                .with_history_ref_filter(gitcomet_core::services::HistoryRefFilter::excluding(
+                    identity.hidden_ref_prefixes().iter().copied(),
+                ));
+        }
+        self.identity = identity;
+        self
     }
 
     /// The one-line description in `--help`.
@@ -95,12 +115,23 @@ impl AppLaunch {
     }
 
     /// Options every repository opens with, such as refs History leaves out.
-    /// The default changes nothing.
+    /// Defaults to the product identity's hidden ref prefixes.
     pub fn repository_options(
         mut self,
         options: gitcomet_core::services::RepositoryOptions,
     ) -> Self {
+        self.repository_options_customized = true;
         self.repository_options = options;
+        self
+    }
+
+    /// Uses this backend for repository operations in every UI window.
+    /// Repository options apply to custom backends just as to the default.
+    pub fn backend(
+        mut self,
+        backend: std::sync::Arc<dyn gitcomet_core::services::GitBackend>,
+    ) -> Self {
+        self.backend = Some(backend);
         self
     }
 
@@ -117,6 +148,8 @@ impl AppLaunch {
             on_prepare,
             extensions,
             repository_options,
+            backend,
+            repository_options_customized: _,
         } = self;
         if let Err(message) = install_identity(identity) {
             eprintln!("{message}");
@@ -127,8 +160,52 @@ impl AppLaunch {
         crashlog::install();
 
         dispatch(cli::parse_cli(args, &about), on_prepare, move |mode| {
-            launch::run_mode(mode, extensions, repository_options)
+            launch::run_mode(mode, extensions, repository_options, backend)
         })
+    }
+}
+
+/// The process builder used by product binaries. Identity is installed only
+/// when running, before crash logging, argument handling, or path resolution.
+///
+/// ```no_run
+/// fn main() -> ! { gitcomet_app::App::new().run() }
+/// ```
+pub struct App(AppLaunch);
+
+impl Default for App {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl App {
+    pub fn new() -> Self {
+        Self(AppLaunch::gitcomet())
+    }
+    pub fn identity(self, identity: ProductIdentity) -> Self {
+        Self(self.0.identity(identity))
+    }
+    pub fn on_prepare(
+        self,
+        prepare: impl FnOnce(&AppMode) -> Result<(), String> + 'static,
+    ) -> Self {
+        Self(self.0.on_prepare(prepare))
+    }
+    pub fn backend(self, backend: std::sync::Arc<dyn gitcomet_core::services::GitBackend>) -> Self {
+        Self(self.0.backend(backend))
+    }
+    pub fn repository_options(self, options: gitcomet_core::services::RepositoryOptions) -> Self {
+        Self(self.0.repository_options(options))
+    }
+    pub fn about(self, about: impl Into<String>) -> Self {
+        Self(self.0.about(about))
+    }
+    #[cfg(feature = "ui-gpui-runtime")]
+    pub fn extension(self, extension: impl gitcomet_extension_api::Extension) -> Self {
+        Self(self.0.extension(extension))
+    }
+    pub fn run(self) -> ! {
+        std::process::exit(self.0.run())
     }
 }
 
@@ -183,6 +260,35 @@ mod tests {
             args.iter().map(OsString::from).collect(),
             cli::DEFAULT_ABOUT,
         )
+    }
+
+    #[test]
+    fn product_builder_uses_identity_defaults_and_preserves_explicit_repository_options() {
+        use gitcomet_core::services::{HistoryRefFilter, RepositoryOptions};
+        const IDENTITY: ProductIdentity =
+            ProductIdentity::new("Example", "example", "com.example.app")
+                .with_hidden_ref_prefixes(&["refs/example/"]);
+        let default = App::new().identity(IDENTITY.clone());
+        assert!(
+            default
+                .0
+                .repository_options
+                .history_ref_filter
+                .excludes("refs/example/1")
+        );
+        assert!(
+            !default
+                .0
+                .repository_options
+                .history_ref_filter
+                .excludes("refs/pull/1")
+        );
+        let explicit = RepositoryOptions::default()
+            .with_history_ref_filter(HistoryRefFilter::excluding(["refs/custom/"]));
+        let customized = App::new()
+            .repository_options(explicit.clone())
+            .identity(IDENTITY);
+        assert_eq!(customized.0.repository_options, explicit);
     }
 
     #[test]

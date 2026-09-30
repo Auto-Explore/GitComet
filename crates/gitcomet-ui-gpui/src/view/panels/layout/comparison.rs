@@ -639,15 +639,16 @@ impl DetailsPaneView {
                 .text_color(theme.colors.foreground.secondary)
                 .child("No files.")
                 .into_any_element(),
-            RangeFilesState::Loaded(_) => Self::vertical_scroll_frame(
+            RangeFilesState::Loaded(_) => Self::vertical_scroll_frame_content(
                 theme,
                 ("range_files_container", repo_id.0),
                 ("range_files_scrollbar", repo_id.0),
                 &self.range_files_scroll,
-                uniform_list(
-                    ("range_files_list", repo_id.0),
+                self.changed_file_list(
+                    repo_id,
+                    crate::view::rows::FileListId::RangeFiles,
                     range_row_count,
-                    cx.processor(Self::render_range_file_rows),
+                    cx,
                 ),
             )
             .into_any_element(),

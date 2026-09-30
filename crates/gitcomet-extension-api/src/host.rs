@@ -132,6 +132,20 @@ impl Drop for StateSubscription {
 /// What the host implements behind a [`WindowHost`]. Every method is weak:
 /// a closed window answers [`HostError::WindowClosed`].
 pub trait WindowHostImpl {
+    fn repository_reader(&self) -> crate::RepositoryReader;
+    fn kind(&self) -> gitcomet_core::identity::WindowKind;
+    fn notifier(&self) -> crate::HostNotifier;
+    fn navigate(
+        &self,
+        repository: &RepositoryHandle,
+        target: crate::ViewTarget,
+        cx: &mut App,
+    ) -> Result<(), HostError>;
+    fn open_settings_at(
+        &self,
+        target: crate::SettingsTarget,
+        cx: &mut App,
+    ) -> Result<(), HostError>;
     fn window_id(&self) -> WindowId;
 
     fn is_open(&self, cx: &App) -> bool;
@@ -209,6 +223,13 @@ pub trait WindowHostImpl {
         cx: &App,
     ) -> Result<RepositoryWatch, HostError>;
 
+    fn watch_worktree(
+        &self,
+        repository: &RepositoryHandle,
+        path: &Path,
+        cx: &App,
+    ) -> Result<RepositoryWatch, HostError>;
+
     /// Syntax highlights for one line of `path`'s text in the window's
     /// theme; empty when the language is unknown.
     fn highlight_line(
@@ -232,6 +253,29 @@ pub trait WindowHostImpl {
         content: DialogContent,
         cx: &mut App,
     ) -> Result<DialogHandle, HostError>;
+
+    fn open_popover(
+        &self,
+        title: SharedString,
+        anchor: gitcomet_ui_kit::gpui::Point<gitcomet_ui_kit::gpui::Pixels>,
+        content: DialogContent,
+        cx: &mut App,
+    ) -> Result<DialogHandle, HostError>;
+
+    fn open_menu(
+        &self,
+        anchor: gitcomet_ui_kit::gpui::Point<gitcomet_ui_kit::gpui::Pixels>,
+        items: Vec<crate::HostedMenuItem>,
+        cx: &mut App,
+    ) -> Result<DialogHandle, HostError>;
+
+    fn toast(
+        &self,
+        kind: crate::NotificationKind,
+        message: SharedString,
+        actions: Vec<crate::HostedAction>,
+        cx: &mut App,
+    ) -> Result<(), HostError>;
 
     /// Opens a window of its own showing `content`, titled `title`.
     fn open_window(
@@ -301,8 +345,55 @@ impl WindowHost {
         Self(host)
     }
 
+    pub fn repository_reader(&self) -> crate::RepositoryReader {
+        self.0.repository_reader()
+    }
+
+    pub fn store_view(&self) -> crate::StoreView {
+        crate::StoreView(self.clone())
+    }
+
+    pub fn syntax(&self) -> crate::SyntaxService {
+        crate::SyntaxService(self.clone())
+    }
+
     pub fn id(&self) -> WindowId {
         self.0.window_id()
+    }
+
+    pub fn kind(&self) -> gitcomet_core::identity::WindowKind {
+        self.0.kind()
+    }
+
+    pub fn notifier(&self) -> crate::HostNotifier {
+        self.0.notifier()
+    }
+
+    pub fn navigate(
+        &self,
+        repository: &RepositoryHandle,
+        target: crate::ViewTarget,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.check(repository, cx)?;
+        self.0.navigate(repository, target, cx)
+    }
+
+    pub fn open_settings_at(
+        &self,
+        target: crate::SettingsTarget,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.0.open_settings_at(target, cx)
+    }
+
+    /// Invalidates only the owner of the given slot, after this update.
+    pub fn invalidate(&self, slot: crate::Slot, _cx: &mut App) {
+        self.0.notifier().notify(slot);
+    }
+
+    pub fn storage_dir(&self, extension: &ExtensionId) -> Option<PathBuf> {
+        crate::storage::storage_dir(extension)
     }
 
     pub fn is_open(&self, cx: &App) -> bool {
@@ -426,6 +517,17 @@ impl WindowHost {
         self.0.watch_repository(repository, cx)
     }
 
+    /// Watches a linked worktree until the returned lease drops.
+    pub fn watch_worktree(
+        &self,
+        repository: &RepositoryHandle,
+        path: &Path,
+        cx: &App,
+    ) -> Result<RepositoryWatch, HostError> {
+        self.check(repository, cx)?;
+        self.0.watch_worktree(repository, path, cx)
+    }
+
     /// Calls `observer` after this window's state changes, coalesced to once
     /// per update cycle, until the subscription is dropped.
     pub fn observe_state(
@@ -480,6 +582,45 @@ impl WindowHost {
         cx: &mut App,
     ) -> Result<DialogHandle, HostError> {
         self.0.open_dialog(title.into(), Box::new(content), cx)
+    }
+
+    pub fn open_popover(
+        &self,
+        title: impl Into<SharedString>,
+        anchor: gitcomet_ui_kit::gpui::Point<gitcomet_ui_kit::gpui::Pixels>,
+        content: impl FnOnce(&mut Window, &mut App) -> AnyView + 'static,
+        cx: &mut App,
+    ) -> Result<DialogHandle, HostError> {
+        self.0
+            .open_popover(title.into(), anchor, Box::new(content), cx)
+    }
+
+    pub fn open_menu(
+        &self,
+        anchor: gitcomet_ui_kit::gpui::Point<gitcomet_ui_kit::gpui::Pixels>,
+        items: Vec<crate::HostedMenuItem>,
+        cx: &mut App,
+    ) -> Result<DialogHandle, HostError> {
+        self.0.open_menu(anchor, items, cx)
+    }
+
+    pub fn toast(
+        &self,
+        kind: crate::NotificationKind,
+        message: impl Into<SharedString>,
+        actions: Vec<crate::HostedAction>,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.0.toast(kind, message.into(), actions, cx)
+    }
+
+    pub fn report_error(
+        &self,
+        message: impl Into<SharedString>,
+        actions: Vec<crate::HostedAction>,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.toast(crate::NotificationKind::Error, message, actions, cx)
     }
 
     /// Opens a window of its own showing `content`, such as a pane's view

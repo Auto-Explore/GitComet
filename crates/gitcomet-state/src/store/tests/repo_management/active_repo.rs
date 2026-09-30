@@ -1605,11 +1605,11 @@ fn set_active_repo_reloads_cancelled_history_panes_but_resets_commit_selection()
             .expect("repo1 exists");
         repo1_state.history_state.file_history_path = Some(history_path.clone());
         repo1_state.history_state.file_history = Loadable::Loading;
-        repo1_state.history_state.blame_path = Some(blame_path.clone());
-        repo1_state.history_state.blame_source = Some(
-            gitcomet_core::domain::BlameSource::Revision(Some("HEAD~1".to_string())),
-        );
-        repo1_state.history_state.blame = Loadable::Loading;
+        repo1_state.diff_state.blame_path = Some(blame_path.clone());
+        repo1_state.diff_state.blame_source = Some(gitcomet_core::domain::BlameSource::Revision(
+            Some("HEAD~1".to_string()),
+        ));
+        repo1_state.diff_state.blame = Loadable::Loading;
         repo1_state.set_selected_commit(Some(selected_commit.clone()));
         repo1_state.set_commit_details(Loadable::Loading);
     }
@@ -1640,10 +1640,7 @@ fn set_active_repo_reloads_cancelled_history_panes_but_resets_commit_selection()
             repo1_state.history_state.file_history,
             Loadable::NotLoaded
         ));
-        assert!(matches!(
-            repo1_state.history_state.blame,
-            Loadable::NotLoaded
-        ));
+        assert!(matches!(repo1_state.diff_state.blame, Loadable::NotLoaded));
         assert!(matches!(
             repo1_state.history_state.commit_details,
             Loadable::NotLoaded
@@ -1653,7 +1650,7 @@ fn set_active_repo_reloads_cancelled_history_panes_but_resets_commit_selection()
             Some(&history_path)
         );
         assert_eq!(
-            repo1_state.history_state.blame_path.as_ref(),
+            repo1_state.diff_state.blame_path.as_ref(),
             Some(&blame_path)
         );
         assert_eq!(
@@ -1698,7 +1695,7 @@ fn set_active_repo_reloads_cancelled_history_panes_but_resets_commit_selection()
         .find(|repo| repo.id == repo1)
         .expect("repo1 exists");
     assert!(repo1_state.history_state.file_history.is_loading());
-    assert!(repo1_state.history_state.blame.is_loading());
+    assert!(repo1_state.diff_state.blame.is_loading());
     assert!(repo1_state.history_state.selected_commit.is_none());
     assert!(matches!(
         repo1_state.history_state.commit_details,

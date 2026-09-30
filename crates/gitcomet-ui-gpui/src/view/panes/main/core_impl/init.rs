@@ -307,7 +307,9 @@ impl MainPaneView {
         });
 
         let mut pane = Self {
-            store,
+            store: store.into(),
+            hosted_content_width: None,
+            hosted_decor: None,
             state,
             view_mode,
             focused_mergetool_labels,

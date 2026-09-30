@@ -450,6 +450,20 @@ pub(in crate::view) fn hash_branch_sidebar_rows(rows: &[BranchSidebarRow]) -> u6
     for row in rows.iter().take(256) {
         std::mem::discriminant(row).hash(&mut h);
         match row {
+            BranchSidebarRow::ContributionHeader {
+                title,
+                collapsed,
+                collapse_key,
+                ..
+            } => {
+                title.hash(&mut h);
+                collapsed.hash(&mut h);
+                collapse_key.hash(&mut h);
+            }
+            BranchSidebarRow::ContributionItem { label, key, .. } => {
+                label.hash(&mut h);
+                key.hash(&mut h);
+            }
             BranchSidebarRow::SectionHeader {
                 section,
                 top_border,

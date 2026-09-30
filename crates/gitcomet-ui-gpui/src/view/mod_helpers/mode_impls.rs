@@ -103,7 +103,8 @@ pub(crate) enum TextFormatMenuSection {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PopoverKind {
     /// A dialog an extension opened; its content lives on the popover host.
-    ExtensionDialog {
+    Hosted {
+        menu: bool,
         id: u64,
     },
     HookActivity {
@@ -589,6 +590,7 @@ pub enum GitCometViewMode {
     #[default]
     Normal,
     FocusedMergetool,
+    FocusedDiff,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -613,6 +615,7 @@ pub struct GitCometViewConfig {
     pub initial_path: Option<std::path::PathBuf>,
     pub initial_repository_launch_mode: InitialRepositoryLaunchMode,
     pub view_mode: GitCometViewMode,
+    pub focused_diff: Option<crate::FocusedDiffConfig>,
     pub focused_mergetool: Option<FocusedMergetoolViewConfig>,
     pub focused_mergetool_exit_code: Option<Arc<AtomicI32>>,
     pub startup_crash_report: Option<StartupCrashReport>,
@@ -625,6 +628,7 @@ impl GitCometViewConfig {
             initial_path: None,
             initial_repository_launch_mode: InitialRepositoryLaunchMode::RestoreSession,
             view_mode: GitCometViewMode::Normal,
+            focused_diff: None,
             focused_mergetool: None,
             focused_mergetool_exit_code: None,
             startup_crash_report,
@@ -640,6 +644,7 @@ impl GitCometViewConfig {
             initial_path: Some(initial_path),
             initial_repository_launch_mode: InitialRepositoryLaunchMode::OpenExplicitly,
             view_mode: GitCometViewMode::Normal,
+            focused_diff: None,
             focused_mergetool: None,
             focused_mergetool_exit_code: None,
             startup_crash_report,
@@ -1494,5 +1499,19 @@ impl DiffWhitespaceMode {
             Self::Show => Self::Ignore,
             Self::Ignore => Self::Show,
         }
+    }
+}
+
+impl PopoverKind {
+    pub(in crate::view) fn survives_gate(&self) -> bool {
+        matches!(
+            self,
+            Self::Hosted { .. }
+                | Self::AppMenu
+                | Self::CloseGuardConfirm(_)
+                | Self::UnsavedFileEditsConfirm(_)
+                | Self::TerminalShutdownConfirm(_)
+                | Self::ErrorDetails { .. }
+        )
     }
 }

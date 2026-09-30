@@ -8,6 +8,7 @@ pub(super) struct GitCometWindowEntry {
     pub(super) view: gpui::WeakEntity<GitCometView>,
     pub(super) main_pane: gpui::WeakEntity<MainPaneView>,
     pub(super) view_mode: GitCometViewMode,
+    pub(super) diff_fallback_enabled: bool,
     pub(super) workspace_id: Option<session::WorkspaceId>,
     pub(super) repo_paths: std::sync::Arc<[PathBuf]>,
 }
@@ -84,6 +85,13 @@ pub(crate) fn sync_gitcomet_window_registry<C>(
     C: std::borrow::BorrowMut<App>,
 {
     let entry = GitCometWindowEntry {
+        diff_fallback_enabled: cx
+            .borrow()
+            .try_global::<GitCometWindowRegistry>()
+            .and_then(|registry| registry.windows.get(&handle.window_id()))
+            .map_or(view_mode == GitCometViewMode::Normal, |entry| {
+                entry.diff_fallback_enabled
+            }),
         handle,
         view,
         main_pane,
@@ -102,6 +110,17 @@ pub(crate) fn sync_gitcomet_window_registry<C>(
             registry.windows.insert(handle.window_id(), entry);
         });
     }
+}
+
+pub(crate) fn set_diff_fallback_enabled(window: gpui::WindowId, enabled: bool, cx: &mut App) {
+    if !cx.has_global::<GitCometWindowRegistry>() {
+        return;
+    }
+    cx.update_global::<GitCometWindowRegistry, _>(|registry, _| {
+        if let Some(entry) = registry.windows.get_mut(&window) {
+            entry.diff_fallback_enabled = enabled && entry.view_mode == GitCometViewMode::Normal;
+        }
+    });
 }
 
 pub(crate) fn mark_gitcomet_window_focused<C>(cx: &mut C, window_id: gpui::WindowId)
@@ -212,6 +231,12 @@ pub(super) fn normal_gitcomet_window_by_id(
     gitcomet_window_entries(cx).into_iter().find(|entry| {
         entry.handle.window_id() == window_id && entry.view_mode == GitCometViewMode::Normal
     })
+}
+
+fn gitcomet_window_by_id(cx: &mut App, window_id: gpui::WindowId) -> Option<GitCometWindowEntry> {
+    gitcomet_window_entries(cx)
+        .into_iter()
+        .find(|entry| entry.handle.window_id() == window_id)
 }
 
 pub(super) fn update_active_normal_gitcomet_window<R>(
@@ -366,7 +391,7 @@ pub(super) fn close_active_window(cx: &mut App) {
 
 pub(crate) fn close_window_or_warn(window: &mut Window, cx: &mut App) {
     let window_id = window.window_handle().window_id();
-    let handled = normal_gitcomet_window_by_id(cx, window_id)
+    let handled = gitcomet_window_by_id(cx, window_id)
         .and_then(|entry| {
             entry
                 .view
@@ -390,7 +415,7 @@ pub(crate) fn close_window_or_warn(window: &mut Window, cx: &mut App) {
 /// user may have clicked into another window — and closing that one instead is
 /// not what they asked for.
 pub(crate) fn close_window_by_id_or_warn(cx: &mut App, window_id: gpui::WindowId) {
-    let handled = normal_gitcomet_window_by_id(cx, window_id)
+    let handled = gitcomet_window_by_id(cx, window_id)
         .and_then(|entry| {
             entry
                 .view
@@ -404,7 +429,7 @@ pub(crate) fn close_window_by_id_or_warn(cx: &mut App, window_id: gpui::WindowId
         return;
     }
     mark_window_closing(cx, window_id);
-    if let Some(entry) = normal_gitcomet_window_by_id(cx, window_id) {
+    if let Some(entry) = gitcomet_window_by_id(cx, window_id) {
         let _ = entry
             .handle
             .update(cx, |_, window, _| window.remove_window());
@@ -412,12 +437,25 @@ pub(crate) fn close_window_by_id_or_warn(cx: &mut App, window_id: gpui::WindowId
 }
 
 pub(crate) fn close_active_window_or_warn(cx: &mut App) {
+    if let Some(window) = cx.active_window()
+        && window
+            .downcast::<crate::view::settings_window::SettingsWindowView>()
+            .is_some()
+    {
+        let _ = window.update(cx, |_, window, cx| {
+            crate::view::settings_window::close_guards::request_native_close(window, cx)
+        });
+        return;
+    }
     let active_window_id = cx.active_window().map(|window| window.window_id());
     let handled = active_window_id
         .and_then(|window_id| {
-            update_active_normal_gitcomet_window(cx, move |view, cx| {
-                view.request_close_window_or_warn(window_id, cx)
-            })
+            gitcomet_window_by_id(cx, window_id)?
+                .view
+                .update(cx, move |view, cx| {
+                    view.request_close_window_or_warn(window_id, cx)
+                })
+                .ok()
         })
         .unwrap_or(false);
     if !handled {
@@ -426,11 +464,11 @@ pub(crate) fn close_active_window_or_warn(cx: &mut App) {
 }
 
 pub(crate) fn quit_app_or_warn(cx: &mut App) {
-    let entries: Vec<_> = gitcomet_window_entries(cx)
-        .into_iter()
-        .filter(|entry| entry.view_mode == GitCometViewMode::Normal)
-        .collect();
+    let entries = gitcomet_window_entries(cx);
     if entries.is_empty() {
+        if crate::view::settings_window::close_guards::request_settings_only_quit(cx) {
+            return;
+        }
         mark_clean_shutdown(cx);
         cx.quit();
         return;
@@ -474,6 +512,7 @@ pub(crate) fn quit_app_or_warn(cx: &mut App) {
     // window; asked after the terminal prompt when there is one.
     let mut late_reasons: Vec<gpui::SharedString> = Vec::new();
     if running_command_count == 0 {
+        late_reasons.extend(crate::view::settings_window::close_guards::quit_reasons(cx));
         for entry in &entries {
             if let Ok(reasons) = entry
                 .view

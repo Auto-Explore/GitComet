@@ -13,6 +13,7 @@ mod diff_text;
 mod file_disk;
 mod file_editor;
 mod helpers;
+mod hosted_binding;
 mod interactive_rebase;
 mod markdown_state;
 mod preview;
@@ -91,14 +92,18 @@ impl Render for MainPaneView {
         self.main_pane_surface_frame = self.main_pane_surface_frame.wrapping_add(1);
         debug_assert!(matches!(
             self.view_mode,
-            GitCometViewMode::Normal | GitCometViewMode::FocusedMergetool
+            GitCometViewMode::Normal
+                | GitCometViewMode::FocusedMergetool
+                | GitCometViewMode::FocusedDiff
         ));
         self.last_window_size = window.viewport_size();
         self.sync_root_layout_snapshot(cx);
         // The file explorer marks and pins files with unsaved buffers, and those
         // buffers live here rather than in the store, so nothing else can notice
         // them changing.
-        self.sync_unsaved_file_edits_rev(cx);
+        if self.store.binding.is_none() {
+            self.sync_unsaved_file_edits_rev(cx);
+        }
         let history_content_width = self.main_pane_content_width(cx);
         self.history_view.update(cx, |v, _| {
             v.set_last_window_size(self.last_window_size);
@@ -107,7 +112,7 @@ impl Render for MainPaneView {
 
         let show_diff = self
             .active_repo()
-            .and_then(|r| r.diff_state.diff_target.as_ref())
+            .and_then(|r| self.bound_diff_state(r).diff_target.as_ref())
             .is_some();
         let in_rebase = self.active_repo().is_some_and(|r| {
             r.interactive_rebase_setup.is_some() || r.interactive_cherry_pick_setup.is_some()
@@ -121,6 +126,8 @@ impl Render for MainPaneView {
         }
         let inner = if show_diff {
             self.diff_view(window, cx).into_any_element()
+        } else if self.store.binding.is_some() {
+            div().into_any_element()
         } else if in_rebase {
             self.interactive_rebase_view(window, cx).into_any_element()
         } else {

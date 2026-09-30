@@ -15,7 +15,7 @@ use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::BlameLine;
 use gitcomet_core::services::ComparisonOptions;
 use gitcomet_core::services::{CancellationToken, Result};
-use gitcomet_core::text_format::TextEncoding;
+use gitcomet_core::text_format::{TextAttributes, TextEncoding, TextOverride};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -43,12 +43,8 @@ pub struct DiffSession {
     pub generation: u64,
     /// Bumped on every change to the session, for fingerprints.
     pub rev: u64,
-    pub diff: Loadable<Shared<Diff>>,
-    pub file_text: Loadable<Option<Shared<FileDiffText>>>,
-    pub file_image: Loadable<Option<Shared<FileDiffImage>>>,
-    /// Loaded on request ([`DiffSessionMsg::LoadBlame`]), for the target's
-    /// newer side; cleared on retarget.
-    pub blame: Loadable<Shared<Vec<BlameLine>>>,
+    /// The complete diff state, shared with the built-in pane.
+    pub diff_state: crate::model::DiffState,
     /// Once requested, blame follows subsequent reloads and retargets.
     pub(crate) blame_requested: bool,
     /// An external change during a load requests one more load on completion.
@@ -57,17 +53,30 @@ pub struct DiffSession {
     pub(crate) cancellation: CancellationToken,
 }
 
+impl std::ops::Deref for DiffSession {
+    type Target = crate::model::DiffState;
+    fn deref(&self) -> &Self::Target {
+        &self.diff_state
+    }
+}
+
+impl std::ops::DerefMut for DiffSession {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.diff_state
+    }
+}
+
 impl DiffSession {
     pub(crate) fn new(target: DiffTarget) -> Self {
         Self {
-            target,
+            target: target.clone(),
             encoding: None,
             generation: 0,
             rev: 0,
-            diff: Loadable::NotLoaded,
-            file_text: Loadable::NotLoaded,
-            file_image: Loadable::NotLoaded,
-            blame: Loadable::NotLoaded,
+            diff_state: crate::model::DiffState {
+                diff_target: Some(target.clone()),
+                ..Default::default()
+            },
             blame_requested: false,
             refresh_queued: false,
             pending: DiffSessionLoads::default(),
@@ -89,18 +98,23 @@ impl DiffSession {
     /// Whether the target follows the working tree, so external edits
     /// reload it.
     pub fn follows_worktree(&self) -> bool {
-        matches!(
-            self.target,
-            DiffTarget::WorkingTree { .. }
-                | DiffTarget::CommitRange {
-                    to_commit_id: None,
-                    ..
-                }
-        )
+        self.diff_target.is_some()
+            && matches!(
+                self.target,
+                DiffTarget::WorkingTree { .. }
+                    | DiffTarget::CommitRange {
+                        to_commit_id: None,
+                        ..
+                    }
+            )
     }
 
     pub fn is_loading(&self) -> bool {
-        self.pending.patch || self.pending.file_text || self.pending.image || self.pending.blame
+        self.pending.patch
+            || self.pending.file_text
+            || self.pending.image
+            || self.pending.blame
+            || self.pending.attributes
     }
 
     /// The blame the target's newer side reads, if it names one file.
@@ -126,6 +140,7 @@ impl DiffSession {
 /// Outstanding parts of this generation, independent of retained content.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct DiffSessionLoads {
+    pub attributes: bool,
     pub patch: bool,
     pub file_text: bool,
     pub image: bool,
@@ -135,6 +150,11 @@ pub(crate) struct DiffSessionLoads {
 /// Where a hosted file list's changes come from.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ChangeSource {
+    /// Changes in this repository's index or working directory.
+    Worktree {
+        area: DiffArea,
+        include_untracked: bool,
+    },
     /// What a commit changed, against its first parent.
     Commit(CommitId),
     /// `from` to `to` (the working tree when `None`).
@@ -149,6 +169,7 @@ impl ChangeSource {
     /// The diff target for one listed change, carrying its rename source.
     pub fn target_for(&self, change: &CommitFileChange, base: Option<&CommitId>) -> DiffTarget {
         match self {
+            Self::Worktree { area, .. } => DiffTarget::working_tree(change.path.clone(), *area),
             Self::Commit(id) => DiffTarget::commit(id.clone(), None),
             Self::Comparison { from, to, .. } => {
                 DiffTarget::commit_range(base.unwrap_or(from).clone(), to.clone(), None)
@@ -159,7 +180,10 @@ impl ChangeSource {
 
     /// Whether the working tree is one side, so external edits reload it.
     pub fn follows_worktree(&self) -> bool {
-        matches!(self, Self::Comparison { to: None, .. })
+        matches!(
+            self,
+            Self::Comparison { to: None, .. } | Self::Worktree { .. }
+        )
     }
 }
 
@@ -221,6 +245,37 @@ pub enum DiffSessionMsg {
         view: DiffViewId,
         encoding: Option<TextEncoding>,
     },
+    SetTextOverride {
+        repo_id: RepoId,
+        lifetime: u64,
+        view: DiffViewId,
+        path: PathBuf,
+        value: TextOverride,
+    },
+    /// Changes the content presentation without touching History's navigation.
+    SetContentMode {
+        repo_id: RepoId,
+        lifetime: u64,
+        view: DiffViewId,
+        preview: bool,
+        edit: bool,
+    },
+    Clear {
+        repo_id: RepoId,
+        lifetime: u64,
+        view: DiffViewId,
+    },
+    OpenEditor {
+        repo_id: RepoId,
+        lifetime: u64,
+        view: DiffViewId,
+        path: PathBuf,
+    },
+    ExitEditor {
+        repo_id: RepoId,
+        lifetime: u64,
+        view: DiffViewId,
+    },
     /// Reloads the current target (a new generation).
     Reload {
         repo_id: RepoId,
@@ -269,6 +324,7 @@ pub enum DiffSessionMsg {
 
 #[derive(Debug)]
 pub enum DiffSessionContent {
+    Attributes(Result<TextAttributes>),
     Patch(Result<Diff>),
     FileText(Result<Option<FileDiffText>>),
     Image(Result<Option<FileDiffImage>>),
@@ -324,6 +380,7 @@ impl DiffSessionEffect {
         };
         match work {
             DiffSessionWork::Content {
+                target,
                 patch,
                 file_text,
                 image,
@@ -333,6 +390,9 @@ impl DiffSessionEffect {
                 let text = error.to_string();
                 let error = || Error::new(ErrorKind::Backend(text.clone()));
                 let mut replies = Vec::new();
+                if target.file_path().is_some() {
+                    replies.push(reply(DiffSessionContent::Attributes(Err(error()))));
+                }
                 if patch {
                     replies.push(reply(DiffSessionContent::Patch(Err(error()))));
                 }

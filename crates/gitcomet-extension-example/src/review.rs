@@ -396,6 +396,7 @@ impl Extension for ReviewExtension {
             .repository_view(
                 "review",
                 RepositoryViewDescriptor {
+                    navigation: None,
                     title: "Review".into(),
                     icon: ICON_PATH.into(),
                     build: Rc::new(|context, _window, cx| {
@@ -406,6 +407,7 @@ impl Extension for ReviewExtension {
             .repository_view(
                 "changes",
                 RepositoryViewDescriptor {
+                    navigation: None,
                     title: "Changes".into(),
                     icon: ICON_PATH.into(),
                     build: Rc::new(|context, _window, cx| {
@@ -447,6 +449,7 @@ impl Extension for ReviewExtension {
             .status_item(
                 "review-status",
                 StatusItemDescriptor {
+                    view: None,
                     build: Rc::new(|window, _, cx| {
                         cx.new(|cx| ReviewStatus::new(window, cx)).into()
                     }),
@@ -540,7 +543,8 @@ mod tests {
 
     #[test]
     fn every_contribution_registers_and_validates() {
-        let registry = Registry::build(&[Box::new(ReviewExtension)]).expect("valid registration");
+        let registry =
+            Registry::build(vec![Box::new(ReviewExtension)]).expect("valid registration");
         assert_eq!(registry.repository_views().len(), 2);
         assert_eq!(registry.status_items().len(), 1);
         assert_eq!(registry.settings_pages().len(), 1);
@@ -559,7 +563,7 @@ mod tests {
 
     #[test]
     fn registering_twice_is_refused() {
-        let errors = Registry::build(&[Box::new(ReviewExtension), Box::new(ReviewExtension)])
+        let errors = Registry::build(vec![Box::new(ReviewExtension), Box::new(ReviewExtension)])
             .err()
             .expect("a duplicate extension id is an error");
         assert!(errors[0].message.contains("registered twice"), "{errors:?}");

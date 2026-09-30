@@ -224,7 +224,7 @@ impl MainPaneView {
     fn selected_text_attributes(&self) -> Arc<TextAttributes> {
         match self
             .active_repo()
-            .map(|repo| &repo.diff_state.text_attributes)
+            .map(|repo| &self.bound_diff_state(repo).text_attributes)
         {
             Some(Loadable::Ready(attributes)) => Arc::clone(attributes),
             _ => Arc::default(),
@@ -240,7 +240,7 @@ impl MainPaneView {
             MainPaneBody::Conflict => Some((None, self.conflict_output_text_format()?, false)),
             MainPaneBody::FileDiff | MainPaneBody::Patch => {
                 let repo = self.active_repo()?;
-                let Loadable::Ready(Some(file)) = &repo.diff_state.diff_file else {
+                let Loadable::Ready(Some(file)) = &self.bound_diff_state(repo).diff_file else {
                     return None;
                 };
                 let side =
@@ -311,20 +311,20 @@ impl MainPaneView {
     pub(in crate::view) fn effective_tab_size(&self) -> (u8, &'static str) {
         let max = crate::view::tab_width::MAX_TAB_WIDTH;
         if let Some(repo) = self.active_repo()
-            && let Some(path) = repo
-                .diff_state
+            && let Some(path) = self
+                .bound_diff_state(repo)
                 .diff_target
                 .as_ref()
                 .and_then(DiffTarget::file_path)
         {
-            if let Some(size) = repo
-                .diff_state
+            if let Some(size) = self
+                .bound_diff_state(repo)
                 .text_override_for(path)
                 .and_then(|value| value.tab_size)
             {
                 return (size.clamp(1, max), "Chosen for this file");
             }
-            if let Loadable::Ready(attributes) = &repo.diff_state.text_attributes
+            if let Loadable::Ready(attributes) = &self.bound_diff_state(repo).text_attributes
                 && let Some(width) = attributes.tab_width
             {
                 let source = match width.source {
@@ -380,8 +380,8 @@ impl MainPaneView {
             return;
         };
         let repo_id = repo.id;
-        let Some(path) = repo
-            .diff_state
+        let Some(path) = self
+            .bound_diff_state(repo)
             .diff_target
             .as_ref()
             .and_then(DiffTarget::file_path)
@@ -391,7 +391,10 @@ impl MainPaneView {
         };
         let value = TextOverride {
             tab_size: size,
-            ..repo.diff_state.text_override_for(&path).unwrap_or_default()
+            ..self
+                .bound_diff_state(repo)
+                .text_override_for(&path)
+                .unwrap_or_default()
         };
         self.store.dispatch(Msg::SetTextOverride {
             repo_id,
@@ -402,8 +405,8 @@ impl MainPaneView {
 
     pub(in crate::view) fn text_encoding_menu_state(&self) -> Option<TextEncodingMenuState> {
         let repo = self.active_repo()?;
-        let path = repo
-            .diff_state
+        let path = self
+            .bound_diff_state(repo)
             .diff_target
             .as_ref()?
             .file_path()?
@@ -421,8 +424,8 @@ impl MainPaneView {
             editor,
             unsaved: editor && unsaved,
             save_format: editor.then_some(shown.format),
-            chosen: repo
-                .diff_state
+            chosen: self
+                .bound_diff_state(repo)
                 .text_override_for(&path)
                 .and_then(|value| value.encoding),
             current: Some(shown.format.encoding),
@@ -448,8 +451,8 @@ impl MainPaneView {
             return;
         };
         let repo_id = repo.id;
-        let Some(path) = repo
-            .diff_state
+        let Some(path) = self
+            .bound_diff_state(repo)
             .diff_target
             .as_ref()
             .and_then(DiffTarget::file_path)
@@ -496,7 +499,10 @@ impl MainPaneView {
         }
         let value = TextOverride {
             encoding,
-            ..repo.diff_state.text_override_for(&path).unwrap_or_default()
+            ..self
+                .bound_diff_state(repo)
+                .text_override_for(&path)
+                .unwrap_or_default()
         };
         self.store.dispatch(Msg::SetTextOverride {
             repo_id,
@@ -558,7 +564,10 @@ impl MainPaneView {
             return;
         };
         let repo_id = repo.id;
-        let current = repo.diff_state.text_override_for(path).unwrap_or_default();
+        let current = self
+            .bound_diff_state(repo)
+            .text_override_for(path)
+            .unwrap_or_default();
         let request = self.selected_text_decode_request(SideKind::Worktree);
         let decode_key = request
             .as_ref()
@@ -644,7 +653,7 @@ impl MainPaneView {
                         .as_ref()
                         .is_some_and(|(key_repo, key_path)| key_repo == repo_id && key_path == path)
             }
-            ErrorAction::OpenUrl { .. } => true,
+            ErrorAction::OpenUrl { .. } | ErrorAction::Hosted(_) => true,
         }
     }
 

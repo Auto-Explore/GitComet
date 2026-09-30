@@ -236,8 +236,10 @@ impl Render for TextInput {
                 input.on_pointer_click(MouseButton::Right, cx.listener(Self::on_right_click))
             })
             .line_height(self.effective_line_height(window))
-            .when(!self.display_text, |d| {
-                d.text_size(if self.editor_font {
+            .when(!self.display_text || self.text_size.is_some(), |d| {
+                d.text_size(if let Some(size) = self.text_size {
+                    crate::ui_scale::design_px_from_window(size, window)
+                } else if self.editor_font {
                     crate::appearance::editor_size(window, cx)
                 } else {
                     crate::ui_scale::design_px_from_window(

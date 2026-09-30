@@ -955,12 +955,11 @@ fn open_annotated_editor(
         view.update(app, |this, cx| {
             let mut state = editor_state(repo_id, workdir, file_rel);
             let repo = &mut Arc::make_mut(&mut state).repos[0];
-            repo.history_state.blame_path = Some(file_rel.to_path_buf());
-            repo.history_state.blame_source =
-                Some(gitcomet_core::domain::BlameSource::WorkingTree(
-                    gitcomet_core::domain::DiffArea::Unstaged,
-                ));
-            repo.history_state.blame =
+            repo.diff_state.blame_path = Some(file_rel.to_path_buf());
+            repo.diff_state.blame_source = Some(gitcomet_core::domain::BlameSource::WorkingTree(
+                gitcomet_core::domain::DiffArea::Unstaged,
+            ));
+            repo.diff_state.blame =
                 gitcomet_state::model::Loadable::Ready(std::sync::Arc::new(editor_blame_lines()));
             push_test_state(this, state, cx);
             this.main_pane.update(cx, |pane, cx| {

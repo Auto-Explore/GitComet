@@ -31,7 +31,7 @@ fn numbered(prefix: &str, count: usize, edit_at: Option<usize>) -> String {
 
 fn install_example(cx: &mut gpui::TestAppContext) {
     cx.update(|app| {
-        let registry = Registry::build(&[Box::new(
+        let registry = Registry::build(vec![Box::new(
             gitcomet_extension_example::review::ReviewExtension,
         )])
         .unwrap();
@@ -129,6 +129,52 @@ fn rows_with(cx: &mut gpui::VisualTestContext, pane: &DiffPane, needle: &str) ->
         pane.set_search(needle, app);
         pane.search_matches(app)
     })
+}
+
+#[gpui::test]
+fn worktree_lists_respect_the_index_and_untracked_option(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (dir, store, view, cx) = open_repository(cx);
+    crate::test_support::git(dir.path(), &["add", "a.rs"]);
+    std::fs::write(dir.path().join("untracked.rs"), "untracked\n").unwrap();
+    let lists = cx.update(|_, app| {
+        let host = view.read(app).extension_window.as_ref().unwrap().host();
+        let repository = host.active_repository(app).unwrap().unwrap();
+        [
+            (DiffArea::Staged, true),
+            (DiffArea::Unstaged, false),
+            (DiffArea::Unstaged, true),
+        ]
+        .map(|(area, include_untracked)| {
+            host.create_file_list(
+                &repository,
+                ChangeSource::Worktree {
+                    area,
+                    include_untracked,
+                },
+                |_, _, _| {},
+                app,
+            )
+            .unwrap()
+        })
+    });
+    settle(cx, &view, &store, "worktree lists", |cx| {
+        cx.update(|_, app| lists.iter().all(|list| !list.is_loading(app)))
+    });
+    let paths = cx.update(|_, app| {
+        lists.each_ref().map(|list| {
+            list.files(app)
+                .into_iter()
+                .map(|file| file.path)
+                .collect::<Vec<_>>()
+        })
+    });
+    assert_eq!(paths[0], vec![PathBuf::from("a.rs")]);
+    assert_eq!(paths[1], vec![PathBuf::from("b.rs")]);
+    assert_eq!(
+        paths[2],
+        vec![PathBuf::from("b.rs"), PathBuf::from("untracked.rs")]
+    );
 }
 
 #[gpui::test]
@@ -368,7 +414,7 @@ fn retargeting_ignores_old_notifications_and_clears_files_before_loading(
     session.target = target("b.rs");
     session.rev += 1;
     session.diff = Loadable::Loading;
-    session.file_text = Loadable::Loading;
+    session.diff_file = Loadable::Loading;
     let change_list = Arc::make_mut(&mut state.repos[0].change_lists)
         .get_mut(&list_id)
         .unwrap();
@@ -478,8 +524,12 @@ fn the_example_changes_view_shows_picks_in_two_panes(cx: &mut gpui::TestAppConte
     settle(cx, &view, &store, "the second pick", |cx| {
         let sessions = store.snapshot().repos[0].diff_sessions.len() == 2;
         let drawn = store.snapshot().repos[0].diff_sessions.keys().all(|id| {
-            cx.debug_bounds(selector(format!("hosted_diff_{}_row_0", id.0)))
-                .is_some()
+            // The shared renderer initially reveals the first changed line.
+            // Row zero need not be inside either pane's visible window.
+            (0..64).any(|row| {
+                cx.debug_bounds(selector(format!("hosted_diff_{}_row_{row}", id.0)))
+                    .is_some()
+            })
         });
         sessions && drawn
     });
@@ -751,6 +801,7 @@ fn pane_contributions_annotate_act_and_inset_without_touching_file_lines(
         });
         cx.run_until_parked();
     }
+    assert!(cx.update(|_, app| pane_view.read(app).shares_renderer_rows(app)));
     // Rows: one, two (removed), TWO, two inset rows, three.
     for part in ["legend", "markers", "row_3", "row_4", "row_5"] {
         assert!(

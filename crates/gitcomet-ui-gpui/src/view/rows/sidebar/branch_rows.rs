@@ -333,6 +333,15 @@ impl SidebarPaneView {
             // One method per row kind keeps each kind's builder temporaries in
             // its own stack frame (opt-level 0 gives every temporary a slot).
             .map(|(row, slot)| match row {
+                BranchSidebarRow::ContributionHeader {
+                    section,
+                    title,
+                    collapsed,
+                    ..
+                } => this.contributed_header(section, title, collapsed, cx),
+                BranchSidebarRow::ContributionItem { section, row, .. } => {
+                    this.contributed_row(section, row, cx)
+                }
                 BranchSidebarRow::SectionHeader {
                     section,
                     top_border: _,

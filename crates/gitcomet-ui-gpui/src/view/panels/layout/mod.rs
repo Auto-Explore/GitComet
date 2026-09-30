@@ -48,6 +48,16 @@ impl DetailsPaneView {
         let list = restrict_scroll_to_vertical_axis(
             list.w_full().h_full().min_h(px(0.0)).track_scroll(scroll),
         );
+        Self::vertical_scroll_frame_content(theme, container_id, scrollbar_id, scroll, list)
+    }
+
+    fn vertical_scroll_frame_content(
+        theme: AppTheme,
+        container_id: impl Into<ElementId>,
+        scrollbar_id: impl Into<ElementId>,
+        scroll: &UniformListScrollHandle,
+        list: impl IntoElement,
+    ) -> Stateful<Div> {
         let scrollbar_gutter = components::Scrollbar::visible_gutter(
             scroll.clone(),
             components::ScrollbarAxis::Vertical,

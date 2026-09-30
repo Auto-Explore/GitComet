@@ -464,8 +464,8 @@ fn blame_loaded_requires_matching_path_and_source() {
 
     {
         let repo = repo_mut(&mut state, repo_id);
-        repo.history_state.blame_path = Some(path.clone());
-        repo.history_state.blame_source = Some(source.clone());
+        repo.diff_state.blame_path = Some(path.clone());
+        repo.diff_state.blame_source = Some(source.clone());
     }
 
     blame_loaded(
@@ -476,7 +476,7 @@ fn blame_loaded_requires_matching_path_and_source() {
         Ok(Vec::new()),
     );
     assert!(matches!(
-        repo_mut(&mut state, repo_id).history_state.blame,
+        repo_mut(&mut state, repo_id).diff_state.blame,
         Loadable::NotLoaded
     ));
 
@@ -488,7 +488,7 @@ fn blame_loaded_requires_matching_path_and_source() {
         Ok(Vec::new()),
     );
     assert!(matches!(
-        repo_mut(&mut state, repo_id).history_state.blame,
+        repo_mut(&mut state, repo_id).diff_state.blame,
         Loadable::Ready(_)
     ));
 
@@ -500,7 +500,7 @@ fn blame_loaded_requires_matching_path_and_source() {
         Err(backend_error("blame failed")),
     );
     let repo = repo_mut(&mut state, repo_id);
-    assert!(matches!(repo.history_state.blame, Loadable::Error(_)));
+    assert!(matches!(repo.diff_state.blame, Loadable::Error(_)));
     assert_eq!(repo.feedback.diagnostics.len(), 1);
 }
 
@@ -737,14 +737,14 @@ fn load_requests_set_loading_and_emit_effects() {
     ));
     {
         let repo = repo_mut(&mut state, repo_id);
-        assert_eq!(repo.history_state.blame_path.as_ref(), Some(&blame_path));
+        assert_eq!(repo.diff_state.blame_path.as_ref(), Some(&blame_path));
         assert_eq!(
-            repo.history_state.blame_source,
+            repo.diff_state.blame_source,
             Some(gitcomet_core::domain::BlameSource::Revision(Some(
                 "HEAD".to_string()
             )))
         );
-        assert!(repo.history_state.blame.is_loading());
+        assert!(repo.diff_state.blame.is_loading());
     }
 
     let effects = load_worktrees(&mut state, repo_id);
@@ -2866,10 +2866,7 @@ fn load_blame_reloads_when_target_changes_while_loading() {
     let effects = load_blame(&mut state, repo_id, other.clone(), source);
     assert_eq!(effects.len(), 1);
     assert_eq!(
-        repo_mut(&mut state, repo_id)
-            .history_state
-            .blame_path
-            .as_ref(),
+        repo_mut(&mut state, repo_id).diff_state.blame_path.as_ref(),
         Some(&other)
     );
 }
@@ -2883,17 +2880,17 @@ fn load_blame_retains_ready_annotations_for_the_same_target() {
     let lines = Arc::new(vec![blame_line("let x = 1;")]);
     {
         let repo = repo_mut(&mut state, repo_id);
-        repo.history_state.blame_path = Some(path.clone());
-        repo.history_state.blame_source = Some(source.clone());
-        repo.history_state.blame = Loadable::Ready(Arc::clone(&lines));
+        repo.diff_state.blame_path = Some(path.clone());
+        repo.diff_state.blame_source = Some(source.clone());
+        repo.diff_state.blame = Loadable::Ready(Arc::clone(&lines));
     }
 
     load_blame(&mut state, repo_id, path, source);
 
     let repo = repo_mut(&mut state, repo_id);
-    assert!(repo.history_state.blame.is_loading());
+    assert!(repo.diff_state.blame.is_loading());
     assert!(
-        repo.history_state
+        repo.diff_state
             .retained_blame_while_loading
             .as_ref()
             .is_some_and(|held| Arc::ptr_eq(held, &lines)),
@@ -2908,16 +2905,16 @@ fn load_blame_drops_retained_annotations_when_retargeting() {
     let source = gitcomet_core::domain::BlameSource::WorkingTree(DiffArea::Unstaged);
     {
         let repo = repo_mut(&mut state, repo_id);
-        repo.history_state.blame_path = Some(PathBuf::from("src/lib.rs"));
-        repo.history_state.blame_source = Some(source.clone());
-        repo.history_state.blame = Loadable::Ready(Arc::new(vec![blame_line("let x = 1;")]));
+        repo.diff_state.blame_path = Some(PathBuf::from("src/lib.rs"));
+        repo.diff_state.blame_source = Some(source.clone());
+        repo.diff_state.blame = Loadable::Ready(Arc::new(vec![blame_line("let x = 1;")]));
     }
 
     load_blame(&mut state, repo_id, PathBuf::from("src/main.rs"), source);
 
     assert!(
         repo_mut(&mut state, repo_id)
-            .history_state
+            .diff_state
             .retained_blame_while_loading
             .is_none(),
         "annotations for a different file must never be painted"
@@ -2935,9 +2932,9 @@ fn blame_loaded_reuses_the_retained_allocation_when_unchanged() {
     let lines = Arc::new(vec![blame_line("let x = 1;")]);
     {
         let repo = repo_mut(&mut state, repo_id);
-        repo.history_state.blame_path = Some(path.clone());
-        repo.history_state.blame_source = Some(source.clone());
-        repo.history_state.blame = Loadable::Ready(Arc::clone(&lines));
+        repo.diff_state.blame_path = Some(path.clone());
+        repo.diff_state.blame_source = Some(source.clone());
+        repo.diff_state.blame = Loadable::Ready(Arc::clone(&lines));
     }
     load_blame(&mut state, repo_id, path.clone(), source.clone());
 
@@ -2950,8 +2947,8 @@ fn blame_loaded_reuses_the_retained_allocation_when_unchanged() {
     );
 
     let repo = repo_mut(&mut state, repo_id);
-    assert!(matches!(&repo.history_state.blame, Loadable::Ready(got) if Arc::ptr_eq(got, &lines)));
-    assert!(repo.history_state.retained_blame_while_loading.is_none());
+    assert!(matches!(&repo.diff_state.blame, Loadable::Ready(got) if Arc::ptr_eq(got, &lines)));
+    assert!(repo.diff_state.retained_blame_while_loading.is_none());
 }
 
 #[test]
@@ -2963,9 +2960,9 @@ fn blame_loaded_replaces_the_retained_allocation_when_changed() {
     let lines = Arc::new(vec![blame_line("let x = 1;")]);
     {
         let repo = repo_mut(&mut state, repo_id);
-        repo.history_state.blame_path = Some(path.clone());
-        repo.history_state.blame_source = Some(source.clone());
-        repo.history_state.blame = Loadable::Ready(Arc::clone(&lines));
+        repo.diff_state.blame_path = Some(path.clone());
+        repo.diff_state.blame_source = Some(source.clone());
+        repo.diff_state.blame = Loadable::Ready(Arc::clone(&lines));
     }
     load_blame(&mut state, repo_id, path.clone(), source.clone());
 
@@ -2978,8 +2975,8 @@ fn blame_loaded_replaces_the_retained_allocation_when_changed() {
     );
 
     let repo = repo_mut(&mut state, repo_id);
-    assert!(matches!(&repo.history_state.blame, Loadable::Ready(got) if !Arc::ptr_eq(got, &lines)));
-    assert!(repo.history_state.retained_blame_while_loading.is_none());
+    assert!(matches!(&repo.diff_state.blame, Loadable::Ready(got) if !Arc::ptr_eq(got, &lines)));
+    assert!(repo.diff_state.retained_blame_while_loading.is_none());
 }
 
 #[test]

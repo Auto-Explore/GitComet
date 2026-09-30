@@ -32,6 +32,7 @@ impl ErrorReport {
 /// Something the details dialog can do about an error.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ErrorAction {
+    Hosted(gitcomet_extension_api::HostedAction),
     /// Write the editor's buffer of `path` in `format`.
     SaveEditorAs {
         repo_id: RepoId,
@@ -55,6 +56,7 @@ pub(crate) enum ErrorAction {
 impl ErrorAction {
     pub(crate) fn label(&self) -> String {
         match self {
+            Self::Hosted(action) => action.label().to_string(),
             Self::SaveEditorAs { format, .. } => {
                 let bom = if format.bom && !format.encoding.is_utf16() {
                     " with BOM"

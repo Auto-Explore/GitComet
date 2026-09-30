@@ -45,7 +45,7 @@ routed_contribution!(SidebarSectionDescriptor);
 /// repository shows (absent: the built-in content).
 pub(in crate::view) struct ViewRouter<D> {
     views: Rc<[(ContributionId, D)]>,
-    selected: FxHashMap<RepoKey, usize>,
+    selected: FxHashMap<std::path::PathBuf, usize>,
     built: FxHashMap<(RepoKey, usize), gpui::AnyView>,
 }
 
@@ -74,13 +74,13 @@ impl<D: RoutedContribution + Clone> ViewRouter<D> {
 
     /// The selected view for `repo`: `None` is the built-in content.
     pub(in crate::view) fn selected(&self, repo: &RepoState) -> Option<usize> {
-        self.selected.get(&repo_key(repo)).copied()
+        self.selected.get(&repo.spec.workdir).copied()
     }
 
     /// The view to show instead of the built-in content, if one is selected.
     pub(in crate::view) fn active_view(&self, repo: &RepoState) -> Option<gpui::AnyView> {
         let key = repo_key(repo);
-        let index = *self.selected.get(&key)?;
+        let index = *self.selected.get(&repo.spec.workdir)?;
         self.built.get(&(key, index)).cloned()
     }
 
@@ -99,7 +99,8 @@ impl<D: RoutedContribution + Clone> ViewRouter<D> {
                 .iter()
                 .any(|repo| repo.id == key.0 && repo.lifetime() == key.1)
         };
-        self.selected.retain(|key, _| open(key));
+        self.selected
+            .retain(|path, _| state.repos.iter().any(|repo| &repo.spec.workdir == path));
         self.built.retain(|(key, _), _| open(key));
     }
 }
@@ -118,6 +119,76 @@ pub(in crate::view) enum RoutedArea {
 }
 
 impl GitCometView {
+    pub(in crate::view) fn extension_navigation_context(
+        &self,
+    ) -> Option<(
+        RepositoryViewContext,
+        Option<gitcomet_extension_api::ViewNavigation>,
+    )> {
+        let repo = self.active_repo()?;
+        let router = self.repository_views.as_ref()?;
+        let selected = router.selected(repo)?;
+        let host = self.extension_window.as_ref()?.host();
+        Some((
+            RepositoryViewContext {
+                window: host,
+                repository: super::extension_host::repository_handle(
+                    self.window_handle.window_id(),
+                    repo,
+                ),
+            },
+            router.views.get(selected)?.1.navigation.clone(),
+        ))
+    }
+
+    pub(in crate::view) fn sync_extension_navigation(&self, cx: &mut gpui::Context<Self>) {
+        let navigation = self.extension_navigation_context();
+        let active_view = self
+            .active_repo()
+            .and_then(|repo| {
+                self.repository_views.as_ref().and_then(|router| {
+                    router.selected(repo).and_then(|index| {
+                        router.views.get(index).map(|(id, _)| {
+                            gitcomet_extension_api::ViewTarget::Extension(id.clone())
+                        })
+                    })
+                })
+            })
+            .unwrap_or(gitcomet_extension_api::ViewTarget::History);
+        self.bottom_status_bar
+            .update(cx, |bar, cx| bar.set_active_view(active_view, cx));
+        let enabled = !self.window_gated && navigation.is_none();
+        self.action_bar
+            .update(cx, |bar, cx| bar.set_extension_navigation(navigation, cx));
+        crate::app::set_diff_fallback_enabled(self.window_handle.window_id(), enabled, cx);
+    }
+
+    pub(in crate::view) fn route_extension_navigation(
+        &self,
+        forward: bool,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let Some((context, navigation)) = self.extension_navigation_context() else {
+            return false;
+        };
+        if let Some(navigation) = navigation {
+            let allowed = if forward {
+                &navigation.can_forward
+            } else {
+                &navigation.can_back
+            };
+            if allowed(&context, cx) {
+                let run = if forward {
+                    navigation.forward
+                } else {
+                    navigation.back
+                };
+                cx.defer(move |cx| run(context, cx));
+            }
+        }
+        true
+    }
+
     pub(in crate::view) fn repository_view_router(cx: &App) -> Option<RepositoryViewRouter> {
         ViewRouter::new(super::extension_host::registry(cx)?.repository_views())
     }
@@ -166,6 +237,7 @@ impl GitCometView {
                 repo,
             ),
         };
+        super::perf::extension_dispatch();
         Some(build(context, window, cx))
     }
 
@@ -182,6 +254,46 @@ impl GitCometView {
         let Some(repo) = self.active_repo().cloned() else {
             return;
         };
+        self.select_routed_for_repo(repo, area, index, window, cx);
+    }
+
+    pub(in crate::view) fn repository_view_index(&self, id: &ContributionId) -> Option<usize> {
+        self.repository_views
+            .as_ref()?
+            .views
+            .iter()
+            .position(|(candidate, _)| candidate == id)
+    }
+
+    pub(in crate::view) fn select_repository_view(
+        &mut self,
+        repository: &gitcomet_extension_api::RepositoryHandle,
+        index: Option<usize>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(repo) = self
+            .state
+            .repos
+            .iter()
+            .find(|repo| {
+                repo.id == repository.repo_id() && repo.lifetime() == repository.lifetime()
+            })
+            .cloned()
+        else {
+            return;
+        };
+        self.select_routed_for_repo(repo, RoutedArea::Main, index, window, cx);
+    }
+
+    fn select_routed_for_repo(
+        &mut self,
+        repo: RepoState,
+        area: RoutedArea,
+        index: Option<usize>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
         let key = repo_key(&repo);
         let (count, current, build) = match area {
             RoutedArea::Main => {
@@ -230,11 +342,15 @@ impl GitCometView {
                 if !views.contains_key(&(key, index)) {
                     return;
                 }
-                selected.insert(key, index);
+                selected.insert(repo.spec.workdir.clone(), index);
             }
             None => {
-                selected.remove(&key);
+                selected.remove(&repo.spec.workdir);
             }
+        }
+        self.sync_extension_navigation(cx);
+        if let Some(extension) = &self.extension_window {
+            extension.emit(gitcomet_extension_api::ShellEvent::ViewChanged, cx);
         }
         cx.notify();
     }

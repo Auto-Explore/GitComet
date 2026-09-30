@@ -93,6 +93,9 @@ impl TextInput {
         });
         Self {
             focus_handle,
+            text_size: options
+                .text_size
+                .filter(|size| size.is_finite() && *size > 0.0),
             probe_action: 0,
             content: TextModel::new(),
             placeholder: options.placeholder,
@@ -693,6 +696,11 @@ impl TextInput {
     }
 
     pub(super) fn effective_line_height(&self, window: &Window) -> Pixels {
+        if let Some(size) = self.text_size {
+            return self
+                .line_height_override
+                .unwrap_or_else(|| crate::ui_scale::design_px_from_window(size * 1.5, window));
+        }
         if self.display_text {
             return window.line_height();
         }

@@ -153,7 +153,7 @@ pub struct UiLaunch {
     pub(super) initial_request: BrowserOpenRequest,
     pub(super) startup_crash_report: Option<StartupCrashReport>,
     pub(super) on_shutdown: Option<ShutdownCallback>,
-    pub(super) browser_requests: Option<smol::channel::Receiver<BrowserOpenRequest>>,
+    pub(super) browser_requests: Option<crate::BrowserRequestReceiver>,
 }
 
 impl UiLaunch {
@@ -202,10 +202,7 @@ impl UiLaunch {
     /// Repository-open requests forwarded by another process. The caller owns
     /// the single-instance transport, which keeps the wire protocol outside
     /// this crate and independently testable.
-    pub fn browser_requests(
-        mut self,
-        requests: Option<smol::channel::Receiver<BrowserOpenRequest>>,
-    ) -> Self {
+    pub fn browser_requests(mut self, requests: Option<crate::BrowserRequestReceiver>) -> Self {
         self.browser_requests = requests;
         self
     }
@@ -283,7 +280,7 @@ pub fn run_with_startup_crash_report_shutdown_callback_and_browser_requests(
     initial_path: Option<PathBuf>,
     startup_crash_report: Option<StartupCrashReport>,
     on_shutdown: Option<impl Fn() + Send + Sync + 'static>,
-    browser_requests: Option<smol::channel::Receiver<BrowserOpenRequest>>,
+    browser_requests: Option<crate::BrowserRequestReceiver>,
 ) -> Result<UiRunOutcome, UiLaunchError> {
     #[allow(deprecated)]
     run_with_startup_crash_report_shutdown_callback_and_initial_browser_request(
@@ -304,7 +301,7 @@ pub fn run_with_startup_crash_report_shutdown_callback_and_initial_browser_reque
     initial_request: BrowserOpenRequest,
     startup_crash_report: Option<StartupCrashReport>,
     on_shutdown: Option<impl Fn() + Send + Sync + 'static>,
-    browser_requests: Option<smol::channel::Receiver<BrowserOpenRequest>>,
+    browser_requests: Option<crate::BrowserRequestReceiver>,
 ) -> Result<UiRunOutcome, UiLaunchError> {
     let mut launch = UiLaunch::new(backend)
         .initial_request(initial_request)
@@ -314,8 +311,83 @@ pub fn run_with_startup_crash_report_shutdown_callback_and_initial_browser_reque
     launch.run()
 }
 
+/// Configuration for a standalone diff using the same pane as repository views.
+#[derive(Clone, Debug)]
+pub struct FocusedDiffConfig {
+    pub label_left: String,
+    pub label_right: String,
+    pub display_path: Option<String>,
+    pub diff_text: String,
+}
+
+impl UiLaunch {
+    pub fn run_focused_diff(self, config: FocusedDiffConfig) -> i32 {
+        install_live_kit_policy();
+        if let Err(err) = ensure_graphics_device_available("focused diff GPUI launch") {
+            eprintln!("Failed to launch focused diff window: {err}");
+            return 2;
+        }
+        let launch = WindowLaunchConfig {
+            title: format!("{} — Diff", identity::current().display_name()),
+            app_id: identity::current().window_app_id(WindowKind::FocusedDiff),
+            view_config: GitCometViewConfig {
+                view_mode: GitCometViewMode::FocusedDiff,
+                focused_diff: Some(config),
+                workspace: WorkspaceBootstrap::Empty,
+                ..Default::default()
+            },
+            browser_open_target: BrowserOpenTarget::ExistingWindow,
+        };
+        match run_with_panic_guard("focused diff GPUI launch", move || {
+            run_windowed_app(
+                self.backend,
+                self.extensions,
+                launch,
+                CleanShutdownTracker::default(),
+                self.on_shutdown,
+                None,
+            )
+        }) {
+            Ok(()) => 0,
+            Err(err) => {
+                eprintln!("Failed to launch focused diff window: {err}");
+                2
+            }
+        }
+    }
+
+    pub fn run_focused_mergetool(self, config: FocusedMergetoolConfig) -> i32 {
+        run_mergetool_with_extensions(self.backend, config, self.extensions)
+    }
+}
+
+/// Compatibility entry point for a snapshot-only standalone diff.
+pub fn run_focused_diff(config: FocusedDiffConfig) -> i32 {
+    struct SnapshotBackend;
+    impl GitBackend for SnapshotBackend {
+        fn open(
+            &self,
+            _: &Path,
+        ) -> gitcomet_core::services::Result<Arc<dyn gitcomet_core::services::GitRepository>>
+        {
+            Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Unsupported("snapshot window has no repository"),
+            ))
+        }
+    }
+    UiLaunch::new(Arc::new(SnapshotBackend)).run_focused_diff(config)
+}
+
 /// Launch the unified focused mergetool window using the shared `GitCometView`.
 pub fn run_focused_mergetool(backend: Arc<dyn GitBackend>, config: FocusedMergetoolConfig) -> i32 {
+    run_mergetool_with_extensions(backend, config, gitcomet_extension_api::Registry::default())
+}
+
+fn run_mergetool_with_extensions(
+    backend: Arc<dyn GitBackend>,
+    config: FocusedMergetoolConfig,
+    extensions: gitcomet_extension_api::Registry,
+) -> i32 {
     install_live_kit_policy();
     if let Err(err) = ensure_graphics_device_available("focused mergetool GPUI launch") {
         eprintln!("Failed to launch focused mergetool window: {err}");
@@ -327,7 +399,7 @@ pub fn run_focused_mergetool(backend: Arc<dyn GitBackend>, config: FocusedMerget
     if let Err(err) = run_with_panic_guard("focused mergetool GPUI launch", move || {
         run_windowed_app(
             backend,
-            gitcomet_extension_api::Registry::default(),
+            extensions,
             launch,
             CleanShutdownTracker::default(),
             None,
@@ -406,6 +478,7 @@ pub(super) fn focused_mergetool_launch_config(
             initial_path: Some(config.repo_path.clone()),
             initial_repository_launch_mode: InitialRepositoryLaunchMode::RestoreSession,
             view_mode: GitCometViewMode::FocusedMergetool,
+            focused_diff: None,
             focused_mergetool: Some(FocusedMergetoolViewConfig {
                 repo_path: config.repo_path.clone(),
                 conflicted_file_path: config.conflicted_file_path.clone(),
@@ -440,7 +513,7 @@ pub(super) fn run_windowed_app(
     launch: WindowLaunchConfig,
     clean_shutdown_tracker: CleanShutdownTracker,
     on_shutdown: Option<ShutdownCallback>,
-    browser_requests: Option<smol::channel::Receiver<BrowserOpenRequest>>,
+    browser_requests: Option<crate::BrowserRequestReceiver>,
 ) {
     let quit_when_all_windows_closed = should_quit_when_all_windows_closed(&launch);
     // Without this, `gpui` keeps its null client and every request — the
@@ -503,7 +576,7 @@ pub(super) fn run_windowed_app(
             bind_app_keys(cx);
             install_app_actions(cx, Arc::clone(&backend));
             if let Some(browser_requests) = browser_requests {
-                register_browser_open_request_handler(cx, Arc::clone(&backend), browser_requests);
+                register_browser_open_request_handler(cx, Arc::clone(&backend), browser_requests.0);
             }
 
             #[cfg(target_os = "macos")]
@@ -624,7 +697,7 @@ pub(super) fn open_initial_gitcomet_windows_after_workspace_initialization(
 }
 
 pub(super) fn should_quit_when_all_windows_closed(launch: &WindowLaunchConfig) -> bool {
-    launch.view_config.view_mode == GitCometViewMode::FocusedMergetool || !cfg!(target_os = "macos")
+    launch.view_config.view_mode != GitCometViewMode::Normal || !cfg!(target_os = "macos")
 }
 
 pub(super) fn open_gitcomet_window(
@@ -683,7 +756,6 @@ pub(super) fn open_gitcomet_window(
     let app_id = launch.app_id.clone();
     let view_config = launch.view_config.clone();
     let ui_scale_percent = ui_scale.percent;
-    let intercept_native_close = view_config.view_mode == GitCometViewMode::Normal;
 
     let window = crate::ui_probe::time_section("open main window", || {
         cx.open_window(
@@ -707,12 +779,10 @@ pub(super) fn open_gitcomet_window(
             },
             move |window, cx| {
                 ui_scale::apply_to_window(window, ui_scale_percent);
-                if intercept_native_close {
-                    window.on_window_should_close(cx, |window, cx| {
-                        close_window_or_warn(window, cx);
-                        false
-                    });
-                }
+                window.on_window_should_close(cx, |window, cx| {
+                    close_window_or_warn(window, cx);
+                    false
+                });
                 #[cfg(test)]
                 let (store, events) = AppStore::new_test(Arc::clone(&backend));
                 #[cfg(not(test))]
@@ -734,10 +804,8 @@ pub(super) fn open_gitcomet_window(
     });
 
     #[cfg(target_os = "macos")]
-    if intercept_native_close {
-        refresh_macos_app_menus(cx);
-    }
-    if intercept_native_close && let Ok(view) = window.update(cx, |_, _, cx| cx.entity()) {
+    refresh_macos_app_menus(cx);
+    if let Ok(view) = window.update(cx, |_, _, cx| cx.entity()) {
         crate::view::extension_host::window_opened(&view, cx);
     }
 

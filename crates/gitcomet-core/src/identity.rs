@@ -27,6 +27,34 @@ pub struct ProductIdentity {
     links: ProductLinks,
     update_source: UpdateSource,
     branding: ProductBranding,
+    hidden_ref_prefixes: &'static [&'static str],
+    overrides: StaticOverrides,
+}
+
+// Static overrides make const builders usable on both borrowed and runtime
+// identities without dropping owned strings during constant evaluation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StaticOverrides {
+    display_name: Option<&'static str>,
+    directory_name: Option<&'static str>,
+    app_id: Option<&'static str>,
+    macos_bundle_id: Option<&'static str>,
+    version: Option<&'static str>,
+    git_tool_name: Option<&'static str>,
+    links: Option<&'static ProductLinks>,
+    update_source: Option<&'static UpdateSource>,
+}
+impl StaticOverrides {
+    const EMPTY: Self = Self {
+        display_name: None,
+        directory_name: None,
+        app_id: None,
+        macos_bundle_id: None,
+        version: None,
+        git_tool_name: None,
+        links: None,
+        update_source: None,
+    };
 }
 
 /// Web pages the application points users at. `None` hides the entry point.
@@ -113,7 +141,7 @@ const GITCOMET_REPOSITORY: &str = "https://github.com/Auto-Explore/GitComet";
 
 impl ProductIdentity {
     /// GitComet's own identity.
-    pub fn gitcomet() -> Self {
+    pub const fn gitcomet() -> Self {
         Self {
             display_name: Cow::Borrowed("GitComet"),
             executable_name: Cow::Borrowed("gitcomet"),
@@ -158,8 +186,95 @@ impl ProductIdentity {
                 owner: Cow::Borrowed("Auto-Explore"),
                 repo: Cow::Borrowed("GitComet"),
             },
-            branding: ProductBranding::default(),
+            branding: ProductBranding {
+                app_icon_png: None,
+                window_icon_png: None,
+                logo_svg: None,
+            },
+            hidden_ref_prefixes: &["refs/pull/", "refs/changes/", "refs/notes/"],
+            overrides: StaticOverrides::EMPTY,
         }
+    }
+
+    /// A compile-time identity, including a distinct reverse-DNS macOS bundle id.
+    /// For names obtained at runtime, use [`Self::builder`].
+    pub const fn new(
+        display_name: &'static str,
+        executable_name: &'static str,
+        bundle_id: &'static str,
+    ) -> Self {
+        assert!(is_reverse_dns(bundle_id), "invalid bundle id");
+        assert!(!display_name.is_empty(), "display name is empty");
+        assert!(is_plain_name(executable_name), "invalid executable name");
+        Self {
+            display_name: Cow::Borrowed(display_name),
+            executable_name: Cow::Borrowed(executable_name),
+            directory_name: Cow::Borrowed(executable_name),
+            app_id: Cow::Borrowed(executable_name),
+            macos_bundle_id: Cow::Borrowed(bundle_id),
+            version: Cow::Borrowed("0.0.0"),
+            git_tool_name: Cow::Borrowed(executable_name),
+            links: ProductLinks {
+                website: None,
+                editions: None,
+                community: None,
+                repository: None,
+                new_issue: None,
+                releases: None,
+                license: None,
+                documentation: None,
+                survey: None,
+            },
+            update_source: UpdateSource::Disabled,
+            branding: ProductBranding {
+                app_icon_png: None,
+                window_icon_png: None,
+                logo_svg: None,
+            },
+            hidden_ref_prefixes: &[],
+            overrides: StaticOverrides::EMPTY,
+        }
+    }
+    pub const fn with_display_name(mut self, value: &'static str) -> Self {
+        assert!(!value.is_empty());
+        self.overrides.display_name = Some(value);
+        self
+    }
+    pub const fn with_directory_name(mut self, value: &'static str) -> Self {
+        assert!(is_plain_name(value));
+        self.overrides.directory_name = Some(value);
+        self
+    }
+    pub const fn with_app_id(mut self, value: &'static str) -> Self {
+        assert!(is_plain_name(value));
+        self.overrides.app_id = Some(value);
+        self
+    }
+    pub const fn with_macos_bundle_id(mut self, value: &'static str) -> Self {
+        assert!(is_reverse_dns(value));
+        self.overrides.macos_bundle_id = Some(value);
+        self
+    }
+    pub const fn with_version(mut self, value: &'static str) -> Self {
+        self.overrides.version = Some(value);
+        self
+    }
+    pub const fn with_git_tool_name(mut self, value: &'static str) -> Self {
+        assert!(is_plain_name(value));
+        self.overrides.git_tool_name = Some(value);
+        self
+    }
+    pub const fn with_links(mut self, value: &'static ProductLinks) -> Self {
+        self.overrides.links = Some(value);
+        self
+    }
+    pub const fn with_update_source(mut self, value: &'static UpdateSource) -> Self {
+        self.overrides.update_source = Some(value);
+        self
+    }
+    pub const fn with_branding(mut self, value: ProductBranding) -> Self {
+        self.branding = value;
+        self
     }
 
     /// Starts a new identity. `executable_name` also becomes the default
@@ -181,14 +296,31 @@ impl ProductIdentity {
                 executable_name,
                 links: ProductLinks::default(),
                 update_source: UpdateSource::Disabled,
-                branding: ProductBranding::default(),
+                branding: ProductBranding {
+                    app_icon_png: None,
+                    window_icon_png: None,
+                    logo_svg: None,
+                },
+                hidden_ref_prefixes: &[],
+                overrides: StaticOverrides::EMPTY,
             },
         }
     }
 
     /// Product name in window titles, menus, and messages.
     pub fn display_name(&self) -> &str {
-        &self.display_name
+        self.overrides.display_name.unwrap_or(&self.display_name)
+    }
+
+    /// Reference namespaces omitted from an all-branches History walk.
+    pub fn hidden_ref_prefixes(&self) -> &'static [&'static str] {
+        self.hidden_ref_prefixes
+    }
+
+    /// Sets the product's default History reference filter.
+    pub const fn with_hidden_ref_prefixes(mut self, prefixes: &'static [&'static str]) -> Self {
+        self.hidden_ref_prefixes = prefixes;
+        self
     }
 
     /// Command name: CLI help, launchers, and the macOS bundle executable.
@@ -198,52 +330,56 @@ impl ProductIdentity {
 
     /// Per-user state, data, and crash directories are named after this.
     pub fn directory_name(&self) -> &str {
-        &self.directory_name
+        self.overrides
+            .directory_name
+            .unwrap_or(&self.directory_name)
     }
 
     /// Desktop app id of the main window, also the launcher and icon name.
     pub fn app_id(&self) -> &str {
-        &self.app_id
+        self.overrides.app_id.unwrap_or(&self.app_id)
     }
 
     pub fn window_app_id(&self, kind: WindowKind) -> String {
         match kind {
-            WindowKind::Main => self.app_id.to_string(),
-            WindowKind::FocusedMergetool => format!("{}-mergetool", self.app_id),
-            WindowKind::FocusedDiff => format!("{}-diff", self.app_id),
-            WindowKind::Settings => format!("{}-settings", self.app_id),
+            WindowKind::Main => self.app_id().to_string(),
+            WindowKind::FocusedMergetool => format!("{}-mergetool", self.app_id()),
+            WindowKind::FocusedDiff => format!("{}-diff", self.app_id()),
+            WindowKind::Settings => format!("{}-settings", self.app_id()),
         }
     }
 
     /// File name of the Linux launcher entry.
     pub fn desktop_file_name(&self) -> String {
-        format!("{}.desktop", self.app_id)
+        format!("{}.desktop", self.app_id())
     }
 
     pub fn macos_bundle_id(&self) -> &str {
-        &self.macos_bundle_id
+        self.overrides
+            .macos_bundle_id
+            .unwrap_or(&self.macos_bundle_id)
     }
 
     pub fn version(&self) -> &str {
-        &self.version
+        self.overrides.version.unwrap_or(&self.version)
     }
 
     /// `git difftool`/`git mergetool` name of the terminal tools.
     pub fn git_tool_name(&self) -> &str {
-        &self.git_tool_name
+        self.overrides.git_tool_name.unwrap_or(&self.git_tool_name)
     }
 
     /// Tool name of the windowed variant, selected by `guiDefault=auto`.
     pub fn git_gui_tool_name(&self) -> String {
-        format!("{}-gui", self.git_tool_name)
+        format!("{}-gui", self.git_tool_name())
     }
 
     pub fn links(&self) -> &ProductLinks {
-        &self.links
+        self.overrides.links.unwrap_or(&self.links)
     }
 
     pub fn update_source(&self) -> &UpdateSource {
-        &self.update_source
+        self.overrides.update_source.unwrap_or(&self.update_source)
     }
 
     pub fn branding(&self) -> ProductBranding {
@@ -330,27 +466,43 @@ impl ProductIdentityBuilder {
 }
 
 /// Safe as a path component, a desktop id, and a Git config subsection.
-fn is_plain_name(value: &str) -> bool {
-    !value.is_empty()
-        && !value.starts_with(['.', '-'])
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-}
-
-fn is_reverse_dns(value: &str) -> bool {
-    let mut labels = 0;
-    for label in value.split('.') {
-        if label.is_empty()
-            || !label
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        {
+const fn is_plain_name(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.is_empty() || matches!(bytes[0], b'.' | b'-') {
+        return false;
+    }
+    let mut i = 0;
+    while i < bytes.len() {
+        if !bytes[i].is_ascii_alphanumeric() && !matches!(bytes[i], b'-' | b'_' | b'.') {
             return false;
         }
-        labels += 1;
+        i += 1;
     }
-    labels >= 2
+    true
+}
+
+const fn is_reverse_dns(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let mut i = 0;
+    let mut labels = 0;
+    let mut length = 0;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if byte == b'.' {
+            if length == 0 {
+                return false;
+            }
+            labels += 1;
+            length = 0;
+        } else {
+            if !byte.is_ascii_alphanumeric() && byte != b'-' {
+                return false;
+            }
+            length += 1;
+        }
+        i += 1;
+    }
+    labels >= 1 && length > 0
 }
 
 /// A write-once identity slot; reading it first freezes the default.
@@ -387,6 +539,24 @@ pub fn current() -> &'static ProductIdentity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn identity_can_be_built_at_compile_time() {
+        const IDENTITY: ProductIdentity =
+            ProductIdentity::new("Example", "example", "com.example.app")
+                .with_app_id("example-desktop")
+                .with_directory_name("example-data")
+                .with_macos_bundle_id("org.example.desktop")
+                .with_version("1.2.3")
+                .with_git_tool_name("example-tool");
+        assert_eq!(
+            IDENTITY.window_app_id(WindowKind::FocusedDiff),
+            "example-desktop-diff"
+        );
+        assert_eq!(IDENTITY.directory_name(), "example-data");
+        assert_eq!(IDENTITY.git_gui_tool_name(), "example-tool-gui");
+        assert_eq!(IDENTITY.version(), "1.2.3");
+    }
 
     #[test]
     fn gitcomet_identity_keeps_the_historical_names() {

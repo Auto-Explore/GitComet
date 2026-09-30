@@ -8,6 +8,7 @@ use crate::diff_session::{
     DiffSessionMsg as Event, DiffSessionWork, DiffViewId,
 };
 use crate::model::RepoState;
+use gitcomet_core::domain::DiffTarget;
 use std::sync::Arc;
 
 pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
@@ -23,10 +24,69 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
             let session = sessions
                 .entry(view)
                 .and_modify(|session| {
+                    if session.target.file_path() != target.file_path() {
+                        session.encoding = None;
+                        session.text_override = None;
+                        session.text_override_rev = session.text_override_rev.wrapping_add(1);
+                    }
+                    session.content_preview = false;
+                    session.edit_mode = false;
+                    session.edit_return_view = None;
                     session.target = target.clone();
+                    session.diff_state.diff_target = Some(target.clone());
+                    session.diff_state.diff_target_rev =
+                        session.diff_state.diff_target_rev.wrapping_add(1);
                     session.blame = Loadable::NotLoaded;
                 })
                 .or_insert_with(|| DiffSession::new(target));
+            load(repo_id, lifetime, view, session)
+        }),
+        Event::Clear {
+            repo_id,
+            lifetime,
+            view,
+        } => with_session(state, repo_id, lifetime, view, |_, session| {
+            session.next_generation();
+            session.diff_state = Default::default();
+            session.pending = Default::default();
+            Vec::new()
+        }),
+        Event::OpenEditor {
+            repo_id,
+            lifetime,
+            view,
+            path,
+        } => with_session(state, repo_id, lifetime, view, |lifetime, session| {
+            if session.edit_mode {
+                return Vec::new();
+            }
+            session.edit_return_view = Some(crate::model::FileEditReturnView {
+                target: session.target.clone(),
+                content_preview: session.content_preview,
+            });
+            let target = DiffTarget::working_tree(path, gitcomet_core::domain::DiffArea::Unstaged);
+            session.target = target.clone();
+            session.diff_target = Some(target);
+            session.diff_target_rev = session.diff_target_rev.wrapping_add(1);
+            session.content_preview = true;
+            session.edit_mode = true;
+            load(repo_id, lifetime, view, session)
+        }),
+        Event::ExitEditor {
+            repo_id,
+            lifetime,
+            view,
+        } => with_session(state, repo_id, lifetime, view, |lifetime, session| {
+            if !session.edit_mode {
+                return Vec::new();
+            }
+            if let Some(previous) = session.edit_return_view.take() {
+                session.target = previous.target.clone();
+                session.diff_target = Some(previous.target);
+                session.content_preview = previous.content_preview;
+                session.diff_target_rev = session.diff_target_rev.wrapping_add(1);
+            }
+            session.edit_mode = false;
             load(repo_id, lifetime, view, session)
         }),
         Event::SetEncoding {
@@ -38,8 +98,57 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
             if session.encoding == encoding {
                 return Vec::new();
             }
+            let Some(path) = session.target.file_path().map(ToOwned::to_owned) else {
+                return Vec::new();
+            };
+            let value = gitcomet_core::text_format::TextOverride {
+                encoding,
+                ..session.text_override_for(&path).unwrap_or_default()
+            };
+            session.text_override =
+                (!value.is_empty()).then_some(crate::model::OpenFileTextOverride { path, value });
+            session.text_override_rev = session.text_override_rev.wrapping_add(1);
             session.encoding = encoding;
             load(repo_id, lifetime, view, session)
+        }),
+        Event::SetTextOverride {
+            repo_id,
+            lifetime,
+            view,
+            path,
+            value,
+        } => with_session(state, repo_id, lifetime, view, |lifetime, session| {
+            if session.target.file_path() != Some(path.as_path())
+                || session.text_override_for(&path).unwrap_or_default() == value
+            {
+                return Vec::new();
+            }
+            let encoding_changed = session.encoding != value.encoding;
+            session.text_override =
+                (!value.is_empty()).then_some(crate::model::OpenFileTextOverride { path, value });
+            session.text_override_rev = session.text_override_rev.wrapping_add(1);
+            session.encoding = value.encoding;
+            session.rev = session.rev.wrapping_add(1);
+            session.diff_state_rev = session.rev;
+            if encoding_changed {
+                load(repo_id, lifetime, view, session)
+            } else {
+                Vec::new()
+            }
+        }),
+        Event::SetContentMode {
+            repo_id,
+            lifetime,
+            view,
+            preview,
+            edit,
+        } => with_session(state, repo_id, lifetime, view, |_, session| {
+            session.content_preview = preview;
+            session.edit_mode =
+                preview && edit && matches!(session.target, DiffTarget::WorkingTree { .. });
+            session.rev = session.rev.wrapping_add(1);
+            session.diff_state_rev = session.rev;
+            Vec::new()
         }),
         Event::Reload {
             repo_id,
@@ -171,17 +280,24 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                 .get_mut(&view)
                 .expect("checked above");
             match content {
+                DiffSessionContent::Attributes(result) => {
+                    session.pending.attributes = false;
+                    session.text_attributes = loadable(result.map(Arc::new));
+                    session.text_attributes_rev = session.text_attributes_rev.wrapping_add(1);
+                }
                 DiffSessionContent::Patch(result) => {
                     session.pending.patch = false;
+                    session.diff_rev = session.diff_rev.wrapping_add(1);
                     session.diff = loadable(result.map(Arc::new));
                 }
                 DiffSessionContent::FileText(result) => {
                     session.pending.file_text = false;
-                    session.file_text = loadable(result.map(|text| text.map(Arc::new)));
+                    session.diff_file_rev = session.diff_file_rev.wrapping_add(1);
+                    session.diff_file = loadable(result.map(|text| text.map(Arc::new)));
                 }
                 DiffSessionContent::Image(result) => {
                     session.pending.image = false;
-                    session.file_image = loadable(result.map(|image| image.map(Arc::new)));
+                    session.diff_file_image = loadable(result.map(|image| image.map(Arc::new)));
                 }
                 DiffSessionContent::Blame(result) => {
                     session.pending.blame = false;
@@ -189,6 +305,8 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                 }
             }
             session.rev = session.rev.wrapping_add(1);
+            session.diff_state.diff_state_rev = session.rev;
+            session.diff_reload_in_flight = session.is_loading();
             if session.refresh_queued && !session.is_loading() {
                 refresh(repo_id, lifetime, view, session)
             } else {
@@ -269,12 +387,17 @@ fn load_blame(
     view: DiffViewId,
     session: &mut DiffSession,
 ) -> Vec<Effect> {
+    if session.diff_target.is_none() {
+        return Vec::new();
+    }
     let Some((path, source)) = session.blame_source() else {
         return Vec::new();
     };
     if matches!(session.blame, Loadable::Loading | Loadable::Ready(_)) {
         return Vec::new();
     }
+    session.blame_path = Some(path.clone());
+    session.blame_source = Some(source.clone());
     session.blame = Loadable::Loading;
     session.pending.blame = true;
     session.rev = session.rev.wrapping_add(1);
@@ -332,14 +455,14 @@ fn refresh(
 ) -> Vec<Effect> {
     let previous = (
         session.diff.clone(),
-        session.file_text.clone(),
-        session.file_image.clone(),
+        session.diff_file.clone(),
+        session.diff_file_image.clone(),
         session.blame.clone(),
     );
     let effects = load(repo_id, lifetime, view, session);
     retain_ready(previous.0, &mut session.diff);
-    retain_ready(previous.1, &mut session.file_text);
-    retain_ready(previous.2, &mut session.file_image);
+    retain_ready(previous.1, &mut session.diff_file);
+    retain_ready(previous.2, &mut session.diff_file_image);
     retain_ready(previous.3, &mut session.blame);
     effects
 }
@@ -400,27 +523,40 @@ fn load(
     view: DiffViewId,
     session: &mut DiffSession,
 ) -> Vec<Effect> {
+    if session.diff_target.is_none() {
+        return Vec::new();
+    }
     let cancellation = session.next_generation();
     let preview = util::diff_target_preview_flags(&session.target);
     let has_file = session.target.file_path().is_some();
     let image = has_file && preview.wants_image;
     let file_text = has_file && (!preview.wants_image || preview.is_svg);
+    session.diff_state_rev = session.rev;
+    session.diff_rev = session.diff_rev.wrapping_add(1);
+    session.diff_file_rev = session.diff_file_rev.wrapping_add(1);
+    session.diff_reload_in_flight = true;
+    session.text_attributes = if has_file {
+        Loadable::Loading
+    } else {
+        Loadable::NotLoaded
+    };
     session.pending = DiffSessionLoads {
+        attributes: has_file,
         patch: true,
         file_text,
         image,
         blame: false,
     };
     session.diff = Loadable::Loading;
-    session.file_text = if file_text {
+    session.diff_file = if file_text {
         Loadable::Loading
     } else {
-        Loadable::Ready(None)
+        Loadable::NotLoaded
     };
-    session.file_image = if image {
+    session.diff_file_image = if image {
         Loadable::Loading
     } else {
-        Loadable::Ready(None)
+        Loadable::NotLoaded
     };
     session.blame = Loadable::NotLoaded;
     let mut effects = vec![Effect::DiffSession(DiffSessionEffect {

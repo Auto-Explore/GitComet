@@ -9,7 +9,7 @@ const MARK_REVIEWED: &str = "com.example.review/mark-reviewed";
 const SHOW_SUMMARY: &str = "com.example.review/show-summary";
 
 fn install_example(app: &mut gpui::App) {
-    let registry = Registry::build(&[Box::new(ReviewExtension)]).expect("valid registration");
+    let registry = Registry::build(vec![Box::new(ReviewExtension)]).expect("valid registration");
     extension_host::install(registry, app);
 }
 
@@ -68,6 +68,7 @@ fn open_window_with_repo(
 
 #[gpui::test]
 fn without_extensions_the_host_adds_nothing(cx: &mut gpui::TestAppContext) {
+    crate::view::perf::take_extension_dispatch_calls();
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -81,6 +82,7 @@ fn without_extensions_the_host_adds_nothing(cx: &mut gpui::TestAppContext) {
     assert!(cx.debug_bounds("repository_view_strip").is_none());
     cx.update(|_window, app| {
         let view = view.read(app);
+        assert_eq!(crate::view::perf::take_extension_dispatch_calls(), 0);
         assert!(extension_host::registry(app).is_none());
         assert!(view.extension_window.is_none());
         assert!(view.repository_views.is_none());

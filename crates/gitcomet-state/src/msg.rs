@@ -18,3 +18,6 @@ pub use repo_external_change::{ChangedPaths, MAX_CHANGED_PATHS, RepoExternalChan
 pub use repo_path::RepoPath;
 pub use repo_path_list::RepoPathList;
 pub use store_event::StoreEvent;
+
+mod fetch;
+pub use fetch::FetchMsg;

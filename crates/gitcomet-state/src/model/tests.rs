@@ -446,7 +446,7 @@ fn app_state_clone_shares_heavy_repo_fields_via_arc() {
         commits: Vec::new(),
         next_cursor: None,
     }));
-    repo.history_state.blame = Loadable::Ready(Arc::new(vec![BlameLine {
+    repo.diff_state.blame = Loadable::Ready(Arc::new(vec![BlameLine {
         commit_id: "c1".into(),
         author: "a".into(),
         author_time_unix: None,
@@ -1405,7 +1405,7 @@ fn grouped_state_defaults_are_initialized() {
         repo.history_state.file_history,
         Loadable::NotLoaded
     ));
-    assert!(matches!(repo.history_state.blame, Loadable::NotLoaded));
+    assert!(matches!(repo.diff_state.blame, Loadable::NotLoaded));
 
     assert!(repo.diff_state.diff_target.is_none());
     assert!(matches!(repo.diff_state.diff, Loadable::NotLoaded));

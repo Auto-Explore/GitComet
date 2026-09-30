@@ -78,9 +78,9 @@ impl MainPaneView {
     /// being compared — conflict views keep their own local/remote wording.
     pub(in crate::view) fn split_diff_pane_labels(&self) -> (&'static str, &'static str) {
         let repo = self.active_repo();
-        let target = repo.and_then(|repo| match &repo.diff_state.diff {
+        let target = repo.and_then(|repo| match &self.bound_diff_state(repo).diff {
             Loadable::Ready(diff) => Some(&diff.target),
-            _ => repo.diff_state.diff_target.as_ref(),
+            _ => self.bound_diff_state(repo).diff_target.as_ref(),
         });
         match target {
             Some(DiffTarget::Commit { .. }) => ("Parent", "This commit"),
@@ -301,7 +301,10 @@ impl MainPaneView {
                     .dispatch(Msg::CloseInlineSubmoduleDiff { repo_id });
                 handled = true;
             }
-            if !handled && let Some(repo_id) = self.active_repo_id() {
+            if !handled
+                && self.store.policy.escape_clears_target
+                && let Some(repo_id) = self.active_repo_id()
+            {
                 self.clear_status_multi_selection(repo_id, cx);
                 self.clear_diff_selection_or_exit(repo_id, cx);
                 handled = true;
@@ -373,7 +376,7 @@ impl MainPaneView {
                 .is_focused(window)
             && let Some(repo_id) = self.active_repo_id()
             && let Some(repo) = self.active_repo()
-            && let Some(diff_target) = repo.diff_state.diff_target.clone()
+            && let Some(diff_target) = self.bound_diff_state(repo).diff_target.clone()
             && let DiffTarget::WorkingTree { path, area, .. } = &diff_target
         {
             let path = path.clone();
@@ -506,7 +509,7 @@ impl MainPaneView {
                 .is_focused(window)
             && let Some(repo_id) = self.active_repo_id()
             && let Some(repo) = self.active_repo()
-            && let Some(diff_target) = repo.diff_state.diff_target.clone()
+            && let Some(diff_target) = self.bound_diff_state(repo).diff_target.clone()
             && let DiffTarget::WorkingTree { path, area, .. } = &diff_target
         {
             let path = path.clone();
@@ -676,9 +679,10 @@ impl MainPaneView {
                 "e" if !mods.shift && crate::external_editor::configured_setting().is_some() => {
                     let full_path = repo.spec.workdir.join(&path);
                     let root_view = self.root_view.clone();
+                    let bound = self.store.binding.is_some();
                     let p = full_path;
                     cx.defer(move |cx| {
-                        if let Some(root) = root_view.upgrade() {
+                        if !bound && let Some(root) = root_view.upgrade() {
                             root.update(cx, |root, cx| {
                                 root.open_path_in_external_code_editor(p, cx);
                             });
@@ -715,7 +719,7 @@ impl MainPaneView {
                 .is_focused(window)
             && let Some(repo_id) = self.active_repo_id()
             && let Some(repo) = self.active_repo()
-            && let Some(diff_target) = repo.diff_state.diff_target.clone()
+            && let Some(diff_target) = self.bound_diff_state(repo).diff_target.clone()
         {
             let path = match &diff_target {
                 DiffTarget::WorkingTree { path, .. } => Some(path.clone()),
@@ -747,9 +751,10 @@ impl MainPaneView {
                     {
                         let full_path = repo.spec.workdir.join(&path);
                         let root_view = self.root_view.clone();
+                        let bound = self.store.binding.is_some();
                         let p = full_path;
                         cx.defer(move |cx| {
-                            if let Some(root) = root_view.upgrade() {
+                            if !bound && let Some(root) = root_view.upgrade() {
                                 root.update(cx, |root, cx| {
                                     root.open_path_in_external_code_editor(p, cx);
                                 });
@@ -843,8 +848,9 @@ impl MainPaneView {
                         self.set_diff_view_mode(DiffViewMode::Split, cx);
                         handled = true;
                         let root_view = self.root_view.clone();
+                        let bound = self.store.binding.is_some();
                         cx.defer(move |cx| {
-                            if let Some(root) = root_view.upgrade() {
+                            if !bound && let Some(root) = root_view.upgrade() {
                                 root.update(cx, |root, cx| {
                                     root.set_diff_view_mode(DiffViewMode::Split, cx);
                                 });
@@ -863,9 +869,10 @@ impl MainPaneView {
                         self.set_diff_view_mode(new_mode, cx);
                         handled = true;
                         let root_view = self.root_view.clone();
+                        let bound = self.store.binding.is_some();
                         let mode = new_mode;
                         cx.defer(move |cx| {
-                            if let Some(root) = root_view.upgrade() {
+                            if !bound && let Some(root) = root_view.upgrade() {
                                 root.update(cx, |root, cx| {
                                     root.set_diff_view_mode(mode, cx);
                                 });
@@ -879,10 +886,15 @@ impl MainPaneView {
                 }
                 "b" if !markdown_preview_active && !conflict_preview_active => {
                     let next = !self.annotate_enabled;
+                    if !self.store.policy.allow_annotate {
+                        return false;
+                    }
+                    self.annotate_enabled = next;
                     handled = true;
                     let root_view = self.root_view.clone();
+                    let bound = self.store.binding.is_some();
                     cx.defer(move |cx| {
-                        if let Some(root) = root_view.upgrade() {
+                        if !bound && let Some(root) = root_view.upgrade() {
                             root.update(cx, |root, cx| {
                                 root.set_annotate_enabled(next, cx);
                             });
@@ -1221,7 +1233,10 @@ impl MainPaneView {
         // feedback. Toggling off then on retries (see request_blame_for_current_target).
         let blame_status = self
             .annotate_enabled
-            .then(|| self.active_repo().map(|repo| &repo.history_state.blame))
+            .then(|| {
+                self.active_repo()
+                    .map(|repo| &self.bound_diff_state(repo).blame)
+            })
             .flatten();
         // A rendered preview has no annotation gutter to draw into, so the
         // toggle greys out there rather than silently doing nothing — matching
@@ -1265,10 +1280,16 @@ impl MainPaneView {
             .selected_bg(selected_bg)
             .on_click(theme, cx, |this, _e, window, cx| {
                 let next = !this.annotate_enabled;
+                if !this.store.policy.allow_annotate {
+                    return;
+                }
+                this.annotate_enabled = next;
+                cx.notify();
                 this.restore_diff_panel_focus_after_toolbar_action(window, cx);
                 let root_view = this.root_view.clone();
+                let bound = this.store.binding.is_some();
                 cx.defer(move |cx| {
-                    if let Some(root) = root_view.upgrade() {
+                    if !bound && let Some(root) = root_view.upgrade() {
                         root.update(cx, |root, cx| {
                             root.set_annotate_enabled(next, cx);
                         });
@@ -1611,9 +1632,22 @@ impl MainPaneView {
     ) -> bool {
         let diff_visible = self
             .active_repo()
-            .and_then(|repo| repo.diff_state.diff_target.as_ref())
+            .and_then(|repo| self.bound_diff_state(repo).diff_target.as_ref())
             .is_some();
         if !diff_visible {
+            if self.store.binding.is_some()
+                || window
+                    .context_stack()
+                    .iter()
+                    .any(|context| context.contains("TextInput"))
+            {
+                return false;
+            }
+            self.history_view
+                .update(cx, |history, cx| history.open_history_find(window, cx));
+            return true;
+        }
+        if !self.store.policy.search {
             return false;
         }
 
@@ -1823,11 +1857,12 @@ impl MainPaneView {
                 || self.rendered_preview_modes.get(RenderedPreviewKind::Svg)
                     == RenderedPreviewMode::Rendered);
 
-        let (prev_file_btn, next_file_btn) = if show_diff_file_navigation(self.view_mode) {
-            self.diff_prev_next_file_buttons(repo_id, is_conflict_resolver, theme, cx)
-        } else {
-            (None, None)
-        };
+        let (prev_file_btn, next_file_btn) =
+            if self.store.policy.file_navigation && show_diff_file_navigation(self.view_mode) {
+                self.diff_prev_next_file_buttons(repo_id, is_conflict_resolver, theme, cx)
+            } else {
+                (None, None)
+            };
 
         let mut controls = div().flex().items_center().gap_1();
         if self.is_inline_submodule_diff_active()
@@ -1992,8 +2027,9 @@ impl MainPaneView {
                         this.set_diff_view_mode(DiffViewMode::Inline, cx);
                         this.restore_diff_panel_focus_after_toolbar_action(window, cx);
                         let root_view = this.root_view.clone();
+                        let bound = this.store.binding.is_some();
                         cx.defer(move |cx| {
-                            if let Some(root) = root_view.upgrade() {
+                            if !bound && let Some(root) = root_view.upgrade() {
                                 root.update(cx, |root, cx| {
                                     root.set_diff_view_mode(DiffViewMode::Inline, cx);
                                 });
@@ -2021,8 +2057,9 @@ impl MainPaneView {
                         this.set_diff_view_mode(DiffViewMode::Split, cx);
                         this.restore_diff_panel_focus_after_toolbar_action(window, cx);
                         let root_view = this.root_view.clone();
+                        let bound = this.store.binding.is_some();
                         cx.defer(move |cx| {
-                            if let Some(root) = root_view.upgrade() {
+                            if !bound && let Some(root) = root_view.upgrade() {
                                 root.update(cx, |root, cx| {
                                     root.set_diff_view_mode(DiffViewMode::Split, cx);
                                 });
@@ -2241,25 +2278,27 @@ impl MainPaneView {
                     .debug_selector(move || cog_id.to_string())
                     .gitcomet_tooltip(theme, cog_tooltip.into()),
             );
-            controls = controls.child(
-                components::Button::new("diff_close", "")
-                    .start_slot(
-                        svg_icon(
-                            "icons/generic_close.svg",
-                            theme.colors.foreground.secondary,
-                            scaled_px(12.0),
+            controls = controls.when(self.store.policy.close_button, |controls| {
+                controls.child(
+                    components::Button::new("diff_close", "")
+                        .start_slot(
+                            svg_icon(
+                                "icons/generic_close.svg",
+                                theme.colors.foreground.secondary,
+                                scaled_px(12.0),
+                            )
+                            .debug_selector(|| "diff_close_icon".to_string()),
                         )
-                        .debug_selector(|| "diff_close_icon".to_string()),
-                    )
-                    .style(components::ButtonStyle::Transparent)
-                    .on_click(theme, cx, move |this, _e, _w, cx| {
-                        this.clear_status_multi_selection(repo_id, cx);
-                        this.clear_diff_selection_or_exit(repo_id, cx);
-                        cx.notify();
-                    })
-                    .debug_selector(|| "diff_close".to_string())
-                    .gitcomet_tooltip(theme, "Close diff".into()),
-            );
+                        .style(components::ButtonStyle::Transparent)
+                        .on_click(theme, cx, move |this, _e, _w, cx| {
+                            this.clear_status_multi_selection(repo_id, cx);
+                            this.clear_diff_selection_or_exit(repo_id, cx);
+                            cx.notify();
+                        })
+                        .debug_selector(|| "diff_close".to_string())
+                        .gitcomet_tooltip(theme, "Close diff".into()),
+                )
+            });
         }
 
         let header = div()
@@ -2738,8 +2777,8 @@ impl MainPaneView {
                                                 );
                                             let list = uniform_list(
                                                 "diff",
-                                                self.diff_visible_len(),
-                                                cx.processor(Self::render_diff_rows),
+                                                self.diff_list_len(),
+                                                cx.processor(Self::render_projected_inline),
                                             )
                                             .h_full()
                                             .min_h(px(0.0))
@@ -2796,7 +2835,7 @@ impl MainPaneView {
                                             self.sync_diff_split_scroll();
                                             let vertical_sync_enabled =
                                                 self.diff_scroll_sync.includes_vertical();
-                                            let count = self.diff_visible_len();
+                                            let count = self.diff_list_len();
                                             let horizontal_scrollbar_gutter =
                                                 components::Scrollbar::gutter(
                                                     components::ScrollbarAxis::Horizontal,
@@ -2828,7 +2867,7 @@ impl MainPaneView {
                                             let left = uniform_list(
                                                 "diff_split_left",
                                                 count,
-                                                cx.processor(Self::render_diff_split_left_rows),
+                                                cx.processor(Self::render_projected_left),
                                             )
                                             .h_full()
                                             .min_h(px(0.0))
@@ -2850,7 +2889,7 @@ impl MainPaneView {
                                             let right = uniform_list(
                                                 "diff_split_right",
                                                 count,
-                                                cx.processor(Self::render_diff_split_right_rows),
+                                                cx.processor(Self::render_projected_right),
                                             )
                                             .h_full()
                                             .min_h(px(0.0))

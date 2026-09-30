@@ -2694,11 +2694,11 @@ fn state_with_loaded_diff_and_blame(
         source_path: None,
         prior_commit: None,
     }]);
-    repo_state.history_state.blame_path = Some(PathBuf::from("src/lib.rs"));
-    repo_state.history_state.blame_source = Some(gitcomet_core::domain::BlameSource::WorkingTree(
+    repo_state.diff_state.blame_path = Some(PathBuf::from("src/lib.rs"));
+    repo_state.diff_state.blame_source = Some(gitcomet_core::domain::BlameSource::WorkingTree(
         gitcomet_core::domain::DiffArea::Unstaged,
     ));
-    repo_state.history_state.blame = Loadable::Ready(Arc::clone(&blame));
+    repo_state.diff_state.blame = Loadable::Ready(Arc::clone(&blame));
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
     (state, target, blame)
@@ -2751,7 +2751,7 @@ fn diff_loaded_identical_content_skips_rev_bumps_and_keeps_blame() {
         "an unchanged reload must keep the existing Arc so identity fingerprints stay put"
     );
     assert!(
-        matches!(&repo_state.history_state.blame, Loadable::Ready(lines) if Arc::ptr_eq(lines, &blame)),
+        matches!(&repo_state.diff_state.blame, Loadable::Ready(lines) if Arc::ptr_eq(lines, &blame)),
         "blame must survive a reload that found no change"
     );
 }
@@ -2782,18 +2782,18 @@ fn diff_loaded_changed_content_bumps_revs_and_invalidates_blame() {
         diff_state_rev.wrapping_add(1)
     );
     assert!(
-        matches!(repo_state.history_state.blame, Loadable::NotLoaded),
+        matches!(repo_state.diff_state.blame, Loadable::NotLoaded),
         "blame is derived from the diff content, so changed content invalidates it"
     );
     // The target is preserved so the view reloads the same file's blame, and the
     // outgoing annotations stay painted meanwhile.
     assert_eq!(
-        repo_state.history_state.blame_path.as_deref(),
+        repo_state.diff_state.blame_path.as_deref(),
         Some(std::path::Path::new("src/lib.rs"))
     );
     assert!(
         repo_state
-            .history_state
+            .diff_state
             .retained_blame_while_loading
             .as_ref()
             .is_some_and(|held| Arc::ptr_eq(held, &blame))
@@ -2877,7 +2877,7 @@ fn diff_file_loaded_identical_content_skips_rev_bumps_and_keeps_blame() {
     assert_eq!(repo_state.diff_state.diff_file_rev, diff_file_rev);
     assert_eq!(repo_state.diff_state.diff_state_rev, diff_state_rev);
     assert!(
-        matches!(&repo_state.history_state.blame, Loadable::Ready(lines) if Arc::ptr_eq(lines, &blame))
+        matches!(&repo_state.diff_state.blame, Loadable::Ready(lines) if Arc::ptr_eq(lines, &blame))
     );
 }
 
@@ -2904,10 +2904,7 @@ fn diff_file_loaded_changed_content_bumps_revs_and_invalidates_blame() {
         repo_state.diff_state.diff_file_rev,
         diff_file_rev.wrapping_add(1)
     );
-    assert!(matches!(
-        repo_state.history_state.blame,
-        Loadable::NotLoaded
-    ));
+    assert!(matches!(repo_state.diff_state.blame, Loadable::NotLoaded));
 }
 
 #[test]

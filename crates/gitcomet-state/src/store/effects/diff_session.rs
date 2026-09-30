@@ -50,6 +50,9 @@ pub(super) fn schedule(
                     file_text,
                     image,
                 } => {
+                    if let Some(path) = target.file_path() {
+                        send(DiffSessionContent::Attributes(repo.text_attributes(path)));
+                    }
                     if patch {
                         send(DiffSessionContent::Patch(
                             repo.diff_parsed_with_encoding_cancellable(
@@ -76,6 +79,22 @@ pub(super) fn schedule(
                 }
                 DiffSessionWork::Changes { source } => {
                     let result = match source {
+                        crate::diff_session::ChangeSource::Worktree {
+                            area,
+                            include_untracked,
+                        } => {
+                            let status = match area {
+                                gitcomet_core::domain::DiffArea::Staged => {
+                                    repo.staged_status_cancellable(&cancellation)
+                                }
+                                gitcomet_core::domain::DiffArea::Unstaged => {
+                                    repo.worktree_status_cancellable(&cancellation)
+                                }
+                            };
+                            status.map(|files| (None, files.into_iter()
+                                .filter(|file| include_untracked || file.kind != gitcomet_core::domain::FileStatusKind::Untracked)
+                                .map(|file| gitcomet_core::domain::CommitFileChange::new(file.path, file.kind)).collect()))
+                        }
                         crate::diff_session::ChangeSource::Commit(id) => repo
                             .commit_details(&id)
                             .map(|details| (details.parent_ids.first().cloned(), details.files)),

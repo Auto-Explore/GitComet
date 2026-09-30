@@ -386,7 +386,7 @@ pub(in crate::view::panes::main) struct RemoteMarkdownImageSummaryCache {
 
 pub(crate) struct MainPaneView {
     // Store, theme, and window wiring.
-    pub(in crate::view) store: Arc<AppStore>,
+    pub(in crate::view) store: crate::view::pane_store::PaneStore,
     pub(in crate::view::panes::main) state: Arc<AppState>,
     pub(in crate::view) view_mode: GitCometViewMode,
     pub(in crate::view) focused_mergetool_labels: Option<FocusedMergetoolLabels>,
@@ -399,6 +399,9 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
     pub(in crate::view::panes::main) notify_fingerprint: u64,
     pub(in crate::view) active_context_menu_invoker: Option<SharedString>,
+
+    pub(in crate::view) hosted_decor: Option<super::super::hosted_binding::HostedDiffDecor>,
+    pub(in crate::view) hosted_content_width: Option<Pixels>,
 
     // Surrounding pane layout, as last rendered.
     pub(in crate::view) last_window_size: Size<Pixels>,

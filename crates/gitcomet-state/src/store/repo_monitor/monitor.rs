@@ -23,6 +23,7 @@ pub(super) struct MonitorConfig {
     /// Set while a watch lease holds this repository: its changes are
     /// delivered even when another repository is active.
     pub leased: Arc<AtomicBool>,
+    pub worktree_owner: Option<(u64, PathBuf)>,
     #[cfg(test)]
     pub native_events: Option<Arc<AtomicU64>>,
     #[cfg(test)]
@@ -39,6 +40,7 @@ impl Default for MonitorConfig {
             dir_limit: MAX_WORKTREE_WATCH_DIRS,
             before_registration: None,
             leased: Arc::default(),
+            worktree_owner: None,
             #[cfg(test)]
             native_events: None,
             #[cfg(test)]
@@ -507,12 +509,21 @@ pub(super) fn repo_monitor_thread(
     let mut rebuild = None;
     let mut idle_at = Instant::now() + config.idle_tick;
     let leased = Arc::clone(&config.leased);
+    let worktree_owner = config.worktree_owner.clone();
     let flush = |change| {
         let active = active_repo_id.load(Ordering::Relaxed);
         if active == repo_id.0 || leased.load(Ordering::Relaxed) {
             trace_repo_monitor_flush("flush", repo_id, &change, active);
             msg_tx.send_repo_monitor_or_log(
-                Msg::RepoExternallyChanged { repo_id, change },
+                match &worktree_owner {
+                    Some((lifetime, path)) => Msg::WorktreeExternallyChanged {
+                        repo_id,
+                        lifetime: *lifetime,
+                        path: path.clone(),
+                        change,
+                    },
+                    None => Msg::RepoExternallyChanged { repo_id, change },
+                },
                 "repo monitor flush",
             );
         }

@@ -69,3 +69,68 @@ pub fn selectable_field(theme: AppTheme, label: impl Into<SharedString>, value: 
                 .child(value),
         )
 }
+
+/// A navigation tab with an optional icon and badge and a selected underline.
+/// Attach activation with the interaction kit's `on_activate` after rendering.
+pub struct NavTab {
+    id: SharedString,
+    label: SharedString,
+    icon: Option<SharedString>,
+    badge: Option<SharedString>,
+    selected: bool,
+}
+
+impl NavTab {
+    pub fn new(id: impl Into<SharedString>, label: impl Into<SharedString>) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            icon: None,
+            badge: None,
+            selected: false,
+        }
+    }
+
+    pub fn icon(mut self, icon: impl Into<SharedString>) -> Self {
+        self.icon = Some(icon.into());
+        self
+    }
+
+    pub fn badge(mut self, badge: impl Into<SharedString>) -> Self {
+        self.badge = Some(badge.into());
+        self
+    }
+
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
+    }
+
+    pub fn render(self, theme: AppTheme, scale: UiScale) -> gpui::Stateful<Div> {
+        let mut button = navigation_tab(self.id, self.label, self.selected, None, theme);
+        if let Some(icon) = self.icon {
+            button = button.start_slot(
+                gpui::svg()
+                    .path(icon)
+                    .size(scale.px(14.0))
+                    .text_color(theme.colors.foreground.secondary),
+            );
+        }
+        if let Some(badge) = self.badge {
+            button = button.end_slot(
+                div()
+                    .px(scale.px(4.0))
+                    .rounded(scale.px(8.0))
+                    .bg(theme.colors.surface.raised)
+                    .child(badge),
+            );
+        }
+        navigation_tab_metrics(button.render(theme, scale), theme, scale)
+            .border_b_2()
+            .border_color(if self.selected {
+                theme.colors.accent.foreground
+            } else {
+                gpui::rgba(0x00000000)
+            })
+    }
+}

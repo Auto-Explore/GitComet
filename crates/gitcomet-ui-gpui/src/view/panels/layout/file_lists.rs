@@ -278,15 +278,16 @@ impl DetailsPaneView {
                 .child("No files match this filter.")
                 .into_any_element()
         } else {
-            Self::vertical_scroll_frame(
+            Self::vertical_scroll_frame_content(
                 theme,
                 ("commit_details_files_container", repo_id.0),
                 ("commit_details_files_scrollbar", repo_id.0),
                 &self.commit_files_scroll,
-                uniform_list(
-                    ("commit_details_files_list", repo_id.0),
+                self.changed_file_list(
+                    repo_id,
+                    crate::view::rows::FileListId::CommitFiles,
                     row_count,
-                    cx.processor(Self::render_commit_file_rows),
+                    cx,
                 ),
             )
             .min_h(crate::view::rows::sidebar::sidebar_list_row_height(

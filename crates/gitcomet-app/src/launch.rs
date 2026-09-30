@@ -129,11 +129,12 @@ pub(crate) fn run_mode(
     mode: AppMode,
     extensions: crate::Extensions,
     repository_options: gitcomet_core::services::RepositoryOptions,
+    backend_override: Option<std::sync::Arc<dyn gitcomet_core::services::GitBackend>>,
 ) -> i32 {
     // Validated in every mode, so a broken product fails the same way
     // whichever mode it is started in.
     #[cfg(feature = "ui-gpui-runtime")]
-    let extensions = match gitcomet_extension_api::Registry::build(&extensions) {
+    let extensions = match gitcomet_extension_api::Registry::build(extensions) {
         Ok(registry) => registry,
         Err(errors) => {
             for error in errors {
@@ -147,9 +148,9 @@ pub(crate) fn run_mode(
 
     install_configured_git_executable_preference(&mode);
     #[cfg(feature = "ui-gpui-runtime")]
-    let backend = || build_backend(&repository_options);
+    let backend = || build_backend(&repository_options, backend_override.clone());
     #[cfg(not(feature = "ui-gpui-runtime"))]
-    let _ = &repository_options;
+    let _ = (&repository_options, &backend_override);
 
     #[cfg(all(target_os = "linux", feature = "ui-gpui-runtime"))]
     if let Some(code) = maybe_relaunch_with_linux_x11_fallback(&mode) {
@@ -187,7 +188,9 @@ pub(crate) fn run_mode(
                     display_path: config.display_path.clone(),
                     diff_text: result.stdout.clone(),
                 };
-                return gitcomet_ui_gpui::run_focused_diff(gui_config);
+                return gitcomet_ui_gpui::UiLaunch::new(backend())
+                    .extensions(extensions)
+                    .run_focused_diff(gui_config);
             }
 
             emit(result)
@@ -229,7 +232,9 @@ pub(crate) fn run_mode(
                     }
                 };
                 let backend = backend();
-                return gitcomet_ui_gpui::run_focused_mergetool(backend, gui_config);
+                return gitcomet_ui_gpui::UiLaunch::new(backend)
+                    .extensions(extensions)
+                    .run_focused_mergetool(gui_config);
             }
 
             emit(mergetool_mode::run_mergetool(&config))
@@ -596,6 +601,7 @@ fn print_startup_crash_report_hint(report: &crashlog::StartupCrashReport) {
 #[cfg(feature = "ui-gpui-runtime")]
 fn build_backend(
     options: &gitcomet_core::services::RepositoryOptions,
+    backend_override: Option<std::sync::Arc<dyn gitcomet_core::services::GitBackend>>,
 ) -> std::sync::Arc<dyn gitcomet_core::services::GitBackend> {
     #[cfg(feature = "gix")]
     let backend: std::sync::Arc<dyn gitcomet_core::services::GitBackend> =
@@ -603,6 +609,7 @@ fn build_backend(
     #[cfg(not(feature = "gix"))]
     let backend: std::sync::Arc<dyn gitcomet_core::services::GitBackend> =
         std::sync::Arc::new(gitcomet_core::services::UnavailableGitBackend);
+    let backend = backend_override.unwrap_or(backend);
     if options.is_default() {
         backend
     } else {

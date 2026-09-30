@@ -522,7 +522,7 @@ fn file_history_enter_activates_row_and_closes_picker(cx: &mut gpui::TestAppCont
     file_history_picker!(cx, host);
     let store = cx.update(|_, app| {
         let host = host.read(app);
-        let store = host.store.clone();
+        let store = host.store.store_for_test();
         store.replace_snapshot_for_test(Arc::clone(&host.state));
         store.insert_repo_for_test(
             RepoId(1),
@@ -552,7 +552,7 @@ fn file_history_show_changes_opens_a_file_diff_and_closes_picker(cx: &mut gpui::
     file_history_picker!(cx, host);
     let store = cx.update(|_, app| {
         let host = host.read(app);
-        let store = host.store.clone();
+        let store = host.store.store_for_test();
         store.replace_snapshot_for_test(Arc::clone(&host.state));
         store.insert_repo_for_test(
             RepoId(1),

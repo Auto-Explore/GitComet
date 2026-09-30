@@ -9,9 +9,11 @@ impl Render for GitCometView {
         #[cfg(test)]
         clear_visible_tooltip_text_for_test();
 
+        let gate_content = self.window_gate_content(window, cx);
+
         // The repository bar takes drops once repositories are open; Home
         // takes them before that.
-        let external_repo_drop_enabled = renders_full_chrome(self.view_mode);
+        let external_repo_drop_enabled = !self.window_gated && renders_full_chrome(self.view_mode);
         if self.external_drag_paths.is_some()
             && (!external_repo_drop_enabled
                 || (!cx.has_active_drag() && !self.external_drag_drop_pending))
@@ -23,7 +25,9 @@ impl Render for GitCometView {
         let font_preferences = crate::font_preferences::current(cx);
         debug_assert!(matches!(
             self.view_mode,
-            GitCometViewMode::Normal | GitCometViewMode::FocusedMergetool
+            GitCometViewMode::Normal
+                | GitCometViewMode::FocusedMergetool
+                | GitCometViewMode::FocusedDiff
         ));
         let next_window_size = window.viewport_size();
         let previous_window_width = self.last_window_size.width;
@@ -222,7 +226,7 @@ impl Render for GitCometView {
             .map(cursor_style_for_resize_edge)
             .unwrap_or(CursorStyle::Arrow);
 
-        let center_content = self.center_content(window, cx);
+        let center_content = gate_content.unwrap_or_else(|| self.center_content(window, cx));
         let font_features =
             crate::font_preferences::applied_font_features(font_preferences.use_font_ligatures);
         let show_custom_window_chrome =
@@ -490,7 +494,31 @@ impl Render for GitCometView {
         }
         root = root.child(UiScaleScrollCapture { view: cx.entity() });
         root = root
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if this.view_mode != GitCometViewMode::FocusedDiff
+                    || event.keystroke.modifiers != gpui::Modifiers::default()
+                    || !matches!(event.keystroke.key.as_str(), "escape" | "q")
+                    || window.context_stack().iter().any(|context| {
+                        context.contains("TextInput")
+                            || context.contains("ContextMenu")
+                            || context.contains("PopoverPrompt")
+                    })
+                {
+                    return;
+                }
+                let handle = window.window_handle();
+                cx.defer(move |cx| {
+                    let _ = handle.update(cx, |_, window, cx| {
+                        crate::app::close_window_or_warn(window, cx)
+                    });
+                });
+                cx.stop_propagation();
+            }))
             .on_action(cx.listener(|this, _: &OpenActiveViewSearch, window, cx| {
+                if !this.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
+                    cx.stop_propagation();
+                    return;
+                }
                 let handled = this
                     .main_pane
                     .update(cx, |pane, cx| pane.open_search_for_active_view(window, cx));
@@ -529,10 +557,18 @@ impl Render for GitCometView {
                 cx.stop_propagation();
             }))
             .on_action(cx.listener(|this, _: &LocateFileInExplorer, _window, cx| {
+                if !this.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
+                    cx.stop_propagation();
+                    return;
+                }
                 this.locate_open_file_in_explorer(cx);
                 cx.stop_propagation();
             }))
             .on_action(cx.listener(|this, _: &OpenRemoteInBrowser, window, cx| {
+                if !this.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
+                    cx.stop_propagation();
+                    return;
+                }
                 this.open_remote_in_browser(window, cx);
                 cx.stop_propagation();
             }))
@@ -543,6 +579,10 @@ impl Render for GitCometView {
                 }
             }))
             .on_action(cx.listener(|this, _: &TextInputCommitSubmit, window, cx| {
+                if !this.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
+                    cx.stop_propagation();
+                    return;
+                }
                 let handled = this.details_pane.update(cx, |pane, cx| {
                     pane.handle_commit_submit_shortcut(window, cx)
                 });
@@ -551,6 +591,10 @@ impl Render for GitCometView {
                 }
             }))
             .on_action(cx.listener(|this, _: &TextInputDiffPrevFile, _window, cx| {
+                if !this.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
+                    cx.stop_propagation();
+                    return;
+                }
                 if !show_diff_file_navigation(this.view_mode) {
                     cx.stop_propagation();
                     return;
@@ -559,6 +603,10 @@ impl Render for GitCometView {
                 cx.stop_propagation();
             }))
             .on_action(cx.listener(|this, _: &TextInputDiffNextFile, _window, cx| {
+                if !this.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
+                    cx.stop_propagation();
+                    return;
+                }
                 if !show_diff_file_navigation(this.view_mode) {
                     cx.stop_propagation();
                     return;
@@ -583,6 +631,10 @@ impl Render for GitCometView {
                 },
             ))
             .on_action(cx.listener(|this, _: &DiffPrevFile, _window, cx| {
+                if !this.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
+                    cx.stop_propagation();
+                    return;
+                }
                 if !show_diff_file_navigation(this.view_mode) {
                     cx.stop_propagation();
                     return;
@@ -591,6 +643,10 @@ impl Render for GitCometView {
                 cx.stop_propagation();
             }))
             .on_action(cx.listener(|this, _: &DiffNextFile, _window, cx| {
+                if !this.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
+                    cx.stop_propagation();
+                    return;
+                }
                 if !show_diff_file_navigation(this.view_mode) {
                     cx.stop_propagation();
                     return;

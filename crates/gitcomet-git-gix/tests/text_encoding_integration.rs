@@ -494,6 +494,20 @@ fn utf16_without_attributes_is_binary_to_git_but_text_to_the_file_view() {
     let text = file_text(&*repo, &target, None);
     assert_eq!(read_side(text.old_source.as_ref()), "hello\r\n");
     assert_eq!(read_side(text.new_source.as_ref()), "hello\r\nworld\r\n");
+    for (source, original) in [
+        (text.old_source.as_ref().unwrap(), "hello\r\n"),
+        (text.new_source.as_ref().unwrap(), "hello\r\nworld\r\n"),
+    ] {
+        assert_eq!(
+            fs::read(source.raw_path.as_ref().expect("original UTF-16 source")).unwrap(),
+            utf16(original)
+        );
+    }
+    let cached = file_text(&*repo, &target, None);
+    assert_eq!(
+        cached.new_source.as_ref().unwrap().raw_path,
+        text.new_source.as_ref().unwrap().raw_path
+    );
     let new = text.new_source.unwrap().format.unwrap();
     assert_eq!(new.format.encoding, TextEncoding::UTF_16LE);
     assert!(new.format.bom);

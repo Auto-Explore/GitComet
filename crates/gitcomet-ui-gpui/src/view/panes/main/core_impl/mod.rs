@@ -60,6 +60,15 @@ pub(super) fn uniform_list_base_handle(handle: &UniformListScrollHandle) -> Scro
 }
 
 impl MainPaneView {
+    /// The diff bound to this pane. Hosted panes supply a session projection;
+    /// History supplies the repository's own selection.
+    pub(in crate::view) fn bound_diff_state<'a>(
+        &self,
+        repo: &'a RepoState,
+    ) -> &'a gitcomet_state::model::DiffState {
+        &repo.diff_state
+    }
+
     pub(in crate::view) fn sync_interactive_commit_editor_states(&mut self) {
         let repos_with_setup: Vec<RepoId> = self
             .state
@@ -286,10 +295,10 @@ impl MainPaneView {
             }
             // Blame/annotate data — when blame loads for the first time or changes
             // target, the annotation sidebar needs to repaint.
-            repo.history_state.blame_path.hash(&mut hasher);
-            repo.history_state.blame_source.hash(&mut hasher);
+            repo.diff_state.blame_path.hash(&mut hasher);
+            repo.diff_state.blame_source.hash(&mut hasher);
             matches!(
-                &repo.history_state.blame,
+                &repo.diff_state.blame,
                 gitcomet_state::model::Loadable::Ready(_)
             )
             .hash(&mut hasher);
@@ -303,6 +312,9 @@ impl MainPaneView {
         repo_id: RepoId,
         cx: &mut gpui::Context<Self>,
     ) {
+        if !self.store.policy.close_button {
+            return;
+        }
         match clear_diff_selection_action(self.view_mode) {
             ClearDiffSelectionAction::ClearSelection => {
                 self.store.dispatch(Msg::ClearDiffSelection { repo_id });
@@ -515,6 +527,9 @@ impl MainPaneView {
 
 impl MainPaneView {
     pub(in crate::view) fn sync_root_layout_snapshot(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.store.binding.is_some() {
+            return;
+        }
         let fallback_sidebar = self.layout_sidebar_render_width;
         let fallback_details = self.layout_details_render_width;
         let fallback_sidebar_collapsed = self.layout_sidebar_collapsed;
@@ -1161,8 +1176,8 @@ impl MainPaneView {
             return false;
         };
         self.active_repo().is_some_and(|repo| {
-            repo.history_state.blame_path.as_deref() == Some(path.as_path())
-                && repo.history_state.blame_source.as_ref() == Some(&source)
+            self.bound_diff_state(repo).blame_path.as_deref() == Some(path.as_path())
+                && self.bound_diff_state(repo).blame_source.as_ref() == Some(&source)
         })
     }
 }
@@ -1187,7 +1202,7 @@ impl MainPaneView {
         };
 
         if let Some(repo) = self.active_repo() {
-            let history = &repo.history_state;
+            let history = &self.bound_diff_state(repo);
             let same_target = history.blame_path.as_deref() == Some(path.as_path())
                 && history.blame_source.as_ref() == Some(&source);
             if !should_request_blame(same_target, &history.blame, force) {
@@ -1374,8 +1389,7 @@ impl MainPaneView {
     pub(in crate::view) fn active_inline_submodule_diff(
         &self,
     ) -> Option<&gitcomet_state::model::InlineSubmoduleDiffState> {
-        self.active_repo()?
-            .diff_state
+        self.bound_diff_state(self.active_repo()?)
             .inline_submodule_diff
             .as_ref()
     }
@@ -1394,7 +1408,11 @@ impl MainPaneView {
     pub(in crate::view) fn rendered_diff_target(&self) -> Option<&DiffTarget> {
         self.active_inline_submodule_diff()
             .map(|inline| &inline.target)
-            .or_else(|| self.active_repo()?.diff_state.diff_target.as_ref())
+            .or_else(|| {
+                self.bound_diff_state(self.active_repo()?)
+                    .diff_target
+                    .as_ref()
+            })
     }
 
     /// Whether the content pane is showing a file's full content *at the commit
@@ -1413,14 +1431,18 @@ impl MainPaneView {
         if let Some(inline) = self.active_inline_submodule_diff() {
             Some(&inline.diff)
         } else {
-            self.active_repo().map(|repo| &repo.diff_state.diff)
+            self.active_repo()
+                .map(|repo| &self.bound_diff_state(repo).diff)
         }
     }
 
     pub(in crate::view) fn rendered_patch_diff_rev(&self) -> u64 {
         self.active_inline_submodule_diff()
             .map(|inline| inline.diff_rev)
-            .or_else(|| self.active_repo().map(|repo| repo.diff_state.diff_rev))
+            .or_else(|| {
+                self.active_repo()
+                    .map(|repo| self.bound_diff_state(repo).diff_rev)
+            })
             .unwrap_or(0)
     }
 }
@@ -1448,6 +1470,9 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn schedule_ui_settings_persist(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.store.binding.is_some() {
+            return;
+        }
         let _ = self.root_view.update(cx, |root, cx| {
             root.schedule_ui_settings_persist(cx);
         });
@@ -1572,11 +1597,20 @@ impl MainPaneView {
     ) {
         let kind: PopoverRequest = kind.into();
         let root_view = self.root_view.clone();
+        let bound_pane = self.store.binding.map(|_| cx.entity());
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
             let _ = window_handle.update(cx, |_, window, cx| {
                 let _ = root_view.update(cx, |root, cx| {
-                    root.open_popover_at(kind, anchor, window, cx);
+                    if let Some(pane) = bound_pane {
+                        root.popover_host.update(cx, |host, cx| {
+                            host.bind_diff_pane(pane, cx);
+                            host.open_popover_at(kind, anchor, window, cx);
+                        });
+                        cx.notify();
+                    } else {
+                        root.open_popover_at(kind, anchor, window, cx);
+                    }
                 });
             });
         });
@@ -1591,11 +1625,20 @@ impl MainPaneView {
     ) {
         let kind: PopoverRequest = kind.into();
         let root_view = self.root_view.clone();
+        let bound_pane = self.store.binding.map(|_| cx.entity());
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
             let _ = window_handle.update(cx, |_, window, cx| {
                 let _ = root_view.update(cx, |root, cx| {
-                    root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
+                    if let Some(pane) = bound_pane {
+                        root.popover_host.update(cx, |host, cx| {
+                            host.bind_diff_pane(pane, cx);
+                            host.open_popover_for_bounds(kind, anchor_bounds, window, cx);
+                        });
+                        cx.notify();
+                    } else {
+                        root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
+                    }
                 });
             });
         });
@@ -2038,6 +2081,9 @@ impl MainPaneView {
         repo_id: RepoId,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.store.binding.is_some() {
+            return;
+        }
         let _ = self.root_view.update(cx, |root, cx| {
             root.details_pane.update(cx, |pane, cx| {
                 pane.clear_status_multi_selection(repo_id);
@@ -2082,6 +2128,9 @@ impl MainPaneView {
         repo_id: RepoId,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.store.binding.is_some() {
+            return;
+        }
         let _ = self.root_view.update(cx, |root, cx| {
             root.details_pane.update(cx, |pane, cx| {
                 pane.status_multi_selection.remove(&repo_id);

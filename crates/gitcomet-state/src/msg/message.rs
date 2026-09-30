@@ -304,6 +304,19 @@ pub enum Msg {
         repo_id: RepoId,
         lifetime: u64,
     },
+    /// Keep a linked worktree watched independently of the active repository.
+    WatchWorktree {
+        repo_id: RepoId,
+        lifetime: u64,
+        path: PathBuf,
+        watch: bool,
+    },
+    WorktreeExternallyChanged {
+        repo_id: RepoId,
+        lifetime: u64,
+        path: PathBuf,
+        change: RepoExternalChange,
+    },
     RepoExternallyChanged {
         repo_id: RepoId,
         change: RepoExternalChange,
@@ -838,16 +851,7 @@ pub enum Msg {
         repo_id: RepoId,
         context: SafePushAfterCommitContext,
     },
-    FetchAll {
-        repo_id: RepoId,
-    },
-    /// Fetches exactly `refspecs` from `remote`, through the same
-    /// authentication, progress, retry, and refresh as a full fetch.
-    FetchRefspecs {
-        repo_id: RepoId,
-        remote: String,
-        refspecs: Vec<String>,
-    },
+    Fetch(super::FetchMsg),
     PruneMergedBranches {
         repo_id: RepoId,
     },

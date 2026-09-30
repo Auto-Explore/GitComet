@@ -177,9 +177,12 @@ pub(super) fn install_global_diff_shortcut_fallback(cx: &mut App) {
         }
 
         let window_id = window.window_handle().window_id();
-        let Some(entry) = gitcomet_window_entries(cx).into_iter().find(|entry| {
-            entry.handle.window_id() == window_id && entry.view_mode == GitCometViewMode::Normal
-        }) else {
+        let Some(entry) = cx
+            .try_global::<GitCometWindowRegistry>()
+            .and_then(|registry| registry.windows.get(&window_id))
+            .filter(|entry| entry.diff_fallback_enabled)
+            .cloned()
+        else {
             return;
         };
 

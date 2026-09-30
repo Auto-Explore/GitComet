@@ -125,6 +125,42 @@ jobs:
           cold-cache: ${{ inputs.cold-cache }}
           compiled: "false"
 
+  ui-clippy:
+    name: UI and extension API lint
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install UI native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
+      - uses: ./.github/actions/ci-setup
+        id: setup
+        with:
+          context: ubuntu22-x64-ui-clippy
+          cold-cache: ${{ inputs.cold-cache }}
+          nextest: "false"
+          compiled: "false"
+      - name: Lint public libraries and host
+        run: cargo clippy --locked -p gitcomet-ui-kit -p gitcomet-extension-api -p gitcomet-extension-example -p gitcomet-ui-gpui -p gitcomet-app -- -D warnings
+      - name: Build public documentation
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --locked --no-deps -p gitcomet-ui-kit -p gitcomet-extension-api
+      - name: Check the extension public API snapshot
+        run: python3 scripts/ci/public_api.py
+      - name: Test the downstream example and API contracts
+        run: cargo test --locked -p gitcomet-extension-api -p gitcomet-extension-example
+      - uses: ./.github/actions/ci-finish
+        if: always()
+        with:
+          name: ui-clippy
+          cache-key: ${{ steps.setup.outputs.cache-key }}
+          cache-hit: ${{ steps.setup.outputs.cache-hit }}
+          cold-cache: ${{ inputs.cold-cache }}
+          compiled: "false"
+
   headless:
     name: Headless builds and package test suites
     runs-on: ubuntu-22.04

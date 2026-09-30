@@ -52,6 +52,15 @@ pub fn load(extension: &crate::ExtensionId) -> Option<serde_json::Value> {
     gitcomet_state::session::extension_namespace(extension.as_str())
 }
 
+/// An extension's private data directory. The caller creates it when needed.
+pub fn storage_dir(extension: &crate::ExtensionId) -> Option<std::path::PathBuf> {
+    Some(
+        gitcomet_core::platform::dirs::data_dir()?
+            .join("extensions")
+            .join(extension.as_str()),
+    )
+}
+
 /// Saves (`Some`) or clears (`None`) the extension's session-wide state.
 pub fn save(
     extension: &crate::ExtensionId,
