@@ -228,6 +228,7 @@ mod diff_text_selection;
 mod diff_utils;
 pub(crate) mod error_notices;
 pub(crate) mod extension_host;
+mod extension_panels;
 mod external_drag;
 mod file_diff_display;
 mod fingerprint;

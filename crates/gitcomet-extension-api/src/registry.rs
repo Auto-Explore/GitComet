@@ -2,8 +2,9 @@
 
 use crate::Extension;
 use crate::contributions::{
-    CloseGuard, CommandDescriptor, MenuLocation, RepositoryEntryGate, RepositoryViewDescriptor,
-    SettingsPageDescriptor, StatusItemDescriptor,
+    BottomPanelDescriptor, CloseGuard, CommandDescriptor, DetailsTabDescriptor, MenuLocation,
+    RepositoryEntryGate, RepositoryViewDescriptor, SettingsPageDescriptor,
+    SidebarSectionDescriptor, StatusItemDescriptor,
 };
 use crate::host::WindowHost;
 use crate::id::{ContributionId, ExtensionId};
@@ -49,6 +50,9 @@ pub type WindowOpened = Rc<dyn Fn(WindowHost, &mut App)>;
 pub struct Registrar {
     extension: ExtensionId,
     repository_views: Vec<(ContributionId, RepositoryViewDescriptor)>,
+    bottom_panels: Vec<(ContributionId, BottomPanelDescriptor)>,
+    details_tabs: Vec<(ContributionId, DetailsTabDescriptor)>,
+    sidebar_sections: Vec<(ContributionId, SidebarSectionDescriptor)>,
     status_items: Vec<(ContributionId, StatusItemDescriptor)>,
     settings_pages: Vec<(ContributionId, SettingsPageDescriptor)>,
     commands: Vec<(ContributionId, CommandDescriptor)>,
@@ -66,6 +70,9 @@ impl Registrar {
         Self {
             extension,
             repository_views: Vec::new(),
+            bottom_panels: Vec::new(),
+            details_tabs: Vec::new(),
+            sidebar_sections: Vec::new(),
             status_items: Vec::new(),
             settings_pages: Vec::new(),
             commands: Vec::new(),
@@ -100,6 +107,39 @@ impl Registrar {
     ) -> &mut Self {
         if let Some(id) = self.id(local) {
             self.repository_views.push((id, descriptor));
+        }
+        self
+    }
+
+    pub fn bottom_panel(
+        &mut self,
+        local: impl Into<Cow<'static, str>>,
+        descriptor: BottomPanelDescriptor,
+    ) -> &mut Self {
+        if let Some(id) = self.id(local) {
+            self.bottom_panels.push((id, descriptor));
+        }
+        self
+    }
+
+    pub fn details_tab(
+        &mut self,
+        local: impl Into<Cow<'static, str>>,
+        descriptor: DetailsTabDescriptor,
+    ) -> &mut Self {
+        if let Some(id) = self.id(local) {
+            self.details_tabs.push((id, descriptor));
+        }
+        self
+    }
+
+    pub fn sidebar_section(
+        &mut self,
+        local: impl Into<Cow<'static, str>>,
+        descriptor: SidebarSectionDescriptor,
+    ) -> &mut Self {
+        if let Some(id) = self.id(local) {
+            self.sidebar_sections.push((id, descriptor));
         }
         self
     }
@@ -222,6 +262,9 @@ impl Registrar {
 pub struct Registry {
     extensions: Vec<ExtensionId>,
     repository_views: Vec<(ContributionId, RepositoryViewDescriptor)>,
+    bottom_panels: Vec<(ContributionId, BottomPanelDescriptor)>,
+    details_tabs: Vec<(ContributionId, DetailsTabDescriptor)>,
+    sidebar_sections: Vec<(ContributionId, SidebarSectionDescriptor)>,
     status_items: Vec<(ContributionId, StatusItemDescriptor)>,
     settings_pages: Vec<(ContributionId, SettingsPageDescriptor)>,
     commands: Vec<(ContributionId, CommandDescriptor)>,
@@ -260,6 +303,9 @@ impl Registry {
             }
             registry.extensions.push(id.clone());
             registry.repository_views.extend(registrar.repository_views);
+            registry.bottom_panels.extend(registrar.bottom_panels);
+            registry.details_tabs.extend(registrar.details_tabs);
+            registry.sidebar_sections.extend(registrar.sidebar_sections);
             registry.status_items.extend(registrar.status_items);
             registry.settings_pages.extend(registrar.settings_pages);
             registry.commands.extend(registrar.commands);
@@ -286,6 +332,18 @@ impl Registry {
             (
                 "repository view",
                 duplicates(registry.repository_views.iter().map(|(id, _)| id)),
+            ),
+            (
+                "bottom panel",
+                duplicates(registry.bottom_panels.iter().map(|(id, _)| id)),
+            ),
+            (
+                "details tab",
+                duplicates(registry.details_tabs.iter().map(|(id, _)| id)),
+            ),
+            (
+                "sidebar section",
+                duplicates(registry.sidebar_sections.iter().map(|(id, _)| id)),
             ),
             (
                 "status item",
@@ -370,6 +428,18 @@ impl Registry {
 
     pub fn repository_views(&self) -> &[(ContributionId, RepositoryViewDescriptor)] {
         &self.repository_views
+    }
+
+    pub fn bottom_panels(&self) -> &[(ContributionId, BottomPanelDescriptor)] {
+        &self.bottom_panels
+    }
+
+    pub fn details_tabs(&self) -> &[(ContributionId, DetailsTabDescriptor)] {
+        &self.details_tabs
+    }
+
+    pub fn sidebar_sections(&self) -> &[(ContributionId, SidebarSectionDescriptor)] {
+        &self.sidebar_sections
     }
 
     pub fn status_items(&self) -> &[(ContributionId, StatusItemDescriptor)] {

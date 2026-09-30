@@ -1082,6 +1082,8 @@ pub(crate) struct TerminalPanelResizeState {
 pub(crate) enum BottomPanelTab {
     Terminal,
     Reflog,
+    /// An extension's panel, by its index in the registry.
+    Extension(usize),
 }
 
 /// A cell in alacritty's grid coordinate space. `row` is a `Line`: `0` is the

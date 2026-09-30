@@ -296,3 +296,16 @@ Still to do, deliberately kept out of this step:
   update, so they may read the pane.
 - The example's Changes view flags lines from the gutter (annotations and
   a legend) and adds notes under a selection (insets).
+- Bottom panels, details tabs, and sidebar sections are registry
+  contributions built per repository with a `RepositoryViewContext`.
+  Terminal, Reflog, and extension panels share one bottom tab list and
+  strip (a lone panel still renders without one, and only the terminal
+  renders exactly as before). Which extension panels are open lives in a
+  cell the host and the root view share, so `open_bottom_panel`,
+  `close_bottom_panel`, and `is_bottom_panel_open` never touch the root
+  view; the view is built in a deferred root update.
+- Repository views and details tabs use one `ViewRouter` (select, build on
+  first use, keep until the repository closes); sidebar sections use it to
+  build every section for the active repository, each collapsible. With no
+  such contribution registered, the details and sidebar panes mount through
+  the same cached paths as before (the invalidation guard still checks them).

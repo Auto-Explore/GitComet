@@ -9,10 +9,11 @@
 
 use crate::review_counter::ReviewCounter;
 use gitcomet_extension_api::{
-    CloseDecision, CloseRequest, CloseScope, CommandContext, CommandDescriptor, EntryOrigin,
-    Extension, ExtensionId, GateDecision, MenuLocation, Registrar, RepositoryEntryRequest,
-    RepositoryViewContext, RepositoryViewDescriptor, SettingsPageDescriptor, StatusItemDescriptor,
-    WindowHost,
+    BottomPanelDescriptor, CloseDecision, CloseRequest, CloseScope, CommandContext,
+    CommandDescriptor, DetailsTabDescriptor, EntryOrigin, Extension, ExtensionId, GateDecision,
+    MenuLocation, Registrar, RepositoryEntryRequest, RepositoryViewContext,
+    RepositoryViewDescriptor, SettingsPageDescriptor, SidebarSectionDescriptor,
+    StatusItemDescriptor, WindowHost,
 };
 use gitcomet_ui_kit::components::{Button, ButtonStyle};
 use gitcomet_ui_kit::gpui::prelude::*;
@@ -29,6 +30,9 @@ pub const DENY_MARKER: &str = ".comet-example-deny";
 pub const ICON_PATH: &str = "extensions/com.example.review/icons/review.svg";
 
 const ICON_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M2 8l4 4 8-8" stroke="currentColor" fill="none" stroke-width="2"/></svg>"#;
+
+/// The bottom panel listing this repository's reviews.
+pub const REVIEW_LOG_PANEL: &str = "review-log";
 
 pub fn extension_id() -> ExtensionId {
     ExtensionId::new(EXTENSION_ID).expect("the example id is valid")
@@ -152,6 +156,99 @@ impl Render for ReviewView {
                     }),
             )
     }
+}
+
+/// The bottom panel: this repository's review count in the window.
+pub struct ReviewLog {
+    context: RepositoryViewContext,
+    reviews: Entity<Reviews>,
+    _observe: gitcomet_ui_kit::gpui::Subscription,
+}
+
+impl ReviewLog {
+    fn new(context: RepositoryViewContext, cx: &mut Context<Self>) -> Self {
+        let reviews = reviews(cx);
+        let observe = cx.observe(&reviews, |_, _, cx| cx.notify());
+        Self {
+            context,
+            reviews,
+            _observe: observe,
+        }
+    }
+}
+
+impl Render for ReviewLog {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.context.window.theme(cx);
+        let workdir = self.context.repository.workdir();
+        let count = self
+            .reviews
+            .read(cx)
+            .count(self.context.window.id(), workdir);
+        div()
+            .id("example_review_log")
+            .debug_selector(|| "example_review_log".to_string())
+            .size_full()
+            .p_2()
+            .text_color(theme.colors.foreground.primary)
+            .child(format!("{count} reviews recorded in this window"))
+    }
+}
+
+/// The details tab and the sidebar section: the repository's count, under
+/// `selector` so tests tell them apart.
+pub struct ReviewCount {
+    context: RepositoryViewContext,
+    reviews: Entity<Reviews>,
+    selector: &'static str,
+    _observe: gitcomet_ui_kit::gpui::Subscription,
+}
+
+impl ReviewCount {
+    fn new(context: RepositoryViewContext, selector: &'static str, cx: &mut Context<Self>) -> Self {
+        let reviews = reviews(cx);
+        let observe = cx.observe(&reviews, |_, _, cx| cx.notify());
+        Self {
+            context,
+            reviews,
+            selector,
+            _observe: observe,
+        }
+    }
+}
+
+impl Render for ReviewCount {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.context.window.theme(cx);
+        let workdir = self.context.repository.workdir();
+        let count = self
+            .reviews
+            .read(cx)
+            .count(self.context.window.id(), workdir);
+        let selector = self.selector;
+        div()
+            .id(selector)
+            .debug_selector(move || selector.to_string())
+            .px_3()
+            .py_1()
+            .text_size(theme.ui_text(12.0))
+            .text_color(theme.colors.foreground.secondary)
+            .child(format!("Reviewed {count} times"))
+    }
+}
+
+fn toggle_review_log(context: CommandContext, _window: &mut Window, cx: &mut App) {
+    let Some(repository) = &context.repository else {
+        return;
+    };
+    let panel = extension_id()
+        .contribution(REVIEW_LOG_PANEL)
+        .expect("the panel id is valid");
+    let _ = if context.window.is_bottom_panel_open(repository, &panel, cx) {
+        context.window.close_bottom_panel(repository, &panel, cx)
+    } else {
+        context.window.open_bottom_panel(repository, &panel, cx)
+    };
 }
 
 /// The status item: reviews in this window, out of its open repositories.
@@ -317,6 +414,36 @@ impl Extension for ReviewExtension {
                     }),
                 },
             )
+            .bottom_panel(
+                REVIEW_LOG_PANEL,
+                BottomPanelDescriptor {
+                    title: "Review Log".into(),
+                    icon: ICON_PATH.into(),
+                    build: Rc::new(|context, _window, cx| {
+                        cx.new(|cx| ReviewLog::new(context, cx)).into()
+                    }),
+                },
+            )
+            .details_tab(
+                "review-details",
+                DetailsTabDescriptor {
+                    title: "Review".into(),
+                    build: Rc::new(|context, _window, cx| {
+                        cx.new(|cx| ReviewCount::new(context, "example_review_details", cx))
+                            .into()
+                    }),
+                },
+            )
+            .sidebar_section(
+                "review-sidebar",
+                SidebarSectionDescriptor {
+                    title: "Review".into(),
+                    build: Rc::new(|context, _window, cx| {
+                        cx.new(|cx| ReviewCount::new(context, "example_review_sidebar", cx))
+                            .into()
+                    }),
+                },
+            )
             .status_item(
                 "review-status",
                 StatusItemDescriptor {
@@ -359,6 +486,16 @@ impl Extension for ReviewExtension {
                     keywords: "review count".into(),
                     requires_repository: false,
                     run: Rc::new(show_summary),
+                },
+            )
+            .command(
+                "toggle-review-log",
+                CommandDescriptor {
+                    label: "Toggle Review Log".into(),
+                    category: "Review".into(),
+                    keywords: "review log panel".into(),
+                    requires_repository: true,
+                    run: Rc::new(toggle_review_log),
                 },
             )
             .key_binding("secondary-alt-r", "mark-reviewed", None)
@@ -407,7 +544,10 @@ mod tests {
         assert_eq!(registry.repository_views().len(), 2);
         assert_eq!(registry.status_items().len(), 1);
         assert_eq!(registry.settings_pages().len(), 1);
-        assert_eq!(registry.commands().len(), 2);
+        assert_eq!(registry.commands().len(), 3);
+        assert_eq!(registry.bottom_panels().len(), 1);
+        assert_eq!(registry.details_tabs().len(), 1);
+        assert_eq!(registry.sidebar_sections().len(), 1);
         assert_eq!(registry.key_bindings().len(), 1);
         assert_eq!(registry.menu_items(MenuLocation::Application).count(), 1);
         assert_eq!(registry.menu_items(MenuLocation::RepositoryTab).count(), 1);

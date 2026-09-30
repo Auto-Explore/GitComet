@@ -234,6 +234,7 @@ struct HostWindow {
     state: Rc<std::cell::RefCell<Arc<AppState>>>,
     theme: Rc<std::cell::Cell<AppTheme>>,
     observers: Rc<StateObservers>,
+    bottom_panels: super::extension_panels::SharedBottomPanels,
 }
 
 /// State observers of one window, notified at most once per update cycle.
@@ -396,6 +397,67 @@ impl WindowHostImpl for HostWindow {
         )))
     }
 
+    fn open_bottom_panel(
+        &self,
+        repository: &RepositoryHandle,
+        panel: &gitcomet_extension_api::ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        let view = self.view.upgrade().ok_or(HostError::WindowClosed)?;
+        let index = self
+            .bottom_panels
+            .borrow()
+            .index_of(panel)
+            .ok_or(HostError::Unsupported)?;
+        let key = (repository.repo_id(), repository.lifetime());
+        self.bottom_panels.borrow_mut().open(key, index);
+        let window = self.window_handle;
+        // Deferred like dialogs: the root builds the view in its own update.
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |_, window, cx| {
+                view.update(cx, |root, cx| {
+                    root.show_extension_bottom_panel(key, index, window, cx);
+                });
+            });
+        });
+        Ok(())
+    }
+
+    fn close_bottom_panel(
+        &self,
+        repository: &RepositoryHandle,
+        panel: &gitcomet_extension_api::ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        let view = self.view.upgrade().ok_or(HostError::WindowClosed)?;
+        let index = self
+            .bottom_panels
+            .borrow()
+            .index_of(panel)
+            .ok_or(HostError::Unsupported)?;
+        let key = (repository.repo_id(), repository.lifetime());
+        if self.bottom_panels.borrow_mut().close(key, index) {
+            cx.defer(move |cx| {
+                view.update(cx, |root, cx| {
+                    root.extension_bottom_panel_closed(key, index, cx);
+                });
+            });
+        }
+        Ok(())
+    }
+
+    fn is_bottom_panel_open(
+        &self,
+        repository: &RepositoryHandle,
+        panel: &gitcomet_extension_api::ContributionId,
+        _cx: &App,
+    ) -> bool {
+        let panels = self.bottom_panels.borrow();
+        panels.index_of(panel).is_some_and(|index| {
+            panels.is_open((repository.repo_id(), repository.lifetime()), index)
+        })
+    }
+
     fn watch_repository(
         &self,
         repository: &RepositoryHandle,
@@ -523,6 +585,7 @@ pub(in crate::view) struct ExtensionWindow {
     state: Rc<std::cell::RefCell<Arc<AppState>>>,
     theme: Rc<std::cell::Cell<AppTheme>>,
     observers: Rc<StateObservers>,
+    bottom_panels: super::extension_panels::SharedBottomPanels,
 }
 
 impl ExtensionWindow {
@@ -533,7 +596,10 @@ impl ExtensionWindow {
         theme: AppTheme,
         cx: &gpui::Context<GitCometView>,
     ) -> Option<Self> {
-        registry(cx)?;
+        let registry = registry(cx)?;
+        let bottom_panels = Rc::new(std::cell::RefCell::new(
+            super::extension_panels::BottomPanels::new(registry.bottom_panels()),
+        ));
         let state = Rc::new(std::cell::RefCell::new(state));
         let theme = Rc::new(std::cell::Cell::new(theme));
         let observers = Rc::new(StateObservers::default());
@@ -546,6 +612,7 @@ impl ExtensionWindow {
             state: Rc::clone(&state),
             theme: Rc::clone(&theme),
             observers: Rc::clone(&observers),
+            bottom_panels: Rc::clone(&bottom_panels),
         });
         *observers.host.borrow_mut() = Some(Rc::downgrade(&host_window));
         Some(Self {
@@ -553,11 +620,16 @@ impl ExtensionWindow {
             state,
             theme,
             observers,
+            bottom_panels,
         })
     }
 
     pub(in crate::view) fn host(&self) -> WindowHost {
         self.host.clone()
+    }
+
+    pub(in crate::view) fn bottom_panels(&self) -> super::extension_panels::SharedBottomPanels {
+        Rc::clone(&self.bottom_panels)
     }
 
     /// Publishes the view's latest state to extension handles and schedules

@@ -1035,6 +1035,11 @@ pub struct GitCometView {
     pub(super) extension_window: Option<super::extension_host::ExtensionWindow>,
     /// Present only when an extension registers a repository view.
     pub(super) repository_views: Option<super::repository_views::RepositoryViewRouter>,
+    /// Present only when an extension registers a details tab.
+    pub(super) details_tabs:
+        Option<super::repository_views::ViewRouter<gitcomet_extension_api::DetailsTabDescriptor>>,
+    /// Present only when an extension registers a sidebar section.
+    pub(super) sidebar_sections: Option<super::repository_views::SidebarSections>,
     pub(super) tooltip_host: Entity<TooltipHost>,
     pub(super) toast_host: Entity<ToastHost>,
     pub(super) history_refs_hover_host: Entity<HistoryRefsHoverHost>,

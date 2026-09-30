@@ -23,10 +23,11 @@ pub mod registry;
 pub mod storage;
 
 pub use contributions::{
-    CloseDecision, CloseGuard, CloseRequest, CloseScope, CommandContext, CommandDescriptor,
-    CommandHandler, EntryOrigin, GateDecision, MenuLocation, RepositoryEntryGate,
-    RepositoryEntryRequest, RepositoryViewContext, RepositoryViewDescriptor,
-    SettingsPageDescriptor, StatusItemDescriptor, ViewBuilder,
+    BottomPanelDescriptor, CloseDecision, CloseGuard, CloseRequest, CloseScope, CommandContext,
+    CommandDescriptor, CommandHandler, DetailsTabDescriptor, EntryOrigin, GateDecision,
+    MenuLocation, RepositoryEntryGate, RepositoryEntryRequest, RepositoryViewContext,
+    RepositoryViewDescriptor, SettingsPageDescriptor, SidebarSectionDescriptor,
+    StatusItemDescriptor, ViewBuilder,
 };
 /// Revision-pinned state types hosted panes take.
 pub use gitcomet_state::diff_session::ChangeSource;

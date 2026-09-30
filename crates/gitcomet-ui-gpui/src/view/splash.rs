@@ -844,6 +844,10 @@ impl GitCometView {
                 .is_some()
                 .then(|| self.terminal_panel_resize_handle(theme, cx));
             let main_content = self.repository_main_content(cx);
+            let details_tabs = self.details_tab_content(cx);
+            let sidebar_sections = (!self.sidebar_collapsed)
+                .then(|| self.sidebar_section_content(window, cx))
+                .flatten();
             let content = div()
                 .flex()
                 .flex_col()
@@ -899,7 +903,20 @@ impl GitCometView {
                                     // a diff update) reuse the sidebar's layout
                                     // and paint. The wrapper fills this div, so
                                     // the width animation still re-lays it out.
-                                    d.child(stable_cached_fill_view(self.sidebar_pane.clone()))
+                                    match sidebar_sections {
+                                        None => d.child(stable_cached_fill_view(
+                                            self.sidebar_pane.clone(),
+                                        )),
+                                        // Extension sections sit below the
+                                        // sidebar's own, which keeps the rest.
+                                        Some(sections) => d
+                                            .flex()
+                                            .flex_col()
+                                            .child(div().flex_1().min_h(px(0.0)).child(
+                                                stable_cached_fill_view(self.sidebar_pane.clone()),
+                                            ))
+                                            .child(sections),
+                                    }
                                 })
                                 .when(self.sidebar_collapsed, |d| {
                                     d.child(self.collapsed_sidebar_rail(theme, cx))
@@ -964,10 +981,11 @@ impl GitCometView {
                                             // keep a hairline between main and the strip.
                                             d.border_l_1().border_color(theme.colors.stroke.subtle)
                                         })
-                                        .when(!self.details_collapsed, |d| {
-                                            d.child(div().flex_1().min_h(px(0.0)).child(
+                                        .when(!self.details_collapsed, |d| match details_tabs {
+                                            None => d.child(div().flex_1().min_h(px(0.0)).child(
                                                 stable_cached_fill_view(self.details_pane.clone()),
-                                            ))
+                                            )),
+                                            Some(content) => d.child(content),
                                         }),
                                 )
                                 .child(

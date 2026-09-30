@@ -55,7 +55,7 @@ pub fn panel_tab(
     id: impl Into<ElementId>,
     theme: AppTheme,
     ui_scale: impl Into<UiScale>,
-    icon: &'static str,
+    icon: impl Into<gpui::SharedString>,
     label: impl Into<gpui::SharedString>,
     selected: bool,
 ) -> Stateful<Div> {

@@ -34,6 +34,32 @@ pub struct RepositoryViewDescriptor {
     pub build: ViewBuilder<RepositoryViewContext>,
 }
 
+/// A panel in the repository's bottom area beside the terminal and reflog,
+/// opened with [`WindowHost::open_bottom_panel`](crate::WindowHost::open_bottom_panel).
+/// Built on open and dropped on close.
+#[derive(Clone)]
+pub struct BottomPanelDescriptor {
+    pub title: SharedString,
+    pub icon: SharedString,
+    pub build: ViewBuilder<RepositoryViewContext>,
+}
+
+/// A tab beside the details pane's own content. Built when first selected in
+/// a window and kept while the repository stays open there.
+#[derive(Clone)]
+pub struct DetailsTabDescriptor {
+    pub title: SharedString,
+    pub build: ViewBuilder<RepositoryViewContext>,
+}
+
+/// A section below the sidebar's own, for the active repository. Built once
+/// per repository in a window and kept while it stays open there.
+#[derive(Clone)]
+pub struct SidebarSectionDescriptor {
+    pub title: SharedString,
+    pub build: ViewBuilder<RepositoryViewContext>,
+}
+
 /// An item in the window's status bar, built once per window.
 #[derive(Clone)]
 pub struct StatusItemDescriptor {

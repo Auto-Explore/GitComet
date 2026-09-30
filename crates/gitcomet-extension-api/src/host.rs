@@ -1,7 +1,7 @@
 //! Handles to the host: weak references that fail cleanly once their window or
 //! repository is gone.
 
-use crate::id::ExtensionId;
+use crate::id::{ContributionId, ExtensionId};
 use crate::storage::StorageError;
 use gitcomet_state::model::{AppState, RepoId};
 use gitcomet_state::msg::Msg;
@@ -179,6 +179,29 @@ pub trait WindowHostImpl {
         cx: &mut App,
     ) -> Result<crate::panes::FileList, HostError>;
 
+    /// Opens bottom panel `panel` for `repository` and shows it; records the
+    /// open at once and builds the view after the current update.
+    fn open_bottom_panel(
+        &self,
+        repository: &RepositoryHandle,
+        panel: &ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError>;
+
+    fn close_bottom_panel(
+        &self,
+        repository: &RepositoryHandle,
+        panel: &ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError>;
+
+    fn is_bottom_panel_open(
+        &self,
+        repository: &RepositoryHandle,
+        panel: &ContributionId,
+        cx: &App,
+    ) -> bool;
+
     /// Watches `repository` until the returned value drops.
     fn watch_repository(
         &self,
@@ -317,6 +340,39 @@ impl WindowHost {
         self.check(repository, cx)?;
         self.0
             .create_file_list(repository, source, Rc::new(on_select), cx)
+    }
+
+    /// Opens this extension's bottom panel `panel` for `repository` and
+    /// brings it to the front. [`HostError::Unsupported`] when no bottom
+    /// panel has that id.
+    pub fn open_bottom_panel(
+        &self,
+        repository: &RepositoryHandle,
+        panel: &ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.check(repository, cx)?;
+        self.0.open_bottom_panel(repository, panel, cx)
+    }
+
+    /// Closes the panel and drops its view.
+    pub fn close_bottom_panel(
+        &self,
+        repository: &RepositoryHandle,
+        panel: &ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.check(repository, cx)?;
+        self.0.close_bottom_panel(repository, panel, cx)
+    }
+
+    pub fn is_bottom_panel_open(
+        &self,
+        repository: &RepositoryHandle,
+        panel: &ContributionId,
+        cx: &App,
+    ) -> bool {
+        self.0.is_bottom_panel_open(repository, panel, cx)
     }
 
     /// Keeps `repository`'s file watcher running (and its changes delivered)

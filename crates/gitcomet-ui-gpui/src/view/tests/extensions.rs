@@ -84,6 +84,8 @@ fn without_extensions_the_host_adds_nothing(cx: &mut gpui::TestAppContext) {
         assert!(extension_host::registry(app).is_none());
         assert!(view.extension_window.is_none());
         assert!(view.repository_views.is_none());
+        assert!(view.details_tabs.is_none());
+        assert!(view.sidebar_sections.is_none());
         assert!(extension_host::palette_entries(app).is_empty());
         assert_eq!(view.bottom_status_bar.read(app).extension_item_count(), 0);
     });
@@ -287,7 +289,8 @@ fn commands_reach_the_palette_key_bindings_and_menus(cx: &mut gpui::TestAppConte
             ids,
             vec![
                 "extension:com.example.review/mark-reviewed",
-                "extension:com.example.review/show-summary"
+                "extension:com.example.review/show-summary",
+                "extension:com.example.review/toggle-review-log"
             ]
         );
         let app_menu =
@@ -314,6 +317,148 @@ fn commands_reach_the_palette_key_bindings_and_menus(cx: &mut gpui::TestAppConte
     cx.simulate_keystrokes("secondary-alt-r");
     cx.run_until_parked();
     cx.update(|_window, app| assert_eq!(review::reviews(app).read(app).count(window_id, &repo), 2));
+}
+
+#[gpui::test]
+fn extension_bottom_panels_share_the_strip_with_the_reflog(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    cx.update(install_example);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(1);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            test_support::push_test_state(
+                this,
+                state_with_repo(repo_id, Path::new("/tmp/extension-bottom-panels")),
+                cx,
+            )
+        });
+    });
+    test_support::redraw(cx);
+    let host = cx.update(|_window, app| view.read(app).extension_window.as_ref().unwrap().host());
+    let repository = cx.update(|_window, app| host.active_repository(app).unwrap().unwrap());
+    let panel = review::extension_id()
+        .contribution(review::REVIEW_LOG_PANEL)
+        .unwrap();
+    let is_open = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| host.is_bottom_panel_open(&repository, &panel, app))
+    };
+
+    // Opened through its command; alone, it needs no strip.
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.execute_command(
+                "extension:com.example.review/toggle-review-log",
+                Some(window),
+                cx,
+            )
+        });
+    });
+    assert!(is_open(cx), "the open is recorded at once");
+    cx.run_until_parked();
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("example_review_log").is_some());
+    assert!(cx.debug_bounds("bottom_panel_tab_extension_0").is_none());
+
+    // With the reflog open both get tabs; the reflog opened last is in front.
+    cx.update(|_window, app| view.update(app, |this, cx| this.open_reflog_panel(repo_id, cx)));
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("bottom_panel_tab_reflog").is_some());
+    assert!(cx.debug_bounds("example_review_log").is_none());
+    click_debug_selector(cx, "bottom_panel_tab_extension_0");
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("example_review_log").is_some());
+
+    // Its tab's close button closes it; the reflog shows alone again.
+    click_debug_selector(cx, "bottom_panel_tab_extension_0_close");
+    cx.run_until_parked();
+    test_support::redraw(cx);
+    assert!(!is_open(cx));
+    assert!(cx.debug_bounds("example_review_log").is_none());
+    assert!(cx.debug_bounds("bottom_panel_tab_reflog").is_none());
+
+    // Closing the repository forgets its panels.
+    cx.update(|_window, app| {
+        host.open_bottom_panel(&repository, &panel, app).unwrap();
+    });
+    cx.run_until_parked();
+    assert!(is_open(cx));
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            test_support::push_test_state(this, empty_state(), cx)
+        });
+    });
+    test_support::redraw(cx);
+    assert!(!is_open(cx));
+    let unknown = review::extension_id().contribution("nope").unwrap();
+    cx.update(|_window, app| {
+        assert_eq!(
+            host.open_bottom_panel(&repository, &unknown, app),
+            Err(HostError::RepositoryClosed)
+        );
+    });
+}
+
+#[gpui::test]
+fn details_tabs_and_sidebar_sections_sit_beside_the_built_ins(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    cx.update(install_example);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            test_support::push_test_state(
+                this,
+                state_with_repo(RepoId(1), Path::new("/tmp/extension-details-sidebar")),
+                cx,
+            )
+        });
+    });
+    test_support::redraw(cx);
+
+    // The sidebar section is built for the repository and collapses.
+    assert!(cx.debug_bounds("sidebar_pane").is_some());
+    assert!(cx.debug_bounds("example_review_sidebar").is_some());
+    click_debug_selector(cx, "sidebar_extension_section_0");
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("example_review_sidebar").is_none());
+    click_debug_selector(cx, "sidebar_extension_section_0");
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("example_review_sidebar").is_some());
+
+    // The details tab replaces the details pane's content until Details.
+    assert!(cx.debug_bounds("details_tab_strip").is_some());
+    assert!(cx.debug_bounds("example_review_details").is_none());
+    click_debug_selector(cx, "details_tab_0");
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("example_review_details").is_some());
+    click_debug_selector(cx, "details_tab_details");
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("example_review_details").is_none());
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            test_support::push_test_state(this, empty_state(), cx)
+        });
+    });
+    test_support::redraw(cx);
+    cx.update(|_window, app| {
+        let this = view.read(app);
+        let repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/extension-details-sidebar"),
+            },
+        );
+        let details = this.details_tabs.as_ref().unwrap();
+        assert!(
+            details.built(&repo, 0).is_none(),
+            "a closed repository's tab is dropped"
+        );
+    });
 }
 
 #[gpui::test]
