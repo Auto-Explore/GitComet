@@ -364,11 +364,22 @@ re-exports, and inline tests moved into child modules of their old paths.
   text" on top; tree-sitter's convention (no start after a trailing
   newline) stays separate on purpose.
 
-Left for later: `render_sidebar_rows` (one 1,796-line function) and the tail
-of `commit_details_view` (the status sections) need method extraction, not
-moves; the three changed-file row renderers in `sidebar/file_rows.rs`
-duplicate their directory and file rows and should share one; the
-remaining auth helpers in `reducer/util.rs` belong in `reducer/auth.rs`.
+Since then:
+
+- `render_sidebar_rows` renders each row kind in its own method (a
+  `SidebarRowContext` replaces its closures), and `commit_details_view` is a
+  dispatcher over the worktree, comparison, multi-commit, single-commit, and
+  status views (`layout/status_view.rs`). At opt-level 0 the sidebar row
+  closure's 666 KB frame became a 29 KB dispatcher plus one arm (largest
+  91 KB); sidebar tests' stack need went 837 → 671, 885 → 694, and
+  869 → 790 KiB. The largest remaining frames are the status view
+  (~394 KB) and `GitCometView::render` (~255 KB).
+- The commit, worktree, and range lists and hosted lists share one file-row
+  and directory-row builder (`rows/file_list/changed_rows.rs`).
+- Auth-prompt recognition and credential staging moved from
+  `reducer/util.rs` to `reducer/auth.rs`.
+- The theme and live-syntax inline tests moved to child test files.
+- UI repository tests share one `test_support::git` runner.
 
 ## Verification
 
