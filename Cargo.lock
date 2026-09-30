@@ -2310,6 +2310,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "smol",
+ "strum 0.28.0",
  "tempfile",
  "uuid",
 ]

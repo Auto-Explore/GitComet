@@ -641,6 +641,7 @@ fn run_windowed_app(
         bind_terminal_keys(cx);
 
         open_initial_gitcomet_windows(cx, Arc::clone(&backend), &launch);
+        crate::view::scenario_driver::start_if_requested(cx);
 
         cx.activate(true);
     });

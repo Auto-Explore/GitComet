@@ -1,19 +1,106 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
 
 const RUNNER_CLASS_ENV: &str = "GITCOMET_PERF_RUNNER_CLASS";
+/// Set by the suite drivers so every artifact of one run can be matched up.
+const RUN_ID_ENV: &str = "GITCOMET_PERF_RUN_ID";
+/// The Cargo profile the measuring binary was built with, set by the drivers.
+const CARGO_PROFILE_ENV: &str = "GITCOMET_PERF_CARGO_PROFILE";
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct PerfSidecarReport {
     pub bench: String,
     #[serde(default, skip_serializing_if = "PerfSidecarRunner::is_empty")]
     pub runner: PerfSidecarRunner,
+    /// Absent in sidecars written before measurement labels existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measurement: Option<PerfSidecarMeasurement>,
     #[serde(default)]
     pub metrics: Map<String, Value>,
+}
+
+/// What a result covers. Several benchmark names (`frame_timing`, `display`,
+/// `keyboard`) predate these labels and do not measure native frames.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MeasurementKind {
+    /// Git backend or filesystem work, without view state or rendering.
+    BackendOperation,
+    /// View-model and row preparation on the benchmark thread; nothing is
+    /// laid out, painted, submitted, or presented.
+    PreparedRowWork,
+    /// Layout and paint in a GPUI test-platform window: no GPU, compositor,
+    /// or platform event loop.
+    GpuiTestPlatformDraw,
+    /// A real application process with a native window.
+    LiveApplication,
+}
+
+impl MeasurementKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BackendOperation => "backend_operation",
+            Self::PreparedRowWork => "prepared_row_work",
+            Self::GpuiTestPlatformDraw => "gpui_test_platform_draw",
+            Self::LiveApplication => "live_application",
+        }
+    }
+}
+
+/// Classifies a result by its benchmark group (the first path segment).
+pub fn measurement_kind_for_bench(bench: &str) -> MeasurementKind {
+    let group = bench.split('/').next().unwrap_or(bench);
+    match group {
+        "git_ops" | "fs_event" | "real_repo" | "idle" => MeasurementKind::BackendOperation,
+        "picker_prompt"
+        | "status_truncation"
+        | "markdown_preview_render_single"
+        | "markdown_preview_render_diff"
+        | "markdown_preview_scroll"
+        | "diff_open_markdown_preview_first_window" => MeasurementKind::GpuiTestPlatformDraw,
+        "app_launch" => MeasurementKind::LiveApplication,
+        _ => MeasurementKind::PreparedRowWork,
+    }
+}
+
+/// Identifies the run, build, and allocator a result came from.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PerfSidecarMeasurement {
+    pub kind: MeasurementKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cargo_profile: Option<String>,
+    pub debug_assertions: bool,
+    pub allocator: PerfSidecarAllocator,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PerfSidecarAllocator {
+    /// `MIMALLOC_*` settings in effect; unset options use mimalloc defaults.
+    #[serde(default)]
+    pub mimalloc_env: BTreeMap<String, String>,
+}
+
+impl PerfSidecarMeasurement {
+    pub fn current(bench: &str) -> Self {
+        Self {
+            kind: measurement_kind_for_bench(bench),
+            run_id: env_string(RUN_ID_ENV),
+            cargo_profile: env_string(CARGO_PROFILE_ENV),
+            debug_assertions: cfg!(debug_assertions),
+            allocator: PerfSidecarAllocator {
+                mimalloc_env: env::vars()
+                    .filter(|(key, _)| key.starts_with("MIMALLOC_"))
+                    .collect(),
+            },
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -42,8 +129,10 @@ impl PerfSidecarRunner {
 
 impl PerfSidecarReport {
     pub fn new(bench: impl Into<String>, metrics: Map<String, Value>) -> Self {
+        let bench = bench.into();
         Self {
-            bench: bench.into(),
+            measurement: Some(PerfSidecarMeasurement::current(&bench)),
+            bench,
             runner: current_runner_metadata(),
             metrics,
         }
@@ -214,11 +303,42 @@ mod tests {
     }
 
     #[test]
+    fn measurement_kind_labels_what_each_group_times() {
+        assert_eq!(
+            measurement_kind_for_bench("fs_event/single_file_save_to_status_update"),
+            MeasurementKind::BackendOperation
+        );
+        assert_eq!(
+            measurement_kind_for_bench("frame_timing/continuous_scroll_history_list"),
+            MeasurementKind::PreparedRowWork
+        );
+        assert_eq!(
+            measurement_kind_for_bench("picker_prompt/branch_filter"),
+            MeasurementKind::GpuiTestPlatformDraw
+        );
+        assert_eq!(
+            measurement_kind_for_bench("app_launch/cold_single_repo"),
+            MeasurementKind::LiveApplication
+        );
+    }
+
+    #[test]
+    fn sidecars_without_measurement_labels_still_parse() {
+        let report: PerfSidecarReport =
+            serde_json::from_str(r#"{"bench":"idle/cpu_usage_single_repo_60s","metrics":{}}"#)
+                .expect("parse legacy sidecar");
+        assert_eq!(report.measurement, None);
+    }
+
+    #[test]
     fn perf_sidecar_report_new_attaches_current_runner_metadata() {
         let report = PerfSidecarReport::new("diff_open_patch_first_window/200", Map::new());
 
         assert_eq!(report.runner.os.as_deref(), Some(std::env::consts::OS));
         assert_eq!(report.runner.arch.as_deref(), Some(std::env::consts::ARCH));
         assert!(!report.runner.is_empty());
+        let measurement = report.measurement.expect("measurement label");
+        assert_eq!(measurement.kind, MeasurementKind::PreparedRowWork);
+        assert_eq!(measurement.debug_assertions, cfg!(debug_assertions));
     }
 }
