@@ -257,6 +257,29 @@ fn repo_monitor_start_failures_are_recorded_for_missing_workdir() {
 }
 
 #[test]
+fn repo_monitor_thread_has_its_own_name() {
+    let mut monitors = monitor_impl::RepoMonitorManager::new();
+    let workdir = tempfile::tempdir().unwrap();
+    let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
+    let msg_tx = super::super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
+
+    monitors.start(
+        RepoId(1),
+        workdir.path().to_path_buf(),
+        msg_tx,
+        std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1)),
+        std::sync::Arc::new(FailingBackend),
+    );
+
+    // Unnamed, it inherits the store worker's name in /proc and profiles.
+    assert_eq!(
+        monitors.thread_name_for_test(RepoId(1)).as_deref(),
+        Some("gitcomet-watch")
+    );
+    monitors.stop(RepoId(1));
+}
+
+#[test]
 fn repo_monitor_manager_reports_running_enabled_monitors() {
     let mut monitors = monitor_impl::RepoMonitorManager::new();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
@@ -462,6 +485,7 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
         signature_executor: &metadata_executor,
         session_persist_executor: &session_persist_executor,
         backend: &backend,
+        publication: &std::sync::atomic::AtomicU64::new(0),
     }
     .handle_effects(&repos, std::iter::empty::<Effect>());
     let elapsed = started.elapsed();

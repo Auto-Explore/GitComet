@@ -1099,7 +1099,7 @@ fn build_report_markdown_includes_structural_budget_table() {
         None,
     );
     assert!(markdown.contains("### Structural Budgets"));
-    assert!(markdown.contains("`diff_open_patch_first_window/200`"));
+    assert!(markdown.contains("`diff_open_patch_first_window/200` | prepared_row_work |"));
     assert!(markdown.contains("`rows_materialized`"));
     assert!(markdown.contains("<= 256"));
 }

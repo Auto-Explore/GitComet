@@ -1,4 +1,5 @@
 use crate::msg::Msg;
+use gitcomet_core::op_trace;
 use gitcomet_core::services::CancellationToken;
 #[cfg(any(test, feature = "test-support"))]
 use gitcomet_core::services::GitRepository;
@@ -23,8 +24,20 @@ impl StoreInstanceId {
     }
 }
 
+impl StoreWorkerCommand {
+    pub(super) fn msg(&self) -> Option<&Msg> {
+        match self {
+            Self::Msg(msg) | Self::Traced(msg, _) => Some(msg),
+            _ => None,
+        }
+    }
+}
+
 pub(super) enum StoreWorkerCommand {
     Msg(Box<Msg>),
+    /// A message sent while operation tracing is on, carrying the sender's
+    /// operation and enqueue time. Handled exactly like [`Self::Msg`].
+    Traced(Box<Msg>, op_trace::Stamp),
     Shutdown,
     #[cfg(any(test, feature = "test-support"))]
     InsertRepoForTest {
@@ -183,12 +196,17 @@ impl StoreWorkerSender {
         }
 
         match &self.inner {
-            StoreWorkerSenderInner::Command(tx) => send_diagnostics::send_or_log(
-                tx,
-                StoreWorkerCommand::Msg(Box::new(msg)),
-                kind,
-                context,
-            ),
+            StoreWorkerSenderInner::Command(tx) => {
+                let command = match op_trace::Stamp::capture() {
+                    Some(stamp) => {
+                        let name = repo_load_trace::stage_label(&msg);
+                        op_trace::record(op_trace::Stage::Dispatch, stamp.op, name, 0, 0);
+                        StoreWorkerCommand::Traced(Box::new(msg), stamp)
+                    }
+                    None => StoreWorkerCommand::Msg(Box::new(msg)),
+                };
+                send_diagnostics::send_or_log(tx, command, kind, context)
+            }
             #[cfg(test)]
             StoreWorkerSenderInner::MsgForTest(tx) => {
                 send_diagnostics::send_or_log(tx, msg, kind, context)

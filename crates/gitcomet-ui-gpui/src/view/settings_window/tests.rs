@@ -11,6 +11,182 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const SESSION_FILE_ENV: &str = "GITCOMET_SESSION_FILE";
 const DIFF_DEFAULTS_SESSION_SUBTEST_ENV: &str = "GITCOMET_DIFF_DEFAULTS_SESSION_SUBTEST";
 
+#[test]
+fn git_reprobe_preserves_system_and_graphics_environment() {
+    use gitcomet_core::environment::{GraphicsDetails, Rendering};
+    let mut info = SettingsRuntimeInfo::from_runtime(GitRuntimeState {
+        preference: GitExecutablePreference::SystemPath,
+        availability: GitExecutableAvailability::Checking,
+    });
+    info.environment.system.cpu_model = Some("Recorded CPU".into());
+    info.environment.graphics.insert(
+        1,
+        GraphicsDetails {
+            device_name: Some("llvmpipe".into()),
+            rendering: Rendering::Software,
+            ..Default::default()
+        },
+    );
+    let system = info.environment.system.clone();
+    let graphics = info.environment.graphics.clone();
+    for availability in [
+        GitExecutableAvailability::Checking,
+        GitExecutableAvailability::Available {
+            version_output: "git version 2.51.0".into(),
+        },
+        GitExecutableAvailability::Unavailable {
+            detail: "not found".into(),
+        },
+    ] {
+        let runtime = GitRuntimeState {
+            preference: GitExecutablePreference::SystemPath,
+            availability,
+        };
+        info.update_git(runtime.clone());
+        assert_eq!(info.environment.system, system);
+        assert_eq!(info.environment.graphics, graphics);
+        assert_eq!(
+            info.environment.git_version.as_deref(),
+            runtime.version_output()
+        );
+    }
+}
+
+#[gpui::test]
+fn environment_copy_matches_displayed_rows_and_refreshes_windows(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (view, cx) = cx.add_window_view(SettingsWindowView::new);
+    cx.run_until_parked();
+    cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+    view.update(cx, |settings, cx| {
+        settings.select_category(SettingsCategory::Environment, cx)
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        view.update(cx, |settings, cx| {
+            // Simulate a stale cache; copying must capture the open window.
+            settings.runtime_info.environment.graphics.clear();
+            settings.copy_environment_details(window, cx);
+            assert_eq!(settings.runtime_info.environment.graphics.len(), 1);
+            assert_eq!(
+                crate::clipboard::read_text(cx),
+                Some(settings.runtime_info.environment.summary())
+            );
+        });
+        let _ = window.draw(cx);
+    });
+    for row in [
+        "settings_window_build",
+        "settings_window_git",
+        "settings_window_os",
+        "settings_window_kernel",
+        "settings_window_architecture",
+        "settings_window_cpu",
+        "settings_window_processors",
+        "settings_window_memory",
+        "settings_window_gpu_1",
+        "settings_window_backend_1",
+        "settings_window_rendering_1",
+    ] {
+        assert!(cx.debug_bounds(row).is_some(), "missing {row} row");
+    }
+}
+
+fn open_environment_page(
+    cx: &mut gpui::TestAppContext,
+) -> (Entity<SettingsWindowView>, &mut gpui::VisualTestContext) {
+    let (view, cx) = cx.add_window_view(SettingsWindowView::new);
+    cx.update(|_, app| crate::app::bind_text_input_keys_for_test(app));
+    cx.run_until_parked();
+    cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+    cx.update(|_, app| {
+        let mut environment = app.global::<crate::environment::Environment>().0.clone();
+        environment.system.cpu_model = Some("Recorded CPU 9000".into());
+        app.set_global(crate::environment::Environment(environment));
+    });
+    view.update(cx, |settings, cx| {
+        settings.select_category(SettingsCategory::Environment, cx)
+    });
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    (view, cx)
+}
+
+fn clipboard_text(cx: &mut gpui::VisualTestContext) -> Option<String> {
+    cx.read_from_clipboard().and_then(|item| item.text())
+}
+
+#[gpui::test]
+fn environment_values_select_with_the_mouse_and_copy(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let _clipboard_guard = crate::test_support::lock_clipboard_test();
+    let (_view, cx) = open_environment_page(cx);
+    cx.write_to_clipboard(gpui::ClipboardItem::new_string("stale".into()));
+
+    let drag = |cx: &mut gpui::VisualTestContext, selector: &'static str| {
+        let value = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("expected `{selector}` bounds"));
+        let start = point(value.left() + px(1.0), value.center().y);
+        let end = point(value.right() - px(1.0), value.center().y);
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::default());
+        cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+    };
+
+    drag(cx, "settings_window_cpu_value");
+    cx.simulate_keystrokes("secondary-c");
+    assert_eq!(clipboard_text(cx).as_deref(), Some("Recorded CPU 9000"));
+
+    // Rows in the graphics sections carry an index suffix.
+    drag(cx, "settings_window_rendering_1_value");
+    cx.simulate_keystrokes("secondary-c");
+    let rendering = clipboard_text(cx).expect("copied rendering value");
+    assert!(
+        !rendering.is_empty() && rendering != "Recorded CPU 9000",
+        "{rendering:?}"
+    );
+}
+
+#[gpui::test]
+fn environment_copy_button_sits_compact_in_the_card_header(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let _clipboard_guard = crate::test_support::lock_clipboard_test();
+    let (view, cx) = open_environment_page(cx);
+    cx.write_to_clipboard(gpui::ClipboardItem::new_string("stale".into()));
+
+    let bounds = |cx: &mut gpui::VisualTestContext, selector: &'static str| {
+        cx.debug_bounds(selector)
+            .unwrap_or_else(|| panic!("expected `{selector}` bounds"))
+    };
+    let card = bounds(cx, "settings_window_environment");
+    let button = bounds(cx, "settings_window_copy_environment");
+    let first_row = bounds(cx, "settings_window_build");
+    assert!(
+        button.size.width < card.size.width / 4.0,
+        "button spans the card: button={button:?}, card={card:?}"
+    );
+    assert!(
+        button.right() <= card.right() && card.right() - button.right() < px(16.0),
+        "button is not at the trailing edge: button={button:?}, card={card:?}"
+    );
+    assert!(
+        button.top() - card.top() < px(8.0) && button.bottom() <= first_row.top(),
+        "button is not in the header: button={button:?}, card={card:?}, row={first_row:?}"
+    );
+
+    cx.simulate_mouse_move(button.center(), None, Modifiers::default());
+    cx.simulate_click(button.center(), Modifiers::default());
+    cx.run_until_parked();
+    let summary = view.update(cx, |settings, _| {
+        settings.runtime_info.environment.summary()
+    });
+    assert_eq!(clipboard_text(cx), Some(summary));
+}
+
 fn wait_for_store(
     cx: &mut gpui::VisualTestContext,
     store: &AppStore,
@@ -1589,10 +1765,11 @@ fn settings_window_rows_clamp_under_lilex_at_minimum_width(cx: &mut gpui::TestAp
 
     let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
         settings.ui_font_family = crate::bundled_fonts::LILEX_FONT_FAMILY.to_string();
-        settings.runtime_info.app_version_display =
+        settings.runtime_info.environment.app_version =
             "GitComet v0.0.0-overflow-regression-build".into();
-        settings.runtime_info.operating_system =
-            "linux (gnu-linux-overflow-regression-platform, x86_64-extra-build-metadata)".into();
+        settings.runtime_info.environment.system.operating_system = Some(
+            "linux (gnu-linux-overflow-regression-platform, x86_64-extra-build-metadata)".into(),
+        );
         settings.runtime_info.git.version_display =
             "git version 2.51.0 (overflow-regression-build-with-very-long-metadata)".into();
         settings.runtime_info.git.compatibility = GitCompatibility::Supported;
@@ -1729,11 +1906,11 @@ fn settings_window_containers_fill_available_width_when_content_wraps(
         settings.ui_font_family = synthetic_fonts[0].clone();
         settings.set_expanded_section(Some(SettingsSection::UiFont), cx);
         settings.git_executable_mode = GitExecutableMode::Custom;
-        settings.runtime_info.app_version_display =
+        settings.runtime_info.environment.app_version =
             "GitComet v0.0.0-overflow-regression-build-with-extra-layout-metadata".into();
-        settings.runtime_info.operating_system =
-            "linux (gnu-linux-overflow-regression-platform with verbose wrapping metadata, x86_64)"
-                .into();
+        settings.runtime_info.environment.system.operating_system =
+            Some("linux (gnu-linux-overflow-regression-platform with verbose wrapping metadata, x86_64)"
+                .into());
         settings.runtime_info.git.version_display =
             "git version 2.51.0 (overflow-regression-build-with-very-long-metadata)".into();
         settings.runtime_info.git.compatibility = GitCompatibility::Unknown;

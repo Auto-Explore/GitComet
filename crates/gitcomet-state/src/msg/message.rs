@@ -215,7 +215,7 @@ pub enum RepoWatchDegradedReason {
 // Dispatch keeps internal messages inline so the hot reducer path does not
 // require an additional allocation for every effect completion.
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug)]
+#[derive(Debug, strum::IntoStaticStr)]
 pub enum Msg {
     IndexedHistory(crate::indexed_history::IndexedHistoryMsg),
     HistoryAuthors(crate::history_authors::HistoryAuthorsMsg),
@@ -1152,6 +1152,7 @@ pub enum Msg {
     Internal(InternalMsg),
 }
 
+#[derive(strum::IntoStaticStr)]
 pub enum InternalMsg {
     TagPushPreviewLoaded {
         repo_id: RepoId,

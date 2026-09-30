@@ -255,6 +255,7 @@ mod reflog_panel;
 mod repo_open;
 mod reveal_commit;
 pub(crate) mod rows;
+pub(crate) mod scenario_driver;
 mod settings_window;
 pub(crate) mod shortcut_labels;
 mod sidebar_presentation;

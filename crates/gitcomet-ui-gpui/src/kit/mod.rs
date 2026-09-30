@@ -15,6 +15,8 @@ pub use scrollbar::{
 };
 #[cfg(feature = "benchmarks")]
 pub(crate) use scrollbar::{compute_vertical_click_offset, vertical_thumb_metrics};
+#[cfg(test)]
+pub(crate) use text_input::take_wrapped_lines_shaped_for_tests;
 pub(crate) use text_input::utf8_edit_delta_between_texts;
 pub use text_input::{
     Backspace, Copy, Cut, Delete, DeleteToLineEnd, DeleteToLineStart, DeleteWordLeft,

@@ -595,6 +595,7 @@ fn run_windowed_app(
     application.run(move |cx: &mut App| {
         cx.set_global(clean_shutdown_tracker);
         crate::ui_probe::start_if_enabled(cx);
+        crate::environment::initialize(cx);
         cx.set_global(GitCometBackendGlobal(Arc::clone(&backend)));
         cx.on_app_quit(move |cx| {
             flush_open_workspace_environments(cx);
@@ -640,6 +641,7 @@ fn run_windowed_app(
         bind_terminal_keys(cx);
 
         open_initial_gitcomet_windows(cx, Arc::clone(&backend), &launch);
+        crate::view::scenario_driver::start_if_requested(cx);
 
         cx.activate(true);
     });
@@ -1046,7 +1048,7 @@ fn open_gitcomet_window(
             "failed to open main GitComet window: {err}\n\
              This is usually a GPU/display problem, not a GitComet bug. \
              If you just updated your system (kernel, mesa, or vulkan drivers), reboot. \
-             For per-adapter details, relaunch with RUST_LOG=info."
+             For diagnostics, include the crash report from the next launch."
         )
     });
 

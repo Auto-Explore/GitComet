@@ -83,19 +83,8 @@ pub(super) use trace;
 
 pub(super) fn msg_name(msg: &Msg) -> &'static str {
     match msg {
-        Msg::OpenRepo(_) => "OpenRepo",
-        Msg::OpenRepoFromExternalDrop(_) => "OpenRepoFromExternalDrop",
-        Msg::RestoreSession { .. } => "RestoreSession",
-        Msg::CloseRepo { .. } => "CloseRepo",
-        Msg::MoveRepoOut { .. } => "MoveRepoOut",
-        Msg::CloseRepos { .. } => "CloseRepos",
-        Msg::SetActiveRepo { .. } => "SetActiveRepo",
-        Msg::ReorderRepoTabs { .. } => "ReorderRepoTabs",
-        Msg::ReloadRepo { .. } => "ReloadRepo",
-        Msg::RepoActivated { .. } => "RepoActivated",
-        Msg::RepoExternallyChanged { .. } => "RepoExternallyChanged",
         Msg::Internal(message) => internal_msg_name(message),
-        _ => "Msg",
+        msg => msg.into(),
     }
 }
 
@@ -120,73 +109,24 @@ pub(super) fn msg_external_change(msg: &Msg) -> Option<crate::msg::RepoExternalC
 }
 
 pub(super) fn internal_msg_name(msg: &InternalMsg) -> &'static str {
-    match msg {
-        InternalMsg::GitOperationStarted { .. } => "GitOperationStarted",
-        InternalMsg::GitOperationEvent { .. } => "GitOperationEvent",
-        InternalMsg::GitOperationFinished { .. } => "GitOperationFinished",
-        InternalMsg::RepoLoadFinished { .. } => "RepoLoadFinished",
-        InternalMsg::RepoOpenedOk { .. } => "RepoOpenedOk",
-        InternalMsg::RepoOpenedErr { .. } => "RepoOpenedErr",
-        InternalMsg::BranchesLoaded { .. } => "BranchesLoaded",
-        InternalMsg::RemotesLoaded { .. } => "RemotesLoaded",
-        InternalMsg::RemoteBranchesLoaded { .. } => "RemoteBranchesLoaded",
-        InternalMsg::WorktreeStatusLoaded { .. } => "WorktreeStatusLoaded",
-        InternalMsg::StagedStatusLoaded { .. } => "StagedStatusLoaded",
-        InternalMsg::UncommittedLineStatsLoaded { .. } => "UncommittedLineStatsLoaded",
-        InternalMsg::StatusLoaded { .. } => "StatusLoaded",
-        InternalMsg::HeadBranchLoaded { .. } => "HeadBranchLoaded",
-        InternalMsg::UpstreamDivergenceLoaded { .. } => "UpstreamDivergenceLoaded",
-        InternalMsg::LogLoaded { .. } => "LogLoaded",
-        InternalMsg::TagsLoaded { .. } => "TagsLoaded",
-        InternalMsg::RemoteTagsLoaded { .. } => "RemoteTagsLoaded",
-        InternalMsg::StashesLoaded { .. } => "StashesLoaded",
-        InternalMsg::WorktreesLoaded { .. } => "WorktreesLoaded",
-        InternalMsg::WorktreeDirtyLoaded { .. } => "WorktreeDirtyLoaded",
-        InternalMsg::RefMetadataLoaded { .. } => "RefMetadataLoaded",
-        InternalMsg::SubmodulesLoaded { .. } => "SubmodulesLoaded",
-        InternalMsg::LargeFileSupportLoaded { .. } => "LargeFileSupportLoaded",
-        InternalMsg::LfsLocksLoaded { .. } => "LfsLocksLoaded",
-        InternalMsg::AnnexWhereisLoaded { .. } => "AnnexWhereisLoaded",
-        InternalMsg::AnnexUnusedLoaded { .. } => "AnnexUnusedLoaded",
-        InternalMsg::RebaseStateLoaded { .. } => "RebaseStateLoaded",
-        InternalMsg::MergeCommitMessageLoaded { .. } => "MergeCommitMessageLoaded",
-        _ => "InternalMsg",
+    msg.into()
+}
+
+/// Operation-trace label: names the result a repository load delivered
+/// rather than the `RepoLoadFinished` envelope every load arrives in.
+pub(super) fn stage_label(msg: &Msg) -> &'static str {
+    let mut message = match msg {
+        Msg::Internal(message) => message,
+        msg => return msg.into(),
+    };
+    while let InternalMsg::RepoLoadFinished { message: inner, .. } = message {
+        message = inner;
     }
+    message.into()
 }
 
 pub(super) fn effect_name(effect: &Effect) -> &'static str {
-    match effect {
-        Effect::OpenRepo { .. } => "OpenRepo",
-        Effect::CancelRepoLoads { .. } => "CancelRepoLoads",
-        Effect::CancelGitOperation { .. } => "CancelGitOperation",
-        Effect::LoadBranches { .. } => "LoadBranches",
-        Effect::LoadRemotes { .. } => "LoadRemotes",
-        Effect::LoadRemoteBranches { .. } => "LoadRemoteBranches",
-        Effect::LoadWorktreeStatus { .. } => "LoadWorktreeStatus",
-        Effect::LoadStagedStatus { .. } => "LoadStagedStatus",
-        Effect::LoadUncommittedLineStats { .. } => "LoadUncommittedLineStats",
-        Effect::LoadStatus { .. } => "LoadStatus",
-        Effect::LoadHeadBranch { .. } => "LoadHeadBranch",
-        Effect::LoadUpstreamDivergence { .. } => "LoadUpstreamDivergence",
-        Effect::LoadLog { .. } => "LoadLog",
-        Effect::LoadTags { .. } => "LoadTags",
-        Effect::LoadRemoteTags { .. } => "LoadRemoteTags",
-        Effect::LoadStashes { .. } => "LoadStashes",
-        Effect::LoadWorktrees { .. } => "LoadWorktrees",
-        Effect::LoadWorktreeDirty { .. } => "LoadWorktreeDirty",
-        Effect::LoadRefMetadata { .. } => "LoadRefMetadata",
-        Effect::LoadSubmodules { .. } => "LoadSubmodules",
-        Effect::LoadLargeFileSupport { .. } => "LoadLargeFileSupport",
-        Effect::LoadLfsLocks { .. } => "LoadLfsLocks",
-        Effect::LoadAnnexWhereis { .. } => "LoadAnnexWhereis",
-        Effect::LoadAnnexUnused { .. } => "LoadAnnexUnused",
-        Effect::LoadRebaseAndMergeState { .. } => "LoadRebaseAndMergeState",
-        Effect::LoadRebaseState { .. } => "LoadRebaseState",
-        Effect::LoadMergeCommitMessage { .. } => "LoadMergeCommitMessage",
-        Effect::PersistSession { .. } => "PersistSession",
-        Effect::PersistRecentRepo { .. } => "PersistRecentRepo",
-        _ => "Effect",
-    }
+    effect.into()
 }
 
 pub(super) fn effect_repo_id(effect: &Effect) -> Option<RepoId> {

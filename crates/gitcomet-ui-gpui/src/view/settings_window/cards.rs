@@ -25,7 +25,7 @@ impl SettingsWindowView {
             SettingsCategory::LargeFiles => self.large_files_card(theme, cx),
             SettingsCategory::Tags => self.tags_card(theme, cx),
             SettingsCategory::GitExecutable => self.git_executable_card(theme, cx),
-            SettingsCategory::Environment => self.environment_card(theme),
+            SettingsCategory::Environment => self.environment_card(theme, cx),
             SettingsCategory::Links => self.links_card(theme, cx),
         }
     }
@@ -2358,26 +2358,6 @@ impl SettingsWindowView {
             }),
         );
         git_executable_card
-    }
-
-    fn environment_card(&self, theme: AppTheme) -> Stateful<gpui::Div> {
-        let no_separator = gpui::rgba(0x00000000);
-        self.card("settings_window_environment", "Environment", theme)
-            .child(self.info_row(
-                "settings_window_build",
-                "Build",
-                self.runtime_info.app_version_display.clone(),
-                theme,
-            ))
-            .child(
-                self.info_row(
-                    "settings_window_os",
-                    "Operating system",
-                    self.runtime_info.operating_system.clone(),
-                    theme,
-                )
-                .border_color(no_separator),
-            )
     }
 
     fn links_card(&self, theme: AppTheme, cx: &mut gpui::Context<Self>) -> Stateful<gpui::Div> {

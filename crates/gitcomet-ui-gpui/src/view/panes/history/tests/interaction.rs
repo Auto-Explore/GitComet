@@ -3424,3 +3424,71 @@ fn a_date_cell_tooltip_is_retracted_when_the_pointer_leaves_the_cell(
          pointer event respawns the tooltip delay timer"
     );
 }
+
+#[gpui::test]
+fn history_bounds_belong_to_the_active_repository(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let page = Arc::new(log_page(vec![commit("tip", &[], "tip")], None));
+    let make_repo = |repo_id: RepoId, path: &str| {
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from(path),
+            },
+        );
+        repo.head_branch = Loadable::Ready("main".to_string());
+        repo.head_branch_rev = 1;
+        repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "tip")]));
+        repo.branches_rev = 1;
+        repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+        repo.remote_branches_rev = 1;
+        repo.log = Loadable::Ready(Arc::clone(&page));
+        repo.log_rev = 1;
+        repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+        repo.history_state.log_rev = 1;
+        repo
+    };
+    let first = make_repo(RepoId(1), "/tmp/history-bounds-first");
+    let second = make_repo(RepoId(2), "/tmp/history-bounds-second");
+    let state_for = |active_repo| {
+        Arc::new(AppState {
+            repos: vec![first.clone(), second.clone()],
+            active_repo: Some(active_repo),
+            ..AppState::test_default()
+        })
+    };
+    let bounds = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let history = view.read(app).main_pane.read(app).history_view.clone();
+            history.read(app).history_viewport_bounds()
+        })
+    };
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    ensure_history_cache_for_tests(cx, &view, state_for(RepoId(1)));
+    assert!(
+        bounds(cx).is_some(),
+        "the first repository's list is laid out"
+    );
+
+    // The second repository's log is ready, but its list was never drawn.
+    cx.update(|_window, app| {
+        let ui_model = view.read(app).ui_model.clone();
+        ui_model.update(app, |model, cx| model.set_state(state_for(RepoId(2)), cx));
+    });
+    assert!(
+        bounds(cx).is_none(),
+        "bounds painted for the previous repository must not count"
+    );
+
+    ensure_history_cache_for_tests(cx, &view, state_for(RepoId(2)));
+    wait_until(cx, "the second repository's list laid out", |cx| {
+        bounds(cx).is_some()
+    });
+}
