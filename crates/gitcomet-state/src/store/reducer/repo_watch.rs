@@ -6,10 +6,14 @@ use crate::model::{AppState, RepoId};
 use crate::msg::{Effect, RepoWatchDegradedReason};
 use std::sync::Arc;
 
-pub(super) fn acquire_lease(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+pub(super) fn acquire_lease(state: &mut AppState, repo_id: RepoId, lifetime: u64) -> Vec<Effect> {
     // Only an open repository can be watched; a lease on a closed
     // one is a no-op, and so is its release.
-    if state.repos.iter().any(|repo| repo.id == repo_id) {
+    if state
+        .repos
+        .iter()
+        .any(|repo| repo.id == repo_id && repo.lifetime() == lifetime)
+    {
         *Arc::make_mut(&mut state.watch_leases)
             .entry(repo_id)
             .or_default() += 1;
@@ -17,7 +21,14 @@ pub(super) fn acquire_lease(state: &mut AppState, repo_id: RepoId) -> Vec<Effect
     Vec::new()
 }
 
-pub(super) fn release_lease(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+pub(super) fn release_lease(state: &mut AppState, repo_id: RepoId, lifetime: u64) -> Vec<Effect> {
+    if !state
+        .repos
+        .iter()
+        .any(|repo| repo.id == repo_id && repo.lifetime() == lifetime)
+    {
+        return Vec::new();
+    }
     if let Some(count) = state.watch_leases.get(&repo_id).copied() {
         let leases = Arc::make_mut(&mut state.watch_leases);
         if count <= 1 {

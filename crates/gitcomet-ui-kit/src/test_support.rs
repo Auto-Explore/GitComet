@@ -234,13 +234,15 @@ pub mod source_guards {
         pub custom_styling: &'a [&'a str],
         /// Mouse-ups that end a continuous gesture rather than click.
         pub release_gestures: &'a [&'a str],
+        /// Left presses that start gestures or manage focus/propagation.
+        pub primary_press: &'a [&'a str],
         /// Context actions opened on press.
         pub context_press: &'a [&'a str],
     }
 
     /// Discrete controls must style and activate through the shared
     /// interaction APIs: no ad-hoc `.hover(|..`/`.active(|..`, raw
-    /// `.on_click`, bare `.on_mouse_up`, or right-button presses.
+    /// `.on_click`, bare `.on_mouse_up`, or raw button presses.
     pub fn discrete_control_violations(
         src_dir: &Path,
         allow: &DiscreteControlAllowlist<'_>,
@@ -250,6 +252,8 @@ pub mod source_guards {
             regex::Regex::new(r"\.on_click\(\s*(?:cx\.listener|on_click\b|(?:move\s+)?\|)")
                 .unwrap();
         let raw_release = regex::Regex::new(r"\.on_mouse_up\(").unwrap();
+        let primary_press =
+            regex::Regex::new(r"\.on_mouse_down\(\s*(?:gpui::)?MouseButton::Left").unwrap();
         let context_press =
             regex::Regex::new(r"\.on_mouse_down\(\s*(?:gpui::)?MouseButton::Right").unwrap();
         let listed = |relative: &Path, list: &[&str]| {
@@ -298,6 +302,9 @@ pub mod source_guards {
                 }
                 if context_press.is_match(&source) && !listed(relative, allow.context_press) {
                     violations.push(format!("{}: context action on press", relative.display()));
+                }
+                if primary_press.is_match(&source) && !listed(relative, allow.primary_press) {
+                    violations.push(format!("{}: primary action on press", relative.display()));
                 }
             }
         }

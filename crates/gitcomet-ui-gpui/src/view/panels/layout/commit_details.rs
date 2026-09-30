@@ -136,111 +136,9 @@ impl DetailsPaneView {
                 }
             }
             Some(Loadable::Ready(details)) => {
-                if details.id != selected_id {
-                    if show_delayed_loading {
-                        components::empty_state(theme, "Commit", "Loading").into_any_element()
-                    } else {
-                        let parent = details
-                            .parent_ids
-                            .first()
-                            .map(|p: &CommitId| p.as_ref().to_string())
-                            .unwrap_or_else(|| "—".to_string());
-
-                        self.sync_retained_commit_details_message_input(
-                            details.message.as_str(),
-                            cx,
-                        );
-                        Self::sync_commit_details_input_value(
-                            &self.commit_details_sha_input,
-                            details.id.as_ref(),
-                            cx,
-                        );
-                        Self::sync_commit_details_input_value(
-                            &self.commit_details_date_input,
-                            self.commit_details_date_display(details).as_str(),
-                            cx,
-                        );
-                        self.sync_commit_details_parent_input(
-                            parent.as_str(),
-                            RepoId(0),
-                            false,
-                            theme,
-                            cx,
-                        );
-
-                        let message = self.commit_details_message_view(theme, repo_id);
-
-                        div()
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .h_full()
-                            .min_h(px(0.0))
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_2()
-                                    .w_full()
-                                    .min_w(px(0.0))
-                                    .pb_2()
-                                    .child(message),
-                            )
-                            .children(
-                                commit_details_author_row(
-                                    theme,
-                                    ui_scale,
-                                    details,
-                                    commit_signatures.get(&details.id),
-                                )
-                                .map(|row| {
-                                    row.border_t_1()
-                                        .border_color(theme.colors.stroke.default)
-                                        .pt_2()
-                                        .pb_2()
-                                }),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_2()
-                                    .w_full()
-                                    .min_w(px(0.0))
-                                    .border_t_1()
-                                    .border_color(theme.colors.stroke.default)
-                                    .pt_2()
-                                    .pb_2()
-                                    .child(commit_details_selectable_row(
-                                        theme,
-                                        "Commit SHA",
-                                        commit_details_monospace_value(
-                                            self.commit_details_sha_input.clone(),
-                                        ),
-                                    ))
-                                    .child(commit_details_selectable_row(
-                                        theme,
-                                        "Commit date",
-                                        commit_details_monospace_value(
-                                            self.commit_details_date_input.clone(),
-                                        ),
-                                    ))
-                                    .child(commit_details_selectable_row(
-                                        theme,
-                                        "Parent commit SHA",
-                                        commit_details_monospace_value(
-                                            self.commit_details_parent_input.clone(),
-                                        ),
-                                    )),
-                            )
-                            .child(self.commit_files_section(
-                                repo_id,
-                                commit_details_rev,
-                                details,
-                                cx,
-                            ))
-                            .into_any_element()
-                    }
+                let current = details.id == selected_id;
+                if !current && show_delayed_loading {
+                    components::empty_state(theme, "Commit", "Loading").into_any_element()
                 } else {
                     let parent = details
                         .parent_ids
@@ -248,12 +146,19 @@ impl DetailsPaneView {
                         .map(|p: &CommitId| p.as_ref().to_string())
                         .unwrap_or_else(|| "—".to_string());
 
-                    self.sync_commit_details_message_input(
-                        details.message.as_str(),
-                        theme,
-                        repo_id,
-                        cx,
-                    );
+                    if current {
+                        self.sync_commit_details_message_input(
+                            details.message.as_str(),
+                            theme,
+                            repo_id,
+                            cx,
+                        );
+                    } else {
+                        self.sync_retained_commit_details_message_input(
+                            details.message.as_str(),
+                            cx,
+                        );
+                    }
                     Self::sync_commit_details_input_value(
                         &self.commit_details_sha_input,
                         details.id.as_ref(),
@@ -264,17 +169,19 @@ impl DetailsPaneView {
                         self.commit_details_date_display(details).as_str(),
                         cx,
                     );
-                    self.sync_commit_details_sha_menu(
-                        details.id.as_ref(),
-                        repo_id,
-                        true,
-                        theme,
-                        cx,
-                    );
+                    if current {
+                        self.sync_commit_details_sha_menu(
+                            details.id.as_ref(),
+                            repo_id,
+                            true,
+                            theme,
+                            cx,
+                        );
+                    }
                     self.sync_commit_details_parent_input(
                         parent.as_str(),
-                        repo_id,
-                        parent != "—",
+                        if current { repo_id } else { RepoId(0) },
+                        current && parent != "—",
                         theme,
                         cx,
                     );
@@ -325,11 +232,17 @@ impl DetailsPaneView {
                                 .child(commit_details_selectable_row(
                                     theme,
                                     "Commit SHA",
-                                    commit_details_monospace_element(
-                                        self.commit_details_sha_link_menu
-                                            .clone()
-                                            .into_any_element(),
-                                    ),
+                                    if current {
+                                        commit_details_monospace_element(
+                                            self.commit_details_sha_link_menu
+                                                .clone()
+                                                .into_any_element(),
+                                        )
+                                    } else {
+                                        commit_details_monospace_value(
+                                            self.commit_details_sha_input.clone(),
+                                        )
+                                    },
                                 ))
                                 .child(commit_details_selectable_row(
                                     theme,
@@ -341,11 +254,17 @@ impl DetailsPaneView {
                                 .child(commit_details_selectable_row(
                                     theme,
                                     "Parent commit SHA",
-                                    commit_details_monospace_element(
-                                        self.commit_details_parent_link_menu
-                                            .clone()
-                                            .into_any_element(),
-                                    ),
+                                    if current {
+                                        commit_details_monospace_element(
+                                            self.commit_details_parent_link_menu
+                                                .clone()
+                                                .into_any_element(),
+                                        )
+                                    } else {
+                                        commit_details_monospace_value(
+                                            self.commit_details_parent_input.clone(),
+                                        )
+                                    },
                                 )),
                         )
                         .child(self.commit_files_section(repo_id, commit_details_rev, details, cx))

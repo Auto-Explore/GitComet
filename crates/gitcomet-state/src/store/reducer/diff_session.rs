@@ -4,8 +4,8 @@
 
 use super::*;
 use crate::diff_session::{
-    ChangeListSession, DiffSession, DiffSessionContent, DiffSessionEffect, DiffSessionMsg as Event,
-    DiffSessionWork, DiffViewId,
+    ChangeListSession, DiffSession, DiffSessionContent, DiffSessionEffect, DiffSessionLoads,
+    DiffSessionMsg as Event, DiffSessionWork, DiffViewId,
 };
 use crate::model::RepoState;
 use std::sync::Arc;
@@ -14,9 +14,10 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
     match event {
         Event::Open {
             repo_id,
+            lifetime,
             view,
             target,
-        } => with_repo(state, repo_id, |repo| {
+        } => with_repo(state, repo_id, lifetime, |repo| {
             let (repo_id, lifetime) = (repo.id, repo.lifetime());
             let sessions = Arc::make_mut(&mut repo.diff_sessions);
             let session = sessions
@@ -30,42 +31,40 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
         }),
         Event::SetEncoding {
             repo_id,
+            lifetime,
             view,
             encoding,
-        } => with_session(state, repo_id, view, |lifetime, session| {
+        } => with_session(state, repo_id, lifetime, view, |lifetime, session| {
             if session.encoding == encoding {
                 return Vec::new();
             }
             session.encoding = encoding;
             load(repo_id, lifetime, view, session)
         }),
-        Event::Reload { repo_id, view } => {
-            with_session(state, repo_id, view, |lifetime, session| {
-                load(repo_id, lifetime, view, session)
-            })
-        }
-        Event::LoadBlame { repo_id, view } => {
-            with_session(state, repo_id, view, |lifetime, session| {
-                let Some((path, source)) = session.blame_source() else {
-                    return Vec::new();
-                };
-                if matches!(session.blame, Loadable::Loading | Loadable::Ready(_)) {
-                    return Vec::new();
-                }
-                session.blame = Loadable::Loading;
-                session.rev = session.rev.wrapping_add(1);
-                vec![Effect::DiffSession(DiffSessionEffect {
-                    repo_id,
-                    view,
-                    lifetime,
-                    generation: session.generation,
-                    work: DiffSessionWork::Blame { path, source },
-                    cancellation: session.cancellation.clone(),
-                })]
-            })
-        }
-        Event::Close { repo_id, view } => {
-            if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id)
+        Event::Reload {
+            repo_id,
+            lifetime,
+            view,
+        } => with_session(state, repo_id, lifetime, view, |lifetime, session| {
+            load(repo_id, lifetime, view, session)
+        }),
+        Event::LoadBlame {
+            repo_id,
+            lifetime,
+            view,
+        } => with_session(state, repo_id, lifetime, view, |lifetime, session| {
+            session.blame_requested = true;
+            load_blame(repo_id, lifetime, view, session)
+        }),
+        Event::Close {
+            repo_id,
+            lifetime,
+            view,
+        } => {
+            if let Some(repo) = state
+                .repos
+                .iter_mut()
+                .find(|repo| repo.id == repo_id && repo.lifetime() == lifetime)
                 && repo.diff_sessions.contains_key(&view)
             {
                 let sessions = Arc::make_mut(&mut repo.diff_sessions);
@@ -77,19 +76,30 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
         }
         Event::OpenChanges {
             repo_id,
+            lifetime,
             view,
             source,
-        } => with_repo(state, repo_id, |repo| {
+        } => with_repo(state, repo_id, lifetime, |repo| {
             let (repo_id, lifetime) = (repo.id, repo.lifetime());
             let lists = Arc::make_mut(&mut repo.change_lists);
             let list = lists
                 .entry(view)
-                .and_modify(|list| list.source = source.clone())
+                .and_modify(|list| {
+                    list.source = source.clone();
+                    list.base = None;
+                })
                 .or_insert_with(|| ChangeListSession::new(source));
             load_changes(repo_id, lifetime, view, list)
         }),
-        Event::CloseChanges { repo_id, view } => {
-            if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id)
+        Event::CloseChanges {
+            repo_id,
+            lifetime,
+            view,
+        } => {
+            if let Some(repo) = state
+                .repos
+                .iter_mut()
+                .find(|repo| repo.id == repo_id && repo.lifetime() == lifetime)
                 && repo.change_lists.contains_key(&view)
                 && let Some(list) = Arc::make_mut(&mut repo.change_lists).remove(&view)
             {
@@ -129,7 +139,12 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                 Err(error) => list.files = Loadable::Error(error.to_string()),
             }
             list.rev = list.rev.wrapping_add(1);
-            Vec::new()
+            list.loading = false;
+            if list.refresh_queued {
+                refresh_changes(repo_id, lifetime, view, list)
+            } else {
+                Vec::new()
+            }
         }
         Event::Loaded {
             repo_id,
@@ -157,40 +172,79 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                 .expect("checked above");
             match content {
                 DiffSessionContent::Patch(result) => {
+                    session.pending.patch = false;
                     session.diff = loadable(result.map(Arc::new));
                 }
                 DiffSessionContent::FileText(result) => {
+                    session.pending.file_text = false;
                     session.file_text = loadable(result.map(|text| text.map(Arc::new)));
                 }
                 DiffSessionContent::Image(result) => {
+                    session.pending.image = false;
                     session.file_image = loadable(result.map(|image| image.map(Arc::new)));
                 }
                 DiffSessionContent::Blame(result) => {
+                    session.pending.blame = false;
                     session.blame = loadable(result.map(Arc::new));
                 }
             }
             session.rev = session.rev.wrapping_add(1);
-            Vec::new()
+            if session.refresh_queued && !session.is_loading() {
+                refresh(repo_id, lifetime, view, session)
+            } else {
+                Vec::new()
+            }
         }
     }
 }
 
-/// Reloads the sessions and lists that follow the working tree after an
-/// external edit.
-pub(super) fn reload_worktree_sessions(repo: &mut RepoState) -> Vec<Effect> {
+/// Queue at most one refresh while a load is in flight. Known worktree
+/// paths only invalidate panes for those files; index/HEAD changes are broad.
+pub(super) fn reload_worktree_sessions(
+    repo: &mut RepoState,
+    change: &crate::msg::RepoExternalChange,
+) -> Vec<Effect> {
     let (repo_id, lifetime) = (repo.id, repo.lifetime());
     let mut effects = Vec::new();
-    if repo
-        .diff_sessions
-        .values()
-        .any(DiffSession::follows_worktree)
-    {
+    let affected = |session: &DiffSession| {
+        if !session.follows_worktree() {
+            return false;
+        }
+        if change.index || change.git_state || change.text_attributes {
+            return true;
+        }
+        if !change.worktree
+            || matches!(
+                session.target,
+                gitcomet_core::domain::DiffTarget::WorkingTree {
+                    area: gitcomet_core::domain::DiffArea::Staged,
+                    ..
+                }
+            )
+        {
+            return false;
+        }
+        session
+            .target
+            .file_path()
+            .is_none_or(|path| change.paths.may_contain(path))
+            || session
+                .target
+                .old_file_path()
+                .is_some_and(|path| change.paths.may_contain(path))
+    };
+    if repo.diff_sessions.values().any(affected) {
         for (view, session) in Arc::make_mut(&mut repo.diff_sessions).iter_mut() {
-            if session.follows_worktree() {
-                effects.extend(load(repo_id, lifetime, *view, session));
+            if affected(session) {
+                if session.is_loading() {
+                    session.refresh_queued = true;
+                } else {
+                    effects.extend(refresh(repo_id, lifetime, *view, session));
+                }
             }
         }
     }
+    // A list covers the whole repository, including files not listed yet.
     if repo
         .change_lists
         .values()
@@ -198,11 +252,40 @@ pub(super) fn reload_worktree_sessions(repo: &mut RepoState) -> Vec<Effect> {
     {
         for (view, list) in Arc::make_mut(&mut repo.change_lists).iter_mut() {
             if list.source.follows_worktree() {
-                effects.extend(load_changes(repo_id, lifetime, *view, list));
+                if list.is_loading() {
+                    list.refresh_queued = true;
+                } else {
+                    effects.extend(refresh_changes(repo_id, lifetime, *view, list));
+                }
             }
         }
     }
     effects
+}
+
+fn load_blame(
+    repo_id: RepoId,
+    lifetime: u64,
+    view: DiffViewId,
+    session: &mut DiffSession,
+) -> Vec<Effect> {
+    let Some((path, source)) = session.blame_source() else {
+        return Vec::new();
+    };
+    if matches!(session.blame, Loadable::Loading | Loadable::Ready(_)) {
+        return Vec::new();
+    }
+    session.blame = Loadable::Loading;
+    session.pending.blame = true;
+    session.rev = session.rev.wrapping_add(1);
+    vec![Effect::DiffSession(DiffSessionEffect {
+        repo_id,
+        view,
+        lifetime,
+        generation: session.generation,
+        work: DiffSessionWork::Blame { path, source },
+        cancellation: session.cancellation.clone(),
+    })]
 }
 
 fn load_changes(
@@ -212,6 +295,7 @@ fn load_changes(
     list: &mut ChangeListSession,
 ) -> Vec<Effect> {
     let cancellation = list.next_generation();
+    list.loading = true;
     list.files = Loadable::Loading;
     vec![Effect::DiffSession(DiffSessionEffect {
         repo_id,
@@ -232,12 +316,57 @@ fn loadable<T>(result: gitcomet_core::services::Result<T>) -> Loadable<T> {
     }
 }
 
+// Publish completed content even when another refresh was queued. Otherwise
+// a stream of edits could keep a newly opened pane empty indefinitely.
+fn retain_ready<T>(previous: Loadable<T>, current: &mut Loadable<T>) {
+    if matches!(previous, Loadable::Ready(_)) {
+        *current = previous;
+    }
+}
+
+fn refresh(
+    repo_id: RepoId,
+    lifetime: u64,
+    view: DiffViewId,
+    session: &mut DiffSession,
+) -> Vec<Effect> {
+    let previous = (
+        session.diff.clone(),
+        session.file_text.clone(),
+        session.file_image.clone(),
+        session.blame.clone(),
+    );
+    let effects = load(repo_id, lifetime, view, session);
+    retain_ready(previous.0, &mut session.diff);
+    retain_ready(previous.1, &mut session.file_text);
+    retain_ready(previous.2, &mut session.file_image);
+    retain_ready(previous.3, &mut session.blame);
+    effects
+}
+
+fn refresh_changes(
+    repo_id: RepoId,
+    lifetime: u64,
+    view: DiffViewId,
+    list: &mut ChangeListSession,
+) -> Vec<Effect> {
+    let previous = list.files.clone();
+    let effects = load_changes(repo_id, lifetime, view, list);
+    retain_ready(previous, &mut list.files);
+    effects
+}
+
 fn with_repo(
     state: &mut AppState,
     repo_id: RepoId,
+    lifetime: u64,
     f: impl FnOnce(&mut RepoState) -> Vec<Effect>,
 ) -> Vec<Effect> {
-    match state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+    match state
+        .repos
+        .iter_mut()
+        .find(|repo| repo.id == repo_id && repo.lifetime() == lifetime)
+    {
         Some(repo) => f(repo),
         None => Vec::new(),
     }
@@ -246,10 +375,11 @@ fn with_repo(
 fn with_session(
     state: &mut AppState,
     repo_id: RepoId,
+    lifetime: u64,
     view: DiffViewId,
     f: impl FnOnce(u64, &mut DiffSession) -> Vec<Effect>,
 ) -> Vec<Effect> {
-    with_repo(state, repo_id, |repo| {
+    with_repo(state, repo_id, lifetime, |repo| {
         if !repo.diff_sessions.contains_key(&view) {
             return Vec::new();
         }
@@ -275,6 +405,12 @@ fn load(
     let has_file = session.target.file_path().is_some();
     let image = has_file && preview.wants_image;
     let file_text = has_file && (!preview.wants_image || preview.is_svg);
+    session.pending = DiffSessionLoads {
+        patch: true,
+        file_text,
+        image,
+        blame: false,
+    };
     session.diff = Loadable::Loading;
     session.file_text = if file_text {
         Loadable::Loading
@@ -287,7 +423,7 @@ fn load(
         Loadable::Ready(None)
     };
     session.blame = Loadable::NotLoaded;
-    vec![Effect::DiffSession(DiffSessionEffect {
+    let mut effects = vec![Effect::DiffSession(DiffSessionEffect {
         repo_id,
         view,
         lifetime,
@@ -300,5 +436,9 @@ fn load(
             image,
         },
         cancellation,
-    })]
+    })];
+    if session.blame_requested {
+        effects.extend(load_blame(repo_id, lifetime, view, session));
+    }
+    effects
 }

@@ -3582,7 +3582,7 @@ fn global_nav_enters_and_leaves_a_range_comparison() {
         to: Some(to.clone()),
         from_label: "base".into(),
         to_label: "tip".into(),
-        options: Default::default(),
+        options: gitcomet_core::services::ComparisonOptions::merge_base().with_untracked(true),
         base: None,
     };
 
@@ -3644,6 +3644,56 @@ fn global_nav_enters_and_leaves_a_range_comparison() {
         )),
         "the restored comparison must reload its changed-file list"
     );
+}
+
+#[test]
+fn global_nav_reuses_a_comparison_whose_base_loaded_after_the_snapshot() {
+    let mut repos = FxHashMap::default();
+    let ids = AtomicU64::new(2);
+    let repo_id = RepoId(1);
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: "/tmp/repo".into(),
+        },
+    );
+    let range = crate::model::RangeSelection::new(
+        CommitId("base".into()),
+        None,
+        "base".into(),
+        "Working tree".into(),
+    );
+    let snapshot = |path: &str| crate::model::MainViewSnapshot {
+        diff_target: Some(DiffTarget::commit_range(
+            range.from.clone(),
+            None,
+            Some(path.into()),
+        )),
+        content_preview: false,
+        edit_mode: false,
+        selected_commit: None,
+        range_selection: Some(range.clone()),
+        worktree_selection: None,
+    };
+    repo.navigation.main_history.record(snapshot("a.rs"));
+    repo.navigation.main_history.record(snapshot("b.rs"));
+    repo.set_range_selection(Some(crate::model::RangeSelection {
+        base: Some(range.from.clone()),
+        ..range
+    }));
+    repo.set_range_files(Loadable::Ready(Arc::new(Vec::new())));
+    let mut state = AppState::test_default();
+    state.repos.push(repo);
+    let effects = reduce(&mut repos, &ids, &mut state, Msg::GlobalNavBack { repo_id });
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadRangeFiles { .. }))
+    );
+    assert!(matches!(
+        state.repos[0].history_state.range_files,
+        Loadable::Ready(_)
+    ));
 }
 
 #[test]

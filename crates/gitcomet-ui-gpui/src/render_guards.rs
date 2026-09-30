@@ -36,6 +36,30 @@ mod tests {
                     "view/panels/main/diff_view.rs",
                 ],
                 context_press: &["view/terminal_panel/viewport.rs"],
+                // Selection, resizing, dragging, focus, and propagation only.
+                // Discrete controls (including hosted group headers) use on_activate.
+                primary_press: &[
+                    "view/chrome.rs",
+                    "view/diff_text_selection.rs",
+                    "view/gitcomet_view.rs",
+                    "view/gitcomet_view_render.rs",
+                    "view/hosted/diff_pane.rs",
+                    "view/panels/layout/status_view.rs",
+                    "view/panels/main/conflict_resolver_view.rs",
+                    "view/panels/main/diff.rs",
+                    "view/panels/main/diff_view.rs",
+                    "view/panels/popover/context_menu.rs",
+                    "view/panels/popover/mod.rs",
+                    "view/panels/repo_tabs_bar.rs",
+                    "view/panes/details.rs",
+                    "view/panes/history/history_panel.rs",
+                    "view/rows/conflict_resolver.rs",
+                    "view/rows/diff_text/build.rs",
+                    "view/rows/markdown_document.rs",
+                    "view/settings_window/render.rs",
+                    "view/terminal_panel.rs",
+                    "view/terminal_panel/viewport.rs",
+                ],
             },
         );
         assert!(

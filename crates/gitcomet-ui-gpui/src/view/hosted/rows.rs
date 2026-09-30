@@ -17,6 +17,9 @@ pub(crate) enum PaneRowKind {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PaneRow {
+    /// Side/line API anchors are meaningful only when the target names a file.
+    /// Whole-target patches may repeat the same numbers in several files.
+    file_scoped: bool,
     pub(crate) kind: PaneRowKind,
     pub(crate) old_line: Option<u32>,
     pub(crate) new_line: Option<u32>,
@@ -27,7 +30,7 @@ impl PaneRow {
     /// The file line this row shows: its new side unless it only has an old
     /// one.
     pub(crate) fn anchor(&self) -> Option<(DiffLineSide, u32)> {
-        match (self.new_line, self.old_line) {
+        match (self.line(DiffLineSide::New), self.line(DiffLineSide::Old)) {
             (Some(line), _) => Some((DiffLineSide::New, line)),
             (None, Some(line)) => Some((DiffLineSide::Old, line)),
             (None, None) => None,
@@ -35,6 +38,9 @@ impl PaneRow {
     }
 
     pub(crate) fn line(&self, side: DiffLineSide) -> Option<u32> {
+        if !self.file_scoped {
+            return None;
+        }
         match side {
             DiffLineSide::Old => self.old_line,
             DiffLineSide::New => self.new_line,
@@ -70,18 +76,21 @@ pub(crate) fn rows_from_file_text(old: &str, new: &str) -> Vec<PaneRow> {
             .map(|text| SharedString::from(text.to_string()));
         match row.kind {
             FileDiffRowKind::Context => rows.push(PaneRow {
+                file_scoped: true,
                 kind: PaneRowKind::Context,
                 old_line: row.old_line,
                 new_line: row.new_line,
                 text: new_text.or(old_text).unwrap_or_default(),
             }),
             FileDiffRowKind::Remove => rows.push(PaneRow {
+                file_scoped: true,
                 kind: PaneRowKind::Removed,
                 old_line: row.old_line,
                 new_line: None,
                 text: old_text.unwrap_or_default(),
             }),
             FileDiffRowKind::Add => rows.push(PaneRow {
+                file_scoped: true,
                 kind: PaneRowKind::Added,
                 old_line: None,
                 new_line: row.new_line,
@@ -89,12 +98,14 @@ pub(crate) fn rows_from_file_text(old: &str, new: &str) -> Vec<PaneRow> {
             }),
             FileDiffRowKind::Modify => {
                 rows.push(PaneRow {
+                    file_scoped: true,
                     kind: PaneRowKind::Removed,
                     old_line: row.old_line,
                     new_line: None,
                     text: old_text.unwrap_or_default(),
                 });
                 rows.push(PaneRow {
+                    file_scoped: true,
                     kind: PaneRowKind::Added,
                     old_line: None,
                     new_line: row.new_line,
@@ -146,6 +157,7 @@ pub(crate) fn rows_from_patch(diff: &Diff) -> Vec<PaneRow> {
             _ => text,
         };
         rows.push(PaneRow {
+            file_scoped: diff.target.file_path().is_some(),
             kind,
             old_line,
             new_line,

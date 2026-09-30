@@ -317,6 +317,149 @@ fn commands_reach_the_palette_key_bindings_and_menus(cx: &mut gpui::TestAppConte
     cx.simulate_keystrokes("secondary-alt-r");
     cx.run_until_parked();
     cx.update(|_window, app| assert_eq!(review::reviews(app).read(app).count(window_id, &repo), 2));
+
+    // A stale explicit target must never turn into the active repository.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            assert!(this.run_extension_command_for(MARK_REVIEWED, Some(RepoId(999)), cx));
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|_window, app| assert_eq!(review::reviews(app).read(app).count(window_id, &repo), 2));
+}
+
+#[gpui::test]
+fn retained_panes_and_bottom_panels_do_not_keep_a_closed_windows_store_alive(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_extension_api::{ChangeSource, DiffPaneOptions};
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let workspace = named_workspace("Store lifetime");
+    cx.update(|app| {
+        crate::workspaces::initialize_for_test(app, vec![workspace.clone()]);
+        install_example(app);
+    });
+    let window = open_window_with_repo(cx, workspace, Path::new("/tmp/host-store-lifetime"));
+    let (host, weak_store, panels, key) = window
+        .update(cx, |view, _, _| {
+            let extensions = view.extension_window.as_ref().unwrap();
+            (
+                extensions.host(),
+                Arc::downgrade(&view.store),
+                extensions.bottom_panels(),
+                crate::view::extension_panels::repo_key(view.active_repo().unwrap()),
+            )
+        })
+        .unwrap();
+    let (pane, list) = cx.update(|app| {
+        let repository = host.active_repository(app).unwrap().unwrap();
+        let pane = host
+            .create_diff_pane(
+                &repository,
+                DiffTarget::working_tree("a.rs".into(), DiffArea::Unstaged),
+                DiffPaneOptions::default(),
+                app,
+            )
+            .unwrap();
+        let list = host
+            .create_file_list(
+                &repository,
+                ChangeSource::Commit(CommitId("HEAD".into())),
+                |_, _, _| {},
+                app,
+            )
+            .unwrap();
+        host.open_bottom_panel(
+            &repository,
+            &review::extension_id()
+                .contribution(review::REVIEW_LOG_PANEL)
+                .unwrap(),
+            app,
+        )
+        .unwrap();
+        (pane, list)
+    });
+    cx.run_until_parked();
+    assert!(!panels.borrow().shown(key).is_empty());
+    window
+        .update(cx, |_, window, _| window.remove_window())
+        .unwrap();
+    cx.run_until_parked();
+    assert!(
+        weak_store.upgrade().is_none(),
+        "retained panes must own only a weak store"
+    );
+    assert!(
+        panels.borrow().shown(key).is_empty(),
+        "closing breaks the panel/host cycle"
+    );
+    cx.update(|app| {
+        assert!(!host.is_open(app));
+        pane.set_target(
+            DiffTarget::working_tree("b.rs".into(), DiffArea::Unstaged),
+            app,
+        );
+        list.set_source(ChangeSource::Commit(CommitId("other".into())), app);
+    });
+}
+
+#[gpui::test]
+fn different_close_requests_replace_pending_and_visible_confirmations(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = (*state_with_repo(RepoId(1), Path::new("/tmp/busy"))).clone();
+    state.repos[0].push_in_flight = 1;
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            test_support::push_test_state(this, Arc::new(state), cx);
+        });
+    });
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            assert!(this.request_late_close_guards(
+                &TerminalShutdownAction::CloseRepo { repo_id: RepoId(1) },
+                cx
+            ));
+            assert!(this.request_late_close_guards(&TerminalShutdownAction::CloseWindow, cx));
+            assert_eq!(
+                this.pending_close_guard_prompt.as_ref().unwrap().action,
+                TerminalShutdownAction::CloseWindow
+            );
+        })
+    });
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            assert_eq!(
+                this.popover_host.read(cx).close_guard_action(),
+                Some(&TerminalShutdownAction::CloseWindow)
+            );
+            assert!(this.request_late_close_guards(&TerminalShutdownAction::QuitApp, cx));
+            assert_eq!(
+                this.pending_close_guard_prompt.as_ref().unwrap().action,
+                TerminalShutdownAction::QuitApp
+            );
+        })
+    });
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            assert_eq!(
+                this.popover_host.read(cx).close_guard_action(),
+                Some(&TerminalShutdownAction::QuitApp)
+            );
+            assert!(this.request_late_close_guards(&TerminalShutdownAction::QuitApp, cx));
+            assert!(
+                this.pending_close_guard_prompt.is_none(),
+                "the identical action is deduplicated"
+            );
+        })
+    });
 }
 
 #[gpui::test]

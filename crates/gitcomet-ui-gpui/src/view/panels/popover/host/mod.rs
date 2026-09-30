@@ -1241,8 +1241,11 @@ impl PopoverHost {
 
     /// Like [`Self::showing_unsaved_file_edits_prompt`], for the close-guard
     /// confirmation.
-    pub(in crate::view) fn showing_close_guard_prompt(&self) -> bool {
-        matches!(self.popover, Some(PopoverKind::CloseGuardConfirm(_)))
+    pub(in crate::view) fn close_guard_action(&self) -> Option<&TerminalShutdownAction> {
+        match &self.popover {
+            Some(PopoverKind::CloseGuardConfirm(prompt)) => Some(&prompt.action),
+            _ => None,
+        }
     }
 
     #[cfg(test)]

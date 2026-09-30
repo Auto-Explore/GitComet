@@ -196,11 +196,12 @@ pub(super) fn repo_externally_changed(
     if change.worktree {
         repo_state.record_worktree_change(change.paths.clone());
     }
-    let session_reloads = if change.worktree || change.index {
-        super::diff_session::reload_worktree_sessions(repo_state)
-    } else {
-        Vec::new()
-    };
+    let session_reloads =
+        if change.worktree || change.index || change.git_state || change.text_attributes {
+            super::diff_session::reload_worktree_sessions(repo_state, &change)
+        } else {
+            Vec::new()
+        };
 
     let file_browser_effect = file_browser_refresh_for_external_change(
         repo_state,

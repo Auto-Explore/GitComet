@@ -416,7 +416,11 @@ pub(super) fn global_nav(
         }
         None => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.set_selected_commit(None);
+                // The setter also clears a comparison. Preserve it when the
+                // commit selection already matches this navigation entry.
+                if repo_state.history_state.selected_commit.is_some() {
+                    repo_state.set_selected_commit(None);
+                }
                 repo_state.set_commit_details(Loadable::NotLoaded);
             }
         }
@@ -453,17 +457,25 @@ pub(super) fn global_nav(
         let Some(repo_state) = state.repos.iter().find(|r| r.id == repo_id) else {
             return effects;
         };
-        repo_state.history_state.range_selection != snapshot.range_selection
+        match (
+            &repo_state.history_state.range_selection,
+            &snapshot.range_selection,
+        ) {
+            (Some(current), Some(saved)) => !current.same_comparison(saved),
+            (None, None) => false,
+            _ => true,
+        }
     };
     if restore_range {
         match snapshot.range_selection {
-            Some(range) => effects.extend(super::effects::compare_range(
+            Some(range) => effects.extend(super::effects::compare_range_with_options(
                 state,
                 repo_id,
                 range.from,
                 range.to,
                 range.from_label,
                 range.to_label,
+                range.options,
                 super::effects::ComparisonSource::Explicit,
             )),
             None => {

@@ -49,6 +49,11 @@ pub struct DiffSession {
     /// Loaded on request ([`DiffSessionMsg::LoadBlame`]), for the target's
     /// newer side; cleared on retarget.
     pub blame: Loadable<Shared<Vec<BlameLine>>>,
+    /// Once requested, blame follows subsequent reloads and retargets.
+    pub(crate) blame_requested: bool,
+    /// An external change during a load requests one more load on completion.
+    pub(crate) refresh_queued: bool,
+    pub(crate) pending: DiffSessionLoads,
     pub(crate) cancellation: CancellationToken,
 }
 
@@ -63,6 +68,9 @@ impl DiffSession {
             file_text: Loadable::NotLoaded,
             file_image: Loadable::NotLoaded,
             blame: Loadable::NotLoaded,
+            blame_requested: false,
+            refresh_queued: false,
+            pending: DiffSessionLoads::default(),
             cancellation: CancellationToken::new(),
         }
     }
@@ -70,6 +78,7 @@ impl DiffSession {
     /// Starts a new generation: cancels the old one's work and returns the
     /// new generation's token.
     pub(crate) fn next_generation(&mut self) -> CancellationToken {
+        self.refresh_queued = false;
         self.cancellation.cancel();
         self.cancellation = CancellationToken::new();
         self.generation = self.generation.wrapping_add(1);
@@ -90,6 +99,10 @@ impl DiffSession {
         )
     }
 
+    pub fn is_loading(&self) -> bool {
+        self.pending.patch || self.pending.file_text || self.pending.image || self.pending.blame
+    }
+
     /// The blame the target's newer side reads, if it names one file.
     pub fn blame_source(&self) -> Option<(PathBuf, BlameSource)> {
         let path = self.target.file_path()?.to_path_buf();
@@ -108,6 +121,15 @@ impl DiffSession {
         };
         Some((path, source))
     }
+}
+
+/// Outstanding parts of this generation, independent of retained content.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct DiffSessionLoads {
+    pub patch: bool,
+    pub file_text: bool,
+    pub image: bool,
+    pub blame: bool,
 }
 
 /// Where a hosted file list's changes come from.
@@ -150,6 +172,8 @@ pub struct ChangeListSession {
     pub files: Loadable<Shared<Vec<CommitFileChange>>>,
     /// The commit a comparison measured from (its merge base when asked).
     pub base: Option<CommitId>,
+    pub(crate) refresh_queued: bool,
+    pub(crate) loading: bool,
     pub(crate) cancellation: CancellationToken,
 }
 
@@ -161,16 +185,23 @@ impl ChangeListSession {
             rev: 0,
             files: Loadable::NotLoaded,
             base: None,
+            refresh_queued: false,
+            loading: false,
             cancellation: CancellationToken::new(),
         }
     }
 
     pub(crate) fn next_generation(&mut self) -> CancellationToken {
+        self.refresh_queued = false;
         self.cancellation.cancel();
         self.cancellation = CancellationToken::new();
         self.generation = self.generation.wrapping_add(1);
         self.rev = self.rev.wrapping_add(1);
         self.cancellation.clone()
+    }
+
+    pub fn is_loading(&self) -> bool {
+        self.loading
     }
 }
 
@@ -180,36 +211,43 @@ pub enum DiffSessionMsg {
     /// Opens `view` on `target`, or retargets it if already open.
     Open {
         repo_id: RepoId,
+        lifetime: u64,
         view: DiffViewId,
         target: DiffTarget,
     },
     SetEncoding {
         repo_id: RepoId,
+        lifetime: u64,
         view: DiffViewId,
         encoding: Option<TextEncoding>,
     },
     /// Reloads the current target (a new generation).
     Reload {
         repo_id: RepoId,
+        lifetime: u64,
         view: DiffViewId,
     },
     LoadBlame {
         repo_id: RepoId,
+        lifetime: u64,
         view: DiffViewId,
     },
     /// Cancels the session's work and forgets it.
     Close {
         repo_id: RepoId,
+        lifetime: u64,
         view: DiffViewId,
     },
     /// Opens (or re-sources) change list `view`.
     OpenChanges {
         repo_id: RepoId,
+        lifetime: u64,
         view: DiffViewId,
         source: ChangeSource,
     },
     CloseChanges {
         repo_id: RepoId,
+        lifetime: u64,
         view: DiffViewId,
     },
     ChangesLoaded {

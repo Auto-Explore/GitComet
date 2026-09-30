@@ -260,6 +260,15 @@ pub struct RangeSelection {
 }
 
 impl RangeSelection {
+    /// The requested comparison, independent of its asynchronously loaded base.
+    pub fn same_comparison(&self, other: &Self) -> bool {
+        self.from == other.from
+            && self.to == other.to
+            && self.from_label == other.from_label
+            && self.to_label == other.to_label
+            && self.options == other.options
+    }
+
     pub fn new(from: CommitId, to: Option<CommitId>, from_label: String, to_label: String) -> Self {
         Self {
             from,

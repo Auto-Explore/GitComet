@@ -41,8 +41,10 @@ impl PaneProjection {
         let mut lines = FxHashMap::default();
         for (row_ix, row) in rows.iter().enumerate() {
             let keys = [
-                row.old_line.map(|line| (DiffLineSide::Old, line)),
-                row.new_line.map(|line| (DiffLineSide::New, line)),
+                row.line(DiffLineSide::Old)
+                    .map(|line| (DiffLineSide::Old, line)),
+                row.line(DiffLineSide::New)
+                    .map(|line| (DiffLineSide::New, line)),
             ];
             let display_ix = display.len();
             display.push(DisplayRow::Document(row_ix));
@@ -184,5 +186,46 @@ mod tests {
         let range = |side, start, end| DiffLineRange { side, start, end };
         assert_eq!(selected_text(&rows, range(DiffLineSide::New, 1, 2)), "a\nB");
         assert_eq!(selected_text(&rows, range(DiffLineSide::Old, 2, 3)), "b\nc");
+    }
+
+    #[test]
+    fn whole_commit_patches_do_not_alias_file_line_anchors() {
+        use super::super::rows::rows_from_patch;
+        use gitcomet_core::domain::{CommitId, Diff, DiffTarget};
+        let diff = Diff::from_unified(
+            DiffTarget::commit(CommitId("head".into()), None),
+            "diff --git a/a b/a\n@@ -1 +1 @@\n-old a\n+new a\ndiff --git a/b b/b\n@@ -1 +1 @@\n-old b\n+new b\n",
+        );
+        let rows = rows_from_patch(&diff);
+        assert_eq!(rows.iter().filter(|row| row.new_line == Some(1)).count(), 2);
+        let projection =
+            PaneProjection::build(&rows, &[inset(DiffLineSide::New, 1, &["ambiguous"])]);
+        assert_eq!(
+            projection.len(),
+            rows.len(),
+            "no inset on an ambiguous line"
+        );
+        assert_eq!(projection.display_ix(DiffLineSide::New, 1), None);
+        assert!(rows.iter().all(|row| row.anchor().is_none()));
+        assert!(
+            selected_text(
+                &rows,
+                DiffLineRange {
+                    side: DiffLineSide::New,
+                    start: 1,
+                    end: 1
+                }
+            )
+            .is_empty()
+        );
+        assert!(
+            projection
+                .markers(&DiffAnnotations::new().with(
+                    DiffLineSide::New,
+                    1,
+                    DiffAnnotation::new(gpui::red())
+                ))
+                .is_empty()
+        );
     }
 }

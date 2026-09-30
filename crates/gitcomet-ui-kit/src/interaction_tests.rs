@@ -839,6 +839,7 @@ fn discrete_control_styles_and_activation_are_owned_by_the_interaction_kit() {
             // Editing focus is intentionally different from a discrete action.
             custom_styling: &["interaction.rs", "text_input/render.rs"],
             release_gestures: &["text_input/render.rs"],
+            primary_press: &["text_input/editing.rs", "text_input/render.rs"],
             context_press: &["text_input/editing.rs", "text_input/render.rs"],
         },
     );

@@ -4,6 +4,11 @@
 //!
 //! A pane lives while its handle or its mounted view does; dropping both
 //! closes its session and cancels its work.
+//!
+//! File-line features (selection, reveal, annotations, insets, blame, and
+//! gutter actions) require a single-file target or a snapshot. Whole-commit
+//! and whole-comparison patches display and search all files; their repeated
+//! line numbers cannot be addressed by the side/line API.
 
 use gitcomet_core::domain::{CommitFileChange, DiffTarget};
 use gitcomet_core::text_format::TextEncoding;

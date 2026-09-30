@@ -349,6 +349,7 @@ impl WorkerLoopContext<'_> {
 pub struct WatchLease {
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    lifetime: u64,
 }
 
 impl WatchLease {
@@ -361,6 +362,7 @@ impl Drop for WatchLease {
     fn drop(&mut self) {
         self.msg_tx.dispatch(Msg::ReleaseWatchLease {
             repo_id: self.repo_id,
+            lifetime: self.lifetime,
         });
     }
 }
@@ -369,6 +371,7 @@ impl std::fmt::Debug for WatchLease {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WatchLease")
             .field("repo_id", &self.repo_id)
+            .field("lifetime", &self.lifetime)
             .finish()
     }
 }
@@ -715,13 +718,15 @@ impl AppStore {
         self.msg_tx.dispatch(msg);
     }
 
-    /// Watches `repo_id` for external changes until the lease is dropped. A
-    /// repository closed meanwhile simply stops counting the lease.
-    pub fn watch_repository(&self, repo_id: RepoId) -> WatchLease {
-        self.msg_tx.dispatch(Msg::AcquireWatchLease { repo_id });
+    /// Watches this lifetime of `repo_id` until the lease is dropped. Closing
+    /// and reopening the repository never transfers an outstanding lease.
+    pub fn watch_repository(&self, repo_id: RepoId, lifetime: u64) -> WatchLease {
+        self.msg_tx
+            .dispatch(Msg::AcquireWatchLease { repo_id, lifetime });
         WatchLease {
             msg_tx: self.msg_tx.clone(),
             repo_id,
+            lifetime,
         }
     }
 

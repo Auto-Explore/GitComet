@@ -631,8 +631,12 @@ fn reduce_inner(
             open_repos,
             active_repo,
         } => repo_management::restore_session(repos, id_alloc, state, open_repos, active_repo),
-        Msg::AcquireWatchLease { repo_id } => repo_watch::acquire_lease(state, repo_id),
-        Msg::ReleaseWatchLease { repo_id } => repo_watch::release_lease(state, repo_id),
+        Msg::AcquireWatchLease { repo_id, lifetime } => {
+            repo_watch::acquire_lease(state, repo_id, lifetime)
+        }
+        Msg::ReleaseWatchLease { repo_id, lifetime } => {
+            repo_watch::release_lease(state, repo_id, lifetime)
+        }
         Msg::CloseRepo { repo_id } => repo_management::close_repo(repos, state, repo_id),
         Msg::MoveRepoOut { repo_id } => repo_management::move_repo_out(repos, state, repo_id),
         Msg::CloseRepos {

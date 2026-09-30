@@ -349,8 +349,8 @@ impl WindowHostImpl for HostWindow {
         options: gitcomet_extension_api::DiffPaneOptions,
         cx: &mut App,
     ) -> Result<gitcomet_extension_api::DiffPane, HostError> {
-        let store = self.store.upgrade().ok_or(HostError::WindowClosed)?;
         let host = self.host()?;
+        let store = self.store.clone();
         let repository = repository.clone();
         let entity = cx.new(|cx| {
             super::hosted::diff_pane::DiffPaneView::new(
@@ -384,8 +384,8 @@ impl WindowHostImpl for HostWindow {
         on_select: gitcomet_extension_api::FileSelected,
         cx: &mut App,
     ) -> Result<gitcomet_extension_api::FileList, HostError> {
-        let store = self.store.upgrade().ok_or(HostError::WindowClosed)?;
         let host = self.host()?;
+        let store = self.store.clone();
         let repository = repository.clone();
         let entity = cx.new(|cx| {
             super::hosted::file_list::FileListView::new(
@@ -465,7 +465,7 @@ impl WindowHostImpl for HostWindow {
     ) -> Result<gitcomet_extension_api::RepositoryWatch, HostError> {
         let store = self.store.upgrade().ok_or(HostError::WindowClosed)?;
         Ok(gitcomet_extension_api::RepositoryWatch::new(Box::new(
-            store.watch_repository(repository.repo_id()),
+            store.watch_repository(repository.repo_id(), repository.lifetime()),
         )))
     }
 
@@ -664,6 +664,9 @@ impl Drop for ExtensionWindow {
     fn drop(&mut self) {
         *self.state.borrow_mut() = Arc::default();
         self.observers.observers.borrow_mut().clear();
+        // Built panels can hold host handles, which share this same panel map.
+        // Break that ownership cycle when the window goes away.
+        *self.bottom_panels.borrow_mut() = Default::default();
     }
 }
 
@@ -750,19 +753,26 @@ impl GitCometView {
         let requires_repository = command.requires_repository;
         let window_handle = self.window_handle;
         let window_id = window_handle.window_id();
-        let target = target.and_then(|repo_id| {
-            self.state
-                .repos
-                .iter()
-                .find(|repo| repo.id == repo_id)
-                .map(|repo| repository_handle(window_id, repo))
-        });
+        let target = match target {
+            Some(repo_id) => {
+                let Some(repo) = self.state.repos.iter().find(|repo| repo.id == repo_id) else {
+                    return true;
+                };
+                Some(repository_handle(window_id, repo))
+            }
+            None => None,
+        };
         // Deferred: the command reads this window through its host, and the
         // view is borrowed while it updates.
         cx.defer(move |cx| {
             let _ = window_handle.update(cx, |_, window, cx| {
                 let repository = match target {
-                    Some(target) => host.check(&target, cx).ok().map(|()| target),
+                    Some(target) => {
+                        if host.check(&target, cx).is_err() {
+                            return;
+                        }
+                        Some(target)
+                    }
                     None => host.active_repository(cx).ok().flatten(),
                 };
                 if requires_repository && repository.is_none() {

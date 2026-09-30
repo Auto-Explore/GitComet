@@ -6,6 +6,7 @@
 use super::projection::{DisplayRow, PaneProjection, selected_text};
 use super::rows::{PaneRow, PaneRowKind, rows_from_file_text, rows_from_patch, side_text};
 use super::*;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use gitcomet_core::domain::DiffTarget;
 use gitcomet_core::text_format::TextEncoding;
 use gitcomet_extension_api::{
@@ -19,7 +20,7 @@ use std::rc::Rc;
 enum PaneSource {
     /// A diff session in the window's store.
     Session {
-        store: Arc<AppStore>,
+        store: std::sync::Weak<AppStore>,
         repository: RepositoryHandle,
         target: DiffTarget,
     },
@@ -92,7 +93,7 @@ impl DiffPaneView {
 
     pub(crate) fn new(
         host: WindowHost,
-        store: Arc<AppStore>,
+        store: std::sync::Weak<AppStore>,
         repository: RepositoryHandle,
         target: DiffTarget,
         options: DiffPaneOptions,
@@ -132,10 +133,11 @@ impl DiffPaneView {
         self.build = None;
         self.building_rev = None;
         self.rows = Arc::default();
-        self.rows_rev = None;
         self.loading = true;
         self.error = None;
+        self.blame = None;
         self.selection = None;
+        self.pending_reveal = None;
         self.reproject();
     }
 
@@ -190,14 +192,19 @@ impl DiffPaneView {
             return;
         };
         *shown = target.clone();
+        let Some(store) = store.upgrade() else {
+            return;
+        };
         store.dispatch(Msg::DiffSession(DiffSessionMsg::Open {
             repo_id: repository.repo_id(),
+            lifetime: repository.lifetime(),
             view: self.view_id,
             target,
         }));
         if self.options.policy.blame {
             store.dispatch(Msg::DiffSession(DiffSessionMsg::LoadBlame {
                 repo_id: repository.repo_id(),
+                lifetime: repository.lifetime(),
                 view: self.view_id,
             }));
         }
@@ -216,7 +223,10 @@ impl DiffPaneView {
     }
 
     fn session<'a>(&self, state: &'a AppState) -> Option<&'a DiffSession> {
-        let PaneSource::Session { repository, .. } = &self.source else {
+        let PaneSource::Session {
+            repository, target, ..
+        } = &self.source
+        else {
             return None;
         };
         state
@@ -227,6 +237,10 @@ impl DiffPaneView {
             })?
             .diff_sessions
             .get(&self.view_id)
+            .filter(|session| {
+                session.target == *target
+                    && session.target.old_file_path() == target.old_file_path()
+            })
     }
 
     /// Rebuilds rows when this pane's session moved; other sessions and
@@ -260,9 +274,12 @@ impl DiffPaneView {
             }
             _ => None,
         };
-        let loading = matches!(session.diff, Loadable::Loading)
-            || matches!(session.file_text, Loadable::Loading);
+        let loading = session.is_loading();
         if file_text.is_none() && patch.is_none() {
+            // A reload can overtake a row build. Do not let that build put
+            // the previous generation back on screen after this notification.
+            self.build = None;
+            self.building_rev = None;
             self.rows_rev = Some(rev);
             self.loading = loading;
             self.error = error;
@@ -317,9 +334,11 @@ impl DiffPaneView {
         if let PaneSource::Session {
             store, repository, ..
         } = &self.source
+            && let Some(store) = store.upgrade()
         {
             store.dispatch(Msg::DiffSession(DiffSessionMsg::SetEncoding {
                 repo_id: repository.repo_id(),
+                lifetime: repository.lifetime(),
                 view: self.view_id,
                 encoding,
             }));
@@ -469,10 +488,10 @@ impl DiffPaneView {
                 let row = self.rows.get(row_ix)?.clone();
                 let anchor = row.anchor();
                 let annotation = row
-                    .old_line
+                    .line(DiffLineSide::Old)
                     .and_then(|line| self.annotations.get(DiffLineSide::Old, line))
                     .or_else(|| {
-                        row.new_line
+                        row.line(DiffLineSide::New)
                             .and_then(|line| self.annotations.get(DiffLineSide::New, line))
                     })
                     .cloned();
@@ -507,7 +526,7 @@ impl DiffPaneView {
                 let blame = policy
                     .blame
                     .then(|| {
-                        let line = row.new_line? as usize;
+                        let line = row.line(DiffLineSide::New)? as usize;
                         let blame = self.blame.as_ref()?.get(line.checked_sub(1)?)?;
                         Some(SharedString::from(blame.author.to_string()))
                     })
@@ -593,13 +612,18 @@ impl DiffPaneView {
                                     .unwrap_or_else(|| marker.into()),
                             )
                             .when(gutter_action && anchor.is_some(), |gutter| {
-                                gutter.cursor_pointer().on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |this, _: &gpui::MouseDownEvent, _, cx| {
-                                        cx.stop_propagation();
-                                        this.click_gutter(ix, cx);
-                                    }),
-                                )
+                                gutter
+                                    .control_interaction(
+                                        controls::InteractionStyle::new(theme),
+                                        controls::InteractionState::default(),
+                                    )
+                                    .on_activate(
+                                        false,
+                                        controls::ControlActivation::Nested,
+                                        cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                                            this.click_gutter(ix, cx);
+                                        }),
+                                    )
                             }),
                     )
                     .child(
@@ -769,9 +793,11 @@ impl Drop for DiffPaneView {
         if let PaneSource::Session {
             store, repository, ..
         } = &self.source
+            && let Some(store) = store.upgrade()
         {
             store.dispatch(Msg::DiffSession(DiffSessionMsg::Close {
                 repo_id: repository.repo_id(),
+                lifetime: repository.lifetime(),
                 view: self.view_id,
             }));
         }

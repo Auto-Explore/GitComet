@@ -54,6 +54,7 @@ fn open_repository(
     git(root, &["init", "-q", "-b", "main"]);
     git(root, &["config", "user.email", "t@example.com"]);
     git(root, &["config", "user.name", "T"]);
+    git(root, &["config", "commit.gpgsign", "false"]);
     // Same bytes under any user or system config (Windows CI sets autocrlf).
     git(root, &["config", "core.autocrlf", "false"]);
     std::fs::write(root.join("a.rs"), numbered("a", 30, None)).unwrap();
@@ -251,6 +252,140 @@ fn two_panes_and_a_list_change_cancel_and_drop_independently(cx: &mut gpui::Test
 
 fn selector(text: String) -> &'static str {
     Box::leak(text.into_boxed_str())
+}
+
+#[gpui::test]
+fn retargeting_ignores_old_notifications_and_clears_files_before_loading(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::view::hosted::{
+        diff_pane::{DiffPaneView, HostedDiffPane},
+        file_list::{FileListView, HostedFileList},
+    };
+    use gitcomet_state::diff_session::DiffViewId;
+    use std::rc::Rc;
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (_dir, store, view, cx) = open_repository(cx);
+    let (host, repository) = cx.update(|_, app| {
+        let host = view.read(app).extension_window.as_ref().unwrap().host();
+        let repository = host.active_repository(app).unwrap().unwrap();
+        (host, repository)
+    });
+    let target = |path: &str| DiffTarget::working_tree(path.into(), DiffArea::Unstaged);
+    let source = ChangeSource::Comparison {
+        from: CommitId("HEAD".into()),
+        to: None,
+        options: Default::default(),
+    };
+    let (seed_pane, seed_list) = cx.update(|_, app| {
+        (
+            host.create_diff_pane(&repository, target("a.rs"), DiffPaneOptions::default(), app)
+                .unwrap(),
+            host.create_file_list(&repository, source.clone(), |_, _, _| {}, app)
+                .unwrap(),
+        )
+    });
+    settle(cx, &view, &store, "seed content", |cx| {
+        cx.update(|_, app| !seed_pane.is_loading(app) && !seed_list.is_loading(app))
+    });
+    let mut state = (*store.snapshot()).clone();
+    let session = state.repos[0]
+        .diff_sessions
+        .values()
+        .next()
+        .unwrap()
+        .clone();
+    let change_list = state.repos[0].change_lists.values().next().unwrap().clone();
+    // These panes have no dispatcher: only the explicitly published snapshots
+    // can advance them, making the notification-before-Open race deterministic.
+    let (pane_entity, list_entity) = cx.update(|_, app| {
+        (
+            app.new(|cx| {
+                DiffPaneView::new(
+                    host.clone(),
+                    std::sync::Weak::new(),
+                    repository.clone(),
+                    target("a.rs"),
+                    DiffPaneOptions::default(),
+                    cx,
+                )
+            }),
+            app.new(|cx| {
+                FileListView::new(
+                    host.clone(),
+                    std::sync::Weak::new(),
+                    repository.clone(),
+                    source,
+                    Rc::new(|_, _, _| {}),
+                    cx,
+                )
+            }),
+        )
+    });
+    let pane = DiffPane::new(Rc::new(HostedDiffPane {
+        entity: pane_entity.clone(),
+    }));
+    let list = gitcomet_extension_api::FileList::new(Rc::new(HostedFileList {
+        entity: list_entity.clone(),
+    }));
+    let (pane_id, list_id) = cx.update(|_, app| {
+        (
+            DiffViewId(pane_entity.read(app).view_id()),
+            DiffViewId(list_entity.read(app).test_parts().0),
+        )
+    });
+    Arc::make_mut(&mut state.repos[0].diff_sessions).insert(pane_id, session);
+    Arc::make_mut(&mut state.repos[0].change_lists).insert(list_id, change_list);
+    publish(cx, &view, Arc::new(state.clone()));
+    assert_eq!(rows_with(cx, &pane, "a edited 3"), 1);
+    assert!(!cx.update(|_, app| list.files(app)).is_empty());
+    let new_source = ChangeSource::Commit(CommitId("other".into()));
+    cx.update(|_, app| {
+        pane.set_target(target("b.rs"), app);
+        list.set_source(new_source.clone(), app);
+        assert!(list.files(app).is_empty());
+        assert!(!list.select_path(Path::new("a.rs"), app));
+    });
+    // A newer revision of the OLD target/source arrives before Open is reduced.
+    Arc::make_mut(&mut state.repos[0].diff_sessions)
+        .get_mut(&pane_id)
+        .unwrap()
+        .rev += 1;
+    Arc::make_mut(&mut state.repos[0].change_lists)
+        .get_mut(&list_id)
+        .unwrap()
+        .rev += 1;
+    publish(cx, &view, Arc::new(state.clone()));
+    assert_eq!(rows_with(cx, &pane, "a edited 3"), 0);
+    cx.update(|_, app| {
+        assert!(pane.is_loading(app));
+        assert!(list.is_loading(app));
+        assert!(list.files(app).is_empty());
+    });
+    let session = Arc::make_mut(&mut state.repos[0].diff_sessions)
+        .get_mut(&pane_id)
+        .unwrap();
+    session.target = target("b.rs");
+    session.rev += 1;
+    session.diff = Loadable::Loading;
+    session.file_text = Loadable::Loading;
+    let change_list = Arc::make_mut(&mut state.repos[0].change_lists)
+        .get_mut(&list_id)
+        .unwrap();
+    change_list.source = new_source;
+    change_list.rev += 1;
+    change_list.files = Loadable::Error("Could not load comparison".into());
+    change_list.base = None;
+    publish(cx, &view, Arc::new(state));
+    assert_eq!(rows_with(cx, &pane, "a edited 3"), 0);
+    cx.update(|_, app| {
+        assert!(list.files(app).is_empty());
+        assert!(!list.is_loading(app));
+        assert_eq!(
+            list_entity.read(app).load_error(),
+            Some("Could not load comparison")
+        );
+    });
 }
 
 /// Opens the example's Changes view and waits for its file list.
@@ -751,6 +886,48 @@ fn grouped_file_lists_pin_the_current_group_without_replanning(cx: &mut gpui::Te
     );
 
     // Rows: Added header, 60 files, Modified header, 60 files.
+    let added = selector(format!("hosted_file_list_{id}_group_Added"));
+    let center = cx.debug_bounds(added).unwrap().center();
+    cx.simulate_mouse_down(center, gpui::MouseButton::Left, gpui::Modifiers::default());
+    draw(cx);
+    assert_eq!(
+        cx.update(|_, app| list_view.read(app).test_parts().2),
+        builds,
+        "a header never toggles on press"
+    );
+    cx.simulate_mouse_up(
+        gpui::point(px(1000.0), px(1000.0)),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    draw(cx);
+    assert_eq!(
+        cx.update(|_, app| list_view.read(app).test_parts().2),
+        builds,
+        "a cancelled click never toggles"
+    );
+    click_debug_selector(cx, added);
+    draw(cx);
+    assert!(
+        cx.debug_bounds(selector(format!("hosted_file_list_{id}_file_a00.rs")))
+            .is_none()
+    );
+    cx.simulate_keystrokes("space");
+    cx.update(|window, app| {
+        window.dispatch_event(
+            gpui::PlatformInput::KeyUp(gpui::KeyUpEvent {
+                keystroke: gpui::Keystroke::parse("space").unwrap(),
+            }),
+            app,
+        );
+    });
+    draw(cx);
+    assert!(
+        cx.debug_bounds(selector(format!("hosted_file_list_{id}_file_a00.rs")))
+            .is_some(),
+        "keyboard activation reopens the group"
+    );
+    let builds = cx.update(|_, app| list_view.read(app).test_parts().2);
     scroll.scroll_to_item(90, gpui::ScrollStrategy::Top);
     draw(cx);
     assert!(
@@ -770,7 +947,16 @@ fn grouped_file_lists_pin_the_current_group_without_replanning(cx: &mut gpui::Te
     );
 
     // The pinned header collapses its group like the row does.
-    click_debug_selector(cx, selector(format!("hosted_file_list_{id}_sticky_Added")));
+    let sticky = selector(format!("hosted_file_list_{id}_sticky_Added"));
+    let center = cx.debug_bounds(sticky).unwrap().center();
+    cx.simulate_mouse_down(center, gpui::MouseButton::Left, gpui::Modifiers::default());
+    draw(cx);
+    assert_eq!(
+        cx.update(|_, app| list_view.read(app).test_parts().2),
+        builds,
+        "the sticky header also waits for release"
+    );
+    cx.simulate_mouse_up(center, gpui::MouseButton::Left, gpui::Modifiers::default());
     draw(cx);
     assert!(
         cx.debug_bounds(selector(format!("hosted_file_list_{id}_file_a00.rs")))

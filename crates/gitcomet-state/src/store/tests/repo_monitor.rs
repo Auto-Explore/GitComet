@@ -495,23 +495,28 @@ fn watch_leases_count_and_leave_with_their_repository() {
         },
     ));
 
+    let lifetime = state.repos[0].lifetime();
+
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::AcquireWatchLease { repo_id },
+        Msg::AcquireWatchLease { repo_id, lifetime },
     );
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::AcquireWatchLease { repo_id },
+        Msg::AcquireWatchLease { repo_id, lifetime },
     );
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::AcquireWatchLease { repo_id: RepoId(9) },
+        Msg::AcquireWatchLease {
+            repo_id: RepoId(9),
+            lifetime,
+        },
     );
     assert_eq!(state.watch_leases.get(&repo_id), Some(&2));
     assert!(!state.watch_leases.contains_key(&RepoId(9)));
@@ -520,7 +525,7 @@ fn watch_leases_count_and_leave_with_their_repository() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ReleaseWatchLease { repo_id },
+        Msg::ReleaseWatchLease { repo_id, lifetime },
     );
     assert_eq!(state.watch_leases.get(&repo_id), Some(&1));
 
@@ -539,7 +544,49 @@ fn watch_leases_count_and_leave_with_their_repository() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ReleaseWatchLease { repo_id },
+        Msg::ReleaseWatchLease { repo_id, lifetime },
+    );
+    assert!(state.watch_leases.is_empty());
+
+    // Reusing the id starts a new lifetime. Neither a delayed acquire nor a
+    // drop from the first lifetime may change the replacement's lease count.
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: "/tmp/reopened".into(),
+        },
+    ));
+    let reopened = state.repos[0].lifetime();
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AcquireWatchLease {
+            repo_id,
+            lifetime: reopened,
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AcquireWatchLease { repo_id, lifetime },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ReleaseWatchLease { repo_id, lifetime },
+    );
+    assert_eq!(state.watch_leases.get(&repo_id), Some(&1));
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ReleaseWatchLease {
+            repo_id,
+            lifetime: reopened,
+        },
     );
     assert!(state.watch_leases.is_empty());
 }

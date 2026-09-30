@@ -298,9 +298,11 @@ pub enum Msg {
     /// by the lease itself; not meant for dispatch by hand.
     AcquireWatchLease {
         repo_id: RepoId,
+        lifetime: u64,
     },
     ReleaseWatchLease {
         repo_id: RepoId,
+        lifetime: u64,
     },
     RepoExternallyChanged {
         repo_id: RepoId,

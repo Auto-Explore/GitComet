@@ -89,20 +89,7 @@ const STAGED_NAMES: StatusSectionNames = StatusSectionNames {
 impl DetailsPaneView {
     pub(super) fn status_sections_view(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
         let v = self.status_view_inputs(cx);
-        // All four are built every frame; the column keeps the ones the
-        // change-tracking view shows.
-        let unstaged_section = self.combined_unstaged_status_section(&v, cx);
-        let untracked_section = self.untracked_status_section(&v, cx);
-        let split_unstaged_section = self.split_unstaged_status_section(&v, cx);
-        let staged_section = self.staged_status_section(&v, cx);
-        let status_sections = self.status_sections_column(
-            &v,
-            unstaged_section,
-            untracked_section,
-            split_unstaged_section,
-            staged_section,
-            cx,
-        );
+        let status_sections = self.status_sections_column(&v, cx);
 
         div()
             .flex()
@@ -1024,19 +1011,18 @@ impl DetailsPaneView {
     /// Change tracking over staged, split by a resize handle. The container's
     /// probe measures it for next frame's split heights and header wording.
     fn status_sections_column(
-        &self,
+        &mut self,
         v: &StatusViewInputs,
-        unstaged_section: Div,
-        untracked_section: Div,
-        split_unstaged_section: Div,
-        staged_section: Div,
-        cx: &gpui::Context<Self>,
+        cx: &mut gpui::Context<Self>,
     ) -> Div {
+        let staged_section = self.staged_status_section(v, cx);
         let section_min_h = px(STATUS_SECTION_MIN_HEIGHT_PX);
         let resize_handle_h = px(PANE_RESIZE_HANDLE_PX);
         let (change_tracking_heights, untracked_heights) =
             self.status_section_split_heights(v.split_change_tracking);
         let change_tracking_section = if v.split_change_tracking {
+            let untracked_section = self.untracked_status_section(v, cx);
+            let split_unstaged_section = self.split_unstaged_status_section(v, cx);
             self.split_change_tracking_stack(
                 v,
                 untracked_section,
@@ -1045,7 +1031,7 @@ impl DetailsPaneView {
                 cx,
             )
         } else {
-            unstaged_section
+            self.combined_unstaged_status_section(v, cx)
         };
         let (change_tracking_grow, staged_grow) = change_tracking_heights
             .map(|(top_height, bottom_height)| (px_to_grow(top_height), px_to_grow(bottom_height)))

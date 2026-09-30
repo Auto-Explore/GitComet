@@ -329,7 +329,7 @@ impl FileListController {
 
 pub(crate) struct FileListView {
     host: WindowHost,
-    store: Arc<AppStore>,
+    store: std::sync::Weak<AppStore>,
     repository: RepositoryHandle,
     view_id: DiffViewId,
     controller: FileListController,
@@ -337,6 +337,7 @@ pub(crate) struct FileListView {
     base: Option<CommitId>,
     list_rev: Option<u64>,
     loading: bool,
+    error: Option<SharedString>,
     on_select: FileSelected,
     scroll: UniformListScrollHandle,
     _state: Option<StateSubscription>,
@@ -345,18 +346,21 @@ pub(crate) struct FileListView {
 impl FileListView {
     pub(crate) fn new(
         host: WindowHost,
-        store: Arc<AppStore>,
+        store: std::sync::Weak<AppStore>,
         repository: RepositoryHandle,
         source: ChangeSource,
         on_select: FileSelected,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let view_id = DiffViewId::next();
-        store.dispatch(Msg::DiffSession(DiffSessionMsg::OpenChanges {
-            repo_id: repository.repo_id(),
-            view: view_id,
-            source: source.clone(),
-        }));
+        if let Some(store) = store.upgrade() {
+            store.dispatch(Msg::DiffSession(DiffSessionMsg::OpenChanges {
+                repo_id: repository.repo_id(),
+                lifetime: repository.lifetime(),
+                view: view_id,
+                source: source.clone(),
+            }));
+        }
         let weak = cx.weak_entity();
         let state = host
             .observe_state(move |_, cx| {
@@ -373,6 +377,7 @@ impl FileListView {
             base: None,
             list_rev: None,
             loading: true,
+            error: None,
             on_select,
             scroll: UniformListScrollHandle::default(),
             _state: state,
@@ -391,6 +396,7 @@ impl FileListView {
                     && repo.lifetime() == self.repository.lifetime()
             })
             .and_then(|repo| repo.change_lists.get(&self.view_id))
+            .filter(|list| list.source == self.source)
         else {
             return;
         };
@@ -398,10 +404,20 @@ impl FileListView {
             return;
         }
         self.list_rev = Some(list.rev);
-        self.loading = matches!(list.files, Loadable::Loading | Loadable::NotLoaded);
-        self.base = list.base.clone();
-        if let Loadable::Ready(files) = &list.files {
-            self.controller.set_files(Arc::clone(files), list.rev);
+        self.loading = list.is_loading() || matches!(list.files, Loadable::NotLoaded);
+        self.error = None;
+        match &list.files {
+            Loadable::Ready(files) => {
+                self.base = list.base.clone();
+                self.controller.set_files(Arc::clone(files), list.rev);
+            }
+            Loadable::Error(error) => {
+                self.base = None;
+                self.controller.selected = None;
+                self.controller.set_files(Arc::default(), list.rev);
+                self.error = Some(error.clone().into());
+            }
+            Loadable::Loading | Loadable::NotLoaded => {}
         }
         cx.notify();
     }
@@ -409,12 +425,19 @@ impl FileListView {
     pub(crate) fn set_source(&mut self, source: ChangeSource, cx: &mut gpui::Context<Self>) {
         self.source = source.clone();
         self.loading = true;
-        self.store
-            .dispatch(Msg::DiffSession(DiffSessionMsg::OpenChanges {
+        self.error = None;
+        self.base = None;
+        self.controller.selected = None;
+        self.controller
+            .set_files(Arc::default(), self.controller.files_rev.wrapping_add(1));
+        if let Some(store) = self.store.upgrade() {
+            store.dispatch(Msg::DiffSession(DiffSessionMsg::OpenChanges {
                 repo_id: self.repository.repo_id(),
+                lifetime: self.repository.lifetime(),
                 view: self.view_id,
                 source,
             }));
+        }
         cx.notify();
     }
 
@@ -425,6 +448,11 @@ impl FileListView {
             self.scroll.clone(),
             self.controller.group_builds,
         )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn load_error(&self) -> Option<&str> {
+        self.error.as_deref()
     }
 
     fn pick(&mut self, change: CommitFileChange, cx: &mut gpui::Context<Self>) {
@@ -615,17 +643,25 @@ fn group_header(
         .gap(ui_scale.px(4.0))
         .px(ui_scale.px(8.0))
         .bg(theme.colors.surface.panel)
+        .control_interaction(
+            controls::InteractionStyle::new(theme),
+            controls::InteractionState::default(),
+        )
         .text_size(theme.ui_text(12.0))
         .text_color(theme.colors.foreground.secondary)
         .child(if collapsed { "▸" } else { "▾" })
         .child(format!("{label} ({count})"))
-        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-            cx.stop_propagation();
-            let _ = list.update(cx, |list, cx| {
-                list.controller.toggle_group(group);
-                cx.notify();
-            });
-        })
+        .on_activate(
+            false,
+            controls::ControlActivation::Action,
+            move |_, _, cx| {
+                cx.stop_propagation();
+                let _ = list.update(cx, |list, cx| {
+                    list.controller.toggle_group(group);
+                    cx.notify();
+                });
+            },
+        )
         .into_any_element()
 }
 
@@ -718,6 +754,25 @@ impl Render for FileListView {
             .flex()
             .flex_col()
             .bg(theme.colors.surface.canvas)
+            .when_some(
+                self.error.clone().or_else(|| {
+                    (rows == 0).then(|| {
+                        if self.loading {
+                            "Loading…".into()
+                        } else {
+                            "No changes".into()
+                        }
+                    })
+                }),
+                |list, status| {
+                    list.child(
+                        div()
+                            .p_2()
+                            .text_color(theme.colors.foreground.secondary)
+                            .child(status),
+                    )
+                },
+            )
             .child(
                 uniform_list(
                     "hosted_file_list_rows",
@@ -736,11 +791,13 @@ impl Render for FileListView {
 
 impl Drop for FileListView {
     fn drop(&mut self) {
-        self.store
-            .dispatch(Msg::DiffSession(DiffSessionMsg::CloseChanges {
+        if let Some(store) = self.store.upgrade() {
+            store.dispatch(Msg::DiffSession(DiffSessionMsg::CloseChanges {
                 repo_id: self.repository.repo_id(),
+                lifetime: self.repository.lifetime(),
                 view: self.view_id,
             }));
+        }
     }
 }
 

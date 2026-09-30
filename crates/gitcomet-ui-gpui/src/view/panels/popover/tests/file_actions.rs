@@ -481,7 +481,33 @@ fn commit_file_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
     let repo_id = RepoId(2);
     let commit_id = CommitId("deadbeefdeadbeef".into());
     let path = std::path::PathBuf::from("src/main.rs");
+    let old_path = std::path::PathBuf::from("src/old.rs");
 
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = commit_menu_test_repo(repo_id, &commit_id);
+            repo.history_state.commit_details =
+                Loadable::Ready(Arc::new(gitcomet_core::domain::CommitDetails {
+                    id: commit_id.clone(),
+                    message: "Rename".into(),
+                    author_name: String::new(),
+                    author_email: String::new(),
+                    authored_at_unix: 0,
+                    committed_at: String::new(),
+                    committed_at_unix: 0,
+                    parent_ids: Vec::new(),
+                    files: vec![
+                        gitcomet_core::domain::CommitFileChange::new(
+                            path.clone(),
+                            gitcomet_core::domain::FileStatusKind::Renamed,
+                        )
+                        .with_old_path(Some(old_path.clone())),
+                    ],
+                }));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.run_until_parked();
     cx.update(|_window, app| {
         let model = view
             .update(app, |this, cx| {
@@ -497,6 +523,20 @@ fn commit_file_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
                 })
             })
             .expect("expected commit file context menu model");
+
+        let target = model
+            .items
+            .iter()
+            .find_map(|item| match item {
+                ContextMenuItem::Entry { action, .. } => match action.as_ref() {
+                    ContextMenuAction::SelectDiff { target, .. } => Some(target),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("Open diff target");
+        assert_eq!(target.file_path(), Some(path.as_path()));
+        assert_eq!(target.old_file_path(), Some(old_path.as_path()));
 
         let open_file_action = model.items.iter().find_map(|item| match item {
             ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Open file" => {
