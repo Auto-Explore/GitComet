@@ -70,12 +70,15 @@ const SLICE_BATCH_MAX_FILES: usize = 4;
 
 thread_local! {
     static SLICE_BATCH: RefCell<SliceBatch> = const {
-        RefCell::new(SliceBatch { depth: 0, files: Vec::new() })
+        RefCell::new(SliceBatch { depth: 0, sparse: false, files: Vec::new() })
     };
 }
 
 struct SliceBatch {
     depth: usize,
+    /// Set by the outermost guard: keep handles and read each slice, never
+    /// a whole file.
+    sparse: bool,
     files: Vec<(PathBuf, BatchedFile)>,
 }
 
@@ -89,6 +92,7 @@ enum BatchedFile {
 #[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static FILE_SLICE_OPENS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static FILE_SLICE_BYTES_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Source-backed files this thread opened to read line slices since the
@@ -96,6 +100,18 @@ thread_local! {
 #[cfg(any(test, feature = "test-support"))]
 pub fn take_file_slice_opens_for_tests() -> usize {
     FILE_SLICE_OPENS.with(|opens| opens.replace(0))
+}
+
+/// Bytes this thread read from source-backed files for line slices since
+/// the last call.
+#[cfg(any(test, feature = "test-support"))]
+pub fn take_file_slice_bytes_read_for_tests() -> usize {
+    FILE_SLICE_BYTES_READ.with(|read| read.replace(0))
+}
+
+fn count_slice_bytes_read(_bytes: usize) {
+    #[cfg(any(test, feature = "test-support"))]
+    FILE_SLICE_BYTES_READ.with(|read| read.set(read.get() + _bytes));
 }
 
 fn open_slice_file(path: &PathBuf) -> std::io::Result<File> {
@@ -109,7 +125,24 @@ fn open_slice_file(path: &PathBuf) -> std::io::Result<File> {
 /// pass over every row (search) otherwise spends nearly all its time in those
 /// system calls. The files are released when the outermost guard drops.
 pub fn batch_file_slice_reads() -> FileSliceBatch {
-    SLICE_BATCH.with(|batch| batch.borrow_mut().depth += 1);
+    begin_slice_batch(false)
+}
+
+/// [`batch_file_slice_reads`] for passes over a few rows: each file is opened
+/// once and each slice is its own seek and read, so a handful of rows never
+/// loads whole files.
+pub fn batch_file_slice_handles() -> FileSliceBatch {
+    begin_slice_batch(true)
+}
+
+fn begin_slice_batch(sparse: bool) -> FileSliceBatch {
+    SLICE_BATCH.with(|batch| {
+        let mut batch = batch.borrow_mut();
+        if batch.depth == 0 {
+            batch.sparse = sparse;
+        }
+        batch.depth += 1;
+    });
     FileSliceBatch {
         _thread_bound: PhantomData,
     }
@@ -145,12 +178,16 @@ fn read_batched_file_bytes(path: &PathBuf, range: &Range<usize>) -> Option<Optio
                 if batch.files.len() >= SLICE_BATCH_MAX_FILES {
                     batch.files.remove(0);
                 }
+                let sparse = batch.sparse;
                 let file = match open_slice_file(path) {
                     Ok(mut file) => match file.metadata() {
-                        Ok(metadata) if metadata.len() <= SLICE_BATCH_MAX_FILE_BYTES => {
+                        Ok(metadata) if !sparse && metadata.len() <= SLICE_BATCH_MAX_FILE_BYTES => {
                             let mut bytes = Vec::new();
                             match file.read_to_end(&mut bytes) {
-                                Ok(_) => BatchedFile::Bytes(bytes),
+                                Ok(read) => {
+                                    count_slice_bytes_read(read);
+                                    BatchedFile::Bytes(bytes)
+                                }
                                 Err(_) => BatchedFile::Unreadable,
                             }
                         }
@@ -175,6 +212,7 @@ fn read_range(file: &mut File, range: Range<usize>) -> Option<Vec<u8>> {
         .ok()?;
     let mut bytes = vec![0u8; range.end.saturating_sub(range.start)];
     file.read_exact(&mut bytes).ok()?;
+    count_slice_bytes_read(bytes.len());
     Some(bytes)
 }
 
@@ -3386,6 +3424,18 @@ mod tests {
         };
         assert_eq!(batched, unbatched);
         assert_eq!(take_file_slice_opens_for_tests(), 1);
+
+        // A sparse batch reads the same slices through one handle, and only
+        // the bytes asked for; the outermost guard picks the mode.
+        let _ = take_file_slice_bytes_read_for_tests();
+        let sparse = {
+            let _batch = batch_file_slice_handles();
+            let _nested = batch_file_slice_reads();
+            file_slice_lines(&path, text)[0].as_str().to_owned()
+        };
+        assert_eq!(sparse, "plain ascii line");
+        assert_eq!(take_file_slice_opens_for_tests(), 1);
+        assert_eq!(take_file_slice_bytes_read_for_tests(), sparse.len());
 
         // The batch ended: a changed file is read afresh, not from a copy.
         std::fs::write(&*path, text.replace("plain", "PLAIN")).expect("rewrite side");

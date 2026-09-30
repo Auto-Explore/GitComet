@@ -428,6 +428,7 @@ mod tests {
         );
 
         // Refining reuses the cached candidates and still reads each side once.
+        let _ = gitcomet_core::file_diff::take_file_slice_bytes_read_for_tests();
         let refined = document.search(
             "needle old",
             DiffSearchOptions::default(),
@@ -435,6 +436,24 @@ mod tests {
         );
         assert_eq!(refined.matches, found.matches);
         assert!(gitcomet_core::file_diff::take_file_slice_opens_for_tests() <= 2);
+        // It reads the 20 candidate rows, not whole sides (~48 KB each).
+        let read = gitcomet_core::file_diff::take_file_slice_bytes_read_for_tests();
+        assert!(read < 4_096, "refinement read {read} bytes");
+
+        // Searches that scan column by column batch the same way.
+        let matched_case = document.search(
+            "needle",
+            DiffSearchOptions {
+                match_case: true,
+                ..Default::default()
+            },
+            CancellationToken::new(),
+        );
+        assert_eq!(matched_case.matches, found.matches);
+        assert_eq!(
+            gitcomet_core::file_diff::take_file_slice_opens_for_tests(),
+            2
+        );
     }
 
     #[test]
@@ -510,9 +529,6 @@ impl SearchDocument {
     ) -> SearchResult {
         let mut matcher = DiffSearchMatcher::new(query, options);
         matcher.set_cancellation(cancellation);
-        // Every row of a source-backed side is read: one read per file, not
-        // an open/seek/read per row (and per chunk).
-        let _batch = gitcomet_core::file_diff::batch_file_slice_reads();
         let mut result = SearchResult {
             regex_error: matcher.regex_error().map(str::to_owned),
             ..Default::default()
@@ -596,6 +612,8 @@ impl RowDocument {
                 })
                 .min_by_key(|entry| entry.rows.len())
             {
+                // Only the candidates are read: a seek per row, not whole files.
+                let _batch = gitcomet_core::file_diff::batch_file_slice_handles();
                 out.extend(
                     candidates
                         .rows
@@ -614,6 +632,7 @@ impl RowDocument {
                 // hundreds of milliseconds on large previews. Scan once and
                 // retain small result sets instead. Keeping broader queries
                 // makes both refinement and backspacing cheap.
+                let _batch = gitcomet_core::file_diff::batch_file_slice_reads();
                 for ix in (0..self.len).take_while(|_| !matcher.is_cancelled()) {
                     if (0..self.columns).any(|column| {
                         (self.text)(ix, column)
@@ -643,6 +662,9 @@ impl RowDocument {
             }
             return out;
         }
+        // Every row of a source-backed side is read: one read per file, not
+        // an open/seek/read per row (and per chunk).
+        let _batch = gitcomet_core::file_diff::batch_file_slice_reads();
         for column in 0..self.columns {
             let rows = (0..self.len)
                 .take_while(|_| !matcher.is_cancelled())
