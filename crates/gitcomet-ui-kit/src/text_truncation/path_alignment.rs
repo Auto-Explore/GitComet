@@ -21,16 +21,34 @@ impl PathAlignmentLayoutKey {
 #[derive(Clone, Default)]
 pub struct PathTruncationAlignmentGroup(Rc<RefCell<PathAlignmentState>>);
 
+/// Anchors are tracked per visible-row signature and layout key. One list
+/// lays its rows out in more than one pass a frame (gpui's uniform list
+/// measures its first item on its own, unconstrained) and at more than one
+/// width (rows with and without a stat column). With a single slot each pass
+/// reset the others, the anchor never resolved, and every frame reported an
+/// ellipsis and notified the owner view again.
 #[derive(Debug, Default)]
 struct PathAlignmentState {
     visible_signature: Option<u64>,
     render_epoch: u64,
-    layout_key: Option<PathAlignmentLayoutKey>,
+    /// The slot the last layout call used.
+    current: Option<usize>,
+    slots: Vec<PathAlignmentSlot>,
+}
+
+#[derive(Debug)]
+struct PathAlignmentSlot {
+    visible_signature: u64,
+    layout_key: PathAlignmentLayoutKey,
     layout_epoch: u64,
     resolved_anchor: Option<Pixels>,
     pending_anchor: Option<Pixels>,
     notified_for_pending: bool,
 }
+
+/// A pane's lists each keep their own group; this bounds the passes and widths
+/// one group tracks.
+const PATH_ALIGNMENT_SLOTS: usize = 8;
 
 #[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -45,35 +63,52 @@ pub struct PathAlignmentSnapshot {
 }
 
 impl PathAlignmentState {
-    fn reset_layout_state(&mut self) {
-        self.layout_key = None;
-        self.layout_epoch = 0;
-        self.resolved_anchor = None;
-        self.pending_anchor = None;
-        self.notified_for_pending = false;
-    }
-
-    fn prepare_layout(&mut self, layout_key: PathAlignmentLayoutKey) {
-        if self.layout_key != Some(layout_key) {
-            self.layout_key = Some(layout_key);
-            self.layout_epoch = self.render_epoch;
-            self.resolved_anchor = None;
-            self.pending_anchor = None;
-            self.notified_for_pending = false;
-            return;
-        }
-
-        if self.layout_epoch != self.render_epoch {
-            self.layout_epoch = self.render_epoch;
-            if let Some(pending_anchor) = self.pending_anchor {
-                self.resolved_anchor = Some(
-                    self.resolved_anchor
+    fn prepare_layout(&mut self, layout_key: PathAlignmentLayoutKey) -> &mut PathAlignmentSlot {
+        let signature = self.visible_signature.unwrap_or_default();
+        let render_epoch = self.render_epoch;
+        let ix =
+            match self.slots.iter().position(|slot| {
+                slot.visible_signature == signature && slot.layout_key == layout_key
+            }) {
+                Some(ix) => ix,
+                None => {
+                    if self.slots.len() >= PATH_ALIGNMENT_SLOTS {
+                        // Drop the least recently laid out.
+                        if let Some(oldest) = self
+                            .slots
+                            .iter()
+                            .enumerate()
+                            .min_by_key(|(_, slot)| slot.layout_epoch)
+                            .map(|(ix, _)| ix)
+                        {
+                            self.slots.swap_remove(oldest);
+                        }
+                    }
+                    self.slots.push(PathAlignmentSlot {
+                        visible_signature: signature,
+                        layout_key,
+                        layout_epoch: render_epoch,
+                        resolved_anchor: None,
+                        pending_anchor: None,
+                        notified_for_pending: false,
+                    });
+                    self.slots.len() - 1
+                }
+            };
+        self.current = Some(ix);
+        let slot = &mut self.slots[ix];
+        if slot.layout_epoch != render_epoch {
+            slot.layout_epoch = render_epoch;
+            if let Some(pending_anchor) = slot.pending_anchor {
+                slot.resolved_anchor = Some(
+                    slot.resolved_anchor
                         .map_or(pending_anchor, |current| current.min(pending_anchor)),
                 );
             }
-            self.pending_anchor = None;
-            self.notified_for_pending = false;
+            slot.pending_anchor = None;
+            slot.notified_for_pending = false;
         }
+        slot
     }
 }
 
@@ -85,14 +120,9 @@ impl PathTruncationAlignmentGroup {
 
     pub(super) fn begin_visible_rows(&self, visible_signature: u64) {
         let mut state = self.0.borrow_mut();
-        if state.visible_signature != Some(visible_signature) {
-            state.visible_signature = Some(visible_signature);
-            state.render_epoch = state.render_epoch.wrapping_add(1);
-            state.reset_layout_state();
-            return;
-        }
-
+        state.visible_signature = Some(visible_signature);
         state.render_epoch = state.render_epoch.wrapping_add(1);
+        state.current = None;
     }
 
     pub fn path_anchor_for_layout(
@@ -101,8 +131,9 @@ impl PathTruncationAlignmentGroup {
         style_key: u64,
     ) -> Option<Pixels> {
         let mut state = self.0.borrow_mut();
-        state.prepare_layout(PathAlignmentLayoutKey::new(max_width, style_key));
-        state.resolved_anchor
+        state
+            .prepare_layout(PathAlignmentLayoutKey::new(max_width, style_key))
+            .resolved_anchor
     }
 
     pub fn report_natural_ellipsis(
@@ -112,34 +143,35 @@ impl PathTruncationAlignmentGroup {
         ellipsis_x: Pixels,
     ) -> bool {
         let mut state = self.0.borrow_mut();
-        state.prepare_layout(PathAlignmentLayoutKey::new(max_width, style_key));
-        let tightened = state
+        let slot = state.prepare_layout(PathAlignmentLayoutKey::new(max_width, style_key));
+        let tightened = slot
             .pending_anchor
             .is_none_or(|current| ellipsis_x < current);
         if !tightened {
             return false;
         }
 
-        state.pending_anchor = Some(ellipsis_x);
-        if state.notified_for_pending {
+        slot.pending_anchor = Some(ellipsis_x);
+        if slot.notified_for_pending {
             return false;
         }
 
-        state.notified_for_pending = true;
+        slot.notified_for_pending = true;
         true
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn snapshot_for_test(&self) -> PathAlignmentSnapshot {
         let state = self.0.borrow();
+        let slot = state.current.and_then(|ix| state.slots.get(ix));
         PathAlignmentSnapshot {
             visible_signature: state.visible_signature,
-            layout_key: state.layout_key,
-            resolved_anchor: state.resolved_anchor,
-            pending_anchor: state.pending_anchor,
+            layout_key: slot.map(|slot| slot.layout_key),
+            resolved_anchor: slot.and_then(|slot| slot.resolved_anchor),
+            pending_anchor: slot.and_then(|slot| slot.pending_anchor),
             render_epoch: state.render_epoch,
-            layout_epoch: state.layout_epoch,
-            notified_for_pending: state.notified_for_pending,
+            layout_epoch: slot.map_or(0, |slot| slot.layout_epoch),
+            notified_for_pending: slot.is_some_and(|slot| slot.notified_for_pending),
         }
     }
 }

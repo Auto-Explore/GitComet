@@ -1531,3 +1531,101 @@ fn commit_details_pane_ignores_unrelated_frames(cx: &mut gpui::TestAppContext) {
         "an unrelated frame re-rendered the details pane"
     );
 }
+
+/// Frames caused elsewhere must not re-render the cached details pane while
+/// its file list truncates paths. The list's path alignment group reset
+/// whenever the uniform list's measure pass and its visible rows, or rows of
+/// different widths (a binary file has no stat column), took turns, so the
+/// anchor never resolved and each frame's layout notified the pane again
+/// (5 -> 15 renders over these 10 frames).
+#[gpui::test]
+fn commit_file_list_with_truncated_paths_ignores_unrelated_frames(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _cache_guard = crate::view::enable_stable_cached_views_for_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(900.0), px(700.0)));
+    let repo_id = gitcomet_state::model::RepoId(36);
+    let commit_id = gitcomet_core::domain::CommitId(
+        "0123456789abcdef0123456789abcdef01234567".into(),
+    );
+    let file = |path: &str, stats: Option<(u32, u32)>| {
+        let mut change = gitcomet_core::domain::CommitFileChange::new(
+            path.into(),
+            gitcomet_core::domain::FileStatusKind::Modified,
+        );
+        change.additions = stats.map(|(added, _)| added);
+        change.deletions = stats.map(|(_, removed)| removed);
+        change
+    };
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-mixed-widths"));
+            repo.history_state.selected_commit = Some(commit_id.clone());
+            repo.history_state.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::CommitDetails {
+                    id: commit_id.clone(),
+                    message: "subject".to_string(),
+                    author_name: String::new(),
+                    author_email: String::new(),
+                    authored_at_unix: 0,
+                    committed_at: "2026-03-08 12:34:56 +0200".to_string(),
+                    committed_at_unix: 0,
+                    parent_ids: vec![],
+                    files: vec![
+                        file(
+                            "assets/some/deeply/nested/directory/structure/image_resource.png",
+                            None,
+                        ),
+                        file(
+                            "src/some/deeply/nested/directory/structure/with/a/long/module_name.rs",
+                            Some((12, 3)),
+                        ),
+                        file(
+                            "tests/another/deeply/nested/directory/structure/integration_case.rs",
+                            Some((1, 1)),
+                        ),
+                    ],
+                },
+            ));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.update(|_window, app| {
+        let details = view.read(app).details_pane.clone();
+        details.update(app, |_, cx| cx.notify());
+    });
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    }
+    let render_count = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| view.read(app).details_pane.read(app).render_count)
+    };
+    let before = render_count(cx);
+    for _ in 0..5 {
+        cx.update(|_window, app| {
+            let sidebar = view.read(app).sidebar_pane.clone();
+            sidebar.update(app, |_, cx| cx.notify());
+        });
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    }
+    let snapshot = cx.update(|_window, app| {
+        view.read(app)
+            .details_pane
+            .read(app)
+            .commit_files_path_alignment_group
+            .snapshot_for_test()
+    });
+    assert_eq!(
+        render_count(cx),
+        before,
+        "an unrelated frame re-rendered the details pane; alignment {snapshot:?}"
+    );
+}

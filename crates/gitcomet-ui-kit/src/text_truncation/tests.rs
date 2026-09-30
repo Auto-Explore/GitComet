@@ -1509,6 +1509,46 @@ fn path_alignment_group_promotes_pending_anchor_on_second_render() {
     assert_eq!(after_second_render.pending_anchor, None);
 }
 
+/// A uniform list lays its first item out on its own every frame before the
+/// visible rows, and rows can differ in width. Neither pass may reset the
+/// other: with one shared slot the anchor never resolved and every frame
+/// asked the owner view to render again.
+#[test]
+fn path_alignment_group_converges_across_passes_and_widths_in_one_frame() {
+    let group = PathTruncationAlignmentGroup::default();
+    let frame = |group: &PathTruncationAlignmentGroup| {
+        let mut notified = 0;
+        // The measure pass: the first item, unconstrained.
+        group.begin_visible_rows(1);
+        let _ = group.path_anchor_for_layout(None, 11);
+        // The visible rows, at two widths.
+        group.begin_visible_rows(2);
+        for (width, ellipsis) in [(346.0, 58.0), (346.0, 60.0), (274.0, 50.0)] {
+            if group.path_anchor_for_layout(Some(px(width)), 11).is_none()
+                && group.report_natural_ellipsis(Some(px(width)), 11, px(ellipsis))
+            {
+                notified += 1;
+            }
+        }
+        notified
+    };
+    assert_eq!(frame(&group), 2, "each width reports once");
+    assert_eq!(
+        frame(&group),
+        0,
+        "the second frame uses the resolved anchors"
+    );
+    assert_eq!(frame(&group), 0);
+    assert_eq!(
+        group.path_anchor_for_layout(Some(px(346.0)), 11),
+        Some(px(58.0))
+    );
+    assert_eq!(
+        group.path_anchor_for_layout(Some(px(274.0)), 11),
+        Some(px(50.0))
+    );
+}
+
 #[test]
 fn path_alignment_group_resets_when_visible_signature_changes() {
     let group = PathTruncationAlignmentGroup::default();
