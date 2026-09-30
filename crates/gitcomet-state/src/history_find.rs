@@ -15,6 +15,7 @@ pub const HISTORY_FIND_THREAD: &str = "gitcomet-history-find";
 #[derive(Clone, Debug, Default)]
 pub struct HistoryFindState {
     pub query: Option<HistoryFindQuery>,
+    pub stashes_rev: u64,
     /// Identity only: finished results must not keep obsolete indexes alive.
     pub index: Option<Weak<HistoryIndex>>,
     /// Matching raw index rows in ascending (display) order, in the chunks
@@ -47,6 +48,16 @@ impl HistoryFindState {
         }
     }
 
+    /// The find bar closed: stop searching and free the commit text.
+    pub(crate) fn close(&mut self) {
+        self.cancellation.cancel();
+        *self = Self {
+            seq: self.seq.wrapping_add(1),
+            rev: self.rev.wrapping_add(1),
+            ..Self::default()
+        };
+    }
+
     /// Identifies one search; its `matches` only grow while it lasts.
     pub fn generation(&self) -> u64 {
         self.seq
@@ -59,10 +70,16 @@ impl HistoryFindState {
             .flat_map(|chunk| chunk.iter().map(|&row| row as usize))
     }
 
-    /// Whether these results answer `query` over `index`. The query's text and
-    /// options together identify it, so changing either needs a new search.
-    pub fn is_for(&self, query: &HistoryFindQuery, index: &HistoryIndexHandle) -> bool {
-        self.query.as_ref() == Some(query)
+    /// Whether these results answer this query, index and stash-row revision.
+    /// A stash list can change the displayed text without replacing the index.
+    pub fn is_for(
+        &self,
+        query: &HistoryFindQuery,
+        index: &HistoryIndexHandle,
+        stashes_rev: u64,
+    ) -> bool {
+        self.stashes_rev == stashes_rev
+            && self.query.as_ref() == Some(query)
             && self
                 .index
                 .as_ref()
@@ -81,6 +98,8 @@ pub struct HistoryFindChunk {
 #[derive(Debug)]
 pub enum HistoryFindMsg {
     /// Start a search, or with `query: None` stop searching and clear results.
+    /// Stopping keeps text for the next query in this repo. Searching another
+    /// repo releases it, as does `Close`.
     Find {
         repo_id: RepoId,
         query: Option<HistoryFindQuery>,
@@ -91,6 +110,9 @@ pub enum HistoryFindMsg {
         seq: u64,
         result: Result<HistoryFindChunk>,
     },
+    /// The find bar closed: stop every repository's search and free the
+    /// commit text kept for the next query.
+    Close,
 }
 
 #[derive(Clone, Debug)]
@@ -99,6 +121,8 @@ pub struct HistoryFindEffect {
     pub seq: u64,
     pub index: HistoryIndexHandle,
     pub query: HistoryFindQuery,
+    /// Listed stashes: their rows show, and are matched on, these messages.
+    pub stashes: Arc<Vec<gitcomet_core::domain::StashEntry>>,
     pub cancellation: CancellationToken,
     pub(crate) cache: Arc<Mutex<HistoryFindCache>>,
 }

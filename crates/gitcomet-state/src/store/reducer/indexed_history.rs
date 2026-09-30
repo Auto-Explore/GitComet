@@ -29,16 +29,15 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
             projection,
             ..
         } => {
-            if repo
+            let clicked = repo
                 .history_state
                 .indexed
                 .displayed_index
                 .as_ref()
-                .is_none_or(|index| !Arc::ptr_eq(index, &projection.index))
-            {
-                return Vec::new();
-            }
-            let Some(clicked) = projection.position(commit_id.as_ref()) else {
+                .is_some_and(|index| Arc::ptr_eq(index, &projection.index))
+                .then(|| projection.position(commit_id.as_ref()))
+                .flatten();
+            let Some(clicked) = clicked else {
                 return Vec::new();
             };
             let entries = if mode == crate::msg::CommitSelectMode::Range {
@@ -683,6 +682,7 @@ mod tests {
             reduce(
                 &mut state,
                 Event::Select {
+                    request_id: None,
                     repo_id: RepoId(1),
                     projection: projection.clone(),
                     commit_id: index.commit_id(row).unwrap(),
@@ -717,6 +717,7 @@ mod tests {
         reduce(
             &mut state,
             Event::Select {
+                request_id: None,
                 repo_id: RepoId(1),
                 projection,
                 commit_id: index.commit_id(10_004).unwrap(),
@@ -748,6 +749,7 @@ mod tests {
             reduce(
                 &mut state,
                 Event::Select {
+                    request_id: None,
                     repo_id: RepoId(1),
                     projection: projection.clone(),
                     commit_id: index.commit_id(row).unwrap(),

@@ -476,6 +476,9 @@ fn signature_work_survives_repo_load_cancellation_and_does_not_use_primary_worke
             metadata_executor: &primary,
             session_persist_executor: &primary,
             signature_executor: &signatures,
+            history_find_executor: &std::sync::LazyLock::new(|| {
+                super::super::executor::TaskExecutor::new(1)
+            }),
         };
         let repo_id = RepoId(1);
         let spec = RepoSpec {
@@ -611,6 +614,9 @@ fn schedule_effect_with_state_for_test(
             session_persist_executor,
             metadata_executor: &metadata_executor,
             signature_executor: &metadata_executor,
+            history_find_executor: &std::sync::LazyLock::new(|| {
+                super::super::executor::TaskExecutor::new(1)
+            }),
         },
         &thread_state,
         backend,
@@ -5437,6 +5443,9 @@ fn open_repo_effect_suppresses_result_after_cancellation() {
             session_persist_executor: &executor,
             metadata_executor: &metadata_executor,
             signature_executor: &metadata_executor,
+            history_find_executor: &std::sync::LazyLock::new(|| {
+                super::super::executor::TaskExecutor::new(1)
+            }),
         },
         &thread_state,
         &backend,
@@ -5459,6 +5468,9 @@ fn open_repo_effect_suppresses_result_after_cancellation() {
             session_persist_executor: &executor,
             metadata_executor: &metadata_executor,
             signature_executor: &metadata_executor,
+            history_find_executor: &std::sync::LazyLock::new(|| {
+                super::super::executor::TaskExecutor::new(1)
+            }),
         },
         &thread_state,
         &backend,
@@ -5529,6 +5541,9 @@ fn open_repo_effects_are_bounded_by_repo_load_executor() {
         session_persist_executor: &executor,
         metadata_executor: &metadata_executor,
         signature_executor: &metadata_executor,
+        history_find_executor: &std::sync::LazyLock::new(|| {
+            super::super::executor::TaskExecutor::new(1)
+        }),
     };
 
     super::effects::schedule_effect(
@@ -5943,6 +5958,9 @@ fn remote_tag_load_for_one_repo_does_not_block_other_repo_metadata_refresh() {
         session_persist_executor: &executor,
         metadata_executor: &metadata_executor,
         signature_executor: &metadata_executor,
+        history_find_executor: &std::sync::LazyLock::new(|| {
+            super::super::executor::TaskExecutor::new(1)
+        }),
     };
 
     super::effects::schedule_effect(
@@ -6055,6 +6073,9 @@ fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
         session_persist_executor: &executor,
         metadata_executor: &metadata_executor,
         signature_executor: &metadata_executor,
+        history_find_executor: &std::sync::LazyLock::new(|| {
+            super::super::executor::TaskExecutor::new(1)
+        }),
     };
 
     super::effects::schedule_effect(
@@ -6193,6 +6214,9 @@ fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
         session_persist_executor: &executor,
         metadata_executor: &metadata_executor,
         signature_executor: &metadata_executor,
+        history_find_executor: &std::sync::LazyLock::new(|| {
+            super::super::executor::TaskExecutor::new(1)
+        }),
     };
 
     super::effects::schedule_effect(

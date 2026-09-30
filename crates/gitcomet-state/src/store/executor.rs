@@ -248,6 +248,28 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    #[ignore = "manual find worker startup measurement"]
+    fn history_find_worker_startup_measurement() {
+        let start = std::time::Instant::now();
+        let workers: Vec<_> = (0..32)
+            .map(|_| {
+                std::sync::LazyLock::new(|| {
+                    TaskExecutor::named(crate::history_find::HISTORY_FIND_THREAD, 1)
+                })
+            })
+            .collect();
+        eprintln!(
+            "32 find executors: {:?}, started threads={}",
+            start.elapsed(),
+            workers
+                .iter()
+                .filter_map(std::sync::LazyLock::get)
+                .map(|worker| worker._threads.len())
+                .sum::<usize>()
+        );
+    }
+
+    #[test]
     fn latest_slot_replaces_pending_work_without_blocking_other_slots() {
         let executor = TaskExecutor::new(1);
         let (release_tx, release_rx) = mpsc::channel();

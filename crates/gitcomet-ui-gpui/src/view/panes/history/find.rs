@@ -39,6 +39,9 @@ pub(in crate::view) struct HistoryFind {
     /// Steps that cannot yet be answered by a streaming scan.
     steps: VecDeque<bool>,
     matches: Option<(FindMatchesKey, Rc<FindMatches>)>,
+    /// The answer from the list this one replaced (a fetch, a commit), moved
+    /// onto its rows and shown until the same query is answered over it.
+    carried: Option<CarriedMatches>,
     /// Running while the user is still typing; see [`HISTORY_FIND_SETTLE_MS`].
     settling: Option<gpui::Task<()>>,
     _input_subscription: gpui::Subscription,
@@ -65,12 +68,14 @@ struct FindRequest {
     repo_id: RepoId,
     query: HistoryFindQuery,
     index: FindIdentity<HistoryIndex>,
+    stashes_rev: u64,
 }
 
 #[derive(Eq, PartialEq)]
 enum FindMatchesKey {
     Indexed {
         generation: u64,
+        stashes_rev: u64,
         graph: FindIdentity<IndexedGraph>,
     },
     Paged {
@@ -79,8 +84,20 @@ enum FindMatchesKey {
         page: FindIdentity<LogPage>,
         stashes_rev: u64,
         visible: usize,
+        complete: bool,
     },
 }
+
+struct CarriedMatches {
+    query: HistoryFindQuery,
+    stashes_rev: u64,
+    graph: FindIdentity<IndexedGraph>,
+    matches: Rc<FindMatches>,
+}
+
+/// Most matches moved onto a replacement list, one lookup each on the UI
+/// thread; past this the bar says "Searching…" until the store answers.
+const HISTORY_FIND_CARRY_LIMIT: usize = 50_000;
 
 /// Matching rows, as ascending visible indices of the displayed list.
 #[derive(Clone, Debug, Default)]
@@ -96,19 +113,6 @@ pub(in crate::view) struct FindMatches {
     pub(in crate::view) failed: bool,
 }
 
-/// Whether a commit row fades while the find bar has a searchable query (see
-/// [`HistoryView::history_find_query`]). Decided from the row's own text,
-/// which every drawn row has loaded, so a keystroke restyles the rows in the
-/// same frame instead of waiting on the scan. The selected row never fades,
-/// so the commit being looked at stays readable.
-pub(in crate::view) fn history_find_row_dimmed(
-    query: Option<&HistoryFindQuery>,
-    commit: &Commit,
-    selected: bool,
-) -> bool {
-    !selected && query.is_some_and(|query| !query.matches(commit))
-}
-
 /// Most highlighted matches per cell, as in the sidebar searches.
 const HISTORY_FIND_MAX_HIGHLIGHTS: usize = 16;
 
@@ -121,6 +125,31 @@ pub(in crate::view) struct HistoryFindHighlights {
     /// Bytes of the short SHA to light up: all of it when the query matched
     /// the id as a prefix, since it names the commit rather than some text.
     pub(in crate::view) sha: usize,
+}
+
+/// How a drawn commit row shows the find query (see
+/// [`HistoryView::history_find_query`]): whether it fades, and what to
+/// highlight. Decided from the text the row shows (a stash shows its
+/// message), which every drawn row has, so a keystroke restyles rows in the
+/// same frame instead of waiting on the scan. The selected row never fades,
+/// so the commit being looked at stays readable. Runs per visible row per
+/// frame, so a miss is matched once and never searched for highlights.
+pub(in crate::view) fn history_find_row_marks(
+    query: Option<&HistoryFindQuery>,
+    commit: &Commit,
+    selected: bool,
+    summary: &str,
+    author: &str,
+    short_sha: &str,
+) -> (bool, Option<HistoryFindHighlights>) {
+    match query {
+        Some(query) if query.matches_fields(commit.id.as_ref(), summary, author) => (
+            false,
+            history_find_highlights(Some(query), commit, summary, author, short_sha),
+        ),
+        Some(_) => (!selected, None),
+        None => (false, None),
+    }
 }
 
 /// Highlights for a row showing `summary`, `author` and `short_sha`, which
@@ -172,6 +201,7 @@ pub(in crate::view) fn history_find_detail_highlights(
     id: &str,
     message: &str,
     author: &str,
+    row_summary: &str,
 ) -> Option<CommitDetailsFindHighlights> {
     let query = query?;
     let prefix = query.sha_prefix_len(id);
@@ -184,11 +214,19 @@ pub(in crate::view) fn history_find_detail_highlights(
         ..CommitDetailsFindHighlights::default()
     };
     let summary = &message[..message.find('\n').unwrap_or(message.len())];
-    query.text_ranges_into(
-        summary,
-        &mut highlights.summary,
-        HISTORY_FIND_MAX_HIGHLIGHTS,
-    );
+    // Ranges still address the raw details message. Only text that the row
+    // actually searched may be highlighted; a hidden stash prefix cannot match.
+    if let Some(prefix) = summary.strip_suffix(row_summary) {
+        query.text_ranges_into(
+            row_summary,
+            &mut highlights.summary,
+            HISTORY_FIND_MAX_HIGHLIGHTS,
+        );
+        for range in &mut highlights.summary {
+            range.start += prefix.len();
+            range.end += prefix.len();
+        }
+    }
     query.text_ranges_into(author, &mut highlights.author, HISTORY_FIND_MAX_HIGHLIGHTS);
     (!highlights.summary.is_empty() || !highlights.author.is_empty() || highlights.sha)
         .then_some(highlights)
@@ -242,6 +280,7 @@ impl HistoryView {
                 jump_to_first: false,
                 requested: None,
                 matches: None,
+                carried: None,
                 steps: VecDeque::new(),
                 settling: None,
                 _input_subscription: subscription,
@@ -276,9 +315,12 @@ impl HistoryView {
         find.open = false;
         find.jump_to_first = false;
         find.matches = None;
+        find.carried = None;
         find.settling = None;
         find.steps.clear();
-        self.stop_history_find_request();
+        // Unlike pausing the search, closing frees every repo's commit text.
+        find.requested = None;
+        self.store.dispatch(Msg::HistoryFind(HistoryFindMsg::Close));
         window.focus(&self.history_panel_focus_handle, cx);
         cx.notify();
     }
@@ -339,6 +381,7 @@ impl HistoryView {
                 .as_ref()
                 .is_some_and(|query| query.regex_error().is_none());
         find.matches = None;
+        find.carried = None;
         find.steps.clear();
     }
 
@@ -412,10 +455,11 @@ impl HistoryView {
             repo_id,
             query: query.clone(),
             index: index.into(),
+            stashes_rev: repo.stashes_rev,
         });
         let answered = query
             .zip(index.as_ref())
-            .is_some_and(|(query, index)| results.is_for(query, index));
+            .is_some_and(|(query, index)| results.is_for(query, index, repo.stashes_rev));
         let changed = find.requested.as_ref().map(|(request, _)| request) != wanted.as_ref();
         // A generation change distinguishes a cancelled search from the same
         // snapshot waiting for its request to reach the store.
@@ -447,10 +491,13 @@ impl HistoryView {
             && let Some(matches) = self.history_find_matches()
             && (!matches.visible.is_empty() || (matches.complete && !matches.failed))
         {
-            self.find.as_mut().unwrap().jump_to_first = false;
             if let Some(&first) = matches.visible.first() {
-                self.select_history_find_match(first, cx);
-                moved = true;
+                moved = self.select_history_find_match(first, cx);
+                if moved {
+                    self.find.as_mut().unwrap().jump_to_first = false;
+                }
+            } else {
+                self.find.as_mut().unwrap().jump_to_first = false;
             }
         }
         self.drive_history_find_steps(cx) || moved
@@ -478,6 +525,7 @@ impl HistoryView {
         self.cancel_history_find_navigation();
         if let Some(find) = self.find.as_mut() {
             find.matches = None;
+            find.carried = None;
             find.settling = None;
         }
     }
@@ -499,7 +547,19 @@ impl HistoryView {
         {
             let projection = &shown.graph.projection;
             let results = &repo.history_state.find;
-            if !results.is_for(&query, &projection.index) {
+            let find = self.find.as_mut()?;
+            let answered = results.is_for(&query, &projection.index, repo.stashes_rev)
+                && (results.done || results.error.is_some());
+            if answered {
+                find.carried = None;
+            } else if let Some(carried) = find.carried.as_ref().filter(|carried| {
+                carried.query == query
+                    && carried.stashes_rev == repo.stashes_rev
+                    && carried.graph == FindIdentity::from(&shown.graph)
+            }) {
+                return Some(Rc::clone(&carried.matches));
+            }
+            if !results.is_for(&query, &projection.index, repo.stashes_rev) {
                 return Some(Rc::new(FindMatches {
                     pending: true,
                     ..FindMatches::default()
@@ -507,9 +567,9 @@ impl HistoryView {
             }
             let key = FindMatchesKey::Indexed {
                 generation: results.generation(),
+                stashes_rev: repo.stashes_rev,
                 graph: (&shown.graph).into(),
             };
-            let find = self.find.as_mut()?;
             if find
                 .matches
                 .as_ref()
@@ -546,34 +606,44 @@ impl HistoryView {
             .history_cache
             .as_ref()
             .filter(|cache| cache.base.request.repo_id == repo_id)?;
+        // The page answers for the whole history only when nothing is behind
+        // it, or when no index is coming to search the rest.
+        let complete = cache.page.next_cursor.is_none()
+            || repo.history_state.log_snapshot.is_none()
+            || repo.history_state.indexed.error.is_some();
         let key = FindMatchesKey::Paged {
             repo_id,
             query: query.clone(),
             page: (&cache.page).into(),
             stashes_rev: cache.base.request.stashes_rev,
             visible: cache.base.visible_indices.len(),
+            complete,
         };
         if let Some((cached, matches)) = self.find.as_ref().and_then(|find| find.matches.as_ref())
             && *cached == key
         {
             return Some(Rc::clone(matches));
         }
+        // Matched on what each row shows, as the indexed scan does.
         let matches = Rc::new(FindMatches {
             visible: cache
                 .base
                 .visible_indices
                 .iter()
+                .zip(cache.base.row_vms.iter())
                 .enumerate()
-                .filter(|(_, commit_ix)| {
-                    cache
-                        .page
-                        .commits
-                        .get(*commit_ix)
-                        .is_some_and(|commit| query.matches(commit))
+                .filter(|(_, (commit_ix, row))| {
+                    cache.page.commits.get(*commit_ix).is_some_and(|commit| {
+                        query.matches_fields(
+                            commit.id.as_ref(),
+                            row.summary.as_ref(),
+                            row.author.as_ref(),
+                        )
+                    })
                 })
                 .map(|(visible_ix, _)| visible_ix)
                 .collect(),
-            complete: true,
+            complete,
             ..FindMatches::default()
         });
         if let Some(find) = self.find.as_mut() {
@@ -582,10 +652,75 @@ impl HistoryView {
         Some(matches)
     }
 
+    /// The indexed list is about to show `next` instead of `old`. Move the
+    /// bar's answer onto `next`'s rows by commit id, so a refresh does not
+    /// blank it while the same query is searched again over the new index.
+    pub(super) fn carry_history_find_matches(
+        &mut self,
+        old: &Arc<IndexedGraph>,
+        next: &Arc<IndexedGraph>,
+    ) {
+        let Some(query) = self.history_find_query().cloned() else {
+            return;
+        };
+        let stashes_rev = self.active_repo().map_or(0, |repo| repo.stashes_rev);
+        let Some(find) = self.find.as_mut() else {
+            return;
+        };
+        if Arc::ptr_eq(&old.projection.index, &next.projection.index) {
+            // The store's answer is for this index already.
+            return;
+        }
+        let old_identity = FindIdentity::from(old);
+        let answer = find
+            .carried
+            .as_ref()
+            .filter(|carried| carried.query == query && carried.stashes_rev == stashes_rev && carried.graph == old_identity)
+            .map(|carried| Rc::clone(&carried.matches))
+            .or_else(|| {
+                find.matches.as_ref().and_then(|(key, matches)| {
+                    matches!(key, FindMatchesKey::Indexed { graph, stashes_rev: revision, .. } if *graph == old_identity && *revision == stashes_rev)
+                        .then(|| Rc::clone(matches))
+                })
+            })
+            .filter(|matches| {
+                !matches.pending
+                    && !matches.failed
+                    && (matches.complete || !matches.visible.is_empty())
+                    && matches.visible.len() <= HISTORY_FIND_CARRY_LIMIT
+            });
+        find.carried = answer.map(|answer| {
+            let (from, to) = (&old.projection, &next.projection);
+            let mut visible: Vec<usize> = answer
+                .visible
+                .iter()
+                .filter_map(|&row| {
+                    let id = from.index.id_bytes(from.raw_position(row)?)?;
+                    to.visible_position(to.index.position_bytes(id)?)
+                })
+                .collect();
+            visible.sort_unstable();
+            CarriedMatches {
+                query,
+                stashes_rev,
+                graph: next.into(),
+                // New commits have not been searched yet.
+                matches: Rc::new(FindMatches {
+                    visible,
+                    ..FindMatches::default()
+                }),
+            }
+        });
+    }
+
     /// The selected commit's visible index, if a commit is selected and shown.
     fn history_find_selected_visible_ix(&self) -> Option<usize> {
         let repo = self.active_repo()?;
-        let selected = match self.pending_history_selections.back() {
+        let selected = match self
+            .pending_history_selections
+            .back()
+            .map(|pending| &pending.selection)
+        {
             Some(HistoryPrimarySelection::Commit(id)) => id,
             Some(_) => return None,
             None => repo.history_state.selected_commit.as_ref()?,
@@ -670,28 +805,42 @@ impl HistoryView {
                 }
                 break;
             };
+            if !self.select_history_find_match(target, cx) {
+                break;
+            }
             self.find.as_mut().unwrap().steps.pop_front();
-            self.select_history_find_match(target, cx);
             moved = true;
         }
         moved
     }
 
     /// Select a match the way clicking its row would and bring it into view.
-    fn select_history_find_match(&mut self, visible_ix: usize, cx: &mut gpui::Context<Self>) {
+    fn select_history_find_match(
+        &mut self,
+        visible_ix: usize,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
         let Some(repo_id) = self.active_repo_id() else {
-            return;
+            return false;
         };
-        if self.indexed.presentation.is_some() {
+        if self
+            .indexed
+            .presentation
+            .as_ref()
+            .is_some_and(|shown| shown.key.repo_id == repo_id)
+        {
             if self.select_indexed_commit_row(repo_id, visible_ix, true, cx) {
                 self.dismiss_history_refs_hover(cx);
+                return true;
             }
-            return;
+            return false;
         }
         let plan = self.ensure_history_list_plan();
         if self.select_paged_commit_row(repo_id, &plan, visible_ix, cx) {
             cx.notify();
+            return true;
         }
+        false
     }
 
     /// What the bar's match label reports.

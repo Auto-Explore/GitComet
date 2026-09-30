@@ -129,6 +129,9 @@ pub(super) struct EffectExecutors<'a> {
     pub(super) session_persist_executor: &'a TaskExecutor,
     pub(super) metadata_executor: &'a TaskExecutor,
     pub(super) signature_executor: &'a TaskExecutor,
+    /// Whole-history find scans, one worker per store: one window's scan
+    /// must not hold up another's.
+    pub(super) history_find_executor: &'a std::sync::LazyLock<TaskExecutor>,
 }
 
 fn selected_diff_target(
@@ -1526,6 +1529,7 @@ pub(super) fn schedule_effect(
         session_persist_executor,
         metadata_executor,
         signature_executor,
+        history_find_executor,
     } = executors;
 
     if effect_requires_available_git(&effect) {
@@ -1831,7 +1835,7 @@ pub(super) fn schedule_effect(
             if let Some((msg_tx, cancellation)) =
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, work.repo_id)
             {
-                history_find::schedule(repos, msg_tx, work, cancellation);
+                history_find::schedule(history_find_executor, repos, msg_tx, work, cancellation);
             }
         }
         Effect::IndexedHistory(work) => {
@@ -3176,6 +3180,7 @@ mod tests {
             repo_load_executor: &executor,
             metadata_executor: &executor,
             signature_executor: &executor,
+            history_find_executor: &std::sync::LazyLock::new(|| TaskExecutor::new(1)),
             session_persist_executor: &executor,
             backend: &backend,
         };

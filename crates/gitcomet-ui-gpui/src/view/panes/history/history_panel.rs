@@ -405,12 +405,15 @@ impl HistoryView {
             let Some(path) = path else {
                 return false;
             };
-            self.note_history_selection(
+            let request_id = Some(self.note_history_selection(
                 repo_id,
                 super::HistoryPrimarySelection::Worktree(path.clone()),
-            );
-            self.store
-                .dispatch(Msg::SelectWorktreeUncommitted { repo_id, path });
+            ));
+            self.store.dispatch(Msg::SelectWorktreeUncommitted {
+                request_id,
+                repo_id,
+                path,
+            });
             self.dismiss_history_refs_hover(_cx);
             self.history_scroll
                 .scroll_to_item_strict(next_list_ix, gpui::ScrollStrategy::Center);
@@ -469,15 +472,12 @@ impl HistoryView {
             request.history_scope,
         );
         let list_ix = plan.list_ix_for_visible(visible_ix);
-        self.note_history_selection(
+        self.select_history_commit(
             repo_id,
-            super::HistoryPrimarySelection::Commit(commit_id.clone()),
+            commit_id.clone(),
+            gitcomet_state::msg::CommitSelectMode::Single,
+            None,
         );
-        // The reducer owns idempotence and leaving range-comparison mode.
-        self.store.dispatch(Msg::SelectCommit {
-            repo_id,
-            commit_id: commit_id.clone(),
-        });
         super::set_history_selected_list_index_cache(
             &mut self.history_selected_list_index_cache,
             repo_id,
@@ -498,11 +498,144 @@ impl HistoryView {
         &mut self,
         repo_id: RepoId,
         selection: super::HistoryPrimarySelection,
+    ) -> u64 {
+        let multi_selection = match &selection {
+            super::HistoryPrimarySelection::Commit(id) => {
+                gitcomet_state::model::CommitMultiSelection::default()
+                    .select(
+                        id.clone(),
+                        gitcomet_state::msg::CommitSelectMode::Single,
+                        None,
+                        None,
+                        0,
+                    )
+                    .0
+            }
+            _ => Default::default(),
+        };
+        self.note_history_selection_with_members(
+            repo_id,
+            selection,
+            super::PendingHistoryMembers::Commits(multi_selection),
+        )
+    }
+
+    fn note_history_selection_with_members(
+        &mut self,
+        repo_id: RepoId,
+        selection: super::HistoryPrimarySelection,
+        multi_selection: super::PendingHistoryMembers,
+    ) -> u64 {
+        static NEXT_REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let request_id = NEXT_REQUEST.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if self.active_repo_id() == Some(repo_id) {
+            self.pending_history_selections
+                .push_back(super::PendingHistorySelection {
+                    request_id,
+                    selection,
+                    multi_selection,
+                });
+        }
+        request_id
+    }
+
+    /// Dispatches the same modifier-aware selection for both row renderers.
+    /// Prediction uses the reducer's rules, including the focus after a toggle.
+    pub(in crate::view) fn select_history_commit(
+        &mut self,
+        repo_id: RepoId,
+        commit_id: CommitId,
+        mode: gitcomet_state::msg::CommitSelectMode,
+        clicked_index: Option<usize>,
     ) {
-        if self.active_repo_id() == Some(repo_id)
-            && self.pending_history_selections.back() != Some(&selection)
+        use gitcomet_state::msg::CommitSelectMode;
+        let projection = self
+            .indexed
+            .presentation
+            .as_ref()
+            .filter(|shown| shown.key.repo_id == repo_id)
+            .map(|shown| shown.graph.projection.clone());
+        let Some(repo) = self.active_repo().filter(|repo| repo.id == repo_id) else {
+            return;
+        };
+        let pending = self.pending_history_selections.back();
+        let previous_anchor = pending.map_or(
+            repo.history_state.multi_selection.anchor.as_ref(),
+            |pending| pending.multi_selection.anchor(),
+        );
+        let clicked_index = if projection.is_some() {
+            None
+        } else {
+            clicked_index
+        };
+        let visible_order = (mode == CommitSelectMode::Range && projection.is_none())
+            .then(|| self.visible_commit_ids_for_repo(repo_id))
+            .flatten();
+        let (multi, focus) = if mode == CommitSelectMode::Range
+            && let Some(projection) = projection.as_ref()
+            && let Some(clicked) = projection.position(commit_id.as_ref())
         {
-            self.pending_history_selections.push_back(selection);
+            let anchor = previous_anchor
+                .and_then(|id| projection.position(id.as_ref()))
+                .unwrap_or(clicked);
+            let first = anchor.min(clicked);
+            (
+                super::PendingHistoryMembers::IndexedRange {
+                    projection: projection.clone(),
+                    rows: first..=anchor.max(clicked),
+                    anchor: previous_anchor.cloned().or_else(|| Some(commit_id.clone())),
+                    anchor_index: anchor - first,
+                    log_rev: repo.history_state.log_rev,
+                },
+                Some(commit_id.clone()),
+            )
+        } else {
+            let previous = if mode == CommitSelectMode::Single {
+                Default::default()
+            } else {
+                pending.map_or_else(
+                    || repo.history_state.multi_selection.clone(),
+                    |pending| pending.multi_selection.materialize(),
+                )
+            };
+            let (multi, focus) = previous.select(
+                commit_id.clone(),
+                mode,
+                clicked_index,
+                visible_order.clone(),
+                repo.history_state.log_rev,
+            );
+            (super::PendingHistoryMembers::Commits(multi), focus)
+        };
+        let selection = focus
+            .map(super::HistoryPrimarySelection::Commit)
+            .unwrap_or(super::HistoryPrimarySelection::WorkingTree);
+        let request_id = Some(self.note_history_selection_with_members(repo_id, selection, multi));
+        if let Some(projection) = projection {
+            self.store.dispatch(Msg::IndexedHistory(
+                gitcomet_state::indexed_history::IndexedHistoryMsg::Select {
+                    request_id,
+                    repo_id,
+                    commit_id,
+                    mode,
+                    projection,
+                },
+            ));
+        } else if mode == CommitSelectMode::Single {
+            self.store.dispatch(Msg::SelectCommit {
+                request_id,
+                repo_id,
+                commit_id,
+            });
+        } else {
+            self.store.dispatch(Msg::SelectCommitMulti {
+                request_id,
+                repo_id,
+                commit_id,
+                mode,
+                clicked_index,
+                visible_order,
+            });
         }
     }
 
@@ -511,10 +644,15 @@ impl HistoryView {
         repo: &RepoState,
         show_working_tree: bool,
     ) -> Option<super::HistoryPrimarySelection> {
-        self.pending_history_selections
-            .back()
-            .cloned()
-            .or_else(|| super::history_primary_selection(repo, show_working_tree))
+        match self.pending_history_selections.back() {
+            Some(pending) => match &pending.selection {
+                super::HistoryPrimarySelection::WorkingTree if !show_working_tree => repo
+                    .head_commit_id()
+                    .map(super::HistoryPrimarySelection::Commit),
+                selection => Some(selection.clone()),
+            },
+            None => super::history_primary_selection(repo, show_working_tree),
+        }
     }
 
     fn history_column_headers(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {

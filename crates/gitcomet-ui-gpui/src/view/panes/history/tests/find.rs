@@ -357,12 +357,17 @@ fn dimmed_rows(cx: &mut gpui::VisualTestContext, view: &gpui::Entity<GitCometVie
                 .enumerate()
                 .filter_map(|(visible_ix, commit_ix)| {
                     let commit = cache.page.commits.get(commit_ix)?;
+                    let row = cache.base.row_vms.get(visible_ix)?;
                     let is_selected = Some(&commit.id) == selected.as_ref();
-                    crate::view::panes::history::find::history_find_row_dimmed(
+                    crate::view::panes::history::find::history_find_row_marks(
                         query.as_ref(),
                         commit,
                         is_selected,
+                        row.summary.as_ref(),
+                        row.author.as_ref(),
+                        "",
                     )
+                    .0
                     .then_some(visible_ix)
                 })
                 .collect()
@@ -599,6 +604,98 @@ fn history_find_matches_and_labels(cx: &mut gpui::TestAppContext) {
     assert_eq!(find_matches(cx, &view), Vec::<usize>::new());
 }
 
+/// Find matches what a row shows. A stash tip missing from the stash list
+/// shows its summary after the "WIP on main:" prefix, so the hidden prefix
+/// neither counts it nor leaves it bright without a visible match.
+#[gpui::test]
+fn history_find_matches_stash_rows_on_what_they_show(cx: &mut gpui::TestAppContext) {
+    use crate::view::panes::history::find::history_find_row_marks;
+
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let mut commits = find_fixture_commits();
+    commits.insert(
+        1,
+        Commit {
+            parent_ids: [CommitId("bbbb1111".into()), CommitId("9999ffff".into())].into(),
+            ..authored("abab7777", "WIP on main: bbbb111 Add feature", "Alice")
+        },
+    );
+    let (view, store, cx) = mount_find_fixture(cx, find_fixture_repo(commits));
+    open_find_with_shortcut(cx, &view);
+    let stash_row = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            history_view(&view, app).update(app, |history, _cx| {
+                let query = history.history_find_query().cloned();
+                let cache = history.history_cache.as_ref().expect("the list is built");
+                let commit = &cache.page.commits[cache.base.visible_indices.get(1).unwrap()];
+                let row = &cache.base.row_vms[1];
+                assert!(row.is_stash, "the row is drawn as a stash");
+                assert_eq!(row.summary.as_ref(), "bbbb111 Add feature");
+                history_find_row_marks(
+                    query.as_ref(),
+                    commit,
+                    false,
+                    row.summary.as_ref(),
+                    row.author.as_ref(),
+                    "abab7777",
+                )
+            })
+        })
+    };
+
+    retype_query(cx, "main");
+    assert_eq!(find_matches(cx, &view), Vec::<usize>::new());
+    assert_eq!(stash_row(cx), (true, None), "the prefix is not shown");
+
+    retype_query(cx, "add feature");
+    wait_for_selection(cx, &view, &store, "abab7777");
+    assert_eq!(find_matches(cx, &view), vec![1, 2]);
+    let (dimmed, highlights) = stash_row(cx);
+    assert!(!dimmed);
+    assert_eq!(highlights.map(|found| found.summary), Some(vec![8..19]));
+}
+
+/// Before its index is built (a scope change, a first load) the list is one
+/// page with more history behind it: the bar cannot say "No matches" or
+/// give a final count yet.
+#[gpui::test]
+fn history_find_over_a_partial_page_is_not_final_while_the_index_builds(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let mut repo = find_fixture_repo(find_fixture_commits());
+    let page = Arc::new(log_page(find_fixture_commits(), Some("ffff5555")));
+    repo.log = Loadable::Ready(Arc::clone(&page));
+    repo.history_state.log = Loadable::Ready(page);
+    let snapshot = HistorySnapshot("history-find-building".into());
+    repo.history_state.log_snapshot = Some(snapshot.clone());
+    repo.history_state.indexed.requested = Some(snapshot);
+    repo.history_state.indexed.epoch = repo.load_epoch;
+    repo.history_state.indexed.loading = true;
+    let (view, store, cx) = mount_find_fixture(cx, repo);
+
+    open_find_with_shortcut(cx, &view);
+    run_script(
+        cx,
+        &view,
+        &store,
+        &[
+            (Act::Type("fix"), &[0, 2, 4], "aaaa0000", "1/3+"),
+            (Act::Type("zzz"), &[], "aaaa0000", "Searching…"),
+        ],
+    );
+
+    // A failed build leaves the page as the whole answer.
+    let mut state = (*store.snapshot()).clone();
+    state.repos[0].history_state.indexed.loading = false;
+    state.repos[0].history_state.indexed.error = Some("index failed".into());
+    let state = Arc::new(state);
+    store.replace_snapshot_for_test(Arc::clone(&state));
+    sync_view_with_store(cx, &view);
+    draw_and_park(cx);
+    assert_eq!(find_label(cx, &view), "No matches");
+}
+
 /// Each toggle rebuilds the query at once, selects its first match and keeps
 /// the input focused. The SHA prefix does not apply to a regex.
 #[gpui::test]
@@ -779,26 +876,6 @@ fn history_find_dims_misses_but_not_matches_or_the_selection(cx: &mut gpui::Test
 }
 
 #[test]
-fn row_dimming_follows_the_rows_own_text() {
-    use crate::view::panes::history::find::history_find_row_dimmed;
-
-    let query = HistoryFindQuery::new("fix", TextSearchOptions::default());
-    let hit = authored("aaaa0000", "Fix login bug", "Alice");
-    let miss = authored("bbbb1111", "Add feature", "Bob");
-
-    assert!(!history_find_row_dimmed(query.as_ref(), &hit, false));
-    assert!(history_find_row_dimmed(query.as_ref(), &miss, false));
-    assert!(
-        !history_find_row_dimmed(query.as_ref(), &miss, true),
-        "the selected row stays bright even when it misses"
-    );
-    assert!(
-        !history_find_row_dimmed(None, &miss, false),
-        "no query, nothing fades"
-    );
-}
-
-#[test]
 fn row_highlights_show_why_the_row_matched() {
     use crate::view::panes::history::find::{HistoryFindHighlights, history_find_highlights};
 
@@ -837,6 +914,108 @@ fn row_highlights_show_why_the_row_matched() {
 }
 
 #[test]
+fn row_marks_fade_misses_and_highlight_only_matches() {
+    use crate::view::panes::history::find::{history_find_highlights, history_find_row_marks};
+
+    let query = HistoryFindQuery::new("fix", TextSearchOptions::default());
+    let hit = authored("aaaa0000", "Fix login bug", "Alice");
+    let miss = authored("bbbb1111", "Add feature", "Bob");
+    let marks = |commit: &Commit, selected| {
+        history_find_row_marks(
+            query.as_ref(),
+            commit,
+            selected,
+            &commit.summary,
+            &commit.author,
+            "aaaa0000",
+        )
+    };
+
+    assert_eq!(
+        marks(&hit, false),
+        (
+            false,
+            history_find_highlights(query.as_ref(), &hit, "Fix login bug", "Alice", "aaaa0000")
+        )
+    );
+    assert_eq!(marks(&miss, false), (true, None));
+    assert_eq!(
+        marks(&miss, true),
+        (false, None),
+        "the selection stays bright"
+    );
+    assert_eq!(
+        history_find_row_marks(None, &hit, false, "Fix login bug", "Alice", "aaaa0000"),
+        (false, None)
+    );
+}
+
+/// Timing probe: a screen of rows, mostly misses, under a regex query. The
+/// "before" arm is how rows were marked before `history_find_row_marks`.
+#[test]
+#[ignore]
+fn history_find_row_marks_timing() {
+    use crate::view::panes::history::find::{history_find_highlights, history_find_row_marks};
+
+    let query = HistoryFindQuery::new(
+        "fix(ed)? (crash|leak)",
+        TextSearchOptions {
+            regex: true,
+            ..TextSearchOptions::default()
+        },
+    );
+    let rows: Vec<Commit> = (0..60)
+        .map(|row| {
+            let summary = if row % 12 == 0 {
+                format!("fixed crash in parser {row}")
+            } else {
+                format!("Refactor the widget layout for row {row} and tidy up")
+            };
+            authored(&format!("{row:08x}"), &summary, "Alice Example")
+        })
+        .collect();
+    let frames = 2_000;
+    let started = std::time::Instant::now();
+    let mut marked = 0usize;
+    for _ in 0..frames {
+        for commit in &rows {
+            let dimmed = query.as_ref().is_some_and(|query| !query.matches(commit));
+            let highlights = history_find_highlights(
+                query.as_ref(),
+                commit,
+                &commit.summary,
+                &commit.author,
+                &commit.id.as_ref()[..8],
+            );
+            marked += usize::from(dimmed) + usize::from(highlights.is_some());
+        }
+    }
+    let before = started.elapsed();
+    let started = std::time::Instant::now();
+    let mut marked_after = 0usize;
+    for _ in 0..frames {
+        for commit in &rows {
+            let (dimmed, highlights) = history_find_row_marks(
+                query.as_ref(),
+                commit,
+                false,
+                &commit.summary,
+                &commit.author,
+                &commit.id.as_ref()[..8],
+            );
+            marked_after += usize::from(dimmed) + usize::from(highlights.is_some());
+        }
+    }
+    let after = started.elapsed();
+    assert_eq!(marked, marked_after);
+    eprintln!(
+        "row marks per frame of 60 rows: before {:?}, after {:?}",
+        before / frames,
+        after / frames
+    );
+}
+
+#[test]
 fn detail_highlights_follow_the_fields_a_row_matches_on() {
     use crate::view::panes::history::find::{
         CommitDetailsFindHighlights, history_find_detail_highlights,
@@ -846,7 +1025,7 @@ fn detail_highlights_follow_the_fields_a_row_matches_on() {
     let id = "abcd1234ffff0000111122223333444455556666";
     let message = "Fix login fix\n\nThe fix is in the body.";
     let highlights = |query: Option<HistoryFindQuery>| {
-        history_find_detail_highlights(query.as_ref(), id, message, "Alice Fixer")
+        history_find_detail_highlights(query.as_ref(), id, message, "Alice Fixer", "Fix login fix")
     };
 
     assert_eq!(
@@ -1062,13 +1241,35 @@ fn indexed_visible(row: usize) -> usize {
 /// A linear history, except that the stash row also has the helper as its
 /// second parent.
 fn indexed_find_history() -> (HistoryIndexHandle, Vec<Commit>) {
-    let mut builder = HistoryIndexBuilder::new(
-        HistorySnapshot("history-find-indexed".into()),
-        LogScope::AllBranches,
-        20,
-    )
-    .unwrap();
-    let mut commits = Vec::with_capacity(INDEXED_ROWS);
+    indexed_find_history_with_top("history-find-indexed", None)
+}
+
+/// The same history after a fetch put a commit summarised `summary` on top,
+/// so every earlier row moves down by one.
+fn indexed_find_history_after_fetch(summary: &str) -> (HistoryIndexHandle, Vec<Commit>) {
+    indexed_find_history_with_top("history-find-fetched", Some(summary))
+}
+
+fn indexed_find_history_with_top(
+    snapshot: &str,
+    top: Option<&str>,
+) -> (HistoryIndexHandle, Vec<Commit>) {
+    let mut builder =
+        HistoryIndexBuilder::new(HistorySnapshot(snapshot.into()), LogScope::AllBranches, 20)
+            .unwrap();
+    let mut commits = Vec::with_capacity(INDEXED_ROWS + 1);
+    if let Some(summary) = top {
+        let id = [0xff; 20];
+        let parent = indexed_find_raw_id(0);
+        builder.push(&id, [parent.as_slice()], false).unwrap();
+        commits.push(Commit {
+            id: CommitId(gitcomet_core::hex::encode(&id).into()),
+            parent_ids: std::iter::once(CommitId(indexed_find_id(0).into())).collect(),
+            summary: summary.into(),
+            author: "Erin".into(),
+            time: SystemTime::UNIX_EPOCH,
+        });
+    }
     for row in 0..INDEXED_ROWS {
         let parents: Vec<[u8; 20]> = match row {
             STASH_ROW => vec![
@@ -1109,6 +1310,7 @@ enum ScanMode {
     Fail,
     /// Fail only the first scan, then serve a retry.
     FailOnce,
+    PanicOnce,
     /// Block until cancelled; the test reports the scan's chunks itself.
     Hold,
 }
@@ -1117,7 +1319,8 @@ enum ScanMode {
 /// find scan as `ScanMode` says.
 struct IndexedFindRepo {
     spec: RepoSpec,
-    commits: Vec<Commit>,
+    /// Replaced when a test moves the fixture to a newer history.
+    commits: std::sync::RwLock<Vec<Commit>>,
     mode: ScanMode,
     scans_started: AtomicUsize,
     released: AtomicBool,
@@ -1161,13 +1364,14 @@ impl GitRepository for IndexedFindRepo {
             }
             match self.mode {
                 ScanMode::Serve => {}
+                ScanMode::PanicOnce if self.scans_started.load(Ordering::SeqCst) > 1 => {}
+                ScanMode::PanicOnce => panic!("deliberate history find panic"),
                 ScanMode::FailOnce if self.scans_started.load(Ordering::SeqCst) > 1 => {}
                 ScanMode::Fail | ScanMode::FailOnce => {
                     return Err(Error::new(ErrorKind::Backend("history read failed".into())));
                 }
                 ScanMode::Hold => {
-                    // The scan executor is one thread shared by every test,
-                    // so a held scan must end with its search or its test.
+                    // A held scan must end with its search or its test.
                     while !self.released.load(Ordering::SeqCst) {
                         cancellation.check_cancelled()?;
                         std::thread::sleep(Duration::from_millis(2));
@@ -1178,6 +1382,8 @@ impl GitRepository for IndexedFindRepo {
         }
         let commits = self
             .commits
+            .read()
+            .unwrap()
             .get(range.clone())
             .ok_or_else(|| Error::new(ErrorKind::Backend("range out of bounds".into())))?
             .to_vec();
@@ -1248,7 +1454,7 @@ fn mount_indexed_find_fixture(
     let (view, store, cx) = mount_find_fixture(cx, find_fixture_repo(commits.clone()));
     let repo = Arc::new(IndexedFindRepo {
         spec: store.snapshot().repos[0].spec.clone(),
-        commits,
+        commits: commits.into(),
         mode,
         scans_started: AtomicUsize::new(0),
         released: AtomicBool::new(false),
@@ -1436,16 +1642,21 @@ fn indexed_dimmed_rows(
                 .page
                 .commits
                 .iter()
+                .zip(window.cache.base.row_vms.iter())
                 .enumerate()
                 .filter(|(ix, _)| window.loaded.get(*ix).copied().unwrap_or(false))
-                .map(|(ix, commit)| (window.start + ix, commit))
-                .filter(|(visible_ix, commit)| {
+                .map(|(ix, row)| (window.start + ix, row))
+                .filter(|(visible_ix, (commit, row))| {
                     rows.contains(visible_ix)
-                        && crate::view::panes::history::find::history_find_row_dimmed(
+                        && crate::view::panes::history::find::history_find_row_marks(
                             query.as_ref(),
                             commit,
                             selected.as_ref() == Some(&commit.id),
+                            row.summary.as_ref(),
+                            row.author.as_ref(),
+                            "",
                         )
+                        .0
                 })
                 .map(|(visible_ix, _)| visible_ix)
                 .collect()
@@ -1688,6 +1899,38 @@ fn indexed_history_find_ignores_matches_on_hidden_stash_helper_rows(cx: &mut gpu
         found(&[FAR_FIX_ROW - 1], true)
     );
     assert_eq!(find_label(cx, &view), "1/1");
+}
+
+/// The stash row is not in the fixture's (empty) stash list, so it shows its
+/// summary after the "WIP on main:" prefix. The scan matches that text, as
+/// the row's fading does, rather than the hidden prefix.
+#[gpui::test]
+fn indexed_history_find_matches_stash_rows_on_what_they_show(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Serve);
+
+    open_find_with_shortcut(cx, &view);
+    for (query, rows) in [
+        ("main", vec![STASH_HELPER_ROW]),
+        ("1234567 wip", vec![STASH_ROW]),
+    ] {
+        retype_query(cx, query);
+        wait_until(cx, "the scan to finish", |cx| {
+            sync_view_with_store(cx, &view);
+            let results = store_find(&store);
+            results.query == plain_query(query) && results.done
+        });
+        assert_eq!(
+            store_find(&store).match_rows().collect::<Vec<_>>(),
+            rows,
+            "{query}"
+        );
+    }
+    assert_eq!(
+        indexed_dimmed_rows(cx, &view, STASH_ROW..STASH_ROW + 1),
+        Vec::<usize>::new(),
+        "the row showing the match stays bright"
+    );
 }
 
 /// A query edit fades rows immediately and clears the previous query's count.
@@ -2010,9 +2253,12 @@ fn history_find_paged_matches_are_reused_until_the_projection_changes(
     type_query(cx, "fix");
     cx.update(|_window, app| {
         history_view(&view, app).update(app, |history, _cx| {
+            // Row text is built per visible row, so it follows the indices.
             let cache = history.history_cache.as_mut().unwrap();
+            let rows = cache.base.row_vms.clone();
             cache.base.visible_indices =
                 HistoryVisibleIndices::Filtered(Arc::from([0, 1, 2, 3, 4]));
+            cache.base.row_vms = rows[0..5].to_vec();
             cache.base.request.stashes_rev += 1;
             let first = history.history_find_matches().unwrap();
             assert_eq!(first.visible, vec![0, 2, 4]);
@@ -2027,6 +2273,7 @@ fn history_find_paged_matches_are_reused_until_the_projection_changes(
             let cache = history.history_cache.as_mut().unwrap();
             cache.base.visible_indices =
                 HistoryVisibleIndices::Filtered(Arc::from([1, 2, 3, 4, 5]));
+            cache.base.row_vms = rows[1..6].to_vec();
             cache.base.request.stashes_rev += 1;
             assert_eq!(history.history_find_matches().unwrap().visible, vec![1, 3]);
         });
@@ -2038,6 +2285,7 @@ fn history_find_quick_down_up_keeps_the_last_selection(cx: &mut gpui::TestAppCon
     let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
     store.dispatch(Msg::SelectCommit {
+        request_id: None,
         repo_id: FIND_REPO_ID,
         commit_id: CommitId("aaaa0000".into()),
     });
@@ -2054,6 +2302,172 @@ fn history_find_quick_down_up_keeps_the_last_selection(cx: &mut gpui::TestAppCon
         &store,
         Some("aaaa0000"),
         "Down then Up returns to the original row",
+    );
+}
+
+/// A fetch or a commit replaces the index while the bar is open. The same
+/// query is searched again over the new index; meanwhile the bar keeps its
+/// answer, moved onto the new rows, instead of blanking to "Searching…".
+#[gpui::test]
+fn indexed_history_find_keeps_its_matches_while_a_refreshed_index_is_searched(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, store, cx, backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
+    open_and_find(cx, &view, &store, "fix");
+    report_matches(cx, &view, &store, &ALL_FIX_ROWS, true);
+    wait_for_selection(cx, &view, &store, &indexed_find_id(0));
+    assert_eq!(find_label(cx, &view), "1/3");
+
+    let (fetched, commits) = indexed_find_history_after_fetch("Add a feature on top");
+    *backend.0.commits.write().unwrap() = commits;
+    let mut state = (*store.snapshot()).clone();
+    install_index(&mut state, fetched.clone());
+    let state = Arc::new(state);
+    store.replace_snapshot_for_test(Arc::clone(&state));
+    set_history_view_state_for_tests(cx, &view, state);
+    wait_until(cx, "the fetched history to show", |cx| {
+        sync_view_with_store(cx, &view);
+        cx.update(|_window, app| {
+            history_view(&view, app)
+                .read(app)
+                .indexed
+                .presentation
+                .as_ref()
+                .is_some_and(|shown| Arc::ptr_eq(&shown.graph.projection.index, &fetched))
+        }) && store_find(&store)
+            .index
+            .is_some_and(|index| index.ptr_eq(&Arc::downgrade(&fetched)))
+    });
+
+    // Every old row moved down by one under the new commit.
+    let moved: Vec<usize> = all_fix_visible().iter().map(|row| row + 1).collect();
+    assert_eq!(
+        indexed_find_status(cx, &view),
+        found(&moved, false),
+        "the old answer, on the new rows, until the new search reports"
+    );
+    assert_eq!(find_label(cx, &view), "1/3+");
+    step_to(cx, &view, &store, "enter", 5, "2/3+");
+
+    let fetched_rows: Vec<usize> = ALL_FIX_ROWS.iter().map(|row| row + 1).collect();
+    report_matches(cx, &view, &store, &fetched_rows, true);
+    assert_eq!(indexed_find_status(cx, &view), found(&moved, true));
+    assert_eq!(find_label(cx, &view), "2/3");
+}
+
+/// Each window has its own store. A whole-history scan in one window must not
+/// hold up find in another.
+#[test]
+fn history_find_in_one_store_does_not_wait_for_another_stores_scan() {
+    let (index, commits) = indexed_find_history();
+    let start = |mode| {
+        let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
+        let mut state = AppState {
+            repos: vec![find_fixture_repo(commits.clone())],
+            active_repo: Some(FIND_REPO_ID),
+            ..AppState::test_default()
+        };
+        install_index(&mut state, index.clone());
+        store.replace_snapshot_for_test(Arc::new(state));
+        let repo = Arc::new(IndexedFindRepo {
+            spec: store.snapshot().repos[0].spec.clone(),
+            commits: commits.clone().into(),
+            mode,
+            scans_started: AtomicUsize::new(0),
+            released: AtomicBool::new(false),
+        });
+        store.insert_repo_for_test(FIND_REPO_ID, repo.clone());
+        store.dispatch(Msg::HistoryFind(HistoryFindMsg::Find {
+            repo_id: FIND_REPO_ID,
+            query: plain_query("fix"),
+            index: Some(index.clone()),
+        }));
+        (store, events, IndexedFindBackend(repo))
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let (held, _held_events, held_backend) = start(ScanMode::Hold);
+    while held_backend.scans_started() == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the held scan never started"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let (other, _other_events, _other_backend) = start(ScanMode::Serve);
+    while !store_find(&other).done {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the other store's search waited for the held scan"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        store_find(&other).match_rows().collect::<Vec<_>>(),
+        ALL_FIX_ROWS
+    );
+    drop(held);
+}
+
+/// The store drops a selection naming a presentation it no longer shows. The
+/// next Down must start from the row still selected, not from the dropped one.
+#[gpui::test]
+fn indexed_history_rejected_selections_do_not_move_where_down_starts(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
+    cx.update(|_window, app| {
+        history_view(&view, app).update(app, |history, cx| {
+            history.select_indexed_commit_row(FIND_REPO_ID, 0, false, cx);
+        });
+    });
+    wait_for_selection(cx, &view, &store, &indexed_find_id(0));
+
+    let shown = store.snapshot().repos[0]
+        .history_state
+        .indexed
+        .displayed_index
+        .clone();
+    let set_displayed = |index: Option<HistoryIndexHandle>| {
+        let mut state = (*store.snapshot()).clone();
+        state.repos[0].history_state.indexed.displayed_index = index;
+        store.replace_snapshot_for_test(Arc::new(state));
+    };
+    set_displayed(None);
+    for _ in 0..2 {
+        cx.update(|_window, app| {
+            history_view(&view, app).update(app, |history, cx| {
+                assert!(history.history_select_adjacent_commit(1, cx));
+            });
+        });
+        sync_view_with_store(cx, &view);
+    }
+    assert_selection_settles_on(
+        cx,
+        &view,
+        &store,
+        Some(&indexed_find_id(0)),
+        "the store dropped both selections",
+    );
+
+    set_displayed(shown);
+    sync_view_with_store(cx, &view);
+    cx.update(|_window, app| {
+        history_view(&view, app).update(app, |history, cx| {
+            assert!(history.history_select_adjacent_commit(1, cx));
+        });
+    });
+    wait_until(cx, "the next selection", |cx| {
+        sync_view_with_store(cx, &view);
+        store_selected(&store).as_deref() != Some(&indexed_find_id(0))
+    });
+    assert_selection_settles_on(
+        cx,
+        &view,
+        &store,
+        Some(&indexed_find_id(1)),
+        "Down starts from the row still selected",
     );
 }
 
@@ -2089,18 +2503,22 @@ fn indexed_history_find_does_not_resend_while_the_snapshot_is_pending(
     let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
     open_find_with_shortcut(cx, &view);
-    std::thread::sleep(Duration::from_millis(100));
+    let (unrelated, _unrelated_events) = AppStore::new_test(Arc::new(BlockingBackend));
     cx.update(|_window, app| {
         history_view(&view, app).update(app, |history, cx| {
             history.set_history_find_query("fix", false);
-            let before = AppStore::reducer_diagnostics().dispatch_count;
+            let before = store.history_find_dispatch_count_for_test();
             for _ in 0..20 {
+                unrelated.dispatch(Msg::HistoryFind(HistoryFindMsg::Find {
+                    repo_id: FIND_REPO_ID,
+                    query: None,
+                    index: None,
+                }));
                 history.sync_history_find(cx);
             }
-            // Hold the UI snapshot fixed until the worker has drained its queue.
-            std::thread::sleep(Duration::from_millis(100));
-            assert!(store_find(&store).query == plain_query("fix"));
-            let dispatched = AppStore::reducer_diagnostics().dispatch_count - before;
+            // Count sends synchronously, scoped to this store. No worker timing
+            // or traffic from another test can influence this assertion.
+            let dispatched = store.history_find_dispatch_count_for_test() - before;
             assert_eq!(
                 dispatched, 1,
                 "renders with the same unanswered snapshot must share a request"
@@ -2375,4 +2793,285 @@ fn indexed_history_find_switching_repos_releases_the_previous_search(
             .iter()
             .all(|repo| repo.history_state.find.query.is_none())
     });
+}
+
+#[gpui::test]
+fn history_find_repeated_destinations_acknowledge_only_the_request_that_arrived(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
+    store.dispatch(Msg::SelectCommit {
+        request_id: None,
+        repo_id: FIND_REPO_ID,
+        commit_id: CommitId("aaaa0000".into()),
+    });
+    wait_for_selection(cx, &view, &store, "aaaa0000");
+    select_next_row(cx, &view);
+    wait_until(cx, "first Down reduced", |_| {
+        store_selected(&store).as_deref() == Some("bbbb1111")
+    });
+    let first_reply = store.snapshot();
+    cx.update(|_window, app| {
+        history_view(&view, app).update(app, |history, cx| {
+            assert!(history.history_select_adjacent_commit(1, cx));
+            assert!(history.history_select_adjacent_commit(-1, cx));
+            assert_eq!(history.pending_history_selections.len(), 3);
+        });
+        let model = view.read(app).ui_model.clone();
+        model.update(app, |model, cx| model.set_state(first_reply, cx));
+    });
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        history_view(&view, app).update(app, |history, cx| {
+            assert_eq!(
+                history.pending_history_selections.len(),
+                2,
+                "the first Down must not acknowledge the later Up to the same row"
+            );
+            assert!(history.history_select_adjacent_commit(1, cx));
+        });
+    });
+    wait_for_selection(cx, &view, &store, "cccc2222");
+}
+
+#[gpui::test]
+fn indexed_history_find_store_selection_preserves_pending_navigation(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
+    open_and_find(cx, &view, &store, "fix");
+    for step in [false, true] {
+        if step {
+            retype_query(cx, "bob");
+            wait_for_find_request(cx, &view, &store, plain_query("bob"));
+            cx.simulate_keystrokes("enter");
+        }
+        // A store-driven reconciliation/reveal, with no history input.
+        let mut state = (*store.snapshot()).clone();
+        state.repos[0].history_state.selected_commit = Some(CommitId(indexed_find_id(8).into()));
+        state.repos[0].history_state.selected_commit_rev += 1;
+        store.replace_snapshot_for_test(Arc::new(state));
+        sync_view_with_store(cx, &view);
+        let rows = if step { [2, 7] } else { [0, 5] };
+        report_matches(cx, &view, &store, &rows, true);
+        wait_for_selection(cx, &view, &store, &indexed_find_id(rows[0]));
+    }
+}
+
+#[gpui::test]
+fn history_find_toggle_deselect_uses_the_remaining_focus(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let mut repo = find_fixture_repo(find_fixture_commits());
+    repo.history_state.selected_commit = Some(CommitId("cccc2222".into()));
+    repo.history_state.multi_selection.commits = Arc::new(vec![
+        CommitId("bbbb1111".into()),
+        CommitId("cccc2222".into()),
+    ]);
+    let (view, store, cx) = mount_find_fixture(cx, repo);
+    let at = cx.debug_bounds("history_row_2").unwrap().center();
+    cx.simulate_mouse_move(at, None, gpui::Modifiers::default());
+    cx.simulate_click(
+        at,
+        gpui::Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    cx.update(|_window, app| {
+        history_view(&view, app).update(app, |history, _cx| {
+            assert_eq!(
+                history.history_navigation_selection(history.active_repo().unwrap(), true),
+                Some(HistoryPrimarySelection::Commit(CommitId("bbbb1111".into())))
+            );
+        });
+    });
+    wait_for_selection(cx, &view, &store, "bbbb1111");
+}
+
+#[gpui::test]
+fn history_find_stash_details_highlight_only_the_row_summary(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let id = "abab7777";
+    let message = "WIP on main: saved work\n\nmain in the body";
+    let parents = vec![CommitId("bbbb1111".into()), CommitId("9999ffff".into())];
+    let mut commits = find_fixture_commits();
+    commits[0] = Commit {
+        parent_ids: parents.clone().into(),
+        ..authored(id, "WIP on main: saved work", "Alice")
+    };
+    let mut repo = find_fixture_repo(commits);
+    repo.history_state.selected_commit = Some(CommitId(id.into()));
+    repo.history_state.commit_details =
+        Loadable::Ready(Arc::new(gitcomet_core::domain::CommitDetails {
+            id: CommitId(id.into()),
+            message: message.into(),
+            author_name: "Alice".into(),
+            author_email: String::new(),
+            authored_at_unix: 0,
+            committed_at: String::new(),
+            committed_at_unix: 0,
+            parent_ids: parents,
+            files: vec![],
+        }));
+    let (view, _store, cx) = mount_find_fixture(cx, repo);
+    open_find_with_shortcut(cx, &view);
+    type_query(cx, "main");
+    settle_typing(cx);
+    assert!(
+        details_find_washes(cx, &view, false).is_empty(),
+        "the hidden stash prefix is not a match"
+    );
+    retype_query(cx, "saved");
+    settle_typing(cx);
+    assert_eq!(details_find_washes(cx, &view, false), vec![13..18]);
+}
+
+#[gpui::test]
+fn indexed_history_find_panic_reports_failure_and_can_retry(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, store, cx, backend) = mount_indexed_find_fixture(cx, ScanMode::PanicOnce);
+    open_and_find(cx, &view, &store, "fix");
+    wait_until(cx, "panic reported as search failure", |cx| {
+        sync_view_with_store(cx, &view);
+        store_find(&store).error.is_some()
+    });
+    assert_eq!(find_label(cx, &view), "Search failed");
+    cx.simulate_keystrokes("enter");
+    wait_until(cx, "retry after panic", |cx| {
+        sync_view_with_store(cx, &view);
+        store_find(&store).done
+    });
+    assert_eq!(backend.scans_started(), 2);
+    wait_for_selection(cx, &view, &store, &indexed_find_id(0));
+}
+
+#[gpui::test]
+fn history_find_step_after_tab_switch_uses_the_active_repos_page(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
+    open_find_with_shortcut(cx, &view);
+    cx.update(|_window, app| {
+        history_view(&view, app).update(app, |history, cx| {
+            let mut cache = history.indexed.window.as_ref().unwrap().cache.clone();
+            cache.base.request.repo_id = RepoId(2);
+            let mut repo = find_fixture_repo(cache.page.commits.clone());
+            repo.id = RepoId(2);
+            let mut next = (*history.state).clone();
+            next.repos.push(repo);
+            next.active_repo = Some(RepoId(2));
+            history.state = Arc::new(next);
+            store.replace_snapshot_for_test(Arc::clone(&history.state));
+            // The new tab has a page, while the indexed presentation still
+            // belongs to the old tab for this transition frame.
+            history.history_cache = Some(cache);
+            history.set_history_find_query("fix", false);
+            assert!(history.history_find_step(true, cx));
+            assert!(
+                !history.pending_history_selections.is_empty(),
+                "F3 must dispatch through the active page"
+            );
+        });
+    });
+    wait_until(cx, "F3 in the second repository", |_| {
+        store.snapshot().repos[1]
+            .history_state
+            .selected_commit
+            .as_ref()
+            .is_some_and(|id| id.as_ref() == indexed_find_id(0))
+    });
+}
+
+#[gpui::test]
+fn indexed_history_find_loading_stashes_restarts_the_same_query(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, store, cx, backend) = mount_indexed_find_fixture(cx, ScanMode::Serve);
+    open_and_find(cx, &view, &store, "main");
+    wait_until(cx, "initial search", |cx| {
+        sync_view_with_store(cx, &view);
+        store_find(&store).done
+    });
+    assert!(find_matches(cx, &view).is_empty());
+    let old_index = store.snapshot().repos[0]
+        .history_state
+        .indexed
+        .index
+        .clone()
+        .unwrap();
+    let scans = backend.scans_started();
+    let mut state = (*store.snapshot()).clone();
+    state.repos[0].stashes = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::StashEntry {
+        index: 0,
+        id: CommitId(indexed_find_id(STASH_ROW).into()),
+        message: "On main: listed work".into(),
+        created_at: None,
+    }]));
+    state.repos[0].stashes_rev += 1;
+    let revision = state.repos[0].stashes_rev;
+    store.replace_snapshot_for_test(Arc::new(state));
+    wait_until(cx, "search with loaded stashes", |cx| {
+        sync_view_with_store(cx, &view);
+        let found = store_find(&store);
+        found.done
+            && found.stashes_rev == revision
+            && cx.update(|_window, app| {
+                history_view(&view, app)
+                    .read(app)
+                    .active_repo()
+                    .is_some_and(|repo| repo.history_state.find.rev == found.rev)
+            })
+    });
+    assert_eq!(find_matches(cx, &view), vec![STASH_ROW]);
+    assert!(Arc::ptr_eq(
+        &old_index,
+        store.snapshot().repos[0]
+            .history_state
+            .indexed
+            .index
+            .as_ref()
+            .unwrap()
+    ));
+    assert_eq!(
+        backend.scans_started(),
+        scans,
+        "the new stash search reuses decoded commit text"
+    );
+}
+
+#[gpui::test]
+fn indexed_history_find_range_then_toggle_predicts_the_store_focus(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
+    cx.update(|_window, app| {
+        history_view(&view, app).update(app, |history, cx| {
+            history.select_indexed_commit_row(FIND_REPO_ID, 0, false, cx);
+        });
+    });
+    wait_for_selection(cx, &view, &store, &indexed_find_id(0));
+    cx.update(|_window, app| {
+        history_view(&view, app).update(app, |history, cx| {
+            use gitcomet_state::msg::CommitSelectMode;
+            history.select_history_commit(
+                FIND_REPO_ID,
+                CommitId(indexed_find_id(5).into()),
+                CommitSelectMode::Range,
+                None,
+            );
+            history.select_history_commit(
+                FIND_REPO_ID,
+                CommitId(indexed_find_id(5).into()),
+                CommitSelectMode::Toggle,
+                None,
+            );
+            assert_eq!(
+                history.history_navigation_selection(history.active_repo().unwrap(), true),
+                Some(HistoryPrimarySelection::Commit(CommitId(
+                    indexed_find_id(4).into()
+                )))
+            );
+            assert!(history.history_select_adjacent_commit(1, cx));
+        });
+    });
+    wait_for_selection(cx, &view, &store, &indexed_find_id(5));
 }

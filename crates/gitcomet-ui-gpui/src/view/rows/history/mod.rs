@@ -247,10 +247,11 @@ impl HistoryView {
                     }) {
                         return None;
                     }
-                    let find_highlights =
-                        crate::view::panes::history::find::history_find_highlights(
+                    let (find_dimmed, find_highlights) =
+                        crate::view::panes::history::find::history_find_row_marks(
                             find_query.as_ref(),
                             commit,
+                            selected,
                             base_row_vm.summary.as_ref(),
                             base_row_vm.author.as_ref(),
                             short_sha.as_ref(),
@@ -289,11 +290,7 @@ impl HistoryView {
                         selected,
                         base_row_vm.is_head,
                         is_stash_node,
-                        crate::view::panes::history::find::history_find_row_dimmed(
-                            find_query.as_ref(),
-                            commit,
-                            selected,
-                        ),
+                        find_dimmed,
                         find_highlights,
                         this.active_context_menu_invoker.as_ref(),
                         cx,
@@ -608,24 +605,7 @@ fn history_table_row(
                     CommitSelectMode::Single
                 };
                 this.cancel_history_find_navigation();
-                this.note_history_selection(
-                    repo_id,
-                    crate::view::panes::history::HistoryPrimarySelection::Commit(commit_id.clone()),
-                );
-                if this.select_indexed_commit(repo_id, commit_id.clone(), mode) {
-                    cx.notify();
-                    return;
-                }
-                let visible_order = (mode == CommitSelectMode::Range)
-                    .then(|| this.visible_commit_ids_for_repo(repo_id))
-                    .flatten();
-                this.store.dispatch(Msg::SelectCommitMulti {
-                    repo_id,
-                    commit_id: commit_id.clone(),
-                    mode,
-                    clicked_index: Some(graph_row_ix),
-                    visible_order,
-                });
+                this.select_history_commit(repo_id, commit_id.clone(), mode, Some(graph_row_ix));
                 cx.notify();
             }),
         );
@@ -844,13 +824,14 @@ fn worktree_uncommitted_history_row(
                     return;
                 }
                 this.cancel_history_find_navigation();
-                this.note_history_selection(
+                let request_id = Some(this.note_history_selection(
                     repo_id,
                     crate::view::panes::history::HistoryPrimarySelection::Worktree(
                         select_path.clone(),
                     ),
-                );
+                ));
                 this.store.dispatch(Msg::SelectWorktreeUncommitted {
+                    request_id,
                     repo_id,
                     path: select_path.clone(),
                 });

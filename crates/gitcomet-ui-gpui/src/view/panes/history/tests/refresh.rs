@@ -243,6 +243,7 @@ fn pagination_waits_for_the_new_source_and_uses_its_current_extent(cx: &mut gpui
         }
         // A user message is an ordering barrier after the frame's dispatches.
         store.dispatch(Msg::SelectCommit {
+            request_id: None,
             repo_id: RepoId(1),
             commit_id: CommitId(id.into()),
         });

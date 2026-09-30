@@ -600,6 +600,14 @@ impl HistoryView {
             self.prepare_window_for(next, plan, dirty, logical, true, cx);
             return;
         }
+        if let Some(old) = self
+            .indexed
+            .presentation
+            .as_ref()
+            .map(|old| Arc::clone(&old.graph))
+        {
+            self.carry_history_find_matches(&old, &next.graph);
+        }
         self.indexed.presentation = Some(next.clone());
         self.store.dispatch(Msg::IndexedHistory(Event::Publish {
             repo_id: next.key.repo_id,
@@ -1005,11 +1013,10 @@ impl HistoryView {
                             let is_stash = stash.is_some()
                                 || shown.graph.projection.index.is_probable_stash(raw);
                             let summary = if is_stash {
-                                stash
-                                    .map(|stash| stash.message.as_ref())
-                                    .filter(|message| !message.trim().is_empty())
-                                    .or_else(|| stash_summary_from_log_summary(&commit.summary))
-                                    .unwrap_or(&commit.summary)
+                                gitcomet_core::history_find::stash_row_summary(
+                                    stash.map(|stash| stash.message.as_ref()),
+                                    &commit.summary,
+                                )
                             } else {
                                 &commit.summary
                             };
@@ -1227,12 +1234,12 @@ impl HistoryView {
         else {
             return false;
         };
-        let projection = shown.graph.projection.clone();
         self.store.dispatch(Msg::IndexedHistory(Event::Select {
+            request_id: None,
             repo_id,
             commit_id,
             mode,
-            projection,
+            projection: shown.graph.projection.clone(),
         }));
         true
     }
@@ -1274,8 +1281,12 @@ impl HistoryView {
             return false;
         };
         let list_ix = self.indexed.plan.list_ix_for_visible(visible_ix);
-        self.note_history_selection(repo_id, HistoryPrimarySelection::Commit(id.clone()));
-        self.select_indexed_commit(repo_id, id, gitcomet_state::msg::CommitSelectMode::Single);
+        self.select_history_commit(
+            repo_id,
+            id,
+            gitcomet_state::msg::CommitSelectMode::Single,
+            None,
+        );
         self.cancel_history_scroll_reveal();
         let center = center_if_hidden && !self.indexed_row_in_view(list_ix);
         self.scroll_indexed_to(list_ix, center);
@@ -1348,12 +1359,15 @@ impl HistoryView {
             Some(HistoryListRow::WorktreeUncommitted { worktree_ix, .. }) => {
                 if let Some(summary) = self.indexed.worktrees.get(worktree_ix) {
                     let (repo_id, path) = (repo.id, summary.path.clone());
-                    self.note_history_selection(
+                    let request_id = Some(self.note_history_selection(
                         repo_id,
                         HistoryPrimarySelection::Worktree(path.clone()),
-                    );
-                    self.store
-                        .dispatch(Msg::SelectWorktreeUncommitted { repo_id, path });
+                    ));
+                    self.store.dispatch(Msg::SelectWorktreeUncommitted {
+                        request_id,
+                        repo_id,
+                        path,
+                    });
                 }
             }
             _ => return false,
@@ -1396,6 +1410,7 @@ impl HistoryView {
             let resolved_id = shown.graph.projection.commit_id(visible).unwrap();
             if let Some(path) = &pending.worktree_path {
                 self.store.dispatch(Msg::SelectWorktreeUncommitted {
+                    request_id: None,
                     repo_id: pending.repo_id,
                     path: path.clone(),
                 });

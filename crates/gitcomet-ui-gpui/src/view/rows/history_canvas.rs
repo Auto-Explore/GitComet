@@ -315,31 +315,78 @@ fn shape_truncated_line_cached_from_with_affix(
         style.font_family = family.into();
     }
     let runs = crate::text_runs::text_runs_for_highlights(text, &style, highlights);
-    let mut wrapper = window.text_system().line_wrapper(style.font(), font_size);
-    let mut shape = |width: Pixels| {
-        let (truncated, runs) = wrapper.truncate_line(
-            text.clone(),
-            width.max(px(0.0)),
-            truncation_affix,
-            &runs,
-            truncate_from,
-        );
-        window
-            .text_system()
-            .shape_line(truncated, font_size, runs.as_ref(), None)
+    let text_system = window.text_system();
+    let shaped = if highlights.is_empty() || truncate_from != TruncateFrom::End {
+        let (truncated, runs) = text_system
+            .line_wrapper(style.font(), font_size)
+            .truncate_line(
+                text.clone(),
+                max_width.max(px(0.0)),
+                truncation_affix,
+                &runs,
+                truncate_from,
+            );
+        text_system.shape_line(truncated, font_size, runs.as_ref(), None)
+    } else {
+        // The wrapper cuts by base-font widths, so bold matches would
+        // overflow and be clipped mid-glyph; cut the shaped line instead.
+        let full = text_system.shape_line(text.clone(), font_size, &runs, None);
+        let affix = || {
+            text_system
+                .shape_line(
+                    truncation_affix.into(),
+                    font_size,
+                    &[style.to_run(truncation_affix.len())],
+                    None,
+                )
+                .width
+        };
+        match highlighted_cut(full.width, max_width, affix, |x| full.index_for_x(x)) {
+            None => full,
+            Some(cut) => {
+                // Like the wrapper, drop trailing blanks and punctuation.
+                let prefix = text[..cut]
+                    .trim_end_matches(|c: char| c.is_whitespace() || c.is_ascii_punctuation());
+                let kept: Vec<_> = highlights
+                    .iter()
+                    .filter_map(|(range, highlight)| {
+                        let end = range.end.min(prefix.len());
+                        (range.start < end).then_some((range.start..end, *highlight))
+                    })
+                    .collect();
+                let mut runs = crate::text_runs::text_runs_for_highlights(prefix, &style, &kept);
+                runs.push(style.to_run(truncation_affix.len()));
+                text_system.shape_line(
+                    format!("{prefix}{truncation_affix}").into(),
+                    font_size,
+                    &runs,
+                    None,
+                )
+            }
+        }
     };
-    let mut shaped = shape(max_width);
-    // The wrapper measures in the base font, so bold matches can overflow and
-    // be clipped mid-glyph; truncate again by the overshoot.
-    if !highlights.is_empty() && shaped.width > max_width {
-        shaped = shape(max_width - (shaped.width - max_width));
-    }
 
     HISTORY_TEXT_LAYOUT_CACHE.with(|cache| {
         cache.borrow_mut().put(key, shaped.clone());
     });
 
     shaped
+}
+
+/// Where to cut a highlighted line so its shaped width, with the affix,
+/// fits `max_width`; `None` when the whole line fits. `index_for_x` is the
+/// shaped line's: the glyph under `x`, whose start is at or before it.
+fn highlighted_cut(
+    width: Pixels,
+    max_width: Pixels,
+    affix_width: impl FnOnce() -> Pixels,
+    index_for_x: impl FnOnce(Pixels) -> Option<usize>,
+) -> Option<usize> {
+    if width <= max_width {
+        return None;
+    }
+    let room = (max_width - affix_width()).max(px(0.0));
+    Some(index_for_x(room).unwrap_or(0))
 }
 
 /// Which visual family a ref chip belongs to. Tags stay accent-tinted pills,
@@ -1866,17 +1913,12 @@ pub(super) fn history_commit_row_canvas(
                         // details pane matches the menu target. Outside the
                         // selection this collapses to the clicked commit.
                         this.cancel_history_find_navigation();
-                        this.note_history_selection(
+                        this.select_history_commit(
                             repo_id,
-                            super::HistoryPrimarySelection::Commit(commit_id.clone()),
+                            commit_id.clone(),
+                            CommitSelectMode::PreserveIfSelected,
+                            None,
                         );
-                        this.store.dispatch(Msg::SelectCommitMulti {
-                            repo_id,
-                            commit_id: commit_id.clone(),
-                            mode: CommitSelectMode::PreserveIfSelected,
-                            clicked_index: None,
-                            visible_order: None,
-                        });
                         let context_menu_invoker =
                             format!("history_commit_menu_{}_{}", repo_id.0, commit_id.as_ref())
                                 .into();
@@ -2234,6 +2276,97 @@ mod tests {
                     > ellipsized.text.trim_start_matches('…').chars().count(),
                 "removing the ellipsis should expose more of the branch name"
             );
+        })
+        .expect("history canvas test window should stay open");
+    }
+
+    /// Test text systems measure bold like regular text, so this models a
+    /// shaped line instead: 10px glyphs, bold ones 14px, a 10px ellipsis.
+    /// The wrapper's base-font cut let bold matches overflow the cell.
+    #[test]
+    fn highlighted_lines_are_cut_where_their_bold_matches_really_end() {
+        let bold = |ix: usize| (4..10).contains(&ix) || (14..20).contains(&ix);
+        let glyphs = 24usize;
+        let start = |ix: usize| {
+            (0..ix)
+                .map(|ix| if bold(ix) { 14.0 } else { 10.0 })
+                .sum::<f32>()
+        };
+        let width = px(start(glyphs));
+        // As `LineLayout::index_for_x`: the last glyph starting at or before x.
+        let index_for_x = |x: Pixels| {
+            (x < width).then(|| {
+                (0..glyphs)
+                    .rev()
+                    .find(|&ix| px(start(ix)) <= x)
+                    .unwrap_or(0)
+            })
+        };
+        for max in 0..=320 {
+            let max_width = px(max as f32);
+            let drawn = match highlighted_cut(width, max_width, || px(10.0), index_for_x) {
+                None => start(glyphs),
+                Some(cut) => start(cut) + 10.0,
+            };
+            assert!(
+                drawn <= max as f32 || max < 10,
+                "{drawn}px drawn in a {max}px cell"
+            );
+        }
+        assert_eq!(
+            highlighted_cut(width, width, || px(10.0), index_for_x),
+            None
+        );
+    }
+
+    #[gpui::test]
+    fn highlighted_lines_truncate_on_character_boundaries(cx: &mut gpui::TestAppContext) {
+        let window_handle = cx.add_window(|_window, _cx| gpui::Empty);
+        cx.update_window(window_handle.into(), |_, window, _| {
+            let style = window.text_style();
+            let font_size = style.font_size.to_pixels(window.rem_size());
+            let text: SharedString = "Élodie fixé — naïve déjà vu, and more words".into();
+            let color = AppTheme::gitcomet_dark().colors.foreground.primary;
+            let bold = gpui::HighlightStyle {
+                font_weight: Some(gpui::FontWeight::BOLD),
+                ..gpui::HighlightStyle::default()
+            };
+            let full = shape_highlighted_line_cached(
+                window,
+                &style,
+                font_size,
+                &text,
+                fx_hash_str(text.as_ref()),
+                px(10_000.0),
+                color,
+                None,
+                &[(7..13, bold)],
+            );
+            assert_eq!(full.text, text);
+            for max in [0.0, 20.0, 60.0, 120.0, f32::from(full.width) - 1.0] {
+                let shaped = shape_highlighted_line_cached(
+                    window,
+                    &style,
+                    font_size,
+                    &text,
+                    fx_hash_str(text.as_ref()),
+                    px(max),
+                    color,
+                    None,
+                    &[(7..13, bold)],
+                );
+                assert!(shaped.text.ends_with('…'), "{max}: {}", shaped.text);
+                assert!(
+                    text.starts_with(shaped.text.trim_end_matches('…')),
+                    "{max}: {}",
+                    shaped.text
+                );
+                assert!(
+                    shaped.width <= px(max) || shaped.text.as_ref() == "…",
+                    "{max}: {:?}",
+                    shaped.width
+                );
+            }
         })
         .expect("history canvas test window should stay open");
     }

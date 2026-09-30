@@ -4,47 +4,71 @@ use crate::history_find::{HistoryFindEffect, HistoryFindMsg, HistoryFindState};
 pub(super) fn reduce(state: &mut AppState, event: HistoryFindMsg) -> Vec<Effect> {
     let repo_id = match &event {
         HistoryFindMsg::Find { repo_id, .. } | HistoryFindMsg::Found { repo_id, .. } => *repo_id,
+        HistoryFindMsg::Close => {
+            for repo in &mut state.repos {
+                repo.history_state.find.close();
+            }
+            return Vec::new();
+        }
     };
+    // Keep decoded text for the active search only. Switching among large
+    // repositories must not retain an unbounded cache per visited tab.
+    if matches!(
+        &event,
+        HistoryFindMsg::Find {
+            query: Some(_),
+            index: Some(_),
+            ..
+        }
+    ) {
+        for repo in &mut state.repos {
+            if repo.id != repo_id {
+                repo.history_state.find.close();
+            }
+        }
+    }
     let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
         return Vec::new();
+    };
+    let stashes = match &repo.stashes {
+        Loadable::Ready(stashes) => Arc::clone(stashes),
+        _ => Default::default(),
     };
     let find = &mut repo.history_state.find;
     match event {
         HistoryFindMsg::Find { query, index, .. } => {
             if let (Some(query), Some(index)) = (&query, &index)
-                && find.is_for(query, index)
+                && find.is_for(query, index, repo.stashes_rev)
                 && find.error.is_none()
             {
                 return Vec::new();
             }
             find.cancellation.cancel();
-            let seq = find.seq.wrapping_add(1);
-            let rev = find.rev.wrapping_add(1);
-            let cache = if query.is_some() && index.is_some() {
-                Arc::clone(&find.cache)
-            } else {
-                Default::default()
-            };
+            // Stopping keeps the commit text: the view stops for passing
+            // states (a regex mid-typing, a scope change, a tab switch).
             *find = HistoryFindState {
-                seq,
-                rev,
-                cache,
+                seq: find.seq.wrapping_add(1),
+                rev: find.rev.wrapping_add(1),
+                cache: Arc::clone(&find.cache),
                 ..Default::default()
             };
             let (Some(query), Some(index)) = (query, index) else {
                 return Vec::new();
             };
             find.query = Some(query.clone());
+            find.stashes_rev = repo.stashes_rev;
             find.index = Some(Arc::downgrade(&index));
-            if index.is_empty() {
+            // An invalid regex matches nothing.
+            if index.is_empty() || query.regex_error().is_some() {
                 find.done = true;
                 return Vec::new();
             }
             vec![Effect::HistoryFind(HistoryFindEffect {
                 repo_id,
-                seq,
+                seq: find.seq,
                 index,
                 query,
+                stashes,
                 cancellation: find.cancellation.clone(),
                 cache: Arc::clone(&find.cache),
             })]
@@ -67,6 +91,8 @@ pub(super) fn reduce(state: &mut AppState, event: HistoryFindMsg) -> Vec<Effect>
             find.rev = find.rev.wrapping_add(1);
             Vec::new()
         }
+        // Handled for every repo above.
+        HistoryFindMsg::Close => Vec::new(),
     }
 }
 
@@ -163,6 +189,28 @@ mod tests {
         assert!(find(&mut state, "fix", &index).is_empty());
     }
 
+    #[test]
+    fn history_find_restarts_when_stash_rows_change_without_a_new_index() {
+        let mut state = fixture();
+        let index = index(8);
+        let first = work(find(&mut state, "main", &index));
+        state.repos[0].stashes =
+            Loadable::Ready(Arc::new(vec![gitcomet_core::domain::StashEntry {
+                index: 0,
+                id: gitcomet_core::domain::CommitId("0000000".into()),
+                message: "On main: saved work".into(),
+                created_at: None,
+            }]));
+        state.repos[0].stashes_rev += 1;
+        let next = work(find(&mut state, "main", &index));
+        assert!(first.cancellation.is_cancelled());
+        assert_ne!(next.seq, first.seq);
+        assert!(Arc::ptr_eq(&first.cache, &next.cache));
+        found(&mut state, first.seq, vec![7], true);
+        assert!(state.repos[0].history_state.find.matches.is_empty());
+        assert_eq!(next.stashes.len(), 1);
+    }
+
     /// The options are part of the query: toggling one searches again.
     #[test]
     fn a_changed_option_cancels_and_restarts_the_scan() {
@@ -234,6 +282,84 @@ mod tests {
         assert!(work.cancellation.is_cancelled());
         let find = &state.repos[0].history_state.find;
         assert!(find.query.is_none() && find.matches.is_empty());
+    }
+
+    /// The view stops the search for passing states: a blank query, a regex
+    /// mid-typing, a scope change, a tab switch. None of them may throw away
+    /// the decoded commit text the next query reuses.
+    #[test]
+    fn stopping_the_search_keeps_the_commit_text() {
+        let mut state = fixture();
+        let index = index(8);
+        let first = work(find(&mut state, "fix", &index));
+        reduce(
+            &mut state,
+            HistoryFindMsg::Find {
+                repo_id: RepoId(1),
+                query: None,
+                index: None,
+            },
+        );
+        assert!(first.cancellation.is_cancelled());
+        let next = work(find(&mut state, "fix", &index));
+        assert!(Arc::ptr_eq(&first.cache, &next.cache));
+    }
+
+    #[test]
+    fn history_find_searching_another_repo_releases_the_previous_text_cache() {
+        let mut state = fixture();
+        state.repos.push(RepoState::new_opening(
+            RepoId(2),
+            RepoSpec {
+                workdir: "/tmp/find-other".into(),
+            },
+        ));
+        let index = index(8);
+        let first = work(find(&mut state, "fix", &index));
+        let cache = Arc::downgrade(&first.cache);
+        let cancellation = first.cancellation.clone();
+        drop(first);
+        reduce(
+            &mut state,
+            HistoryFindMsg::Find {
+                repo_id: RepoId(2),
+                query: HistoryFindQuery::new("fix", TextSearchOptions::default()),
+                index: Some(index),
+            },
+        );
+        assert!(cancellation.is_cancelled());
+        assert!(cache.upgrade().is_none());
+        assert!(state.repos[0].history_state.find.query.is_none());
+    }
+
+    #[test]
+    fn closing_the_find_bar_releases_the_commit_text_of_every_repo() {
+        let mut state = fixture();
+        let index = index(8);
+        let scan = work(find(&mut state, "fix", &index));
+        let cache = Arc::downgrade(&scan.cache);
+        drop(scan);
+        reduce(&mut state, HistoryFindMsg::Close);
+        let find = &state.repos[0].history_state.find;
+        assert!(find.query.is_none() && find.matches.is_empty());
+        assert!(cache.upgrade().is_none(), "the closed bar keeps its cache");
+    }
+
+    /// An invalid regex matches nothing; reading all of history to say so
+    /// would be wasted work.
+    #[test]
+    fn an_invalid_regex_is_answered_without_a_scan() {
+        let mut state = fixture();
+        let index = index(8);
+        let options = TextSearchOptions {
+            regex: true,
+            ..TextSearchOptions::default()
+        };
+        assert!(find_with(&mut state, "fix(", options, &index).is_empty());
+        let find = &state.repos[0].history_state.find;
+        let query = HistoryFindQuery::new("fix(", options).unwrap();
+        assert!(find.is_for(&query, &index, state.repos[0].stashes_rev));
+        assert!(find.done && find.matches.is_empty() && find.error.is_none());
     }
 
     #[test]

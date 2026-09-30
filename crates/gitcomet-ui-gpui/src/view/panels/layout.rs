@@ -1609,7 +1609,10 @@ impl DetailsPaneView {
                     .style(components::ButtonStyle::Transparent)
                     .on_click(theme, cx, |this, _e, _w, cx| {
                         if let Some(repo_id) = this.active_repo_id() {
-                            this.store.dispatch(Msg::ClearCommitSelection { repo_id });
+                            this.store.dispatch(Msg::ClearCommitSelection {
+                                request_id: None,
+                                repo_id,
+                            });
                         }
                         cx.notify();
                     })
@@ -1736,7 +1739,10 @@ impl DetailsPaneView {
                     ))
                     .style(components::ButtonStyle::Transparent)
                     .on_click(theme, cx, move |this, _e, _w, cx| {
-                        this.store.dispatch(Msg::ClearCommitSelection { repo_id });
+                        this.store.dispatch(Msg::ClearCommitSelection {
+                            request_id: None,
+                            repo_id,
+                        });
                         cx.notify();
                     })
                     .gitcomet_tooltip(theme, "Close".into()),
@@ -2537,7 +2543,10 @@ impl DetailsPaneView {
                             // The commit details and diff views are independent
                             // panels; closing details must not close the diff.
                             if let Some(repo_id) = this.active_repo_id() {
-                                this.store.dispatch(Msg::ClearCommitSelection { repo_id });
+                                this.store.dispatch(Msg::ClearCommitSelection {
+                                    request_id: None,
+                                    repo_id,
+                                });
                             }
                             cx.notify();
                         })
@@ -2581,12 +2590,31 @@ impl DetailsPaneView {
                     }
                 }
                 Some(Loadable::Ready(details)) => {
-                    // Why the selection matched the history find bar, if open.
+                    // Match the displayed row, then map its ranges back into
+                    // the raw message that the details pane shows.
+                    let summary = details.message.split('\n').next().unwrap_or_default();
+                    let listed = self.active_repo().and_then(|repo| match &repo.stashes {
+                        Loadable::Ready(stashes) => stashes
+                            .iter()
+                            .find(|stash| stash.id == details.id)
+                            .map(|stash| stash.message.as_ref()),
+                        _ => None,
+                    });
+                    let row_summary = if listed.is_some()
+                        || gitcomet_core::history_find::is_probable_stash_summary(
+                            details.parent_ids.len(),
+                            summary,
+                        ) {
+                        gitcomet_core::history_find::stash_row_summary(listed, summary)
+                    } else {
+                        summary
+                    };
                     let find = history_find_detail_highlights(
                         self.history_find_query.as_ref(),
                         details.id.as_ref(),
                         &details.message,
                         commit_details_author_display_name(details),
+                        row_summary,
                     )
                     .unwrap_or_default();
                     if details.id != selected_id {

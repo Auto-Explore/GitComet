@@ -172,6 +172,7 @@ struct WorkerLoopContext<'a> {
     repo_load_executor: &'a TaskExecutor,
     metadata_executor: &'a TaskExecutor,
     signature_executor: &'a TaskExecutor,
+    history_find_executor: &'a std::sync::LazyLock<TaskExecutor>,
     session_persist_executor: &'a TaskExecutor,
     backend: &'a Arc<dyn GitBackend>,
 }
@@ -323,6 +324,7 @@ impl WorkerLoopContext<'_> {
                     session_persist_executor: self.session_persist_executor,
                     metadata_executor: self.metadata_executor,
                     signature_executor: self.signature_executor,
+                    history_find_executor: self.history_find_executor,
                 },
                 self.thread_state,
                 self.backend,
@@ -343,11 +345,17 @@ pub struct AppStore {
 
 struct StorePublicLifetime {
     msg_tx: StoreWorkerSender,
+    #[cfg(any(test, feature = "test-support"))]
+    history_find_dispatches: AtomicU64,
 }
 
 impl StorePublicLifetime {
     fn new(msg_tx: StoreWorkerSender) -> Self {
-        Self { msg_tx }
+        Self {
+            msg_tx,
+            #[cfg(any(test, feature = "test-support"))]
+            history_find_dispatches: AtomicU64::new(0),
+        }
     }
 }
 
@@ -413,6 +421,11 @@ impl AppStore {
                 TaskExecutor::shared_for_store(StoreExecutorPool::Signatures, 1);
             let session_persist_executor =
                 TaskExecutor::shared_for_store(StoreExecutorPool::SessionPersist, 1);
+            // Find scans read all of history, so each window gets its own.
+            let history_find_executor: std::sync::LazyLock<TaskExecutor> =
+                std::sync::LazyLock::new(|| {
+                    TaskExecutor::named(crate::history_find::HISTORY_FIND_THREAD, 1)
+                });
             let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
             let mut repo_task_tokens: FxHashMap<RepoId, RepoTaskToken> = FxHashMap::default();
             let mut repo_monitors = RepoMonitorManager::new();
@@ -531,6 +544,7 @@ impl AppStore {
                     repo_load_executor: &repo_load_executor,
                     metadata_executor: &metadata_executor,
                     signature_executor: &signature_executor,
+                    history_find_executor: &history_find_executor,
                     session_persist_executor: &session_persist_executor,
                     backend: &backend,
                 };
@@ -674,7 +688,24 @@ impl AppStore {
     }
 
     pub fn dispatch(&self, msg: Msg) {
+        #[cfg(any(test, feature = "test-support"))]
+        if matches!(
+            &msg,
+            Msg::HistoryFind(crate::history_find::HistoryFindMsg::Find { .. })
+        ) {
+            self.public_lifetime
+                .history_find_dispatches
+                .fetch_add(1, Ordering::Relaxed);
+        }
         self.msg_tx.dispatch(msg);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn history_find_dispatch_count_for_test(&self) -> u64 {
+        self.public_lifetime
+            .history_find_dispatches
+            .load(Ordering::Relaxed)
     }
 
     pub fn snapshot(&self) -> Arc<AppState> {

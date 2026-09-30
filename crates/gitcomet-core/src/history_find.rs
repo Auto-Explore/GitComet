@@ -28,6 +28,29 @@ pub struct HistoryFindQuery {
     sha_prefix: Option<String>,
 }
 
+/// The summary a history row shows for a stash tip, which find matches
+/// instead of the commit's own: the stash list's message, or without one the
+/// log summary after its "WIP on main:" / "On main:" prefix.
+pub fn stash_row_summary<'a>(listed_message: Option<&'a str>, summary: &'a str) -> &'a str {
+    listed_message
+        .filter(|message| !message.trim().is_empty())
+        .or_else(|| stash_summary_tail(summary))
+        .unwrap_or(summary)
+}
+
+/// Whether parent count and summary have the shape of a stash tip.
+pub fn is_probable_stash_summary(parent_count: usize, summary: &str) -> bool {
+    (2..=3).contains(&parent_count)
+        && (summary.starts_with("WIP on ") || summary.starts_with("On "))
+        && summary.contains(": ")
+}
+
+/// A stash commit's log summary after its "WIP on main:" / "On main:" prefix.
+pub fn stash_summary_tail(summary: &str) -> Option<&str> {
+    let (_, tail) = summary.split_once(": ")?;
+    Some(tail.trim()).filter(|tail| !tail.is_empty())
+}
+
 /// Shortest hex query treated as a SHA prefix. Shorter hex runs such as "add"
 /// or "fix" are common words, and every commit id would match them.
 const MIN_SHA_PREFIX_LEN: usize = 4;
@@ -180,6 +203,19 @@ mod tests {
 
     fn query(text: &str, options: TextSearchOptions) -> HistoryFindQuery {
         HistoryFindQuery::new(text, options).expect("a non-blank query")
+    }
+
+    #[test]
+    fn stash_rows_show_their_listed_message_or_the_summary_after_its_prefix() {
+        let summary = "On main: savepoint";
+        assert_eq!(stash_row_summary(Some("listed"), summary), "listed");
+        assert_eq!(stash_row_summary(Some("  "), summary), "savepoint");
+        assert_eq!(
+            stash_row_summary(None, "WIP on main: keep this"),
+            "keep this"
+        );
+        assert_eq!(stash_row_summary(None, "no delimiter"), "no delimiter");
+        assert_eq!(stash_row_summary(None, "On main:  "), "On main:  ");
     }
 
     fn hash(query: &HistoryFindQuery) -> u64 {
