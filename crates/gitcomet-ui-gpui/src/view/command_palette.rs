@@ -520,7 +520,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Search in Current View",
         shortcut: Shortcut::Secondary("F"),
         category: "Navigation",
-        keywords: "",
+        keywords: "find commit history sha diff file",
         requires_repo: true,
         needs: Needs::Nothing,
     },

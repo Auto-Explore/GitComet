@@ -1634,24 +1634,18 @@ impl MainPaneView {
             .active_repo()
             .and_then(|repo| self.bound_diff_state(repo).diff_target.as_ref())
             .is_some();
-        if !diff_visible {
-            if self.store.binding.is_some()
-                || window
-                    .context_stack()
-                    .iter()
-                    .any(|context| context.contains("TextInput"))
-            {
+        if diff_visible {
+            if !self.store.policy.search {
                 return false;
             }
-            self.history_view
-                .update(cx, |history, cx| history.open_history_find(window, cx));
+            self.activate_diff_search(window, cx);
             return true;
         }
-        if !self.store.policy.search {
+        if !self.history_is_active_surface() {
             return false;
         }
-
-        self.activate_diff_search(window, cx);
+        self.history_view
+            .update(cx, |history, cx| history.open_history_find(window, cx));
         true
     }
 

@@ -126,6 +126,9 @@ pub(super) fn send_unavailable_git_effect_result(
         Effect::HistoryAuthors(work) => send(Msg::HistoryAuthors(
             work.failed(git_unavailable_error(runtime)),
         )),
+        Effect::HistoryFind(work) => send(Msg::HistoryFind(
+            work.failed(git_unavailable_error(runtime)),
+        )),
         Effect::LoadLog {
             repo_id,
             seq,

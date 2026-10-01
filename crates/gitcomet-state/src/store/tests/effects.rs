@@ -25,6 +25,9 @@ fn schedule_effect_with_state_for_test(
             session_persist_executor,
             metadata_executor: &metadata_executor,
             signature_executor: &metadata_executor,
+            history_find_executor: &std::sync::LazyLock::new(|| {
+                super::super::executor::TaskExecutor::new(1)
+            }),
         },
         &thread_state,
         backend,

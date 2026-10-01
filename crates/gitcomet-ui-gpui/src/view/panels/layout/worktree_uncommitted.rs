@@ -97,7 +97,10 @@ impl DetailsPaneView {
                     ))
                     .style(components::ButtonStyle::Transparent)
                     .on_click(theme, cx, move |this, _e, _w, cx| {
-                        this.store.dispatch(Msg::ClearCommitSelection { repo_id });
+                        this.store.dispatch(Msg::ClearCommitSelection {
+                            request_id: None,
+                            repo_id,
+                        });
                         cx.notify();
                     })
                     .gitcomet_tooltip(theme, "Close".into()),

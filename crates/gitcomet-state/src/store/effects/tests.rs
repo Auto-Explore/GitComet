@@ -99,6 +99,7 @@ fn messages_without_selected_diff_work_skip_the_selection_index() {
         repo_load_executor: &executor,
         metadata_executor: &executor,
         signature_executor: &executor,
+        history_find_executor: &std::sync::LazyLock::new(|| TaskExecutor::new(1)),
         session_persist_executor: &executor,
         backend: &backend,
         publication: &std::sync::atomic::AtomicU64::new(0),

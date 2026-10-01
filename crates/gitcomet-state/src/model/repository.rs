@@ -855,6 +855,7 @@ impl RepoState {
         self.load_epoch = self.load_epoch.wrapping_add(1);
         self.history_state.indexed.cancel();
         self.history_state.authors.cancellation.cancel();
+        self.history_state.find.interrupt();
         previous
     }
 }

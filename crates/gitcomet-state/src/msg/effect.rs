@@ -17,6 +17,7 @@ pub enum Effect {
     IndexedHistory(crate::indexed_history::IndexedHistoryEffect),
     DiffSession(crate::diff_session::DiffSessionEffect),
     HistoryAuthors(crate::history_authors::HistoryAuthorsEffect),
+    HistoryFind(crate::history_find::HistoryFindEffect),
     PersistSession {
         repo_id: Option<RepoId>,
         action: &'static str,

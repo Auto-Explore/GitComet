@@ -811,6 +811,7 @@ fn install_blame_annotation_mouse_handler(
                             },
                         },
                         BlameClickAction::OpenDetails => Msg::SelectCommit {
+                            request_id: None,
                             repo_id,
                             commit_id: commit_id.clone(),
                         },

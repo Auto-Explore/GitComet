@@ -60,6 +60,7 @@ fn select(state: &mut AppState, repo_id: RepoId, id: &str, mode: CommitSelectMod
     dispatch_effects(
         state,
         Msg::SelectCommitMulti {
+            request_id: None,
             repo_id,
             commit_id: CommitId(id.into()),
             mode,

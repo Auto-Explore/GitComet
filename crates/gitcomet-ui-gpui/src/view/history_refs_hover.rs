@@ -375,8 +375,19 @@ impl HistoryRefsHoverHost {
     fn select_commit(&self, repo_id: RepoId, commit_id: CommitId, cx: &mut gpui::Context<Self>) {
         let root_view = self.root_view.clone();
         let _ = root_view.update(cx, |root, cx| {
-            root.store
-                .dispatch(Msg::SelectCommit { repo_id, commit_id });
+            let history = root.main_pane.read(cx).history_view.clone();
+            let request_id = Some(history.update(cx, |history, _| {
+                history.cancel_history_find_navigation();
+                history.note_history_selection(
+                    repo_id,
+                    HistoryPrimarySelection::Commit(commit_id.clone()),
+                )
+            }));
+            root.store.dispatch(Msg::SelectCommit {
+                request_id,
+                repo_id,
+                commit_id,
+            });
             cx.notify();
         });
     }

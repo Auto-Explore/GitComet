@@ -11,6 +11,9 @@ mod external_and_history;
 mod git_hook_activity;
 mod git_operations;
 mod history_authors;
+mod history_find;
+#[cfg(test)]
+mod history_selection_ack_tests;
 mod indexed_history;
 #[cfg(test)]
 mod line_stats_tests;
@@ -502,6 +505,34 @@ pub(super) fn reduce(
         Msg::GlobalNavBack { .. } | Msg::GlobalNavForward { .. }
     );
     let push = is_view_navigation(&msg);
+    let selection_request = match &msg {
+        Msg::SelectCommit {
+            repo_id,
+            request_id,
+            ..
+        }
+        | Msg::SelectCommitMulti {
+            repo_id,
+            request_id,
+            ..
+        }
+        | Msg::SelectWorktreeUncommitted {
+            repo_id,
+            request_id,
+            ..
+        }
+        | Msg::ClearCommitSelection {
+            repo_id,
+            request_id,
+            ..
+        }
+        | Msg::IndexedHistory(crate::indexed_history::IndexedHistoryMsg::Select {
+            repo_id,
+            request_id,
+            ..
+        }) => request_id.map(|id| (*repo_id, id)),
+        _ => None,
+    };
 
     if reconcile {
         reconcile_active_nav_history(state, false);
@@ -512,6 +543,13 @@ pub(super) fn reduce(
     effects::follow_history_selection(state, &mut effects);
 
     finalize_reduced_state(state, reconcile.then_some(push));
+    // Acknowledge processing, including no-ops and rejected stale projections.
+    // The published selection is the authoritative outcome of this request.
+    if let Some((repo_id, request_id)) = selection_request
+        && let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id)
+    {
+        repo.history_state.selection_ack = Some(request_id);
+    }
 
     effects
 }
@@ -777,15 +815,16 @@ fn reduce_inner(
             external_and_history::set_history_author_filter(state, repo_id, author)
         }
         Msg::LoadMoreHistory { repo_id } => external_and_history::load_more_history(state, repo_id),
-        Msg::SelectCommit { repo_id, commit_id } => {
-            effects::select_commit(state, repo_id, commit_id)
-        }
+        Msg::SelectCommit {
+            repo_id, commit_id, ..
+        } => effects::select_commit(state, repo_id, commit_id),
         Msg::SelectCommitMulti {
             repo_id,
             commit_id,
             mode,
             clicked_index,
             visible_order,
+            ..
         } => effects::select_commit_multi(
             state,
             repo_id,
@@ -794,7 +833,9 @@ fn reduce_inner(
             clicked_index,
             visible_order,
         ),
-        Msg::ClearCommitSelection { repo_id } => effects::clear_commit_selection(state, repo_id),
+        Msg::ClearCommitSelection { repo_id, .. } => {
+            effects::clear_commit_selection(state, repo_id)
+        }
         Msg::CompareCommitRange {
             repo_id,
             from,
@@ -915,7 +956,7 @@ fn reduce_inner(
         } => effects::load_blame(state, repo_id, path, source),
         Msg::LoadWorktrees { repo_id } => effects::load_worktrees(state, repo_id),
         Msg::LoadWorktreeDirty { repo_id } => effects::load_worktree_dirty(state, repo_id),
-        Msg::SelectWorktreeUncommitted { repo_id, path } => {
+        Msg::SelectWorktreeUncommitted { repo_id, path, .. } => {
             effects::select_worktree_uncommitted(state, repo_id, path)
         }
         Msg::LoadRefMetadata { repo_id } => effects::load_ref_metadata(state, repo_id),
@@ -1740,6 +1781,7 @@ fn reduce_inner(
         Msg::IndexedHistory(event) => indexed_history::reduce(state, event),
         Msg::DiffSession(event) => diff_session::reduce(state, event),
         Msg::HistoryAuthors(event) => history_authors::reduce(state, event),
+        Msg::HistoryFind(event) => history_find::reduce(state, event),
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id,
             seq,

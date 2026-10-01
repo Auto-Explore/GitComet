@@ -505,6 +505,9 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
         repo_load_executor: &repo_load_executor,
         metadata_executor: &metadata_executor,
         signature_executor: &metadata_executor,
+        history_find_executor: &std::sync::LazyLock::new(|| {
+            super::super::executor::TaskExecutor::new(1)
+        }),
         session_persist_executor: &session_persist_executor,
         backend: &backend,
         publication: &std::sync::atomic::AtomicU64::new(0),
@@ -694,6 +697,9 @@ fn a_watch_lease_keeps_a_background_repositorys_monitor_running() {
             repo_load_executor: &repo_load_executor,
             metadata_executor: &metadata_executor,
             signature_executor: &metadata_executor,
+            history_find_executor: &std::sync::LazyLock::new(|| {
+                super::super::executor::TaskExecutor::new(1)
+            }),
             session_persist_executor: &session_persist_executor,
             backend: &backend,
             publication: &std::sync::atomic::AtomicU64::new(0),

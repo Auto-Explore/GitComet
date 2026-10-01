@@ -9,7 +9,7 @@ the same change as the milestone it describes.
 | Item | Value |
 |---|---|
 | Inspected revision | `2efcfc96811331a85ab7cf38f92dad73df4ff88a` (`dev`, 2026-09-29) |
-| Open integration dependency | #532 (`feat/history_find_commit`), head `17280f50e5eb6cc1605563989b86d177c105b328`, not merged |
+| Open integration dependency | #532 (`feat/history_find_commit`), head `17280f50e5eb6cc1605563989b86d177c105b328`; merged from `dev` as `6525b691` (see [History find](#history-find-532)) |
 | Test inventory | 7,668 tests in 44 harnesses, 31 ignored (`--workspace --no-default-features --features gix,gitcomet-ui-gpui/default`) |
 | Test-profile build of every harness | 5 m 18 s wall, 39 m 32 s CPU, dependencies warm, workspace crates cold (32 threads, shared host) |
 | `cargo build -p gitcomet` (dev), fresh target directory | 1 m 58 s wall |
@@ -18,7 +18,8 @@ the same change as the milestone it describes.
 | Source-size check | 7 test files over 6,500 lines; the first-`#[cfg(test)]` heuristic hid 5 production files over 4,500 (whole-file counts: `app.rs` 6,960, sidebar rows 4,858, panel layout 4,849, diff canvas 4,791, state model 4,524) |
 
 After #532 merges, recheck the shortcut tables, History annotations, and
-message routing that the extension host and History-find decoration touch.
+message routing that the extension host and History-find decoration touch
+(done; see [History find](#history-find-532)).
 
 ## Checks
 
@@ -330,8 +331,8 @@ Still to do, deliberately kept out of this step:
 - History's split and inline diff do not take insets yet; hosted panes have
   one (inline) layout, and their projection is the one both History layouts
   should share once History moves onto a diff session.
-- History-find decoration comes with #532, which is not merged; once it is,
-  its row highlighting becomes annotations drawn in the History canvas.
+- History find (#532) still draws its own row marks (fade and match
+  highlights) beside the annotations; see [History find](#history-find-532).
 - The focused difftool keeps its renderer. Its contract is pinned by unit
   tests in `focused_diff.rs` (parsing, whitespace, change navigation, key
   dispatch) and by `difftool_git_integration.rs` and
@@ -382,6 +383,30 @@ Since then:
   `reducer/util.rs` to `reducer/auth.rs`.
 - The theme and live-syntax inline tests moved to child test files.
 - UI repository tests share one `test_support::git` runner.
+
+## History find (#532)
+
+Merged from `dev` onto the split modules; the placeholder find this branch
+carried (a lower-cased substring filter in `history/annotations.rs`) is gone.
+
+- State: `HistoryState::find` and `selection_ack` live in `model/history.rs`,
+  and `CommitMultiSelection::select` is the one selection rule the reducer
+  and the History view's prediction share. The find scan schedules through
+  `store/effects/history_find.rs`, fails through `effects/unavailable.rs`
+  like every other effect, and keeps its text cache under the product's
+  `directory_name()`.
+- UI: `panes/history/find.rs` owns the bar, the scan, and stepping; the
+  details pane reads its highlights in `layout/commit_metadata.rs`. A find
+  miss fades by multiplying the row's annotation opacity, so an extension's
+  fade survives it.
+- The main pane says which view fills it with `MainPaneContent` (history,
+  diff, interactive rebase, or a hosted pane with no target), distinct from
+  `MainPaneSurface`, which is what the diff view draws. Cmd-F opens History
+  find only when History fills the pane, so hosted panes never do, and
+  diff search still respects `DiffPanePolicy::search`.
+- Shortcuts: `Shift-Enter` resolves to `HistoryFindPrevious` only under
+  `HistoryFind > TextInput`; `docs/shortcuts.md` lists the split binding
+  files as its sources.
 
 ## Verification
 

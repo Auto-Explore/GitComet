@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::HistoryView;
-use crate::view::caches::HistoryListRow;
+use crate::view::caches::{HistoryListPlan, HistoryListRow};
 use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
 
 /// The log's column-header bar and the chips inside it ("All branches", the
@@ -18,8 +18,8 @@ impl Render for HistoryView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         self.last_window_size = window.viewport_size();
         let headers = self.sync_history_annotations(window, cx);
-        let content = self.history_view_inner(cx);
-        if headers.is_empty() && self.history_find.is_none() {
+        let content = self.history_view_inner(window, cx);
+        if headers.is_empty() {
             return content.into_any_element();
         }
         div()
@@ -27,23 +27,6 @@ impl Render for HistoryView {
             .flex_col()
             .size_full()
             .children(headers)
-            .when(self.history_find.is_some(), |body| {
-                body.child(
-                    div()
-                        .p_1()
-                        .child(self.history_find_input.as_ref().unwrap().clone())
-                        .on_key_down(cx.listener(
-                            |this, event: &gpui::KeyDownEvent, window, cx| {
-                                if event.keystroke.key == "escape" {
-                                    this.history_find = None;
-                                    window.focus(&this.history_panel_focus_handle, cx);
-                                    cx.stop_propagation();
-                                    cx.notify();
-                                }
-                            },
-                        )),
-                )
-            })
             .child(content)
             .into_any_element()
     }
@@ -61,7 +44,11 @@ impl HistoryView {
         });
     }
 
-    fn history_view_inner(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
+    fn history_view_inner(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Div {
         let theme = self.theme;
         let scrollbar_gutter = super::history_scrollbar_gutter();
         let manual = std::mem::take(&mut self.scroll_interaction.borrow_mut().manual_pending);
@@ -79,6 +66,11 @@ impl HistoryView {
         self.sync_history_loading(cx);
         self.ensure_relative_time_tick(cx);
         self.drive_pending_history_reveal(cx);
+        if self.sync_history_find(cx) {
+            // The jump happens after preparing this frame's text window.
+            // Notify during drawing cannot invalidate the next frame.
+            window.request_animation_frame();
+        }
         let plan = self.ensure_history_list_plan();
         if self.indexed.presentation.is_none() {
             self.sync_history_viewport(&plan, cx);
@@ -201,7 +193,18 @@ impl HistoryView {
                 .into_any_element()
         };
 
+        let find_bar = {
+            let ui_scale = ui_scale::UiScale::from_percent(self.ui_scale_percent)
+                .with_appearance(theme.metrics);
+            let header_height = ui_scale.row_height(
+                HISTORY_HEADER_HEIGHT_PX,
+                HISTORY_HEADER_COMFORTABLE_HEIGHT_PX,
+            );
+            self.render_history_find(header_height, scrollbar_gutter, cx)
+        };
+
         div()
+            .relative()
             .flex()
             .flex_col()
             .flex_1()
@@ -229,6 +232,10 @@ impl HistoryView {
                         "up" => this.history_select_adjacent_commit(-1, cx),
                         "down" => this.history_select_adjacent_commit(1, cx),
                         "enter" => this.history_open_selected_worktree(window, cx),
+                        "escape" if this.history_find_is_open() => {
+                            this.close_history_find(window, cx);
+                            true
+                        }
                         _ => false,
                     };
 
@@ -258,6 +265,7 @@ impl HistoryView {
                     .min_h(px(0.0))
                     .child(div().flex_1().min_h(px(0.0)).child(body)),
             )
+            .children(find_bar)
     }
 
     /// Enter on a worktree row opens that worktree, matching what clicking its
@@ -283,6 +291,7 @@ impl HistoryView {
         direction: i8,
         _cx: &mut gpui::Context<Self>,
     ) -> bool {
+        self.cancel_history_find_navigation();
         if self.indexed.presentation.is_some() {
             return self.select_adjacent_indexed(direction, _cx);
         }
@@ -306,7 +315,7 @@ impl HistoryView {
                     };
                     let page = Arc::clone(&cache.page);
                     (
-                        super::history_primary_selection(repo, show_working_tree_summary_row),
+                        self.history_navigation_selection(repo, show_working_tree_summary_row),
                         page,
                         cache.base.request.log_source as u64,
                         cache.base.request.stashes_rev,
@@ -407,8 +416,15 @@ impl HistoryView {
             let Some(path) = path else {
                 return false;
             };
-            self.store
-                .dispatch(Msg::SelectWorktreeUncommitted { repo_id, path });
+            let request_id = Some(self.note_history_selection(
+                repo_id,
+                super::HistoryPrimarySelection::Worktree(path.clone()),
+            ));
+            self.store.dispatch(Msg::SelectWorktreeUncommitted {
+                request_id,
+                repo_id,
+                path,
+            });
             self.dismiss_history_refs_hover(_cx);
             self.history_scroll
                 .scroll_to_item_strict(next_list_ix, gpui::ScrollStrategy::Center);
@@ -432,31 +448,222 @@ impl HistoryView {
         let Some(HistoryListRow::Commit { visible_ix }) = plan.row_at(next_list_ix) else {
             return false;
         };
-        let Some(commit_ix) = cache.base.visible_indices.get(visible_ix) else {
-            return false;
-        };
-        let Some(commit) = page.commits.get(commit_ix) else {
-            return false;
-        };
+        self.select_paged_commit_row(repo_id, &plan, visible_ix, _cx)
+    }
 
-        self.store.dispatch(Msg::SelectCommit {
+    /// Select the commit on a visible row of the paged list the way clicking
+    /// it would, and scroll it to the middle of the list.
+    pub(in crate::view) fn select_paged_commit_row(
+        &mut self,
+        repo_id: RepoId,
+        plan: &HistoryListPlan,
+        visible_ix: usize,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let Some(cache) = self
+            .history_cache
+            .as_ref()
+            .filter(|cache| cache.base.request.repo_id == repo_id)
+        else {
+            return false;
+        };
+        let Some(commit) = cache
+            .base
+            .visible_indices
+            .get(visible_ix)
+            .and_then(|commit_ix| cache.page.commits.get(commit_ix))
+        else {
+            return false;
+        };
+        let commit_id = commit.id.clone();
+        let request = &cache.base.request;
+        let (log_rev, stashes_rev, history_scope) = (
+            request.log_source as u64,
+            request.stashes_rev,
+            request.history_scope,
+        );
+        let list_ix = plan.list_ix_for_visible(visible_ix);
+        self.select_history_commit(
             repo_id,
-            commit_id: commit.id.clone(),
-        });
+            commit_id.clone(),
+            gitcomet_state::msg::CommitSelectMode::Single,
+            None,
+        );
         super::set_history_selected_list_index_cache(
             &mut self.history_selected_list_index_cache,
             repo_id,
             log_rev,
             stashes_rev,
             history_scope,
-            &plan,
-            Some(commit.id.clone()),
-            next_list_ix,
+            plan,
+            Some(commit_id),
+            list_ix,
         );
-        self.dismiss_history_refs_hover(_cx);
+        self.dismiss_history_refs_hover(cx);
         self.history_scroll
-            .scroll_to_item_strict(next_list_ix, gpui::ScrollStrategy::Center);
+            .scroll_to_item_strict(list_ix, gpui::ScrollStrategy::Center);
         true
+    }
+
+    pub(in crate::view) fn note_history_selection(
+        &mut self,
+        repo_id: RepoId,
+        selection: super::HistoryPrimarySelection,
+    ) -> u64 {
+        let multi_selection = match &selection {
+            super::HistoryPrimarySelection::Commit(id) => {
+                gitcomet_state::model::CommitMultiSelection::default()
+                    .select(
+                        id.clone(),
+                        gitcomet_state::msg::CommitSelectMode::Single,
+                        None,
+                        None,
+                        0,
+                    )
+                    .0
+            }
+            _ => Default::default(),
+        };
+        self.note_history_selection_with_members(
+            repo_id,
+            selection,
+            super::PendingHistoryMembers::Commits(multi_selection),
+        )
+    }
+
+    fn note_history_selection_with_members(
+        &mut self,
+        repo_id: RepoId,
+        selection: super::HistoryPrimarySelection,
+        multi_selection: super::PendingHistoryMembers,
+    ) -> u64 {
+        static NEXT_REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let request_id = NEXT_REQUEST.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if self.active_repo_id() == Some(repo_id) {
+            self.pending_history_selections
+                .push_back(super::PendingHistorySelection {
+                    request_id,
+                    selection,
+                    multi_selection,
+                });
+        }
+        request_id
+    }
+
+    /// Dispatches the same modifier-aware selection for both row renderers.
+    /// Prediction uses the reducer's rules, including the focus after a toggle.
+    pub(in crate::view) fn select_history_commit(
+        &mut self,
+        repo_id: RepoId,
+        commit_id: CommitId,
+        mode: gitcomet_state::msg::CommitSelectMode,
+        clicked_index: Option<usize>,
+    ) {
+        use gitcomet_state::msg::CommitSelectMode;
+        let projection = self
+            .indexed
+            .presentation
+            .as_ref()
+            .filter(|shown| shown.key.repo_id == repo_id)
+            .map(|shown| shown.graph.projection.clone());
+        let Some(repo) = self.active_repo().filter(|repo| repo.id == repo_id) else {
+            return;
+        };
+        let pending = self.pending_history_selections.back();
+        let previous_anchor = pending.map_or(
+            repo.history_state.multi_selection.anchor.as_ref(),
+            |pending| pending.multi_selection.anchor(),
+        );
+        let clicked_index = if projection.is_some() {
+            None
+        } else {
+            clicked_index
+        };
+        let visible_order = (mode == CommitSelectMode::Range && projection.is_none())
+            .then(|| self.visible_commit_ids_for_repo(repo_id))
+            .flatten();
+        let (multi, focus) = if mode == CommitSelectMode::Range
+            && let Some(projection) = projection.as_ref()
+            && let Some(clicked) = projection.position(commit_id.as_ref())
+        {
+            let anchor = previous_anchor
+                .and_then(|id| projection.position(id.as_ref()))
+                .unwrap_or(clicked);
+            let first = anchor.min(clicked);
+            (
+                super::PendingHistoryMembers::IndexedRange {
+                    projection: projection.clone(),
+                    rows: first..=anchor.max(clicked),
+                    anchor: previous_anchor.cloned().or_else(|| Some(commit_id.clone())),
+                    anchor_index: anchor - first,
+                    log_rev: repo.history_state.log_rev,
+                },
+                Some(commit_id.clone()),
+            )
+        } else {
+            let previous = if mode == CommitSelectMode::Single {
+                Default::default()
+            } else {
+                pending.map_or_else(
+                    || repo.history_state.multi_selection.clone(),
+                    |pending| pending.multi_selection.materialize(),
+                )
+            };
+            let (multi, focus) = previous.select(
+                commit_id.clone(),
+                mode,
+                clicked_index,
+                visible_order.clone(),
+                repo.history_state.log_rev,
+            );
+            (super::PendingHistoryMembers::Commits(multi), focus)
+        };
+        let selection = focus
+            .map(super::HistoryPrimarySelection::Commit)
+            .unwrap_or(super::HistoryPrimarySelection::WorkingTree);
+        let request_id = Some(self.note_history_selection_with_members(repo_id, selection, multi));
+        if let Some(projection) = projection {
+            self.store.dispatch(Msg::IndexedHistory(
+                gitcomet_state::indexed_history::IndexedHistoryMsg::Select {
+                    request_id,
+                    repo_id,
+                    commit_id,
+                    mode,
+                    projection,
+                },
+            ));
+        } else if mode == CommitSelectMode::Single {
+            self.store.dispatch(Msg::SelectCommit {
+                request_id,
+                repo_id,
+                commit_id,
+            });
+        } else {
+            self.store.dispatch(Msg::SelectCommitMulti {
+                request_id,
+                repo_id,
+                commit_id,
+                mode,
+                clicked_index,
+                visible_order,
+            });
+        }
+    }
+
+    pub(super) fn history_navigation_selection(
+        &self,
+        repo: &RepoState,
+        show_working_tree: bool,
+    ) -> Option<super::HistoryPrimarySelection> {
+        match self.pending_history_selections.back() {
+            Some(pending) => match &pending.selection {
+                super::HistoryPrimarySelection::WorkingTree if !show_working_tree => repo
+                    .head_commit_id()
+                    .map(super::HistoryPrimarySelection::Commit),
+                selection => Some(selection.clone()),
+            },
+            None => super::history_primary_selection(repo, show_working_tree),
+        }
     }
 
     fn history_column_headers(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {

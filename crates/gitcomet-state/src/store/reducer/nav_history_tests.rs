@@ -86,6 +86,7 @@ fn selecting_a_worktree_row_is_a_navigation_step_of_its_own() {
     dispatch(
         &mut state,
         Msg::SelectCommit {
+            request_id: None,
             repo_id,
             commit_id: commit.clone(),
         },
@@ -93,6 +94,7 @@ fn selecting_a_worktree_row_is_a_navigation_step_of_its_own() {
     dispatch(
         &mut state,
         Msg::SelectWorktreeUncommitted {
+            request_id: None,
             repo_id,
             path: worktree.clone(),
         },
@@ -168,6 +170,7 @@ fn commit_then_file_diffs_are_all_remembered() {
     dispatch(
         &mut state,
         Msg::SelectCommit {
+            request_id: None,
             repo_id,
             commit_id: commit_a.clone(),
         },
@@ -224,6 +227,7 @@ fn view_navigation_messages_push_others_fold_in_place() {
         target: DiffTarget::working_tree(std::path::PathBuf::from("a.txt"), DiffArea::Unstaged),
     }));
     assert!(is_view_navigation(&Msg::SelectCommit {
+        request_id: None,
         repo_id: RepoId(1),
         commit_id: CommitId("a".into()),
     }));
@@ -247,6 +251,7 @@ fn closure_and_replay_messages_are_not_view_navigations() {
         repo_id: RepoId(1),
     }));
     assert!(!is_view_navigation(&Msg::ClearCommitSelection {
+        request_id: None,
         repo_id: RepoId(1),
     }));
     assert!(!is_view_navigation(&Msg::ViewerNavBack {
@@ -328,6 +333,7 @@ fn clearing_diff_folds_in_place_and_single_back_goes_to_commit_details() {
     dispatch(
         &mut state,
         Msg::SelectCommit {
+            request_id: None,
             repo_id,
             commit_id: commit_a.clone(),
         },
@@ -377,6 +383,7 @@ fn clearing_diff_without_folding_previous_allows_correct_back() {
     dispatch(
         &mut state,
         Msg::SelectCommit {
+            request_id: None,
             repo_id,
             commit_id: commit_a.clone(),
         },
@@ -393,6 +400,7 @@ fn clearing_diff_without_folding_previous_allows_correct_back() {
     dispatch(
         &mut state,
         Msg::SelectCommit {
+            request_id: None,
             repo_id,
             commit_id: commit_b.clone(),
         },
@@ -429,6 +437,7 @@ fn browsing_committed_files_within_a_commit_keeps_commit_selected_on_back() {
     dispatch(
         &mut state,
         Msg::SelectCommit {
+            request_id: None,
             repo_id,
             commit_id: commit_a.clone(),
         },

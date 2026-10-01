@@ -4,9 +4,9 @@ use crate::ui_scale;
 use crate::view::{
     DiffNextFile, DiffNextSearchMatchOrChange, DiffPrevFile, DiffPrevSearchMatchOrChange,
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
-    GitCometViewMode, InitialRepositoryLaunchMode, LocateFileInExplorer, MainPaneView,
-    OpenActiveViewSearch, OpenRemoteInBrowser, PopoverPromptDismiss, PopoverPromptTabNext,
-    PopoverPromptTabPrev, PushUpstreamRemoteClose, PushUpstreamRemoteNext,
+    GitCometViewMode, HistoryFindPrevious, InitialRepositoryLaunchMode, LocateFileInExplorer,
+    MainPaneView, OpenActiveViewSearch, OpenRemoteInBrowser, PopoverPromptDismiss,
+    PopoverPromptTabNext, PopoverPromptTabPrev, PushUpstreamRemoteClose, PushUpstreamRemoteNext,
     PushUpstreamRemoteOpenOrSelect, PushUpstreamRemotePrev, SettingsWindowView, StartupCrashReport,
     TerminalCopy, TerminalPaste, TerminalSelectAll, TextInputCommitSubmit, TextInputDiffNextChange,
     TextInputDiffNextFile, TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevChange,

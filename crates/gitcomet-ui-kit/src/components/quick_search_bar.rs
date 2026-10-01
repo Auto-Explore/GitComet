@@ -37,9 +37,7 @@ pub enum QuickSearchStatus {
     Empty,
     /// The query is not a valid regular expression.
     InvalidRegex,
-    /// Results for the current query have not arrived yet. Not reported by
-    /// file search.
-    #[allow(dead_code)]
+    /// Results for the current query have not arrived yet (history find).
     Searching,
     NoMatches,
     /// `current` is the zero-based index of the focused match, if any;
@@ -49,8 +47,7 @@ pub enum QuickSearchStatus {
         total: usize,
         complete: bool,
     },
-    /// The search could not run. Not reported by file search.
-    #[allow(dead_code)]
+    /// The search could not run (history find).
     Failed,
 }
 

@@ -95,7 +95,10 @@ impl DetailsPaneView {
                         // The commit details and diff views are independent
                         // panels; closing details must not close the diff.
                         if let Some(repo_id) = this.active_repo_id() {
-                            this.store.dispatch(Msg::ClearCommitSelection { repo_id });
+                            this.store.dispatch(Msg::ClearCommitSelection {
+                                request_id: None,
+                                repo_id,
+                            });
                         }
                         cx.notify();
                     })
@@ -145,39 +148,42 @@ impl DetailsPaneView {
                         .first()
                         .map(|p: &CommitId| p.as_ref().to_string())
                         .unwrap_or_else(|| "—".to_string());
+                    let find = self.commit_details_find_highlights(details);
 
                     if current {
                         self.sync_commit_details_message_input(
                             details.message.as_str(),
                             theme,
                             repo_id,
+                            &find.summary,
+                            cx,
+                        );
+                        self.sync_commit_details_sha_menu(
+                            details.id.as_ref(),
+                            repo_id,
+                            true,
+                            find.sha,
+                            theme,
                             cx,
                         );
                     } else {
                         self.sync_retained_commit_details_message_input(
                             details.message.as_str(),
+                            &find.summary,
+                            cx,
+                        );
+                        self.sync_commit_details_sha_input(
+                            details.id.as_ref(),
+                            find.sha,
+                            theme,
                             cx,
                         );
                     }
-                    Self::sync_commit_details_input_value(
-                        &self.commit_details_sha_input,
-                        details.id.as_ref(),
-                        cx,
-                    );
                     Self::sync_commit_details_input_value(
                         &self.commit_details_date_input,
                         self.commit_details_date_display(details).as_str(),
                         cx,
                     );
-                    if current {
-                        self.sync_commit_details_sha_menu(
-                            details.id.as_ref(),
-                            repo_id,
-                            true,
-                            theme,
-                            cx,
-                        );
-                    }
                     self.sync_commit_details_parent_input(
                         parent.as_str(),
                         if current { repo_id } else { RepoId(0) },
@@ -210,6 +216,7 @@ impl DetailsPaneView {
                                 ui_scale,
                                 details,
                                 commit_signatures.get(&details.id),
+                                &find.author,
                             )
                             .map(|row| {
                                 row.border_t_1()
@@ -232,17 +239,18 @@ impl DetailsPaneView {
                                 .child(commit_details_selectable_row(
                                     theme,
                                     "Commit SHA",
-                                    if current {
-                                        commit_details_monospace_element(
+                                    commit_details_sha_value(
+                                        theme,
+                                        if current {
                                             self.commit_details_sha_link_menu
                                                 .clone()
-                                                .into_any_element(),
-                                        )
-                                    } else {
-                                        commit_details_monospace_value(
-                                            self.commit_details_sha_input.clone(),
-                                        )
-                                    },
+                                                .into_any_element()
+                                        } else {
+                                            self.commit_details_sha_input.clone().into_any_element()
+                                        },
+                                        details.id.as_ref(),
+                                        &find,
+                                    ),
                                 ))
                                 .child(commit_details_selectable_row(
                                     theme,

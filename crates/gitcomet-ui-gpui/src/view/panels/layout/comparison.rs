@@ -436,7 +436,10 @@ impl DetailsPaneView {
                     .style(components::ButtonStyle::Transparent)
                     .on_click(theme, cx, |this, _e, _w, cx| {
                         if let Some(repo_id) = this.active_repo_id() {
-                            this.store.dispatch(Msg::ClearCommitSelection { repo_id });
+                            this.store.dispatch(Msg::ClearCommitSelection {
+                                request_id: None,
+                                repo_id,
+                            });
                         }
                         cx.notify();
                     })

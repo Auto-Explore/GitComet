@@ -361,7 +361,17 @@ pub(super) fn bind_text_input_keys(cx: &mut App) {
             Some("TextInput"),
         ),
         KeyBinding::new("enter", crate::kit::Enter, Some("TextInput")),
-        KeyBinding::new("shift-enter", crate::kit::ShiftEnter, Some("TextInput")),
+        KeyBinding::new(
+            "shift-enter",
+            crate::kit::ShiftEnter,
+            Some("TextInput && !HistoryFind"),
+        ),
+        // Disjoint scopes keep this independent of registration order.
+        KeyBinding::new(
+            "shift-enter",
+            HistoryFindPrevious,
+            Some("HistoryFind > TextInput"),
+        ),
         KeyBinding::new("secondary-enter", TextInputCommitSubmit, Some("TextInput")),
         KeyBinding::new("f1", TextInputDiffPrevFile, Some("TextInput")),
         KeyBinding::new("f4", TextInputDiffNextFile, Some("TextInput")),
