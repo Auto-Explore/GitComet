@@ -797,9 +797,12 @@ fn collect_index_worktree_status_direct(
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .take()
         .filter(|refreshed| std::sync::Arc::ptr_eq(&refreshed.base, &index));
-    // Every stat the walk records is read after this instant, so a file
-    // written from here on still compares as racy against it.
-    let walk_start = filetime::FileTime::now();
+    // Every stat the walk records is read after this instant. gix compares
+    // the stamp with mtimes in whole seconds, and a write landing just after
+    // it can carry a coarser mtime from the second before (the file clock
+    // lags the wall clock), so the stamp stays one second back: such a write
+    // still compares racy, as it would against git's own index mtime.
+    let stamp = filetime::FileTime::from_unix_time(filetime::FileTime::now().unix_seconds() - 1, 0);
     let (status, changes) = collect_index_worktree_status_direct_from_index(
         repo,
         refreshed
@@ -809,7 +812,7 @@ fn collect_index_worktree_status_direct(
         may_have_gitlinks,
         cancellation,
     )?;
-    let refreshed = apply_stat_refresh(refreshed, &index, changes, walk_start);
+    let refreshed = apply_stat_refresh(refreshed, &index, changes, stamp);
     *stat_refresh
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = refreshed;
@@ -823,7 +826,7 @@ fn apply_stat_refresh(
     refreshed: Option<StatRefreshedIndex>,
     base: &gix::worktree::Index,
     changes: Vec<IndexWorktreeApplyChange>,
-    walk_start: filetime::FileTime,
+    stamp: filetime::FileTime,
 ) -> Option<StatRefreshedIndex> {
     if changes.is_empty() {
         return refreshed;
@@ -862,7 +865,7 @@ fn apply_stat_refresh(
             }
         }
     }
-    refreshed.index.set_timestamp(walk_start);
+    refreshed.index.set_timestamp(stamp);
     Some(refreshed)
 }
 
@@ -2743,6 +2746,58 @@ pub(crate) mod tests {
             "the touched files should have produced an in-memory refresh"
         );
         assert_eq!(repo.worktree_status_impl().expect("status"), expected);
+    }
+
+    /// A write landing right after a walk starts can carry a coarser mtime
+    /// from the second before, below the walk's nanosecond clock. Git's
+    /// index stamp is such an mtime itself; the in-memory stamp must stay
+    /// behind the walk's second so that write still compares racy.
+    #[test]
+    fn stat_refresh_catches_a_write_stamped_just_before_the_walk() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+        git_success(workdir, &["config", "core.trustctime", "false"]);
+        let touched = STAT_REFRESH_MIN_ENTRIES + 16;
+        for index in 0..touched {
+            write_file(workdir, &format!("touched/{index:03}.txt"), "same\n");
+        }
+        write_file(workdir, "racy.txt", "foo\n");
+        git_success(workdir, &["add", "."]);
+        git_success(workdir, &["commit", "-q", "-m", "seed"]);
+        // Touched, so the walk produces the in-memory refresh.
+        for index in 0..touched {
+            write_file(workdir, &format!("touched/{index:03}.txt"), "same\n");
+        }
+        let repo = open_repo(workdir);
+
+        // Early in a second, so the walk below stays inside it.
+        let now = loop {
+            let now = filetime::FileTime::now();
+            if now.nanoseconds() < 300_000_000 {
+                break now;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        // The stamp a write a few milliseconds after the walk starts can get
+        // from the file clock: the last instant of the previous second.
+        let just_before = filetime::FileTime::from_unix_time(now.unix_seconds() - 1, 999_000_000);
+        filetime::set_file_mtime(workdir.join("racy.txt"), just_before).expect("mtime");
+        assert_eq!(repo.worktree_status_impl().expect("status"), vec![]);
+        assert_eq!(
+            filetime::FileTime::now().unix_seconds(),
+            now.unix_seconds(),
+            "the walk left the second it started in; rerun"
+        );
+        assert!(repo.stat_refreshed_index.lock().expect("lock").is_some());
+
+        // Same size and stat as the refreshed entry, different content.
+        write_file(workdir, "racy.txt", "bar\n");
+        filetime::set_file_mtime(workdir.join("racy.txt"), just_before).expect("mtime");
+        assert_eq!(
+            repo.worktree_status_impl().expect("status"),
+            vec![file_status("racy.txt", FileStatusKind::Modified)]
+        );
     }
 
     /// Worktree status after files were touched without changing content, as
