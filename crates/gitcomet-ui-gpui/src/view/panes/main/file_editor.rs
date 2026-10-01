@@ -209,7 +209,7 @@ pub(in crate::view) fn apply_file_editor_occurrence_highlights(
             (start < end).then_some(start..end)
         })
         .collect();
-    apply_file_editor_overlay_highlights(highlights, &clipped, style)
+    crate::text_runs::overlay_highlights(highlights, &clipped, style)
 }
 
 pub(in crate::view) fn file_editor_provider_binding_key(
@@ -291,101 +291,7 @@ pub(in crate::view) fn apply_file_editor_pair_highlights(
         }
     }
     overlays.sort_by_key(|span| span.start);
-    apply_file_editor_overlay_highlights(highlights, &overlays, style)
-}
-
-/// Wash `overlays` over `highlights`, keeping whatever colour the grammar gave
-/// each run and replacing only its background.
-///
-/// `overlays` must be sorted, disjoint and already clipped to the window the
-/// caller is answering for. Both the delimiter pair and the search matches go
-/// through here, search first, so the pair affordance stays readable inside a
-/// washed match.
-pub(in crate::view) fn apply_file_editor_overlay_highlights(
-    mut highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
-    overlays: &[Range<usize>],
-    style: gpui::HighlightStyle,
-) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
-    if overlays.is_empty() {
-        return highlights;
-    }
-
-    let mut out: Vec<(Range<usize>, gpui::HighlightStyle)> =
-        Vec::with_capacity(highlights.len() + overlays.len() * 2);
-    let mut overlay_ix = 0usize;
-    for (range, run_style) in highlights.drain(..) {
-        let mut cursor = range.start;
-        while overlay_ix < overlays.len() && overlays[overlay_ix].end <= cursor {
-            overlay_ix += 1;
-        }
-        let mut probe = overlay_ix;
-        while cursor < range.end {
-            let Some(overlay) = overlays.get(probe).filter(|o| o.start < range.end) else {
-                break;
-            };
-            if overlay.start > cursor {
-                out.push((cursor..overlay.start, run_style));
-                cursor = overlay.start;
-            }
-            let end = overlay.end.min(range.end);
-            let mut merged = run_style;
-            merged.background_color = style.background_color;
-            // Only when the overlay asks for one: the pair wash leaves the
-            // grammar's colour alone, while the search wash pins one on light
-            // themes, where its background would drown a syntax colour.
-            if style.color.is_some() {
-                merged.color = style.color;
-            }
-            out.push((cursor..end, merged));
-            cursor = end;
-            if overlay.end <= end {
-                probe += 1;
-            }
-        }
-        if cursor < range.end {
-            out.push((cursor..range.end, run_style));
-        }
-    }
-
-    // An overlay landing in a stretch the grammar produced no run for (plain
-    // punctuation in some grammars, or anything at all in a plain-text buffer)
-    // still has to be painted. Coverage can be the union of several syntax
-    // runs -- whole tags ordinarily cross punctuation, name and attribute
-    // runs -- so add only the gaps instead of appending the whole overlay on
-    // top of those already-composed pieces.
-    let mut gaps: Vec<(Range<usize>, gpui::HighlightStyle)> = Vec::new();
-    let mut out_ix = 0usize;
-    for overlay in overlays {
-        let mut cursor = overlay.start;
-        while out_ix < out.len() && out[out_ix].0.end <= cursor {
-            out_ix += 1;
-        }
-        let mut probe = out_ix;
-        while let Some((range, _)) = out.get(probe) {
-            if range.end <= cursor {
-                probe += 1;
-                continue;
-            }
-            if range.start >= overlay.end {
-                break;
-            }
-            if range.start > cursor {
-                gaps.push((cursor..range.start.min(overlay.end), style));
-            }
-            cursor = cursor.max(range.end.min(overlay.end));
-            if cursor >= overlay.end {
-                break;
-            }
-            probe += 1;
-        }
-        out_ix = probe;
-        if cursor < overlay.end {
-            gaps.push((cursor..overlay.end, style));
-        }
-    }
-    out.extend(gaps);
-    out.sort_by_key(|(range, _)| range.start);
-    out
+    crate::text_runs::overlay_highlights(highlights, &overlays, style)
 }
 
 /// Wash the search matches that fall inside `byte_range` over the runs the
@@ -416,7 +322,7 @@ fn apply_file_editor_search_highlights(
         }
     }
 
-    apply_file_editor_overlay_highlights(highlights, &clipped, style)
+    crate::text_runs::overlay_highlights(highlights, &clipped, style)
 }
 
 impl MainPaneView {
@@ -1950,12 +1856,7 @@ impl MainPaneView {
         });
         let source_len = snapshot.len();
         let search_overlay = self.file_editor_search_overlay_ranges();
-        let (search_bg, search_fg) = rows::query_highlight_colors(self.theme);
-        let search_style = gpui::HighlightStyle {
-            color: search_fg.map(IntoColor::into_color),
-            background_color: Some(search_bg.into_color()),
-            ..Default::default()
-        };
+        let search_style = rows::query_highlight_style(self.theme);
 
         let Some((version, snapshot)) = live else {
             // No wired grammar, or past the parse ceiling. Same fallback the

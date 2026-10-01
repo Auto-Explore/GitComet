@@ -258,9 +258,20 @@ fn lane_branch_labels(
         .collect()
 }
 
+/// Hands the first repository a finished history index, the way a completed
+/// index build does, so the view switches the list to its indexed mode.
+fn install_index(state: &mut AppState, index: gitcomet_core::history_index::HistoryIndexHandle) {
+    let history = &mut state.repos[0].history_state;
+    history.log_snapshot = Some(index.snapshot.clone());
+    history.indexed.requested = Some(index.snapshot.clone());
+    history.indexed.index = Some(index);
+    history.indexed.rev += 1;
+}
+
 mod base_cache;
 mod branch_names;
 mod columns;
+mod find;
 mod interaction;
 mod lane_attribution;
 mod refresh;

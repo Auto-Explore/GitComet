@@ -65,7 +65,11 @@ fn select(
         repos,
         id_alloc,
         state,
-        Msg::SelectCommit { repo_id, commit_id },
+        Msg::SelectCommit {
+            request_id: None,
+            repo_id,
+            commit_id,
+        },
     )
 }
 
@@ -214,7 +218,10 @@ fn the_working_tree_row_goes_live() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ClearCommitSelection { repo_id },
+        Msg::ClearCommitSelection {
+            request_id: None,
+            repo_id,
+        },
     );
 
     assert_eq!(

@@ -15,6 +15,9 @@ const STATUS_SECTION_MIN_HEIGHT_PX: f32 = 80.0;
 use crate::view::commit_message_text::{
     TextHighlights, commit_link_style, commit_message_summary_highlights,
 };
+use crate::view::panes::history::find::{
+    CommitDetailsFindHighlights, history_find_detail_highlights,
+};
 type MessageLinks = Arc<[components::MessageLink]>;
 type CommitMessageLinkHighlights = (TextHighlights, MessageLinks);
 
@@ -26,22 +29,35 @@ fn commit_allowed(is_merge_active: bool, staged_count: usize) -> bool {
     staged_count > 0 || is_merge_active
 }
 
+/// The name the author row shows: the author's name, or the email without one.
+fn commit_details_author_display_name(details: &gitcomet_core::domain::CommitDetails) -> &str {
+    if details.author_name.is_empty() {
+        &details.author_email
+    } else {
+        &details.author_name
+    }
+}
+
 /// Author identity block: avatar + name + muted email, with the authored date
 /// as a relative label (absolute date lives in the "Commit date" row below).
+/// `name_matches` are history find matches in the shown name.
 fn commit_details_author_row(
     theme: AppTheme,
     ui_scale: crate::ui_scale::UiScale,
     details: &gitcomet_core::domain::CommitDetails,
     signature: Option<&gitcomet_core::domain::CommitSignature>,
+    name_matches: &[std::ops::Range<usize>],
 ) -> Option<Div> {
     if details.author_name.is_empty() && details.author_email.is_empty() {
         return None;
     }
-    let display_name = if details.author_name.is_empty() {
-        details.author_email.clone()
-    } else {
-        details.author_name.clone()
-    };
+    let display_name = commit_details_author_display_name(details).to_owned();
+    let wash = crate::view::rows::query_highlight_style(theme);
+    let mut name_highlights: TextHighlights = name_matches
+        .iter()
+        .map(|range| (range.clone(), wash))
+        .collect();
+    crate::text_runs::sanitize_highlights(&display_name, &mut name_highlights);
     let authored_relative = (details.authored_at_unix != 0).then(|| {
         crate::view::date_time::format_relative_time(
             details.authored_at_unix,
@@ -68,7 +84,10 @@ fn commit_details_author_row(
                             .text_size(theme.ui_text(14.0))
                             .line_clamp(1)
                             .whitespace_nowrap()
-                            .child(display_name),
+                            .child(
+                                gpui::StyledText::new(display_name)
+                                    .with_highlights(name_highlights),
+                            ),
                     )
                     .when(!details.author_email.is_empty(), |column| {
                         column.child(
@@ -316,6 +335,46 @@ fn commit_sha_field_highlights(value: &str, theme: AppTheme) -> TextHighlights {
     } else {
         vec![(0..value.len(), commit_link_style(theme))]
     }
+}
+
+/// The "Commit SHA" value, followed by the abbreviation the history find query
+/// matched, if it was one, so the typed short form can be seen in the full id.
+fn commit_details_sha_value(
+    theme: AppTheme,
+    sha_field: AnyElement,
+    sha: &str,
+    find: &CommitDetailsFindHighlights,
+) -> AnyElement {
+    let short = find
+        .short_sha_len
+        .and_then(|len| sha.get(..len))
+        .filter(|short| !short.is_empty());
+    let Some(short) = short else {
+        return commit_details_monospace_element(sha_field);
+    };
+    let label = format!("({short})");
+    let wash = vec![(
+        1..1 + short.len(),
+        crate::view::rows::query_highlight_style(theme),
+    )];
+    commit_details_monospace_element(
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .w_full()
+            .min_w(px(0.0))
+            .child(div().flex_1().min_w(px(0.0)).child(sha_field))
+            .child(
+                div()
+                    .debug_selector(|| "commit_details_sha_find_short".to_string())
+                    .flex_none()
+                    .whitespace_nowrap()
+                    .text_color(theme.colors.foreground.secondary)
+                    .child(gpui::StyledText::new(label).with_highlights(wash)),
+            )
+            .into_any_element(),
+    )
 }
 
 fn min_change_tracking_stack_height(split_change_tracking: bool, handle_h: Pixels) -> Pixels {
@@ -975,12 +1034,18 @@ impl DetailsPaneView {
         message: &str,
         theme: AppTheme,
         repo_id: RepoId,
+        find_matches: &[std::ops::Range<usize>],
         cx: &mut gpui::Context<Self>,
     ) {
         let (mut highlights, links) = commit_message_link_highlights(message, theme);
         let mut merged = commit_message_summary_highlights(message, theme, &highlights);
         merged.append(&mut highlights);
         merged.sort_by_key(|(range, _)| range.start);
+        let merged = crate::text_runs::overlay_highlights(
+            merged,
+            find_matches,
+            crate::view::rows::query_highlight_style(theme),
+        );
         self.commit_details_message_input.update(cx, |input, cx| {
             if input.text() != message {
                 input.set_text(message.to_string(), cx);
@@ -1023,18 +1088,37 @@ impl DetailsPaneView {
         });
     }
 
+    /// The SHA field's text and link style, washed whole when the history find
+    /// query matched it.
+    fn sync_commit_details_sha_input(
+        &mut self,
+        sha: &str,
+        find_matched: bool,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        Self::sync_commit_details_input_value(&self.commit_details_sha_input, sha, cx);
+        let whole = find_matched.then_some(0..sha.len());
+        let highlights = crate::text_runs::overlay_highlights(
+            commit_sha_field_highlights(sha, theme),
+            whole.as_slice(),
+            crate::view::rows::query_highlight_style(theme),
+        );
+        self.commit_details_sha_input.update(cx, |input, cx| {
+            input.set_highlights(highlights, cx);
+        });
+    }
+
     fn sync_commit_details_sha_menu(
         &mut self,
         sha: &str,
         repo_id: RepoId,
         interactive: bool,
+        find_matched: bool,
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) {
-        Self::sync_commit_details_input_value(&self.commit_details_sha_input, sha, cx);
-        self.commit_details_sha_input.update(cx, |input, cx| {
-            input.set_highlights(commit_sha_field_highlights(sha, theme), cx);
-        });
+        self.sync_commit_details_sha_input(sha, find_matched, theme, cx);
         // A commit's own SHA has nothing to reveal.
         let sha_links = commit_sha_field_links(sha, interactive, false);
         self.commit_details_sha_link_menu.update(cx, |menu, cx| {
@@ -1051,14 +1135,20 @@ impl DetailsPaneView {
     fn sync_retained_commit_details_message_input(
         &mut self,
         message: &str,
+        find_matches: &[std::ops::Range<usize>],
         cx: &mut gpui::Context<Self>,
     ) {
         let theme = self.theme;
+        let highlights = crate::text_runs::overlay_highlights(
+            commit_message_summary_highlights(message, theme, &[]),
+            find_matches,
+            crate::view::rows::query_highlight_style(theme),
+        );
         self.commit_details_message_input.update(cx, |input, cx| {
             if input.text() != message {
                 input.set_text(message.to_string(), cx);
             }
-            input.set_highlights(commit_message_summary_highlights(message, theme, &[]), cx);
+            input.set_highlights(highlights, cx);
         });
         self.commit_details_message_link_menu
             .update(cx, |menu, cx| {
@@ -1519,7 +1609,10 @@ impl DetailsPaneView {
                     .style(components::ButtonStyle::Transparent)
                     .on_click(theme, cx, |this, _e, _w, cx| {
                         if let Some(repo_id) = this.active_repo_id() {
-                            this.store.dispatch(Msg::ClearCommitSelection { repo_id });
+                            this.store.dispatch(Msg::ClearCommitSelection {
+                                request_id: None,
+                                repo_id,
+                            });
                         }
                         cx.notify();
                     })
@@ -1646,7 +1739,10 @@ impl DetailsPaneView {
                     ))
                     .style(components::ButtonStyle::Transparent)
                     .on_click(theme, cx, move |this, _e, _w, cx| {
-                        this.store.dispatch(Msg::ClearCommitSelection { repo_id });
+                        this.store.dispatch(Msg::ClearCommitSelection {
+                            request_id: None,
+                            repo_id,
+                        });
                         cx.notify();
                     })
                     .gitcomet_tooltip(theme, "Close".into()),
@@ -2447,7 +2543,10 @@ impl DetailsPaneView {
                             // The commit details and diff views are independent
                             // panels; closing details must not close the diff.
                             if let Some(repo_id) = this.active_repo_id() {
-                                this.store.dispatch(Msg::ClearCommitSelection { repo_id });
+                                this.store.dispatch(Msg::ClearCommitSelection {
+                                    request_id: None,
+                                    repo_id,
+                                });
                             }
                             cx.notify();
                         })
@@ -2491,6 +2590,33 @@ impl DetailsPaneView {
                     }
                 }
                 Some(Loadable::Ready(details)) => {
+                    // Match the displayed row, then map its ranges back into
+                    // the raw message that the details pane shows.
+                    let summary = details.message.split('\n').next().unwrap_or_default();
+                    let listed = self.active_repo().and_then(|repo| match &repo.stashes {
+                        Loadable::Ready(stashes) => stashes
+                            .iter()
+                            .find(|stash| stash.id == details.id)
+                            .map(|stash| stash.message.as_ref()),
+                        _ => None,
+                    });
+                    let row_summary = if listed.is_some()
+                        || gitcomet_core::history_find::is_probable_stash_summary(
+                            details.parent_ids.len(),
+                            summary,
+                        ) {
+                        gitcomet_core::history_find::stash_row_summary(listed, summary)
+                    } else {
+                        summary
+                    };
+                    let find = history_find_detail_highlights(
+                        self.history_find_query.as_ref(),
+                        details.id.as_ref(),
+                        &details.message,
+                        commit_details_author_display_name(details),
+                        row_summary,
+                    )
+                    .unwrap_or_default();
                     if details.id != selected_id {
                         if show_delayed_loading {
                             components::empty_state(theme, "Commit", "Loading").into_any_element()
@@ -2503,11 +2629,13 @@ impl DetailsPaneView {
 
                             self.sync_retained_commit_details_message_input(
                                 details.message.as_str(),
+                                &find.summary,
                                 cx,
                             );
-                            Self::sync_commit_details_input_value(
-                                &self.commit_details_sha_input,
+                            self.sync_commit_details_sha_input(
                                 details.id.as_ref(),
+                                find.sha,
+                                theme,
                                 cx,
                             );
                             Self::sync_commit_details_input_value(
@@ -2547,6 +2675,7 @@ impl DetailsPaneView {
                                         ui_scale,
                                         details,
                                         commit_signatures.get(&details.id),
+                                        &find.author,
                                     )
                                     .map(|row| {
                                         row.border_t_1()
@@ -2569,8 +2698,13 @@ impl DetailsPaneView {
                                         .child(commit_details_selectable_row(
                                             theme,
                                             "Commit SHA",
-                                            commit_details_monospace_value(
-                                                self.commit_details_sha_input.clone(),
+                                            commit_details_sha_value(
+                                                theme,
+                                                self.commit_details_sha_input
+                                                    .clone()
+                                                    .into_any_element(),
+                                                details.id.as_ref(),
+                                                &find,
                                             ),
                                         ))
                                         .child(commit_details_selectable_row(
@@ -2607,11 +2741,7 @@ impl DetailsPaneView {
                             details.message.as_str(),
                             theme,
                             repo_id,
-                            cx,
-                        );
-                        Self::sync_commit_details_input_value(
-                            &self.commit_details_sha_input,
-                            details.id.as_ref(),
+                            &find.summary,
                             cx,
                         );
                         Self::sync_commit_details_input_value(
@@ -2623,6 +2753,7 @@ impl DetailsPaneView {
                             details.id.as_ref(),
                             repo_id,
                             true,
+                            find.sha,
                             theme,
                             cx,
                         );
@@ -2658,6 +2789,7 @@ impl DetailsPaneView {
                                     ui_scale,
                                     details,
                                     commit_signatures.get(&details.id),
+                                    &find.author,
                                 )
                                 .map(|row| {
                                     row.border_t_1()
@@ -2680,10 +2812,13 @@ impl DetailsPaneView {
                                     .child(commit_details_selectable_row(
                                         theme,
                                         "Commit SHA",
-                                        commit_details_monospace_element(
+                                        commit_details_sha_value(
+                                            theme,
                                             self.commit_details_sha_link_menu
                                                 .clone()
                                                 .into_any_element(),
+                                            details.id.as_ref(),
+                                            &find,
                                         ),
                                     ))
                                     .child(commit_details_selectable_row(

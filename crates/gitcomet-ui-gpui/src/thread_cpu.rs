@@ -82,23 +82,26 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn a_busy_thread_accumulates_cpu_time_under_its_own_name() {
+        const SPIN_CPU_NS: u64 = 20_000_000;
         let (tid_tx, tid_rx) = std::sync::mpsc::channel();
         let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
         let worker = std::thread::Builder::new()
             .name("cpu-probe-busy".into())
             .spawn(move || {
-                tid_tx
-                    .send(gitcomet_core::op_trace::current_os_tid().unwrap())
-                    .unwrap();
+                let tid = gitcomet_core::op_trace::current_os_tid().unwrap();
+                // Spin on CPU time, not wall time: on a loaded runner 30 ms of
+                // wall-clock spinning measured only 14 ms on CPU.
                 let started = std::time::Instant::now();
-                while started.elapsed() < std::time::Duration::from_millis(30) {
+                while thread_cpu_ns(tid).is_some_and(|ns| ns < SPIN_CPU_NS)
+                    && started.elapsed() < std::time::Duration::from_secs(10)
+                {
                     std::hint::black_box(0u64.wrapping_add(1));
                 }
-                stop_rx.recv().unwrap();
+                tid_tx.send(tid).unwrap();
+                let _ = stop_rx.recv();
             })
             .unwrap();
         let tid = tid_rx.recv().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(40));
         let sample = sample_process_threads();
         let busy = sample
             .iter()
@@ -107,8 +110,8 @@ mod tests {
         assert_eq!(busy.name, "cpu-probe-busy");
         assert!(busy.timeslices >= 1);
         assert!(
-            busy.cpu_ns >= 20_000_000,
-            "spun ~30 ms, saw {} ns",
+            busy.cpu_ns >= SPIN_CPU_NS,
+            "spun to {SPIN_CPU_NS} ns on CPU, saw {} ns",
             busy.cpu_ns
         );
         assert_eq!(thread_cpu_ns(tid).map(|ns| ns >= busy.cpu_ns), Some(true));
