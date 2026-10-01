@@ -149,6 +149,30 @@ impl SettingsHost {
         self.live()?;
         Err(HostError::Unsupported)
     }
+    /// Opens `launch` after this update; a failure shows as an error notice.
+    fn launch(
+        &self,
+        launch: crate::view::platform_open::Launch,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.live()?;
+        let view = self.view.clone();
+        crate::view::platform_open::launch_later(
+            launch,
+            move |err, cx| {
+                let _ = view.update(cx, |view, cx| {
+                    view.extension_notice = Some((
+                        NotificationKind::Error,
+                        format!("Could not open: {err}").into(),
+                        Vec::new(),
+                    ));
+                    cx.notify();
+                });
+            },
+            cx,
+        )
+        .map_err(|err| HostError::InvalidRequest(err.to_string().into()))
+    }
     fn handle(&self) -> Result<WindowHost, HostError> {
         self.live()?;
         Ok(WindowHost::new(
@@ -360,6 +384,15 @@ impl WindowHostImpl for SettingsHost {
     }
     fn notify(&self, message: SharedString, cx: &mut App) -> Result<(), HostError> {
         self.toast(NotificationKind::Success, message, Vec::new(), cx)
+    }
+    fn open_url(&self, url: &str, cx: &mut App) -> Result<(), HostError> {
+        self.launch(crate::view::platform_open::Launch::Url(url.to_string()), cx)
+    }
+    fn open_path(&self, path: &std::path::Path, cx: &mut App) -> Result<(), HostError> {
+        self.launch(
+            crate::view::platform_open::Launch::Path(path.to_path_buf()),
+            cx,
+        )
     }
 
     fn workspace_state(

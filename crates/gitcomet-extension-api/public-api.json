@@ -14664,6 +14664,34 @@
             },
             "deprecation": null,
             "name": "Unsupported"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "tuple": [
+                    {
+                      "attrs": [],
+                      "definition": {
+                        "struct_field": {
+                          "resolved_path": {
+                            "args": null,
+                            "path": "gitcomet_ui_kit::gpui::SharedString",
+                            "type_path": "gpui_ce_shared_string::SharedString"
+                          }
+                        }
+                      },
+                      "deprecation": null,
+                      "name": "0"
+                    }
+                  ]
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "InvalidRequest"
           }
         ]
       }
@@ -33913,6 +33941,192 @@
             },
             "deprecation": null,
             "name": "notify"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "generic": "Self"
+                          }
+                        }
+                      }
+                    ],
+                    [
+                      "url",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "primitive": "str"
+                          }
+                        }
+                      }
+                    ],
+                    [
+                      "cx",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": true,
+                          "lifetime": null,
+                          "type": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "App",
+                              "type_path": "gpui::app::App"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "tuple": []
+                              }
+                            },
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "HostError",
+                                  "type_path": "gitcomet_extension_api::HostError"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Result",
+                      "type_path": "core::result::Result"
+                    }
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "open_url"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "generic": "Self"
+                          }
+                        }
+                      }
+                    ],
+                    [
+                      "path",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "Path",
+                              "type_path": "std::path::Path"
+                            }
+                          }
+                        }
+                      }
+                    ],
+                    [
+                      "cx",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": true,
+                          "lifetime": null,
+                          "type": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "App",
+                              "type_path": "gpui::app::App"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "tuple": []
+                              }
+                            },
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "HostError",
+                                  "type_path": "gitcomet_extension_api::HostError"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Result",
+                      "type_path": "core::result::Result"
+                    }
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "open_path"
           },
           {
             "attrs": [],

@@ -439,6 +439,14 @@ Since then:
   interstitial matches the host's; the Git-unavailable "Open Settings"
   button now takes the light palette in light themes. The group is interned
   like the lane palette, keeping `AppTheme` small enough to copy per row.
+- `WindowHost::open_url` and `open_path` give extensions the host's safe
+  opener: validated at once (no script or `file:` URLs, no empty paths;
+  refusals are `HostError::InvalidRequest`), launched after the calling
+  update and off the UI thread, failures reported in the window. The host's
+  own links (status bar, Settings, the submodule-trust notice) use it too
+  instead of opening from inside a click handler. Outside the live runtime
+  (`UiRuntime::launches_applications`) the launch goes to GPUI's platform,
+  which a test platform only records, so no test starts a browser.
 
 ## History find (#532)
 

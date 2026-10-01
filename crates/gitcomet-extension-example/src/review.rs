@@ -44,6 +44,9 @@ const ICON_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0
 /// The bottom panel listing this repository's reviews.
 pub const REVIEW_LOG_PANEL: &str = "review-log";
 
+/// Where the settings page's documentation link goes.
+pub const DOCS_URL: &str = "https://example.com/comet-example/docs";
+
 /// Set to `1` to open every window behind the example's gate.
 pub const GATE_ENV: &str = "COMET_EXAMPLE_GATE";
 
@@ -383,6 +386,15 @@ impl Render for ReviewSettings {
                     theme,
                     cx,
                     |this, _, _, cx| confirm_reset(&this.context.host, this.context.theme, cx),
+                ),
+            )
+            .child(
+                Button::new("example_review_docs", "Documentation").on_click(
+                    theme,
+                    cx,
+                    |this, _, _, cx| {
+                        let _ = this.context.host.open_url(DOCS_URL, cx);
+                    },
                 ),
             )
     }

@@ -71124,6 +71124,39 @@
               }
             },
             "deprecation": null,
+            "name": "launches_applications"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": true,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "generic": "Self"
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "primitive": "bool"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
             "name": "auto_restores_session"
           },
           {

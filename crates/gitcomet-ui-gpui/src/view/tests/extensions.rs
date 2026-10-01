@@ -188,6 +188,75 @@ fn the_examples_chrome_rows_and_gate_reach_a_main_window(cx: &mut gpui::TestAppC
     assert!(cx.debug_bounds("example_gate").is_none());
 }
 
+/// A host opens URLs and files once the calling update has ended, off the
+/// UI thread (tests record the launch instead of starting a browser), and
+/// refuses what must never reach the OS opener.
+#[gpui::test]
+fn hosts_open_urls_and_paths_after_the_update(cx: &mut gpui::TestAppContext) {
+    use crate::view::platform_open::{Launch, take_recorded_launches};
+    let _visual_guard = crate::test_support::lock_visual_test();
+    cx.update(install_example);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.run_until_parked();
+    take_recorded_launches();
+    let host = cx.update(|_, app| view.read(app).extension_window.as_ref().unwrap().host());
+    cx.update(|_, app| {
+        host.open_url("https://example.com/docs", app).unwrap();
+        host.open_path(Path::new("/tmp/report.txt"), app).unwrap();
+        assert!(
+            take_recorded_launches().is_empty(),
+            "nothing launches inside the calling update"
+        );
+        assert!(matches!(
+            host.open_url("javascript:alert(1)", app),
+            Err(HostError::InvalidRequest(_))
+        ));
+        assert!(matches!(
+            host.open_url("file:///etc/passwd", app),
+            Err(HostError::InvalidRequest(_))
+        ));
+        assert!(matches!(
+            host.open_path(Path::new(""), app),
+            Err(HostError::InvalidRequest(_))
+        ));
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        take_recorded_launches(),
+        vec![
+            Launch::Url("https://example.com/docs".into()),
+            Launch::Path("/tmp/report.txt".into()),
+        ]
+    );
+}
+
+/// The product's own links go through the same deferred opener.
+#[gpui::test]
+fn status_bar_links_open_after_the_click(cx: &mut gpui::TestAppContext) {
+    use crate::view::platform_open::{Launch, take_recorded_launches};
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            test_support::push_test_state(this, state_with_repo(RepoId(1), Path::new("/tmp/x")), cx)
+        });
+    });
+    cx.run_until_parked();
+    test_support::redraw(cx);
+    take_recorded_launches();
+    click_debug_selector(cx, "bottom_status_bar_version");
+    cx.run_until_parked();
+    let launches = take_recorded_launches();
+    assert!(
+        matches!(launches.as_slice(), [Launch::Url(url)] if url.starts_with("https://")),
+        "{launches:?}"
+    );
+}
+
 #[gpui::test]
 fn contributions_run_per_window_persist_and_forget_closed_windows(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();

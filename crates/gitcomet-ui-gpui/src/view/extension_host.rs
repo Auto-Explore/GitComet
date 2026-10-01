@@ -373,6 +373,26 @@ impl HostWindow {
         }
     }
 
+    /// Opens `launch` after this update; a failure is reported in the window.
+    fn launch(&self, launch: super::platform_open::Launch, cx: &mut App) -> Result<(), HostError> {
+        self.live()?;
+        let view = self.view.clone();
+        super::platform_open::launch_later(
+            launch,
+            move |err, cx| {
+                let _ = view.update(cx, |root, cx| {
+                    let report = ErrorReport::message(
+                        root.active_repo_id(),
+                        format!("Could not open: {err}"),
+                    );
+                    root.report_error(report, cx);
+                });
+            },
+            cx,
+        )
+        .map_err(|err| HostError::InvalidRequest(err.to_string().into()))
+    }
+
     fn workspace_id(&self, cx: &App) -> Result<WorkspaceId, HostError> {
         self.live()?;
         crate::workspaces::with_workspace_for_window(cx, self.window_id, |workspace| workspace.id)
@@ -754,6 +774,14 @@ impl WindowHostImpl for HostWindow {
     ) -> Result<gitcomet_extension_api::PopOutWindow, HostError> {
         self.live()?;
         super::pop_out::open(self.host()?, self.window_id, title, content, on_closed, cx)
+    }
+
+    fn open_url(&self, url: &str, cx: &mut App) -> Result<(), HostError> {
+        self.launch(super::platform_open::Launch::Url(url.to_string()), cx)
+    }
+
+    fn open_path(&self, path: &std::path::Path, cx: &mut App) -> Result<(), HostError> {
+        self.launch(super::platform_open::Launch::Path(path.to_path_buf()), cx)
     }
 
     fn notify(&self, message: SharedString, cx: &mut App) -> Result<(), HostError> {

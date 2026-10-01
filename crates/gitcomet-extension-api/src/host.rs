@@ -25,6 +25,9 @@ pub enum HostError {
     RepositoryClosed,
     /// This window cannot do it (for example a focused mergetool window).
     Unsupported,
+    /// The request itself was refused, such as a URL scheme that may not be
+    /// opened.
+    InvalidRequest(SharedString),
 }
 
 impl fmt::Display for HostError {
@@ -33,6 +36,7 @@ impl fmt::Display for HostError {
             Self::WindowClosed => "the window has closed",
             Self::RepositoryClosed => "the repository has closed",
             Self::Unsupported => "this window does not support the request",
+            Self::InvalidRequest(reason) => reason,
         })
     }
 }
@@ -293,6 +297,10 @@ pub trait WindowHostImpl {
 
     /// Shows a transient notification.
     fn notify(&self, message: SharedString, cx: &mut App) -> Result<(), HostError>;
+
+    fn open_url(&self, url: &str, cx: &mut App) -> Result<(), HostError>;
+
+    fn open_path(&self, path: &Path, cx: &mut App) -> Result<(), HostError>;
 
     /// The extension's saved state for this window's workspace.
     fn workspace_state(
@@ -654,6 +662,19 @@ impl WindowHost {
 
     pub fn notify(&self, message: impl Into<SharedString>, cx: &mut App) -> Result<(), HostError> {
         self.0.notify(message.into(), cx)
+    }
+
+    /// Opens `url` in the default browser once this update ends, off the UI
+    /// thread. Schemes that run code or reach local files are refused with
+    /// [`HostError::InvalidRequest`]; a failed launch is reported in the
+    /// window.
+    pub fn open_url(&self, url: &str, cx: &mut App) -> Result<(), HostError> {
+        self.0.open_url(url, cx)
+    }
+
+    /// Opens `path` with its default application, like [`Self::open_url`].
+    pub fn open_path(&self, path: &Path, cx: &mut App) -> Result<(), HostError> {
+        self.0.open_path(path, cx)
     }
 
     pub fn workspace_state(

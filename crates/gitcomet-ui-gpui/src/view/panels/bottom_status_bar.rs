@@ -405,7 +405,7 @@ impl Render for BottomStatusBarView {
                 controls::ControlActivation::Action,
                 cx.listener(move |_this, _e: &ClickEvent, _window, cx| {
                     cx.stop_propagation();
-                    cx.open_url(url);
+                    crate::view::platform_open::open_url_later(url, cx);
                 }),
             )
             .gitcomet_tooltip(theme, format!("Join the {name} Discord").into())
@@ -431,7 +431,7 @@ impl Render for BottomStatusBarView {
                 controls::ControlActivation::Action,
                 cx.listener(move |_this, _e: &ClickEvent, _window, cx| {
                     cx.stop_propagation();
-                    cx.open_url(url);
+                    crate::view::platform_open::open_url_later(url, cx);
                 }),
             )
             .gitcomet_tooltip(theme, format!("See {name} editions").into())
@@ -453,7 +453,7 @@ impl Render for BottomStatusBarView {
                 controls::ControlActivation::Action,
                 cx.listener(move |_this, _e: &ClickEvent, _window, cx| {
                     cx.stop_propagation();
-                    cx.open_url(url);
+                    crate::view::platform_open::open_url_later(url, cx);
                 }),
             )
             .gitcomet_tooltip(theme, format!("See {name} Pro").into())
@@ -498,7 +498,7 @@ impl Render for BottomStatusBarView {
                         controls::ControlActivation::Action,
                         cx.listener(move |_this, _e: &ClickEvent, _window, cx| {
                             cx.stop_propagation();
-                            cx.open_url(url);
+                            crate::view::platform_open::open_url_later(url, cx);
                         }),
                     )
                     .gitcomet_tooltip(
@@ -526,7 +526,7 @@ impl Render for BottomStatusBarView {
                     controls::ControlActivation::Action,
                     cx.listener(move |_this, _e: &ClickEvent, _window, cx| {
                         cx.stop_propagation();
-                        cx.open_url(url);
+                        crate::view::platform_open::open_url_later(url, cx);
                     }),
                 )
                 .gitcomet_tooltip(theme, format!("View {name} releases").into())
