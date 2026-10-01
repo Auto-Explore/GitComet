@@ -1,6 +1,6 @@
 use crate::msg::Msg;
+use gitcomet_core::op_trace;
 use gitcomet_core::services::CancellationToken;
-#[cfg(any(test, feature = "test-support"))]
 use gitcomet_core::services::GitRepository;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
@@ -23,14 +23,35 @@ impl StoreInstanceId {
     }
 }
 
+impl StoreWorkerCommand {
+    pub(super) fn msg(&self) -> Option<&Msg> {
+        match self {
+            Self::Msg(msg) | Self::Traced(msg, _) => Some(msg),
+            _ => None,
+        }
+    }
+}
+
 pub(super) enum StoreWorkerCommand {
     Msg(Box<Msg>),
+    /// A message sent while operation tracing is on, carrying the sender's
+    /// operation and enqueue time. Handled exactly like [`Self::Msg`].
+    Traced(Box<Msg>, op_trace::Stamp),
     Shutdown,
+    Repository {
+        repo_id: RepoId,
+        lifetime: u64,
+        reply: mpsc::Sender<Option<Arc<dyn GitRepository>>>,
+    },
     #[cfg(any(test, feature = "test-support"))]
     InsertRepoForTest {
         repo_id: RepoId,
         repo: Arc<dyn GitRepository>,
     },
+    /// Keeps the worker from starting repository monitors: tests over real
+    /// repositories that do not test watching stay free of watcher refreshes.
+    #[cfg(any(test, feature = "test-support"))]
+    DisableRepoMonitorsForTest,
 }
 
 #[derive(Clone)]
@@ -56,6 +77,30 @@ struct RepoLoadGuard {
 }
 
 impl StoreWorkerSender {
+    pub(super) fn repository(
+        &self,
+        repo_id: RepoId,
+        lifetime: u64,
+    ) -> Option<Arc<dyn GitRepository>> {
+        if !self.is_alive() {
+            return None;
+        }
+        let (reply, receive) = mpsc::channel();
+        match &self.inner {
+            StoreWorkerSenderInner::Command(sender) => {
+                sender
+                    .send(StoreWorkerCommand::Repository {
+                        repo_id,
+                        lifetime,
+                        reply,
+                    })
+                    .ok()?;
+                receive.recv().ok().flatten()
+            }
+            #[cfg(test)]
+            StoreWorkerSenderInner::MsgForTest(_) => None,
+        }
+    }
     pub(super) fn new(
         tx: mpsc::Sender<StoreWorkerCommand>,
         alive: Arc<AtomicBool>,
@@ -183,12 +228,17 @@ impl StoreWorkerSender {
         }
 
         match &self.inner {
-            StoreWorkerSenderInner::Command(tx) => send_diagnostics::send_or_log(
-                tx,
-                StoreWorkerCommand::Msg(Box::new(msg)),
-                kind,
-                context,
-            ),
+            StoreWorkerSenderInner::Command(tx) => {
+                let command = match op_trace::Stamp::capture() {
+                    Some(stamp) => {
+                        let name = repo_load_trace::stage_label(&msg);
+                        op_trace::record(op_trace::Stage::Dispatch, stamp.op, name, 0, 0);
+                        StoreWorkerCommand::Traced(Box::new(msg), stamp)
+                    }
+                    None => StoreWorkerCommand::Msg(Box::new(msg)),
+                };
+                send_diagnostics::send_or_log(tx, command, kind, context)
+            }
             #[cfg(test)]
             StoreWorkerSenderInner::MsgForTest(tx) => {
                 send_diagnostics::send_or_log(tx, msg, kind, context)
@@ -219,6 +269,21 @@ impl StoreWorkerSender {
         match &self.inner {
             StoreWorkerSenderInner::Command(tx) => {
                 let _ = tx.send(StoreWorkerCommand::InsertRepoForTest { repo_id, repo });
+            }
+            #[cfg(test)]
+            StoreWorkerSenderInner::MsgForTest(_) => {}
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn disable_repo_monitors_for_test(&self) {
+        if !self.is_alive() {
+            return;
+        }
+
+        match &self.inner {
+            StoreWorkerSenderInner::Command(tx) => {
+                let _ = tx.send(StoreWorkerCommand::DisableRepoMonitorsForTest);
             }
             #[cfg(test)]
             StoreWorkerSenderInner::MsgForTest(_) => {}

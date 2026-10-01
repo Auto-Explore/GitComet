@@ -1,6 +1,8 @@
 #[cfg(feature = "benchmarks")]
 pub mod benchmarks;
+pub mod diff_session;
 pub mod history_authors;
+pub mod history_find;
 pub mod indexed_history;
 pub mod model;
 pub mod msg;

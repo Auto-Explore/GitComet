@@ -366,16 +366,15 @@ pub(crate) fn build_repo_switch_repo_state(
             committed_at_unix: 0,
             parent_ids: selected_commit.parent_ids.to_vec(),
             files: (0..48)
-                .map(|ix| CommitFileChange {
-                    path: std::path::PathBuf::from(format!("src/module_{}/file_{ix}.rs", ix % 12)),
-                    kind: if ix % 5 == 0 {
-                        FileStatusKind::Added
-                    } else {
-                        FileStatusKind::Modified
-                    },
-                    is_submodule: false,
-                    additions: None,
-                    deletions: None,
+                .map(|ix| {
+                    CommitFileChange::new(
+                        std::path::PathBuf::from(format!("src/module_{}/file_{ix}.rs", ix % 12)),
+                        if ix % 5 == 0 {
+                            FileStatusKind::Added
+                        } else {
+                            FileStatusKind::Modified
+                        },
+                    )
                 })
                 .collect(),
         }));
@@ -383,10 +382,10 @@ pub(crate) fn build_repo_switch_repo_state(
     }
 
     if let Some(path) = diff_path {
-        repo.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-            path: std::path::PathBuf::from(path),
-            area: DiffArea::Unstaged,
-        });
+        repo.diff_state.diff_target = Some(DiffTarget::working_tree(
+            std::path::PathBuf::from(path),
+            DiffArea::Unstaged,
+        ));
         repo.diff_state.diff_state_rev = 1;
         repo.diff_state.diff_rev = 1;
     }
@@ -397,10 +396,7 @@ pub(crate) fn build_repo_switch_repo_state(
 /// Populate a repo's diff state with fully loaded diff content + file text,
 /// simulating a user who has a file diff open and visible.
 pub(crate) fn populate_loaded_diff_state(repo: &mut RepoState, path: &str, diff_line_count: usize) {
-    let target = DiffTarget::WorkingTree {
-        path: std::path::PathBuf::from(path),
-        area: DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree(std::path::PathBuf::from(path), DiffArea::Unstaged);
     repo.diff_state.diff = Loadable::Ready(Arc::new(Diff {
         target: target.clone(),
         lines: build_synthetic_diff_lines(diff_line_count),
@@ -830,13 +826,7 @@ pub(crate) fn build_synthetic_commit_details_with_message(
         }
         path.push(format!("file_{ix}.rs"));
 
-        out.push(CommitFileChange {
-            path,
-            kind,
-            is_submodule: false,
-            additions: None,
-            deletions: None,
-        });
+        out.push(CommitFileChange::new(path, kind));
     }
 
     CommitDetails {
@@ -890,13 +880,7 @@ pub(crate) fn build_synthetic_commit_details_unique_paths(
             path.push(format!("dir{}_{}_{}", d, ix / 256, ix % 256));
         }
         path.push(format!("file_{ix}.rs"));
-        out.push(CommitFileChange {
-            path,
-            kind,
-            is_submodule: false,
-            additions: None,
-            deletions: None,
-        });
+        out.push(CommitFileChange::new(path, kind));
     }
     CommitDetails {
         id,
@@ -1281,12 +1265,7 @@ pub(crate) fn build_synthetic_replacement_change_line(
 }
 
 pub(crate) fn line_starts_for_text(text: &str) -> Vec<usize> {
-    let mut line_starts = Vec::with_capacity(text.len().saturating_div(64).saturating_add(1));
-    line_starts.push(0);
-    for newline_ix in memchr::memchr_iter(b'\n', text.as_bytes()) {
-        line_starts.push(newline_ix.saturating_add(1));
-    }
-    line_starts
+    gitcomet_core::text_utils::line_starts(text)
 }
 
 pub(crate) fn bench_counter_u64(value: usize) -> u64 {

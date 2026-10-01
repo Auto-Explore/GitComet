@@ -1,3 +1,6 @@
+use super::comparison::{
+    NumstatCounts, git_range_numstat_counts, git_range_status_changes, parse_numstat_field,
+};
 use super::history::gix_head_id_or_none;
 use super::{GixRepo, oid_to_arc_str};
 use crate::util::{
@@ -5,7 +8,7 @@ use crate::util::{
     run_git_capture_bytes_cancellable, run_git_simple, run_git_with_output, stable_path_bytes,
 };
 use gitcomet_core::domain::{
-    CommitFileChange, CommitId, DiffTarget, FileStatus, RepoStatus, Submodule, SubmoduleDiffRange,
+    CommitId, DiffTarget, FileStatus, RepoStatus, Submodule, SubmoduleDiffRange,
     SubmoduleDiffRangeKind, SubmoduleDiffSummary, SubmoduleDiffSummaryMode, SubmoduleInnerChange,
     SubmoduleStatus,
 };
@@ -23,10 +26,6 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
-
-type NumstatLineCounts = (Option<u32>, Option<u32>);
-/// Lookup only (never iterated in order), so the unseeded hash map suffices.
-type NumstatCounts = rustc_hash::FxHashMap<PathBuf, NumstatLineCounts>;
 
 const SUBMODULE_HISTORY_UNAVAILABLE_REASON: &str = "Submodule history is not available locally.";
 const SUBMODULE_POINTER_SIDE_UNAVAILABLE_REASON: &str =
@@ -91,6 +90,7 @@ impl GixRepo {
             DiffTarget::Commit {
                 commit_id,
                 path: Some(path),
+                ..
             } => submodule_commit_diff_summary(&repo, commit_id, path, cancellation),
             _ => Err(Error::new(ErrorKind::Unsupported(
                 "submodule summaries require a submodule working-tree target or committed submodule path",
@@ -274,9 +274,9 @@ impl GixRepo {
                 path.display()
             )))
         } else {
-            Ok(combine_command_outputs(
+            Ok(CommandOutput::combine(
                 format!("Load submodule {}", path.display()),
-                outputs,
+                &outputs,
             ))
         }
     }
@@ -323,9 +323,9 @@ impl GixRepo {
         let stage_output =
             run_git_with_output(stage_cmd, &format!("git add -- {}", path.display()))?;
 
-        Ok(combine_command_outputs(
+        Ok(CommandOutput::combine(
             format!("Change submodule pointer {}", path.display()),
-            vec![checkout_output, stage_output],
+            &[checkout_output, stage_output],
         ))
     }
 
@@ -1116,39 +1116,11 @@ fn submodule_range_changes_from_commits(
         .map(|change| {
             cancellation.check_cancelled()?;
             let (additions, deletions) = counts.get(&change.path).cloned().unwrap_or((None, None));
-            Ok(SubmoduleInnerChange {
-                path: change.path,
-                kind: change.kind,
-                additions,
-                deletions,
-            })
+            Ok(SubmoduleInnerChange::new(change.path, change.kind)
+                .with_line_counts(additions, deletions)
+                .with_old_path(change.old_path))
         })
         .collect()
-}
-
-/// List the files that differ between commit `from` and the live working tree
-/// (`git diff <from>`), for the compare-against-working-tree feature. Untracked
-/// files are excluded, matching the unified diff shown in the main pane.
-pub(super) fn diff_commit_to_worktree_files(
-    workdir: &Path,
-    from: &CommitId,
-) -> Result<Vec<CommitFileChange>> {
-    let cancellation = CancellationToken::new();
-    let status_changes = git_range_status_changes(workdir, from, None, &cancellation)?;
-    let counts = git_range_numstat_counts(workdir, from, None, &cancellation)?;
-    Ok(status_changes
-        .into_iter()
-        .map(|change| {
-            let (additions, deletions) = counts.get(&change.path).cloned().unwrap_or((None, None));
-            CommitFileChange {
-                path: change.path,
-                kind: change.kind,
-                is_submodule: change.is_submodule,
-                additions,
-                deletions,
-            }
-        })
-        .collect())
 }
 
 fn submodule_inner_changes_from_status(
@@ -1161,28 +1133,10 @@ fn submodule_inner_changes_from_status(
         .map(|entry| {
             cancellation.check_cancelled()?;
             let (additions, deletions) = counts.get(&entry.path).cloned().unwrap_or((None, None));
-            Ok(SubmoduleInnerChange {
-                path: entry.path.clone(),
-                kind: entry.kind,
-                additions,
-                deletions,
-            })
+            Ok(SubmoduleInnerChange::new(entry.path.clone(), entry.kind)
+                .with_line_counts(additions, deletions))
         })
         .collect()
-}
-
-fn parse_numstat_field(field: &[u8]) -> Option<u32> {
-    if field == b"-" {
-        return None;
-    }
-    std::str::from_utf8(field).ok()?.parse::<u32>().ok()
-}
-
-fn next_non_empty_nul_field<'a, I>(fields: &mut I) -> Option<&'a [u8]>
-where
-    I: Iterator<Item = &'a [u8]>,
-{
-    fields.find(|field| !field.is_empty())
 }
 
 fn git_numstat_counts(
@@ -1215,141 +1169,6 @@ fn git_numstat_counts(
         let path =
             path_buf_from_git_bytes(fields.next().unwrap_or_default(), "git diff --numstat path")?;
         counts.insert(path, (additions, deletions));
-    }
-
-    Ok(counts)
-}
-
-/// One entry of a `git diff --raw` listing: what changed at `path`, and whether
-/// that entry is a gitlink on either side (i.e. a submodule pointer rather than
-/// a file).
-struct RangeStatusChange {
-    path: PathBuf,
-    kind: gitcomet_core::domain::FileStatusKind,
-    is_submodule: bool,
-}
-
-/// Git's tree entry mode for a gitlink (a submodule pointer).
-const GITLINK_ENTRY_MODE: &[u8] = b"160000";
-
-/// `--raw` rather than `--name-status` because the entry modes are the only
-/// thing in a CLI diff that identifies a submodule pointer, and callers that
-/// build `CommitFileChange` have to flag those the same way the gix tree-diff
-/// path does.
-fn git_range_status_changes(
-    workdir: &Path,
-    from: &CommitId,
-    to: Option<&CommitId>,
-    cancellation: &CancellationToken,
-) -> Result<Vec<RangeStatusChange>> {
-    let mut command = git_workdir_cmd_for(workdir);
-    command
-        .arg("--no-optional-locks")
-        .arg("diff")
-        .arg("--raw")
-        .arg("-z")
-        .arg("--find-renames")
-        .arg(from.as_ref());
-    // Omitting `to` makes git compare `from` against the working tree.
-    if let Some(to) = to {
-        command.arg(to.as_ref());
-    }
-    let label = "git diff --raw -z --find-renames";
-    let output = run_git_capture_bytes_cancellable(command, label, cancellation)?;
-
-    let mut fields = output.split(|byte| *byte == 0);
-    let mut changes = Vec::new();
-    // Each record is `:<srcmode> <dstmode> <srcsha> <dstsha> <status>\0<path>\0`,
-    // with renames and copies adding a second path field.
-    while let Some(header) = next_non_empty_nul_field(&mut fields) {
-        cancellation.check_cancelled()?;
-        let Some(header) = header.strip_prefix(b":") else {
-            continue;
-        };
-        let mut tokens = header.split(|byte| *byte == b' ').filter(|t| !t.is_empty());
-        let (Some(src_mode), Some(dst_mode)) = (tokens.next(), tokens.next()) else {
-            continue;
-        };
-        // The two object ids sit between the modes and the status letter.
-        let Some(status_field) = tokens.next_back() else {
-            continue;
-        };
-        let Some(status_code) = status_field.first().copied() else {
-            continue;
-        };
-        let kind = match status_code {
-            b'A' | b'C' => gitcomet_core::domain::FileStatusKind::Added,
-            b'D' => gitcomet_core::domain::FileStatusKind::Deleted,
-            b'R' => gitcomet_core::domain::FileStatusKind::Renamed,
-            b'U' => gitcomet_core::domain::FileStatusKind::Conflicted,
-            _ => gitcomet_core::domain::FileStatusKind::Modified,
-        };
-
-        let path_bytes = if matches!(status_code, b'R' | b'C') {
-            let _old_path = next_non_empty_nul_field(&mut fields);
-            next_non_empty_nul_field(&mut fields).unwrap_or_default()
-        } else {
-            next_non_empty_nul_field(&mut fields).unwrap_or_default()
-        };
-
-        if path_bytes.is_empty() {
-            continue;
-        }
-
-        changes.push(RangeStatusChange {
-            path: path_buf_from_git_bytes(path_bytes, "git diff --raw path")?,
-            kind,
-            // A submodule added or removed by the range is a gitlink on only one
-            // side, so either side counts.
-            is_submodule: src_mode == GITLINK_ENTRY_MODE || dst_mode == GITLINK_ENTRY_MODE,
-        });
-    }
-
-    Ok(changes)
-}
-
-fn git_range_numstat_counts(
-    workdir: &Path,
-    from: &CommitId,
-    to: Option<&CommitId>,
-    cancellation: &CancellationToken,
-) -> Result<NumstatCounts> {
-    let mut command = git_workdir_cmd_for(workdir);
-    command
-        .arg("--no-optional-locks")
-        .arg("diff")
-        .arg("--numstat")
-        .arg("-z")
-        .arg("--find-renames")
-        .arg(from.as_ref());
-    // Omitting `to` makes git compare `from` against the working tree.
-    if let Some(to) = to {
-        command.arg(to.as_ref());
-    }
-    let label = "git diff --numstat -z --find-renames";
-    let output = run_git_capture_bytes_cancellable(command, label, cancellation)?;
-
-    let mut counts = NumstatCounts::default();
-    let mut fields = output.split(|byte| *byte == 0);
-    while let Some(record) = next_non_empty_nul_field(&mut fields) {
-        cancellation.check_cancelled()?;
-        let mut columns = record.splitn(3, |byte| *byte == b'\t');
-        let additions = parse_numstat_field(columns.next().unwrap_or_default());
-        let deletions = parse_numstat_field(columns.next().unwrap_or_default());
-        let path_field = columns.next().unwrap_or_default();
-        let path_bytes = if path_field.is_empty() {
-            let _old_path = next_non_empty_nul_field(&mut fields);
-            next_non_empty_nul_field(&mut fields).unwrap_or_default()
-        } else {
-            path_field
-        };
-        if path_bytes.is_empty() {
-            continue;
-        }
-        counts.insert(
-            path_buf_from_git_bytes(path_bytes, "git diff --numstat path")?,
-            (additions, deletions),
-        );
     }
 
     Ok(counts)
@@ -1499,7 +1318,10 @@ fn cleanup_failed_submodule_add_error(
         Err(probe_err) => {
             return append_failed_submodule_add_note(
                 err,
-                &format!("GitComet could not inspect failed submodule add state: {probe_err}"),
+                &format!(
+                    "{} could not inspect failed submodule add state: {probe_err}",
+                    gitcomet_core::identity::current().display_name()
+                ),
             );
         }
     };
@@ -2016,29 +1838,7 @@ fn untrusted_local_submodule_error(source: &SubmoduleTrustTarget, action: &str) 
 }
 
 fn combine_submodule_update_outputs(outputs: Vec<CommandOutput>) -> CommandOutput {
-    combine_command_outputs(
-        "git submodule update --init --recursive".to_string(),
-        outputs,
-    )
-}
-
-fn combine_command_outputs(command: String, outputs: Vec<CommandOutput>) -> CommandOutput {
-    CommandOutput {
-        command,
-        stdout: outputs
-            .iter()
-            .map(|output| output.stdout.trim_end())
-            .filter(|text| !text.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        stderr: outputs
-            .iter()
-            .map(|output| output.stderr.trim_end())
-            .filter(|text| !text.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        exit_code: Some(0),
-    }
+    CommandOutput::combine("git submodule update --init --recursive", &outputs)
 }
 
 fn repo_workdir_for_submodule_trust(repo: &gix::Repository) -> &Path {
@@ -2500,10 +2300,10 @@ mod tests {
 
         let repo = open_repo(tmp.path());
         let summary = repo
-            .submodule_diff_summary_impl(&DiffTarget::WorkingTree {
-                path: submodule_path.into(),
-                area: DiffArea::Staged,
-            })
+            .submodule_diff_summary_impl(&DiffTarget::working_tree(
+                submodule_path.into(),
+                DiffArea::Staged,
+            ))
             .expect("staged submodule removal summary");
         let staged_range = summary
             .ranges

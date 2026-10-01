@@ -3656,10 +3656,7 @@ fn conflict_reload_via_stash_keeps_ordered_resolution() {
         &mut state,
         Msg::SelectDiff {
             repo_id,
-            target: DiffTarget::WorkingTree {
-                path: PathBuf::from("file.txt"),
-                area: DiffArea::Unstaged,
-            },
+            target: DiffTarget::working_tree(PathBuf::from("file.txt"), DiffArea::Unstaged),
         },
     );
     assert!(

@@ -446,6 +446,7 @@ fn dispatch_increments_failure_counter_when_channel_is_disconnected() {
 
     let store = AppStore {
         state: Arc::new(RwLock::new(Arc::new(AppState::test_default()))),
+        publication: Default::default(),
         msg_tx: msg_tx.clone(),
         public_lifetime: Arc::new(StorePublicLifetime::new(msg_tx)),
     };
@@ -469,6 +470,7 @@ fn concurrent_last_app_store_drops_shutdown_worker_once() {
     );
     let store = AppStore {
         state: Arc::new(RwLock::new(Arc::new(AppState::test_default()))),
+        publication: Default::default(),
         msg_tx: msg_tx.clone(),
         public_lifetime: Arc::new(StorePublicLifetime::new(msg_tx)),
     };
@@ -497,12 +499,20 @@ fn concurrent_last_app_store_drops_shutdown_worker_once() {
         .expect("expected final AppStore drop to send worker shutdown")
     {
         super::worker_channel::StoreWorkerCommand::Shutdown => {}
-        super::worker_channel::StoreWorkerCommand::Msg(_) => {
+        super::worker_channel::StoreWorkerCommand::Repository { .. } => {
+            panic!("expected shutdown command, got repository read")
+        }
+        super::worker_channel::StoreWorkerCommand::Msg(_)
+        | super::worker_channel::StoreWorkerCommand::Traced(..) => {
             panic!("expected shutdown command, got message command")
         }
         #[cfg(any(test, feature = "test-support"))]
         super::worker_channel::StoreWorkerCommand::InsertRepoForTest { .. } => {
             panic!("expected shutdown command, got test repo insertion command")
+        }
+        #[cfg(any(test, feature = "test-support"))]
+        super::worker_channel::StoreWorkerCommand::DisableRepoMonitorsForTest => {
+            panic!("expected shutdown command, got test monitor switch command")
         }
     }
     assert!(
@@ -788,10 +798,7 @@ fn selected_diff_results_after_store_drop_do_not_emit_store_event_failures() {
 
     store.dispatch(Msg::SelectDiff {
         repo_id,
-        target: DiffTarget::WorkingTree {
-            path: PathBuf::from("tracked.txt"),
-            area: DiffArea::Unstaged,
-        },
+        target: DiffTarget::working_tree(PathBuf::from("tracked.txt"), DiffArea::Unstaged),
     });
 
     started_rx
@@ -811,4 +818,36 @@ fn selected_diff_results_after_store_drop_do_not_emit_store_event_failures() {
     std::thread::sleep(Duration::from_millis(100));
 
     assert_eq!(store_event_failure_count(), before);
+}
+
+#[test]
+fn background_repository_reader_checks_the_lifetime_and_does_not_select_a_repository() {
+    let (store, _events) = AppStore::new_test(Arc::new(FailingBackend));
+    let repo_id = RepoId(17);
+    let mut state = AppState::test_default();
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: "/tmp/reader".into(),
+        },
+    ));
+    let lifetime = state.repos[0].lifetime();
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    store.insert_repo_for_test(repo_id, Arc::new(DummyRepo::new("/tmp/reader")));
+    let reader = store.clone();
+    let backend = std::thread::spawn(move || reader.repository(repo_id, lifetime))
+        .join()
+        .unwrap();
+    assert!(backend.is_some());
+    assert_eq!(store.snapshot().active_repo, None);
+    state.repos[0] = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: "/tmp/reader".into(),
+        },
+    );
+    let reopened = state.repos[0].lifetime();
+    store.replace_snapshot_for_test(Arc::new(state));
+    assert!(store.repository(repo_id, lifetime).is_none());
+    assert!(store.repository(repo_id, reopened).is_some());
 }

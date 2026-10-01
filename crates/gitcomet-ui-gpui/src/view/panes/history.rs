@@ -12,6 +12,8 @@ use smallvec::SmallVec;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
+mod annotations;
+pub(in crate::view) mod find;
 mod history_panel;
 mod indexed;
 pub(in crate::view) mod indexed_graph;
@@ -755,6 +757,57 @@ pub(in crate::view) enum HistoryPrimarySelection {
     Worktree(PathBuf),
 }
 
+struct PendingHistorySelection {
+    request_id: u64,
+    selection: HistoryPrimarySelection,
+    multi_selection: PendingHistoryMembers,
+}
+
+/// Keep a pending indexed range compact: shift-clicking across a large
+/// history must not materialize its commit IDs on the UI thread. Membership
+/// is only needed if another modifier click arrives before the acknowledgment.
+enum PendingHistoryMembers {
+    Commits(gitcomet_state::model::CommitMultiSelection),
+    IndexedRange {
+        projection: gitcomet_core::history_index::HistoryProjection,
+        rows: std::ops::RangeInclusive<usize>,
+        anchor: Option<CommitId>,
+        anchor_index: usize,
+        log_rev: u64,
+    },
+}
+
+impl PendingHistoryMembers {
+    fn anchor(&self) -> Option<&CommitId> {
+        match self {
+            Self::Commits(selection) => selection.anchor.as_ref(),
+            Self::IndexedRange { anchor, .. } => anchor.as_ref(),
+        }
+    }
+
+    fn materialize(&self) -> gitcomet_state::model::CommitMultiSelection {
+        match self {
+            Self::Commits(selection) => selection.clone(),
+            Self::IndexedRange {
+                projection,
+                rows,
+                anchor,
+                anchor_index,
+                log_rev,
+            } => gitcomet_state::model::CommitMultiSelection {
+                commits: Arc::new(
+                    rows.clone()
+                        .filter_map(|row| projection.commit_id(row))
+                        .collect(),
+                ),
+                anchor: anchor.clone(),
+                anchor_index: Some(*anchor_index),
+                anchor_log_rev: Some(*log_rev),
+            },
+        }
+    }
+}
+
 pub(in crate::view) fn history_primary_selection(
     repo: &RepoState,
     show_working_tree_summary_row: bool,
@@ -1054,7 +1107,7 @@ fn decide_pending_history_reveal(
 }
 
 pub(in super::super) struct HistoryView {
-    pub(in super::super) store: Arc<AppStore>,
+    pub(in super::super) store: crate::view::pane_store::PaneStore,
     state: Arc<AppState>,
     pub(in super::super) theme: AppTheme,
     pub(in super::super) ui_scale_percent: u32,
@@ -1117,11 +1170,17 @@ pub(in super::super) struct HistoryView {
     pub(in super::super) history_stash_ids_cache: Option<HistoryStashIdsCache>,
     pub(in super::super) history_scroll: UniformListScrollHandle,
     pub(in super::super) history_panel_focus_handle: FocusHandle,
+    pub(in crate::view) history_annotations: Option<annotations::HistoryAnnotations>,
     /// Minute tick that re-renders the table while the relative date format is
     /// active, so "2 mins ago" labels don't freeze. `None` for absolute formats.
     relative_time_tick: Option<gpui::Task<()>>,
     signature_viewport: Option<signatures::ViewportKey>,
     signature_debounce: Option<gpui::Task<()>>,
+    /// The Cmd-F find bar, created the first time it opens.
+    find: Option<find::HistoryFind>,
+    // Inputs can arrive before the store publishes their selections. Keep the
+    // outstanding destinations so navigation starts from the latest intent.
+    pending_history_selections: std::collections::VecDeque<PendingHistorySelection>,
 }
 
 /// A hoverable sub-area of a history row. Both are painted on the canvas, so
@@ -1201,7 +1260,21 @@ impl HistoryView {
         }
     }
 
-    fn history_scroll_position(&self) -> f64 {
+    /// Window-space bounds of the active repository's history list once it
+    /// has been laid out, for scripted input that must land on it.
+    pub(in crate::view) fn history_viewport_bounds(&self) -> Option<Bounds<Pixels>> {
+        let active = self.active_repo_id()?;
+        if self.indexed.presentation.is_some() {
+            let (repo_id, bounds) = self.scroll_interaction.borrow().viewport_bounds?;
+            return (repo_id == active).then_some(bounds);
+        }
+        // The list's bounds outlive a repository switch; its cache does not.
+        let cache_repo = self.history_cache.as_ref()?.base.request.repo_id;
+        let bounds = self.history_scroll.0.borrow().base_handle.bounds();
+        (cache_repo == active && bounds.size.height > px(0.0)).then_some(bounds)
+    }
+
+    pub(in crate::view) fn history_scroll_position(&self) -> f64 {
         self.scroll_interaction
             .borrow()
             .logical
@@ -1258,7 +1331,9 @@ impl HistoryView {
             repo.stashes_rev.hash(&mut hasher);
             repo.history_state.selected_commit_rev.hash(&mut hasher);
             repo.history_state.indexed.rev.hash(&mut hasher);
-            repo.file_browser.file_browser_rev.hash(&mut hasher);
+            // The browsed commit's mark. Not `file_browser_rev`: that moves on
+            // every sidebar search keystroke.
+            repo.file_browser.source.hash(&mut hasher);
             // The linked-worktree rows live in this table: their badge counts come
             // from the dirty scan and the selected row from the worktree selection,
             // so both revs have to move the fingerprint or the rows never repaint.
@@ -1302,18 +1377,35 @@ impl HistoryView {
             let next_fingerprint = Self::notify_fingerprint_for(&next, this.history_show_tags);
             let changed = next_fingerprint != this.notify_fingerprint;
             let switched_repo = this.state.active_repo != next.active_repo;
-            // Badges repaint the rows without invalidating open refs menus.
-            let signatures_changed = this
-                .state
+            let previous_repo = this.active_repo();
+            let next_repo = next
                 .repos
                 .iter()
-                .find(|repo| Some(repo.id) == this.state.active_repo)
+                .find(|repo| Some(repo.id) == next.active_repo);
+            // Badges, find results and dropped selections repaint without
+            // invalidating refs menus.
+            let signatures_changed = previous_repo
                 .map(|repo| repo.history_state.commit_signatures_rev)
-                != next
-                    .repos
+                != next_repo.map(|repo| repo.history_state.commit_signatures_rev);
+            let find_changed = this.history_find_is_open()
+                && previous_repo.map(|repo| repo.history_state.find.rev)
+                    != next_repo.map(|repo| repo.history_state.find.rev);
+            let selection_ack = next_repo.and_then(|repo| repo.history_state.selection_ack);
+            let selection_ack_changed =
+                previous_repo.and_then(|repo| repo.history_state.selection_ack) != selection_ack;
+            if switched_repo {
+                this.history_find_repo_changed();
+                this.pending_history_selections.clear();
+            } else if selection_ack_changed
+                && let Some(ix) = this
+                    .pending_history_selections
                     .iter()
-                    .find(|repo| Some(repo.id) == next.active_repo)
-                    .map(|repo| repo.history_state.commit_signatures_rev);
+                    .position(|pending| Some(pending.request_id) == selection_ack)
+            {
+                // Snapshots can coalesce replies. Retire through the acknowledged
+                // request, even when its outcome repeated a row or was a no-op.
+                this.pending_history_selections.drain(..=ix);
+            }
             this.state = next;
             if selected_remote_branch_is_missing(&this.state, this.selected_branch.as_ref()) {
                 this.selected_branch = None;
@@ -1359,7 +1451,7 @@ impl HistoryView {
                 this.notify_fingerprint = next_fingerprint;
                 this.dismiss_history_refs_hover(cx);
                 cx.notify();
-            } else if signatures_changed {
+            } else if signatures_changed || find_changed || selection_ack_changed {
                 cx.notify();
             }
         });
@@ -1369,8 +1461,12 @@ impl HistoryView {
         let scale = ui_scale::UiScale::from_percent(ui_scale_percent);
         let default_widths = scaled_history_column_widths(default_design_widths, scale);
 
+        let history_annotations = super::super::extension_host::registry(cx)
+            .filter(|registry| !registry.history_annotators().is_empty())
+            .map(|registry| annotations::HistoryAnnotations::new(registry.history_annotators()));
         Self {
-            store,
+            history_annotations,
+            store: store.into(),
             state,
             theme,
             ui_scale_percent,
@@ -1429,6 +1525,8 @@ impl HistoryView {
             relative_time_tick: None,
             signature_viewport: None,
             signature_debounce: None,
+            find: None,
+            pending_history_selections: Default::default(),
         }
     }
 
@@ -1684,7 +1782,12 @@ impl HistoryView {
         repo_id: RepoId,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.store.dispatch(Msg::ClearCommitSelection { repo_id });
+        self.cancel_history_find_navigation();
+        let request_id = self.note_history_selection(repo_id, HistoryPrimarySelection::WorkingTree);
+        self.store.dispatch(Msg::ClearCommitSelection {
+            request_id: Some(request_id),
+            repo_id,
+        });
         let keep_file_view = self.state.file_browser_settings.follow_selected_commit
             && self.state.sidebar_mode == gitcomet_state::model::SidebarMode::Files
             && self
@@ -1714,6 +1817,7 @@ impl HistoryView {
         cx: &mut gpui::Context<Self>,
     ) {
         self.store.dispatch(Msg::SelectWorktreeUncommitted {
+            request_id: None,
             repo_id,
             path: worktree_path.clone(),
         });
@@ -1837,6 +1941,10 @@ impl HistoryView {
 
     pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
+        if let Some(find) = &self.find {
+            find.input
+                .update(cx, |input, cx| input.set_theme(theme, cx));
+        }
         cx.notify();
     }
 
@@ -2166,12 +2274,14 @@ impl HistoryView {
                 });
                 if !already_selected {
                     self.store.dispatch(Msg::SelectWorktreeUncommitted {
+                        request_id: None,
                         repo_id: pending.repo_id,
                         path: path.clone(),
                     });
                 }
             }
             (None, Some(commit_id)) => self.store.dispatch(Msg::SelectCommit {
+                request_id: None,
                 repo_id: pending.repo_id,
                 commit_id,
             }),
@@ -2765,14 +2875,10 @@ fn is_probable_stash_tip(commit: &Commit) -> bool {
     crate::view::caches::history_commit_is_probable_stash_tip(commit)
 }
 
+/// Shared with find, which matches stash rows on what they show.
+#[cfg(test)]
 fn stash_summary_from_log_summary(summary: &str) -> Option<&str> {
-    let (_, tail) = summary.split_once(": ")?;
-    let trimmed = tail.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed)
-    }
+    gitcomet_core::history_find::stash_summary_tail(summary)
 }
 
 fn resolve_history_head_target<'a>(
@@ -2857,14 +2963,10 @@ fn build_history_base_cache(
                 {
                     Some(stash_tip) => (
                         true,
-                        stash_tip
-                            .message
-                            .map(|message| Arc::clone(message).into())
-                            .or_else(|| {
-                                stash_summary_from_log_summary(&commit.summary)
-                                    .map(SharedString::new)
-                            })
-                            .unwrap_or_else(|| commit.summary.clone().into()),
+                        SharedString::new(gitcomet_core::history_find::stash_row_summary(
+                            stash_tip.message.map(|message| message.as_ref()),
+                            &commit.summary,
+                        )),
                     ),
                     None => (false, commit.summary.clone().into()),
                 };

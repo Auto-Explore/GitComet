@@ -65,7 +65,11 @@ fn select(
         repos,
         id_alloc,
         state,
-        Msg::SelectCommit { repo_id, commit_id },
+        Msg::SelectCommit {
+            request_id: None,
+            repo_id,
+            commit_id,
+        },
     )
 }
 
@@ -214,7 +218,10 @@ fn the_working_tree_row_goes_live() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ClearCommitSelection { repo_id },
+        Msg::ClearCommitSelection {
+            request_id: None,
+            repo_id,
+        },
     );
 
     assert_eq!(
@@ -698,10 +705,7 @@ fn following_reopens_the_file_at_the_latest_selection_and_closes_it_when_missing
     );
     assert_eq!(
         state.repos[0].diff_state.diff_target,
-        Some(DiffTarget::Commit {
-            commit_id: latest,
-            path: Some(path),
-        })
+        Some(DiffTarget::commit(latest, Some(path)))
     );
     assert!(
         effects

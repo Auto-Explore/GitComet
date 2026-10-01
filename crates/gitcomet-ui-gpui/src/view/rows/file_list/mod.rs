@@ -19,11 +19,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 mod build;
+mod changed_rows;
 mod render;
 #[cfg(test)]
 mod tests;
 
 pub(in crate::view) use build::{FileTree, FileTreeItem};
+pub(in crate::view) use changed_rows::{
+    ChangedFileRow, DirectoryToggle, changed_file_directory_row, changed_file_row,
+};
 pub(in crate::view) use render::{
     DirectoryRowDetail, DirectoryRowProps, directory_row, directory_row_detail_for_width,
     file_row_indent_px,
@@ -234,7 +238,7 @@ impl FileListOrdered<'_> {
 /// hidden.
 #[derive(Clone, Debug, Default)]
 pub(in crate::view) struct CollapsedDirs {
-    set: FxHashSet<Arc<Path>>,
+    set: Arc<FxHashSet<Arc<Path>>>,
     rev: u64,
 }
 
@@ -252,16 +256,16 @@ impl CollapsedDirs {
     /// later merges away would strand the collapse on no row at all.
     pub(in crate::view) fn collapse(&mut self, key: Arc<Path>, chain: &[Arc<Path>]) {
         for segment in chain {
-            self.set.remove(segment);
+            Arc::make_mut(&mut self.set).remove(segment);
         }
-        self.set.insert(key);
+        Arc::make_mut(&mut self.set).insert(key);
         self.rev = self.rev.wrapping_add(1);
     }
 
     pub(in crate::view) fn expand(&mut self, chain: &[Arc<Path>]) {
         let mut changed = false;
         for segment in chain {
-            changed |= self.set.remove(segment);
+            changed |= Arc::make_mut(&mut self.set).remove(segment);
         }
         if changed {
             self.rev = self.rev.wrapping_add(1);

@@ -181,14 +181,14 @@ pub(super) fn model(
 
 fn diff_target_for_source(source: &FileSource, path: &std::path::Path) -> Option<DiffTarget> {
     match source {
-        FileSource::WorkingDirectory => Some(DiffTarget::WorkingTree {
-            path: path.to_path_buf(),
-            area: DiffArea::Unstaged,
-        }),
-        FileSource::Commit(commit_id) => Some(DiffTarget::Commit {
-            commit_id: commit_id.clone(),
-            path: Some(path.to_path_buf()),
-        }),
+        FileSource::WorkingDirectory => Some(DiffTarget::working_tree(
+            path.to_path_buf(),
+            DiffArea::Unstaged,
+        )),
+        FileSource::Commit(commit_id) => Some(DiffTarget::commit(
+            commit_id.clone(),
+            Some(path.to_path_buf()),
+        )),
         FileSource::Branch(_) => None,
     }
 }

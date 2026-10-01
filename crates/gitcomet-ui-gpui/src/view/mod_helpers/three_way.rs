@@ -53,14 +53,7 @@ impl<T> std::ops::IndexMut<ThreeWayColumn> for ThreeWaySides<T> {
 }
 
 pub(crate) fn deferred_line_starts_for_text(text: &str) -> Vec<usize> {
-    let mut starts = Vec::with_capacity(text.len().saturating_div(64).saturating_add(1));
-    starts.push(0);
-    for (ix, byte) in text.as_bytes().iter().enumerate() {
-        if *byte == b'\n' {
-            starts.push(ix.saturating_add(1));
-        }
-    }
-    starts
+    gitcomet_core::text_utils::line_starts(text)
 }
 
 /// Lazily materialized line starts for one merge-input side.

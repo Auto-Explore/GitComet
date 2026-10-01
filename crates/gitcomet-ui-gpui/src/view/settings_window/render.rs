@@ -4,6 +4,7 @@ use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 
 impl Render for SettingsWindowView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        crate::view::perf::settings_rendered();
         let metrics = crate::appearance::current(cx);
         if self.appearance_metrics != metrics {
             self.appearance_metrics = metrics;
@@ -57,8 +58,17 @@ impl Render for SettingsWindowView {
         #[cfg(not(test))]
         let show_overflow_probe = false;
 
-        let content = if show_overflow_probe {
-            self.overflow_probe_content(theme).into_any_element()
+        if let Some(extension) = &self.extension_window {
+            extension.set_theme(theme, cx);
+        }
+        let gate = match (&mut self.window_gates, &self.extension_window) {
+            (Some(gates), Some(extension)) => gates.content(extension.host(), window, cx),
+            _ => None,
+        };
+        let content = if let Some(gate) = gate {
+            div().flex_1().min_h(px(0.0)).child(gate).into_any_element()
+        } else if show_overflow_probe {
+            self.overflow_probe_content(theme, cx).into_any_element()
         } else {
             match self.current_view {
                 SettingsView::Root => self.root_page(theme, cx),
@@ -153,12 +163,100 @@ impl Render for SettingsWindowView {
             self.hover_resize_edge = None;
         }
 
-        root.child(settings_window_frame(
+        let root = root.child(settings_window_frame(
             theme,
             decorations,
             body.into_any_element(),
             self.ui_scale_percent,
-        ))
+        ));
+        let root = root.when_some(self.extension_notice.clone(), |root, (notice, actions)| {
+            root.child(
+                div()
+                    .absolute()
+                    .bottom_4()
+                    .left_4()
+                    .right_4()
+                    .p_3()
+                    .bg(theme.colors.surface.raised)
+                    .child(notice)
+                    .children(actions.into_iter().enumerate().map(|(ix, action)| {
+                        components::Button::new(
+                            format!("settings_notice_action_{ix}"),
+                            action.label().clone(),
+                        )
+                        .on_click(theme, cx, move |_, _, _, cx| action.invoke(cx))
+                    }))
+                    .child(
+                        components::Button::new("settings_notice_close", "Dismiss").on_click(
+                            theme,
+                            cx,
+                            |view, _, _, cx| {
+                                view.extension_notice = None;
+                                cx.notify();
+                            },
+                        ),
+                    ),
+            )
+        });
+        let dialog = self.extension_dialog.as_ref().map(|dialog| {
+            (
+                dialog.title.clone(),
+                dialog.content.clone(),
+                dialog.anchor,
+                dialog.focus.clone(),
+            )
+        });
+        root.when_some(dialog, |root, (title, view, anchor, focus)| {
+            let bounds = window.viewport_size();
+            root.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .occlude()
+                    .when(anchor.is_none(), |div| {
+                        div.flex()
+                            .items_center()
+                            .justify_center()
+                            .bg(gpui::rgba(0x00000080))
+                    })
+                    .child(
+                        div()
+                            .id("settings_hosted_dialog")
+                            .track_focus(&focus)
+                            .tab_group()
+                            .tab_stop(false)
+                            .on_key_down(cx.listener(Self::hosted_dialog_key))
+                            .when_some(anchor, |div, anchor| {
+                                div.absolute()
+                                    .left(
+                                        anchor
+                                            .x
+                                            .min((bounds.width - px(384.0)).max(px(0.0)))
+                                            .max(px(0.0)),
+                                    )
+                                    .top(
+                                        anchor
+                                            .y
+                                            .min((bounds.height - px(120.0)).max(px(0.0)))
+                                            .max(px(0.0)),
+                                    )
+                            })
+                            .w_96()
+                            .max_h_full()
+                            .p_4()
+                            .bg(theme.colors.surface.panel)
+                            .child(title)
+                            .child(view)
+                            .child(
+                                components::Button::new("settings_dialog_close", "Close").on_click(
+                                    theme,
+                                    cx,
+                                    |view, _, window, cx| view.close_hosted_dialog(window, cx),
+                                ),
+                            ),
+                    ),
+            )
+        })
     }
 }
 
@@ -222,10 +320,9 @@ fn settings_window_control(
         .on_activate(
             false,
             controls::ControlActivation::Action,
-            cx.listener(|_this, _e: &ClickEvent, window, cx| {
+            cx.listener(|this, _e: &ClickEvent, window, cx| {
                 cx.stop_propagation();
-                crate::app::mark_clean_shutdown_if_last_window_from_view(cx);
-                window.remove_window();
+                this.request_close(window, cx);
             }),
         )
         .into_any_element(),
@@ -325,7 +422,7 @@ impl SettingsWindowView {
                     .line_height(px(16.0))
                     .font_weight(FontWeight::BOLD)
                     .whitespace_nowrap()
-                    .child(SETTINGS_WINDOW_TITLE),
+                    .child(settings_window_title()),
             );
 
         let is_maximized = window.is_maximized();
@@ -396,7 +493,15 @@ impl SettingsWindowView {
             .expanded_section
             .map(SettingsSection::category)
             .unwrap_or(self.selected_category);
-        let active_card = self.category_card(active_category, theme, cx);
+        let active_card = match self
+            .expanded_section
+            .is_none()
+            .then(|| self.extension_page_card(theme))
+            .flatten()
+        {
+            Some(card) => card,
+            None => self.category_card(active_category, theme, cx),
+        };
 
         let scroll_surface = restrict_scroll_to_vertical_axis(
             div()

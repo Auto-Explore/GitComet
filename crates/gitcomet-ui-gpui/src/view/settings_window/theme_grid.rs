@@ -187,6 +187,17 @@ fn orb_base(colors: ThemePreviewColors) -> gpui::Rgba {
     mix_color(colors.base, toward, 0.2)
 }
 
+/// Unlike `theme::mix_colors`, this mixes alpha too rather than forcing 1.0.
+fn mix_color(a: gpui::Rgba, b: gpui::Rgba, t: f32) -> gpui::Rgba {
+    let t = t.clamp(0.0, 1.0);
+    gpui::Rgba::new(
+        a.red + (b.red - a.red) * t,
+        a.green + (b.green - a.green) * t,
+        a.blue + (b.blue - a.blue) * t,
+        a.alpha + (b.alpha - a.alpha) * t,
+    )
+}
+
 /// One theme's layers in a 64-unit box: gradient defs, then the blurred fill.
 fn orb_layers_svg(colors: ThemePreviewColors, id: &str, centres: GlowCentres) -> (String, String) {
     let ((ax, ay), (sx, sy)) = centres;

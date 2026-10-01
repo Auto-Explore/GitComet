@@ -1,4 +1,3 @@
-mod build_themes;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -80,22 +79,15 @@ fn generate_svg_dir_assets(
     generated
 }
 
+/// Product artwork served under `icons/`; the UI kit serves the icon set.
 fn generate_icon_assets(manifest_dir: &std::path::Path, out_dir: &std::path::Path) {
     let icons_dir = manifest_dir.join("assets/icons");
-    let mut generated = generate_svg_dir_assets(&icons_dir, "icons", "icon_bytes", "ICON_ASSETS");
-    generated.push('\n');
-    generated.push_str(&generate_svg_dir_assets(
-        &icons_dir.join("file_icons"),
-        "icons/file_icons",
-        "file_icon_bytes",
-        "FILE_ICON_ASSETS",
-    ));
-
+    let generated =
+        generate_svg_dir_assets(&icons_dir, "icons", "brand_icon_bytes", "BRAND_ICON_ASSETS");
     fs::write(out_dir.join("icons_assets.rs"), generated).expect("write icons_assets.rs");
 }
 
 fn main() {
-    build_themes::generate_embedded_theme_registry();
     println!("cargo:rerun-if-changed=build.rs");
 
     let manifest_dir =

@@ -25,17 +25,28 @@ REPORTS = ROOT / "target" / "ci-reports"
 REPORT_LOCK = threading.RLock()
 CONSOLE_LOCK = threading.RLock()
 UI = "gitcomet-ui-gpui"
+# Packages whose tests mount GPUI windows. GPUI test contexts share
+# process-global platform state, so each of these harnesses runs as one libtest
+# process on every platform instead of nextest's process per test.
+GPUI_PACKAGES = (UI, "gitcomet-ui-kit", "gitcomet-extension-example")
 NEXTEST_PROFILES = ("ci", "ci-git-limited", "ci-watch-first")
 # Audited in-memory tests: no process-global environment, filesystem, or native
 # resources. Keep this an explicit binary/prefix allowlist, not all unit tests.
 PURE_BATCHES = {"gitcomet-core": ("conflict_session::",)}
+# The example product builds alone, so it never relies on (or leaks) the
+# workspace's feature unification: it enables the application's GUI, which the
+# headless workspace context must not inherit.
+EXAMPLE_PACKAGES = ("gitcomet-extension-example", "gitcomet-extension-example-app")
 CONTEXTS = {
-    "workspace": ["--workspace", "--no-default-features", "--features", "gix,gitcomet-ui-gpui/default"],
+    "workspace": ["--workspace", *(arg for package in EXAMPLE_PACKAGES for arg in ("--exclude", package)),
+                  "--no-default-features", "--features", "gix,gitcomet-ui-gpui/default"],
     "core": ["-p", "gitcomet-core"],
     "state": ["-p", "gitcomet-state"],
     "backend": ["-p", "gitcomet-git-gix"],
-    "app": ["-p", "gitcomet", "--no-default-features", "--features", "gix"],
+    # The executable's integration tests and the launch library's unit tests.
+    "app": ["-p", "gitcomet", "-p", "gitcomet-app", "--no-default-features", "--features", "gix"],
     "ui": ["-p", UI],
+    "example": [arg for package in EXAMPLE_PACKAGES for arg in ("-p", package)],
 }
 DISPLAY_PROFILES = {
     "x11-gnome": (":99", "", "x11", "GNOME"),
@@ -59,8 +70,14 @@ MARKS_PER_LINE = 100
 
 
 def uses_libtest(package):
-    # Run the GPUI harness in one process on every platform.
-    return package == UI
+    # Run each GPUI harness in one process on every platform.
+    return package in GPUI_PACKAGES
+
+
+def gpui_packages(packages):
+    """GPUI harness packages that exist in this build's Cargo metadata."""
+    present = set(packages.values())
+    return tuple(package for package in GPUI_PACKAGES if package in present)
 
 
 def batch_pure_enabled(mode="auto"):
@@ -90,13 +107,16 @@ def runner_label(package, binary_id, name, batched):
             "libtest-pure" if (binary_id, name) in batched else "nextest")
 
 
-def nextest_filter(batches):
+def nextest_filter(batches, libtest_packages=(UI,)):
     # `binary` matches the Cargo binary name; `binary_id` also distinguishes
     # library and integration harnesses. Inventory verification below remains
-    # the authority for the actual partition.
-    exclusions = [f"package(={UI})"]
+    # the authority for the actual partition. A `package()` predicate must name
+    # a package in the metadata, so only present GPUI packages are excluded.
+    exclusions = [f"package(={package})" for package in libtest_packages]
     for _, suite, prefix in batches:
         exclusions.append(f"(package(={suite['package-name']}) & kind(lib) & test(/^{re.escape(prefix)}/))")
+    if not exclusions:
+        return None
     return "not " + exclusions[0] if len(exclusions) == 1 else "not (" + " | ".join(exclusions) + ")"
 
 
@@ -390,12 +410,25 @@ def prepare_runtime_binaries(context):
     }, indent=2) + "\n", encoding="utf-8")
 
 
+def feature_args(selection):
+    """The selection without its package choice (`--workspace`, `-p`, `--exclude`)."""
+    args, skip = [], False
+    for arg in selection:
+        if skip:
+            skip = False
+        elif arg in ("-p", "--exclude"):
+            skip = True
+        elif arg != "--workspace":
+            args.append(arg)
+    return args
+
+
 def compile_tests(context, profile, test_targets=()):
     directory = paths(context)
     selection = CONTEXTS[context]
     targets = [arg for target in test_targets for arg in ("--test", target)]
     # Metadata cannot select packages, but must use the same feature switches.
-    features = selection[1:] if selection[0] == "--workspace" else selection[2:]
+    features = feature_args(selection)
     run(f"{context}-metadata", ["cargo", "metadata", "--format-version", "1", "--locked", *features],
         output=directory / "cargo.json")
     run(f"{context}-features", ["cargo", "tree", "--locked", *selection,
@@ -428,7 +461,7 @@ def compile_tests(context, profile, test_targets=()):
 
 def suite_env(context, suite, *, cleanup):
     env = dict(os.environ)
-    if suite.get("package-name") == UI:
+    if suite.get("package-name") in GPUI_PACKAGES:
         # Keep copied/renamed UI harnesses away from the developer's session.
         # Explicit session files created by subprocess tests still take
         # precedence over DISABLE_SESSION_PERSIST in the session loader.
@@ -570,8 +603,9 @@ def execute(context, schedule="serial", nextest_threads=None, nextest_profile="c
         build = json.loads((paths(context) / "binaries.json").read_text(encoding="utf-8"))
         junit = Path(build["rust-build-meta"]["target-directory"]) / "nextest" / nextest_profile / "junit.xml"
         junit.unlink(missing_ok=True)
+        expression = nextest_filter(batches, gpui_packages(packages))
         command = ["cargo", "nextest", "run", *reuse_args(context), "--profile", nextest_profile,
-                   "--ignore-default-filter", "-E", nextest_filter(batches), "--no-fail-fast"]
+                   "--ignore-default-filter", *(["-E", expression] if expression else []), "--no-fail-fast"]
         if threads is not None:
             command += ["--test-threads", str(threads)]
         code = run(f"{context}-nextest", command, check=False, live=live, cancel=cancel, dots=True)

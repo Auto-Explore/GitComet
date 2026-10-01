@@ -38,7 +38,7 @@ fn directory_symlink_is_not_hidden_by_directory_only_ignore_for_any_event_kind()
         assert_eq!(path_dir_hint(&event), expected_hint, "{kind:?}");
         let effect = summarize_event(&root, Some(&root.join(".git")), &mut rules, &event);
         assert!(
-            effect.change.is_some_and(|change| change.worktree),
+            effect.change.as_ref().is_some_and(|change| change.worktree),
             "a symlink to a directory is visible to Git after {kind:?}: {effect:?}"
         );
         assert!(effect.new_ignored_dirs.is_empty(), "{kind:?}");
@@ -73,7 +73,7 @@ fn symlink_over_tracked_directory_is_never_ignored() {
         let event = notify::Event::new(kind).add_path(link);
         let effect = summarize_event(&root, Some(&root.join(".git")), &mut rules, &event);
         assert!(
-            effect.change.is_some_and(|change| change.worktree),
+            effect.change.as_ref().is_some_and(|change| change.worktree),
             "tracked files vanished behind the link after {kind:?}: {effect:?}"
         );
     }

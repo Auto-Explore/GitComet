@@ -49,22 +49,24 @@ impl SettingsWindowView {
                             }),
                         ),
                     )
-                    .child(
-                        self.link_row(
-                            "settings_window_theme_guide",
-                            "Theme guide",
-                            THEMES_GUIDE_URL.into(),
-                            theme,
+                    .when_some(themes_guide_url(), |container, url| {
+                        container.child(
+                            self.link_row(
+                                "settings_window_theme_guide",
+                                "Theme guide",
+                                url.clone().into(),
+                                theme,
+                            )
+                            .border_color(no_separator)
+                            .on_activate(
+                                false,
+                                controls::ControlActivation::Action,
+                                move |_, _, cx| {
+                                    cx.open_url(&url);
+                                },
+                            ),
                         )
-                        .border_color(no_separator)
-                        .on_activate(
-                            false,
-                            controls::ControlActivation::Action,
-                            |_, _, cx| {
-                                cx.open_url(THEMES_GUIDE_URL);
-                            },
-                        ),
-                    ),
+                    }),
             )
     }
 

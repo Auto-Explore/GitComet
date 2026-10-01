@@ -58,6 +58,8 @@ pub(crate) enum Shortcut {
     },
     /// A binding that is only registered on macOS.
     MacOs(&'static str),
+    /// An extension's binding in GPUI keystroke syntax, like `secondary-shift-k`.
+    Keystrokes(&'static str),
 }
 
 impl Shortcut {
@@ -74,8 +76,43 @@ impl Shortcut {
                 Some(if is_macos { *macos } else { *other }.to_string())
             }
             Shortcut::MacOs(label) => is_macos.then(|| (*label).to_string()),
+            Shortcut::Keystrokes(source) => Some(keystrokes_label(source, is_macos)),
         }
     }
+}
+
+/// `secondary-shift-k g` → "Ctrl+Shift+K G" (Cmd on macOS). The modifiers
+/// come from GPUI's parse, which resolves `secondary` for this platform.
+fn keystrokes_label(source: &str, is_macos: bool) -> String {
+    let chords: Vec<String> = source
+        .split_whitespace()
+        .map(|chord| {
+            let Ok(keystroke) = gpui::Keystroke::parse(chord) else {
+                return chord.to_string();
+            };
+            let modifiers = keystroke.modifiers;
+            let mut parts: Vec<String> = Vec::new();
+            if modifiers.control {
+                parts.push("Ctrl".into());
+            }
+            if modifiers.alt {
+                parts.push(if is_macos { "Option" } else { "Alt" }.into());
+            }
+            if modifiers.shift {
+                parts.push("Shift".into());
+            }
+            if modifiers.platform {
+                parts.push(if is_macos { "Cmd" } else { "Super" }.into());
+            }
+            let mut key = keystroke.key.chars();
+            parts.push(match key.next() {
+                Some(first) => first.to_uppercase().chain(key).collect(),
+                None => String::new(),
+            });
+            parts.join("+")
+        })
+        .collect();
+    chords.join(" ")
 }
 
 #[cfg(test)]
@@ -102,5 +139,13 @@ mod tests {
         let macos_only = Shortcut::MacOs("Cmd+M");
         assert_eq!(macos_only.label_for(true).as_deref(), Some("Cmd+M"));
         assert_eq!(macos_only.label_for(false), None);
+    }
+
+    #[test]
+    fn extension_keystrokes_read_like_built_in_labels() {
+        let label = Shortcut::Keystrokes("ctrl-shift-k alt-f5").label_for(false);
+        assert_eq!(label.as_deref(), Some("Ctrl+Shift+K Alt+F5"));
+        let label = Shortcut::Keystrokes("alt-f5").label_for(true);
+        assert_eq!(label.as_deref(), Some("Option+F5"));
     }
 }

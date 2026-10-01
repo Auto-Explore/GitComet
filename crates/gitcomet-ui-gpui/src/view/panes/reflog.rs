@@ -513,6 +513,7 @@ impl ReflogPaneView {
                         panel.selected = Some(target.clone());
                     }
                     this.store.dispatch(Msg::SelectCommit {
+                        request_id: None,
                         repo_id,
                         commit_id: target.clone(),
                     });

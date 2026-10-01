@@ -12,6 +12,7 @@ impl SettingsWindowView {
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> Stateful<gpui::Div> {
+        crate::view::perf::settings_page_rendered();
         match category {
             SettingsCategory::General => self.general_card(theme, cx),
             SettingsCategory::Appearance => self.appearance_card(theme, cx),
@@ -25,7 +26,7 @@ impl SettingsWindowView {
             SettingsCategory::Remotes => self.remotes_card(theme, cx),
             SettingsCategory::Tags => self.tags_card(theme, cx),
             SettingsCategory::GitExecutable => self.git_executable_card(theme, cx),
-            SettingsCategory::Environment => self.environment_card(theme),
+            SettingsCategory::Environment => self.environment_card(theme, cx),
             SettingsCategory::Links => self.links_card(theme, cx),
         }
     }
@@ -816,6 +817,10 @@ impl SettingsWindowView {
             ));
         }
 
+        // A product without an update source has nothing to toggle.
+        if !crate::view::update_checks_available() {
+            return security_privacy_card;
+        }
         security_privacy_card = security_privacy_card.child(update_check_row);
         if update_check_locked {
             security_privacy_card = security_privacy_card.child(
@@ -826,7 +831,10 @@ impl SettingsWindowView {
                     .text_size(theme.ui_text(12.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(
-                        "Disabled by GITCOMET_NO_UPDATE_CHECK. Remove the environment variable and restart GitComet to change this setting.",
+                        format!(
+                            "Disabled by GITCOMET_NO_UPDATE_CHECK. Remove the environment variable and restart {} to change this setting.",
+                            crate::view::product_name()
+                        ),
                     ),
             );
         }
@@ -1927,103 +1935,104 @@ impl SettingsWindowView {
             }
         }
 
-        git_executable_card = git_executable_card.child(
-            self.link_row(
-                "settings_window_signature_guide",
-                "Signature verification guide",
-                "docs/commit-signatures.md".into(),
-                theme,
-            )
-            .on_activate(false, controls::ControlActivation::Action, |_, _, cx| {
-                cx.open_url(SIGNATURE_GUIDE_URL);
-            }),
-        );
-        git_executable_card
-    }
-
-    fn environment_card(&self, theme: AppTheme) -> Stateful<gpui::Div> {
-        let no_separator = gpui::rgba(0x00000000);
-        self.card("settings_window_environment", "Environment", theme)
-            .child(self.info_row(
-                "settings_window_build",
-                "Build",
-                self.runtime_info.app_version_display.clone(),
-                theme,
-            ))
-            .child(
-                self.info_row(
-                    "settings_window_os",
-                    "Operating system",
-                    self.runtime_info.operating_system.clone(),
+        if let Some(url) = signature_guide_url() {
+            git_executable_card = git_executable_card.child(
+                self.link_row(
+                    "settings_window_signature_guide",
+                    "Signature verification guide",
+                    "docs/commit-signatures.md".into(),
                     theme,
                 )
-                .border_color(no_separator),
-            )
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    move |_, _, cx| {
+                        cx.open_url(&url);
+                    },
+                ),
+            );
+        }
+        git_executable_card
     }
 
     fn links_card(&self, theme: AppTheme, cx: &mut gpui::Context<Self>) -> Stateful<gpui::Div> {
         let no_separator = gpui::rgba(0x00000000);
         self.card("settings_window_links", "Links", theme)
-            .child(
-                self.link_row(
-                    "settings_window_links_theme_guide",
-                    "Theme guide",
-                    "docs/themes.md".into(),
-                    theme,
+            .when_some(themes_guide_url(), |card, url| {
+                card.child(
+                    self.link_row(
+                        "settings_window_links_theme_guide",
+                        "Theme guide",
+                        "docs/themes.md".into(),
+                        theme,
+                    )
+                    .on_activate(
+                        false,
+                        controls::ControlActivation::Action,
+                        move |_, _, cx| {
+                            cx.open_url(&url);
+                        },
+                    ),
                 )
-                .on_activate(
-                    false,
-                    controls::ControlActivation::Action,
-                    |_, _, cx| {
-                        cx.open_url(THEMES_GUIDE_URL);
-                    },
-                ),
-            )
-            .child(
-                self.link_row(
-                    "settings_window_github",
-                    "GitHub",
-                    "Auto-Explore/GitComet".into(),
-                    theme,
+            })
+            .when_some(repository_url(), |card, url| {
+                let label = if url.contains("://github.com/") {
+                    "GitHub"
+                } else {
+                    "Source code"
+                };
+                card.child(
+                    self.link_row("settings_window_github", label, url_label(url), theme)
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Action,
+                            move |_, _, cx| {
+                                cx.open_url(url);
+                            },
+                        ),
                 )
-                .on_activate(
-                    false,
-                    controls::ControlActivation::Action,
-                    |_, _, cx| {
-                        cx.open_url(GITHUB_URL);
-                    },
-                ),
-            )
-            .child(
-                self.link_row(
-                    "settings_window_license",
-                    "License",
-                    LICENSE_NAME.into(),
-                    theme,
+            })
+            .when_some(license_link(), |card, license| {
+                card.child(
+                    self.link_row(
+                        "settings_window_license",
+                        "License",
+                        license.name.to_string().into(),
+                        theme,
+                    )
+                    .on_activate(
+                        false,
+                        controls::ControlActivation::Action,
+                        move |_, _, cx| {
+                            cx.open_url(&license.url);
+                        },
+                    ),
                 )
-                .on_activate(
-                    false,
-                    controls::ControlActivation::Action,
-                    |_, _, cx| {
-                        cx.open_url(LICENSE_URL);
-                    },
-                ),
-            )
-            .child(
-                self.link_row(
-                    "settings_window_professional_edition_waitlist",
-                    "Professional Edition waitlist",
-                    "gitcomet.dev".into(),
-                    theme,
+            })
+            .when_some(crate::view::editions_url(), |card, url| {
+                let host = url_label(url);
+                let host: SharedString = host
+                    .split(['/', '#'])
+                    .next()
+                    .unwrap_or_default()
+                    .to_string()
+                    .into();
+                card.child(
+                    self.link_row(
+                        "settings_window_professional_edition_waitlist",
+                        "Professional Edition waitlist",
+                        host,
+                        theme,
+                    )
+                    .on_activate(
+                        false,
+                        controls::ControlActivation::Action,
+                        move |_, _, cx| {
+                            cx.open_url(url);
+                        },
+                    ),
                 )
-                .on_activate(
-                    false,
-                    controls::ControlActivation::Action,
-                    |_, _, cx| {
-                        cx.open_url(EDITIONS_URL);
-                    },
-                ),
-            )
+            })
             .child(
                 self.link_row(
                     "settings_window_open_source_licenses",

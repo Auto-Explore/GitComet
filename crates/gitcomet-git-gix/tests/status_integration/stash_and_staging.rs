@@ -814,10 +814,10 @@ fn stage_hunk_applies_only_part_of_a_file_to_index() {
     let opened = backend.open(repo).unwrap();
 
     let unstaged_before = opened
-        .diff_unified(&DiffTarget::WorkingTree {
-            path: PathBuf::from("a.txt"),
-            area: DiffArea::Unstaged,
-        })
+        .diff_unified(&DiffTarget::working_tree(
+            PathBuf::from("a.txt"),
+            DiffArea::Unstaged,
+        ))
         .unwrap();
     let hunk_count_before = unstaged_before
         .lines()
@@ -853,10 +853,10 @@ fn stage_hunk_applies_only_part_of_a_file_to_index() {
         .unwrap();
 
     let staged_after = opened
-        .diff_unified(&DiffTarget::WorkingTree {
-            path: PathBuf::from("a.txt"),
-            area: DiffArea::Staged,
-        })
+        .diff_unified(&DiffTarget::working_tree(
+            PathBuf::from("a.txt"),
+            DiffArea::Staged,
+        ))
         .unwrap();
     assert_eq!(
         staged_after.lines().filter(|l| l.starts_with("@@")).count(),
@@ -868,10 +868,10 @@ fn stage_hunk_applies_only_part_of_a_file_to_index() {
     assert!(!staged_after.contains("L25-mod"));
 
     let unstaged_after = opened
-        .diff_unified(&DiffTarget::WorkingTree {
-            path: PathBuf::from("a.txt"),
-            area: DiffArea::Unstaged,
-        })
+        .diff_unified(&DiffTarget::working_tree(
+            PathBuf::from("a.txt"),
+            DiffArea::Unstaged,
+        ))
         .unwrap();
     assert_eq!(
         unstaged_after
@@ -917,10 +917,10 @@ fn unstage_hunk_reverts_only_that_part_in_index() {
     let opened = backend.open(repo).unwrap();
 
     let unstaged_before = opened
-        .diff_unified(&DiffTarget::WorkingTree {
-            path: PathBuf::from("a.txt"),
-            area: DiffArea::Unstaged,
-        })
+        .diff_unified(&DiffTarget::working_tree(
+            PathBuf::from("a.txt"),
+            DiffArea::Unstaged,
+        ))
         .unwrap();
     assert_eq!(
         unstaged_before
@@ -957,10 +957,10 @@ fn unstage_hunk_reverts_only_that_part_in_index() {
         .unwrap();
 
     let staged_after_stage = opened
-        .diff_unified(&DiffTarget::WorkingTree {
-            path: PathBuf::from("a.txt"),
-            area: DiffArea::Staged,
-        })
+        .diff_unified(&DiffTarget::working_tree(
+            PathBuf::from("a.txt"),
+            DiffArea::Staged,
+        ))
         .unwrap();
     assert_eq!(
         staged_after_stage
@@ -976,10 +976,10 @@ fn unstage_hunk_reverts_only_that_part_in_index() {
         .unwrap();
 
     let staged_after_unstage = opened
-        .diff_unified(&DiffTarget::WorkingTree {
-            path: PathBuf::from("a.txt"),
-            area: DiffArea::Staged,
-        })
+        .diff_unified(&DiffTarget::working_tree(
+            PathBuf::from("a.txt"),
+            DiffArea::Staged,
+        ))
         .unwrap();
     assert!(
         staged_after_unstage.trim().is_empty(),
@@ -987,10 +987,10 @@ fn unstage_hunk_reverts_only_that_part_in_index() {
     );
 
     let unstaged_after_unstage = opened
-        .diff_unified(&DiffTarget::WorkingTree {
-            path: PathBuf::from("a.txt"),
-            area: DiffArea::Unstaged,
-        })
+        .diff_unified(&DiffTarget::working_tree(
+            PathBuf::from("a.txt"),
+            DiffArea::Unstaged,
+        ))
         .unwrap();
     assert_eq!(
         unstaged_after_unstage
@@ -1236,10 +1236,10 @@ fn unstage_line_patch_must_describe_the_index_side() {
         .expect("a patch describing the index side reverse-applies");
 
     let staged_after = opened
-        .diff_unified(&DiffTarget::WorkingTree {
-            path: PathBuf::from("a.txt"),
-            area: DiffArea::Staged,
-        })
+        .diff_unified(&DiffTarget::working_tree(
+            PathBuf::from("a.txt"),
+            DiffArea::Staged,
+        ))
         .unwrap();
     assert!(
         staged_after.contains("+new two") && !staged_after.contains("+new one"),
@@ -1275,10 +1275,10 @@ fn line_level_staging_round_trips_a_path_containing_spaces() {
     let opened = backend.open(repo).unwrap();
 
     let unstaged = opened
-        .diff_unified(&DiffTarget::WorkingTree {
-            path: PathBuf::from(rel),
-            area: DiffArea::Unstaged,
-        })
+        .diff_unified(&DiffTarget::working_tree(
+            PathBuf::from(rel),
+            DiffArea::Unstaged,
+        ))
         .unwrap();
     assert!(
         unstaged.contains(&format!("+++ b/{rel}\t")),
@@ -1303,10 +1303,10 @@ fn line_level_staging_round_trips_a_path_containing_spaces() {
         .expect("a per-line patch for a spaced path must apply to the index");
 
     let staged_after = opened
-        .diff_unified(&DiffTarget::WorkingTree {
-            path: PathBuf::from(rel),
-            area: DiffArea::Staged,
-        })
+        .diff_unified(&DiffTarget::working_tree(
+            PathBuf::from(rel),
+            DiffArea::Staged,
+        ))
         .unwrap();
     assert!(
         staged_after.contains("+new one") && !staged_after.contains("+new two"),

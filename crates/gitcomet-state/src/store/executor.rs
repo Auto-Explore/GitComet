@@ -1,5 +1,5 @@
 use super::send_diagnostics::{SendFailureKind, panic_payload_to_string, send_or_log};
-use gitcomet_core::mergetool_trace;
+use gitcomet_core::{mergetool_trace, op_trace};
 use std::any::Any;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::OnceLock;
@@ -60,6 +60,8 @@ pub(super) enum StoreExecutorPool {
 
 pub(super) struct TaskExecutor {
     tx: mpsc::Sender<Task>,
+    /// Thread-name prefix, also the pool label in operation traces.
+    name: &'static str,
     _threads: Vec<thread::JoinHandle<()>>,
 }
 
@@ -118,6 +120,9 @@ impl TaskExecutor {
         task: impl FnOnce() + Send + 'static,
     ) -> bool {
         let context = mergetool_trace::current_capture_context();
+        // Traced at request time: a replacement also replaces the operation
+        // the running task is attributed to.
+        let task = op_trace::wrap_task(self.name, task);
         let task: Task = Box::new(move || {
             let _trace = context.as_ref().map(mergetool_trace::attach_capture);
             task();
@@ -130,7 +135,7 @@ impl TaskExecutor {
             .is_some();
         if !already_queued {
             let queued = slot.clone();
-            let sent = self.try_spawn(move || {
+            let sent = self.try_spawn_untraced(move || {
                 let task = queued.0.lock().unwrap_or_else(|e| e.into_inner()).take();
                 if let Some(task) = task {
                     task();
@@ -143,19 +148,32 @@ impl TaskExecutor {
         }
         already_queued
     }
-    #[cfg_attr(feature = "test-support", allow(dead_code))]
+
+    #[cfg(test)]
     pub(super) fn new(threads: usize) -> Self {
+        Self::named("gitcomet-store-worker", threads)
+    }
+
+    #[cfg_attr(feature = "test-support", allow(dead_code))]
+    pub(super) fn named(name: &'static str, threads: usize) -> Self {
         let (tx, rx) = mpsc::channel::<Task>();
         let rx = Arc::new(std::sync::Mutex::new(rx));
 
+        // Named so profilers and per-thread CPU samples can attribute work.
         let mut worker_threads = Vec::with_capacity(threads);
-        for _ in 0..threads {
+        for ix in 0..threads {
             let rx = Arc::clone(&rx);
-            worker_threads.push(thread::spawn(move || worker_loop(rx)));
+            worker_threads.push(
+                thread::Builder::new()
+                    .name(format!("{name}-{ix}"))
+                    .spawn(move || worker_loop(rx))
+                    .expect("spawn store executor thread"),
+            );
         }
 
         Self {
             tx,
+            name,
             _threads: worker_threads,
         }
     }
@@ -185,22 +203,34 @@ impl TaskExecutor {
         static METADATA: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
         static SESSION_PERSIST: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
 
-        let tx = match pool {
-            StoreExecutorPool::Primary => sender_for(&PRIMARY, "gitcomet-store-primary", threads),
-            StoreExecutorPool::Signatures => {
-                sender_for(&SIGNATURES, "gitcomet-store-signatures", threads)
-            }
-            StoreExecutorPool::Metadata => {
-                sender_for(&METADATA, "gitcomet-store-metadata", threads)
-            }
+        let (cell, name) = match pool {
+            StoreExecutorPool::Primary => (&PRIMARY, "gitcomet-store-primary"),
+            StoreExecutorPool::Signatures => (&SIGNATURES, "gitcomet-store-signatures"),
+            StoreExecutorPool::Metadata => (&METADATA, "gitcomet-store-metadata"),
             StoreExecutorPool::SessionPersist => {
-                sender_for(&SESSION_PERSIST, "gitcomet-store-session-persist", threads)
+                (&SESSION_PERSIST, "gitcomet-store-session-persist")
             }
         };
 
         Self {
-            tx,
+            tx: sender_for(cell, name, threads),
+            name,
             _threads: Vec::new(),
+        }
+    }
+
+    /// Closes the queue and waits for the workers, so a test process never
+    /// exits with store workers still running.
+    #[cfg(test)]
+    pub(super) fn join(self) {
+        let Self {
+            tx,
+            _threads: threads,
+            ..
+        } = self;
+        drop(tx);
+        for thread in threads {
+            thread.join().expect("store executor worker panicked");
         }
     }
 
@@ -210,6 +240,10 @@ impl TaskExecutor {
 
     /// `false` when the worker queue is disconnected (the failure is recorded).
     fn try_spawn(&self, task: impl FnOnce() + Send + 'static) -> bool {
+        self.try_spawn_untraced(op_trace::wrap_task(self.name, task))
+    }
+
+    fn try_spawn_untraced(&self, task: impl FnOnce() + Send + 'static) -> bool {
         let mergetool_trace_context = mergetool_trace::current_capture_context();
         send_or_log(
             &self.tx,
@@ -229,6 +263,28 @@ impl TaskExecutor {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    #[ignore = "manual find worker startup measurement"]
+    fn history_find_worker_startup_measurement() {
+        let start = std::time::Instant::now();
+        let workers: Vec<_> = (0..32)
+            .map(|_| {
+                std::sync::LazyLock::new(|| {
+                    TaskExecutor::named(crate::history_find::HISTORY_FIND_THREAD, 1)
+                })
+            })
+            .collect();
+        eprintln!(
+            "32 find executors: {:?}, started threads={}",
+            start.elapsed(),
+            workers
+                .iter()
+                .filter_map(std::sync::LazyLock::get)
+                .map(|worker| worker._threads.len())
+                .sum::<usize>()
+        );
+    }
 
     #[test]
     fn latest_slot_replaces_pending_work_without_blocking_other_slots() {

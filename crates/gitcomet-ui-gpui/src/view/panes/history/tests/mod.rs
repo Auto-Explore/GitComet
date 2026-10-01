@@ -47,6 +47,36 @@ fn the_history_fingerprint_tracks_the_worktree_revs() {
     );
 }
 
+/// Sidebar file search and folder expansion move `file_browser_rev` on every
+/// keystroke; history only marks the browsed commit, which follows the
+/// browser's `source`.
+#[test]
+fn the_history_fingerprint_ignores_file_browser_search() {
+    let mut state = AppState::test_default();
+    state
+        .repos
+        .push(gitcomet_state::model::RepoState::new_opening(
+            gitcomet_state::model::RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        ));
+    state.active_repo = Some(gitcomet_state::model::RepoId(1));
+    let fingerprint = |state: &AppState| HistoryView::notify_fingerprint_for(state, false);
+    let before = fingerprint(&state);
+
+    let browser = &mut state.repos[0].file_browser;
+    browser.search_query = "src".into();
+    browser.expanded_dirs.insert(Arc::new(PathBuf::from("src")));
+    browser.bump_rev();
+    assert_eq!(before, fingerprint(&state));
+
+    let browser = &mut state.repos[0].file_browser;
+    browser.source = gitcomet_core::domain::FileSource::Commit(CommitId("c1".into()));
+    browser.bump_rev();
+    assert_ne!(before, fingerprint(&state), "the browsed commit is marked");
+}
+
 struct BlockingBackend;
 
 impl GitBackend for BlockingBackend {
@@ -258,9 +288,20 @@ fn lane_branch_labels(
         .collect()
 }
 
+/// Hands the first repository a finished history index, the way a completed
+/// index build does, so the view switches the list to its indexed mode.
+fn install_index(state: &mut AppState, index: gitcomet_core::history_index::HistoryIndexHandle) {
+    let history = &mut state.repos[0].history_state;
+    history.log_snapshot = Some(index.snapshot.clone());
+    history.indexed.requested = Some(index.snapshot.clone());
+    history.indexed.index = Some(index);
+    history.indexed.rev += 1;
+}
+
 mod base_cache;
 mod branch_names;
 mod columns;
+mod find;
 mod interaction;
 mod lane_attribution;
 mod refresh;

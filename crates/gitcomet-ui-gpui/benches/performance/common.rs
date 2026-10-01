@@ -179,7 +179,18 @@ fn sidecar_cli_flag_has_inline_value(flag: &str) -> bool {
     )
 }
 
+/// `--list` still registers every benchmark (and so builds its fixtures), but
+/// must not run sidecar passes: a sidecar written during discovery would look
+/// fresh to the suite's completeness gate without any measurement behind it.
+fn listing_benchmarks() -> bool {
+    static LISTING: OnceLock<bool> = OnceLock::new();
+    *LISTING.get_or_init(|| env::args().skip(1).any(|arg| arg == "--list"))
+}
+
 pub(crate) fn sidecar_benchmark_matches_filter(bench: &str) -> bool {
+    if listing_benchmarks() {
+        return false;
+    }
     match current_sidecar_benchmark_filter() {
         BenchmarkFilter::AcceptAll => true,
         BenchmarkFilter::Exact(exact) => bench == exact,
@@ -219,6 +230,7 @@ pub(crate) fn markdown_preview_measurement_time() -> Duration {
 
 pub(crate) fn benchmark_criterion() -> Criterion {
     install_benchmark_process_ram_guard();
+    gitcomet_ui_gpui::benchmarks::install_live_runtime();
     install_tree_sitter_tracking_allocator();
     Criterion::default()
 }
@@ -228,6 +240,25 @@ pub(crate) fn settle_markdown_allocator_pages() {
     // mimalloc a short purge window keeps the process-wide RAM guard aligned with
     // live working set before the next benchmark group begins.
     std::thread::sleep(Duration::from_secs(1));
+}
+
+/// Times `routine` alone: `reset` restores the fixture before each iteration
+/// and the output is dropped after the clock stops.
+pub(crate) fn time_iterations_with_reset<F, O>(
+    iters: u64,
+    fixture: &mut F,
+    mut reset: impl FnMut(&mut F),
+    mut routine: impl FnMut(&mut F) -> O,
+) -> Duration {
+    let mut elapsed = Duration::ZERO;
+    for _ in 0..iters {
+        reset(fixture);
+        let started = Instant::now();
+        let output = routine(fixture);
+        elapsed += started.elapsed();
+        drop(std::hint::black_box(output));
+    }
+    elapsed
 }
 
 pub(crate) fn measure_sidecar_allocations<T>(f: impl FnOnce() -> T) -> T {
@@ -799,8 +830,55 @@ pub(crate) fn capture_frame_timing_scroll_burst<F>(
     scroll_step_rows: usize,
     frame_budget_ns: u64,
     frames: usize,
-    mut run_step: F,
+    run_step: F,
 ) -> (u64, FrameTimingStats, FrameTimingScenarioMetrics)
+where
+    F: FnMut(usize, usize) -> u64,
+{
+    let mut capture =
+        FrameTimingCapture::with_expected_frames(frame_budget_ns.max(1), frames.max(1));
+    let (hash, metrics) = scroll_burst(
+        total_rows,
+        window_rows,
+        scroll_step_rows,
+        frames,
+        Some(&mut capture),
+        run_step,
+    );
+    (hash, capture.finish(), metrics)
+}
+
+/// The timed variant of [`capture_frame_timing_scroll_burst`]: the same steps
+/// without per-frame clock reads or percentile bookkeeping.
+pub(crate) fn run_frame_timing_scroll_burst<F>(
+    total_rows: usize,
+    window_rows: usize,
+    scroll_step_rows: usize,
+    frames: usize,
+    run_step: F,
+) -> u64
+where
+    F: FnMut(usize, usize) -> u64,
+{
+    scroll_burst(
+        total_rows,
+        window_rows,
+        scroll_step_rows,
+        frames,
+        None,
+        run_step,
+    )
+    .0
+}
+
+fn scroll_burst<F>(
+    total_rows: usize,
+    window_rows: usize,
+    scroll_step_rows: usize,
+    frames: usize,
+    mut capture: Option<&mut FrameTimingCapture>,
+    mut run_step: F,
+) -> (u64, FrameTimingScenarioMetrics)
 where
     F: FnMut(usize, usize) -> u64,
 {
@@ -810,14 +888,18 @@ where
     let total_rows = total_rows.max(window_rows);
     let max_start = total_rows.saturating_sub(window_rows);
 
-    let mut capture = FrameTimingCapture::with_expected_frames(frame_budget_ns.max(1), frames);
     let mut hash = 0u64;
     let mut start = 0usize;
 
     for _ in 0..frames {
-        let frame_started = Instant::now();
-        hash ^= run_step(start, window_rows);
-        capture.record_frame(frame_started.elapsed());
+        match capture.as_deref_mut() {
+            Some(capture) => {
+                let frame_started = Instant::now();
+                hash ^= run_step(start, window_rows);
+                capture.record_frame(frame_started.elapsed());
+            }
+            None => hash ^= run_step(start, window_rows),
+        }
 
         if max_start > 0 {
             start = start.saturating_add(scroll_step_rows);
@@ -829,7 +911,6 @@ where
 
     (
         hash,
-        capture.finish(),
         FrameTimingScenarioMetrics {
             total_rows: u64::try_from(total_rows).unwrap_or(u64::MAX),
             window_rows: u64::try_from(window_rows).unwrap_or(u64::MAX),

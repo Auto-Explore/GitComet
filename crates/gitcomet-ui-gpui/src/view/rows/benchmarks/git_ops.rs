@@ -205,10 +205,7 @@ impl GitOpsFixture {
             _repo_root: repo_root,
             repo,
             scenario: GitOpsScenario::DiffCommit {
-                target: DiffTarget::Commit {
-                    commit_id,
-                    path: None,
-                },
+                target: DiffTarget::commit(commit_id, None),
                 changed_files: renamed_files,
                 renamed_files,
                 binary_files: 0,
@@ -230,10 +227,7 @@ impl GitOpsFixture {
             _repo_root: repo_root,
             repo,
             scenario: GitOpsScenario::DiffCommit {
-                target: DiffTarget::Commit {
-                    commit_id,
-                    path: None,
-                },
+                target: DiffTarget::commit(commit_id, None),
                 changed_files: binary_files,
                 renamed_files: 0,
                 binary_files,
@@ -255,10 +249,7 @@ impl GitOpsFixture {
             _repo_root: repo_root,
             repo,
             scenario: GitOpsScenario::DiffCommit {
-                target: DiffTarget::Commit {
-                    commit_id,
-                    path: None,
-                },
+                target: DiffTarget::commit(commit_id, None),
                 changed_files: 1,
                 renamed_files: 0,
                 binary_files: 0,

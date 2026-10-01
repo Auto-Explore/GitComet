@@ -51,6 +51,7 @@ impl PopoverHost {
         anchor = anchor_for_corner(anchor_corner);
 
         let panel = match kind {
+            PopoverKind::Hosted { id, .. } => extension_dialog::panel(self, id, cx),
             PopoverKind::HookActivity {
                 repo_id,
                 operation_id,
@@ -681,6 +682,7 @@ impl PopoverHost {
             PopoverKind::UnsavedFileEditsConfirm(prompt) => {
                 unsaved_file_edits_confirm::panel(self, prompt, cx)
             }
+            PopoverKind::CloseGuardConfirm(prompt) => close_guard_confirm::panel(self, prompt, cx),
         };
 
         let is_right = matches!(anchor_corner, Anchor::TopRight | Anchor::BottomRight);

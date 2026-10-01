@@ -1114,7 +1114,7 @@ fn live_and_prepared_agree_on_a_pair_inside_a_combined_layer() {
     let _ = syntax_tokens_for_prepared_document_line(document, 1);
     let live = LiveSyntaxDocument::new(
         DiffSyntaxLanguage::Jinja,
-        crate::kit::rope::Rope::from_str(text),
+        crate::kit::rope::Rope::from_text(text),
         Vec::new().into(),
         None,
     )

@@ -170,11 +170,13 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         comparator: StructuralBudgetComparator::Exactly,
         threshold: 100.0,
     },
+    // Split status: a worktree call and a staged call per refreshed repo,
+    // here and in every `status_calls` budget below.
     StructuralBudgetSpec {
         bench: "idle/background_refresh_cost_per_cycle",
         metric: "status_calls",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 100.0,
+        threshold: 200.0,
     },
     StructuralBudgetSpec {
         bench: "idle/background_refresh_cost_per_cycle",
@@ -210,7 +212,7 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "idle/wake_from_sleep_resume",
         metric: "status_calls",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 10.0,
+        threshold: 20.0,
     },
     StructuralBudgetSpec {
         bench: "idle/wake_from_sleep_resume",
@@ -437,7 +439,7 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "fs_event/single_file_save_to_status_update",
         metric: "status_calls",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 1.0,
+        threshold: 2.0,
     },
     StructuralBudgetSpec {
         bench: "fs_event/git_checkout_200_files_to_status_update",
@@ -461,7 +463,7 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "fs_event/git_checkout_200_files_to_status_update",
         metric: "status_calls",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 1.0,
+        threshold: 2.0,
     },
     StructuralBudgetSpec {
         bench: "fs_event/rapid_saves_debounce_coalesce",
@@ -479,7 +481,7 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "fs_event/rapid_saves_debounce_coalesce",
         metric: "status_calls",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 1.0,
+        threshold: 2.0,
     },
     StructuralBudgetSpec {
         bench: "fs_event/false_positive_rate_under_churn",
@@ -503,7 +505,7 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "fs_event/false_positive_rate_under_churn",
         metric: "status_calls",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 1.0,
+        threshold: 2.0,
     },
     // --- network --- mocked transport progress/cancel structural budgets
     StructuralBudgetSpec {

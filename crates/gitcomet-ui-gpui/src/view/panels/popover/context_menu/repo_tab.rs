@@ -9,13 +9,39 @@ pub(super) fn model(host: &PopoverHost, repo_id: RepoId) -> ContextMenuModel {
         .iter()
         .find(|repo| repo.id == repo_id)
         .map(|repo| repo.spec.workdir.clone());
-    model_for_state(
+    let mut model = model_for_state(
         host.state.as_ref(),
         repo_id,
         workdir,
         &host.cached_workspaces,
         host.cached_workspace_id,
-    )
+    );
+    if !host.extension_repo_tab_menu.is_empty() && !model.items.is_empty() {
+        // Above the Close group, which stays last.
+        let at = model
+            .items
+            .iter()
+            .rposition(|item| matches!(item, ContextMenuItem::Separator))
+            .unwrap_or(model.items.len());
+        let entries = host
+            .extension_repo_tab_menu
+            .iter()
+            .map(|entry| ContextMenuItem::Entry {
+                label: entry.label.clone(),
+                icon: None,
+                shortcut: None,
+                disabled: false,
+                action: Box::new(ContextMenuAction::RunExtensionCommand {
+                    id: entry.id.clone(),
+                    repo_id,
+                }),
+            });
+        let block: Vec<ContextMenuItem> = std::iter::once(ContextMenuItem::Separator)
+            .chain(entries)
+            .collect();
+        model.items.splice(at..at, block);
+    }
+    model
 }
 
 fn model_for_state(

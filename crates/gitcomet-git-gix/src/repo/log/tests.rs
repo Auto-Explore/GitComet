@@ -1545,10 +1545,7 @@ fn worktree_file_source_memo_invalidates_on_config_change() {
         .unwrap();
     let _clock = crate::repo::RacyClockSkew::set(std::time::Duration::from_secs(30));
     let repo = open_repo(tmp.path());
-    let target = DiffTarget::WorkingTree {
-        path: "src.txt".into(),
-        area: DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree("src.txt".into(), DiffArea::Unstaged);
     let read_source = || {
         let text = repo.diff_file_text_impl(&target).unwrap().unwrap();
         fs::read(text.new_source.unwrap().path).unwrap()

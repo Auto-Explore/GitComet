@@ -115,6 +115,7 @@ actions!(
         TextInputDiffPrevChange,
         TextInputDiffNextChange,
         OpenActiveViewSearch,
+        HistoryFindPrevious,
         PopoverPromptDismiss,
         PopoverPromptTabNext,
         PopoverPromptTabPrev,
@@ -207,10 +208,13 @@ fn repo_activation_msg(
 }
 
 mod app_model;
+mod bottom_panel_providers;
 mod branch_sidebar;
 mod caches;
+mod changed_file_list;
 pub(crate) mod chrome;
 pub(crate) mod clone_progress;
+mod close_guards;
 mod color;
 mod command_palette;
 mod commit_message_hover;
@@ -226,20 +230,24 @@ mod diff_text_model;
 mod diff_text_selection;
 mod diff_utils;
 pub(crate) mod error_notices;
+pub(crate) mod extension_host;
+mod extension_panels;
 mod external_drag;
+mod fetch_ref;
 mod file_diff_display;
-mod file_icons;
+mod file_list_controller;
 mod fingerprint;
 mod history_graph;
 pub(crate) mod history_mode;
 mod history_refs_hover;
 mod home;
-mod icons;
+pub(crate) mod hosted;
 #[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 mod linux_desktop_integration;
 mod markdown_preview;
 mod mod_helpers;
 mod open_source_licenses_data;
+mod pane_store;
 mod panels;
 mod panes;
 mod patch_split;
@@ -248,13 +256,17 @@ mod perf;
 mod permalink;
 pub(super) mod platform_open;
 mod poller;
+mod pop_out;
 mod preference_sync;
 mod preferences;
 mod reflog_panel;
 mod repo_open;
+mod repository_views;
 mod reveal_commit;
 pub(crate) mod rows;
-mod settings_window;
+pub(crate) mod scenario_driver;
+pub(crate) mod settings_window;
+mod shell_policy;
 pub(crate) mod shortcut_labels;
 mod sidebar_presentation;
 mod sidebar_search;
@@ -269,10 +281,12 @@ mod terminal_preferences;
 #[cfg(test)]
 pub(crate) mod test_support;
 mod toast_host;
-mod tooltip;
-mod tooltip_host;
+mod ui_persistence;
+mod window_gates;
+pub(crate) use gitcomet_ui_kit::{file_icons, icons, tooltip, tooltip_host};
 mod update_check;
-pub(crate) use update_check::update_checks_disabled_by_environment;
+mod workspace_picker;
+pub(crate) use update_check::{update_checks_available, update_checks_disabled_by_environment};
 mod user_survey;
 mod word_diff;
 
@@ -332,7 +346,7 @@ pub use mod_helpers::{
 };
 use panels::{
     ActionBarView, BottomStatusBarView, PopoverHost, PopoverHostInit, RepoTabsBarView,
-    action_bar_density, action_bar_height,
+    action_bar_density, action_bar_height, bottom_status_bar_height,
 };
 pub(crate) use panes::MainPaneView;
 use panes::{
@@ -440,15 +454,42 @@ const TOAST_FADE_OUT_MS: u64 = 220;
 const TOAST_SLIDE_PX: f32 = 12.0;
 const TERMINAL_PANEL_DEFAULT_HEIGHT_PX: f32 = 220.0;
 const TERMINAL_PANEL_RESIZE_HANDLE_PX: f32 = 6.0;
-pub(crate) const WEBSITE_URL: &str = "https://gitcomet.dev";
-pub(crate) const EDITIONS_URL: &str = "https://gitcomet.dev/#editions";
-pub(crate) const RELEASES_URL: &str = "https://github.com/Auto-Explore/GitComet/releases";
-pub(crate) const DISCORD_URL: &str = "https://discord.com/invite/2ufDGP8RnA";
 
-pub(in crate::view) fn restrict_scroll_to_vertical_axis<E: Styled>(mut element: E) -> E {
-    element.style().restrict_scroll_to_axis = Some(true);
-    element
+/// Product links from the installed identity; `None` hides the entry point.
+pub(crate) fn website_url() -> Option<&'static str> {
+    gitcomet_core::identity::current()
+        .links()
+        .website
+        .as_deref()
 }
+
+pub(crate) fn editions_url() -> Option<&'static str> {
+    gitcomet_core::identity::current()
+        .links()
+        .editions
+        .as_deref()
+}
+
+pub(crate) fn releases_url() -> Option<&'static str> {
+    gitcomet_core::identity::current()
+        .links()
+        .releases
+        .as_deref()
+}
+
+pub(crate) fn community_url() -> Option<&'static str> {
+    gitcomet_core::identity::current()
+        .links()
+        .community
+        .as_deref()
+}
+
+/// The product name in window titles, menus, and messages.
+pub(crate) fn product_name() -> &'static str {
+    gitcomet_core::identity::current().display_name()
+}
+
+pub(in crate::view) use gitcomet_ui_kit::restrict_scroll_to_vertical_axis;
 
 // A cached view reuses its previous frame's layout and paint whenever the frame
 // was requested through `notify` on some other view (spinner ticks, store
@@ -517,12 +558,24 @@ fn stable_cached_fixed_height_view<V: Render>(view: Entity<V>, height: Pixels) -
 }
 
 fn stable_overlay_view<V: Render>(view: Entity<V>) -> impl IntoElement {
-    // Keep overlay hosts uncached. Their paint ranges are recorded after focused
-    // TextInput views register platform input handlers, and Wayland text-input
-    // replace_text_in_range can trigger a redraw while that handler is
-    // temporarily unavailable. Reusing the cached overlay paint range then
-    // replays a stale input-handler index and panics inside GPUI reuse_paint.
+    // Uncached: anchored popovers and hover cards would need their own
+    // invalidation checked before they could reuse a frame. The input-handler
+    // panic that once kept every host uncached is fixed in gpui (zed #50665);
+    // see `stable_cached_overlay_view`.
     div().absolute().top_0().left_0().size_full().child(view)
+}
+
+/// An overlay host behind a stable cache boundary. Overlays paint after the
+/// panes and their focused input, and replaying such a paint range panicked in
+/// gpui's `reuse_paint` until it stopped popping the frame's input handler
+/// (zed #50665, in gpui-ce since June 2026).
+fn stable_cached_overlay_view<V: Render>(view: Entity<V>) -> impl IntoElement {
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .child(stable_cached_fill_view(view))
 }
 
 struct UiScaleScrollCapture {
@@ -634,7 +687,7 @@ fn active_diff_target(state: &AppState) -> Option<(RepoId, DiffTarget)> {
 
 fn active_merge_view_target(state: &AppState) -> Option<(RepoId, DiffTarget)> {
     let (repo_id, target) = active_diff_target(state)?;
-    let DiffTarget::WorkingTree { path, area } = &target else {
+    let DiffTarget::WorkingTree { path, area, .. } = &target else {
         return None;
     };
     if *area != DiffArea::Unstaged {
@@ -764,7 +817,7 @@ pub(in crate::view) fn diff_split_column_widths(
     diff_split_column_widths_from_available(available, min_col_w, ratio)
 }
 
-pub(crate) const UI_MONOSPACE_FONT_FAMILY: &str = crate::bundled_fonts::LILEX_FONT_FAMILY;
+pub(crate) use crate::bundled_fonts::UI_MONOSPACE_FONT_FAMILY;
 
 mod gitcomet_view;
 mod gitcomet_view_render;

@@ -10,6 +10,7 @@ pub(super) fn panel(
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
+    let quit_title = format!("Quit {}?", crate::view::product_name());
     let (title, discard_label) = if prompt.waiting_for_writes {
         ("Waiting for saves", "Wait for saves")
     } else {
@@ -18,7 +19,7 @@ pub(super) fn panel(
             UnsavedFileEditsAction::DeleteWorkspace { .. } => {
                 ("Delete workspace?", "Discard and delete")
             }
-            UnsavedFileEditsAction::QuitApp => ("Quit GitComet?", "Discard and quit"),
+            UnsavedFileEditsAction::QuitApp => (quit_title.as_str(), "Discard and quit"),
             UnsavedFileEditsAction::MoveRepo { .. } => ("Move repository?", "Discard and move"),
         }
     };

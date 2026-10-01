@@ -32,6 +32,7 @@ doc = false
 
 [dependencies]
 gitcomet-core = { workspace = true }
+filetime = { workspace = true }
 gix = { workspace = true }
 lru = { workspace = true }
 memchr = { workspace = true }

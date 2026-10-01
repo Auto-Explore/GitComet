@@ -32,12 +32,12 @@ impl Files {
             Files::Failed(message) => Loadable::Error(message.to_string()),
             Files::Loaded(count) => Loadable::Ready(Arc::new(
                 (0..count)
-                    .map(|ix| CommitFileChange {
-                        path: std::path::PathBuf::from(format!("src/file_{ix}.rs")),
-                        kind: FileStatusKind::Modified,
-                        is_submodule: false,
-                        additions: Some(1),
-                        deletions: Some(0),
+                    .map(|ix| {
+                        CommitFileChange::new(
+                            std::path::PathBuf::from(format!("src/file_{ix}.rs")),
+                            FileStatusKind::Modified,
+                        )
+                        .with_line_counts(Some(1), Some(0))
                     })
                     .collect(),
             )),
@@ -87,6 +87,8 @@ fn draw_comparison(
                 to: Some(CommitId(sha(0).into())),
                 from_label: "base".into(),
                 to_label: "tip".into(),
+                options: Default::default(),
+                base: None,
             });
             repo.history_state.range_files = files.into_loadable();
 

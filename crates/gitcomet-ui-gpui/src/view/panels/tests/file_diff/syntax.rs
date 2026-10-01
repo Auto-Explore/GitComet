@@ -13,10 +13,10 @@ fn patch_view_applies_syntax_highlighting_to_context_lines(cx: &mut gpui::TestAp
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            let target = gitcomet_core::domain::DiffTarget::Commit {
-                commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
-                path: None,
-            };
+            let target = gitcomet_core::domain::DiffTarget::commit(
+                gitcomet_core::domain::CommitId("deadbeef".into()),
+                None,
+            );
 
             let diff = gitcomet_core::domain::Diff {
                 target: target.clone(),
@@ -454,10 +454,7 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     let new_text = DEPLOYMENT_CI.new_text.to_owned();
     let unified = DEPLOYMENT_CI.unified_diff().to_owned();
 
-    let target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: Some(path.clone()),
-    };
+    let target = gitcomet_core::domain::DiffTarget::commit(commit_id.clone(), Some(path.clone()));
     let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), &unified);
 
     let baseline_path_line = 17u32;
@@ -949,10 +946,7 @@ fn yaml_commit_patch_diff_keeps_consistent_highlighting_for_added_paths_and_keys
         gitcomet_core::domain::CommitId("bd8b4a04b4d7a04caf97392d6a66cbeebd665606".into());
     let unified = DEPLOYMENT_CI.unified_diff().to_owned();
 
-    let target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: None,
-    };
+    let target = gitcomet_core::domain::DiffTarget::commit(commit_id.clone(), None);
     let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), &unified);
 
     let baseline_path_line = 17u32;
@@ -1785,10 +1779,7 @@ fn yaml_commit_patch_diff_full_fixture_keeps_consistent_highlighting_across_file
     let commit_id =
         gitcomet_core::domain::CommitId("bd8b4a04b4d7a04caf97392d6a66cbeebd665606".into());
     let unified = COMMIT_PATCH.to_owned();
-    let target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: None,
-    };
+    let target = gitcomet_core::domain::DiffTarget::commit(commit_id.clone(), None);
     let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), &unified);
 
     let build_release_file = ".github/workflows/build-release-artifacts.yml";
@@ -2623,15 +2614,10 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
     let old_text = BUILD_RELEASE_ARTIFACTS.old_text.to_owned();
     let new_text = BUILD_RELEASE_ARTIFACTS.new_text.to_owned();
 
-    let file_target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: Some(path.clone()),
-    };
+    let file_target =
+        gitcomet_core::domain::DiffTarget::commit(commit_id.clone(), Some(path.clone()));
     let file_diff = gitcomet_core::domain::Diff::from_unified(file_target.clone(), &unified);
-    let patch_target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: None,
-    };
+    let patch_target = gitcomet_core::domain::DiffTarget::commit(commit_id.clone(), None);
     let patch_diff = gitcomet_core::domain::Diff::from_unified(patch_target.clone(), &unified);
     let (visible_old_lines, visible_new_lines) = patch_visible_line_numbers(&patch_diff);
     let (old_shared_text, old_line_starts) = shared_text_and_line_starts(old_text.as_str());
