@@ -510,6 +510,10 @@ fn concurrent_last_app_store_drops_shutdown_worker_once() {
         super::worker_channel::StoreWorkerCommand::InsertRepoForTest { .. } => {
             panic!("expected shutdown command, got test repo insertion command")
         }
+        #[cfg(any(test, feature = "test-support"))]
+        super::worker_channel::StoreWorkerCommand::DisableRepoMonitorsForTest => {
+            panic!("expected shutdown command, got test monitor switch command")
+        }
     }
     assert!(
         !alive.load(Ordering::Acquire),

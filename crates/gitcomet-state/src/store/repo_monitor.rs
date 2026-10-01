@@ -313,6 +313,8 @@ impl DebouncedChange {
 pub(super) struct RepoMonitorManager {
     handles: FxHashMap<RepoId, RepoMonitorHandle>,
     worktree_handles: FxHashMap<(RepoId, u64, PathBuf), RepoMonitorHandle>,
+    /// Set by tests: no monitor is ever started.
+    disabled: bool,
 }
 
 impl RepoMonitorManager {
@@ -320,7 +322,14 @@ impl RepoMonitorManager {
         Self {
             handles: FxHashMap::default(),
             worktree_handles: FxHashMap::default(),
+            disabled: false,
         }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn disable(&mut self) {
+        self.disabled = true;
+        self.stop_all();
     }
 
     pub(super) fn revalidate(&self, repo_id: RepoId) {
@@ -363,6 +372,9 @@ impl RepoMonitorManager {
         active_repo_id: Arc<AtomicU64>,
         backend: Arc<dyn GitBackend>,
     ) {
+        if self.disabled {
+            return;
+        }
         let std::collections::hash_map::Entry::Vacant(entry) = self.handles.entry(repo_id) else {
             return;
         };
@@ -383,6 +395,9 @@ impl RepoMonitorManager {
         active_repo_id: Arc<AtomicU64>,
         backend: Arc<dyn GitBackend>,
     ) {
+        if self.disabled {
+            return;
+        }
         let obsolete: Vec<_> = self
             .worktree_handles
             .keys()

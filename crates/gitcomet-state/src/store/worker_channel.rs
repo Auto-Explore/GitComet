@@ -48,6 +48,10 @@ pub(super) enum StoreWorkerCommand {
         repo_id: RepoId,
         repo: Arc<dyn GitRepository>,
     },
+    /// Keeps the worker from starting repository monitors: tests over real
+    /// repositories that do not test watching stay free of watcher refreshes.
+    #[cfg(any(test, feature = "test-support"))]
+    DisableRepoMonitorsForTest,
 }
 
 #[derive(Clone)]
@@ -265,6 +269,21 @@ impl StoreWorkerSender {
         match &self.inner {
             StoreWorkerSenderInner::Command(tx) => {
                 let _ = tx.send(StoreWorkerCommand::InsertRepoForTest { repo_id, repo });
+            }
+            #[cfg(test)]
+            StoreWorkerSenderInner::MsgForTest(_) => {}
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn disable_repo_monitors_for_test(&self) {
+        if !self.is_alive() {
+            return;
+        }
+
+        match &self.inner {
+            StoreWorkerSenderInner::Command(tx) => {
+                let _ = tx.send(StoreWorkerCommand::DisableRepoMonitorsForTest);
             }
             #[cfg(test)]
             StoreWorkerSenderInner::MsgForTest(_) => {}

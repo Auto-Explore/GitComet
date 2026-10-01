@@ -76,6 +76,8 @@ fn is_control_command(command: &StoreWorkerCommand) -> bool {
         StoreWorkerCommand::Repository { .. } => true,
         #[cfg(any(test, feature = "test-support"))]
         StoreWorkerCommand::InsertRepoForTest { .. } => true,
+        #[cfg(any(test, feature = "test-support"))]
+        StoreWorkerCommand::DisableRepoMonitorsForTest => true,
     }
 }
 
@@ -575,6 +577,11 @@ impl AppStore {
                         repos.insert(repo_id, repo);
                         continue;
                     }
+                    #[cfg(any(test, feature = "test-support"))]
+                    StoreWorkerCommand::DisableRepoMonitorsForTest => {
+                        repo_monitors.disable();
+                        continue;
+                    }
                 };
 
                 if !thread_msg_tx.is_alive() {
@@ -942,6 +949,14 @@ impl AppStore {
     #[doc(hidden)]
     pub fn insert_repo_for_test(&self, repo_id: RepoId, repo: Arc<dyn GitRepository>) {
         self.msg_tx.insert_repo_for_test(repo_id, repo);
+    }
+
+    /// Never starts a filesystem monitor for any repository. For tests over
+    /// real repositories whose assertions a watcher refresh would disturb.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn disable_repo_monitors_for_test(&self) {
+        self.msg_tx.disable_repo_monitors_for_test();
     }
 }
 

@@ -67,6 +67,11 @@ fn open_repository(
     install_example(cx);
     let repo = gitcomet_git_gix::GixBackend.open(root).expect("open repo");
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    // Watching is not under test. Windows reports the `.git/logs` and
+    // `.git/hooks` directory timestamps setup left dirty only once a watch
+    // exists (NTFS flushes them late), FSEvents replays recent history, and
+    // that git-state refresh reloads every worktree pane mid-assertion.
+    store.disable_repo_monitors_for_test();
     let repo_id = RepoId(1);
     let mut repo_state = RepoState::new_opening(repo_id, repo.spec().clone());
     repo_state.open = Loadable::Ready(());
