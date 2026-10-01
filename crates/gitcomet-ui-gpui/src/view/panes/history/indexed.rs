@@ -1137,10 +1137,12 @@ impl HistoryView {
             cx,
         );
         let interaction = self.scroll_interaction.clone();
+        let shown_repo = self.indexed.presentation.as_ref().map(|p| p.key.repo_id);
         let view = cx.entity().downgrade();
         let measure = gpui::canvas(
             move |bounds, window, _cx| {
                 let mut state = interaction.borrow_mut();
+                state.viewport_bounds = shown_repo.map(|repo_id| (repo_id, bounds));
                 if let Some(logical) = &mut state.logical {
                     let height = f64::from(f32::from(bounds.size.height));
                     let row = f64::from(f32::from(row_height));

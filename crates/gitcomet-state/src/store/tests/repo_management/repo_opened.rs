@@ -1,6 +1,70 @@
 use super::*;
 
 #[test]
+fn pr530_observed_open_failures_are_released_without_losing_newer_failures() {
+    let mut repos = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let paths: Vec<_> = ["first", "second", "first", "third"]
+        .into_iter()
+        .map(|name| std::env::temp_dir().join(format!("pr530-failed-{name}")))
+        .collect();
+    let mut observed = 0;
+    for (index, path) in paths.iter().enumerate() {
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::OpenRepo(path.clone()),
+        );
+        let repo_id = state.active_repo.unwrap();
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
+                repo_id,
+                spec: RepoSpec {
+                    workdir: path.clone(),
+                },
+                error: Error::new(ErrorKind::NotARepository),
+            }),
+        );
+        if index == 1 {
+            observed = *state.repo_open_failures.values().max().unwrap();
+        }
+    }
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AcknowledgeRepoOpenFailures {
+            through_revision: observed,
+        },
+    );
+    assert!(!state.repo_open_failures.contains_key(&paths[1]));
+    for path in [&paths[2], &paths[3]] {
+        assert!(
+            state.repo_open_failures[path] > observed,
+            "a queued acknowledgement lost a newer failure"
+        );
+    }
+    let latest = *state.repo_open_failures.values().max().unwrap();
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AcknowledgeRepoOpenFailures {
+            through_revision: latest,
+        },
+    );
+    assert!(
+        state.repo_open_failures.is_empty(),
+        "observed paths must not accumulate in every snapshot"
+    );
+}
+
+#[test]
 fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
@@ -275,10 +339,6 @@ fn repo_action_finished_clears_error_and_refreshes() {
     ));
     state.active_repo = Some(RepoId(1));
     state.repos[0].feedback.last_error = Some("boom".to_string());
-    state.banner_error = Some(crate::model::BannerErrorState {
-        repo_id: Some(RepoId(1)),
-        message: "boom".to_string(),
-    });
 
     let effects = reduce(
         &mut repos,
@@ -292,7 +352,6 @@ fn repo_action_finished_clears_error_and_refreshes() {
     );
 
     assert!(state.repos[0].feedback.last_error.is_none());
-    assert!(state.banner_error.is_none());
     assert!(has_status_refresh_effects(&effects, RepoId(1)));
 }
 
@@ -1035,7 +1094,7 @@ fn repo_opened_err_records_diagnostic() {
 }
 
 #[test]
-fn repo_opened_err_not_found_marks_repo_missing_without_banner_error() {
+fn repo_opened_err_not_found_marks_repo_missing_without_reporting_an_error() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();

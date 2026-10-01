@@ -3194,6 +3194,10 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) rendered_preview_modes: RenderedPreviewModes,
     pub(in crate::view) remote_markdown_images: RemoteMarkdownImages,
     pub(in crate::view) diff_word_wrap: bool,
+    /// The settings' tab size; a file's attributes or the user's choice win.
+    pub(in crate::view) default_tab_size: u8,
+    /// Width used by this pane's current layout and selection geometry.
+    pub(in crate::view) display_tab_width: usize,
     pub(in crate::view) diff_show_line_numbers: bool,
     pub(in crate::view) diff_scroll_sync: DiffScrollSync,
     pub(in crate::view) diff_content_mode: DiffContentMode,
@@ -3454,6 +3458,11 @@ pub(crate) struct MainPaneView {
 
     pub(in crate::view) worktree_preview_path: Option<std::path::PathBuf>,
     pub(in crate::view) worktree_preview_source_path: Option<std::path::PathBuf>,
+    /// What the preview was decoded with; a change re-reads it.
+    pub(in crate::view) worktree_preview_decode_key: Option<super::preview::TextDecodeKey>,
+    /// How the previewed bytes were read, for the status strip.
+    pub(in crate::view) worktree_preview_text_format:
+        Option<gitcomet_core::text_format::SideTextFormat>,
     pub(in crate::view) worktree_preview: Loadable<usize>,
     pub(in crate::view) worktree_preview_source_len: usize,
     pub(in crate::view) worktree_preview_text: SharedString,
@@ -3498,6 +3507,14 @@ pub(crate) struct MainPaneView {
     /// What the buffer was read from (or last wrote). See `super::file_disk`.
     pub(in crate::view) file_editor_disk: DiskIdentity,
     pub(in crate::view) file_editor_error: Option<SharedString>,
+    /// How the buffer's file was read, and so how it is written back.
+    pub(in crate::view) file_editor_text_format: Option<gitcomet_core::text_format::SideTextFormat>,
+    pub(in crate::view) file_editor_source_text_format:
+        Option<gitcomet_core::text_format::SideTextFormat>,
+    /// What the buffer was decoded with; a new choice re-reads it.
+    pub(in crate::view) file_editor_decode_key: Option<super::preview::TextDecodeKey>,
+    /// A read is waiting for the file's attributes.
+    pub(in crate::view) file_editor_waiting_for_attributes: bool,
     pub(in crate::view) file_editor_dirty: bool,
     /// The topmost 0-based line an unsaved edit has touched, or `None` while the
     /// buffer matches disk.
@@ -3510,6 +3527,10 @@ pub(crate) struct MainPaneView {
     /// still moves it, because tracking that precisely costs more than the
     /// attribution below it is worth.
     pub(in crate::view) file_editor_first_dirty_line: Option<u32>,
+    /// Why the last save wrote nothing (the text has no bytes in the file's
+    /// encoding). Shows Save/Discard under auto-save and stops auto-save
+    /// re-reporting the same failure every pause.
+    pub(in crate::view) file_editor_save_error: Option<SharedString>,
     /// Fingerprint of the text last known to be on disk. `None` before the
     /// first read lands, which reads as "everything is unsaved".
     pub(in crate::view) file_editor_saved_fingerprint: Option<u64>,

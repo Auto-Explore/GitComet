@@ -1087,6 +1087,7 @@ fn history_author_filter_focuses_its_search_box_and_narrows_the_list(
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 
@@ -1212,6 +1213,7 @@ fn history_author_filter_applies_the_selected_author(cx: &mut gpui::TestAppConte
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 
@@ -1262,6 +1264,7 @@ fn history_author_filter_applies_free_form_text(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 
@@ -1303,6 +1306,7 @@ fn history_author_filter_enter_applies_the_row_the_list_highlights(cx: &mut gpui
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 
@@ -3286,6 +3290,7 @@ fn diff_search_secondary_f_selects_existing_query(cx: &mut gpui::TestAppContext)
 fn diff_search_input_accepts_spaces_without_staging_file(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 
@@ -3334,6 +3339,7 @@ fn diff_search_input_accepts_spaces_without_staging_file(cx: &mut gpui::TestAppC
 fn diff_search_close_clears_query_and_input(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 
@@ -3748,6 +3754,235 @@ fn diff_search_overlay_does_not_reflow_action_bar_or_content(cx: &mut gpui::Test
     assert!(
         cx.debug_bounds("diff_search_overlay").is_none(),
         "expected search close button to remove diff search overlay"
+    );
+}
+
+/// Opens diff search (`secondary-f`) over a two-hunk working tree diff.
+fn open_diff_search_on_two_hunk_diff(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: RepoId,
+    name: &str,
+) {
+    let commit_id = CommitId("1122334455667748".into());
+    let workdir =
+        std::env::temp_dir().join(format!("gitcomet_ui_test_{}_{name}", std::process::id()));
+    let path = std::path::PathBuf::from("src/lib.rs");
+
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    repo.diff_state.diff = Loadable::Ready(
+        two_hunk_diff(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        })
+        .into(),
+    );
+    apply_state(cx, view, app_state_with_active_repo(repo));
+    cx.simulate_resize(gpui::size(px(1000.0), px(640.0)));
+
+    cx.update(|window, app| {
+        app.clear_key_bindings();
+        crate::app::bind_app_keys_for_test(app);
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.rebuild_diff_cache(cx);
+                pane.ensure_diff_visible_indices();
+                let focus = pane.diff_panel_focus_handle.clone();
+                window.focus(&focus, cx);
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.simulate_keystrokes("secondary-f");
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.debug_bounds("diff_search_overlay").is_some(),
+        "expected diff search overlay after secondary-f"
+    );
+}
+
+fn set_diff_search_text(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    text: &'static str,
+) {
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text(text, cx));
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+    wait_for_diff_search_debounce(cx);
+}
+
+fn diff_search_match_state(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> (usize, Option<usize>) {
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        (pane.diff_search_matches.len(), pane.diff_search_match_ix)
+    })
+}
+
+#[gpui::test]
+fn diff_search_arrow_buttons_step_through_matches(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    open_diff_search_on_two_hunk_diff(cx, &view, RepoId(70941), "diff_search_arrow_buttons");
+
+    let prev = cx
+        .debug_bounds("diff_search_prev")
+        .expect("expected a previous-match button in diff search");
+    let next = cx
+        .debug_bounds("diff_search_next")
+        .expect("expected a next-match button in diff search");
+    let label = cx
+        .debug_bounds("diff_search_match_label")
+        .expect("expected the diff search match label");
+    let close = cx
+        .debug_bounds("diff_search_close")
+        .expect("expected the diff search close button");
+    assert!(
+        label.right() <= prev.left() && prev.right() <= next.left() && next.right() <= close.left(),
+        "expected the arrow buttons between the match label and the close button"
+    );
+
+    set_diff_search_text(cx, &view, "new");
+    let (total, first_ix) = diff_search_match_state(cx, &view);
+    assert_eq!(total, 2, "expected the query to match both hunks");
+    let first_ix = first_ix.unwrap_or(0);
+
+    let next = cx.debug_bounds("diff_search_next").expect("next button");
+    cx.simulate_click(next.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        diff_search_match_state(cx, &view),
+        (2, Some((first_ix + 1) % 2)),
+        "expected the down arrow to step to the next match"
+    );
+    assert!(
+        diff_search_input_is_focused(cx, &view),
+        "expected the search input to keep focus after stepping"
+    );
+
+    let next = cx.debug_bounds("diff_search_next").expect("next button");
+    cx.simulate_click(next.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        diff_search_match_state(cx, &view),
+        (2, Some(first_ix)),
+        "expected the down arrow to wrap to the first match"
+    );
+
+    let prev = cx.debug_bounds("diff_search_prev").expect("prev button");
+    cx.simulate_click(prev.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        diff_search_match_state(cx, &view),
+        (2, Some((first_ix + 1) % 2)),
+        "expected the up arrow to wrap to the last match"
+    );
+}
+
+#[gpui::test]
+fn diff_search_arrow_buttons_are_disabled_without_matches(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    open_diff_search_on_two_hunk_diff(cx, &view, RepoId(70942), "diff_search_arrow_disabled");
+
+    set_diff_search_text(cx, &view, "new");
+    let found = cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .diff_search_matches
+            .clone()
+    });
+    assert_eq!(found.len(), 2, "expected the query to match both hunks");
+
+    set_diff_search_text(cx, &view, "absent_from_the_diff");
+    assert_eq!(diff_search_match_state(cx, &view), (0, None));
+
+    for selector in ["diff_search_next", "diff_search_prev"] {
+        // Draw the arrows for "no matches", then hand the pane matches without
+        // re-rendering: a click on the arrows on screen must not reach it.
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    pane.diff_search_matches.clear();
+                    pane.diff_search_match_ix = None;
+                    cx.notify();
+                });
+            });
+            let _ = window.draw(app);
+        });
+        draw_and_drain_test_window(cx);
+        let bounds = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("expected {selector} while search is open"));
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, _cx| {
+                    pane.diff_search_matches = found.clone();
+                });
+            });
+        });
+        cx.simulate_click(bounds.center(), Modifiers::default());
+        assert_eq!(
+            diff_search_match_state(cx, &view),
+            (2, None),
+            "expected {selector} to be disabled when there are no matches"
+        );
+    }
+}
+
+#[gpui::test]
+fn diff_search_shift_enter_inserts_a_newline(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    open_diff_search_on_two_hunk_diff(cx, &view, RepoId(70943), "diff_search_shift_enter");
+    assert!(diff_search_input_is_focused(cx, &view));
+
+    cx.simulate_input("new");
+    cx.simulate_keystrokes("shift-enter");
+    cx.simulate_input("x");
+    draw_and_drain_test_window(cx);
+
+    let text = cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .diff_search_input
+            .read(app)
+            .text()
+            .to_string()
+    });
+    assert_eq!(text, "new\nx", "expected Shift+Enter to insert a newline");
+    assert!(
+        cx.debug_bounds("diff_search_overlay").is_some(),
+        "expected diff search to stay open"
     );
 }
 
@@ -6407,6 +6642,46 @@ fn dismissing_change_tracking_settings_with_escape_restores_diff_panel_focus(
 mod hook_activity;
 mod status_selection;
 mod window_and_file_actions;
+
+#[gpui::test]
+fn open_workspace_shortcut_opens_the_workspace_chooser_with_nothing_focused(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|window, app| {
+        app.clear_key_bindings();
+        crate::app::install_app_shortcuts_for_test(app, Arc::new(TestBackend));
+        let _ = window.draw(app);
+        window.activate_window();
+    });
+    focus_detached_window_focus(cx);
+
+    cx.simulate_keystrokes("secondary-shift-r");
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+
+    // One press opens it: a chord handled twice would toggle it shut again.
+    assert_eq!(
+        cx.update(|_window, app| crate::view::test_support::popover_kind(view.read(app), app)),
+        Some(PopoverKind::RepoPicker {
+            scope: RepoPickerScope::WorkspacesOnly
+        }),
+        "Ctrl/Cmd+Shift+R opens the workspace chooser"
+    );
+
+    cx.simulate_keystrokes("secondary-shift-r");
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        cx.update(|_window, app| crate::view::test_support::popover_kind(view.read(app), app)),
+        None,
+        "pressing it again closes the chooser"
+    );
+}
 
 #[gpui::test]
 fn background_search_keeps_latest_query_and_queued_navigation(cx: &mut gpui::TestAppContext) {

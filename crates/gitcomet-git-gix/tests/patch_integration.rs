@@ -141,7 +141,7 @@ fn apply_unified_patch_to_worktree_applies_and_reverses() {
     let opened = backend.open(repo).expect("open repository");
 
     let apply_output = opened
-        .apply_unified_patch_to_worktree_with_output(&patch, false)
+        .apply_unified_patch_to_worktree_with_output(patch.as_bytes(), false)
         .expect("apply worktree patch");
     assert_eq!(apply_output.exit_code, Some(0));
     assert!(
@@ -155,7 +155,7 @@ fn apply_unified_patch_to_worktree_applies_and_reverses() {
     );
 
     let reverse_output = opened
-        .apply_unified_patch_to_worktree_with_output(&patch, true)
+        .apply_unified_patch_to_worktree_with_output(patch.as_bytes(), true)
         .expect("reverse worktree patch");
     assert_eq!(reverse_output.exit_code, Some(0));
     assert!(

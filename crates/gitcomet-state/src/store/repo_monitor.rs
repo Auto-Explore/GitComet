@@ -362,24 +362,35 @@ impl RepoMonitorManager {
         let monitor_tx_for_notify = monitor_tx.clone();
         let monitor_enabled = Arc::new(AtomicBool::new(true));
         let monitor_enabled_for_thread = Arc::clone(&monitor_enabled);
-        let join = thread::spawn(move || {
-            repo_monitor_thread(
-                repo_id,
-                workdir,
-                msg_tx,
-                monitor_rx,
-                monitor_tx_for_notify,
-                active_repo_id,
-                monitor_enabled_for_thread,
-                backend,
-                MonitorConfig::default(),
-            )
-        });
+        // Named, or it shows under its creator's name (the store worker) in
+        // profiles and per-thread CPU samples.
+        let join = thread::Builder::new()
+            .name("gitcomet-watch".into())
+            .spawn(move || {
+                repo_monitor_thread(
+                    repo_id,
+                    workdir,
+                    msg_tx,
+                    monitor_rx,
+                    monitor_tx_for_notify,
+                    active_repo_id,
+                    monitor_enabled_for_thread,
+                    backend,
+                    MonitorConfig::default(),
+                )
+            })
+            .expect("spawn repo monitor thread");
         entry.insert(RepoMonitorHandle {
             msg_tx: monitor_tx,
             join,
             monitor_enabled,
         });
+    }
+
+    #[cfg(test)]
+    pub(super) fn thread_name_for_test(&self, repo_id: RepoId) -> Option<String> {
+        let handle = self.handles.get(&repo_id)?;
+        handle.join.thread().name().map(str::to_owned)
     }
 
     #[cfg(test)]
@@ -533,6 +544,7 @@ fn merge_change(a: RepoExternalChange, b: RepoExternalChange) -> RepoExternalCha
         git_state: a.git_state || b.git_state,
         tags: a.tags || b.tags,
         verification_context: a.verification_context || b.verification_context,
+        text_attributes: a.text_attributes || b.text_attributes,
     }
 }
 

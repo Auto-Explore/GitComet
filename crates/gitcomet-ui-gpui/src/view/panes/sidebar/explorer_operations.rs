@@ -429,7 +429,7 @@ impl SidebarPaneView {
                     if let Err(error) =
                         gitcomet_core::filesystem::validate_name(std::ffi::OsStr::new(&name))
                     {
-                        self.store.dispatch(Msg::ShowBannerError {
+                        self.store.dispatch(Msg::ReportError {
                             repo_id: self.active_repo_id(),
                             message: error.to_string(),
                         });
@@ -825,19 +825,11 @@ impl SidebarPaneView {
         {
             return None;
         }
-        let (origin, height) =
-            if self.collapsed_popover_section == Some(CollapsedSidebarSection::Files) {
-                let (bounds, height) = self.explorer_popover_rows.get()?;
-                if position.x < bounds.left() || position.x >= bounds.right() {
-                    return None;
-                }
-                (bounds.origin, height)
-            } else {
-                (
-                    scroll.bounds().origin,
-                    ui_scale::UiScale::current(cx).px(sidebar_list_row_height_px(self.theme)),
-                )
-            };
+        // The rail popover renders the same list, so one geometry serves both.
+        let (origin, height) = (
+            scroll.bounds().origin,
+            ui_scale::UiScale::current(cx).px(sidebar_list_row_height_px(self.theme)),
+        );
         if height <= px(0.0) {
             return None;
         }
@@ -978,11 +970,7 @@ impl SidebarPaneView {
     }
 
     fn explorer_scroll_handle(&self) -> gpui::ScrollHandle {
-        if self.collapsed_popover_section == Some(CollapsedSidebarSection::Files) {
-            self.collapsed_popover_scroll.clone()
-        } else {
-            self.file_browser_scroll.0.borrow().base_handle.clone()
-        }
+        self.file_browser_scroll.0.borrow().base_handle.clone()
     }
 
     fn explorer_scroll_direction(&self, position: gpui::Point<Pixels>, cx: &mut gpui::App) -> f32 {

@@ -17,11 +17,13 @@ mod interactive_rebase;
 mod markdown_state;
 mod preview;
 pub(in crate::view) use preview::{
-    preflight_worktree_file_for_editing, read_worktree_file_for_editing,
+    TextDecodeRequest, preflight_worktree_file_for_editing, read_worktree_file_for_editing,
     read_worktree_file_version_for_editing,
 };
 pub(in crate::view) mod submodule_summary;
 mod surface;
+mod text_format;
+pub(in crate::view) use text_format::TextEncodingMenuState;
 
 #[cfg(feature = "benchmarks")]
 #[allow(unused_imports)]

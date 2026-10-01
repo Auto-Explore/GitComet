@@ -11,6 +11,7 @@ struct WrappedInputView {
 
 impl WrappedInputView {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        window.activate_window();
         let scroll = ScrollHandle::new();
         let input = cx.new(|cx| {
             let mut input = TextInput::new(
@@ -188,6 +189,7 @@ fn offscreen_wrapped_edits_keep_measured_height_until_current_text_is_shaped(
             let estimate = estimate_wrap_rows_for_line(
                 &paragraph,
                 wrap_columns_for_width(input.wrap.row_counts_width.unwrap(), *size),
+                TEXT_INPUT_WRAP_TAB_STOP_COLUMNS,
             );
             assert_ne!(
                 estimate, measured,

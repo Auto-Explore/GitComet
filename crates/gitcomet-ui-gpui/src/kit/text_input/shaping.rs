@@ -125,6 +125,78 @@ pub(super) fn hash_shaping_slice(line_text: &str, max_bytes: usize) -> (u64, usi
     (info.hash(), info.capped_len)
 }
 
+/// Tabs shaped as spaces: the same byte offsets, and no missing-glyph box.
+/// [`apply_tab_stops`] then widens each to its tab stop.
+pub(super) fn shaping_text_without_tabs(text: SharedString) -> SharedString {
+    if !text.contains('\t') {
+        return text;
+    }
+    SharedString::from(text.replace('\t', " "))
+}
+
+/// `layout` (shaped from [`shaping_text_without_tabs`] of `text`) with every
+/// tab advanced to the next multiple of `tab_size` columns. Glyph indices are
+/// untouched, so every index/x mapping over the line stays byte-exact. `None`
+/// when there is nothing to move.
+pub(super) fn apply_tab_stops(
+    layout: &gpui::LineLayout,
+    text: &str,
+    tab_size: usize,
+) -> Option<gpui::LineLayout> {
+    let bytes = text.as_bytes();
+    memchr::memchr(b'\t', bytes)?;
+    let glyphs: Vec<(usize, usize)> = layout
+        .runs
+        .iter()
+        .enumerate()
+        .flat_map(|(run_ix, run)| (0..run.glyphs.len()).map(move |glyph_ix| (run_ix, glyph_ix)))
+        .collect();
+    let glyph = |k: usize| &layout.runs[glyphs[k].0].glyphs[glyphs[k].1];
+    let x_of = |k: usize| f32::from(glyph(k).position.x);
+    let is_tab = |k: usize| bytes.get(glyph(k).index) == Some(&b'\t');
+    let advance_of = |k: usize| {
+        if k + 1 < glyphs.len() {
+            x_of(k + 1) - x_of(k)
+        } else {
+            f32::from(layout.width) - x_of(k)
+        }
+    };
+    // Right-to-left runs are not laid out left to right; leave them be.
+    if (1..glyphs.len()).any(|k| x_of(k) < x_of(k - 1)) {
+        return None;
+    }
+    // A tab shaped as a space is one column wide (the editor font is monospace).
+    let column = advance_of((0..glyphs.len()).find(|&k| is_tab(k))?);
+    if column <= 0.0 {
+        return None;
+    }
+    let tab_size = tab_size.max(1);
+    let mut runs = layout.runs.clone();
+    let mut shift = 0.0f32;
+    let mut logical_column = 0usize;
+    let mut after_tab = 0usize;
+    for k in 0..glyphs.len() {
+        let x = x_of(k) + shift;
+        runs[glyphs[k].0].glyphs[glyphs[k].1].position.x = px(x);
+        if is_tab(k) {
+            let index = glyph(k).index;
+            logical_column += text[after_tab..index].chars().count();
+            let spaces = tab_size - logical_column % tab_size;
+            shift += spaces as f32 * column - advance_of(k);
+            logical_column += spaces;
+            after_tab = index + 1;
+        }
+    }
+    Some(gpui::LineLayout {
+        font_size: layout.font_size,
+        width: layout.width + px(shift),
+        ascent: layout.ascent,
+        descent: layout.descent,
+        runs,
+        len: layout.len,
+    })
+}
+
 /// Build the (possibly truncated) SharedString for shaping. Only call on cache miss.
 pub(super) fn build_shaping_text(line_text: &str, max_bytes: usize) -> SharedString {
     shaping_slice_info(line_text, max_bytes).into_shared_string()
@@ -148,6 +220,17 @@ pub(crate) fn benchmark_text_input_shaping_slice(text: &str, max_bytes: usize) -
     hash_shaping_slice(text, max_bytes)
 }
 
+#[cfg(test)]
+thread_local! {
+    static WRAPPED_LINES_SHAPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Soft-wrapped lines this thread shaped since the last call.
+#[cfg(test)]
+pub(crate) fn take_wrapped_lines_shaped_for_tests() -> usize {
+    WRAPPED_LINES_SHAPED.with(|shaped| shaped.replace(0))
+}
+
 /// Shape one soft-wrapped source line.
 ///
 /// Unlike the plain path there is no cache here: `WrappedLine` shaping is
@@ -158,8 +241,11 @@ pub(super) fn shape_wrapped_line(
     wrap_width: Pixels,
     precomputed_runs: Option<&[TextRun]>,
     shape_style: &TextShapeStyle<'_>,
+    tab_size: usize,
     window: &mut Window,
 ) -> WrappedLine {
+    #[cfg(test)]
+    WRAPPED_LINES_SHAPED.with(|shaped| shaped.set(shaped.get() + 1));
     let capped_text = build_shaping_text(line.line_text, TEXT_INPUT_MAX_LINE_SHAPE_BYTES);
     let owned_runs;
     let runs = if let Some(precomputed_runs) = precomputed_runs {
@@ -174,17 +260,139 @@ pub(super) fn shape_wrapped_line(
         );
         owned_runs.as_slice()
     };
+    let with_tabs = capped_text.clone();
     let shaped = window
         .text_system()
         .shape_text(
-            capped_text,
+            shaping_text_without_tabs(capped_text),
             shape_style.font_size,
             runs,
             Some(wrap_width),
             None,
         )
         .unwrap_or_default();
-    shaped.into_iter().next().unwrap_or_default()
+    let mut wrapped: WrappedLine = shaped.into_iter().next().unwrap_or_default();
+    if let Some(layout) = apply_tab_stops_wrapped(&wrapped, &with_tabs, tab_size) {
+        *wrapped = Arc::new(layout);
+    }
+    wrapped
+}
+
+/// [`apply_tab_stops`] for a soft-wrapped line, wrapped again: gpui chose
+/// its breaks measuring each tab as one space.
+pub(super) fn apply_tab_stops_wrapped(
+    wrapped: &gpui::WrappedLineLayout,
+    text: &str,
+    tab_size: usize,
+) -> Option<gpui::WrappedLineLayout> {
+    let unwrapped = apply_tab_stops(&wrapped.unwrapped_layout, text, tab_size)?;
+    let wrap_boundaries = match wrapped.wrap_width {
+        Some(wrap_width) => wrap_boundaries(&unwrapped, text, wrap_width)
+            .into_iter()
+            .collect(),
+        None => wrapped.wrap_boundaries.clone(),
+    };
+    Some(gpui::WrappedLineLayout {
+        unwrapped_layout: Arc::new(unwrapped),
+        wrap_boundaries,
+        wrap_width: wrapped.wrap_width,
+    })
+}
+
+/// gpui's private `LineLayout::compute_wrap_boundaries` (no line clamp),
+/// over glyph positions that include tab stops. Tabs count as the spaces
+/// they were shaped as.
+fn wrap_boundaries(
+    layout: &gpui::LineLayout,
+    text: &str,
+    wrap_width: Pixels,
+) -> Vec<gpui::WrapBoundary> {
+    let mut boundaries = Vec::new();
+    let mut seen_non_whitespace = false;
+    let mut last_candidate: Option<(gpui::WrapBoundary, Pixels)> = None;
+    let mut last_boundary = gpui::WrapBoundary {
+        run_ix: 0,
+        glyph_ix: 0,
+    };
+    let mut last_boundary_x = px(0.0);
+    let mut prev_ch = '\0';
+    let mut glyphs = layout
+        .runs
+        .iter()
+        .enumerate()
+        .flat_map(|(run_ix, run)| {
+            run.glyphs.iter().enumerate().map(move |(glyph_ix, glyph)| {
+                let boundary = gpui::WrapBoundary { run_ix, glyph_ix };
+                (boundary, glyph.index, glyph.position.x)
+            })
+        })
+        .peekable();
+    while let Some((boundary, index, x)) = glyphs.next() {
+        let ch = match text.get(index..).and_then(|rest| rest.chars().next()) {
+            Some('\t') => ' ',
+            Some('\n') | None => continue,
+            Some(ch) => ch,
+        };
+        if is_word_char(ch) {
+            if prev_ch == ' ' && ch != ' ' && seen_non_whitespace {
+                last_candidate = Some((boundary, x));
+            }
+        } else if ch != ' ' && seen_non_whitespace {
+            last_candidate = Some((boundary, x));
+        }
+        seen_non_whitespace |= ch != ' ';
+        let next_x = glyphs.peek().map_or(layout.width, |&(_, _, x)| x);
+        if next_x - last_boundary_x > wrap_width && boundary > last_boundary {
+            (last_boundary, last_boundary_x) = last_candidate.take().unwrap_or((boundary, x));
+            boundaries.push(last_boundary);
+        }
+        prev_ch = ch;
+    }
+    boundaries
+}
+
+/// gpui's `LineWrapper::is_word_char` (crate-private there): characters a
+/// line is not broken before when they follow another.
+fn is_word_char(c: char) -> bool {
+    c.is_ascii_alphanumeric()
+        || matches!(
+            c,
+            '\u{00C0}'..='\u{024F}'
+                | '\u{0400}'..='\u{04FF}'
+                | '\u{1E00}'..='\u{1EFF}'
+                | '\u{0300}'..='\u{036F}'
+                | '\u{0980}'..='\u{09FF}'
+        )
+        || matches!(
+            c,
+            '-' | '_'
+                | '.'
+                | '\''
+                | '’'
+                | '‘'
+                | '$'
+                | '%'
+                | '@'
+                | '#'
+                | '^'
+                | '~'
+                | ','
+                | '='
+                | ':'
+                | ';'
+                | '!'
+                | ')'
+                | ']'
+                | '}'
+                | '"'
+                | '”'
+                | '»'
+                | '…'
+                | '⋯'
+                | '\u{202F}'
+                | '\u{00A0}'
+                | '\u{2011}'
+        )
 }
 
 pub(super) use crate::theme::with_alpha;
@@ -409,4 +617,148 @@ pub(super) fn line_for_offset(
         None => local,
     };
     (line_ix, local)
+}
+
+#[cfg(test)]
+mod tab_stop_tests {
+    use super::*;
+
+    /// A monospace line: one glyph per byte, `column` pixels apart.
+    fn mono_layout(text: &str, column: f32) -> gpui::LineLayout {
+        let glyphs = (0..text.len())
+            .map(|ix| gpui::ShapedGlyph {
+                id: gpui::GlyphId(ix as u32),
+                position: gpui::point(px(ix as f32 * column), px(0.0)),
+                index: ix,
+                is_emoji: false,
+            })
+            .collect();
+        gpui::LineLayout {
+            font_size: px(12.0),
+            width: px(text.len() as f32 * column),
+            ascent: px(10.0),
+            descent: px(2.0),
+            runs: vec![gpui::ShapedRun {
+                font_id: gpui::FontId(0),
+                glyphs,
+            }],
+            len: text.len(),
+        }
+    }
+
+    fn xs(layout: &gpui::LineLayout) -> Vec<f32> {
+        layout.runs[0]
+            .glyphs
+            .iter()
+            .map(|glyph| f32::from(glyph.position.x))
+            .collect()
+    }
+
+    #[test]
+    fn review_wide_characters_use_the_same_tab_columns_as_diff() {
+        let text = "日本\tx";
+        let mut layout = mono_layout("abcd", 10.0);
+        layout.len = text.len();
+        layout.width = px(60.0);
+        for (glyph, (index, x)) in
+            layout.runs[0]
+                .glyphs
+                .iter_mut()
+                .zip([(0, 0.0), (3, 20.0), (6, 40.0), (7, 50.0)])
+        {
+            glyph.index = index;
+            glyph.position.x = px(x);
+        }
+        let layout = apply_tab_stops(&layout, text, 4).unwrap();
+        // The diff expands two characters plus a tab to 日本<space><space>x.
+        assert_eq!(xs(&layout)[3], 60.0);
+        assert_eq!(layout.runs[0].glyphs[3].index, 7);
+    }
+
+    #[test]
+    fn tabs_advance_to_the_next_stop() {
+        let text = "a\tbc\td";
+        let layout = apply_tab_stops(&mono_layout(text, 10.0), text, 4).expect("tabs moved");
+        // a@0, tab@10 → stop 40, b@40, c@50, tab@60 → stop 80, d@80.
+        assert_eq!(xs(&layout), vec![0.0, 10.0, 40.0, 50.0, 60.0, 80.0]);
+        assert_eq!(f32::from(layout.width), 90.0);
+        assert_eq!(layout.runs[0].glyphs[2].index, 2, "indices are untouched");
+    }
+
+    #[test]
+    fn a_tab_on_a_stop_takes_a_whole_stop_and_width_is_configurable() {
+        let text = "abcd\tx";
+        let layout = apply_tab_stops(&mono_layout(text, 10.0), text, 4).unwrap();
+        assert_eq!(xs(&layout)[5], 80.0);
+        let layout = apply_tab_stops(&mono_layout("\tx", 10.0), "\tx", 8).unwrap();
+        assert_eq!(xs(&layout)[1], 80.0);
+    }
+
+    #[test]
+    fn a_wrapped_line_wraps_at_its_widened_tabs() {
+        let text = "\t\t\tabc def";
+        // gpui measured each tab as one column: 10 columns fit in 100 px.
+        let wrapped = gpui::WrappedLineLayout {
+            unwrapped_layout: Arc::new(mono_layout(text, 10.0)),
+            wrap_boundaries: Default::default(),
+            wrap_width: Some(px(100.0)),
+        };
+        let layout = apply_tab_stops_wrapped(&wrapped, text, 4).expect("tabs moved");
+        // Tabs end at 40/80/120, `abc ` at 120..160, `def` at 160..190.
+        let boundary = |glyph_ix| gpui::WrapBoundary {
+            run_ix: 0,
+            glyph_ix,
+        };
+        assert_eq!(
+            layout.wrap_boundaries.as_slice(),
+            &[boundary(2), boundary(7)]
+        );
+        let row_starts = [0.0, 80.0, 160.0, f32::from(layout.unwrapped_layout.width)];
+        for row in row_starts.windows(2) {
+            assert!(row[1] - row[0] <= 100.0, "{row:?} overflows the wrap width");
+        }
+    }
+
+    #[gpui::test]
+    fn the_wrap_port_breaks_where_gpui_does(cx: &mut gpui::TestAppContext) {
+        let cx = cx.add_empty_window();
+        let text = "fn main() { let value = foo-bar(baz, qux); // see: a/b/c?d=1 plz! Grüße 日本語テキスト }";
+        let run = super::super::highlight::text_run_for_style(
+            &gpui::font("Monospace"),
+            gpui::black(),
+            text.len(),
+            None,
+        );
+        let mut wrapped_rows = 0;
+        for width in [30.0, 55.0, 80.0, 130.0, 400.0] {
+            let wrapped = cx.update(|window, _| {
+                window
+                    .text_system()
+                    .shape_text(
+                        SharedString::from(text),
+                        px(12.0),
+                        &[run.clone()],
+                        Some(px(width)),
+                        None,
+                    )
+                    .expect("shaped")
+                    .into_iter()
+                    .next()
+                    .expect("one line")
+            });
+            assert_eq!(
+                wrap_boundaries(&wrapped.unwrapped_layout, text, px(width)).as_slice(),
+                wrapped.wrap_boundaries.as_slice(),
+                "wrap width {width}"
+            );
+            wrapped_rows += wrapped.wrap_boundaries.len();
+        }
+        assert!(wrapped_rows > 10, "the widths must actually wrap");
+    }
+
+    #[test]
+    fn lines_without_tabs_are_left_alone() {
+        assert!(apply_tab_stops(&mono_layout("abc", 10.0), "abc", 4).is_none());
+        assert_eq!(shaping_text_without_tabs("a\tb".into()).as_ref(), "a b");
+    }
 }

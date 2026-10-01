@@ -14,6 +14,24 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, name: &str) -> ContextM
     let mut items = vec![ContextMenuItem::Header("Remote".into())];
     items.push(ContextMenuItem::Label(name.to_owned().into()));
     items.push(ContextMenuItem::Separator);
+    for (label, icon, collapsed) in [
+        ("Expand all", "icons/arrow_down_to_line.svg", false),
+        ("Collapse all", "icons/arrow_up_to_line.svg", true),
+    ] {
+        items.push(ContextMenuItem::Entry {
+            label: label.into(),
+            icon: Some(icon.into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::SetBranchGroupCollapsedRecursive {
+                section: BranchSection::Remote,
+                remote: Some(name.to_owned()),
+                path: String::new(),
+                collapsed,
+            }),
+        });
+    }
+    items.push(ContextMenuItem::Separator);
     items.push(ContextMenuItem::Entry {
         label: "Fetch all".into(),
         icon: Some("icons/arrow_down.svg".into()),

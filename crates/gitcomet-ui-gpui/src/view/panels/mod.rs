@@ -15,6 +15,11 @@ pub(in crate::view) enum AppMenuAction {
     /// Open the active repository's remote in the browser, or its picker.
     OpenRemoteInBrowser,
     Settings,
+    OpenWorkspace,
+    /// Zoom is app-wide, so it lives in the menu rather than a window's footer.
+    ZoomIn,
+    ZoomOut,
+    ActualSize,
     OpenInCodeEditor {
         path: Option<std::path::PathBuf>,
     },
@@ -51,6 +56,26 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         path: std::path::PathBuf,
         action: panes::ExplorerAction,
+    },
+    /// Read the open file in this encoding; `None` goes back to attributes
+    /// and detection.
+    SetTextEncoding {
+        encoding: Option<gitcomet_core::text_format::TextEncoding>,
+    },
+    ConvertLineEndings {
+        ending: gitcomet_core::text_format::LineEnding,
+    },
+    /// Write the editor's buffer in another encoding on its next save.
+    SaveWithEncoding {
+        format: gitcomet_core::text_format::TextFormat,
+    },
+    /// Tab width for the open file; `None` goes back to its attributes or
+    /// Settings.
+    SetTabSize {
+        size: Option<u8>,
+    },
+    AddGitattributesRule {
+        rule: String,
     },
     ToggleHistoryRefGroup {
         target: HistoryMenuRef,
@@ -106,14 +131,14 @@ pub(in crate::view) enum ContextMenuAction {
         path: std::path::PathBuf,
     },
     /// Flip one sidebar collapse key — the branch tree's counterpart to
-    /// clicking a group or section header.
+    /// clicking a group chevron or a rail section header.
     ToggleSidebarCollapseKey {
         collapse_key: SharedString,
     },
     /// Drive one sidebar collapse key to an explicit state.
     ///
     /// For rows whose rendered state can diverge from the stored key — a live
-    /// branch filter force-expands the pinned sections — where a flip would
+    /// branch filter force-expands groups — where a flip would
     /// move the key the opposite way from what the entry's label promised.
     SetSidebarCollapseKey {
         collapse_key: SharedString,
@@ -191,6 +216,24 @@ pub(in crate::view) enum ContextMenuAction {
         repo_ids: Vec<RepoId>,
         activate_after: Option<RepoId>,
     },
+    MoveRepoToWorkspace {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+        target_workspace: Option<gitcomet_state::session::WorkspaceId>,
+    },
+    /// Open a workspace from its picker row: adopted into an empty window,
+    /// otherwise focused or opened in its own.
+    ActivateWorkspace {
+        workspace_id: gitcomet_state::session::WorkspaceId,
+    },
+    /// Forget the workspace; its window closes, or returns to Home if last.
+    DeleteWorkspace {
+        workspace_id: gitcomet_state::session::WorkspaceId,
+    },
+    /// Settings › Workspaces with this workspace selected.
+    OpenWorkspaceSettings {
+        workspace_id: gitcomet_state::session::WorkspaceId,
+    },
     /// Keep a repository in the picker's Pinned section. Pins outlive both the
     /// recents cap and the repository being closed, so this is what keeps one
     /// reachable for good.
@@ -262,6 +305,10 @@ pub(in crate::view) enum ContextMenuAction {
         section: BranchSection,
         name: String,
     },
+    ToggleBranchGroupPin {
+        repo_id: RepoId,
+        group_key: String,
+    },
     SetHistoryScope {
         repo_id: RepoId,
         scope: gitcomet_core::domain::LogScope,
@@ -296,9 +343,6 @@ pub(in crate::view) enum ContextMenuAction {
     },
     UseCommitMessage {
         message: String,
-    },
-    SetUiScale {
-        percent: u32,
     },
     StageSelectionOrPath {
         repo_id: RepoId,
@@ -486,12 +530,12 @@ pub(in crate::view) enum ContextMenuAction {
     },
     ApplyIndexPatch {
         repo_id: RepoId,
-        patch: String,
+        patch: gitcomet_state::msg::ContentBytes,
         reverse: bool,
     },
     ApplyWorktreePatch {
         repo_id: RepoId,
-        patch: String,
+        patch: gitcomet_state::msg::ContentBytes,
         reverse: bool,
     },
     StageHunk {
@@ -566,6 +610,9 @@ struct ContextMenuModel {
     /// Stable debug selectors for menus whose entries predate the shared context-menu
     /// renderer. Sparse so ordinary menus continue deriving selectors from labels.
     entry_debug_selectors: FxHashMap<usize, SharedString>,
+    /// Item ranges painted as one tinted block: an inline submenu's header
+    /// plus the rows it expands to. Sparse and ordered.
+    groups: Vec<std::ops::Range<usize>>,
 }
 
 impl ContextMenuModel {
@@ -575,6 +622,7 @@ impl ContextMenuModel {
             shortcut_keycaps: false,
             entry_tooltips: FxHashMap::default(),
             entry_debug_selectors: FxHashMap::default(),
+            groups: Vec::new(),
         }
     }
 
@@ -643,9 +691,11 @@ mod bars;
 mod bottom_status_bar;
 mod layout;
 mod main;
-mod popover;
+pub(in crate::view) mod popover;
 mod repo_tabs_bar;
 
+#[cfg(test)]
+pub(in crate::view) use action_bar::action_bar_breakpoints;
 pub(super) use action_bar::{ActionBarView, action_bar_density, action_bar_height};
 pub(super) use bottom_status_bar::BottomStatusBarView;
 pub(super) use popover::{PopoverHost, PopoverHostInit};

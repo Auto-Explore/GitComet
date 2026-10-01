@@ -304,10 +304,10 @@ mod tests {
         });
     }
 
-    fn workspace_key(repo: &RepoState, query: &str) -> RowsCacheKey {
+    fn worktree_badge_key(repo: &RepoState, query: &str) -> RowsCacheKey {
         RowsCacheKey::new(
             RowsCacheOwner::Workspace,
-            workspace_picker::rows_signature(repo),
+            worktree_badge_picker::rows_signature(repo),
             query,
         )
     }
@@ -318,8 +318,8 @@ mod tests {
         let cache = RowsCache::default();
         let builds = std::cell::Cell::new(0);
 
-        build_once(&cache, workspace_key(&repo, ""), &builds);
-        build_once(&cache, workspace_key(&repo, ""), &builds);
+        build_once(&cache, worktree_badge_key(&repo, ""), &builds);
+        build_once(&cache, worktree_badge_key(&repo, ""), &builds);
 
         assert_eq!(builds.get(), 1, "the second frame must reuse the rows");
     }
@@ -358,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn the_workspace_signature_tracks_worktrees_head_and_the_active_workdir() {
+    fn the_worktree_signature_tracks_worktrees_head_and_the_active_workdir() {
         let checks: Vec<RevisionBump> = vec![
             ("worktrees_rev", |repo| {
                 repo.worktrees_rev = repo.worktrees_rev.wrapping_add(1)
@@ -374,11 +374,11 @@ mod tests {
 
         for (label, bump) in checks {
             let mut repo = repo();
-            let before = workspace_picker::rows_signature(&repo);
+            let before = worktree_badge_picker::rows_signature(&repo);
             bump(&mut repo);
             assert_ne!(
                 before,
-                workspace_picker::rows_signature(&repo),
+                worktree_badge_picker::rows_signature(&repo),
                 "{label} must invalidate the workspace rows"
             );
         }
@@ -390,8 +390,8 @@ mod tests {
         let cache = RowsCache::default();
         let builds = std::cell::Cell::new(0);
 
-        build_once(&cache, workspace_key(&repo, ""), &builds);
-        build_once(&cache, workspace_key(&repo, "fea"), &builds);
+        build_once(&cache, worktree_badge_key(&repo, ""), &builds);
+        build_once(&cache, worktree_badge_key(&repo, "fea"), &builds);
 
         assert_eq!(builds.get(), 1);
     }

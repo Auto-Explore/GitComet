@@ -3209,6 +3209,21 @@ fn fs_event_single_file_save_is_deterministic() {
     assert_eq!(h1, h2);
 }
 
+/// The benchmark times `refresh_status` alone, so the untimed setup and
+/// restoration around it must leave every iteration the same work.
+#[test]
+fn fs_event_untimed_restore_returns_the_tree_to_its_clean_state() {
+    let fixture = FsEventFixture::git_checkout_batch(100, 30);
+    for _ in 0..2 {
+        let mutation = fixture.apply_mutation();
+        let (_, metrics) = fixture.refresh_status(&mutation);
+        assert_eq!(metrics.dirty_files_detected, 30);
+        fixture.restore(mutation);
+    }
+    let (_, after) = fixture.refresh_status(&FsEventMutation::default());
+    assert_eq!(after.dirty_files_detected, 0);
+}
+
 // ---------------------------------------------------------------------------
 // idle_resource — long-running CPU/RSS sampling harness
 // ---------------------------------------------------------------------------

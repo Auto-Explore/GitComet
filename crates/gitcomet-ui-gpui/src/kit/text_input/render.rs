@@ -3,8 +3,34 @@ use super::state::*;
 use super::*;
 use crate::kit::click::PointerClickExt as _;
 
+impl TextInput {
+    fn reset_focus(&mut self, cx: &mut Context<Self>) {
+        self.interaction.has_focus = false;
+        self.interaction.cursor_blink_visible = true;
+        self.interaction.cursor_blink_task.take();
+        self.interaction.context_menu = None;
+        self.interaction.is_selecting = false;
+        self.interaction.mouse_selection_anchor = None;
+        self.interaction.pending_mouse_selection_anchor = None;
+        self.interaction.took_press = false;
+        self.interaction.pending_cursor_autoscroll = false;
+        self.interaction.cursor_autoscroll_retries_remaining = 0;
+        self.interaction.cursor_autoscroll_layout_waits_remaining = 0;
+        cx.notify();
+    }
+}
+
 impl Render for TextInput {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Bind on first render so inputs created with `new_inert` participate too.
+        if self.interaction.focus_subscriptions.is_none() {
+            self.interaction.focus_subscriptions = Some(crate::window_focus::observe_blur(
+                &self.focus_handle,
+                window,
+                cx,
+                Self::reset_focus,
+            ));
+        }
         let action = std::mem::take(&mut self.probe_action);
         crate::ui_probe::action_phase(action, "rendered", || {
             let snapshot = self.content.snapshot();
@@ -76,14 +102,13 @@ impl Render for TextInput {
             };
             self.effective_line_height(window) * visual_rows as f32 + pad_y * 2.0
         });
-        let is_focused = focus.is_focused(window);
+        let is_focused = crate::window_focus::is_active(&focus, window);
 
         if self.interaction.has_focus != is_focused {
             self.interaction.has_focus = is_focused;
             self.interaction.cursor_blink_visible = true;
             if !is_focused {
-                self.interaction.cursor_blink_task.take();
-                self.interaction.context_menu = None;
+                self.reset_focus(cx);
             }
         }
 
@@ -94,13 +119,13 @@ impl Render for TextInput {
             let task = cx.spawn(
                 async move |input: gpui::WeakEntity<TextInput>, cx: &mut gpui::AsyncApp| {
                     loop {
-                        smol::Timer::after(Duration::from_millis(800)).await;
+                        cx.background_executor()
+                            .timer(Duration::from_millis(800))
+                            .await;
                         let should_continue = input
-                            .update(cx, |input, cx| {
-                                if !input.interaction.has_focus {
-                                    input.interaction.cursor_blink_visible = true;
-                                    input.interaction.cursor_blink_task = None;
-                                    cx.notify();
+                            .update_in(cx, |input, window, cx| {
+                                if !crate::window_focus::is_active(&input.focus_handle, window) {
+                                    input.reset_focus(cx);
                                     return false;
                                 }
 
@@ -169,6 +194,8 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::delete_word_left))
             .on_action(cx.listener(Self::delete_word_right))
+            .on_action(cx.listener(Self::delete_to_line_start))
+            .on_action(cx.listener(Self::delete_to_line_end))
             .on_action(cx.listener(Self::enter))
             .on_action(cx.listener(Self::shift_enter))
             .on_action(cx.listener(Self::left))
@@ -238,12 +265,21 @@ impl Render for TextInput {
             .when(multiline, |d| d.items_start())
             .when_some(leading_icon, |d, icon_path| {
                 d.child(
-                    div().pl(pad_x).flex_none().child(
-                        gpui::svg()
-                            .path(icon_path)
-                            .size(scaled_px(14.0))
-                            .text_color(style.placeholder),
-                    ),
+                    div()
+                        .pl(pad_x)
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        // Match a single-line input while keeping the icon
+                        // beside the first line as a multiline field grows.
+                        .h(self.effective_line_height(window))
+                        .when(multiline, |d| d.mt(pad_y))
+                        .child(
+                            gpui::svg()
+                                .path(icon_path)
+                                .size(scaled_px(14.0))
+                                .text_color(style.placeholder),
+                        ),
                 )
             })
             .child(text_surface);

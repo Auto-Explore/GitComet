@@ -1,7 +1,10 @@
-use super::panes::main::file_editor::{StashedFileEdit, file_editor_text_fingerprint};
-use super::panes::main::{
-    preflight_worktree_file_for_editing, read_worktree_file_version_for_editing,
+use super::panes::main::file_editor::{
+    StashedFileEdit, encode_for_save, file_editor_text_fingerprint,
 };
+use super::panes::main::{
+    TextDecodeRequest, preflight_worktree_file_for_editing, read_worktree_file_version_for_editing,
+};
+use gitcomet_core::text_format::{SideKind, SideTextFormat};
 use super::*;
 use crate::kit::{TextInput, TextInputOptions};
 use gitcomet_core::filesystem::{DiskVersion, DocumentIdentity, Operation, OperationId, Request};
@@ -346,7 +349,6 @@ impl DocumentsView {
         let prompt = components::PickerPrompt::new(self.search.clone(), self.scroll.clone())
             .prebuilt_items(items, layout)
             .remove_tooltip("Remove from recent documents")
-            .accent_selection()
             .padded_query_row()
             .on_context_menu(cx.listener(
                 move |this, event: &components::PickerPromptContextMenuEvent, _, cx| {
@@ -486,6 +488,8 @@ struct StandaloneBuffer {
     syntax_task: Option<gpui::Task<()>>,
     path_input: Entity<TextInput>,
     version: Option<DiskVersion>,
+    /// How the file was read, so saves write it back the same way.
+    text_format: Option<SideTextFormat>,
     saved_fingerprint: Option<u64>,
     load_generation: u64,
     load_task: Option<gpui::Task<()>>,
@@ -618,6 +622,7 @@ impl StandaloneBuffer {
             syntax_task: None,
             path_input,
             version: None,
+            text_format: None,
             saved_fingerprint: None,
             load_generation: 0,
             load_task: None,
@@ -633,6 +638,7 @@ impl StandaloneBuffer {
         };
         if let Some((edit, version)) = initial {
             buffer.version = version;
+            buffer.text_format = edit.text_format;
             buffer.saved_fingerprint = Some(edit.saved_fingerprint);
             buffer.dirty = true;
             buffer.input.update(cx, |input, cx| {
@@ -665,15 +671,23 @@ impl StandaloneBuffer {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 let version = read_worktree_file_version_for_editing(&path)?;
-                let text = if image {
-                    SharedString::default()
+                // Outside a repository there are no attributes: detect only.
+                let request = TextDecodeRequest {
+                    kind: SideKind::Worktree,
+                    attributes: Arc::default(),
+                    encoding: None,
+                };
+                let (text, format) = if image {
+                    (SharedString::default(), None)
                 } else {
-                    panes::read_worktree_file_for_editing(&path)?.0
+                    let (text, _, _, format) =
+                        panes::read_worktree_file_for_editing(&path, &request)?;
+                    (text, Some(format))
                 };
                 if read_worktree_file_version_for_editing(&path)? != version {
                     return Err("File changed while reading. Open it again.".into());
                 }
-                Ok::<_, String>((version, text))
+                Ok::<_, String>((version, text, format))
             })
             .await;
             let _ = view.update(cx, |this: &mut StandaloneBuffer, cx| {
@@ -686,12 +700,16 @@ impl StandaloneBuffer {
                 }
                 this.loading = false;
                 match result {
-                    Ok((version, text)) => {
+                    Ok((version, text, format)) => {
                         this.version = Some(version);
+                        this.text_format = format;
+                        // Text that cannot be written back as it was read is view-only.
+                        let read_only =
+                            !this.editing || format.is_some_and(|format| !format.is_writable());
                         this.input.update(cx, |input, cx| {
                             input.set_line_ending(TextInput::detect_line_ending(&text));
                             input.set_text(text, cx);
-                            input.set_read_only(!this.editing, cx);
+                            input.set_read_only(read_only, cx);
                         });
                         this.saved_fingerprint = Some(file_editor_text_fingerprint(
                             &this.input.read(cx).text_snapshot(),
@@ -722,11 +740,21 @@ impl StandaloneBuffer {
         {
             return;
         }
+        let text = SharedString::from(self.input.read(cx).text().to_string());
+        let contents = match encode_for_save(text, self.text_format) {
+            Ok((bytes, _)) => Arc::from(bytes.as_bytes()),
+            Err(error) => {
+                // Nothing written; the buffer stays dirty.
+                self.error = Some(error.to_string());
+                cx.notify();
+                return;
+            }
+        };
         let path = destination.unwrap_or_else(|| self.identity.0.clone());
         let request = Request::new(Operation::Save {
             path: path.clone(),
             worktree: None,
-            contents: Arc::from(self.input.read(cx).text().as_bytes()),
+            contents,
             expected: if path == self.identity.0 {
                 self.version.clone()
             } else {
@@ -881,7 +909,8 @@ impl Render for StandaloneBuffer {
                         .disabled(
                             (self.image && !editable_image)
                                 || self.loading
-                                || (self.error.is_some() && self.version.is_none()),
+                                || (self.error.is_some() && self.version.is_none())
+                                || self.text_format.is_some_and(|format| !format.is_writable()),
                         )
                         .on_click(theme, cx, |this, _, window, cx| {
                             this.editing = true;

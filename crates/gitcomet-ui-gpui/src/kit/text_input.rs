@@ -33,6 +33,8 @@ actions!(
         Delete,
         DeleteWordLeft,
         DeleteWordRight,
+        DeleteToLineStart,
+        DeleteToLineEnd,
         Enter,
         ShiftEnter,
         Left,
@@ -93,6 +95,8 @@ mod element;
 mod highlight;
 mod render;
 mod shaping;
+#[cfg(test)]
+pub(crate) use shaping::take_wrapped_lines_shaped_for_tests;
 mod state;
 mod wrap;
 

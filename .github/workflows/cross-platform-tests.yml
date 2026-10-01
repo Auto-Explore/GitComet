@@ -189,6 +189,14 @@ jobs:
         if: success() && matrix.name == 'ubuntu22-x64'
         shell: bash
         run: python3 scripts/ci/run.py display
+      # The release build runs the same check; this catches a dependency
+      # update that adds a runtime-loaded library before release day.
+      - name: Check Linux runtime library dependencies
+        if: success() && matrix.name == 'ubuntu22-x64'
+        shell: bash
+        run: |
+          python3 scripts/ci/run.py command --name linux-runtime-deps-build -- cargo build --locked --profile ci-test -p gitcomet --bin gitcomet
+          scripts/check-linux-runtime-deps.sh target/ci-test/gitcomet
       - name: Compile original Windows CMD smoke context
         if: success() && runner.os == 'Windows'
         shell: pwsh

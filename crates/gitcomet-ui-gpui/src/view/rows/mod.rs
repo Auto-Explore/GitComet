@@ -1177,8 +1177,8 @@ pub(in crate::view) use self::markdown_flow_text::{
 pub(in crate::view) use self::markdown_flow_text::{
     markdown_flow_painted_offset, markdown_flow_range_rects, markdown_flow_row_offset,
 };
-pub(in crate::view) use self::sidebar::active_workspace_paths_by_branch;
-pub(in crate::view) use self::sidebar::listed_workspace_paths_by_branch;
+pub(in crate::view) use self::sidebar::active_worktree_paths_by_branch;
+pub(in crate::view) use self::sidebar::listed_worktree_paths_by_branch;
 
 #[cfg(any(test, feature = "benchmarks"))]
 pub(in crate::view) use diff_text::has_pending_prepared_diff_syntax_chunk_builds_for_document;

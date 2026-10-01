@@ -4,11 +4,21 @@ use super::*;
 pub(crate) struct ToastState {
     pub(crate) id: u64,
     pub(crate) kind: components::ToastKind,
-    pub(crate) input: Entity<components::TextInput>,
-    pub(crate) is_code_message: bool,
+    pub(crate) body: ToastBody,
     pub(crate) actions: Vec<ToastAction>,
     pub(crate) dismiss_behavior: ToastDismissBehavior,
     pub(crate) ttl: Option<Duration>,
+}
+
+#[derive(Clone)]
+pub(crate) enum ToastBody {
+    /// Selectable text; indented lines show as code.
+    Text {
+        input: Entity<components::TextInput>,
+        is_code_message: bool,
+    },
+    /// An error, shown until closed; the details dialog has the rest.
+    Error(Arc<ErrorNotice>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -1932,6 +1932,43 @@ fn show_commit_details_message(
     });
 }
 
+/// The message scrolls inside a container capped at
+/// `COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX`; selecting a commit used to shape
+/// every line of its message anyway, which on long pull-request descriptions
+/// made that frame take 30-70 ms.
+#[gpui::test]
+fn selecting_a_commit_shapes_only_the_visible_part_of_a_long_message(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let message: String = std::iter::once("Long pull request\n\n".to_string())
+        .chain((0..400).map(|line| format!("Body line {line} explains one more detail.\n")))
+        .collect();
+
+    let _ = crate::kit::take_wrapped_lines_shaped_for_tests();
+    show_commit_details_message(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(43),
+        "/tmp/repo-commit-message-long",
+        &message,
+    );
+    let shaped = crate::kit::take_wrapped_lines_shaped_for_tests();
+
+    let bounds = cx
+        .debug_bounds("commit_details_message_scroll_surface")
+        .expect("expected commit details message bounds");
+    assert!(bounds.size.height <= px(COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX + 1.0));
+    assert!(
+        (1..=60).contains(&shaped),
+        "a 402-line message in a {:?} tall container shaped {shaped} lines",
+        bounds.size.height
+    );
+}
+
 #[gpui::test]
 fn commit_details_message_url_click_opens_the_web_link_menu(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -4128,6 +4165,7 @@ fn amend_prefills_commit_message_once_recent_messages_load(cx: &mut gpui::TestAp
 fn commit_message_focus_after_initial_draw_accepts_typed_input(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 

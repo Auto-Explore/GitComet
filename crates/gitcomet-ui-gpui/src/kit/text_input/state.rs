@@ -788,9 +788,14 @@ pub(super) struct InteractionState {
     pub(super) has_focus: bool,
     pub(super) cursor_blink_visible: bool,
     pub(super) cursor_blink_task: Option<gpui::Task<()>>,
+    pub(super) focus_subscriptions: Option<[gpui::Subscription; 2]>,
     pub(super) enter_pressed: bool,
     pub(super) escape_pressed: bool,
     pub(super) arrow_up_pressed: bool,
+    /// Left/Right pressed with the caret already at that edge (no selection):
+    /// the caret cannot move, so a list beside the input may take the key.
+    pub(super) arrow_left_at_start_pressed: bool,
+    pub(super) arrow_right_at_end_pressed: bool,
     pub(super) document_home_pressed: bool,
     pub(super) document_end_pressed: bool,
     pub(super) page_up_pressed: bool,
@@ -820,9 +825,12 @@ impl InteractionState {
             has_focus: false,
             cursor_blink_visible: true,
             cursor_blink_task: None,
+            focus_subscriptions: None,
             enter_pressed: false,
             escape_pressed: false,
             arrow_up_pressed: false,
+            arrow_left_at_start_pressed: false,
+            arrow_right_at_end_pressed: false,
             document_home_pressed: false,
             document_end_pressed: false,
             page_up_pressed: false,
@@ -873,6 +881,8 @@ pub struct TextInput {
     pub(super) display_truncation: Option<TextTruncationProfile>,
     pub(super) masked: bool,
     pub(super) line_ending: &'static str,
+    /// Columns a tab advances to when shaped.
+    pub(super) tab_size: usize,
     pub(super) style: TextInputStyle,
     pub(super) line_height_override: Option<Pixels>,
     /// Design px; scaled with the window's UI zoom at render.

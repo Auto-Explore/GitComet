@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use super::RepoPathList;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, strum::IntoStaticStr)]
 pub enum Effect {
     Filesystem(gitcomet_core::filesystem::Request),
     IndexedHistory(crate::indexed_history::IndexedHistoryEffect),
@@ -285,13 +285,18 @@ pub enum Effect {
     SaveWorktreeFile {
         repo_id: RepoId,
         path: PathBuf,
-        contents: String,
+        contents: super::message::ContentBytes,
         expected_contents: Option<std::sync::Arc<[u8]>>,
         stage: bool,
+        completion: Option<smol::channel::Sender<bool>>,
     },
     AppendGitignorePatterns {
         repo_id: RepoId,
         patterns: Vec<String>,
+    },
+    AppendGitattributesRule {
+        repo_id: RepoId,
+        rule: String,
     },
 
     CheckoutBranch {
@@ -441,15 +446,15 @@ pub enum Effect {
     },
     StageHunk {
         repo_id: RepoId,
-        patch: String,
+        patch: super::ContentBytes,
     },
     UnstageHunk {
         repo_id: RepoId,
-        patch: String,
+        patch: super::ContentBytes,
     },
     ApplyWorktreePatch {
         repo_id: RepoId,
-        patch: String,
+        patch: super::ContentBytes,
         reverse: bool,
     },
     StagePath {

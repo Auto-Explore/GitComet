@@ -1,5 +1,5 @@
 use super::GixRepo;
-use crate::util::{run_git_capture, run_git_with_output};
+use crate::util::{run_git_capture_bytes, run_git_with_output};
 use gitcomet_core::domain::CommitId;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CommandOutput, Result};
@@ -20,8 +20,10 @@ impl GixRepo {
             .arg(sha)
             .arg("--stdout")
             .arg("--binary");
-        let patch = run_git_capture(cmd, &format!("git format-patch -1 {sha} --stdout"))?;
-        std::fs::write(dest, patch.as_bytes()).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        // The bytes as git wrote them: file content in any encoding must reach
+        // the patch file unchanged, or `git am` cannot apply it.
+        let patch = run_git_capture_bytes(cmd, &format!("git format-patch -1 {sha} --stdout"))?;
+        std::fs::write(dest, patch).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
         Ok(CommandOutput {
             command: format!("Export patch {sha}"),
             stdout: format!("Saved patch to {}", dest.display()),
@@ -38,12 +40,12 @@ impl GixRepo {
 
     pub(super) fn apply_unified_patch_to_index_with_output_impl(
         &self,
-        patch: &str,
+        patch: &[u8],
         reverse: bool,
     ) -> Result<CommandOutput> {
         let mut tmp_file = NamedTempFile::new().map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
         tmp_file
-            .write_all(patch.as_bytes())
+            .write_all(patch)
             .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
         let tmp_path = tmp_file.path();
 
@@ -68,12 +70,12 @@ impl GixRepo {
 
     pub(super) fn apply_unified_patch_to_worktree_with_output_impl(
         &self,
-        patch: &str,
+        patch: &[u8],
         reverse: bool,
     ) -> Result<CommandOutput> {
         let mut tmp_file = NamedTempFile::new().map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
         tmp_file
-            .write_all(patch.as_bytes())
+            .write_all(patch)
             .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
         let tmp_path = tmp_file.path();
 

@@ -11,6 +11,8 @@ pub struct UiSettings {
     pub repo_sidebar_pinned_branches: Option<BTreeMap<PathBuf, BTreeSet<String>>>,
     pub theme_mode: Option<String>,
     pub ui_scale_percent: Option<u32>,
+    pub window_controls_mode: Option<String>,
+    pub browser_open_target: Option<String>,
     pub ui_density: Option<String>,
     pub ui_font_size_px: Option<u32>,
     pub editor_font_size_px: Option<u32>,
@@ -34,6 +36,7 @@ pub struct UiSettings {
     pub annotate_enabled: Option<bool>,
     pub diff_reveal_whitespace_chars: Option<bool>,
     pub diff_word_wrap: Option<bool>,
+    pub diff_tab_size: Option<u8>,
     pub diff_show_line_numbers: Option<bool>,
     pub remote_markdown_image_policy: Option<String>,
     pub allowed_remote_protocols: Option<BTreeSet<String>>,
@@ -106,6 +109,8 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         }
         apply_setting!(settings, file, theme_mode);
         apply_setting!(settings, file, ui_scale_percent);
+        apply_setting!(settings, file, window_controls_mode);
+        apply_setting!(settings, file, browser_open_target);
         apply_setting!(settings, file, ui_density);
         apply_setting!(settings, file, ui_font_size_px);
         apply_setting!(settings, file, editor_font_size_px);
@@ -133,6 +138,7 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         apply_setting!(settings, file, mergetool_show_line_numbers);
         apply_setting!(settings, file, mergetool_view_three_way);
         apply_setting!(settings, file, diff_word_wrap);
+        apply_setting!(settings, file, diff_tab_size);
         apply_setting!(settings, file, remote_markdown_image_policy);
         apply_setting!(settings, file, allowed_remote_protocols);
         apply_setting!(settings, file, check_for_updates_on_startup);
@@ -178,6 +184,29 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
             file.external_code_editor = editor.map(external_code_editor_to_file);
         }
 
+        persist_to_path(path, &file)
+    })
+}
+
+/// The focused mergetool's window size, kept apart from the legacy
+/// `window_width`/`window_height` that normal windows and workspaces rewrite.
+pub fn persist_mergetool_window_size(width: u32, height: u32) -> io::Result<()> {
+    let Some(path) = default_session_file_path() else {
+        return Ok(());
+    };
+    persist_mergetool_window_size_to_path(width, height, &path)
+}
+
+pub fn persist_mergetool_window_size_to_path(
+    width: u32,
+    height: u32,
+    path: &Path,
+) -> io::Result<()> {
+    with_session_file_persist_lock(|| {
+        let mut file = load_file(path).unwrap_or_default();
+        file.version = CURRENT_SESSION_FILE_VERSION;
+        file.mergetool_window_width = Some(width);
+        file.mergetool_window_height = Some(height);
         persist_to_path(path, &file)
     })
 }

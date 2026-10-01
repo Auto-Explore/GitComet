@@ -43,16 +43,18 @@ App and `gitcomet` command from tap:
 brew install --cask gitcomet
 ```
 
-On Linux, the cask installs the AppImage build. If your system cannot launch AppImages, use the APT repo, AUR package, release tarball, or `.deb` instead.
+On Linux, the cask installs the AppImage build. If your system cannot launch AppImages, use the APT repo, the RPM, the release tarball, or the `.deb` instead.
 
 </details>
 
 <details>
 <summary>AUR (Arch Linux)</summary>
 
+The community-maintained [`gitcomet-bin`](https://aur.archlinux.org/packages/gitcomet-bin) package repackages the release tarball:
+
 ```bash
-git clone https://aur.archlinux.org/gitcomet.git
-cd gitcomet && makepkg -si
+git clone https://aur.archlinux.org/gitcomet-bin.git
+cd gitcomet-bin && makepkg -si
 ```
 
 </details>
@@ -76,11 +78,24 @@ sudo apt update
 sudo apt install gitcomet
 ```
 
-If you install a Linux tarball or Homebrew binary on Debian, Ubuntu, or WSLg instead of the official `apt` package, install the GUI runtime libraries separately:
+If you install a Linux tarball or Homebrew binary on Debian, Ubuntu, or WSLg instead of the official `apt` package, install the GUI runtime libraries separately. GitComet draws with Vulkan, or EGL when Vulkan is unavailable, and uses the Wayland libraries in Wayland sessions:
 
 ```bash
-sudo apt install libxcb1 libxkbcommon0 libxkbcommon-x11-0
+sudo apt install libxcb1 libxkbcommon0 libxkbcommon-x11-0 libvulkan1 libegl1 libwayland-client0 libwayland-egl1
 ```
+
+</details>
+
+<details>
+<summary>RPM (Fedora)</summary>
+
+Download the `.rpm` for your architecture from [GitHub Releases](https://github.com/Auto-Explore/GitComet/releases) and install it:
+
+```bash
+sudo dnf install ./gitcomet-<version>-1.x86_64.rpm
+```
+
+The RPM supports Fedora 42 and newer. It needs glibc 2.35 or newer, so RHEL 9 and its rebuilds (glibc 2.34) cannot install it.
 
 </details>
 

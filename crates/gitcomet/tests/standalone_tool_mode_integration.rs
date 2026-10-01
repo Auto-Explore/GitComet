@@ -209,13 +209,14 @@ fn standalone_mergetool_conflict_exits_one_and_writes_markers() {
 }
 
 #[test]
-fn standalone_mergetool_non_utf8_conflict_exits_one_and_keeps_local_bytes() {
+fn standalone_mergetool_non_utf8_text_conflicts_in_its_own_encoding() {
     let dir = tempfile::tempdir().unwrap();
     let local = dir.path().join("local.dat");
     let remote = dir.path().join("remote.dat");
     let merged = dir.path().join("merged.dat");
 
-    // Invalid UTF-8 without NUL bytes: exercises non-UTF-8 binary detection.
+    // Invalid UTF-8 without NUL bytes is text in another encoding, and git
+    // merges it as text too: a content conflict, not a binary one.
     let local_bytes = b"prefix\n\xFF\n";
     let remote_bytes = b"prefix\n\xFE\n";
     write_bytes(&local, local_bytes);
@@ -234,13 +235,19 @@ fn standalone_mergetool_non_utf8_conflict_exits_one_and_keeps_local_bytes() {
     let text = output_text(&output);
     assert_eq!(output.status.code(), Some(1), "expected exit 1\n{text}");
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("binary"),
-        "expected binary conflict message\n{text}"
+        String::from_utf8_lossy(&output.stderr).contains("CONFLICT (content)"),
+        "expected a content conflict\n{text}"
     );
-    assert_eq!(
-        fs::read(&merged).expect("merged output to exist"),
-        local_bytes,
-        "non-UTF-8 conflict should keep local bytes"
+    let merged_bytes = fs::read(&merged).expect("merged output to exist");
+    let contains = |needle: &[u8]| {
+        merged_bytes
+            .windows(needle.len())
+            .any(|window| window == needle)
+    };
+    assert!(contains(b"<<<<<<<"), "{text}");
+    assert!(
+        contains(b"\n\xFF\n") && contains(b"\n\xFE\n"),
+        "both sides keep their own bytes"
     );
 }
 

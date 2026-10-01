@@ -55,6 +55,7 @@ pub struct Button {
     start_slot: Option<AnyElement>,
     end_slot: Option<AnyElement>,
     separate_end_slot: bool,
+    truncate_label: bool,
     /// Set when the caller pins the button's geometry instead of taking the
     /// app's. See [`Button::unscaled`].
     scale: Option<UiScale>,
@@ -82,6 +83,7 @@ impl Button {
             start_slot: None,
             end_slot: None,
             separate_end_slot: false,
+            truncate_label: false,
             scale: None,
         }
     }
@@ -125,6 +127,13 @@ impl Button {
 
     pub fn text_color(mut self, color: gpui::Rgba) -> Self {
         self.text_color = Some(color);
+        self
+    }
+
+    /// Allow a parent with limited width to shrink the label with an ellipsis.
+    /// Icons and action targets retain their size.
+    pub fn truncate_label(mut self) -> Self {
+        self.truncate_label = true;
         self
     }
 
@@ -226,6 +235,7 @@ impl Button {
     ) -> Stateful<Div> {
         let ui_scale = self.scale.unwrap_or_else(|| UiScale::current(cx));
 
+        let truncate_label = self.truncate_label;
         let last_bounds: Rc<RefCell<Option<Bounds<Pixels>>>> = Rc::new(RefCell::new(None));
         let last_bounds_for_prepaint = Rc::clone(&last_bounds);
         let last_bounds_for_click = Rc::clone(&last_bounds);
@@ -242,6 +252,7 @@ impl Button {
         );
 
         div()
+            .when(truncate_label, |d| d.min_w(px(0.0)))
             .on_children_prepainted(move |children_bounds, _window, _cx| {
                 if let Some(bounds) = children_bounds.first() {
                     *last_bounds_for_prepaint.borrow_mut() = Some(*bounds);
@@ -272,6 +283,7 @@ impl Button {
             start_slot,
             end_slot,
             separate_end_slot,
+            truncate_label,
             scale,
         } = self;
         let ui_scale = scale.unwrap_or_else(|| ui_scale.into().with_appearance(theme.metrics));
@@ -422,12 +434,20 @@ impl Button {
             .ramp(CONTENT_GAP_PX, CONTENT_GAP_COMFORTABLE_PX));
         let separated_slot_pad = ui_scale.px(6.0);
 
-        let mut leading = div().flex().items_center().gap(content_gap);
+        let mut leading = div()
+            .flex()
+            .items_center()
+            .gap(content_gap)
+            .when(truncate_label, |d| d.min_w(px(0.0)).overflow_hidden());
         if let Some(start_slot) = start_slot {
             leading = leading.child(start_slot);
         }
         if !label.is_empty() {
-            leading = leading.child(label);
+            leading = if truncate_label {
+                leading.child(div().min_w(px(0.0)).truncate().child(label))
+            } else {
+                leading.child(label)
+            };
         }
         let inner = match (separate_end_slot, end_slot) {
             (true, Some(end_slot)) => div()
@@ -458,6 +478,7 @@ impl Button {
             .id(id.clone())
             .debug_selector(move || id.to_string())
             .h(control_height)
+            .when(truncate_label, |d| d.min_w(px(0.0)))
             .when(icon_only, |d| d.min_w(control_height))
             .px(if icon_only { icon_pad_x } else { control_pad_x })
             .py(control_pad_y)

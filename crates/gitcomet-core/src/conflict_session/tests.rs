@@ -12,6 +12,8 @@ fn make_region(base: Option<&str>, ours: &str, theirs: &str) -> ConflictRegion {
 fn make_session(regions: Vec<ConflictRegion>) -> ConflictSession {
     ConflictSession {
         path: PathBuf::from("test.txt"),
+        current_format: None,
+        output_format: None,
         conflict_kind: FileConflictKind::BothModified,
         strategy: ConflictResolverStrategy::FullTextResolver,
         base: ConflictPayload::Text("base\n".into()),
@@ -30,6 +32,24 @@ fn make_session(regions: Vec<ConflictRegion>) -> ConflictSession {
 }
 
 // -- ConflictPayload tests --
+
+#[test]
+fn decoding_binary_payload_reuses_shared_bytes() {
+    use crate::text_format::{SideKind, TextAttributes};
+    let bytes: Arc<[u8]> = Arc::from(vec![0, 0, 0xff, 0, 0xff]);
+    let (payload, format) = ConflictPayload::decode(
+        Some(Arc::clone(&bytes)),
+        None,
+        SideKind::GitInternal,
+        &TextAttributes::default(),
+        None,
+    );
+    assert!(format.unwrap().binary);
+    let ConflictPayload::Binary(decoded) = payload else {
+        panic!("expected binary")
+    };
+    assert!(Arc::ptr_eq(&bytes, &decoded));
+}
 
 #[test]
 fn payload_from_bytes_utf8() {
@@ -100,6 +120,71 @@ fn stage_parts_text_preferred_over_bytes() {
 }
 
 // -- ConflictRegionResolution tests --
+
+#[test]
+fn decoded_payloads_keep_original_bytes_through_stage_parts() {
+    use crate::text_format::{SideKind, TextAttributes, TextEncoding};
+    for (bytes, encoding, text) in [
+        (
+            b"caf\xe9\n".as_slice(),
+            TextEncoding::WINDOWS_1252,
+            "café\n",
+        ),
+        (
+            b"\xef\xbb\xbfcaf\xc3\xa9\n".as_slice(),
+            TextEncoding::UTF_8,
+            "café\n",
+        ),
+        (b"\xff\xfea\0\n\0".as_slice(), TextEncoding::UTF_16LE, "a\n"),
+        (
+            b"\x87\x90\n".as_slice(),
+            TextEncoding::from_label("shift_jis").unwrap(),
+            "≒\n",
+        ),
+        (b"bad\xff\n".as_slice(), TextEncoding::UTF_8, "bad�\n"),
+    ] {
+        let original: Arc<[u8]> = bytes.into();
+        let (payload, _) = ConflictPayload::decode(
+            Some(original.clone()),
+            None,
+            SideKind::GitInternal,
+            &TextAttributes::default(),
+            Some(encoding),
+        );
+        assert_eq!(payload.as_text(), Some(text));
+        assert_eq!(payload.as_bytes(), Some(bytes));
+        assert!(!payload.is_binary());
+        let shared_text = payload.as_shared_text().unwrap().clone();
+        let parts = payload.into_stage_parts();
+        let (raw, decoded) = canonicalize_stage_parts(parts.0, parts.1);
+        assert!(Arc::ptr_eq(raw.as_ref().unwrap(), &original));
+        assert!(Arc::ptr_eq(decoded.as_ref().unwrap(), &shared_text));
+        let restored = ConflictPayload::from_stage_parts(raw, decoded);
+        assert_eq!(restored.as_bytes(), Some(bytes));
+        assert_eq!(restored.as_text(), Some(text));
+    }
+}
+
+#[test]
+fn decoded_utf8_payloads_store_text_once() {
+    use crate::text_format::{SideKind, TextAttributes};
+    let text: Arc<str> = "café\n".into();
+    let (payload, _) = ConflictPayload::decode(
+        Some(Arc::from(text.as_bytes())),
+        Some(text.clone()),
+        SideKind::GitInternal,
+        &TextAttributes::default(),
+        None,
+    );
+    let (bytes, decoded) = payload.into_stage_parts();
+    assert!(bytes.is_none());
+    assert!(Arc::ptr_eq(decoded.as_ref().unwrap(), &text));
+    assert!(
+        canonicalize_stage_parts(Some(Arc::from(text.as_bytes())), Some(text))
+            .0
+            .is_none()
+    );
+}
 
 #[test]
 fn unresolved_is_not_resolved() {

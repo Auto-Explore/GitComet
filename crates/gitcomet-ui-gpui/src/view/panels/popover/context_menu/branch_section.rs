@@ -1,14 +1,15 @@
 use super::*;
 
 pub(super) fn model(
-    _this: &PopoverHost,
+    this: &PopoverHost,
     repo_id: RepoId,
     section: BranchSection,
 ) -> ContextMenuModel {
-    model_for_section(repo_id, section)
+    let pins = this.pinned_branch_count(repo_id, section);
+    model_for_section(repo_id, section, pins)
 }
 
-fn model_for_section(repo_id: RepoId, section: BranchSection) -> ContextMenuModel {
+fn model_for_section(repo_id: RepoId, section: BranchSection, pins: usize) -> ContextMenuModel {
     let header: SharedString = match section {
         BranchSection::Local => "Local".into(),
         BranchSection::Remote => "Remote".into(),
@@ -60,6 +61,18 @@ fn model_for_section(repo_id: RepoId, section: BranchSection) -> ContextMenuMode
         });
     }
 
+    items.push(ContextMenuItem::Separator);
+    let section_name = match section {
+        BranchSection::Local => "local",
+        BranchSection::Remote => "remote",
+    };
+    items.push(ContextMenuItem::Entry {
+        label: format!("Unpin all {section_name} ({pins})").into(),
+        icon: Some("icons/pin.svg".into()),
+        shortcut: None,
+        disabled: pins == 0,
+        action: Box::new(ContextMenuAction::UnpinAllBranches { repo_id, section }),
+    });
     ContextMenuModel::new(items)
 }
 
@@ -70,7 +83,7 @@ mod tests {
     #[test]
     fn remote_section_header_omits_remote_specific_actions() {
         let repo_id = RepoId(7);
-        let model = super::model_for_section(repo_id, BranchSection::Remote);
+        let model = super::model_for_section(repo_id, BranchSection::Remote, 0);
 
         let labels: Vec<&str> = model
             .items

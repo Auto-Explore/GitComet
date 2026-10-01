@@ -13,6 +13,7 @@ use std::sync::Mutex;
 /// key when adding a search surface; omitting its generation can publish stale rows.
 #[derive(Clone, PartialEq, Eq)]
 pub(in crate::view) struct SearchDocumentKey {
+    tab_width: usize,
     repo: Option<(RepoId, u64)>,
     patch: (Option<RepoId>, u64),
     file: (Option<RepoId>, u64, u64),
@@ -29,6 +30,108 @@ pub(in crate::view) struct SearchDocumentKey {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[gpui::test]
+    fn windows_and_search_snapshots_keep_their_own_tab_width(cx: &mut gpui::TestAppContext) {
+        use crate::view::{GitCometView, test_support::TestBackend};
+        use gitcomet_core::domain::DiffLineKind;
+        use gitcomet_state::store::AppStore;
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let panes = [2, 8].map(|width| {
+            let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+            let (view, window_cx) =
+                cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+            window_cx.update(|_, app| {
+                let pane = view.read(app).main_pane.clone();
+                let snapshot = pane.update(app, |pane, cx| {
+                    pane.default_tab_size = width;
+                    pane.sync_display_tab_width(cx);
+                    pane.diff_view = DiffViewMode::Inline;
+                    pane.diff_word_wrap = false;
+                    pane.diff_cache = Arc::from([AnnotatedDiffLine {
+                        kind: DiffLineKind::Add,
+                        text: "+\tneedle".into(),
+                        old_line: None,
+                        new_line: Some(1),
+                    }]);
+                    pane.ensure_diff_visible_indices();
+                    pane.capture_search_document()
+                });
+                (pane, snapshot, usize::from(width))
+            })
+        });
+
+        cx.update(|app| {
+            // Both windows have rendered. Copying from either must still use
+            // the offsets belonging to that window's layout.
+            for (pane, _, width) in &panes {
+                pane.update(app, |pane, cx| {
+                    let expected = format!("+{}needle", " ".repeat(*width));
+                    assert_eq!(
+                        pane.diff_text_full_line_for_region(0, DiffTextRegion::Inline)
+                            .as_ref(),
+                        expected
+                    );
+                    assert_eq!(
+                        pane.diff_text_line_len_for_region(0, DiffTextRegion::Inline),
+                        expected.len()
+                    );
+                    let anchor = DiffTextPos {
+                        source_visible_ix: 0,
+                        region: DiffTextRegion::Inline,
+                        offset: width + 1,
+                    };
+                    pane.diff_text_anchor = Some(anchor);
+                    pane.diff_text_head = Some(DiffTextPos {
+                        offset: width + 1 + "needle".len(),
+                        ..anchor
+                    });
+                    pane.copy_selected_diff_text_to_clipboard(cx);
+                    assert_eq!(crate::clipboard::read_text(cx).as_deref(), Some("needle"));
+                });
+            }
+
+            let keys = panes
+                .each_ref()
+                .map(|(pane, _, _)| pane.read(app).diff_search_document_key());
+            panes[0].0.update(app, |pane, cx| {
+                pane.default_tab_size = 3;
+                pane.sync_display_tab_width(cx);
+                assert!(keys[0] != pane.diff_search_document_key());
+            });
+            assert!(keys[1] == panes[1].0.read(app).diff_search_document_key());
+        });
+
+        // Workers must retain the captured width even after a pane changes it,
+        // and must not depend on the thread on which matching runs.
+        for (_, snapshot, width) in panes {
+            std::thread::spawn(move || {
+                let query = format!("+{}needle", " ".repeat(width));
+                assert_eq!(
+                    snapshot
+                        .search(
+                            &query,
+                            DiffSearchOptions::default(),
+                            CancellationToken::new()
+                        )
+                        .matches,
+                    [0]
+                );
+                assert!(
+                    snapshot
+                        .search(
+                            "+   needle",
+                            DiffSearchOptions::default(),
+                            CancellationToken::new()
+                        )
+                        .matches
+                        .is_empty()
+                );
+            })
+            .join()
+            .unwrap();
+        }
+    }
 
     #[gpui::test]
     fn search_snapshot_shares_rows_and_resize_only_invalidates_changed_wrap_plans(
@@ -166,7 +269,11 @@ mod tests {
                     "a row without tabs is shared, not copied"
                 );
                 let row = (rows.text)(tab_row, 0).expect("row text");
-                assert_eq!(row.as_ref(), "+    needle", "tabs still expand");
+                assert_eq!(
+                    row.as_ref(),
+                    "+    needle",
+                    "the diff sign does not advance the content's tab stop"
+                );
             });
         });
     }
@@ -262,6 +369,93 @@ mod tests {
         assert!(RowDocument::matches_text(&matcher, &text));
     }
 
+    /// A split file diff reads both sides from disk. Searching once opened,
+    /// seeked and read the file per row per chunk, twice with the tab check:
+    /// ~400k system calls and ~1.3 s for the first query on 100k rows.
+    #[test]
+    fn searching_source_backed_rows_opens_each_side_once() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sides = ["old.txt", "new.txt"].map(|name| {
+            let path = Arc::new(dir.path().join(name));
+            let text: String = (0..2_000)
+                .map(|row| {
+                    let tab = if row % 7 == 0 { "\t" } else { "" };
+                    let needle = if row % 100 == 0 { "needle" } else { "plain" };
+                    format!("row {row:04}:{tab} {needle} {name}\n")
+                })
+                .collect();
+            std::fs::write(&*path, &text).expect("write side");
+            let mut start = 0;
+            let lines: Vec<_> = text
+                .split_inclusive('\n')
+                .map(|line| {
+                    let range = start..start + line.len() - 1;
+                    start += line.len();
+                    (range, line.contains('\t'))
+                })
+                .collect();
+            (path, lines)
+        });
+        let rows = RowDocument {
+            len: 2_000,
+            columns: 2,
+            text: Box::new(move |ix, column| {
+                let (path, lines) = &sides[column];
+                let (range, has_tabs) = lines.get(ix)?.clone();
+                Some(FileDiffLineText::file_slice(
+                    Arc::clone(path),
+                    range,
+                    true,
+                    has_tabs,
+                ))
+            }),
+            wrapped: Arc::from([]),
+            streamed: false,
+            previous: Mutex::new(VecDeque::new()),
+        };
+        let document = SearchDocument(DocumentSource::Rows(rows));
+
+        let _ = gitcomet_core::file_diff::take_file_slice_opens_for_tests();
+        let found = document.search(
+            "needle",
+            DiffSearchOptions::default(),
+            CancellationToken::new(),
+        );
+        assert_eq!(found.matches, (0..2_000).step_by(100).collect::<Vec<_>>());
+        assert_eq!(
+            gitcomet_core::file_diff::take_file_slice_opens_for_tests(),
+            2
+        );
+
+        // Refining reuses the cached candidates and still reads each side once.
+        let _ = gitcomet_core::file_diff::take_file_slice_bytes_read_for_tests();
+        let refined = document.search(
+            "needle old",
+            DiffSearchOptions::default(),
+            CancellationToken::new(),
+        );
+        assert_eq!(refined.matches, found.matches);
+        assert!(gitcomet_core::file_diff::take_file_slice_opens_for_tests() <= 2);
+        // It reads the 20 candidate rows, not whole sides (~48 KB each).
+        let read = gitcomet_core::file_diff::take_file_slice_bytes_read_for_tests();
+        assert!(read < 4_096, "refinement read {read} bytes");
+
+        // Searches that scan column by column batch the same way.
+        let matched_case = document.search(
+            "needle",
+            DiffSearchOptions {
+                match_case: true,
+                ..Default::default()
+            },
+            CancellationToken::new(),
+        );
+        assert_eq!(matched_case.matches, found.matches);
+        assert_eq!(
+            gitcomet_core::file_diff::take_file_slice_opens_for_tests(),
+            2
+        );
+    }
+
     #[test]
     fn background_search_cancellation_does_not_cache_partial_results() {
         let token = CancellationToken::new();
@@ -282,7 +476,7 @@ mod tests {
             previous: Mutex::new(VecDeque::new()),
         };
         let mut matcher = DiffSearchMatcher::new("needle", DiffSearchOptions::default());
-        matcher.cancellation = Some(token);
+        matcher.set_cancellation(token);
         assert!(rows.search(&matcher).is_empty());
         assert_eq!(reads.load(Ordering::Relaxed), 3);
         assert!(rows.previous.lock().unwrap().is_empty());
@@ -334,7 +528,7 @@ impl SearchDocument {
         cancellation: CancellationToken,
     ) -> SearchResult {
         let mut matcher = DiffSearchMatcher::new(query, options);
-        matcher.cancellation = Some(cancellation);
+        matcher.set_cancellation(cancellation);
         let mut result = SearchResult {
             regex_error: matcher.regex_error().map(str::to_owned),
             ..Default::default()
@@ -412,12 +606,14 @@ impl RowDocument {
             if let Some(candidates) = previous
                 .iter()
                 .filter(|entry| {
-                    entry.options == matcher.options
+                    entry.options == matcher.options()
                         && diff_search_query_reuse(&entry.query, matcher.query())
                             != DiffSearchQueryReuse::None
                 })
                 .min_by_key(|entry| entry.rows.len())
             {
+                // Only the candidates are read: a seek per row, not whole files.
+                let _batch = gitcomet_core::file_diff::batch_file_slice_handles();
                 out.extend(
                     candidates
                         .rows
@@ -436,6 +632,7 @@ impl RowDocument {
                 // hundreds of milliseconds on large previews. Scan once and
                 // retain small result sets instead. Keeping broader queries
                 // makes both refinement and backspacing cheap.
+                let _batch = gitcomet_core::file_diff::batch_file_slice_reads();
                 for ix in (0..self.len).take_while(|_| !matcher.is_cancelled()) {
                     if (0..self.columns).any(|column| {
                         (self.text)(ix, column)
@@ -454,17 +651,20 @@ impl RowDocument {
                 && matcher.query().len() <= QUERY_CACHE_MAX_QUERY_BYTES
             {
                 previous.retain(|entry| {
-                    entry.query != matcher.query() || entry.options != matcher.options
+                    entry.query != matcher.query() || entry.options != matcher.options()
                 });
                 previous.push_front(SearchCandidates {
                     query: matcher.query().to_owned(),
-                    options: matcher.options,
+                    options: matcher.options(),
                     rows: out.clone(),
                 });
                 previous.truncate(QUERY_CACHE_ENTRIES);
             }
             return out;
         }
+        // Every row of a source-backed side is read: one read per file, not
+        // an open/seek/read per row (and per chunk).
+        let _batch = gitcomet_core::file_diff::batch_file_slice_reads();
         for column in 0..self.columns {
             let rows = (0..self.len)
                 .take_while(|_| !matcher.is_cancelled())
@@ -494,6 +694,7 @@ impl RowDocument {
 impl MainPaneView {
     pub(super) fn diff_search_document_key(&self) -> SearchDocumentKey {
         SearchDocumentKey {
+            tab_width: self.display_tab_width,
             repo: self
                 .active_repo()
                 .map(|repo| (repo.id, repo.diff_state.diff_target_rev)),
@@ -537,6 +738,8 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn capture_search_document(&self) -> SearchDocument {
+        let tab_width = self.display_tab_width;
+
         if self.is_file_editor_active() {
             return SearchDocument(DocumentSource::Editor(
                 self.file_editor_search_source.clone().unwrap_or_default(),
@@ -733,7 +936,15 @@ impl MainPaneView {
                         if let Some(header) = headers.get(&ix) {
                             return Some(header.as_ref().into());
                         }
-                        patch_line(ix)
+                        return patch_line(ix).map(|line| {
+                            if line.as_ref().contains('\t') {
+                                crate::view::tab_width::expand_patch_tabs(tab_width, line.as_ref())
+                                    .into_owned()
+                                    .into()
+                            } else {
+                                line
+                            }
+                        });
                     } else {
                         match split
                             .as_ref()
@@ -755,10 +966,16 @@ impl MainPaneView {
                             }
                         }
                     }?;
+                    // The stored flag: reading a source-backed line only to
+                    // look for tabs would load every row once more.
                     if (wrapped || view == DiffViewMode::Split || !file_view)
-                        && raw.as_ref().contains('\t')
+                        && raw.has_tabs_without_loading()
                     {
-                        Some(expand_tabs_to_string(raw.as_ref()).into())
+                        Some(
+                            crate::view::tab_width::expand_tabs(tab_width, raw.as_ref())
+                                .into_owned()
+                                .into(),
+                        )
                     } else {
                         Some(raw)
                     }

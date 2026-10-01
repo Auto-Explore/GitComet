@@ -9,6 +9,7 @@ mod diff_view_helpers;
 mod history;
 mod keep_delete_conflict;
 mod status_nav;
+mod text_format_strip;
 
 pub(super) fn show_external_mergetool_actions(view_mode: GitCometViewMode) -> bool {
     matches!(view_mode, GitCometViewMode::Normal)

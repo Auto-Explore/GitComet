@@ -11,8 +11,9 @@ impl Render for GitCometView {
         #[cfg(test)]
         clear_visible_tooltip_text_for_test();
 
-        let external_repo_drop_enabled =
-            renders_full_chrome(self.view_mode) && !self.state.repos.is_empty();
+        // The repository bar takes drops once repositories are open; Home
+        // takes them before that.
+        let external_repo_drop_enabled = renders_full_chrome(self.view_mode);
         if self.external_drag_paths.is_some()
             && (!external_repo_drop_enabled
                 || (!cx.has_active_drag() && !self.external_drag_drop_pending))
@@ -30,9 +31,10 @@ impl Render for GitCometView {
         let previous_window_width = self.last_window_size.width;
         let window_width_changed = previous_window_width != next_window_size.width;
         self.last_window_size = next_window_size;
+        let metrics = crate::appearance::current(cx);
         if window_width_changed
-            && action_bar_density(previous_window_width, self.ui_scale_percent)
-                != action_bar_density(next_window_size.width, self.ui_scale_percent)
+            && action_bar_density(previous_window_width, self.ui_scale_percent, metrics)
+                != action_bar_density(next_window_size.width, self.ui_scale_percent, metrics)
         {
             // The action bar chooses compact labels at narrow widths. It is
             // normally mounted through a cached view, so explicitly invalidate
@@ -42,7 +44,6 @@ impl Render for GitCometView {
         self.clamp_pane_widths_to_window();
         if self.last_window_size != self.ui_window_size_last_seen {
             self.ui_window_size_last_seen = self.last_window_size;
-            self.schedule_ui_settings_persist(cx);
         }
         let ui_scale_percent = self.ui_scale_percent;
         let scaled_px = ui_scale::scaler(ui_scale_percent);
@@ -463,106 +464,6 @@ impl Render for GitCometView {
             self.auth_prompt_key = None;
         }
 
-        let banner_error =
-            if Self::should_render_generic_error_banner(self.state.auth_prompt.is_some()) {
-                self.state
-                    .banner_error
-                    .as_ref()
-                    .map(|banner| banner.message.clone())
-            } else {
-                None
-            };
-        if let Some(err_text) = banner_error {
-            let (error_command, display_error) =
-                Self::split_error_banner_message(err_text.as_ref());
-            let show_overflow_hint =
-                Self::should_show_error_banner_overflow_hint(err_text.as_ref());
-            self.error_banner_input.update(cx, |input, cx| {
-                input.set_theme(theme, cx);
-                input.set_text(display_error.clone(), cx);
-                input.set_read_only(true, cx);
-            });
-
-            let dismiss = components::Button::new("repo_error_banner_close", "")
-                .start_slot(svg_icon(
-                    "icons/generic_close.svg",
-                    theme.colors.foreground.secondary,
-                    scaled_px(12.0),
-                ))
-                .style(components::ButtonStyle::Transparent)
-                .on_click(theme, cx, move |this, _e, _w, _cx| {
-                    this.store.dispatch(Msg::DismissBannerError);
-                });
-
-            let command_block = error_command.as_ref().map(|command| {
-                div()
-                    .id("repo_error_banner_command")
-                    .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-                    .bg(with_alpha(
-                        theme.colors.surface.canvas,
-                        if theme.is_dark { 0.28 } else { 0.75 },
-                    ))
-                    .rounded(px(theme.radii.row))
-                    .px_2()
-                    .py_1()
-                    .child(command.clone())
-            });
-
-            body = body.child(
-                div()
-                    .relative()
-                    .px_2()
-                    .py_1()
-                    .pr(scaled_px(40.0))
-                    .bg(if theme.is_dark {
-                        with_alpha(theme.colors.status.danger.foreground, 0.15)
-                    } else {
-                        theme.colors.surface.raised
-                    })
-                    .border_1()
-                    .border_color(if theme.is_dark {
-                        with_alpha(theme.colors.status.danger.foreground, 0.3)
-                    } else {
-                        theme.colors.status.danger.border
-                    })
-                    .rounded(px(theme.radii.panel))
-                    .child(
-                        restrict_scroll_to_vertical_axis(
-                            div()
-                                .id("repo_error_banner_scroll")
-                                .max_h(scaled_px(140.0))
-                                .overflow_y_scroll(),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_1()
-                                .when_some(command_block, |this, command_block| {
-                                    this.child(command_block)
-                                })
-                                .child(self.error_banner_input.clone()),
-                        ),
-                    )
-                    .when(show_overflow_hint, |this| {
-                        this.child(
-                            div()
-                                .mt_1()
-                                .text_size(theme.ui_text(12.0))
-                                .text_color(theme.colors.foreground.secondary)
-                                .child("Scroll for full output"),
-                        )
-                    })
-                    .child(
-                        div()
-                            .absolute()
-                            .top(scaled_px(6.0))
-                            .right(scaled_px(6.0))
-                            .child(dismiss),
-                    ),
-            );
-        }
-
         let mut root = div()
             .size_full()
             .cursor(cursor)
@@ -613,6 +514,14 @@ impl Render for GitCometView {
                 this.toggle_command_palette(window, cx);
                 cx.stop_propagation();
             }))
+            .on_action(
+                cx.listener(|this, _: &crate::app::OpenWorkspace, window, cx| {
+                    // Claimed either way so the app-level handler cannot toggle
+                    // the chooser a second time.
+                    this.toggle_workspace_picker(window, cx);
+                    cx.stop_propagation();
+                }),
+            )
             .on_action(cx.listener(|this, _: &ToggleRevealCommit, window, cx| {
                 // The availability gate lives in `toggle_reveal_commit`, which
                 // the app-level handler reaches too. Claiming the action either

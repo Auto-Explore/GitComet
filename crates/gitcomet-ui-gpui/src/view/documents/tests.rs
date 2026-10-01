@@ -172,8 +172,11 @@ fn adopted_documents_keep_their_line_endings_when_enter_is_pressed(cx: &mut gpui
 fn check_document_line_endings(cx: &mut gpui::TestAppContext, adopted: bool) {
     let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
-    let (root, cx) =
-        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let (root, cx) = cx.add_window_view(|window, cx| {
+        // Text input only accepts typing in the active window.
+        window.activate_window();
+        GitCometView::new(store, events, None, window, cx)
+    });
     let directory = tempfile::tempdir().unwrap();
     cx.update(|_, app| {
         app.bind_keys([gpui::KeyBinding::new(
@@ -202,6 +205,8 @@ fn check_document_line_endings(cx: &mut gpui::TestAppContext, adopted: bool) {
                             saved_fingerprint: 2,
                             first_dirty_line: None,
                             disk: Default::default(),
+                            text_format: None,
+                            source_text_format: None,
                         },
                         Some(DiskVersion::read(&path).unwrap()),
                         cx,
@@ -903,6 +908,8 @@ fn detached_buffers_survive_missing_files_history_removal_and_path_collisions(
                         saved_fingerprint: 2,
                         first_dirty_line: None,
                         disk: Default::default(),
+                        text_format: None,
+                        source_text_format: None,
                     },
                     None,
                     cx,
@@ -961,6 +968,8 @@ fn document_history_is_shared_and_opening_another_view_retains_edits(
                     saved_fingerprint: 2,
                     first_dirty_line: None,
                     disk: Default::default(),
+                    text_format: None,
+                    source_text_format: None,
                 },
                 None,
                 cx,
@@ -999,6 +1008,8 @@ fn unsaved_svg_is_editable_and_discarded_missing_files_stay_clean(cx: &mut gpui:
                     saved_fingerprint: 2,
                     first_dirty_line: None,
                     disk: Default::default(),
+                    text_format: None,
+                    source_text_format: None,
                 },
                 None,
                 cx,

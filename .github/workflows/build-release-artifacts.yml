@@ -13,6 +13,10 @@ on:
         required: false
         type: string
         default: "1"
+      rpm_release:
+        required: false
+        type: string
+        default: "1"
       release_id:
         required: false
         type: string
@@ -48,6 +52,11 @@ on:
         required: true
         default: "1"
         type: string
+      rpm_release:
+        description: "RPM package release suffix (e.g. 1 for 1.2.3-1)."
+        required: true
+        default: "1"
+        type: string
       release_id:
         description: "Optional release id for manual backfills"
         required: false
@@ -76,6 +85,7 @@ jobs:
       tag: ${{ steps.norm.outputs.tag }}
       version: ${{ steps.norm.outputs.version }}
       deb_revision: ${{ steps.norm.outputs.deb_revision }}
+      rpm_release: ${{ steps.norm.outputs.rpm_release }}
       release_id: ${{ steps.norm.outputs.release_id }}
     steps:
       - name: Normalize tag and version
@@ -87,6 +97,8 @@ jobs:
           DISPATCH_VERSION: ${{ github.event.inputs.version }}
           INPUT_DEB_REVISION: ${{ inputs.deb_revision }}
           DISPATCH_DEB_REVISION: ${{ github.event.inputs.deb_revision }}
+          INPUT_RPM_RELEASE: ${{ inputs.rpm_release }}
+          DISPATCH_RPM_RELEASE: ${{ github.event.inputs.rpm_release }}
           INPUT_RELEASE_ID: ${{ inputs.release_id }}
           DISPATCH_RELEASE_ID: ${{ github.event.inputs.release_id }}
         run: |
@@ -95,11 +107,13 @@ jobs:
           tag="${INPUT_TAG:-${DISPATCH_TAG:-}}"
           version="${INPUT_VERSION:-${DISPATCH_VERSION:-}}"
           deb_revision="${INPUT_DEB_REVISION:-${DISPATCH_DEB_REVISION:-1}}"
+          rpm_release="${INPUT_RPM_RELEASE:-${DISPATCH_RPM_RELEASE:-1}}"
           release_id="${INPUT_RELEASE_ID:-${DISPATCH_RELEASE_ID:-}}"
 
           tag="$(echo "$tag" | tr -d '[:space:]')"
           version="$(echo "$version" | tr -d '[:space:]')"
           deb_revision="$(echo "$deb_revision" | tr -d '[:space:]')"
+          rpm_release="$(echo "$rpm_release" | tr -d '[:space:]')"
           release_id="$(echo "$release_id" | tr -d '[:space:]')"
 
           if [ -z "$tag" ]; then
@@ -130,9 +144,15 @@ jobs:
             exit 1
           fi
 
+          if ! [[ "$rpm_release" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error title=Invalid RPM release::Expected a positive integer like 1, 2, or 3."
+            exit 1
+          fi
+
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "deb_revision=$deb_revision" >> "$GITHUB_OUTPUT"
+          echo "rpm_release=$rpm_release" >> "$GITHUB_OUTPUT"
           echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
 
   build_windows:
@@ -429,6 +449,7 @@ jobs:
           - target_platform: x86_64-linux
             artifact_arch: x86_64
             deb_arch: amd64
+            rpm_arch: x86_64
             runs_on: ubuntu-22.04
             build_appimage: true
             appimagetool_asset: appimagetool-x86_64.AppImage
@@ -438,6 +459,7 @@ jobs:
           - target_platform: aarch64-linux
             artifact_arch: arm64
             deb_arch: arm64
+            rpm_arch: aarch64
             runs_on: ubuntu-22.04-arm
             build_appimage: true
             appimagetool_asset: appimagetool-aarch64.AppImage
@@ -448,8 +470,10 @@ jobs:
       TAG: ${{ needs.prepare.outputs.tag }}
       VERSION: ${{ needs.prepare.outputs.version }}
       DEB_REVISION: ${{ needs.prepare.outputs.deb_revision }}
+      RPM_RELEASE: ${{ needs.prepare.outputs.rpm_release }}
       ARTIFACT_ARCH: ${{ matrix.artifact_arch }}
       DEB_ARCH: ${{ matrix.deb_arch }}
+      RPM_ARCH: ${{ matrix.rpm_arch }}
       APPIMAGETOOL_ASSET: ${{ matrix.appimagetool_asset }}
       APPIMAGETOOL_SHA256: ${{ matrix.appimagetool_sha256 }}
       APPIMAGE_ARCH: ${{ matrix.appimage_arch }}
@@ -471,6 +495,9 @@ jobs:
             scripts/dump-syms-pins.sh
             scripts/install-dump-syms.sh
             scripts/lib/cli.sh
+            scripts/check-linux-runtime-deps.sh
+            scripts/package-linux.sh
+            packaging/linux
           sparse-checkout-cone-mode: false
 
       - name: Install Linux UI native dependencies
@@ -480,6 +507,7 @@ jobs:
             desktop-file-utils \
             dpkg-dev \
             pkg-config \
+            rpm \
             libxcb1-dev \
             libxkbcommon-dev \
             libxkbcommon-x11-dev
@@ -523,137 +551,54 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # Every packaging step below installs from target/release/gitcomet, so
-      # stripping once here covers the tar.gz, .deb and AppImage alike. The raw
-      # DWARF is deliberately not archived: it is ~203 MiB per build and the
-      # .sym above already covers minidump-stackwalk.
+      # Every package below is built from the stripped target/release/gitcomet.
+      # The raw DWARF is deliberately not archived: it is ~203 MiB per build
+      # and the .sym above already covers minidump-stackwalk.
       - name: Strip release binary
         run: |
           set -euo pipefail
           strip --strip-debug target/release/gitcomet
           ls -l target/release/gitcomet
 
-      - name: Normalize desktop entry metadata
+      # Runtime-loaded libraries are invisible to dpkg-shlibdeps and rpm
+      # AutoReq, so the packages declare them by hand; fail if they drift.
+      - name: Check runtime library dependencies
+        run: .release-tooling/scripts/check-linux-runtime-deps.sh target/release/gitcomet
+
+      - name: Stage package payload
         run: |
-          set -euo pipefail
-          mkdir -p dist
-          # Backward compatibility for older tags that used non-standard categories.
-          sed 's/VersionControl;/RevisionControl;/g' assets/linux/gitcomet.desktop > dist/gitcomet.desktop
-          desktop-file-validate dist/gitcomet.desktop
+          .release-tooling/scripts/package-linux.sh stage \
+            --binary target/release/gitcomet --source . --out "${RUNNER_TEMP}/payload"
 
       - name: Package tar.gz
         run: |
-          set -euo pipefail
-          root="gitcomet-v${VERSION}-linux-${ARTIFACT_ARCH}"
-          mkdir -p "dist/stage/${root}"
-          install -m755 target/release/gitcomet "dist/stage/${root}/gitcomet"
-          install -m644 README.md "dist/stage/${root}/README.md"
-          install -m644 LICENSE-AGPL-3.0 "dist/stage/${root}/LICENSE-AGPL-3.0"
-          install -m644 NOTICE "dist/stage/${root}/NOTICE"
-          tar -C dist/stage -czf "dist/${root}.tar.gz" "${root}"
+          .release-tooling/scripts/package-linux.sh tarball \
+            --payload "${RUNNER_TEMP}/payload" --version "${VERSION}" --arch "${ARTIFACT_ARCH}" --out dist
 
       - name: Package .deb
         run: |
-          set -euo pipefail
-          deb_upstream_version="${VERSION/-rc./~rc.}"
-          deb_revision="${DEB_REVISION}"
-          deb_version="${deb_upstream_version}-${deb_revision}"
-          if [[ -e debian ]]; then
-            echo "::error title=Unexpected debian directory::The release workflow expects no repository debian/ directory."
-            exit 1
-          fi
+          .release-tooling/scripts/package-linux.sh deb \
+            --payload "${RUNNER_TEMP}/payload" --version "${VERSION}" --revision "${DEB_REVISION}" \
+            --arch "${DEB_ARCH}" --out dist
 
-          trap 'rm -rf debian' EXIT
-          pkg_root="debian/gitcomet"
-          mkdir -p "${pkg_root}/DEBIAN"
-          mkdir -p "${pkg_root}/usr/bin"
-          mkdir -p "${pkg_root}/usr/share/applications"
-          mkdir -p "${pkg_root}/usr/share/icons/hicolor/512x512/apps"
-
-          install -m755 target/release/gitcomet "${pkg_root}/usr/bin/gitcomet"
-          install -m644 dist/gitcomet.desktop "${pkg_root}/usr/share/applications/gitcomet.desktop"
-          install -m644 assets/gitcomet-512.png "${pkg_root}/usr/share/icons/hicolor/512x512/apps/gitcomet.png"
-
-          {
-            echo "Source: gitcomet"
-            echo "Maintainer: AutoExplore Oy <info@autoexplore.ai>"
-            echo "Section: utils"
-            echo "Priority: optional"
-            echo "Standards-Version: 4.7.0"
-            echo
-            echo "Package: gitcomet"
-            echo "Architecture: ${DEB_ARCH}"
-            echo "Depends: git, \${shlibs:Depends}"
-            echo "Section: utils"
-            echo "Priority: optional"
-            echo "Description: Fast, resource-efficient Git GUI written in Rust."
-          } > debian/control
-
-          {
-            echo "gitcomet (${deb_version}) unstable; urgency=medium"
-            echo
-            echo "  * Release ${VERSION}."
-            echo
-            echo " -- AutoExplore Oy <info@autoexplore.ai>  $(date -Ru)"
-          } > debian/changelog
-
-          dpkg-shlibdeps -Tdebian/substvars "${pkg_root}/usr/bin/gitcomet"
-          dpkg-gencontrol -pgitcomet -P"${pkg_root}" -Tdebian/substvars
-
-          pkg_file="dist/gitcomet_${deb_version}_${DEB_ARCH}.deb"
-          dpkg-deb --build "${pkg_root}" "${pkg_file}"
-
-          package_name="$(dpkg-deb -f "${pkg_file}" Package)"
-          package_version="$(dpkg-deb -f "${pkg_file}" Version)"
-          package_architecture="$(dpkg-deb -f "${pkg_file}" Architecture)"
-          package_depends="$(dpkg-deb -f "${pkg_file}" Depends)"
-
-          if [[ "${package_name}" != "gitcomet" ]]; then
-            echo "::error title=Unexpected package name::Got ${package_name}."
-            exit 1
-          fi
-          if [[ "${package_version}" != "${deb_version}" ]]; then
-            echo "::error title=Unexpected package version::Got ${package_version}, expected ${deb_version}."
-            exit 1
-          fi
-          if [[ "${package_architecture}" != "${DEB_ARCH}" ]]; then
-            echo "::error title=Unexpected package architecture::Got ${package_architecture}, expected ${DEB_ARCH}."
-            exit 1
-          fi
-          if ! grep -Eq '(^|, )git($|, )' <<<"${package_depends}"; then
-            echo "::error title=Missing git dependency::Got ${package_depends}."
-            exit 1
-          fi
-          if [[ "${package_depends}" == "git" ]]; then
-            echo "::error title=Missing shared library dependencies::Got ${package_depends}."
-            exit 1
-          fi
+      - name: Package .rpm
+        run: |
+          .release-tooling/scripts/package-linux.sh rpm \
+            --payload "${RUNNER_TEMP}/payload" --version "${VERSION}" --release "${RPM_RELEASE}" \
+            --arch "${RPM_ARCH}" --out dist
 
       - name: Package AppImage
         if: ${{ matrix.build_appimage }}
         run: |
           set -euo pipefail
-          appdir="dist/AppDir"
-          mkdir -p "${appdir}/usr/bin"
-          install -m755 target/release/gitcomet "${appdir}/usr/bin/gitcomet"
-          install -m644 dist/gitcomet.desktop "${appdir}/gitcomet.desktop"
-          install -m644 assets/gitcomet-512.png "${appdir}/gitcomet.png"
-
-          {
-            echo '#!/usr/bin/env bash'
-            echo 'set -euo pipefail'
-            echo 'HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"'
-            echo 'exec "${HERE}/usr/bin/gitcomet" "$@"'
-          } > "${appdir}/AppRun"
-          chmod +x "${appdir}/AppRun"
-
           curl -fsSL \
             "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/${APPIMAGETOOL_ASSET}" \
             -o /tmp/appimagetool.AppImage
           echo "${APPIMAGETOOL_SHA256}  /tmp/appimagetool.AppImage" | sha256sum -c -
           chmod +x /tmp/appimagetool.AppImage
-          ARCH="${APPIMAGE_ARCH}" /tmp/appimagetool.AppImage --appimage-extract-and-run \
-            "${appdir}" "dist/gitcomet-v${VERSION}-linux-${ARTIFACT_ARCH}.AppImage"
+          .release-tooling/scripts/package-linux.sh appimage \
+            --payload "${RUNNER_TEMP}/payload" --version "${VERSION}" --arch "${ARTIFACT_ARCH}" \
+            --appimage-arch "${APPIMAGE_ARCH}" --appimagetool /tmp/appimagetool.AppImage --out dist
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -663,6 +608,7 @@ jobs:
             dist/*.tar.gz
             dist/*.AppImage
             dist/*.deb
+            dist/*.rpm
           if-no-files-found: error
           retention-days: 7
 

@@ -324,7 +324,7 @@ async fn own_save_does_not_raise_the_notice_before_or_after_the_write_lands(
     let worker = gitcomet_core::filesystem::global()
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    h.update_pane(cx, |pane, cx| pane.save_file_editor_buffer(cx));
+    h.update_pane(cx, |pane, cx| assert!(pane.save_file_editor_buffer(cx)));
     assert!(
         h.with_pane(cx, |pane, _| pane.file_editor_is_dirty()),
         "a save is not settled until the worker confirms it"
@@ -532,7 +532,7 @@ async fn external_write_back_of_the_loaded_version_after_a_save_raises_the_notic
             input.replace_utf8_range(0..0, "// header\n", cx);
         });
     });
-    h.update_pane(cx, |pane, cx| pane.save_file_editor_buffer(cx));
+    h.update_pane(cx, |pane, cx| assert!(pane.save_file_editor_buffer(cx)));
     h.finish_saves(cx);
     h.bump(cx, 1, 1);
     assert_eq!(h.notice(cx), None);
@@ -679,12 +679,172 @@ async fn auto_save_flush_keeps_edits_unwritten_while_the_notice_is_up(
     assert_eq!(h.notice(cx), Some((DiskSurface::Editor, false, false)));
 
     // Losing focus flushes; with auto-save on that is a write.
-    h.update_pane(cx, |pane, cx| pane.flush_file_editor_buffer(cx));
+    h.update_pane(cx, |pane, cx| assert!(!pane.flush_file_editor_buffer(cx)));
     assert!(
         h.with_pane(cx, |pane, _| pane.file_editor_is_dirty()),
         "auto-save must not answer the notice for the user"
     );
     assert_eq!(h.notice(cx), Some((DiskSurface::Editor, false, false)));
+    h.cleanup();
+}
+
+#[gpui::test]
+async fn review_regression_auto_saved_repo_move_preserves_disk_conflicts(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (h, cx) = Harness::open(cx, "disk_notice_repo_move", 981, "fn main() {}\n", true);
+    h.update_pane(cx, |pane, cx| {
+        pane.auto_save_file_edits = true;
+        pane.file_editor_input.update(cx, |input, cx| {
+            input.replace_utf8_range(0..0, "// my edits\n", cx);
+        });
+    });
+    let external = "fn main() { theirs(); }\n";
+    std::fs::write(h.file(), external).expect("external write");
+    h.bump(cx, 1, 0);
+    assert_eq!(h.notice(cx), Some((DiskSurface::Editor, false, false)));
+
+    let action = cx.update(|_window, app| {
+        h.view.update(app, |this, cx| {
+            let repo_id = h.state.repos[0].id;
+            this.request_move_repo_to_workspace(repo_id, h.workdir.clone(), None, cx);
+            let prompt = this
+                .pending_unsaved_file_edits_prompt
+                .as_ref()
+                .expect("moving must ask before overwriting a disk conflict");
+            assert_eq!(prompt.files, vec![SharedString::from("main.rs")]);
+            assert!(
+                this.pending_unsaved_file_edits_flush.is_none(),
+                "a blocked auto-save must prompt immediately, not retry a write that never started"
+            );
+            assert!(
+                this.state.repos.iter().any(|repo| repo.id == repo_id),
+                "the repository must stay attached until the conflict is resolved"
+            );
+            prompt.action.clone()
+        })
+    });
+    assert!(h.with_pane(cx, |pane, _| pane.file_editor_is_dirty()));
+    assert_eq!(h.notice(cx), Some((DiskSurface::Editor, false, false)));
+    assert_eq!(h.editor_text(cx), "// my edits\nfn main() {}\n");
+    assert_eq!(std::fs::read_to_string(h.file()).unwrap(), external);
+
+    // Choosing Save explicitly is permission to keep the editor's version.
+    cx.update(|_window, app| {
+        h.view.update(app, |this, cx| {
+            this.resolve_unsaved_file_edits(action, true, cx);
+            assert!(
+                this.pending_unsaved_file_edits_flush.is_some(),
+                "the move must wait for the explicitly requested save to finish"
+            );
+        });
+    });
+    assert_eq!(h.notice(cx), None);
+    h.finish_saves(cx);
+    assert!(!h.with_pane(cx, |pane, _| pane.file_editor_is_dirty()));
+    assert_eq!(
+        std::fs::read_to_string(h.file()).unwrap(),
+        "// my edits\nfn main() {}\n"
+    );
+    h.cleanup();
+}
+
+#[gpui::test]
+async fn review_regression_auto_saved_repo_move_keeps_stashed_edits_for_explicit_resolution(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (h, cx) = Harness::open(
+        cx,
+        "disk_notice_stashed_repo_move",
+        982,
+        "fn main() {}\n",
+        true,
+    );
+    h.update_pane(cx, |pane, cx| {
+        pane.auto_save_file_edits = false;
+        pane.file_editor_input.update(cx, |input, cx| {
+            input.replace_utf8_range(0..0, "// my edits\n", cx);
+        });
+    });
+    let external = "fn main() { theirs(); }\n";
+    std::fs::write(h.file(), external).expect("external write");
+    h.bump(cx, 1, 0);
+    assert!(h.notice(cx).is_some());
+
+    let other = std::path::PathBuf::from("other.rs");
+    std::fs::write(h.workdir.join(&other), "fn other() {}\n").expect("write other file");
+    let mut state = AppState::clone(&h.current());
+    state.repos[0].diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: other,
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    });
+    h.push(cx, state);
+    h.update_pane(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
+    assert_eq!(h.editor_text(cx), "fn other() {}\n");
+    h.update_pane(cx, |pane, _| pane.auto_save_file_edits = true);
+
+    cx.update(|_window, app| {
+        h.view.update(app, |this, cx| {
+            let repo_id = h.state.repos[0].id;
+            this.request_move_repo_to_workspace(repo_id, h.workdir.clone(), None, cx);
+            let prompt = this
+                .pending_unsaved_file_edits_prompt
+                .as_ref()
+                .expect("a stashed conflict needs explicit resolution before moving");
+            assert_eq!(prompt.files, vec![SharedString::from("main.rs")]);
+            assert!(this.pending_unsaved_file_edits_flush.is_none());
+            let pane = this.main_pane.read(cx);
+            let key = pane
+                .document_identity(repo_id, &h.file_rel)
+                .expect("open repository");
+            let stashed = pane
+                .file_editor_stash
+                .get(&key)
+                .expect("keep the stashed edits");
+            assert!(stashed.is_dirty());
+            assert_eq!(stashed.text.as_ref(), "// my edits\nfn main() {}\n");
+        });
+    });
+    assert_eq!(std::fs::read_to_string(h.file()).unwrap(), external);
+    h.cleanup();
+}
+
+#[gpui::test]
+async fn review_regression_auto_saved_repo_move_waits_for_a_nonconflicting_write(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (h, cx) = Harness::open(
+        cx,
+        "disk_notice_safe_repo_move",
+        983,
+        "fn main() {}\n",
+        true,
+    );
+    h.update_pane(cx, |pane, cx| {
+        pane.auto_save_file_edits = true;
+        pane.file_editor_input.update(cx, |input, cx| {
+            input.replace_utf8_range(0..0, "// my edits\n", cx);
+        });
+    });
+    cx.update(|_window, app| {
+        h.view.update(app, |this, cx| {
+            let repo_id = h.state.repos[0].id;
+            this.request_move_repo_to_workspace(repo_id, h.workdir.clone(), None, cx);
+            assert!(this.pending_unsaved_file_edits_prompt.is_none());
+            assert!(
+                this.pending_unsaved_file_edits_flush.is_some(),
+                "the move must wait for the pending auto-save write"
+            );
+            assert!(!this.main_pane.read(cx).file_editor_saves.is_empty());
+            assert!(
+                this.state.repos.iter().any(|repo| repo.id == repo_id),
+                "the repository must stay attached while its save is in flight"
+            );
+        });
+    });
     h.cleanup();
 }
 
@@ -701,7 +861,7 @@ async fn an_explicit_save_answers_the_notice(cx: &mut gpui::TestAppContext) {
     h.bump(cx, 1, 0);
     assert!(h.notice(cx).is_some());
 
-    h.update_pane(cx, |pane, cx| pane.save_file_editor_buffer(cx));
+    h.update_pane(cx, |pane, cx| assert!(pane.save_file_editor_buffer(cx)));
     assert_eq!(h.notice(cx), None, "saving is choosing to keep my edits");
     // The save replaces the other program's version instead of failing the
     // version check the notice already asked about.
@@ -740,7 +900,7 @@ async fn keeping_my_edits_lets_the_next_save_replace_the_other_version(
 
     h.update_pane(cx, |pane, cx| pane.dismiss_file_disk_notice(cx));
     // Auto-save or a later Ctrl+S: not an answer to the notice, which is gone.
-    h.update_pane(cx, |pane, cx| pane.save_file_editor_buffer(cx));
+    h.update_pane(cx, |pane, cx| assert!(pane.save_file_editor_buffer(cx)));
     h.finish_saves(cx);
     assert_eq!(h.editor_error(cx), None, "keeping the edits was the answer");
     assert_eq!(
@@ -762,7 +922,7 @@ async fn a_refused_save_keeps_the_edits_when_the_worktree_moves(cx: &mut gpui::T
     // Written before the watcher reported it: the save's version check is
     // the first to see it, and refuses.
     std::fs::write(h.file(), "fn main() { theirs(); }\n").expect("external write");
-    h.update_pane(cx, |pane, cx| pane.save_file_editor_buffer(cx));
+    h.update_pane(cx, |pane, cx| assert!(pane.save_file_editor_buffer(cx)));
     h.finish_saves(cx);
     assert!(h.editor_error(cx).is_some());
     assert!(h.with_pane(cx, |pane, _| pane.file_editor_is_dirty()));

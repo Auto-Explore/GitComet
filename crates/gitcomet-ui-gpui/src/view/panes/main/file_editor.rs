@@ -13,12 +13,13 @@
 //! still there when the user comes back. Only the text and caret are stashed —
 //! `TextInput`'s undo stack does not leave the widget.
 
-use super::file_disk::{DiskCheckCause, DiskIdentity, DiskSurface};
+use super::file_disk::{DiskCheckCause, DiskIdentity, DiskSurface, PendingWrite};
 use super::*;
 use crate::kit::rope::Rope;
 use crate::kit::text_model::TextModelSnapshot;
 use crate::kit::{HighlightProvider, HighlightProviderResult};
 use gitcomet_core::filesystem::{DiskVersion, DocumentIdentity};
+use gitcomet_core::text_format::{FormatSource, SideKind, SideTextFormat};
 use palette::IntoColor;
 use rustc_hash::FxHasher;
 use std::path::{Path, PathBuf};
@@ -55,7 +56,7 @@ impl MainPaneView {
             }
             if save {
                 if let Some(buffer) = self.file_editor_stash.get(&key).cloned() {
-                    self.enqueue_file_editor_save(key, &buffer, false, cx);
+                    let _ = self.enqueue_file_editor_save(key, &buffer, false, true, cx);
                 }
             } else if self.file_editor_key.as_ref() == Some(&key) {
                 self.discard_file_editor_buffer(cx);
@@ -186,7 +187,7 @@ impl MainPaneView {
                 // inactive buffers have no timer to resume them.
                 for (key, stashed) in self.file_editor_stash.clone() {
                     if self.file_editor_key.as_ref() != Some(&key) && stashed.is_dirty() {
-                        self.enqueue_file_editor_save(key, &stashed, false, cx);
+                        let _ = self.enqueue_file_editor_save(key, &stashed, false, false, cx);
                     }
                 }
             }
@@ -227,6 +228,89 @@ pub(in crate::view) struct StashedFileEdit {
     /// What the buffer was read from, so the disk check has a baseline the
     /// moment the buffer comes back.
     pub(in crate::view) disk: DiskIdentity,
+    /// How the file was read, so it is written back the same way.
+    pub(in crate::view) text_format: Option<SideTextFormat>,
+    pub(in crate::view) source_text_format: Option<SideTextFormat>,
+}
+
+/// Why text cannot be written in its file's encoding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::view) enum SaveEncodeError {
+    /// The file did not read back byte for byte, so writing it changes bytes.
+    Unwritable(gitcomet_core::text_format::TextEncoding),
+    /// A character has no bytes in the encoding.
+    Unmappable(gitcomet_core::text_format::Unmappable),
+}
+
+impl std::fmt::Display for SaveEncodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unwritable(encoding) => write!(
+                f,
+                "It can't be written in {encoding} without changing bytes it already has."
+            ),
+            Self::Unmappable(unmappable) => write!(f, "{unmappable}."),
+        }
+    }
+}
+
+/// The error the user sees for a save that wrote nothing. With `editor`, the
+/// dialog offers to save as UTF-8 and to go to the character.
+pub(in crate::view) fn save_error_report(
+    repo_id: RepoId,
+    path: &Path,
+    error: &SaveEncodeError,
+    editor: bool,
+) -> ErrorReport {
+    let name = path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    let mut report = ErrorReport::message(
+        Some(repo_id),
+        format!(
+            "Couldn't save {name}\n\n{error} Choose another encoding under “Save with encoding” in the encoding menu."
+        ),
+    );
+    if editor {
+        report = report.with_action(ErrorAction::SaveEditorAs {
+            repo_id,
+            path: path.to_path_buf(),
+            format: gitcomet_core::text_format::TextFormat::UTF_8,
+        });
+        if let SaveEncodeError::Unmappable(unmappable) = error {
+            report = report.with_action(ErrorAction::RevealInEditor {
+                repo_id,
+                path: path.to_path_buf(),
+                line: unmappable.line,
+                column: unmappable.column,
+                ch: unmappable.ch,
+            });
+        }
+    }
+    report
+}
+
+/// The bytes to write for `text` in the file's encoding, and the same bytes as
+/// the disk check will see them.
+pub(in crate::view) fn encode_for_save(
+    text: SharedString,
+    format: Option<SideTextFormat>,
+) -> Result<(gitcomet_state::msg::ContentBytes, PendingWrite), SaveEncodeError> {
+    if let Some(format) = format
+        && !format.is_writable()
+    {
+        return Err(SaveEncodeError::Unwritable(format.format.encoding));
+    }
+    let Some(format) = format.filter(|format| !format.format.is_plain_utf8()) else {
+        return Ok((text.to_string().into(), PendingWrite::Text(text)));
+    };
+    let bytes: Arc<[u8]> = Arc::from(
+        gitcomet_core::text_format::encode(&text, format.format)
+            .map_err(SaveEncodeError::Unmappable)?
+            .as_ref(),
+    );
+    Ok((Arc::clone(&bytes).into(), PendingWrite::Encoded(bytes)))
 }
 
 impl StashedFileEdit {
@@ -622,6 +706,13 @@ impl MainPaneView {
         self.file_editor_dirty
     }
 
+    /// Whether the toolbar shows Save and Discard for the editor: always
+    /// without auto-save, and with it while the buffer cannot be written.
+    pub(in crate::view) fn file_editor_shows_save_controls(&self) -> bool {
+        !self.auto_save_file_edits
+            || (self.file_editor_dirty && self.file_editor_save_error.is_some())
+    }
+
     pub(in crate::view) fn set_auto_save_file_edits(
         &mut self,
         next: bool,
@@ -657,6 +748,7 @@ impl MainPaneView {
         // disk on its own: an external write raises the "File changed on disk"
         // notice (`super::file_disk`) and the user chooses to reload.
         if self.file_editor_key.as_ref() == Some(&identity) {
+            self.refresh_file_editor_decoding(cx);
             return;
         }
 
@@ -677,6 +769,7 @@ impl MainPaneView {
         // file that was just opened.
         self.file_editor_dirty = false;
         self.file_editor_first_dirty_line = None;
+        self.file_editor_save_error = None;
         self.file_editor_saved_fingerprint = None;
         // Likewise the search: these offsets belong to the outgoing file and mean
         // nothing in the incoming one. The reload re-seats both.
@@ -693,6 +786,9 @@ impl MainPaneView {
                 .set(kind, RenderedPreviewMode::Source);
         }
         self.file_editor_error = None;
+        self.set_file_editor_text_format(None, cx);
+        self.file_editor_decode_key = None;
+        self.file_editor_waiting_for_attributes = false;
         // The incremental tree belongs to the outgoing file. A same-file
         // re-read (`reread_file_editor_from_disk`) keeps it: tearing it down
         // there cost a full-document parse on the next keystroke.
@@ -716,6 +812,13 @@ impl MainPaneView {
                 self.file_editor_stash.remove(&identity);
                 self.file_editor_loading = false;
                 self.file_editor_disk = stashed.disk;
+                // The buffer keeps the encoding it was read in; the current
+                // choice must not re-read over it.
+                self.set_file_editor_text_format(stashed.text_format, cx);
+                self.file_editor_source_text_format = stashed.source_text_format;
+                self.file_editor_decode_key = self
+                    .selected_text_decode_request(SideKind::Worktree)
+                    .map(|(_, key)| key);
                 self.apply_file_editor_text(
                     stashed.text,
                     Some(stashed.cursor),
@@ -761,6 +864,13 @@ impl MainPaneView {
             return;
         };
         let absolute = load_key.0.clone();
+        let Some((request, decode_key)) = self.selected_text_decode_request(SideKind::Worktree)
+        else {
+            self.file_editor_waiting_for_attributes = true;
+            return;
+        };
+        self.file_editor_waiting_for_attributes = false;
+        self.file_editor_decode_key = Some(decode_key);
         self.file_editor_reread_seq = self.file_editor_reread_seq.wrapping_add(1);
         let seq = self.file_editor_reread_seq;
         let revs = self.current_file_disk_revs();
@@ -782,13 +892,13 @@ impl MainPaneView {
                         .unwrap_or_else(|e| e.into_inner());
                     let version =
                         super::preview::read_worktree_file_version_for_editing(&absolute)?;
-                    let (text, stamp, hash) =
-                        super::preview::read_worktree_file_for_editing(&absolute)?;
+                    let (text, stamp, hash, format) =
+                        super::preview::read_worktree_file_for_editing(&absolute, &request)?;
                     if super::preview::read_worktree_file_version_for_editing(&absolute)? != version
                     {
                         return Err("File changed while reading. Open it again.".to_string());
                     }
-                    Ok((text, stamp, hash, version))
+                    Ok((text, stamp, hash, format, version))
                 }
             };
             let result = if crate::ui_runtime::current().uses_background_compute() {
@@ -820,10 +930,11 @@ impl MainPaneView {
                 }
                 this.file_editor_loading = false;
                 match result {
-                    Ok((text, stamp, hash, version)) => {
+                    Ok((text, stamp, hash, format, version)) => {
                         this.file_editor_disk_versions
                             .insert(load_key.clone(), version);
                         this.file_editor_disk = DiskIdentity::loaded(stamp, Some(hash));
+                        this.set_file_editor_text_format(Some(format), cx);
                         // A retry after a failed read (the file came back).
                         this.file_editor_error = None;
                         // Compared as text, not by fingerprint: the buffer's
@@ -834,8 +945,9 @@ impl MainPaneView {
                             .file_editor_input
                             .read_with(cx, |input, _| input.text() == text.as_ref());
                         if unchanged {
+                            let read_only = this.file_editor_format_read_only();
                             let fingerprint = this.file_editor_input.update(cx, |input, cx| {
-                                input.set_read_only(false, cx);
+                                input.set_read_only(read_only, cx);
                                 file_editor_text_fingerprint(&input.text_snapshot())
                             });
                             this.file_editor_saved_fingerprint = Some(fingerprint);
@@ -861,6 +973,27 @@ impl MainPaneView {
         .detach();
     }
 
+    /// Re-read the open file when its attributes arrive or change, or the user
+    /// picks another encoding for it. Unsaved edits keep the encoding they
+    /// were read in, and a save writes them back in it.
+    fn refresh_file_editor_decoding(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some((_, key)) = self.selected_text_decode_request(SideKind::Worktree) else {
+            return;
+        };
+        if self.file_editor_waiting_for_attributes {
+            self.reread_file_editor_from_disk(cx);
+            return;
+        }
+        if self.file_editor_decode_key == Some(key) {
+            return;
+        }
+        if self.file_editor_dirty {
+            self.file_editor_decode_key = Some(key);
+        } else {
+            self.reread_file_editor_from_disk(cx);
+        }
+    }
+
     /// Reload the file on screen from disk, dropping unsaved edits, keeping
     /// the caret. Not `discard_file_editor_buffer`: that blanks the buffer.
     pub(in crate::view) fn reload_file_editor_from_disk(&mut self, cx: &mut gpui::Context<Self>) {
@@ -872,6 +1005,7 @@ impl MainPaneView {
         self.file_editor_autosave = None;
         self.file_editor_dirty = false;
         self.file_editor_first_dirty_line = None;
+        self.file_editor_save_error = None;
         self.file_editor_saved_fingerprint = None;
         self.reread_file_editor_from_disk(cx);
     }
@@ -913,6 +1047,27 @@ impl MainPaneView {
         .detach();
     }
 
+    /// Keep the buffer's format and editability together on reads, restores,
+    /// and encoding changes.
+    pub(super) fn set_file_editor_text_format(
+        &mut self,
+        format: Option<SideTextFormat>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.file_editor_text_format = format;
+        self.file_editor_source_text_format = format;
+        // The loading placeholder stays locked until its read lands.
+        let read_only = self.file_editor_loading || self.file_editor_format_read_only();
+        self.file_editor_input
+            .update(cx, |input, cx| input.set_read_only(read_only, cx));
+    }
+
+    /// Text read in a format it cannot be written back in is view-only.
+    fn file_editor_format_read_only(&self) -> bool {
+        self.file_editor_text_format
+            .is_some_and(|format| !format.is_writable())
+    }
+
     /// Seat `text` in the input.
     ///
     /// `baseline` is the fingerprint the text is measured against for
@@ -930,8 +1085,9 @@ impl MainPaneView {
         // file on Windows) grows mixed endings, showing up as a diff on lines
         // nobody touched. The resolved-output buffer does the same.
         let line_ending = crate::kit::TextInput::detect_line_ending(text.as_ref());
+        let read_only = self.file_editor_format_read_only();
         let snapshot = self.file_editor_input.update(cx, |input, cx| {
-            input.set_read_only(false, cx);
+            input.set_read_only(read_only, cx);
             input.set_line_ending(line_ending);
             input.set_text(text, cx);
             if let Some(cursor) = cursor {
@@ -1042,7 +1198,7 @@ impl MainPaneView {
                     && this.file_editor_dirty
                     && !this.file_disk_notice_awaits_editor()
                 {
-                    this.save_file_editor_buffer(cx);
+                    this.write_file_editor_buffer(false, cx);
                 }
             });
         }));
@@ -1050,13 +1206,27 @@ impl MainPaneView {
 
     /// Saves share the filesystem queue with moves. Keep the buffer dirty until
     /// the worker confirms both the expected disk identity and installation.
-    pub(in crate::view) fn save_file_editor_buffer(&mut self, cx: &mut gpui::Context<Self>) {
+    /// Returns whether a write was dispatched.
+    pub(in crate::view) fn save_file_editor_buffer(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        self.write_file_editor_buffer(true, cx)
+    }
+
+    /// `save_file_editor_buffer`; background writes pass `repeat_failure:
+    /// false` so a failure already on screen is not reported again.
+    fn write_file_editor_buffer(
+        &mut self,
+        repeat_failure: bool,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
         if !self.filesystem_pauses.is_empty() || self.file_editor_loading || !self.file_editor_dirty
         {
-            return;
+            return false;
         }
         let Some(key) = self.file_editor_key.clone() else {
-            return;
+            return false;
         };
         // Every caller that gets here on purpose (button, Ctrl+S, Save all)
         // is the user keeping their edits over the other program's, so the
@@ -1065,25 +1235,32 @@ impl MainPaneView {
         self.answer_file_disk_notice_by_saving();
         self.file_editor_autosave = None;
         self.stash_current_file_editor_buffer(cx);
-        if let Some(stashed) = self.file_editor_stash.get(&key).cloned() {
-            self.enqueue_file_editor_save(key, &stashed, overwrite, cx);
-        }
+        let Some(stashed) = self.file_editor_stash.get(&key).cloned() else {
+            return false;
+        };
+        matches!(
+            self.enqueue_file_editor_save(key, &stashed, overwrite, repeat_failure, cx),
+            Ok(true)
+        )
     }
 
+    /// Queue `buffer`'s write, encoded as it was read. `Ok(false)` means it
+    /// waits for a pause or an earlier write; an encoding error is reported.
     fn enqueue_file_editor_save(
         &mut self,
         key: DocumentIdentity,
         buffer: &StashedFileEdit,
         overwrite: bool,
+        repeat_failure: bool,
         cx: &mut gpui::Context<Self>,
-    ) {
+    ) -> Result<bool, SaveEncodeError> {
         if !self.filesystem_pauses.is_empty()
             || self
                 .file_editor_saves
                 .values()
                 .any(|(pending, _)| pending == &key)
         {
-            return;
+            return Ok(false);
         }
         let Some(worktree) = self
             .state
@@ -1094,29 +1271,116 @@ impl MainPaneView {
             .map(|repo| repo.spec.workdir.clone())
         else {
             self.prune_orphaned_file_editor_stash(cx);
-            return;
+            return Ok(false);
         };
+        let current = self.file_editor_key.as_ref() == Some(&key);
+        let (bytes, pending_write) = match encode_for_save(buffer.text.clone(), buffer.text_format)
+        {
+            Ok(encoded) => encoded,
+            Err(error) => {
+                // Kept dirty: nothing was written.
+                self.report_file_editor_encode_error(&key, &error, repeat_failure, cx);
+                return Err(error);
+            }
+        };
+        if current {
+            self.file_editor_save_error = None;
+            // A converted buffer, or one read in a chosen encoding, may need
+            // that choice moved so the new bytes read back as written.
+            if let Some(format) = buffer
+                .text_format
+                .filter(|format| format.source == FormatSource::Override)
+                && let Some((_, path)) = self.document_repo_path(&key)
+            {
+                self.follow_saved_text_format(&path, bytes.as_bytes(), format.format);
+            }
+        }
         let request =
             gitcomet_core::filesystem::Request::new(gitcomet_core::filesystem::Operation::Save {
                 path: key.0.clone(),
                 worktree: Some(worktree),
-                contents: Arc::from(buffer.text.as_bytes()),
+                contents: Arc::from(bytes.as_bytes()),
                 expected: self.file_editor_disk_versions.get(&key).cloned(),
                 overwrite,
             });
         // The disk check must not mistake this write for someone else's,
         // whether it looks before or after the bytes land.
-        if self.file_editor_key.as_ref() == Some(&key) {
+        if current {
             self.file_editor_disk
-                .note_pending_write(buffer.text.clone());
+                .note_pending_write(pending_write.clone());
         }
         if let Some(stashed) = self.file_editor_stash.get_mut(&key) {
-            stashed.disk.note_pending_write(buffer.text.clone());
+            stashed.disk.note_pending_write(pending_write);
         }
         self.file_editor_saves
             .insert(request.id, (key, buffer.text_fingerprint));
         self.store.dispatch(Msg::FilesystemRequest(request));
         cx.notify();
+        Ok(true)
+    }
+
+    fn report_file_editor_encode_error(
+        &mut self,
+        key: &DocumentIdentity,
+        error: &SaveEncodeError,
+        repeat_failure: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.file_editor_key.as_ref() == Some(key) {
+            self.file_editor_autosave = None;
+        }
+        let Some((repo_id, path)) = self.document_repo_path(key) else {
+            return;
+        };
+        let report = save_error_report(repo_id, &path, error, true);
+        let message = SharedString::from(report.message.clone());
+        let mut repeat = false;
+        if self.file_editor_key.as_ref() == Some(key) {
+            repeat = self.file_editor_save_error.as_ref() == Some(&message);
+            self.file_editor_save_error = Some(message);
+        }
+        if repeat_failure || !repeat {
+            self.show_error_report(report, cx);
+        }
+        cx.notify();
+    }
+
+    /// The repository tab and repo-relative path `key` belongs to; the
+    /// innermost repository wins for nested worktrees.
+    pub(in crate::view) fn document_repo_path(
+        &self,
+        key: &DocumentIdentity,
+    ) -> Option<(RepoId, PathBuf)> {
+        self.state
+            .repos
+            .iter()
+            .filter_map(|repo| {
+                key.0
+                    .strip_prefix(&repo.spec.workdir)
+                    .ok()
+                    .map(|path| (repo.id, path.to_path_buf()))
+            })
+            .min_by_key(|(_, path)| path.components().count())
+    }
+
+    /// Closing and quitting wait for every queued write; a move waits only for
+    /// the moving repository's, so the destination reads the final contents.
+    pub(in crate::view) fn file_editor_saves_block_action(
+        &self,
+        action: &UnsavedFileEditsAction,
+    ) -> bool {
+        match action {
+            UnsavedFileEditsAction::MoveRepo {
+                repo_id: moving_repo,
+                ..
+            } => self.file_editor_saves.values().any(|(key, _)| {
+                self.document_repo_path(key)
+                    .is_some_and(|(repo_id, _)| repo_id == *moving_repo)
+            }),
+            UnsavedFileEditsAction::CloseWindow(_)
+            | UnsavedFileEditsAction::DeleteWorkspace { .. }
+            | UnsavedFileEditsAction::QuitApp => !self.file_editor_saves.is_empty(),
+        }
     }
 
     pub(in crate::view) fn process_file_editor_saves(
@@ -1158,7 +1422,8 @@ impl MainPaneView {
                 {
                     // Navigation may have tried to flush newer edits while
                     // this write was pending. Save them against its new baseline.
-                    self.enqueue_file_editor_save(key.clone(), &stashed, false, cx);
+                    let _ =
+                        self.enqueue_file_editor_save(key.clone(), &stashed, false, false, cx);
                 }
                 if let Some(relative) = self
                     .active_repo()
@@ -1240,17 +1505,23 @@ impl MainPaneView {
                 saved_fingerprint,
                 first_dirty_line: self.file_editor_first_dirty_line,
                 disk: self.file_editor_disk.clone(),
+                text_format: self.file_editor_text_format,
+                source_text_format: self.file_editor_source_text_format,
             },
         );
     }
 
-    /// Flush an unsaved buffer if auto-save is on, otherwise stash it.
+    /// Try auto-save, then stash any edits that could not be written.
+    /// Returns whether a write was dispatched, so closing can wait for it.
     ///
     /// The two moments this covers are leaving the editor and losing focus,
     /// which is where "auto-save" has to mean more than "after a pause" — a
     /// pause that is interrupted by navigating away would otherwise lose the
     /// write it was about to make.
-    pub(in crate::view) fn flush_file_editor_buffer(&mut self, cx: &mut gpui::Context<Self>) {
+    pub(in crate::view) fn flush_file_editor_buffer(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
         // `file_editor_loading` for the same reason `save_file_editor_buffer`
         // checks it: between blanking the buffer and the read landing, the
         // buffer holds a placeholder that reads as *dirty* — the saved
@@ -1258,17 +1529,16 @@ impl MainPaneView {
         // does not match it. Flushing there stashed that empty placeholder under
         // the file's own path, and the next open restored it over the file.
         if self.file_editor_loading || self.file_editor_key.is_none() {
-            return;
+            return false;
         }
         // With "File changed on disk" open the buffer is kept, not written:
         // leaving the file is not an answer to the question.
-        if self.auto_save_file_edits
+        let dispatched = self.auto_save_file_edits
             && self.file_editor_error.is_none()
             && !self.file_disk_notice_awaits_editor()
-        {
-            self.save_file_editor_buffer(cx);
-        }
+            && self.write_file_editor_buffer(false, cx);
         self.stash_current_file_editor_buffer(cx);
+        dispatched
     }
 
     fn detach_file_edit(
@@ -1324,6 +1594,7 @@ impl MainPaneView {
         if active_detached {
             self.file_editor_key = None;
             self.file_editor_dirty = false;
+            self.file_editor_save_error = None;
             self.file_editor_loading = false;
             self.file_editor_autosave = None;
             self.file_editor_saved_fingerprint = None;
@@ -1486,22 +1757,109 @@ impl MainPaneView {
             .collect()
     }
 
+    /// Display labels for dirty buffers that belong to one repository. A move
+    /// only detaches that repository, so unrelated tabs must neither block the
+    /// move nor be discarded by its confirmation dialog.
+    pub(in crate::view) fn unsaved_file_edit_labels_for_repo(
+        &self,
+        repo_id: RepoId,
+    ) -> Vec<SharedString> {
+        self.unsaved_file_edit_paths(repo_id)
+            .into_iter()
+            .map(|path| SharedString::from(path.display().to_string()))
+            .collect()
+    }
+
+    /// Paths of `repo_id` whose writes are still queued.
+    pub(in crate::view) fn pending_file_edit_labels_for_repo(
+        &self,
+        repo_id: RepoId,
+    ) -> Vec<SharedString> {
+        let mut paths: Vec<_> = self
+            .file_editor_saves
+            .values()
+            .filter_map(|(key, _)| self.document_repo_path(key))
+            .filter(|(id, _)| *id == repo_id)
+            .map(|(_, path)| path)
+            .collect();
+        paths.sort();
+        paths.dedup();
+        paths
+            .into_iter()
+            .map(|path| path.display().to_string().into())
+            .collect()
+    }
+
     /// Write every unsaved buffer, retaining it until its save is confirmed.
-    pub(in crate::view) fn save_all_file_edits(&mut self, cx: &mut gpui::Context<Self>) {
+    /// Returns false if any could not be encoded; those edits stay unsaved and
+    /// a pending close must be canceled.
+    pub(in crate::view) fn save_all_file_edits(&mut self, cx: &mut gpui::Context<Self>) -> bool {
+        self.save_file_edits_scoped_to(None, cx)
+    }
+
+    /// Write only the unsaved buffers owned by `repo_id`. Returns false like
+    /// `save_all_file_edits`.
+    pub(in crate::view) fn save_file_edits_for_repo(
+        &mut self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        self.save_file_edits_scoped_to(Some(repo_id), cx)
+    }
+
+    fn save_file_edits_scoped_to(
+        &mut self,
+        only_repo: Option<RepoId>,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let in_scope = |this: &Self, key: &DocumentIdentity| {
+            only_repo.is_none_or(|only_repo| {
+                this.document_repo_path(key)
+                    .is_some_and(|(repo_id, _)| repo_id == only_repo)
+            })
+        };
         // Saving on purpose answers "File changed on disk" for the buffer on
         // screen, as `save_file_editor_buffer` does.
-        let overwrite_current = self.file_disk_notice_awaits_editor();
-        self.answer_file_disk_notice_by_saving();
+        let current_in_scope = self
+            .file_editor_key
+            .as_ref()
+            .is_some_and(|key| in_scope(self, key));
+        let overwrite_current = current_in_scope && self.file_disk_notice_awaits_editor();
+        if current_in_scope {
+            self.answer_file_disk_notice_by_saving();
+        }
         self.stash_current_file_editor_buffer(cx);
+        let mut failed = None;
         for (key, stashed) in self.file_editor_stash.clone() {
+            if !in_scope(self, &key) {
+                continue;
+            }
             let current = self.file_editor_key.as_ref() == Some(&key);
             if self.file_editor_loading && current {
                 continue;
             }
-            if stashed.is_dirty() {
-                self.enqueue_file_editor_save(key, &stashed, current && overwrite_current, cx);
+            if stashed.is_dirty()
+                && self
+                    .enqueue_file_editor_save(
+                        key.clone(),
+                        &stashed,
+                        current && overwrite_current,
+                        true,
+                        cx,
+                    )
+                    .is_err()
+            {
+                failed.get_or_insert((key, current));
             }
         }
+        let Some((key, current)) = failed else {
+            return true;
+        };
+        // Bring the failed buffer back so its encoding can be changed.
+        if !current && let Some((repo_id, path)) = self.document_repo_path(&key) {
+            self.store.dispatch(Msg::OpenFileEditor { repo_id, path });
+        }
+        false
     }
 
     /// Throw away every unsaved buffer.
@@ -1509,6 +1867,18 @@ impl MainPaneView {
         self.file_editor_stash.clear();
         if self.file_editor_dirty {
             self.discard_file_editor_buffer(cx);
+        }
+    }
+
+    /// Throw away only the dirty buffers owned by `repo_id`.
+    pub(in crate::view) fn discard_file_edits_for_repo(
+        &mut self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let paths = self.unsaved_file_edit_paths(repo_id);
+        for path in paths {
+            self.discard_file_edits_for(repo_id, &path, cx);
         }
     }
 
@@ -1520,6 +1890,7 @@ impl MainPaneView {
         self.file_editor_stash.remove(&key);
         self.file_editor_dirty = false;
         self.file_editor_first_dirty_line = None;
+        self.file_editor_save_error = None;
         self.file_editor_saved_fingerprint = None;
         // Forget which file is loaded so the next `ensure` re-reads it.
         self.file_editor_key = None;
@@ -1909,7 +2280,7 @@ impl MainPaneView {
                         let answer = window.prompt(gpui::PromptLevel::Warning, "Replace the current disk contents?", Some("This replaces the version saved by another editor."), &[gpui::PromptButton::cancel("Cancel"), gpui::PromptButton::new("Replace")], cx);
                         cx.spawn_in(window, async move |view, cx| { if answer.await.ok() == Some(1) { let _ = view.update_in(cx, |this, _, cx| {
                             this.stash_current_file_editor_buffer(cx);
-                            if let Some(key) = this.file_editor_key.clone() && let Some(buffer) = this.file_editor_stash.get(&key).cloned() { this.enqueue_file_editor_save(key, &buffer, true, cx); }
+                            if let Some(key) = this.file_editor_key.clone() && let Some(buffer) = this.file_editor_stash.get(&key).cloned() { let _ = this.enqueue_file_editor_save(key, &buffer, true, true, cx); }
                         }); } }).detach();
                     }))
                 )).into_any_element();
@@ -2390,4 +2761,87 @@ pub(in crate::view) fn file_editor_gutter_width(
     // scaled by `resolved_output_line_no_width`.
     let padding = ui_scale::design_px_from_percent(8.0 + 8.0, ui_scale_percent);
     rows::resolved_output_line_no_width(line_count, scale) + padding
+}
+
+#[cfg(test)]
+mod encode_for_save_tests {
+    use super::*;
+    use gitcomet_core::text_format::{
+        FormatSource, LineEndingStats, SideTextFormat, TextEncoding, TextFormat,
+    };
+
+    fn read_as(encoding: TextEncoding, bom: bool) -> SideTextFormat {
+        SideTextFormat {
+            format: TextFormat { encoding, bom },
+            source: FormatSource::Detected { confident: true },
+            binary: false,
+            malformed: false,
+            lossy: false,
+            line_endings: LineEndingStats::default(),
+        }
+    }
+
+    #[test]
+    fn utf8_is_written_as_the_buffer_text() {
+        for format in [None, Some(read_as(TextEncoding::UTF_8, false))] {
+            let (bytes, pending) = encode_for_save("é\n".into(), format).unwrap();
+            assert_eq!(bytes.as_bytes(), "é\n".as_bytes());
+            assert!(matches!(pending, PendingWrite::Text(_)));
+        }
+    }
+
+    #[test]
+    fn utf8_fast_path_rejects_unwritable_formats() {
+        for bom in [false, true] {
+            let format = read_as(TextEncoding::UTF_8, bom);
+            for unwritable in [
+                SideTextFormat {
+                    malformed: true,
+                    ..format
+                },
+                SideTextFormat {
+                    lossy: true,
+                    ..format
+                },
+                SideTextFormat {
+                    binary: true,
+                    ..format
+                },
+            ] {
+                assert!(encode_for_save("caf�\n".into(), Some(unwritable)).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn other_encodings_write_their_own_bytes_and_bom() {
+        let (bytes, pending) = encode_for_save(
+            "café\n".into(),
+            Some(read_as(TextEncoding::WINDOWS_1252, false)),
+        )
+        .unwrap();
+        assert_eq!(bytes.as_bytes(), b"caf\xe9\n");
+        assert_eq!(pending, PendingWrite::Encoded(Arc::from(&b"caf\xe9\n"[..])));
+
+        let (bytes, _) =
+            encode_for_save("a".into(), Some(read_as(TextEncoding::UTF_16LE, true))).unwrap();
+        assert_eq!(bytes.as_bytes(), b"\xff\xfea\x00");
+        let (bytes, _) =
+            encode_for_save("a".into(), Some(read_as(TextEncoding::UTF_8, true))).unwrap();
+        assert_eq!(bytes.as_bytes(), b"\xef\xbb\xbfa");
+    }
+
+    #[test]
+    fn unwritable_text_or_lossy_files_are_refused() {
+        let error = encode_for_save(
+            "ok\nĀ".into(),
+            Some(read_as(TextEncoding::WINDOWS_1252, false)),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("line 2, column 1"), "{error}");
+
+        let mut lossy = read_as(TextEncoding::from_label("shift_jis").unwrap(), false);
+        lossy.lossy = true;
+        assert!(encode_for_save("x".into(), Some(lossy)).is_err());
+    }
 }

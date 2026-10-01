@@ -130,7 +130,116 @@ pub(super) fn tooltip_text_for_test() -> Option<SharedString> {
 }
 
 impl GitCometView {
+    pub(crate) fn current_workspace_layout(&self, cx: &gpui::App) -> session::WorkspaceLayout {
+        let (change_tracking_height, untracked_height) =
+            self.details_pane.read(cx).saved_status_section_heights();
+        let sidebar_width = ui_scale::stored_design_units(Some(
+            self.ui_scale().design_units_from_pixels(self.sidebar_width),
+        ));
+        let details_width = ui_scale::stored_design_units(Some(
+            self.ui_scale().design_units_from_pixels(self.details_width),
+        ));
+        session::WorkspaceLayout {
+            sidebar_width,
+            details_width,
+            sidebar_collapsed: self.sidebar_collapsed,
+            change_tracking_height,
+            untracked_height,
+        }
+    }
+
+    /// Record the live per-window layout synchronously. Debounced settings
+    /// writes still handle ordinary resizing, but close/quit cannot wait for a
+    /// weak-view timer that becomes invalid as soon as the window disappears.
+    pub(crate) fn flush_workspace_environment(&self, cx: &mut gpui::Context<Self>) {
+        let layout = self.current_workspace_layout(cx);
+        let placement = self.window_placement.clone();
+        crate::workspaces::update_window_environment(
+            cx,
+            self.window_handle.window_id(),
+            layout,
+            placement,
+        );
+    }
+
+    /// Debounce the disk write for bounds-only changes. The live placement is
+    /// already recorded in the group manager by the bounds observer; this
+    /// flushes that manager without serializing this window's potentially
+    /// stale copy of process-wide UI preferences.
+    pub(super) fn schedule_workspace_persist(&mut self, cx: &mut gpui::Context<Self>) {
+        if !crate::ui_runtime::current().persists_ui_settings() {
+            let _ = cx;
+            return;
+        }
+
+        self.workspace_persist_seq = self.workspace_persist_seq.wrapping_add(1);
+        let seq = self.workspace_persist_seq;
+        cx.spawn(
+            async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(250))
+                    .await;
+                let _ = view.update(cx, |this, cx| {
+                    if this.workspace_persist_seq == seq {
+                        crate::workspaces::persist_unsaved_placement(cx);
+                    }
+                });
+            },
+        )
+        .detach();
+    }
+
+    /// Focused mergetool windows do not participate in durable workspaces, so
+    /// they keep their own size keys, which workspace writes never touch.
+    /// Persist only the dimensions: a resize must not write a stale snapshot
+    /// of unrelated preferences owned by another window.
+    pub(super) fn schedule_legacy_window_bounds_persist(&mut self, cx: &mut gpui::Context<Self>) {
+        #[cfg(test)]
+        {
+            self.ui_settings_persist_requests_for_test =
+                self.ui_settings_persist_requests_for_test.wrapping_add(1);
+        }
+        if !crate::ui_runtime::current().persists_ui_settings() {
+            let _ = cx;
+            return;
+        }
+
+        self.ui_settings_persist_seq = self.ui_settings_persist_seq.wrapping_add(1);
+        let seq = self.ui_settings_persist_seq;
+        cx.spawn(
+            async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(250))
+                    .await;
+                let size = view
+                    .update(cx, |this, _cx| {
+                        if this.ui_settings_persist_seq != seq {
+                            return None;
+                        }
+                        let width: f32 = this.last_window_size.width.round().into();
+                        let height: f32 = this.last_window_size.height.round().into();
+                        let valid = |value: f32| value.is_finite() && value >= 1.0;
+                        (valid(width) && valid(height)).then_some((width as u32, height as u32))
+                    })
+                    .ok()
+                    .flatten();
+                if let Some((width, height)) = size {
+                    let _ = cx
+                        .background_executor()
+                        .spawn(async move { session::persist_mergetool_window_size(width, height) })
+                        .await;
+                }
+            },
+        )
+        .detach();
+    }
+
     pub(super) fn schedule_ui_settings_persist(&mut self, cx: &mut gpui::Context<Self>) {
+        #[cfg(test)]
+        {
+            self.ui_settings_persist_requests_for_test =
+                self.ui_settings_persist_requests_for_test.wrapping_add(1);
+        }
         if !crate::ui_runtime::current().persists_ui_settings() {
             let _ = cx;
             return;
@@ -141,7 +250,7 @@ impl GitCometView {
 
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
-                smol::Timer::after(Duration::from_millis(250)).await;
+                cx.background_executor().timer(Duration::from_millis(250)).await;
                 let settings = view
                     .update(cx, |this, cx| {
                         if this.ui_settings_persist_seq != seq {
@@ -178,8 +287,17 @@ impl GitCometView {
                         ) = this.main_pane.read(cx).mergetool_preferences();
                         let mergetool_view_three_way =
                             this.main_pane.read(cx).mergetool_view_three_way;
-                        let (change_tracking_height, untracked_height) =
-                            this.details_pane.read(cx).saved_status_section_heights();
+                        let group_layout = this.current_workspace_layout(cx);
+                        let sidebar_width = group_layout.sidebar_width;
+                        let details_width = group_layout.details_width;
+                        let change_tracking_height = group_layout.change_tracking_height;
+                        let untracked_height = group_layout.untracked_height;
+                        crate::workspaces::update_window_environment(
+                            cx,
+                            this.window_handle.window_id(),
+                            group_layout,
+                            this.window_placement.clone(),
+                        );
                         let repo_sidebar_collapsed_items =
                             this.sidebar_pane.read(cx).saved_sidebar_collapsed_items();
                         let repo_sidebar_pinned_branches =
@@ -189,17 +307,16 @@ impl GitCometView {
                         let settings = session::UiSettings {
                             window_width,
                             window_height,
-                            sidebar_width: ui_scale::stored_design_units(
-                                Some(this.ui_scale().design_units_from_pixels(this.sidebar_width)),
-                            ),
-                            details_width: ui_scale::stored_design_units(
-                                Some(this.ui_scale().design_units_from_pixels(this.details_width)),
-                            ),
+                            sidebar_width,
+                            details_width,
                             sidebar_collapsed: Some(this.sidebar_collapsed),
                             repo_sidebar_collapsed_items: Some(repo_sidebar_collapsed_items),
                             repo_sidebar_pinned_branches: Some(repo_sidebar_pinned_branches),
                             theme_mode: Some(this.theme_mode.key().to_string()),
                             ui_scale_percent: Some(this.ui_scale_percent),
+                            // Owned by the settings window; None preserves it.
+                            window_controls_mode: None,
+                            browser_open_target: None,
                             ui_density: Some(crate::appearance::current(cx).density.key().to_string()),
                             ui_font_size_px: Some(crate::appearance::current(cx).ui_font_size_px),
                             editor_font_size_px: Some(crate::appearance::current(cx).editor_font_size_px),
@@ -226,6 +343,7 @@ impl GitCometView {
                                 this.diff_reveal_whitespace_chars,
                             ),
                             diff_word_wrap: Some(this.diff_word_wrap),
+                            diff_tab_size: Some(this.diff_tab_size),
                             diff_show_line_numbers: Some(this.diff_show_line_numbers),
                             remote_markdown_image_policy: Some(
                                 this.remote_markdown_image_policy.key().to_string(),
@@ -289,7 +407,9 @@ impl GitCometView {
                     return;
                 };
 
-                let _ = smol::unblock(move || session::persist_ui_settings(settings)).await;
+                let _ = cx.background_executor().spawn(async move {
+                    session::persist_ui_settings(settings)
+                }).await;
             },
         )
         .detach();

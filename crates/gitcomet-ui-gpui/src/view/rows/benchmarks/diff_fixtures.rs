@@ -84,6 +84,8 @@ impl PatchDiffPagedRowsFixture {
     }
 
     pub fn run_eager_full_materialize_step(&self) -> u64 {
+        let tab_width = 4;
+
         let annotated = annotate_unified(&self.diff);
         let split = build_patch_split_rows(&annotated);
         let theme = AppTheme::gitcomet_dark();
@@ -144,6 +146,7 @@ impl PatchDiffPagedRowsFixture {
                 continue;
             }
             let styled = super::diff_text::build_cached_diff_styled_text(
+                tab_width,
                 theme,
                 diff_content_text(line),
                 &[],
@@ -159,6 +162,8 @@ impl PatchDiffPagedRowsFixture {
     }
 
     pub fn run_paged_first_window_step(&self, window: usize) -> u64 {
+        let tab_width = 4;
+
         let window = window.max(1);
         let rows_provider = Arc::new(PagedPatchDiffRows::new(Arc::clone(&self.diff), 256));
         let split_provider = PagedPatchSplitRows::new_with_len_hint(
@@ -190,6 +195,7 @@ impl PatchDiffPagedRowsFixture {
             ) {
                 let content_text = diff_content_text(&line);
                 let styled = super::diff_text::build_cached_diff_styled_text_with_source_identity(
+                    tab_width,
                     theme,
                     content_text,
                     Some(super::diff_text::DiffTextSourceIdentity::from_str(
@@ -331,6 +337,8 @@ impl PatchDiffPagedRowsFixture {
     /// `len_hint()` to avoid indexing past the end.  Used for deep-scroll
     /// benchmarks.
     pub fn run_paged_window_at_step(&self, start_row: usize, window: usize) -> u64 {
+        let tab_width = 4;
+
         let window = window.max(1);
         let rows_provider = Arc::new(PagedPatchDiffRows::new(Arc::clone(&self.diff), 256));
         let split_provider = PagedPatchSplitRows::new_with_len_hint(
@@ -375,6 +383,7 @@ impl PatchDiffPagedRowsFixture {
             ) {
                 let content_text = diff_content_text(&line);
                 let styled = super::diff_text::build_cached_diff_styled_text_with_source_identity(
+                    tab_width,
                     theme,
                     content_text,
                     Some(super::diff_text::DiffTextSourceIdentity::from_str(
@@ -2127,6 +2136,8 @@ impl PatchDiffSearchQueryUpdateFixture {
     }
 
     fn row_styled(&mut self, src_ix: usize, query: &str) -> Option<CachedDiffStyledText> {
+        let tab_width = 4;
+
         let query = query.trim();
         let query_active = !query.is_empty();
         let click_kind = self
@@ -2160,6 +2171,7 @@ impl PatchDiffSearchQueryUpdateFixture {
                 };
 
                 super::diff_text::build_cached_diff_styled_text(
+                    tab_width,
                     self.theme,
                     diff_content_text(line),
                     word_ranges,
@@ -2170,6 +2182,7 @@ impl PatchDiffSearchQueryUpdateFixture {
                 )
             } else {
                 super::diff_text::build_cached_diff_styled_text(
+                    tab_width,
                     self.theme,
                     line.text.as_ref(),
                     &[],

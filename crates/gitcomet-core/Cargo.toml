@@ -15,13 +15,18 @@ test-support = []
 benchmarks = []
 
 [dependencies]
-sha2 = { workspace = true }
+chardetng = { workspace = true }
+encoding_rs = { workspace = true }
 filetime = { workspace = true }
+gix-quote = { workspace = true }
 jiff = { workspace = true }
+sha2 = { workspace = true }
 memchr = { workspace = true }
 process-wrap = { workspace = true }
 regex = { workspace = true }
 rustc-hash = { workspace = true }
+serde = { workspace = true }
+sysinfo = { workspace = true }
 smallvec = { workspace = true }
 strsim = { workspace = true }
 tempfile = { workspace = true }
@@ -31,6 +36,7 @@ thiserror = { workspace = true }
 rustix = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 tempfile = { workspace = true }
 
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]

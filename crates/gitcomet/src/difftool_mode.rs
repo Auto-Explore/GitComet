@@ -60,7 +60,7 @@ pub fn run_difftool(config: &DifftoolConfig) -> Result<DifftoolRunResult, String
         .map_err(|e| io_err!("launch `git diff --no-index`", e))?;
 
     let status_code = output.status.code();
-    let mut stdout = bytes_to_text_preserving_utf8(&output.stdout);
+    let mut stdout = decode_unified_diff_output(output.stdout);
     let stderr = bytes_to_text_preserving_utf8(&output.stderr);
 
     if let Some((left, right)) = labels {
@@ -92,6 +92,36 @@ pub fn run_difftool(config: &DifftoolConfig) -> Result<DifftoolRunResult, String
         }
         None => Err("`git diff --no-index` terminated by signal".to_string()),
     }
+}
+
+/// `git diff` output as text, each file section decoded in the encoding its
+/// bytes read as; UTF-8 passes through untouched.
+fn decode_unified_diff_output(bytes: Vec<u8>) -> String {
+    let bytes = match String::from_utf8(bytes) {
+        Ok(text) => return text,
+        Err(err) => err.into_bytes(),
+    };
+    let terminated = bytes.ends_with(b"\n");
+    let diff = gitcomet_core::domain::Diff::from_unified_bytes(
+        gitcomet_core::domain::DiffTarget::WorkingTree {
+            path: PathBuf::new(),
+            area: gitcomet_core::domain::DiffArea::Unstaged,
+        },
+        bytes,
+        gitcomet_core::domain::DiffSectionFormats::sniff,
+    );
+    // Parsed lines drop their CR and newline; put back what the bytes had.
+    let mut text = String::new();
+    for (ix, line) in diff.lines.iter().enumerate() {
+        text.push_str(line.text.as_ref());
+        if line.text.raw_bytes().ends_with(b"\r") {
+            text.push('\r');
+        }
+        if terminated || ix + 1 < diff.lines.len() {
+            text.push('\n');
+        }
+    }
+    text
 }
 
 struct PreparedDiffInputs {
@@ -1123,6 +1153,30 @@ mod tests {
             result.stdout.contains("main.rs"),
             "directory diff output should mention the changed file: {}",
             result.stdout
+        );
+    }
+
+    #[test]
+    fn latin1_diff_output_decodes_instead_of_escaping() {
+        let raw = b"diff --git a/a b/b\n@@ -1 +1 @@\n-caf\xe9\n+caf\xe9s\n".to_vec();
+        assert_eq!(
+            decode_unified_diff_output(raw),
+            "diff --git a/a b/b\n@@ -1 +1 @@\n-café\n+cafés\n"
+        );
+        assert_eq!(decode_unified_diff_output(b"+ok\n".to_vec()), "+ok\n");
+    }
+
+    #[test]
+    fn latin1_diff_output_keeps_line_endings_as_utf8_output_does() {
+        let crlf = b"diff --git a/a b/b\n@@ -1,2 +1,2 @@\n-caf\xe9\r\n+caf\xe9s\r\n same\r\n";
+        assert_eq!(
+            decode_unified_diff_output(crlf.to_vec()),
+            "diff --git a/a b/b\n@@ -1,2 +1,2 @@\n-café\r\n+cafés\r\n same\r\n"
+        );
+        let unterminated = b"diff --git a/a b/b\n@@ -1 +1 @@\n-caf\xe9\n+caf\xe9s";
+        assert_eq!(
+            decode_unified_diff_output(unterminated.to_vec()),
+            "diff --git a/a b/b\n@@ -1 +1 @@\n-café\n+cafés"
         );
     }
 

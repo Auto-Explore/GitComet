@@ -447,6 +447,7 @@ fn dispatch_increments_failure_counter_when_channel_is_disconnected() {
     let store = AppStore {
         backend: Arc::new(FailingBackend),
         state: Arc::new(RwLock::new(Arc::new(AppState::test_default()))),
+        publication: Default::default(),
         msg_tx: msg_tx.clone(),
         public_lifetime: Arc::new(StorePublicLifetime::new(msg_tx)),
     };
@@ -471,6 +472,7 @@ fn concurrent_last_app_store_drops_shutdown_worker_once() {
     let store = AppStore {
         backend: Arc::new(FailingBackend),
         state: Arc::new(RwLock::new(Arc::new(AppState::test_default()))),
+        publication: Default::default(),
         msg_tx: msg_tx.clone(),
         public_lifetime: Arc::new(StorePublicLifetime::new(msg_tx)),
     };
@@ -499,7 +501,8 @@ fn concurrent_last_app_store_drops_shutdown_worker_once() {
         .expect("expected final AppStore drop to send worker shutdown")
     {
         super::worker_channel::StoreWorkerCommand::Shutdown => {}
-        super::worker_channel::StoreWorkerCommand::Msg(_) => {
+        super::worker_channel::StoreWorkerCommand::Msg(_)
+        | super::worker_channel::StoreWorkerCommand::Traced(..) => {
             panic!("expected shutdown command, got message command")
         }
         #[cfg(any(test, feature = "test-support"))]
@@ -590,7 +593,10 @@ fn closed_receiver_while_store_is_alive_increments_store_event_failure_counter()
     let (store, event_rx) = AppStore::new_test(backend);
     drop(event_rx);
 
-    store.dispatch(Msg::DismissBannerError);
+    store.dispatch(Msg::ReportError {
+        repo_id: None,
+        message: "probe".to_string(),
+    });
 
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
@@ -797,8 +803,10 @@ fn selected_diff_results_after_store_drop_do_not_emit_store_event_failures() {
         .recv_timeout(Duration::from_secs(1))
         .expect("selected diff load did not start");
 
-    drop(event_rx);
+    // Store first: the unblocked text-attributes result can still reach the
+    // worker, and a closed receiver under a live store is a real failure.
     drop(store);
+    drop(event_rx);
     {
         let (lock, condvar) = &*release;
         let mut released = lock.lock().unwrap_or_else(|e| e.into_inner());

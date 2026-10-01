@@ -58,6 +58,15 @@ pub(super) fn model_with_update_checks_disabled(
         false,
         AppMenuAction::Settings,
     );
+    push_entry(
+        &mut items,
+        &mut debug_selectors,
+        "app_menu_open_workspace",
+        "Open Workspace…",
+        Shortcut::Secondary("Shift+R"),
+        false,
+        AppMenuAction::OpenWorkspace,
+    );
     if external_editor_configured {
         push_entry(
             &mut items,
@@ -140,6 +149,28 @@ pub(super) fn model_with_update_checks_disabled(
     );
     items.push(ContextMenuItem::Separator);
 
+    for (debug_selector, label, shortcut, action) in [
+        ("app_menu_zoom_in", "Zoom In", "=", AppMenuAction::ZoomIn),
+        ("app_menu_zoom_out", "Zoom Out", "-", AppMenuAction::ZoomOut),
+        (
+            "app_menu_actual_size",
+            "Actual Size",
+            "0",
+            AppMenuAction::ActualSize,
+        ),
+    ] {
+        push_entry(
+            &mut items,
+            &mut debug_selectors,
+            debug_selector,
+            label,
+            Shortcut::Secondary(shortcut),
+            false,
+            action,
+        );
+    }
+    items.push(ContextMenuItem::Separator);
+
     // Only platforms with a real desktop-entry story get the row at all; a
     // permanently inert entry is noise everywhere else.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -204,6 +235,20 @@ pub(super) fn activate(
             this.close_popover_and_restore_focus(window, cx);
             cx.defer(crate::view::open_settings_window);
         }
+        AppMenuAction::ZoomIn | AppMenuAction::ZoomOut | AppMenuAction::ActualSize => {
+            this.close_popover_and_restore_focus(window, cx);
+            let action: Box<dyn gpui::Action> = match action {
+                AppMenuAction::ZoomIn => Box::new(crate::app::IncreaseUiScale),
+                AppMenuAction::ZoomOut => Box::new(crate::app::DecreaseUiScale),
+                _ => Box::new(crate::app::ResetUiScale),
+            };
+            window.dispatch_action(action, cx);
+        }
+        AppMenuAction::OpenWorkspace => {
+            this.close_popover_and_restore_focus(window, cx);
+            // Dispatched: opening the chooser updates this host again.
+            window.dispatch_action(Box::new(crate::app::OpenWorkspace), cx);
+        }
         AppMenuAction::OpenInCodeEditor { path } => {
             if let Some(path) = path {
                 let _ = this.root_view.update(cx, |root, cx| {
@@ -263,11 +308,17 @@ pub(super) fn activate(
         }
         AppMenuAction::Quit => {
             this.close_popover_and_restore_focus(window, cx);
-            crate::app::quit_app_or_warn(cx);
+            // The quit scan asks every root view whether its unsaved-edits
+            // dialog is open. This callback still owns PopoverHost's update
+            // lease, so let it unwind before the scan can read this host.
+            cx.defer(crate::app::quit_app_or_warn);
         }
         AppMenuAction::CloseWindow => {
             this.close_popover_and_restore_focus(window, cx);
-            crate::app::close_window_or_warn(window, cx);
+            // Closing performs the same unsaved-edits query as quitting and
+            // therefore must also run after this PopoverHost update finishes.
+            let window_id = window.window_handle().window_id();
+            cx.defer(move |cx| crate::app::close_window_by_id_or_warn(cx, window_id));
         }
     }
 }

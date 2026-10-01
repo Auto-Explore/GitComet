@@ -1623,12 +1623,16 @@ impl DetailsPaneView {
                 .on_activate(
                     false,
                     controls::ControlActivation::Nested,
-                    cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                    cx.listener(move |_this, e: &ClickEvent, window, cx| {
                         if !e.standard_click() {
                             return;
                         }
                         cx.stop_propagation();
-                        this.store.dispatch(Msg::OpenRepo(open_path.clone()));
+                        crate::app::open_repository_from_view(
+                            cx,
+                            window.window_handle().window_id(),
+                            open_path.clone(),
+                        );
                         cx.notify();
                     }),
                 )
@@ -4212,7 +4216,10 @@ mod tests {
             density: crate::appearance::UiDensity::Comfortable,
             ..crate::appearance::Appearance::default()
         };
-        let compact = crate::appearance::Appearance::default();
+        let compact = crate::appearance::Appearance {
+            density: crate::appearance::UiDensity::Compact,
+            ..crate::appearance::Appearance::default()
+        };
 
         assert!(commit_file_filter_tab_pad_x(comfortable) > commit_file_filter_tab_pad_x(compact));
 
