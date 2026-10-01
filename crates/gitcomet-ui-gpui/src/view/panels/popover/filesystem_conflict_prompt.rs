@@ -33,6 +33,8 @@ pub(super) fn panel(
         theme.ui_text(14.0),
     )
     .id("filesystem_conflict_destination_text")
+    // The file name is the part to keep when the path is long.
+    .profile(components::TextTruncationProfile::Path)
     .text_color(theme.colors.foreground.secondary)
     .full_text_tooltip(this.tooltip_host.clone());
 
