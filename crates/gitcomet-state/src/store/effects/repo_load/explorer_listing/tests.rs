@@ -261,3 +261,55 @@ fn augment_flags_only_entries_missing_from_the_backend_listing() {
         expected.map(|(path, ignored)| (path.to_owned(), ignored))
     );
 }
+
+#[test]
+fn augment_drops_service_owned_entries_from_the_backend_listing() {
+    let entry = |path: &str, kind| FileEntry {
+        name: Path::new(path)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+        path: Arc::new(PathBuf::from(path)),
+        kind,
+        depth: Path::new(path).components().count() - 1,
+        ignored: false,
+    };
+    let base = vec![
+        entry(".gitcomet-operation-abc", FileEntryKind::Directory),
+        entry(".gitcomet-operation-abc/item", FileEntryKind::File),
+        entry("src", FileEntryKind::Directory),
+        entry("src/.gitcomet-save-xyz", FileEntryKind::File),
+        entry("src/main.rs", FileEntryKind::File),
+    ];
+    let directory = tempfile::tempdir().unwrap();
+    let paths = |entries: Vec<FileEntry>| -> Vec<PathBuf> {
+        entries.into_iter().map(|e| (*e.path).clone()).collect()
+    };
+    // The early return (nothing ignored or revealed) filters too.
+    let listed = augment(
+        directory.path(),
+        base.clone(),
+        Options::default(),
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        paths(listed),
+        [PathBuf::from("src"), PathBuf::from("src/main.rs")]
+    );
+    let listed = augment(
+        directory.path(),
+        base,
+        Options {
+            ignored: true,
+            ..Options::default()
+        },
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        paths(listed),
+        [PathBuf::from("src"), PathBuf::from("src/main.rs")]
+    );
+}

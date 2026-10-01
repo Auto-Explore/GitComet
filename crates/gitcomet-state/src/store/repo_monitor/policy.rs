@@ -68,6 +68,11 @@ impl PolicySnapshot {
     /// One allocation-free ancestors walk, with cache precedence even for
     /// explicitly configured inputs inside private Git/LFS storage.
     pub fn classify(&self, path: &Path) -> PathClass {
+        // Filesystem service staging (save temp files, undo areas) is not a change;
+        // the final rename onto the target still arrives under its own path.
+        if gitcomet_core::path_utils::has_service_owned_component(path) {
+            return PathClass::Cache;
+        }
         let mut git = false;
         let mut tags = self.packed_refs.contains(path);
         let mut excluded = false;

@@ -718,6 +718,9 @@ fn collect_index_worktree_item(
             );
         }
         gix::status::index_worktree::Item::DirectoryContents { entry, .. } => {
+            if is_service_owned_rela_path(entry.rela_path.as_ref()) {
+                return Ok(());
+            }
             let Some(kind) = map_directory_entry_status(entry.status) else {
                 return Ok(());
             };
@@ -736,10 +739,19 @@ fn collect_index_worktree_item(
             );
         }
         gix::status::index_worktree::Item::Rewrite {
+            source,
             dirwalk_entry,
             copy,
             ..
         } => {
+            if is_service_owned_rela_path(dirwalk_entry.rela_path.as_ref()) {
+                return push_rewrite_into_service_area(
+                    source.rela_path(),
+                    copy,
+                    unstaged,
+                    has_conflicted_unstaged,
+                );
+            }
             let kind = if copy {
                 FileStatusKind::Added
             } else {
@@ -1064,6 +1076,9 @@ fn collect_index_worktree_status_entry<U>(
             entry,
             ..
         } => {
+            if is_service_owned_rela_path(entry.rela_path.as_ref()) {
+                return Ok(());
+            }
             let Some(kind) = map_directory_entry_status(entry.status) else {
                 return Ok(());
             };
@@ -1082,10 +1097,19 @@ fn collect_index_worktree_status_entry<U>(
             );
         }
         gix::status::plumbing::index_as_worktree_with_renames::Entry::Rewrite {
+            source,
             dirwalk_entry,
             copy,
             ..
         } => {
+            if is_service_owned_rela_path(dirwalk_entry.rela_path.as_ref()) {
+                return push_rewrite_into_service_area(
+                    source.rela_path(),
+                    copy,
+                    unstaged,
+                    has_conflicted_unstaged,
+                );
+            }
             let kind = if copy {
                 FileStatusKind::Added
             } else {
@@ -1106,6 +1130,36 @@ fn collect_index_worktree_status_entry<U>(
             );
         }
     }
+    Ok(())
+}
+
+/// Staging areas the filesystem service may leave in a worktree are never
+/// user changes.
+fn is_service_owned_rela_path(path: &gix::bstr::BStr) -> bool {
+    path.split(|byte| *byte == b'/')
+        .any(gitcomet_core::path_utils::is_service_owned_name)
+}
+
+/// A file parked in a staging area was removed from where it was tracked.
+fn push_rewrite_into_service_area(
+    source: &gix::bstr::BStr,
+    copy: bool,
+    unstaged: &mut Vec<FileStatus>,
+    has_conflicted_unstaged: &mut bool,
+) -> Result<()> {
+    if copy {
+        return Ok(());
+    }
+    let path = path_buf_from_git_bytes(source, "gix status rewrite source path")?;
+    push_unstaged_status(
+        unstaged,
+        has_conflicted_unstaged,
+        FileStatus {
+            path,
+            kind: FileStatusKind::Deleted,
+            conflict: None,
+        },
+    );
     Ok(())
 }
 
@@ -2082,6 +2136,38 @@ pub(crate) mod tests {
                 file_status("unstaged.txt", FileStatusKind::Modified),
                 file_status("untracked.txt", FileStatusKind::Untracked),
             ]
+        );
+    }
+
+    #[test]
+    fn status_hides_filesystem_service_staging_areas() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+        write_file(workdir, "tracked.txt", "base\n");
+        git_success(workdir, &["add", "tracked.txt"]);
+        git_success(workdir, &["commit", "-m", "initial"]);
+        write_file(workdir, ".gitcomet-operation-abc/item", "parked\n");
+        write_file(
+            workdir,
+            "dir/.gitcomet-operation-def/recovery.log",
+            "move\n",
+        );
+        write_file(workdir, "dir/.gitcomet-save-xyz", "staged\n");
+        write_file(workdir, "dir/new.txt", "untracked\n");
+
+        let gix_repo = open_repo(workdir);
+        // The second call takes the cached-staged fast path.
+        for _ in 0..2 {
+            let status = gix_repo.status_impl().expect("status");
+            assert_eq!(
+                *status.unstaged,
+                vec![file_status("dir/new.txt", FileStatusKind::Untracked)]
+            );
+        }
+        assert_eq!(
+            gix_repo.worktree_status_impl().expect("worktree status"),
+            vec![file_status("dir/new.txt", FileStatusKind::Untracked)]
         );
     }
 

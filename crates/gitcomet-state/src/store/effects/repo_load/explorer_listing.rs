@@ -37,10 +37,12 @@ impl From<&FileBrowserState> for Options {
 
 pub(super) fn augment(
     root: &Path,
-    base: Vec<FileEntry>,
+    mut base: Vec<FileEntry>,
     options: Options,
     cancellation: &CancellationToken,
 ) -> Result<Vec<FileEntry>> {
+    // Staging areas left in a worktree are the filesystem service's, not the user's.
+    base.retain(|entry| !gitcomet_core::path_utils::has_service_owned_component(&entry.path));
     if !options.ignored && options.revealed.is_empty() {
         return Ok(base);
     }
@@ -64,8 +66,7 @@ pub(super) fn augment(
             let entry = entry.map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
             let name = entry.file_name();
             if gitcomet_core::path_utils::is_git_metadata_component(&name)
-                || name.as_encoded_bytes().starts_with(b".gitcomet-operation-")
-                || name.as_encoded_bytes().starts_with(b".gitcomet-save-")
+                || gitcomet_core::path_utils::is_service_owned_name(name.as_encoded_bytes())
             {
                 continue;
             }

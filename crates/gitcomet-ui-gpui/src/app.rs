@@ -305,6 +305,21 @@ pub fn run_with_startup_crash_report_shutdown_callback_and_initial_browser_reque
     Ok(UiRunOutcome::CleanShutdown)
 }
 
+/// Keep undo/staging areas under the app state dir instead of repository
+/// worktrees, and clear what crashed instances left there off the UI thread.
+fn configure_filesystem_journal_storage() {
+    let Some(root) = session::journal_storage_dir() else {
+        return;
+    };
+    match gitcomet_core::filesystem::configure_journal_storage(&root) {
+        Ok(_) => {
+            smol::unblock(move || gitcomet_core::filesystem::sweep_leaked_journal_storage(&root))
+                .detach();
+        }
+        Err(err) => eprintln!("Failed to configure filesystem journal storage: {err}"),
+    }
+}
+
 /// Launch the unified focused mergetool window using the shared `GitCometView`.
 pub fn run_focused_mergetool(backend: Arc<dyn GitBackend>, config: FocusedMergetoolConfig) -> i32 {
     if let Err(err) = ensure_graphics_device_available("focused mergetool GPUI launch") {
@@ -597,6 +612,7 @@ fn run_windowed_app(
         crate::ui_probe::start_if_enabled(cx);
         crate::environment::initialize(cx);
         cx.set_global(GitCometBackendGlobal(Arc::clone(&backend)));
+        configure_filesystem_journal_storage();
         cx.on_app_quit(|_| {
             // GPUI only waits 200 ms for returned futures. Journal directories
             // can be large, so finish cleanup before that timeout starts.

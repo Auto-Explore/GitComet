@@ -375,8 +375,12 @@ fn symlinked_recovery_directory_supports_immediate_undo_and_redo() {
     let alias = directory.path().join("alias");
     fs::create_dir(&storage).unwrap();
     std::os::unix::fs::symlink(&storage, &alias).unwrap();
-    let mut journal = JournalEntry::default();
-    let staged = journal.reserve_in(&alias).unwrap();
+    let mut journal = JournalEntry::new(
+        &Arc::new(StoragePolicy::with_candidates(vec![alias.clone()])),
+        None,
+    );
+    let staged = journal.reserve(directory.path()).unwrap();
+    assert!(staged.starts_with(fs::canonicalize(&storage).unwrap()));
     assert_eq!(staged, absolute_identity(&staged).unwrap());
     let file = fs::canonicalize(directory.path())
         .unwrap()
@@ -1492,4 +1496,185 @@ fn version_checks_stop_when_the_operation_is_cancelled() {
         version.matches(&path, &cancellation).unwrap_err().kind(),
         io::ErrorKind::Interrupted,
     );
+}
+
+/// Every `.gitcomet-operation-*` entry below `root`.
+fn operation_areas_under(root: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir).unwrap().flatten() {
+            let path = entry.path();
+            if crate::path_utils::is_service_owned_name(entry.file_name().as_encoded_bytes()) {
+                found.push(path);
+            } else if entry.file_type().unwrap().is_dir() {
+                pending.push(path);
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn journal_storage_prefers_the_first_writable_same_volume_candidate() {
+    let fixture = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let state_path = canonical_path(state.path()).unwrap();
+    let mut service = Filesystem::with_storage_candidates(vec![
+        PathBuf::from("/nonexistent/gitcomet-journal"),
+        state.path().to_path_buf(),
+    ]);
+    replace_for_shutdown(&mut service, fixture.path());
+    let root = canonical_path(fixture.path()).unwrap();
+    let mut keep_both = Request::new(Operation::Transfer {
+        sources: vec![root.join("file.txt")],
+        destination: root.join("destination"),
+        intent: TransferIntent::Copy,
+    });
+    keep_both.resolutions.insert(
+        root.join("destination/file.txt"),
+        ConflictResolution {
+            expected: DiskVersion::read(&root.join("destination/file.txt")).unwrap(),
+            choice: ConflictChoice::KeepBoth,
+        },
+    );
+    success(&service.execute(keep_both, |_| {}));
+    assert_eq!(
+        fs::read(root.join("destination/file copy.txt")).unwrap(),
+        b"new"
+    );
+
+    let areas = journal_areas(&service);
+    assert!(!areas.is_empty());
+    assert!(
+        areas.iter().all(|area| area.starts_with(&state_path)),
+        "{areas:?}"
+    );
+    assert_eq!(operation_areas_under(&root), Vec::<PathBuf>::new());
+    success(&run(&mut service, Operation::Undo));
+    success(&run(&mut service, Operation::Undo));
+    assert_eq!(fs::read(root.join("destination/file.txt")).unwrap(), b"old");
+    assert!(!root.join("destination/file copy.txt").exists());
+}
+
+#[test]
+fn journal_storage_resolves_a_git_file_to_its_directory() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = canonical_path(directory.path()).unwrap();
+    let worktree = root.join("worktree");
+    let gitdir = root.join("gitdir-target");
+    fs::create_dir_all(&worktree).unwrap();
+    fs::create_dir_all(&gitdir).unwrap();
+    fs::write(worktree.join(".git"), "gitdir: ../gitdir-target\n").unwrap();
+    let mut service = Filesystem::with_storage_candidates(vec![]);
+    replace_for_shutdown(&mut service, &worktree);
+    let areas = journal_areas(&service);
+    assert!(!areas.is_empty());
+    assert!(
+        areas.iter().all(|area| area.starts_with(&gitdir)),
+        "{areas:?}"
+    );
+    assert_eq!(operation_areas_under(&worktree), Vec::<PathBuf>::new());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn journal_storage_skips_cross_volume_candidates() {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(other_volume) = tempfile::tempdir_in("/dev/shm") else {
+        return;
+    };
+    let fixture = tempfile::tempdir().unwrap();
+    if fs::metadata(other_volume.path()).unwrap().dev()
+        == fs::metadata(fixture.path()).unwrap().dev()
+    {
+        return;
+    }
+    let mut service = Filesystem::with_storage_candidates(vec![other_volume.path().to_path_buf()]);
+    replace_for_shutdown(&mut service, fixture.path());
+    let root = canonical_path(fixture.path()).unwrap();
+    // No same-volume candidate and no repository: the last resort is the folder.
+    let areas = journal_areas(&service);
+    assert!(
+        areas.iter().all(|area| area.starts_with(&root)),
+        "{areas:?}"
+    );
+    assert_eq!(fs::read_dir(other_volume.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn shutdown_removes_the_empty_instance_directory() {
+    let fixture = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let mut service = Filesystem::default();
+    let instance = service
+        .configure_journal_storage(&state.path().join("journal"))
+        .unwrap();
+    assert!(instance.join("lock").is_file());
+    // The temp dir comes first in production; point areas at the instance.
+    service.storage = Arc::new(StoragePolicy::with_candidates(vec![instance.clone()]));
+    replace_for_shutdown(&mut service, fixture.path());
+    let areas = journal_areas(&service);
+    assert!(areas.iter().all(|area| area.starts_with(&instance)));
+    service.storage = Arc::new(StoragePolicy::instance(instance.clone()));
+    service.shutdown();
+    assert!(!instance.exists());
+    assert!(state.path().join("journal").is_dir());
+}
+
+#[test]
+fn shutdown_keeps_an_instance_directory_that_retains_recovery_data() {
+    let fixture = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let mut service = Filesystem::default();
+    let instance = service
+        .configure_journal_storage(&state.path().join("journal"))
+        .unwrap();
+    service.storage = Arc::new(StoragePolicy::with_candidates(vec![instance.clone()]));
+    let parked = replace_for_shutdown(&mut service, fixture.path());
+    fs::write(fixture.path().join("destination/file.txt"), b"external").unwrap();
+    assert!(!run(&mut service, Operation::Undo).succeeded());
+    service.storage = Arc::new(StoragePolicy::instance(instance.clone()));
+    service.shutdown();
+    assert_eq!(fs::read(&parked).unwrap(), b"old");
+    assert!(instance.is_dir());
+}
+
+#[test]
+fn sweep_removes_dead_instances_but_keeps_retained_items_and_live_locks() {
+    let state = tempfile::tempdir().unwrap();
+    let root = state.path();
+    let instance = |name: &str, item: bool| {
+        let area = root.join(name).join(".gitcomet-operation-x");
+        fs::create_dir_all(&area).unwrap();
+        fs::write(area.join("recovery.log"), b"move\ta\tb\n").unwrap();
+        if item {
+            fs::write(area.join("item"), b"parked").unwrap();
+        }
+        fs::write(root.join(name).join("lock"), b"").unwrap();
+    };
+    instance("1-10", false);
+    instance("2-20", true);
+    instance("3-30", false);
+    let live = File::open(root.join("3-30/lock")).unwrap();
+    live.try_lock().unwrap();
+    // Without a lock file: still starting when fresh, dead once stale.
+    fs::create_dir(root.join("4-40")).unwrap();
+    fs::create_dir(root.join("5-50")).unwrap();
+    let stale = filetime::FileTime::from_unix_time(1_000_000, 0);
+    filetime::set_file_mtime(root.join("5-50"), stale).unwrap();
+    fs::create_dir(root.join("notes")).unwrap();
+
+    sweep_leaked_journal_storage(root);
+
+    assert!(!root.join("1-10").exists(), "dead and empty");
+    assert!(
+        root.join("2-20/.gitcomet-operation-x/item").exists(),
+        "retained"
+    );
+    assert!(root.join("3-30").exists(), "live");
+    assert!(root.join("4-40").exists(), "fresh, unlocked");
+    assert!(!root.join("5-50").exists(), "stale, unlocked");
+    assert!(root.join("notes").exists(), "not an instance");
+    drop(live);
 }

@@ -1,4 +1,5 @@
 use super::io::*;
+use super::storage::{self, StoragePolicy};
 use super::*;
 use std::collections::VecDeque;
 use std::fs::{self, File, OpenOptions};
@@ -22,6 +23,20 @@ pub fn cleanup_on_shutdown() {
         .shutdown();
 }
 
+/// Keep staging and undo areas in a locked per-process directory under
+/// `root` (the app state dir), so they stay out of repository worktrees.
+pub fn configure_journal_storage(root: &Path) -> io::Result<PathBuf> {
+    global()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .configure_journal_storage(root)
+}
+
+/// Remove areas that crashed instances left under `root`; keeps parked data.
+pub fn sweep_leaked_journal_storage(root: &Path) {
+    storage::sweep(root);
+}
+
 #[derive(Default)]
 pub struct Filesystem {
     shutting_down: bool,
@@ -29,6 +44,8 @@ pub struct Filesystem {
     redo: Vec<JournalEntry>,
     revision: u64,
     changes: VecDeque<(u64, Vec<PathChange>)>,
+    storage: Arc<StoragePolicy>,
+    instance_lock: Option<File>,
 }
 
 struct Step {
@@ -92,9 +109,18 @@ struct JournalEntry {
     steps: Vec<Step>,
     applied: usize,
     areas: Vec<tempfile::TempDir>,
+    storage: Arc<StoragePolicy>,
 }
 
 impl JournalEntry {
+    fn new(storage: &Arc<StoragePolicy>, logical_id: Option<OperationId>) -> Self {
+        Self {
+            logical_id,
+            storage: Arc::clone(storage),
+            ..Self::default()
+        }
+    }
+
     fn require_manual_recovery(&mut self, required: bool) {
         // A failed plain rename can leave only an empty journal and its log.
         // Keep receipts only when some retained entry still needs restoration.
@@ -109,37 +135,7 @@ impl JournalEntry {
     }
 
     fn reserve(&mut self, parent: &Path) -> io::Result<PathBuf> {
-        let same_volume = |candidate: &Path| {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-                fs::metadata(candidate)
-                    .ok()
-                    .zip(fs::metadata(parent).ok())
-                    .is_some_and(|(a, b)| a.dev() == b.dev())
-            }
-            #[cfg(not(unix))]
-            {
-                candidate.components().next() == parent.components().next()
-            }
-        };
-        let temporary = std::env::temp_dir();
-        let git_directory = parent
-            .ancestors()
-            .map(|p| p.join(".git"))
-            .find(|p| p.is_dir() && same_volume(p));
-        let storage = if same_volume(&temporary) {
-            temporary.as_path()
-        } else {
-            git_directory.as_deref().unwrap_or(parent)
-        };
-        self.reserve_in(storage)
-    }
-
-    fn reserve_in(&mut self, storage: &Path) -> io::Result<PathBuf> {
-        let area = tempfile::Builder::new()
-            .prefix(".gitcomet-operation-")
-            .tempdir_in(storage)?;
+        let area = self.storage.reserve(parent)?;
         let path = absolute_identity(&area.path().join("item"))?;
         self.areas.push(area);
         Ok(path)
@@ -195,10 +191,36 @@ impl JournalEntry {
 }
 
 impl Filesystem {
+    #[cfg(test)]
+    fn with_storage_candidates(candidates: Vec<PathBuf>) -> Self {
+        Self {
+            storage: Arc::new(StoragePolicy::with_candidates(candidates)),
+            ..Self::default()
+        }
+    }
+
+    pub fn configure_journal_storage(&mut self, root: &Path) -> io::Result<PathBuf> {
+        let (dir, lock) = storage::create_instance(root)?;
+        self.release_instance();
+        self.storage = Arc::new(StoragePolicy::instance(dir.clone()));
+        self.instance_lock = Some(lock);
+        Ok(dir)
+    }
+
+    fn release_instance(&mut self) {
+        if let Some(lock) = self.instance_lock.take() {
+            drop(lock);
+            if let Some(dir) = self.storage.instance_dir() {
+                storage::release_instance(dir);
+            }
+        }
+    }
+
     fn shutdown(&mut self) {
         self.shutting_down = true;
         self.undo.clear();
         self.redo.clear();
+        self.release_instance();
     }
 
     pub fn prepare_outbound(
@@ -304,7 +326,7 @@ impl Filesystem {
             .map(|_| DiskVersion::read(&path))
             .transpose()?;
         let mut staged = tempfile::Builder::new()
-            .prefix(".gitcomet-save-")
+            .prefix(crate::path_utils::SAVE_STAGING_PREFIX)
             .tempfile_in(path.parent().unwrap())?;
         staged.write_all(bytes)?;
         if let Some(m) = metadata {
@@ -312,7 +334,7 @@ impl Filesystem {
         }
         staged.as_file().sync_all()?;
         let version = DiskVersion::read(staged.path())?;
-        let mut recovery = JournalEntry::default();
+        let mut recovery = JournalEntry::new(&self.storage, None);
         if let Some(original) = original {
             let parked = recovery.reserve(path.parent().unwrap())?;
             recovery.record_intent(&path, &parked)?;
@@ -381,7 +403,7 @@ impl Filesystem {
                 } else if *source_removed || !exists(path).unwrap_or(true) {
                     Ok(ItemOutcome::Completed)
                 } else {
-                    complete_outbound_move(path, version, &request.cancellation)
+                    complete_outbound_move(path, version, &request.cancellation, &self.storage)
                         .map(|_| ItemOutcome::Completed)
                 };
                 let outcome = outcome.unwrap_or_else(|e| ItemOutcome::Failed(e.to_string()));
@@ -463,10 +485,7 @@ impl Filesystem {
                 redo_available: !self.redo.is_empty(),
             };
         }
-        let mut entry = JournalEntry {
-            logical_id: Some(request.logical_id),
-            ..Default::default()
-        };
+        let mut entry = JournalEntry::new(&self.storage, Some(request.logical_id));
         let mut result = OperationResult {
             moved_versions: BTreeMap::new(),
             saved_version: None,
@@ -513,14 +532,13 @@ impl Filesystem {
                     result.changes.push(change.clone());
                 }
             }
-            if matches!(outcome, ItemOutcome::Completed) {
-                match &request.operation {
-                    Operation::DeletePermanently { .. } => result.changes.push(PathChange {
-                        old: Some(source.clone()),
-                        new: None,
-                    }),
-                    _ => {}
-                }
+            if matches!(outcome, ItemOutcome::Completed)
+                && matches!(request.operation, Operation::DeletePermanently { .. })
+            {
+                result.changes.push(PathChange {
+                    old: Some(source.clone()),
+                    new: None,
+                });
             }
             let destination = entry.steps[start..]
                 .iter()
@@ -617,7 +635,7 @@ impl Filesystem {
                     return Err(invalid("Permanent deletion requires confirmation"));
                 }
                 let version = DiskVersion::read_cancellable(source, &request.cancellation)?;
-                complete_outbound_move(source, &version, &request.cancellation)?;
+                complete_outbound_move(source, &version, &request.cancellation, &self.storage)?;
                 // Permanent removal is reported but never enters the journal.
                 self.publish(&[PathChange {
                     old: Some(source.to_path_buf()),
@@ -753,11 +771,12 @@ fn complete_outbound_move(
     path: &Path,
     version: &DiskVersion,
     cancellation: &Cancellation,
+    storage: &Arc<StoragePolicy>,
 ) -> io::Result<()> {
     check_cancel(cancellation)?;
     version.matches(path, cancellation)?;
     protect(path, true, cancellation)?;
-    let mut recovery = JournalEntry::default();
+    let mut recovery = JournalEntry::new(storage, None);
     let parked = recovery.reserve(path.parent().unwrap())?;
     recovery.record_intent(path, &parked)?;
     rename_exclusive(path, &parked)?;

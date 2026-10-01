@@ -385,6 +385,29 @@ fn metadata_noise_in_a_mixed_event_preserves_real_changes() {
 }
 
 #[test]
+fn filesystem_service_staging_is_noise_but_its_final_rename_is_not() {
+    let (_temp, root) = repository();
+    let rules = load_gitignore_rules(&root);
+    let snapshot = rules.state.snapshot();
+    for staging in [
+        root.join("src/.gitcomet-save-abc"),
+        root.join(".gitcomet-operation-x/item"),
+        root.join(".git/.gitcomet-operation-y/item"),
+    ] {
+        assert_eq!(snapshot.classify(&staging), PathClass::Cache, "{staging:?}");
+    }
+    let create = notify::Event::new(EventKind::Create(notify::event::CreateKind::File))
+        .add_path(root.join("src/.gitcomet-save-abc"));
+    assert_eq!(triage(&snapshot, &create), Triage::Drop);
+    let rename = notify::Event::new(EventKind::Modify(ModifyKind::Name(
+        notify::event::RenameMode::Both,
+    )))
+    .add_path(root.join("src/.gitcomet-save-abc"))
+    .add_path(root.join("src/main.rs"));
+    assert_eq!(triage(&snapshot, &rename), Triage::Relevant);
+}
+
+#[test]
 fn recursive_roots_share_overlapping_coverage_without_hiding_sibling_repositories() {
     let temp = unique_temp_dir("gitcomet-overlapping-roots");
     let base = normalized(temp.path());

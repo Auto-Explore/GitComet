@@ -556,6 +556,15 @@ pub fn browser_instance_file_path() -> Option<PathBuf> {
     Some(app_state_dir()?.join("browser-instance.json"))
 }
 
+/// Where the filesystem service keeps undo and staging areas, beside the
+/// session rather than in a worktree. Test binaries get none, like the session.
+pub fn journal_storage_dir() -> Option<PathBuf> {
+    if cfg!(test) || running_under_test_harness() {
+        return None;
+    }
+    Some(app_state_dir()?.join("journal"))
+}
+
 pub(crate) fn default_session_file_path_for_effect() -> Option<PathBuf> {
     default_session_file_path()
 }

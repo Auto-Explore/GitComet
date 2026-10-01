@@ -2,10 +2,14 @@
 //! changes. Call it on a worker; saves and journal operations share its lock.
 mod engine;
 mod io;
+mod storage;
 #[cfg(any(not(any(windows, target_os = "macos")), all(test, unix)))]
 mod trash;
 
-pub use engine::{Filesystem, cleanup_on_shutdown, global};
+pub use engine::{
+    Filesystem, cleanup_on_shutdown, configure_journal_storage, global,
+    sweep_leaked_journal_storage,
+};
 pub use io::{DiskVersion, absolute_identity, validate_name};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
