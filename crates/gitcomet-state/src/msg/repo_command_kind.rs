@@ -8,6 +8,11 @@ use std::path::PathBuf;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RepoCommandKind {
     FetchAll,
+    /// Exactly these refspecs from one remote.
+    FetchRefspecs {
+        remote: String,
+        refspecs: Vec<String>,
+    },
     PruneMergedBranches,
     PruneLocalTags,
     /// `git maintenance run --auto`, started by the user.
@@ -229,6 +234,7 @@ impl RepoCommandKind {
             | Self::RemoveSubmodule { .. }
             | Self::ApplyWorktreePatch { .. } => true,
             Self::FetchAll
+            | Self::FetchRefspecs { .. }
             | Self::PruneMergedBranches
             | Self::PruneLocalTags
             | Self::RunMaintenance
@@ -263,6 +269,7 @@ impl RepoCommandKind {
         matches!(
             self,
             Self::FetchAll
+                | Self::FetchRefspecs { .. }
                 | Self::PruneMergedBranches
                 | Self::Pull { .. }
                 | Self::PullBranch { .. }
@@ -276,7 +283,7 @@ impl RepoCommandKind {
 
     pub(crate) fn hook_activity_label(&self) -> &'static str {
         match self {
-            Self::FetchAll => "Fetch",
+            Self::FetchAll | Self::FetchRefspecs { .. } => "Fetch",
             Self::PruneMergedBranches => "Prune branches",
             Self::PruneLocalTags => "Prune tags",
             Self::RunMaintenance => "Maintenance",

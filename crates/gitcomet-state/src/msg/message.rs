@@ -219,7 +219,9 @@ pub enum RepoWatchDegradedReason {
 #[derive(Debug, strum::IntoStaticStr)]
 pub enum Msg {
     IndexedHistory(crate::indexed_history::IndexedHistoryMsg),
+    DiffSession(crate::diff_session::DiffSessionMsg),
     HistoryAuthors(crate::history_authors::HistoryAuthorsMsg),
+    HistoryFind(crate::history_find::HistoryFindMsg),
     OpenRepo(PathBuf),
     /// Opens a repository candidate supplied by an external file-system drop.
     /// The candidate is not persisted until the backend has opened it
@@ -295,6 +297,29 @@ pub enum Msg {
     RepoActivated {
         repo_id: RepoId,
     },
+    /// A [`WatchLease`](crate::store::WatchLease) was taken or dropped. Sent
+    /// by the lease itself; not meant for dispatch by hand.
+    AcquireWatchLease {
+        repo_id: RepoId,
+        lifetime: u64,
+    },
+    ReleaseWatchLease {
+        repo_id: RepoId,
+        lifetime: u64,
+    },
+    /// Keep a linked worktree watched independently of the active repository.
+    WatchWorktree {
+        repo_id: RepoId,
+        lifetime: u64,
+        path: PathBuf,
+        watch: bool,
+    },
+    WorktreeExternallyChanged {
+        repo_id: RepoId,
+        lifetime: u64,
+        path: PathBuf,
+        change: RepoExternalChange,
+    },
     RepoExternallyChanged {
         repo_id: RepoId,
         change: RepoExternalChange,
@@ -320,12 +345,14 @@ pub enum Msg {
         repo_id: RepoId,
     },
     SelectCommit {
+        request_id: Option<u64>,
         repo_id: RepoId,
         commit_id: CommitId,
     },
     /// Modifier-aware history selection. `visible_order` (the visible commit
     /// ids in log order) is only provided for `Range` clicks.
     SelectCommitMulti {
+        request_id: Option<u64>,
         repo_id: RepoId,
         commit_id: CommitId,
         mode: CommitSelectMode,
@@ -333,6 +360,7 @@ pub enum Msg {
         visible_order: Option<Vec<CommitId>>,
     },
     ClearCommitSelection {
+        request_id: Option<u64>,
         repo_id: RepoId,
     },
     /// Compare two points (commits, or branch/tag tips resolved to commit ids).
@@ -351,6 +379,16 @@ pub enum Msg {
         repo_id: RepoId,
         from: CommitId,
         from_label: String,
+    },
+    /// A comparison with explicit options (a merge-base comparison, or one
+    /// that lists untracked files). `to: None` is the working tree.
+    CompareWithOptions {
+        repo_id: RepoId,
+        from: CommitId,
+        to: Option<CommitId>,
+        options: gitcomet_core::services::ComparisonOptions,
+        from_label: String,
+        to_label: String,
     },
     /// Clear an active range comparison, returning to single/empty selection.
     ClearComparison {
@@ -453,6 +491,7 @@ pub enum Msg {
     /// Select the history row for a linked worktree's uncommitted changes, so
     /// the details pane shows that worktree's files instead of a commit.
     SelectWorktreeUncommitted {
+        request_id: Option<u64>,
         repo_id: RepoId,
         path: PathBuf,
     },
@@ -819,9 +858,7 @@ pub enum Msg {
         repo_id: RepoId,
         context: SafePushAfterCommitContext,
     },
-    FetchAll {
-        repo_id: RepoId,
-    },
+    Fetch(super::FetchMsg),
     PruneMergedBranches {
         repo_id: RepoId,
     },
@@ -1406,7 +1443,7 @@ pub enum InternalMsg {
         to: Option<CommitId>,
         /// The `Effect::LoadRangeFiles` request this answers.
         request: u64,
-        result: Result<Vec<CommitFileChange>, Error>,
+        result: Result<gitcomet_core::services::Comparison, Error>,
     },
     SquashMessagePreviewLoaded {
         repo_id: RepoId,

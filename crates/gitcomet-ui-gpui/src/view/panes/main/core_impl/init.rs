@@ -307,7 +307,9 @@ impl MainPaneView {
         });
 
         let mut pane = Self {
-            store,
+            store: store.into(),
+            hosted_content_width: None,
+            hosted_decor: None,
             state,
             view_mode,
             focused_mergetool_labels,
@@ -356,6 +358,7 @@ impl MainPaneView {
             diff_cache_repo_id: None,
             diff_cache_rev: 0,
             diff_cache_content_signature: None,
+            patch_signature_memo: None,
             diff_cache_target: None,
             diff_cache: Arc::from([]),
             diff_row_provider: None,

@@ -359,6 +359,7 @@ pub(in crate::view) fn markdown_preview_local_link_target(
         DiffTarget::Commit {
             commit_id,
             path: Some(path),
+            ..
         } => (path.as_path(), FileSource::Commit(commit_id.clone())),
         DiffTarget::Commit { path: None, .. } | DiffTarget::CommitRange { .. } => return None,
     };

@@ -192,7 +192,8 @@ impl SettingsRuntimeInfo {
 
 pub(super) fn git_runtime_info_from_state(runtime: GitRuntimeState) -> GitRuntimeInfo {
     let compatibility_message = format!(
-        "GitComet requires Git {} or newer.",
+        "{} requires Git {} or newer.",
+        crate::view::product_name(),
         gitcomet_core::process::GitVersion::MINIMUM
     );
     let compatibility = if matches!(

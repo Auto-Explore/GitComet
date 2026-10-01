@@ -1,5 +1,6 @@
 use super::*;
 use crate::model::{RepoLoadsInFlight, RepoState};
+use crate::msg::RepoCommandKind;
 use gitcomet_core::domain::{RepoSpec, RepoStatus};
 use gitcomet_core::error::{Error, ErrorKind};
 use std::path::PathBuf;
@@ -170,7 +171,7 @@ fn worktree_only_change_updates_counts_and_failed_lane_never_uses_combined_fallb
         &mut state,
         Msg::RepoExternallyChanged {
             repo_id: id,
-            change,
+            change: change.clone(),
         },
     );
     no_stats(&requested);

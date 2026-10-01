@@ -239,7 +239,7 @@ pub(super) fn record_stop_send_failure(repo_id: RepoId, context: &'static str) {
     send_stop_or_log(&tx, repo_id, context);
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct DebouncedChange {
     pending: Option<RepoExternalChange>,
     first_event_at: Option<Instant>,
@@ -264,7 +264,10 @@ impl DebouncedChange {
     }
 
     fn push(&mut self, change: RepoExternalChange, now: Instant) -> Option<RepoExternalChange> {
-        self.pending = Some(merge_change(self.pending.unwrap_or(change), change));
+        self.pending = Some(match self.pending.take() {
+            Some(pending) => merge_change(pending, change),
+            None => change,
+        });
         self.first_event_at.get_or_insert(now);
         self.last_event_at = Some(now);
         self.take_if_max_delay_elapsed(now)
@@ -309,13 +312,24 @@ impl DebouncedChange {
 
 pub(super) struct RepoMonitorManager {
     handles: FxHashMap<RepoId, RepoMonitorHandle>,
+    worktree_handles: FxHashMap<(RepoId, u64, PathBuf), RepoMonitorHandle>,
+    /// Set by tests: no monitor is ever started.
+    disabled: bool,
 }
 
 impl RepoMonitorManager {
     pub(super) fn new() -> Self {
         Self {
             handles: FxHashMap::default(),
+            worktree_handles: FxHashMap::default(),
+            disabled: false,
         }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn disable(&mut self) {
+        self.disabled = true;
+        self.stop_all();
     }
 
     pub(super) fn revalidate(&self, repo_id: RepoId) {
@@ -325,6 +339,9 @@ impl RepoMonitorManager {
     }
 
     pub(super) fn stop_all(&mut self) {
+        for ((repo_id, _, _), handle) in self.worktree_handles.drain() {
+            stop_monitor_handle(repo_id, handle, "RepoMonitorManager::stop_all worktree");
+        }
         for (repo_id, handle) in self.handles.drain() {
             stop_monitor_handle(repo_id, handle, "RepoMonitorManager::stop_all");
         }
@@ -355,41 +372,86 @@ impl RepoMonitorManager {
         active_repo_id: Arc<AtomicU64>,
         backend: Arc<dyn GitBackend>,
     ) {
+        if self.disabled {
+            return;
+        }
         let std::collections::hash_map::Entry::Vacant(entry) = self.handles.entry(repo_id) else {
             return;
         };
-        let (monitor_tx, monitor_rx) = mpsc::channel::<MonitorMsg>();
-        let monitor_tx_for_notify = monitor_tx.clone();
-        let monitor_enabled = Arc::new(AtomicBool::new(true));
-        let monitor_enabled_for_thread = Arc::clone(&monitor_enabled);
-        // Named, or it shows under its creator's name (the store worker) in
-        // profiles and per-thread CPU samples.
-        let join = thread::Builder::new()
-            .name("gitcomet-watch".into())
-            .spawn(move || {
-                repo_monitor_thread(
-                    repo_id,
-                    workdir,
-                    msg_tx,
-                    monitor_rx,
-                    monitor_tx_for_notify,
-                    active_repo_id,
-                    monitor_enabled_for_thread,
-                    backend,
-                    MonitorConfig::default(),
-                )
-            })
-            .expect("spawn repo monitor thread");
-        entry.insert(RepoMonitorHandle {
-            msg_tx: monitor_tx,
-            join,
-            monitor_enabled,
-        });
+        entry.insert(spawn_monitor(
+            repo_id,
+            workdir,
+            msg_tx,
+            active_repo_id,
+            backend,
+            MonitorConfig::default(),
+        ));
+    }
+
+    pub(super) fn reconcile_worktrees(
+        &mut self,
+        wanted: Vec<(RepoId, u64, PathBuf)>,
+        msg_tx: StoreWorkerSender,
+        active_repo_id: Arc<AtomicU64>,
+        backend: Arc<dyn GitBackend>,
+    ) {
+        if self.disabled {
+            return;
+        }
+        let obsolete: Vec<_> = self
+            .worktree_handles
+            .keys()
+            .filter(|key| !wanted.contains(key))
+            .cloned()
+            .collect();
+        for key in obsolete {
+            if let Some(handle) = self.worktree_handles.remove(&key) {
+                stop_monitor_handle(key.0, handle, "worktree watch closed");
+            }
+        }
+        for key in wanted {
+            let std::collections::hash_map::Entry::Vacant(entry) =
+                self.worktree_handles.entry(key.clone())
+            else {
+                continue;
+            };
+            let (repo_id, lifetime, workdir) = key;
+            let config = MonitorConfig {
+                leased: Arc::new(AtomicBool::new(true)),
+                worktree_owner: Some((lifetime, workdir.clone())),
+                ..Default::default()
+            };
+            entry.insert(spawn_monitor(
+                repo_id,
+                workdir,
+                msg_tx.clone(),
+                active_repo_id.clone(),
+                backend.clone(),
+                config,
+            ));
+        }
+    }
+
+    /// Whether a watch lease holds `repo_id`, so its changes are delivered
+    /// while another repository is active.
+    pub(super) fn set_leased(&self, repo_id: RepoId, leased: bool) {
+        if let Some(handle) = self.handles.get(&repo_id) {
+            handle.leased.store(leased, Ordering::Relaxed);
+        }
     }
 
     #[cfg(test)]
     pub(super) fn thread_name_for_test(&self, repo_id: RepoId) -> Option<String> {
         let handle = self.handles.get(&repo_id)?;
+        handle.join.thread().name().map(str::to_owned)
+    }
+
+    #[cfg(test)]
+    pub(super) fn worktree_thread_name_for_test(
+        &self,
+        key: &(RepoId, u64, PathBuf),
+    ) -> Option<String> {
+        let handle = self.worktree_handles.get(key)?;
         handle.join.thread().name().map(str::to_owned)
     }
 
@@ -413,6 +475,7 @@ impl RepoMonitorManager {
                 msg_tx: monitor_tx,
                 join,
                 monitor_enabled: Arc::clone(&monitor_enabled),
+                leased: Arc::default(),
             },
         );
         monitor_enabled
@@ -423,6 +486,48 @@ struct RepoMonitorHandle {
     msg_tx: mpsc::Sender<MonitorMsg>,
     join: thread::JoinHandle<()>,
     monitor_enabled: Arc<AtomicBool>,
+    leased: Arc<AtomicBool>,
+}
+
+/// Named, or the thread shows under its creator's name (the store worker)
+/// in profiles and per-thread CPU samples.
+fn spawn_monitor(
+    repo_id: RepoId,
+    workdir: PathBuf,
+    msg_tx: StoreWorkerSender,
+    active_repo_id: Arc<AtomicU64>,
+    backend: Arc<dyn GitBackend>,
+    config: MonitorConfig,
+) -> RepoMonitorHandle {
+    let (monitor_tx, monitor_rx) = mpsc::channel::<MonitorMsg>();
+    let monitor_enabled = Arc::new(AtomicBool::new(true));
+    let leased = Arc::clone(&config.leased);
+    let join = {
+        let monitor_tx = monitor_tx.clone();
+        let monitor_enabled = Arc::clone(&monitor_enabled);
+        thread::Builder::new()
+            .name("gitcomet-watch".into())
+            .spawn(move || {
+                repo_monitor_thread(
+                    repo_id,
+                    workdir,
+                    msg_tx,
+                    monitor_rx,
+                    monitor_tx,
+                    active_repo_id,
+                    monitor_enabled,
+                    backend,
+                    config,
+                )
+            })
+            .expect("spawn repo monitor thread")
+    };
+    RepoMonitorHandle {
+        msg_tx: monitor_tx,
+        join,
+        monitor_enabled,
+        leased,
+    }
 }
 
 fn stop_monitor_handle(repo_id: RepoId, handle: RepoMonitorHandle, context: &'static str) {
@@ -496,7 +601,7 @@ fn recovery_recheck_due(last_attempt: Option<Instant>, now: Instant, interval: D
 fn trace_repo_monitor_flush(
     source: &'static str,
     repo_id: RepoId,
-    change: RepoExternalChange,
+    change: &RepoExternalChange,
     active_repo: u64,
 ) {
     repo_load_trace::trace!(

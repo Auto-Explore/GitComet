@@ -21,10 +21,7 @@ fn main() {
     let warmups: usize = args[5].parse().unwrap();
     assert!(samples > 0 && samples <= 10000 && warmups <= 10000);
     let repo = GixBackend.open(&root).unwrap();
-    let target = DiffTarget::WorkingTree {
-        path: path.clone(),
-        area: DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree(path.clone(), DiffArea::Unstaged);
     let mut observations = Vec::new();
     for ix in 0..warmups + samples {
         let events = Arc::new(Mutex::new(Vec::new()));

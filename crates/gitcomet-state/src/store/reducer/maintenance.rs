@@ -127,7 +127,7 @@ pub(super) fn start(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
 pub(super) fn defer_external_change(
     state: &mut AppState,
     repo_id: RepoId,
-    change: RepoExternalChange,
+    change: &RepoExternalChange,
 ) -> bool {
     let Some(common_dir) = common_dir(state, repo_id) else {
         return false;
@@ -139,7 +139,10 @@ pub(super) fn defer_external_change(
         return false;
     };
     let deferred = &mut repo.maintenance.deferred_change;
-    *deferred = Some(deferred.map_or(change, |deferred| deferred.union(change)));
+    *deferred = Some(match deferred.take() {
+        Some(deferred) => deferred.union(change.clone()),
+        None => change.clone(),
+    });
     true
 }
 

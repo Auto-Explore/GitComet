@@ -81,7 +81,7 @@ impl GixRepo {
         cmd.arg("--no-pager");
 
         match target {
-            DiffTarget::WorkingTree { path, area } => {
+            DiffTarget::WorkingTree { path, area, .. } => {
                 cmd.arg("--no-optional-locks")
                     .arg("-c")
                     .arg("diff.autoRefreshIndex=false");
@@ -96,21 +96,26 @@ impl GixRepo {
                 }
                 cmd.arg("--").arg(path);
             }
-            DiffTarget::Commit { commit_id, path } => {
+            DiffTarget::Commit {
+                commit_id,
+                path,
+                old_path,
+                ..
+            } => {
                 cmd.arg("show")
                     .arg("--no-ext-diff")
                     .arg("-m")
                     .arg("--first-parent")
                     .arg("--pretty=format:")
                     .arg(commit_id.as_ref());
-                if let Some(path) = path {
-                    cmd.arg("--").arg(path);
-                }
+                Self::pathspec_with_source(&mut cmd, path.as_deref(), old_path.as_deref());
             }
             DiffTarget::CommitRange {
                 from_commit_id,
                 to_commit_id,
                 path,
+                old_path,
+                ..
             } => {
                 cmd.arg("diff")
                     .arg("--no-ext-diff")
@@ -119,13 +124,25 @@ impl GixRepo {
                 if let Some(to_commit_id) = to_commit_id {
                     cmd.arg(to_commit_id.as_ref());
                 }
-                if let Some(path) = path {
-                    cmd.arg("--").arg(path);
-                }
+                Self::pathspec_with_source(&mut cmd, path.as_deref(), old_path.as_deref());
             }
         }
 
         cmd
+    }
+
+    /// The file text view diffs `path` against `old_path`, so the patch must
+    /// pair them too. `--find-renames` pairs renames only and `-C` only
+    /// copies from a source modified alongside; with a two-path pathspec the
+    /// harder copy search inspects nothing else.
+    fn pathspec_with_source(cmd: &mut Command, path: Option<&Path>, old_path: Option<&Path>) {
+        let Some(path) = path else {
+            return;
+        };
+        if old_path.is_some() {
+            cmd.arg("--find-copies-harder");
+        }
+        cmd.arg("--").args(old_path).arg(path);
     }
 
     pub(super) fn diff_unified_impl(&self, target: &DiffTarget) -> Result<String> {
@@ -427,7 +444,7 @@ impl GixRepo {
         // Worktree normalization consults config as well as attributes.
         let repo = self.repo_with_current_config()?;
         match target {
-            DiffTarget::WorkingTree { path, area } => {
+            DiffTarget::WorkingTree { path, area, .. } => {
                 let full_path = if path.is_absolute() {
                     path.clone()
                 } else {
@@ -504,7 +521,12 @@ impl GixRepo {
 
                 Ok(Some(FileDiffText::new_sources(path.clone(), old, new)))
             }
-            DiffTarget::Commit { commit_id, path } => {
+            DiffTarget::Commit {
+                commit_id,
+                path,
+                old_path,
+                ..
+            } => {
                 let Some(path) = path else {
                     return Ok(None);
                 };
@@ -515,7 +537,7 @@ impl GixRepo {
                     Some(parent) => self.file_diff_source_from_revision_path(
                         &repo,
                         &parent,
-                        path,
+                        old_path.as_ref().unwrap_or(path),
                         cancellation,
                     )?,
                     None => None,
@@ -533,6 +555,8 @@ impl GixRepo {
                 from_commit_id,
                 to_commit_id,
                 path,
+                old_path,
+                ..
             } => {
                 let Some(path) = path else {
                     return Ok(None);
@@ -541,7 +565,7 @@ impl GixRepo {
                 let old = self.file_diff_source_from_revision_path(
                     &repo,
                     from_commit_id.as_ref(),
-                    path,
+                    old_path.as_ref().unwrap_or(path),
                     cancellation,
                 )?;
                 let new = match to_commit_id {
@@ -575,7 +599,7 @@ impl GixRepo {
     ) -> Result<Option<std::path::PathBuf>> {
         cancellation.check_cancelled()?;
         match target {
-            DiffTarget::WorkingTree { path, area } => {
+            DiffTarget::WorkingTree { path, area, .. } => {
                 let full_path = if path.is_absolute() {
                     path.clone()
                 } else {
@@ -622,7 +646,12 @@ impl GixRepo {
                     }
                 }
             }
-            DiffTarget::Commit { commit_id, path } => {
+            DiffTarget::Commit {
+                commit_id,
+                path,
+                old_path,
+                ..
+            } => {
                 let Some(path) = path else {
                     return Ok(None);
                 };
@@ -637,7 +666,11 @@ impl GixRepo {
                         else {
                             return Ok(None);
                         };
-                        gix_revision_path_blob_object_id_optional(&repo, &parent, path)?
+                        gix_revision_path_blob_object_id_optional(
+                            &repo,
+                            &parent,
+                            old_path.as_ref().unwrap_or(path),
+                        )?
                     }
                 };
 
@@ -652,6 +685,8 @@ impl GixRepo {
                 from_commit_id,
                 to_commit_id,
                 path,
+                old_path,
+                ..
             } => {
                 let Some(path) = path else {
                     return Ok(None);
@@ -675,7 +710,7 @@ impl GixRepo {
                     DiffPreviewTextSide::Old => gix_revision_path_blob_object_id_optional(
                         &repo,
                         from_commit_id.as_ref(),
-                        path,
+                        old_path.as_ref().unwrap_or(path),
                     )?,
                 };
 
@@ -730,7 +765,7 @@ impl GixRepo {
     ) -> Result<Option<FileDiffImage>> {
         cancellation.check_cancelled()?;
         match target {
-            DiffTarget::WorkingTree { path, area } => {
+            DiffTarget::WorkingTree { path, area, .. } => {
                 let full_path = if path.is_absolute() {
                     path.clone()
                 } else {
@@ -796,7 +831,12 @@ impl GixRepo {
                     new,
                 }))
             }
-            DiffTarget::Commit { commit_id, path } => {
+            DiffTarget::Commit {
+                commit_id,
+                path,
+                old_path,
+                ..
+            } => {
                 let Some(path) = path else {
                     return Ok(None);
                 };
@@ -805,9 +845,11 @@ impl GixRepo {
                 let parent = gix_first_parent_optional(&repo, commit_id.as_ref())?;
 
                 let old = match parent {
-                    Some(parent) => {
-                        gix_revision_path_image_blob_bytes_optional(&repo, &parent, path)?
-                    }
+                    Some(parent) => gix_revision_path_image_blob_bytes_optional(
+                        &repo,
+                        &parent,
+                        old_path.as_ref().unwrap_or(path),
+                    )?,
                     None => None,
                 };
                 let new =
@@ -823,6 +865,8 @@ impl GixRepo {
                 from_commit_id,
                 to_commit_id,
                 path,
+                old_path,
+                ..
             } => {
                 let Some(path) = path else {
                     return Ok(None);
@@ -832,7 +876,7 @@ impl GixRepo {
                 let old = gix_revision_path_image_blob_bytes_optional(
                     &repo,
                     from_commit_id.as_ref(),
-                    path,
+                    old_path.as_ref().unwrap_or(path),
                 )?;
                 let new = match to_commit_id {
                     Some(to_commit_id) => gix_revision_path_image_blob_bytes_optional(
@@ -1062,6 +1106,11 @@ impl GixRepo {
     }
 
     fn synthetic_simple_commit_path_diff(&self, target: &DiffTarget) -> Result<Option<Diff>> {
+        // The fast path reads one path on both sides; a rename is neither a
+        // pure addition nor a deletion, so Git pairs it instead.
+        if target.old_file_path().is_some() {
+            return Ok(None);
+        }
         let repo = self.repo();
         let Some((path, old_revision, new_revision)) = commit_path_diff_revisions(target, &repo)?
         else {
@@ -1129,6 +1178,7 @@ fn commit_path_diff_revisions(
         DiffTarget::Commit {
             commit_id,
             path: Some(path),
+            ..
         } => Ok(Some((
             path.clone(),
             gix_first_parent_optional(repo, commit_id.as_ref())?,
@@ -1138,6 +1188,7 @@ fn commit_path_diff_revisions(
             from_commit_id,
             to_commit_id: Some(to_commit_id),
             path: Some(path),
+            ..
         } => Ok(Some((
             path.clone(),
             Some(from_commit_id.as_ref().to_string()),
@@ -2214,7 +2265,7 @@ mod tests {
         assert_eq!(reader.1, 1);
         assert!(output.is_empty());
     }
-    use gitcomet_core::domain::{DiffArea, DiffTarget};
+    use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget};
     use gitcomet_core::error::ErrorKind;
     use std::process::Command;
 
@@ -2269,10 +2320,10 @@ mod tests {
             )
             .unwrap();
         let output = open_repo(root)
-            .build_unified_diff_command(&DiffTarget::WorkingTree {
-                path: "file.txt".into(),
-                area: DiffArea::Unstaged,
-            })
+            .build_unified_diff_command(&DiffTarget::working_tree(
+                "file.txt".into(),
+                DiffArea::Unstaged,
+            ))
             .output()
             .unwrap();
         assert!(output.status.success());
@@ -2282,6 +2333,38 @@ mod tests {
             before,
             "read-only diff refreshed index stat metadata"
         );
+    }
+
+    /// A copied file's old side is its source, which `--find-renames` never
+    /// pairs: the patch printed the whole file as added while the text view
+    /// showed the edit against the source.
+    #[test]
+    fn commit_diff_pairs_a_copied_file_with_its_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        init_test_repo(root);
+        let body: String = (1..=40).map(|n| format!("line {n}\n")).collect();
+        std::fs::write(root.join("a.rs"), &body).unwrap();
+        run_git(root, &["add", "a.rs"]);
+        run_git(root, &["commit", "-m", "seed"]);
+        std::fs::write(
+            root.join("b.rs"),
+            body.replace("line 20\n", "line twenty\n"),
+        )
+        .unwrap();
+        run_git(root, &["add", "b.rs"]);
+        run_git(root, &["commit", "-m", "copy"]);
+
+        let repo = open_repo(root);
+        let head = super::super::history::gix_head_id_or_none(&repo.repo())
+            .unwrap()
+            .unwrap();
+        let target = DiffTarget::commit(CommitId(head.to_string().into()), Some("b.rs".into()))
+            .with_old_path(Some("a.rs".into()));
+        let patch = repo.diff_unified_impl(&target).unwrap();
+        assert!(patch.contains("copy from a.rs\n"), "{patch}");
+        assert!(patch.contains("-line 20\n+line twenty\n"), "{patch}");
+        assert!(!patch.contains("new file mode"), "{patch}");
     }
 
     #[test]
@@ -2745,10 +2828,10 @@ mod tests {
 
         let repo = open_repo(tmp.path());
         let diff = repo
-            .diff_file_text_impl(&DiffTarget::WorkingTree {
-                path: "vendor/sub".into(),
-                area: DiffArea::Staged,
-            })
+            .diff_file_text_impl(&DiffTarget::working_tree(
+                "vendor/sub".into(),
+                DiffArea::Staged,
+            ))
             .expect("gitlink text diff should not error")
             .expect("file diff text object");
 

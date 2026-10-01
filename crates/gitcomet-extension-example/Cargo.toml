@@ -1,0 +1,28 @@
+[package]
+name = "gitcomet-extension-example"
+description = "An example product built on unmodified GitComet crates."
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+# The product library may use only the public extension surface and the
+# revision-pinned core/state APIs; the runnable application lives in
+# `gitcomet-extension-example-app`. scripts/ci/boundaries.py enforces this.
+[dependencies]
+gitcomet-core = { workspace = true }
+gitcomet-extension-api = { workspace = true }
+gitcomet-ui-kit = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+gitcomet-ui-kit = { workspace = true, features = ["test-support"] }
+tempfile = { workspace = true }
+# `#[gpui::test]` names the crate; the version is the kit's re-export.
+gpui = { workspace = true, features = ["test-support"] }

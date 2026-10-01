@@ -35,6 +35,10 @@ pub(in crate::view) enum AppMenuAction {
     InstallDesktopIntegration,
     Quit,
     CloseWindow,
+    /// An extension command, by contribution id.
+    ExtensionCommand {
+        id: SharedString,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -52,6 +56,12 @@ pub(in crate::view) enum HistoryMenuRef {
 
 #[derive(Clone)]
 pub(in crate::view) enum ContextMenuAction {
+    Hosted(gitcomet_extension_api::HostedAction),
+    /// An extension command for one repository tab.
+    RunExtensionCommand {
+        id: SharedString,
+        repo_id: RepoId,
+    },
     /// Read the open file in this encoding; `None` goes back to attributes
     /// and detection.
     SetTextEncoding {
@@ -258,6 +268,11 @@ pub(in crate::view) enum ContextMenuAction {
         label: String,
     },
     CompareWithMarked {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        label: String,
+    },
+    CompareWithMergeBase {
         repo_id: RepoId,
         commit_id: CommitId,
         label: String,
@@ -688,7 +703,7 @@ mod repo_tabs_bar;
 #[cfg(test)]
 pub(in crate::view) use action_bar::action_bar_breakpoints;
 pub(super) use action_bar::{ActionBarView, action_bar_density, action_bar_height};
-pub(super) use bottom_status_bar::BottomStatusBarView;
+pub(super) use bottom_status_bar::{BottomStatusBarView, bottom_status_bar_height};
 pub(super) use popover::{PopoverHost, PopoverHostInit};
 #[cfg(feature = "benchmarks")]
 pub(in crate::view) use popover::{

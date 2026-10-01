@@ -187,6 +187,7 @@ mod commit_signatures;
 mod conflict_session;
 mod conflict_telemetry;
 mod diff_selection;
+mod diff_sessions;
 mod effects;
 mod external_and_history;
 mod file_browser_follow;

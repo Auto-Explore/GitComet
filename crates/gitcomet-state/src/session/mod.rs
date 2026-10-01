@@ -1,5 +1,6 @@
 use crate::model::{AppState, DefaultTagType, GitLogTagFetchMode, RepoId};
 use gitcomet_core::domain::{HistoryMode, LogScope};
+use gitcomet_core::platform::dirs;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
@@ -115,7 +116,7 @@ struct UiSessionFileV1 {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
-struct UiSessionFile {
+pub(crate) struct UiSessionFile {
     version: u32,
     // V4 (branch-only) stored workspaces under their old "window groups" name.
     #[serde(
@@ -206,6 +207,10 @@ struct UiSessionFile {
     survey_prompt: Option<SurveyPromptSession>,
     #[serde(default, deserialize_with = "lenient_repo_maintenance")]
     repo_maintenance: Option<BTreeMap<String, RepoMaintenanceSession>>,
+    /// Extension namespaces, kept verbatim: any JSON loads, so a malformed
+    /// namespace never makes the rest of the session unreadable.
+    #[serde(default, skip_serializing_if = "ExtensionNamespaces::is_absent")]
+    extensions: ExtensionNamespaces,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -452,6 +457,35 @@ fn with_session_file_persist_lock<T>(persist: impl FnOnce() -> io::Result<T>) ->
     persist()
 }
 
+/// What a session update decided.
+pub(crate) enum SessionUpdate {
+    Write,
+    Unchanged,
+}
+
+/// The session file's one read-modify-write transaction: under the persist
+/// lock, load the current file (or an empty one), let `update` change it, stamp
+/// the current version, and write it back unless `update` left it unchanged.
+///
+/// Every writer goes through here, so each one starts from what is on disk
+/// now: fields it does not touch, such as extension namespaces, survive every
+/// other writer's update, however their calls interleave.
+pub(crate) fn update_session_file(
+    path: &Path,
+    update: impl FnOnce(&mut UiSessionFile) -> SessionUpdate,
+) -> io::Result<()> {
+    with_session_file_persist_lock(|| {
+        let mut file = load_file(path).unwrap_or_default();
+        match update(&mut file) {
+            SessionUpdate::Unchanged => Ok(()),
+            SessionUpdate::Write => {
+                file.version = CURRENT_SESSION_FILE_VERSION;
+                persist_to_path(path, &file)
+            }
+        }
+    })
+}
+
 /// On-disk version `load_file` last read per path, so the write that follows
 /// can skip the backup check's re-read.
 static LOADED_SESSION_VERSIONS: OnceLock<Mutex<FxHashMap<PathBuf, u32>>> = OnceLock::new();
@@ -541,7 +575,7 @@ fn default_session_file_path() -> Option<PathBuf> {
         return None;
     }
 
-    Some(app_state_dir()?.join("session.json"))
+    Some(dirs::state_dir()?.join("session.json"))
 }
 
 /// Per-user rendezvous file used by the browser-process broker. Test binaries
@@ -551,7 +585,7 @@ pub fn browser_instance_file_path() -> Option<PathBuf> {
     if cfg!(test) || running_under_test_harness() {
         return None;
     }
-    Some(app_state_dir()?.join("browser-instance.json"))
+    Some(dirs::state_dir()?.join("browser-instance.json"))
 }
 
 pub(crate) fn default_session_file_path_for_effect() -> Option<PathBuf> {
@@ -593,89 +627,21 @@ pub fn user_themes_dir() -> Option<PathBuf> {
         return None;
     }
 
-    Some(app_data_dir()?.join("themes"))
+    Some(dirs::data_dir()?.join("themes"))
 }
 
-fn non_empty_path(value: Option<&OsStr>) -> Option<PathBuf> {
-    let value = value?;
-    if value.is_empty() {
-        return None;
-    }
-    Some(PathBuf::from(value))
-}
-
-fn app_data_dir() -> Option<PathBuf> {
-    // Follow XDG on linux; otherwise fall back to platform conventions.
-    #[cfg(target_os = "linux")]
-    {
-        app_data_dir_linux(
-            env::var_os("XDG_DATA_HOME").as_deref(),
-            env::var_os("HOME").as_deref(),
-        )
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let home = non_empty_path(env::var_os("HOME").as_deref())?;
-        Some(home.join("Library/Application Support/gitcomet"))
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let appdata = env::var_os("LOCALAPPDATA").or_else(|| env::var_os("APPDATA"));
-        Some(non_empty_path(appdata.as_deref())?.join("gitcomet"))
-    }
-
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        non_empty_path(env::var_os("HOME").as_deref()).map(|home| home.join(".gitcomet"))
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn app_data_dir_linux(xdg_data_home: Option<&OsStr>, home: Option<&OsStr>) -> Option<PathBuf> {
-    if let Some(data_home) = non_empty_path(xdg_data_home) {
-        return Some(data_home.join("gitcomet"));
-    }
-    let home = non_empty_path(home)?;
-    Some(home.join(".local/share/gitcomet"))
-}
-
-fn app_state_dir() -> Option<PathBuf> {
-    // Follow XDG on linux; otherwise fall back to platform conventions.
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(state_home) = non_empty_path(env::var_os("XDG_STATE_HOME").as_deref()) {
-            return Some(state_home.join("gitcomet"));
-        }
-        let home = non_empty_path(env::var_os("HOME").as_deref())?;
-        Some(home.join(".local/state/gitcomet"))
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let home = non_empty_path(env::var_os("HOME").as_deref())?;
-        Some(home.join("Library/Application Support/gitcomet"))
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let appdata = env::var_os("LOCALAPPDATA").or_else(|| env::var_os("APPDATA"));
-        Some(non_empty_path(appdata.as_deref())?.join("gitcomet"))
-    }
-
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        non_empty_path(env::var_os("HOME").as_deref()).map(|home| home.join(".gitcomet"))
-    }
-}
-
+pub use extensions::{
+    ExtensionNamespaceError, ExtensionNamespaces, MAX_EXTENSION_NAMESPACE_BYTES,
+    check_extension_namespace_size, extension_namespace, extension_namespace_from_path,
+    persist_extension_namespace, persist_extension_namespace_to_path,
+};
 use history_mode::{HistoryModeSetting, HistoryScopeSetting};
 use maintenance::{RepoMaintenanceSession, lenient_repo_maintenance};
 use parse::*;
 use survey::{SurveyPromptSession, current_unix_seconds};
 use workspaces::*;
 
+mod extensions;
 mod history_mode;
 mod maintenance;
 mod parse;

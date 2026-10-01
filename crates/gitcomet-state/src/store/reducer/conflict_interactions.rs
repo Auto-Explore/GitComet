@@ -1,3 +1,4 @@
+use super::util;
 use crate::model::{AppState, RepoId};
 use crate::msg::{
     ConflictAutosolveMode, ConflictAutosolveStats, ConflictBulkChoice, ConflictBulkScope,
@@ -12,7 +13,7 @@ use gitcomet_core::conflict_session::{
 use gitcomet_core::merge::{
     ManualAlignment, MergeBlockId, MergeOptions, MergeSource, OrderedSelection,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(super) fn set_hide_resolved(
     state: &mut AppState,
@@ -771,4 +772,35 @@ fn reset_session_resolutions(
         reset += 1;
     }
     reset
+}
+
+pub(super) fn record_autosolve_telemetry(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: Option<PathBuf>,
+    mode: ConflictAutosolveMode,
+    total_conflicts_before: usize,
+    total_conflicts_after: usize,
+    unresolved_before: usize,
+    unresolved_after: usize,
+    stats: ConflictAutosolveStats,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        util::push_action_log(
+            repo_state,
+            true,
+            util::conflict_autosolve_telemetry_command(mode, path.as_deref()),
+            util::conflict_autosolve_telemetry_summary(
+                mode,
+                path.as_deref(),
+                total_conflicts_before,
+                total_conflicts_after,
+                unresolved_before,
+                unresolved_after,
+                stats,
+            ),
+            None,
+        );
+    }
+    Vec::new()
 }

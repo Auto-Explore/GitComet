@@ -16,9 +16,10 @@ pub(super) fn outdated_git_message(runtime: &GitRuntimeState) -> Option<(GitVers
     Some((
         version,
         format!(
-            "Git {version} is older than {}, the oldest version GitComet supports. \
+            "Git {version} is older than {}, the oldest version {} supports. \
              Some features, such as repository maintenance, are turned off. Please update Git.",
-            GitVersion::MINIMUM
+            GitVersion::MINIMUM,
+            crate::view::product_name()
         ),
     ))
 }

@@ -102,6 +102,11 @@ pub(crate) enum TextFormatMenuSection {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PopoverKind {
+    /// A dialog an extension opened; its content lives on the popover host.
+    Hosted {
+        menu: bool,
+        id: u64,
+    },
     HookActivity {
         repo_id: RepoId,
         operation_id: Option<GitOperationId>,
@@ -284,6 +289,8 @@ pub(crate) enum PopoverKind {
     AddRepoMenu,
     TerminalShutdownConfirm(TerminalShutdownPrompt),
     UnsavedFileEditsConfirm(UnsavedFileEditsPrompt),
+    /// Running Git operations or an extension asked before a close.
+    CloseGuardConfirm(CloseGuardPrompt),
     TerminalMenu {
         repo_id: RepoId,
         session_seq: u64,
@@ -583,6 +590,7 @@ pub enum GitCometViewMode {
     #[default]
     Normal,
     FocusedMergetool,
+    FocusedDiff,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -607,6 +615,7 @@ pub struct GitCometViewConfig {
     pub initial_path: Option<std::path::PathBuf>,
     pub initial_repository_launch_mode: InitialRepositoryLaunchMode,
     pub view_mode: GitCometViewMode,
+    pub focused_diff: Option<crate::FocusedDiffConfig>,
     pub focused_mergetool: Option<FocusedMergetoolViewConfig>,
     pub focused_mergetool_exit_code: Option<Arc<AtomicI32>>,
     pub startup_crash_report: Option<StartupCrashReport>,
@@ -619,6 +628,7 @@ impl GitCometViewConfig {
             initial_path: None,
             initial_repository_launch_mode: InitialRepositoryLaunchMode::RestoreSession,
             view_mode: GitCometViewMode::Normal,
+            focused_diff: None,
             focused_mergetool: None,
             focused_mergetool_exit_code: None,
             startup_crash_report,
@@ -634,6 +644,7 @@ impl GitCometViewConfig {
             initial_path: Some(initial_path),
             initial_repository_launch_mode: InitialRepositoryLaunchMode::OpenExplicitly,
             view_mode: GitCometViewMode::Normal,
+            focused_diff: None,
             focused_mergetool: None,
             focused_mergetool_exit_code: None,
             startup_crash_report,
@@ -644,6 +655,7 @@ impl GitCometViewConfig {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StartupCrashReport {
+    /// Prefilled issue page; empty when the product has no issue tracker.
     pub issue_url: String,
     pub summary: String,
     pub crash_log_path: std::path::PathBuf,
@@ -766,25 +778,31 @@ pub(crate) fn normalize_bootstrap_diff_target(
     repo_path: &std::path::Path,
     target: DiffTarget,
 ) -> DiffTarget {
+    let old_path = target
+        .old_file_path()
+        .map(|path| normalize_bootstrap_target_path(repo_path, path.to_path_buf()));
     match target {
-        DiffTarget::WorkingTree { path, area } => DiffTarget::WorkingTree {
-            path: normalize_bootstrap_target_path(repo_path, path),
-            area,
-        },
-        DiffTarget::Commit { commit_id, path } => DiffTarget::Commit {
+        DiffTarget::WorkingTree { path, area, .. } => {
+            DiffTarget::working_tree(normalize_bootstrap_target_path(repo_path, path), area)
+        }
+        DiffTarget::Commit {
+            commit_id, path, ..
+        } => DiffTarget::commit(
             commit_id,
-            path: path.map(|path| normalize_bootstrap_target_path(repo_path, path)),
-        },
+            path.map(|path| normalize_bootstrap_target_path(repo_path, path)),
+        ),
         DiffTarget::CommitRange {
             from_commit_id,
             to_commit_id,
             path,
-        } => DiffTarget::CommitRange {
+            ..
+        } => DiffTarget::commit_range(
             from_commit_id,
             to_commit_id,
-            path: path.map(|path| normalize_bootstrap_target_path(repo_path, path)),
-        },
+            path.map(|path| normalize_bootstrap_target_path(repo_path, path)),
+        ),
     }
+    .with_old_path(old_path)
 }
 
 pub(crate) fn focused_mergetool_target_path(
@@ -975,6 +993,11 @@ pub(in crate::view) enum TerminalShutdownAction {
     CloseRepo {
         repo_id: RepoId,
     },
+    /// Several tabs at once (close others / to the right).
+    CloseRepos {
+        repo_ids: Vec<RepoId>,
+        activate_after: Option<RepoId>,
+    },
     MoveRepo {
         repo_id: RepoId,
         path: std::path::PathBuf,
@@ -993,6 +1016,14 @@ pub(in crate::view) enum TerminalShutdownAction {
         workspace_id: gitcomet_state::session::WorkspaceId,
     },
     QuitApp,
+}
+
+/// A close the Git-operation or extension guards asked about. Confirming it
+/// performs the close: every earlier guard has already passed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct CloseGuardPrompt {
+    pub(in crate::view) action: TerminalShutdownAction,
+    pub(in crate::view) reasons: Vec<SharedString>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1056,6 +1087,8 @@ pub(crate) struct TerminalPanelResizeState {
 pub(crate) enum BottomPanelTab {
     Terminal,
     Reflog,
+    /// An extension's panel, by its index in the registry.
+    Extension(usize),
 }
 
 /// A cell in alacritty's grid coordinate space. `row` is a `Line`: `0` is the
@@ -1097,10 +1130,7 @@ pub(crate) fn focused_mergetool_bootstrap_action(
         return None;
     }
 
-    let target = DiffTarget::WorkingTree {
-        area: DiffArea::Unstaged,
-        path: bootstrap.target_path.clone(),
-    };
+    let target = DiffTarget::working_tree(bootstrap.target_path.clone(), DiffArea::Unstaged);
     if repo.diff_state.diff_target.as_ref() != Some(&target) {
         return Some(FocusedMergetoolBootstrapAction::SelectConflictDiff {
             repo_id: repo.id,
@@ -1469,5 +1499,19 @@ impl DiffWhitespaceMode {
             Self::Show => Self::Ignore,
             Self::Ignore => Self::Show,
         }
+    }
+}
+
+impl PopoverKind {
+    pub(in crate::view) fn survives_gate(&self) -> bool {
+        matches!(
+            self,
+            Self::Hosted { .. }
+                | Self::AppMenu
+                | Self::CloseGuardConfirm(_)
+                | Self::UnsavedFileEditsConfirm(_)
+                | Self::TerminalShutdownConfirm(_)
+                | Self::ErrorDetails { .. }
+        )
     }
 }

@@ -243,6 +243,7 @@ fn pagination_waits_for_the_new_source_and_uses_its_current_extent(cx: &mut gpui
         }
         // A user message is an ordering barrier after the frame's dispatches.
         store.dispatch(Msg::SelectCommit {
+            request_id: None,
             repo_id: RepoId(1),
             commit_id: CommitId(id.into()),
         });
@@ -475,14 +476,6 @@ fn indexed_fixture_with_width(
         });
     }
     (builder.finish(&CancellationToken::new()).unwrap(), commits)
-}
-
-fn install_index(state: &mut AppState, index: gitcomet_core::history_index::HistoryIndexHandle) {
-    let history = &mut state.repos[0].history_state;
-    history.log_snapshot = Some(index.snapshot.clone());
-    history.indexed.requested = Some(index.snapshot.clone());
-    history.indexed.index = Some(index);
-    history.indexed.rev += 1;
 }
 
 fn signature_demand_follows_the_viewport(cx: &mut gpui::TestAppContext, indexed: bool) {

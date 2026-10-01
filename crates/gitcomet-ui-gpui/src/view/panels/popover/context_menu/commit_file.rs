@@ -8,20 +8,20 @@ pub(super) fn model(
     commit_id: &CommitId,
     path: &std::path::Path,
 ) -> ContextMenuModel {
-    let is_submodule = this
+    let change = this
         .state
         .repos
         .iter()
         .find(|repo| repo.id == repo_id)
         .and_then(|repo| match &repo.history_state.commit_details {
-            Loadable::Ready(details) if details.id == *commit_id => details
-                .files
-                .iter()
-                .find(|file| file.path == path)
-                .map(|file| file.is_submodule),
+            Loadable::Ready(details) if details.id == *commit_id => {
+                details.files.iter().find(|file| file.path == path)
+            }
             _ => None,
-        })
-        .unwrap_or(false);
+        });
+    let is_submodule = change.is_some_and(|file| file.is_submodule);
+    let target = DiffTarget::commit(commit_id.clone(), Some(path.to_path_buf()))
+        .with_old_path(change.and_then(|file| file.old_path.clone()));
 
     let mut items = vec![ContextMenuItem::Header(
         path.file_name()
@@ -45,10 +45,7 @@ pub(super) fn model(
             disabled: false,
             action: Box::new(ContextMenuAction::SelectDiff {
                 repo_id,
-                target: DiffTarget::Commit {
-                    commit_id: commit_id.clone(),
-                    path: Some(path.to_path_buf()),
-                },
+                target: DiffTarget::commit(commit_id.clone(), Some(path.to_path_buf())),
             }),
         });
         items.push(ContextMenuItem::Entry {
@@ -94,13 +91,7 @@ pub(super) fn model(
         icon: Some("icons/open_external.svg".into()),
         shortcut: None,
         disabled: false,
-        action: Box::new(ContextMenuAction::SelectDiff {
-            repo_id,
-            target: DiffTarget::Commit {
-                commit_id: commit_id.clone(),
-                path: Some(path.to_path_buf()),
-            },
-        }),
+        action: Box::new(ContextMenuAction::SelectDiff { repo_id, target }),
     });
     items.push(ContextMenuItem::Entry {
         label: "Open file".into(),

@@ -476,9 +476,13 @@ impl SettingsWindowView {
 
     pub(super) fn font_option_detail(&self, family: &str) -> Option<SharedString> {
         match family {
-            crate::font_preferences::UI_SYSTEM_FONT_FAMILY => {
-                Some("Use GitComet's best match for the operating system UI font stack".into())
-            }
+            crate::font_preferences::UI_SYSTEM_FONT_FAMILY => Some(
+                format!(
+                    "Use {}'s best match for the operating system UI font stack",
+                    crate::view::product_name()
+                )
+                .into(),
+            ),
             _ => None,
         }
     }

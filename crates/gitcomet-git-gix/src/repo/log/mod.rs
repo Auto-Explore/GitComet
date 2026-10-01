@@ -3,7 +3,7 @@ use super::{
     GixRepo, LOG_FILE_FOLLOW_CACHE_LIMIT, LOG_PAGE_CACHE_LIMIT, LOG_PAGED_TOPO_WALK_CACHE_LIMIT,
     LOG_PAGED_WALK_CACHE_LIMIT, LogFileFollowCacheEntry, LogFileFollowCacheKey, LogPageCacheEntry,
     LogPageCacheKey, LogPageSeed, LogPagedWalk, LogPagedWalkCacheEntry, LogPagedWalkFilter,
-    LogPagedWalkState, ShallowSnapshot, bstr_to_arc_str, oid_to_arc_str, submodules,
+    LogPagedWalkState, ShallowSnapshot, bstr_to_arc_str, oid_to_arc_str,
 };
 use crate::util::{
     bytes_to_text_preserving_utf8, parse_git_log_pretty_records_from_reader,

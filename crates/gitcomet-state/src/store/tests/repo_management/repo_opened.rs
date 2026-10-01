@@ -115,10 +115,7 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
         repo_state.history_state.file_history,
         Loadable::NotLoaded
     ));
-    assert!(matches!(
-        repo_state.history_state.blame,
-        Loadable::NotLoaded
-    ));
+    assert!(matches!(repo_state.diff_state.blame, Loadable::NotLoaded));
     assert!(has_effect_for_repo(
         &effects,
         RepoId(1),
@@ -895,11 +892,11 @@ fn repo_action_finished_reissues_inflight_blame_and_commit_details() {
     state.active_repo = Some(repo_id);
 
     // The user has a blame and a commit-details view open and still loading.
-    state.repos[0].history_state.blame_path = Some(PathBuf::from("src/main.rs"));
-    state.repos[0].history_state.blame_source = Some(gitcomet_core::domain::BlameSource::Revision(
+    state.repos[0].diff_state.blame_path = Some(PathBuf::from("src/main.rs"));
+    state.repos[0].diff_state.blame_source = Some(gitcomet_core::domain::BlameSource::Revision(
         Some("HEAD".to_string()),
     ));
-    state.repos[0].history_state.blame = Loadable::Loading;
+    state.repos[0].diff_state.blame = Loadable::Loading;
     state.repos[0].history_state.selected_commit = Some(CommitId("abc123".into()));
     state.repos[0].history_state.commit_details = Loadable::Loading;
 
@@ -915,7 +912,7 @@ fn repo_action_finished_reissues_inflight_blame_and_commit_details() {
     );
 
     assert!(
-        state.repos[0].history_state.blame.is_loading(),
+        state.repos[0].diff_state.blame.is_loading(),
         "blame should be reset and re-loaded, not stranded on a spinner"
     );
     assert!(
@@ -952,10 +949,10 @@ fn repo_action_finished_reissues_selected_commit_diff() {
 
     // A historical commit's diff (a non-WorkingTree target) is open and loading. The old code only
     // re-issued WorkingTree diffs, leaving this one stranded.
-    state.repos[0].diff_state.diff_target = Some(DiffTarget::Commit {
-        commit_id: CommitId("abc123".into()),
-        path: Some(PathBuf::from("src/main.rs")),
-    });
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::commit(
+        CommitId("abc123".into()),
+        Some(PathBuf::from("src/main.rs")),
+    ));
     state.repos[0].diff_state.diff = Loadable::Loading;
 
     let effects = reduce(
@@ -1007,11 +1004,11 @@ fn repo_action_finished_invalidates_but_does_not_reissue_views_for_non_active_re
         .loads_in_flight
         .request(RepoLoadsInFlight::BRANCHES);
     state.repos[0].branches = Loadable::Loading;
-    state.repos[0].history_state.blame_path = Some(PathBuf::from("src/main.rs"));
-    state.repos[0].history_state.blame_source = Some(gitcomet_core::domain::BlameSource::Revision(
+    state.repos[0].diff_state.blame_path = Some(PathBuf::from("src/main.rs"));
+    state.repos[0].diff_state.blame_source = Some(gitcomet_core::domain::BlameSource::Revision(
         Some("HEAD".to_string()),
     ));
-    state.repos[0].history_state.blame = Loadable::Loading;
+    state.repos[0].diff_state.blame = Loadable::Loading;
     let old_epoch = state.repos[0].load_epoch;
 
     let effects = reduce(
@@ -1032,7 +1029,7 @@ fn repo_action_finished_invalidates_but_does_not_reissue_views_for_non_active_re
     ));
     assert!(matches!(state.repos[0].branches, Loadable::NotLoaded));
     assert!(matches!(
-        state.repos[0].history_state.blame,
+        state.repos[0].diff_state.blame,
         Loadable::NotLoaded
     ));
     // ... but its view-specific data is not eagerly re-issued; it reloads when next activated.

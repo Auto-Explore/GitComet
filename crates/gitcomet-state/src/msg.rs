@@ -14,7 +14,10 @@ pub use message::{
     ContentBytes, InternalMsg, Msg, RepoActionKind, RepoWatchDegradedReason,
 };
 pub use repo_command_kind::RepoCommandKind;
-pub use repo_external_change::RepoExternalChange;
+pub use repo_external_change::{ChangedPaths, MAX_CHANGED_PATHS, RepoExternalChange};
 pub use repo_path::RepoPath;
 pub use repo_path_list::RepoPathList;
 pub use store_event::StoreEvent;
+
+mod fetch;
+pub use fetch::FetchMsg;

@@ -2,6 +2,7 @@ use super::*;
 
 mod diff_repo;
 mod editing_ops;
+mod extensions;
 mod history_status;
 mod layout_navigation;
 mod render_preview;
@@ -10,6 +11,7 @@ mod text_model;
 
 pub(crate) const STRUCTURAL_BUDGET_GROUPS: &[&[StructuralBudgetSpec]] = &[
     diff_repo::STRUCTURAL_BUDGETS,
+    extensions::STRUCTURAL_BUDGETS,
     history_status::STRUCTURAL_BUDGETS,
     layout_navigation::STRUCTURAL_BUDGETS,
     editing_ops::STRUCTURAL_BUDGETS,

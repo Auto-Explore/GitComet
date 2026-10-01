@@ -3252,7 +3252,7 @@ impl ConflictResolvedOutputLiveSyntaxFixture {
             ));
         }
 
-        let rope = crate::kit::rope::Rope::from_str(&text);
+        let rope = crate::kit::rope::Rope::from_text(&text);
         let mask: Arc<[Range<usize>]> = mask.into();
         let theme = AppTheme::gitcomet_dark();
         let document = super::diff_text::LiveSyntaxDocument::new(
