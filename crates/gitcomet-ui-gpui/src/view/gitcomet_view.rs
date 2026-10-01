@@ -2262,6 +2262,9 @@ impl GitCometView {
         self.sidebar_pane.update(cx, |pane, cx| {
             pane.set_expanded_branches_visible(!collapsed, cx)
         });
+        // The cached bottom bar draws this toggle's icon. Notified by id: its own
+        // toggle calls this from inside the bar's update.
+        gpui::AppContext::notify(cx, self.bottom_status_bar.entity_id());
         // The collapsed-rail popover only exists while collapsed; drop it (and any
         // in-flight fade) instantly when the full sidebar comes back so it can't
         // linger over the expanded pane.
@@ -2376,6 +2379,9 @@ impl GitCometView {
         }
 
         self.details_collapsed = collapsed;
+        // The cached bottom bar draws this toggle's icon. Notified by id: its own
+        // toggle calls this from inside the bar's update.
+        gpui::AppContext::notify(cx, self.bottom_status_bar.entity_id());
         if matches!(
             self.pane_resize,
             Some(PaneResizeState {

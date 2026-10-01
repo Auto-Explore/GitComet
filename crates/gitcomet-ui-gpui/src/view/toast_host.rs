@@ -27,6 +27,8 @@ pub(super) struct ToastHost {
     /// Progress remains live while Activity is open, but compact progress for
     /// the repository represented by that dialog must not render behind it.
     hook_activity_dialog_repo: Option<RepoId>,
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub(in crate::view) render_count: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -201,6 +203,8 @@ impl ToastHost {
             submodule_add_progress: Vec::new(),
             hook_progress: Vec::new(),
             hook_activity_dialog_repo: None,
+            #[cfg(any(test, feature = "benchmarks"))]
+            render_count: 0,
         }
     }
 
@@ -1165,6 +1169,10 @@ impl ToastHost {
 
 impl Render for ToastHost {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        #[cfg(any(test, feature = "benchmarks"))]
+        {
+            self.render_count += 1;
+        }
         let shows_hook_progress =
             |progress: &HookProgressToast| self.hook_activity_dialog_repo != Some(progress.repo_id);
         // Decide "nothing to show" before cloning anything: this renders every

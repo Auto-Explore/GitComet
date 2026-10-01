@@ -703,7 +703,7 @@ mod repo_tabs_bar;
 #[cfg(test)]
 pub(in crate::view) use action_bar::action_bar_breakpoints;
 pub(super) use action_bar::{ActionBarView, action_bar_density, action_bar_height};
-pub(super) use bottom_status_bar::BottomStatusBarView;
+pub(super) use bottom_status_bar::{BottomStatusBarView, bottom_status_bar_height};
 pub(super) use popover::{PopoverHost, PopoverHostInit};
 #[cfg(feature = "benchmarks")]
 pub(in crate::view) use popover::{

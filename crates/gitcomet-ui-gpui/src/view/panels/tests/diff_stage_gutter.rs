@@ -948,6 +948,58 @@ fn timing_main_pane_frame_with_large_status(cx: &mut gpui::TestAppContext) {
     let _ = std::fs::remove_dir_all(&workdir);
 }
 
+/// A diff scroll step's frame while a toast is open: the main pane's own
+/// notify, which also re-renders the root, with the other panes cached.
+/// Ignored: a measurement.
+#[gpui::test]
+#[ignore = "timing probe"]
+fn timing_main_pane_frame_with_open_toast(cx: &mut gpui::TestAppContext) {
+    use std::time::Instant;
+
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let _cached_views = crate::view::enable_stable_cached_views_for_test();
+    let (view, cx, workdir) =
+        open_generated_diff_view(cx, RepoId(70935), 400, DiffViewMode::Inline);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.toast_host.update(cx, |host, cx| {
+                host.push_toast(
+                    components::ToastKind::Warning,
+                    "a toast stays open while scrolling".into(),
+                    cx,
+                )
+            });
+        });
+    });
+    let notify_and_draw = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, app| {
+            let main_pane = view.read(app).main_pane.clone();
+            main_pane.update(app, |_pane, cx| cx.notify());
+            let _ = window.draw(app);
+        });
+    };
+    // Past the toast's fade-in.
+    for _ in 0..10 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(100));
+        notify_and_draw(cx);
+    }
+    const FRAMES: usize = 200;
+    let mut frame_ms = Vec::with_capacity(FRAMES);
+    for _ in 0..FRAMES {
+        let started = Instant::now();
+        notify_and_draw(cx);
+        frame_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    frame_ms.sort_by(f64::total_cmp);
+    println!(
+        "timing main_pane_frame_with_open_toast p50={:.3}ms p90={:.3}ms",
+        frame_ms[FRAMES / 2],
+        frame_ms[FRAMES * 9 / 10],
+    );
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
 /// What the main pane's state application spends on its diff caches when
 /// the open diff did not change (a status or line-stats publication after a
 /// save): both checks confirm the cache per call. Ignored: a measurement.

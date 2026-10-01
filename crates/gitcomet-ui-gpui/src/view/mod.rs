@@ -345,7 +345,7 @@ pub use mod_helpers::{
 };
 use panels::{
     ActionBarView, BottomStatusBarView, PopoverHost, PopoverHostInit, RepoTabsBarView,
-    action_bar_density, action_bar_height,
+    action_bar_density, action_bar_height, bottom_status_bar_height,
 };
 pub(crate) use panes::MainPaneView;
 use panes::{
@@ -557,12 +557,24 @@ fn stable_cached_fixed_height_view<V: Render>(view: Entity<V>, height: Pixels) -
 }
 
 fn stable_overlay_view<V: Render>(view: Entity<V>) -> impl IntoElement {
-    // Keep overlay hosts uncached. Their paint ranges are recorded after focused
-    // TextInput views register platform input handlers, and Wayland text-input
-    // replace_text_in_range can trigger a redraw while that handler is
-    // temporarily unavailable. Reusing the cached overlay paint range then
-    // replays a stale input-handler index and panics inside GPUI reuse_paint.
+    // Uncached: anchored popovers and hover cards would need their own
+    // invalidation checked before they could reuse a frame. The input-handler
+    // panic that once kept every host uncached is fixed in gpui (zed #50665);
+    // see `stable_cached_overlay_view`.
     div().absolute().top_0().left_0().size_full().child(view)
+}
+
+/// An overlay host behind a stable cache boundary. Overlays paint after the
+/// panes and their focused input, and replaying such a paint range panicked in
+/// gpui's `reuse_paint` until it stopped popping the frame's input handler
+/// (zed #50665, in gpui-ce since June 2026).
+fn stable_cached_overlay_view<V: Render>(view: Entity<V>) -> impl IntoElement {
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .child(stable_cached_fill_view(view))
 }
 
 struct UiScaleScrollCapture {

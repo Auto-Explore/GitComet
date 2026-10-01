@@ -514,3 +514,147 @@ fn commit_click_dispatches_after_state_update_without_intermediate_redraw(
         );
     });
 }
+
+/// Typing into the focused commit box re-renders the details pane only. The
+/// bottom bar and the toast host paint after it, so a cached mount replays
+/// their paint after the focused input's handler slot on every keystroke.
+/// That replay panicked inside gpui's `reuse_paint` until gpui-ce took zed's
+/// fix (#50665: the frame's input handler was popped, shortening the list
+/// the cached ranges index), which is why both used to mount uncached and
+/// re-rendered on every frame.
+#[gpui::test]
+fn typing_in_the_commit_box_replays_the_cached_bottom_bar_and_toasts(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _cache_guard = crate::view::enable_stable_cached_views_for_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(45);
+    let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-cached-chrome-typing"));
+    repo.status = gitcomet_state::model::Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
+                path: std::path::PathBuf::from("staged.txt"),
+                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                conflict: None,
+            }]),
+            unstaged: std::sync::Arc::new(Vec::new()),
+        }
+        .into(),
+    );
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+            this.toast_host.update(cx, |host, cx| {
+                host.push_toast(
+                    components::ToastKind::Warning,
+                    "a toast stays open while typing".into(),
+                    cx,
+                )
+            });
+        });
+        let _ = window.draw(app);
+    });
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                let focus = pane.commit_message_input.read(cx).focus_handle();
+                window.focus(&focus, cx);
+            });
+        });
+        let _ = window.draw(app);
+    });
+    // Let the toast's fade-in finish: an animation renders its view per frame.
+    for _ in 0..10 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(100));
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    }
+    let renders = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let root = view.read(app);
+            (
+                root.bottom_status_bar.read(app).render_count,
+                root.toast_host.read(app).render_count,
+            )
+        })
+    };
+    // The first character refreshes the whole window once (no notify reaches
+    // either view; the commit form changes with an empty message). Measure the
+    // keystrokes after it.
+    cx.simulate_input("h");
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    let before = renders(cx);
+
+    cx.simulate_input("ello");
+
+    let text = cx.update(|window, app| {
+        let _ = window.draw(app);
+        view.read(app)
+            .details_pane
+            .read(app)
+            .commit_message_input
+            .read(app)
+            .text()
+            .to_string()
+    });
+    assert_eq!(text, "hello");
+    assert_eq!(
+        cx.update(|_window, app| view.read(app).toast_host.read(app).toast_count_for_tests()),
+        1
+    );
+    assert_eq!(
+        renders(cx),
+        before,
+        "typing re-rendered the bottom bar or the toast host"
+    );
+}
+
+/// The bar draws the pane toggles from the root's collapse flags, so a cached
+/// bar must be told when they change.
+#[gpui::test]
+fn collapsing_a_pane_rerenders_the_cached_bottom_bar(cx: &mut gpui::TestAppContext) {
+    let _cache_guard = crate::view::enable_stable_cached_views_for_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(46);
+    let repo = opening_repo_state(repo_id, Path::new("/tmp/repo-cached-bottom-bar-toggles"));
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+        let _ = window.draw(app);
+    });
+    let renders = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| view.read(app).bottom_status_bar.read(app).render_count)
+    };
+    for collapse in [
+        |view: &mut super::super::super::GitCometView,
+         cx: &mut gpui::Context<super::super::super::GitCometView>| {
+            view.set_sidebar_collapsed(true, cx)
+        },
+        |view: &mut super::super::super::GitCometView,
+         cx: &mut gpui::Context<super::super::super::GitCometView>| {
+            view.set_details_collapsed(true, cx)
+        },
+    ] {
+        let before = renders(cx);
+        cx.update(|window, app| {
+            view.update(app, collapse);
+            let _ = window.draw(app);
+        });
+        assert!(
+            renders(cx) > before,
+            "the bottom bar must redraw its pane toggles ({before} renders before)"
+        );
+    }
+}

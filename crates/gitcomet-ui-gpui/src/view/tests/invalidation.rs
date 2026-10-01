@@ -61,12 +61,12 @@ fn details_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::Tes
     });
 }
 
-/// The full-chrome layout keeps every large pane behind a `stable_cached_*`
-/// boundary so a frame requested by one view (a spinner tick in the title bar,
-/// a store update in the main pane) does not re-render the others. The bottom
-/// status bar and the overlay hosts stay uncached: their paint ranges are
-/// recorded after a focused TextInput registers its platform input handler,
-/// and replaying them during a Wayland text-input redraw has panicked before.
+/// The full-chrome layout keeps every large pane, the bottom status bar and
+/// the toast host behind a `stable_cached_*` boundary, so a frame requested by
+/// one view (a spinner tick in the title bar, a scroll in history) does not
+/// re-render the others. The bar and the toasts were uncached until gpui
+/// stopped popping the frame's input handler (zed #50665): replaying their
+/// paint after a focused input's had panicked in `reuse_paint`.
 #[test]
 fn full_chrome_layout_caches_the_pane_subviews() {
     let splash_source = include_str!("../splash.rs");
@@ -94,8 +94,14 @@ fn full_chrome_layout_caches_the_pane_subviews() {
         "expected action bar to stay behind the stable cache boundary"
     );
     assert!(
-        normalized.contains("self.bottom_status_bar.clone(),"),
-        "expected bottom status bar to mount directly"
+        normalized.contains(
+            "stable_cached_fixed_height_view(self.bottom_status_bar.clone(),bottom_status_bar_height(cx),"
+        ),
+        "expected the bottom status bar to stay behind the stable cache boundary"
+    );
+    assert!(
+        normalized_root.contains("stable_cached_overlay_view(self.toast_host.clone())"),
+        "expected the toast host to stay behind the stable cache boundary"
     );
     // The full-chrome main pane mounts through the repository-view router,
     // which keeps History behind the same boundary.
@@ -119,12 +125,6 @@ fn full_chrome_layout_caches_the_pane_subviews() {
     assert!(
         normalized.contains(".child(stable_cached_fill_view(self.details_pane.clone()"),
         "expected the expanded details pane to mount behind the stable cache boundary"
-    );
-    assert!(
-        !normalized.contains(
-            "stable_cached_fixed_height_view(self.bottom_status_bar.clone(),components::Tab::container_height("
-        ),
-        "bottom status bar must stay outside the stable cache boundary"
     );
 }
 

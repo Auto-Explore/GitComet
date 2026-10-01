@@ -13,6 +13,18 @@ const BOTTOM_STATUS_BAR_ITEM_HEIGHT_PX: f32 = 18.0;
 const BOTTOM_STATUS_BAR_ITEM_COMFORTABLE_HEIGHT_PX: f32 = 26.0;
 const PANE_TOGGLE_ICON_SIZE_PX: f32 = 16.0;
 
+/// The bar's height. It is mounted behind a stable cache boundary, which needs
+/// the height before the bar renders; the bar draws itself at the same height.
+pub(in super::super) fn bottom_status_bar_height<C>(cx: &mut C) -> Pixels
+where
+    C: gpui::BorrowAppContext,
+{
+    crate::ui_scale::UiScale::current(cx).row_height(
+        BOTTOM_STATUS_BAR_HEIGHT_PX,
+        BOTTOM_STATUS_BAR_COMFORTABLE_HEIGHT_PX,
+    )
+}
+
 fn pro_launch_label(today: jiff::civil::Date) -> SharedString {
     let launch_date = jiff::civil::date(2026, 10, 7);
     let days = today.duration_until(launch_date).as_secs() / 86_400;
@@ -87,6 +99,8 @@ pub(in super::super) struct BottomStatusBarView {
     extension_items: Vec<(Option<gitcomet_extension_api::ViewTarget>, gpui::AnyView)>,
     active_view: gitcomet_extension_api::ViewTarget,
     edition_strip: Option<gpui::AnyView>,
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub(in crate::view) render_count: usize,
 }
 
 impl BottomStatusBarView {
@@ -118,6 +132,8 @@ impl BottomStatusBarView {
             extension_items: Vec::new(),
             active_view: gitcomet_extension_api::ViewTarget::History,
             edition_strip: None,
+            #[cfg(any(test, feature = "benchmarks"))]
+            render_count: 0,
         }
     }
 
@@ -224,6 +240,10 @@ impl BottomStatusBarView {
 
 impl Render for BottomStatusBarView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        #[cfg(any(test, feature = "benchmarks"))]
+        {
+            self.render_count += 1;
+        }
         let theme = self.theme;
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
@@ -516,10 +536,7 @@ impl Render for BottomStatusBarView {
         div()
             .id("bottom_status_bar")
             .w_full()
-            .h(scaled_px(theme.metrics.row_height(
-                BOTTOM_STATUS_BAR_HEIGHT_PX,
-                BOTTOM_STATUS_BAR_COMFORTABLE_HEIGHT_PX,
-            )))
+            .h(bottom_status_bar_height(cx))
             .flex_none()
             .flex()
             .items_center()
