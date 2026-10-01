@@ -1421,12 +1421,14 @@ fn file_browser_menu_model(
                     path: Arc::new(std::path::PathBuf::from("src")),
                     kind: gitcomet_core::domain::FileEntryKind::Directory,
                     depth: 0,
+                    ignored: false,
                 },
                 gitcomet_core::domain::FileEntry {
                     name: "a.rs".to_string(),
                     path: Arc::new(std::path::PathBuf::from("src/a.rs")),
                     kind: gitcomet_core::domain::FileEntryKind::File,
                     depth: 1,
+                    ignored: false,
                 },
             ]));
 

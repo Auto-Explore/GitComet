@@ -233,6 +233,7 @@ fn dir_entry(path: &str) -> FileEntry {
         path: Arc::new(PathBuf::from(path)),
         kind: FileEntryKind::Directory,
         depth: 0,
+        ignored: false,
     }
 }
 
@@ -910,6 +911,7 @@ fn following_reopens_the_file_at_the_latest_selection_and_closes_it_when_missing
                     path: Arc::new(path.clone()),
                     kind: FileEntryKind::File,
                     depth: 1,
+                    ignored: false,
                 },
             ]),
         }),

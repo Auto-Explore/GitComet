@@ -216,3 +216,44 @@ fn explicitly_revealed_ignored_files_remain_listed_after_file_or_parent_renames(
         finish(&mut state, entries);
     }
 }
+
+#[test]
+fn augment_flags_only_entries_missing_from_the_backend_listing() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    for path in ["src/main.rs", "src/gen.rs", "target/out.bin", "notes.txt"] {
+        std::fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
+        std::fs::write(root.join(path), "contents").unwrap();
+    }
+    let entry = |path: &str, kind, depth| FileEntry {
+        name: Path::new(path).file_name().unwrap().to_string_lossy().into_owned(),
+        path: Arc::new(path.into()),
+        kind,
+        depth,
+        ignored: false,
+    };
+    let base = vec![
+        entry("src", FileEntryKind::Directory, 0),
+        entry("src/main.rs", FileEntryKind::File, 1),
+    ];
+    let options = Options {
+        ignored: true,
+        ..Options::default()
+    };
+    let flags: Vec<_> = augment(root, base, options, &CancellationToken::new())
+        .unwrap()
+        .into_iter()
+        .map(|e| (e.path.to_string_lossy().into_owned(), e.ignored))
+        .collect();
+    let expected = [
+        ("src", false),
+        ("src/gen.rs", true),
+        ("src/main.rs", false),
+        ("target", true),
+        ("notes.txt", true),
+    ];
+    assert_eq!(
+        flags,
+        expected.map(|(path, ignored)| (path.to_owned(), ignored))
+    );
+}

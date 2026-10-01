@@ -9,6 +9,7 @@ fn dir(name: &str, path: &str, depth: usize) -> FileEntry {
         path: Arc::new(PathBuf::from(path)),
         kind: FileEntryKind::Directory,
         depth,
+        ignored: false,
     }
 }
 
@@ -18,6 +19,7 @@ fn file(name: &str, path: &str, depth: usize) -> FileEntry {
         path: Arc::new(PathBuf::from(path)),
         kind: FileEntryKind::File,
         depth,
+        ignored: false,
     }
 }
 

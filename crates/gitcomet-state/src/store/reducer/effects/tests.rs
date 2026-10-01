@@ -2012,6 +2012,7 @@ fn file_browser_loaded_updates_state_and_records_errors() {
         path: Arc::new(PathBuf::from("src")),
         kind: FileEntryKind::Directory,
         depth: 0,
+        ignored: false,
     }];
     let source = FileSource::WorkingDirectory;
 
@@ -2055,6 +2056,7 @@ fn file_browser_loaded_discards_stale_results() {
         path: Arc::new(PathBuf::from("stale.txt")),
         kind: FileEntryKind::File,
         depth: 0,
+        ignored: false,
     }];
     let wrong_source = FileSource::WorkingDirectory;
 
@@ -2179,6 +2181,7 @@ fn tree_file(path: &str) -> FileEntry {
         depth: path.components().count().saturating_sub(1),
         path: Arc::new(path),
         kind: FileEntryKind::File,
+        ignored: false,
     }
 }
 

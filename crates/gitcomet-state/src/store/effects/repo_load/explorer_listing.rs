@@ -125,6 +125,8 @@ pub(super) fn augment(
         out.push(FileEntry {
             name: path.file_name().unwrap().to_string_lossy().into_owned(),
             depth: path.components().count().saturating_sub(1),
+            // The backend listing holds every non-ignored path.
+            ignored: !original.contains(&path),
             path: Arc::new(path),
             kind,
         });

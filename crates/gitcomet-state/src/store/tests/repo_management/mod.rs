@@ -181,6 +181,7 @@ fn file_browser_tree_entries() -> Vec<gitcomet_core::domain::FileEntry> {
         path: Arc::new(PathBuf::from(path)),
         kind,
         depth,
+        ignored: false,
     };
 
     vec![

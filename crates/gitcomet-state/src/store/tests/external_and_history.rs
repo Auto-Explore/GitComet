@@ -4075,6 +4075,7 @@ fn state_with_loaded_file_browser(sidebar_mode: SidebarMode) -> (AppState, RepoI
         path: Arc::new(PathBuf::from("src")),
         kind: gitcomet_core::domain::FileEntryKind::Directory,
         depth: 0,
+        ignored: false,
     }]));
     state.repos[0]
         .file_browser

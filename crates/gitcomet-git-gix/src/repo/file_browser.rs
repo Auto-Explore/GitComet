@@ -150,6 +150,7 @@ fn flatten_worktree_dir(
             path: Arc::clone(&child_path),
             kind: FileEntryKind::Directory,
             depth,
+            ignored: false,
         });
         flatten_worktree_dir(
             child,
@@ -165,6 +166,7 @@ fn flatten_worktree_dir(
             path: Arc::new(PathBuf::from(join(name))),
             kind: FileEntryKind::File,
             depth,
+            ignored: false,
         });
     }
 }
@@ -228,6 +230,7 @@ fn collect_tree_entries(
                 path: Arc::clone(&child_path),
                 kind: FileEntryKind::Directory,
                 depth,
+                ignored: false,
             });
 
             let child_object = repo
@@ -249,6 +252,7 @@ fn collect_tree_entries(
                 path: Arc::new(PathBuf::from(path)),
                 kind: FileEntryKind::File,
                 depth,
+                ignored: false,
             });
         }
     }

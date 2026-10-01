@@ -3550,6 +3550,7 @@ fn collapsed_files_popover_uses_branch_style_rows_and_scrolls(cx: &mut gpui::Tes
                 path: Arc::new(PathBuf::from(format!("file_{ix}.txt"))),
                 kind: FileEntryKind::File,
                 depth: 0,
+                ignored: false,
             })
             .collect(),
     ));
@@ -5594,18 +5595,21 @@ fn locate_open_file_switches_to_files_and_expands_its_folders(cx: &mut gpui::Tes
             path: Arc::new(PathBuf::from("src")),
             kind: FileEntryKind::Directory,
             depth: 0,
+            ignored: false,
         },
         FileEntry {
             name: "inner".to_string(),
             path: Arc::new(PathBuf::from("src/inner")),
             kind: FileEntryKind::Directory,
             depth: 1,
+            ignored: false,
         },
         FileEntry {
             name: "deep.rs".to_string(),
             path: Arc::new(nested.clone()),
             kind: FileEntryKind::File,
             depth: 2,
+            ignored: false,
         },
     ]));
     state.repos[0].file_browser.bump_rev();
@@ -5913,6 +5917,7 @@ fn the_file_explorer_and_the_branch_tree_share_one_row_height(cx: &mut gpui::Tes
             path: Arc::new(PathBuf::from("a.rs")),
             kind: FileEntryKind::File,
             depth: 0,
+            ignored: false,
         }]));
         state.repos[0].file_browser.bump_rev();
         state
@@ -5979,6 +5984,7 @@ fn file_explorer_pins_and_marks_files_with_unsaved_editor_buffers(cx: &mut gpui:
                 path: Arc::new(PathBuf::from(name)),
                 kind: FileEntryKind::File,
                 depth: 0,
+                ignored: false,
             })
             .collect(),
     ));
@@ -6078,12 +6084,14 @@ fn right_clicking_a_folder_row_opens_the_folder_context_menu(cx: &mut gpui::Test
             path: Arc::new(PathBuf::from("src")),
             kind: FileEntryKind::Directory,
             depth: 0,
+            ignored: false,
         },
         FileEntry {
             name: "a.rs".to_string(),
             path: Arc::new(PathBuf::from("a.rs")),
             kind: FileEntryKind::File,
             depth: 0,
+            ignored: false,
         },
     ]));
     state.repos[0].file_browser.bump_rev();
@@ -6148,6 +6156,7 @@ fn clicking_a_file_with_unsaved_edits_opens_the_editor(cx: &mut gpui::TestAppCon
                 path: Arc::new(PathBuf::from(name)),
                 kind: FileEntryKind::File,
                 depth: 0,
+                ignored: false,
             })
             .collect(),
     ));
@@ -6410,6 +6419,7 @@ fn native_file_drop_moves_before_acknowledgement_and_can_be_undone(cx: &mut gpui
         path: Arc::new(PathBuf::from("target")),
         kind: FileEntryKind::Directory,
         depth: 0,
+        ignored: false,
     }]));
     state.repos[0].file_browser.bump_rev();
     store.replace_snapshot_for_test(Arc::new(state));
@@ -6492,6 +6502,7 @@ fn explorer_selection_keyboard_cut_and_document_navigation_are_focus_scoped(
                 path: Arc::new(PathBuf::from(name)),
                 kind: FileEntryKind::File,
                 depth: 0,
+                ignored: false,
             })
             .collect(),
     ));
@@ -6669,6 +6680,7 @@ fn explorer_ctrl_x_after_a_plain_click_cuts_the_clicked_file(cx: &mut gpui::Test
                 path: Arc::new(PathBuf::from(name)),
                 kind: FileEntryKind::File,
                 depth: 0,
+                ignored: false,
             })
             .collect(),
     ));
@@ -6754,12 +6766,14 @@ fn explorer_chevron_click_keeps_the_selection_and_keyboard_paste_uses_focused_fo
             path: Arc::new("destination".into()),
             kind: FileEntryKind::Directory,
             depth: 0,
+            ignored: false,
         },
         FileEntry {
             name: "source.txt".into(),
             path: Arc::new("source.txt".into()),
             kind: FileEntryKind::File,
             depth: 0,
+            ignored: false,
         },
     ]));
     state.repos[0].file_browser.bump_rev();
@@ -6926,12 +6940,14 @@ fn explorer_folder_row_click_selects_focuses_and_toggles(cx: &mut gpui::TestAppC
             path: Arc::new("destination".into()),
             kind: FileEntryKind::Directory,
             depth: 0,
+            ignored: false,
         },
         FileEntry {
             name: "source.txt".into(),
             path: Arc::new("source.txt".into()),
             kind: FileEntryKind::File,
             depth: 0,
+            ignored: false,
         },
     ]));
     state.repos[0].file_browser.bump_rev();
@@ -7037,12 +7053,14 @@ fn explorer_external_drop_writes_to_highlighted_folder_in_sidebar_and_popup(
                 path: Arc::new("destination".into()),
                 kind: FileEntryKind::Directory,
                 depth: 0,
+                ignored: false,
             },
             FileEntry {
                 name: "keep.txt".into(),
                 path: Arc::new("destination/keep.txt".into()),
                 kind: FileEntryKind::File,
                 depth: 1,
+                ignored: false,
             },
         ]));
         state.repos[0]

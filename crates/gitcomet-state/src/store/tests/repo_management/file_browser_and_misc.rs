@@ -228,12 +228,14 @@ fn recursive_expand_does_not_match_name_prefixes_of_sibling_folders() {
             path: Arc::new(PathBuf::from("src")),
             kind: gitcomet_core::domain::FileEntryKind::Directory,
             depth: 0,
+            ignored: false,
         },
         gitcomet_core::domain::FileEntry {
             name: "src_generated".to_string(),
             path: Arc::new(PathBuf::from("src_generated")),
             kind: gitcomet_core::domain::FileEntryKind::Directory,
             depth: 0,
+            ignored: false,
         },
     ]));
 

@@ -371,6 +371,7 @@ pub(super) fn file_fixture(count: usize) -> Arc<AppState> {
                 path: Arc::new(PathBuf::from(format!("file_{ix:06}.txt"))),
                 kind: gitcomet_core::domain::FileEntryKind::File,
                 depth: 0,
+                ignored: false,
             })
             .collect(),
     ));
