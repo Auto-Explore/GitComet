@@ -658,3 +658,46 @@ fn collapsing_a_pane_rerenders_the_cached_bottom_bar(cx: &mut gpui::TestAppConte
         );
     }
 }
+
+/// The bar rounds its bottom corners by the frame's tiling, which it reads
+/// at render, so a cached bar must be told when the decorations change.
+#[gpui::test]
+fn a_tiling_change_rerenders_the_cached_bottom_bar(cx: &mut gpui::TestAppContext) {
+    let _cache_guard = crate::view::enable_stable_cached_views_for_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(47);
+    let repo = opening_repo_state(repo_id, Path::new("/tmp/repo-cached-bottom-bar-tiling"));
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+        let _ = window.draw(app);
+    });
+    let renders = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| view.read(app).bottom_status_bar.read(app).render_count)
+    };
+    let before = renders(cx);
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            // The test window reports server decorations; the compositor
+            // tiled the window's bottom edge at the same size.
+            view.sync_frame_decorations(
+                gpui::Decorations::Client {
+                    tiling: gpui::Tiling {
+                        bottom: true,
+                        ..Default::default()
+                    },
+                },
+                cx,
+            );
+        });
+        let _ = window.draw(app);
+    });
+    assert!(
+        renders(cx) > before,
+        "the bottom bar must redraw its corners ({before} renders before)"
+    );
+}

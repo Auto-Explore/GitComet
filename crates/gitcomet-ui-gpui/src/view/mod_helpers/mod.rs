@@ -1140,6 +1140,8 @@ pub struct GitCometView {
     pub(super) external_drag_drop_pending: bool,
 
     pub(super) hover_resize_edge: Option<ResizeEdge>,
+    /// The decorations the last render saw; see `sync_frame_decorations`.
+    pub(super) frame_decorations: Option<gpui::Decorations>,
 
     pub(super) sidebar_collapsed: bool,
     /// Which sidebar section is currently shown in the collapsed-rail popover, if

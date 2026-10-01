@@ -1857,6 +1857,7 @@ impl GitCometView {
             external_drag_classification_seq: 0,
             external_drag_drop_pending: false,
             hover_resize_edge: None,
+            frame_decorations: None,
             sidebar_collapsed: restored_sidebar_collapsed,
             sidebar_collapsed_popover: None,
             sidebar_collapsed_popover_closing: None,
@@ -2371,6 +2372,19 @@ impl GitCometView {
             },
         )
         .detach();
+    }
+
+    /// The cached bottom bar rounds its corners by the frame's tiling, which
+    /// it reads at render; a change that leaves its bounds alone would
+    /// otherwise replay the old corners.
+    pub(super) fn sync_frame_decorations(
+        &mut self,
+        decorations: gpui::Decorations,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.frame_decorations.replace(decorations) != Some(decorations) {
+            gpui::AppContext::notify(cx, self.bottom_status_bar.entity_id());
+        }
     }
 
     pub(super) fn set_details_collapsed(&mut self, collapsed: bool, cx: &mut gpui::Context<Self>) {

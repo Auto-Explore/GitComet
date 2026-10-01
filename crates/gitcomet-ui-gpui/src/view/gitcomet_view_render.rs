@@ -212,6 +212,7 @@ impl Render for GitCometView {
         }
 
         let decorations = window.window_decorations();
+        self.sync_frame_decorations(decorations, cx);
         let (tiling, client_inset) = match decorations {
             Decorations::Client { tiling } => (
                 Some(tiling),
