@@ -1,5 +1,38 @@
 ## Contributing
 
+<!-- gitcomet-cla:start -->
+### Contributor License Agreement
+
+GitComet's open-source edition is licensed under AGPL-3.0-only. AutoExplore Oy also plans a paid proprietary GitComet Pro edition.
+
+Before we merge a contribution, its rights holders must have accepted the applicable Contributor License Agreement (CLA), or AutoExplore must have verified equivalent permission under another agreement. Contributors retain ownership of their work. The CLA permits AutoExplore Oy to include their contributions in proprietary GitComet products without royalty payments while also licensing those contributions under the project's license at submission. The full agreement governs; this paragraph is a summary.
+
+Read the [Individual CLA](CLA.md). Company-owned contributions use the separate [Entity CLA](CLA-ENTITY.md) and the authorization process below.
+
+#### CLA signing instructions
+
+After opening a pull request, follow the CLA Assistant comment to read and accept the Individual CLA using your GitHub account. Provide your full legal name and a contact email address. Sign only after you have read the agreement and obtained any necessary employer permission.
+
+For an unchanged agreement, returning signers normally do not need to sign again. An agreement change may require renewed acceptance.
+
+The acceptance record identifies the agreement version that was accepted. The text shown during signing is the agreement you accept; the repository copy must be kept consistent with it.
+
+For company-owned work, have an authorized representative complete the Entity CLA and send it privately to info@gitcomet.dev. Include the company's legal name, the relevant GitHub usernames, and the contribution references. Do not sign the individual agreement as a substitute for obtaining the rights holder's authorization.
+
+Contributors under eighteen should contact info@gitcomet.dev with a parent or guardian to arrange the signing process before contributing.
+
+#### Third-party material and employer-owned contributions
+
+Identify copied or adapted third-party code, documentation, images, and other material in the pull request. Include its source, copyright notices, license, and the affected files. A CLA cannot grant rights you do not hold, and it does not automatically change a dependency's license.
+
+Do not submit employer-owned or other third-party-owned material as if you personally own it. Obtain the necessary permission and contact info@gitcomet.dev to resolve the appropriate agreement before the contribution is merged.
+
+Preserve the actual authors and co-authors of contributions. Ask maintainers for help with an unrecognized GitHub account or an incorrectly attributed commit; do not remove attribution to make the check pass.
+
+Questions about contribution permissions or signing records: info@gitcomet.dev. Do not include private signing details in public issue comments.
+<!-- gitcomet-cla:end -->
+
+
 ### Workspace layout
 
 - `crates/gitcomet-core`: domain types, Git service contracts, merge algorithm, conflict session, text utils.
