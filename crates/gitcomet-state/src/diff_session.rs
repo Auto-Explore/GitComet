@@ -229,6 +229,33 @@ impl ChangeListSession {
     }
 }
 
+/// What refresh scheduling needs from either session kind.
+pub(crate) trait Refreshable {
+    fn is_loading(&self) -> bool;
+    /// One more load once the one in flight completes.
+    fn queue_refresh(&mut self);
+}
+
+impl Refreshable for DiffSession {
+    fn is_loading(&self) -> bool {
+        DiffSession::is_loading(self)
+    }
+
+    fn queue_refresh(&mut self) {
+        self.refresh_queued = true;
+    }
+}
+
+impl Refreshable for ChangeListSession {
+    fn is_loading(&self) -> bool {
+        self.loading
+    }
+
+    fn queue_refresh(&mut self) {
+        self.refresh_queued = true;
+    }
+}
+
 /// Messages for diff sessions. `Loaded` comes from the store's own workers.
 #[derive(Debug)]
 pub enum DiffSessionMsg {

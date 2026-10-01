@@ -5,7 +5,7 @@
 use super::*;
 use crate::diff_session::{
     ChangeListSession, DiffSession, DiffSessionContent, DiffSessionEffect, DiffSessionLoads,
-    DiffSessionMsg as Event, DiffSessionWork, DiffViewId,
+    DiffSessionMsg as Event, DiffSessionWork, DiffViewId, Refreshable,
 };
 use crate::model::RepoState;
 use gitcomet_core::domain::DiffTarget;
@@ -240,16 +240,17 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
             let list = Arc::make_mut(&mut repo.change_lists)
                 .get_mut(&view)
                 .expect("checked above");
-            match result {
-                Ok((base, files)) => {
+            let cancelled = settle(
+                &mut list.files,
+                result.map(|(base, files)| {
                     list.base = base;
-                    list.files = Loadable::Ready(Arc::new(files));
-                }
-                Err(error) => list.files = Loadable::Error(error.to_string()),
-            }
+                    Arc::new(files)
+                }),
+            );
+            list.refresh_queued |= cancelled;
             list.rev = list.rev.wrapping_add(1);
             list.loading = false;
-            if list.refresh_queued {
+            if list.refresh_queued && !cancelled {
                 refresh_changes(repo_id, lifetime, view, list)
             } else {
                 Vec::new()
@@ -279,41 +280,87 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
             let session = Arc::make_mut(&mut repo.diff_sessions)
                 .get_mut(&view)
                 .expect("checked above");
-            match content {
+            let cancelled = match content {
                 DiffSessionContent::Attributes(result) => {
                     session.pending.attributes = false;
-                    session.text_attributes = loadable(result.map(Arc::new));
                     session.text_attributes_rev = session.text_attributes_rev.wrapping_add(1);
+                    settle(&mut session.text_attributes, result.map(Arc::new))
                 }
                 DiffSessionContent::Patch(result) => {
                     session.pending.patch = false;
                     session.diff_rev = session.diff_rev.wrapping_add(1);
-                    session.diff = loadable(result.map(Arc::new));
+                    settle(&mut session.diff, result.map(Arc::new))
                 }
                 DiffSessionContent::FileText(result) => {
                     session.pending.file_text = false;
                     session.diff_file_rev = session.diff_file_rev.wrapping_add(1);
-                    session.diff_file = loadable(result.map(|text| text.map(Arc::new)));
+                    settle(
+                        &mut session.diff_file,
+                        result.map(|text| text.map(Arc::new)),
+                    )
                 }
                 DiffSessionContent::Image(result) => {
                     session.pending.image = false;
-                    session.diff_file_image = loadable(result.map(|image| image.map(Arc::new)));
+                    settle(
+                        &mut session.diff_file_image,
+                        result.map(|image| image.map(Arc::new)),
+                    )
                 }
                 DiffSessionContent::Blame(result) => {
                     session.pending.blame = false;
-                    session.blame = loadable(result.map(Arc::new));
+                    settle(&mut session.blame, result.map(Arc::new))
                 }
-            }
+            };
+            session.refresh_queued |= cancelled;
             session.rev = session.rev.wrapping_add(1);
             session.diff_state.diff_state_rev = session.rev;
             session.diff_reload_in_flight = session.is_loading();
-            if session.refresh_queued && !session.is_loading() {
+            if session.refresh_queued && !session.is_loading() && !cancelled {
                 refresh(repo_id, lifetime, view, session)
             } else {
                 Vec::new()
             }
         }
     }
+}
+
+/// Refreshes the entries `affected` selects: now when idle, else once the
+/// load in flight completes. The map stays shared when none is.
+fn refresh_affected<S: Refreshable + Clone>(
+    map: &mut Arc<FxHashMap<DiffViewId, S>>,
+    affected: impl Fn(&S) -> bool,
+    mut refresh: impl FnMut(DiffViewId, &mut S) -> Vec<Effect>,
+) -> Vec<Effect> {
+    let mut effects = Vec::new();
+    if map.values().any(&affected) {
+        for (view, session) in Arc::make_mut(map).iter_mut() {
+            if !affected(session) {
+                continue;
+            }
+            if session.is_loading() {
+                session.queue_refresh();
+            } else {
+                effects.extend(refresh(*view, session));
+            }
+        }
+    }
+    effects
+}
+
+/// Loads cancelled with the repository's (a tab switch) are queued, not
+/// retried into the same cancellation; its next activation runs them.
+pub(super) fn resume_queued_loads(repo: &mut RepoState, effects: &mut impl Extend<Effect>) {
+    let (repo_id, lifetime) = (repo.id, repo.lifetime());
+    effects.extend(refresh_affected(
+        &mut repo.diff_sessions,
+        |session| session.refresh_queued && !session.is_loading(),
+        |view, session| refresh(repo_id, lifetime, view, session),
+    ));
+    effects.extend(refresh_affected(
+        &mut repo.change_lists,
+        |list| list.refresh_queued && !list.is_loading(),
+        |view, list| refresh_changes(repo_id, lifetime, view, list),
+    ));
 }
 
 /// Queue at most one refresh while a load is in flight. Known worktree
@@ -323,7 +370,6 @@ pub(super) fn reload_worktree_sessions(
     change: &crate::msg::RepoExternalChange,
 ) -> Vec<Effect> {
     let (repo_id, lifetime) = (repo.id, repo.lifetime());
-    let mut effects = Vec::new();
     let affected = |session: &DiffSession| {
         if !session.follows_worktree() {
             return false;
@@ -351,33 +397,15 @@ pub(super) fn reload_worktree_sessions(
                 .old_file_path()
                 .is_some_and(|path| change.paths.may_contain(path))
     };
-    if repo.diff_sessions.values().any(affected) {
-        for (view, session) in Arc::make_mut(&mut repo.diff_sessions).iter_mut() {
-            if affected(session) {
-                if session.is_loading() {
-                    session.refresh_queued = true;
-                } else {
-                    effects.extend(refresh(repo_id, lifetime, *view, session));
-                }
-            }
-        }
-    }
+    let mut effects = refresh_affected(&mut repo.diff_sessions, affected, |view, session| {
+        refresh(repo_id, lifetime, view, session)
+    });
     // A list covers the whole repository, including files not listed yet.
-    if repo
-        .change_lists
-        .values()
-        .any(|list| list.source.follows_worktree())
-    {
-        for (view, list) in Arc::make_mut(&mut repo.change_lists).iter_mut() {
-            if list.source.follows_worktree() {
-                if list.is_loading() {
-                    list.refresh_queued = true;
-                } else {
-                    effects.extend(refresh_changes(repo_id, lifetime, *view, list));
-                }
-            }
-        }
-    }
+    effects.extend(refresh_affected(
+        &mut repo.change_lists,
+        |list| list.source.follows_worktree(),
+        |view, list| refresh_changes(repo_id, lifetime, view, list),
+    ));
     effects
 }
 
@@ -432,11 +460,21 @@ fn load_changes(
     })]
 }
 
-fn loadable<T>(result: gitcomet_core::services::Result<T>) -> Loadable<T> {
+/// Applies a reply to its slot. A cancelled load (its repository was
+/// deactivated) is not an error: the slot keeps the content it retained,
+/// or shows nothing.
+fn settle<T>(slot: &mut Loadable<T>, result: gitcomet_core::services::Result<T>) -> bool {
     match result {
-        Ok(value) => Loadable::Ready(value),
-        Err(error) => Loadable::Error(error.to_string()),
+        Ok(value) => *slot = Loadable::Ready(value),
+        Err(error) if matches!(error.kind(), gitcomet_core::error::ErrorKind::Cancelled) => {
+            if !matches!(slot, Loadable::Ready(_)) {
+                *slot = Loadable::NotLoaded;
+            }
+            return true;
+        }
+        Err(error) => *slot = Loadable::Error(error.to_string()),
     }
+    false
 }
 
 // Publish completed content even when another refresh was queued. Otherwise

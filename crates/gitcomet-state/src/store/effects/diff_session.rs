@@ -62,18 +62,25 @@ pub(super) fn schedule(
                             ),
                         ));
                     }
-                    if file_text && !cancellation.is_cancelled() {
+                    // Every part asked for is answered, or the session's
+                    // pending flags never clear; once cancelled, the readers
+                    // are skipped and the answer says so.
+                    if file_text {
                         send(DiffSessionContent::FileText(
-                            repo.diff_file_text_with_encoding_cancellable(
-                                &target,
-                                encoding,
-                                &cancellation,
-                            ),
+                            cancellation.check_cancelled().and_then(|()| {
+                                repo.diff_file_text_with_encoding_cancellable(
+                                    &target,
+                                    encoding,
+                                    &cancellation,
+                                )
+                            }),
                         ));
                     }
-                    if image && !cancellation.is_cancelled() {
+                    if image {
                         send(DiffSessionContent::Image(
-                            repo.diff_file_image_cancellable(&target, &cancellation),
+                            cancellation.check_cancelled().and_then(|()| {
+                                repo.diff_file_image_cancellable(&target, &cancellation)
+                            }),
                         ));
                     }
                 }
@@ -114,13 +121,11 @@ pub(super) fn schedule(
                     );
                 }
                 DiffSessionWork::Blame { path, source } => {
-                    if !cancellation.is_cancelled() {
-                        send(DiffSessionContent::Blame(repo_load::load_blame(
-                            repo.as_ref(),
-                            &path,
-                            &source,
-                        )));
-                    }
+                    send(DiffSessionContent::Blame(
+                        cancellation
+                            .check_cancelled()
+                            .and_then(|()| repo_load::load_blame(repo.as_ref(), &path, &source)),
+                    ));
                 }
             }
         },
@@ -132,4 +137,74 @@ pub(super) fn schedule(
             }
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diff_session::DiffViewId;
+    use gitcomet_core::domain::{DiffArea, DiffTarget};
+
+    /// Once its repository's loads are cancelled, a session load skips its
+    /// readers but still answers every part it was asked for: an unanswered
+    /// part would leave the session loading forever.
+    #[test]
+    fn a_cancelled_load_answers_every_requested_part() {
+        let executor = super::super::super::executor::TaskExecutor::new(1);
+        let repo_id = RepoId(1);
+        let mut repos: util::RepoMap = Default::default();
+        repos.insert(
+            repo_id,
+            Arc::new(crate::store::tests::DummyRepo::new(
+                "/tmp/diff-session-cancelled",
+            )),
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        let msg_tx =
+            super::super::super::worker_channel::StoreWorkerSender::for_test_msg_sender(tx);
+        let parent = CancellationToken::new();
+        parent.cancel();
+        let work = DiffSessionEffect {
+            repo_id,
+            view: DiffViewId::next(),
+            lifetime: 1,
+            generation: 1,
+            work: DiffSessionWork::Content {
+                target: DiffTarget::working_tree("a.rs".into(), DiffArea::Unstaged),
+                encoding: None,
+                patch: true,
+                file_text: true,
+                image: true,
+            },
+            cancellation: CancellationToken::new(),
+        };
+        schedule(&executor, &repos, msg_tx, work, parent);
+
+        fn cancelled<T>(result: &gitcomet_core::services::Result<T>) -> bool {
+            matches!(result, Err(error) if matches!(error.kind(), ErrorKind::Cancelled))
+        }
+        let mut parts = Vec::new();
+        while let Ok(msg) = rx.recv_timeout(std::time::Duration::from_secs(10)) {
+            let Msg::DiffSession(Event::Loaded { content, .. }) = msg else {
+                panic!("not a session reply");
+            };
+            parts.push(match content {
+                DiffSessionContent::Attributes(_) => "attributes",
+                DiffSessionContent::Patch(_) => "patch",
+                DiffSessionContent::FileText(result) => {
+                    assert!(cancelled(&result));
+                    "file_text"
+                }
+                DiffSessionContent::Image(result) => {
+                    assert!(cancelled(&result));
+                    "image"
+                }
+                DiffSessionContent::Blame(_) => "blame",
+            });
+            if parts.len() == 4 {
+                break;
+            }
+        }
+        assert_eq!(parts, ["attributes", "patch", "file_text", "image"]);
+    }
 }

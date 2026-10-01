@@ -1011,6 +1011,11 @@ fn fill_set_active_repo_inline_impl(
         }
     }
     append_selected_history_reload_effects(repo_id, repo_state, selected_history_reloads, effects);
+    if changed {
+        // Hosted panes whose loads the deactivation cancelled; unbounded, so
+        // not in the inline capacity above.
+        super::diff_session::resume_queued_loads(repo_state, effects);
+    }
     if let Some(effect) = persist_effect {
         effects.push(effect);
     }

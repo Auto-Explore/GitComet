@@ -498,6 +498,155 @@ fn watcher_edits_do_not_cancel_a_session_load_or_reload_unrelated_files() {
     assert!(!session.refresh_queued);
 }
 
+/// A tab switch cancels the repository's loads, sessions included. The
+/// cancelled replies leave a session idle with its last content, not an
+/// error, and the repository's next activation loads it again.
+#[test]
+fn a_cancelled_session_load_keeps_its_content_until_the_repository_is_active_again() {
+    use crate::diff_session::ChangeSource;
+    let (mut repos, ids, mut state, repo_id) = setup();
+    state.repos[0].set_open(Loadable::Ready(()));
+    let lifetime = state.repos[0].lifetime();
+    let view = DiffViewId::next();
+    let effects = reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::Open {
+            repo_id,
+            lifetime,
+            view,
+            target: worktree("a.rs"),
+        }),
+    );
+    let load = session_effect(&effects).clone();
+    for content in [
+        DiffSessionContent::Attributes(Ok(Default::default())),
+        DiffSessionContent::FileText(Ok(None)),
+    ] {
+        reduce(
+            &mut repos,
+            &ids,
+            &mut state,
+            Msg::DiffSession(DiffSessionMsg::Loaded {
+                repo_id,
+                view,
+                lifetime: load.lifetime,
+                generation: load.generation,
+                content,
+            }),
+        );
+    }
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        patch_loaded(repo_id, view, load.lifetime, load.generation),
+    );
+    assert!(!state.repos[0].diff_sessions[&view].is_loading());
+
+    // An edit starts a reload; the tab is switched away while it runs.
+    let effects = reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: RepoExternalChange {
+                paths: crate::msg::ChangedPaths::known(vec!["a.rs".into()]),
+                ..RepoExternalChange::worktree()
+            },
+        },
+    );
+    let reload = session_effect(&effects).clone();
+    fn cancelled<T>() -> gitcomet_core::services::Result<T> {
+        Err(gitcomet_core::error::Error::new(
+            gitcomet_core::error::ErrorKind::Cancelled,
+        ))
+    }
+    for content in [
+        DiffSessionContent::Attributes(cancelled()),
+        DiffSessionContent::Patch(cancelled()),
+        DiffSessionContent::FileText(cancelled()),
+    ] {
+        let effects = reduce(
+            &mut repos,
+            &ids,
+            &mut state,
+            Msg::DiffSession(DiffSessionMsg::Loaded {
+                repo_id,
+                view,
+                lifetime: reload.lifetime,
+                generation: reload.generation,
+                content,
+            }),
+        );
+        assert!(effects.is_empty(), "no retry into the same cancellation");
+    }
+    let session = &state.repos[0].diff_sessions[&view];
+    assert!(!session.is_loading(), "every part was answered");
+    assert!(
+        matches!(session.diff, Loadable::Ready(_)),
+        "the patch shown before the reload stays, not an error"
+    );
+    assert!(matches!(session.diff_file, Loadable::Ready(None)));
+    assert!(session.refresh_queued);
+
+    // A change list cancelled the same way, with nothing to retain.
+    let list = DiffViewId::next();
+    let effects = reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::OpenChanges {
+            repo_id,
+            lifetime,
+            view: list,
+            source: ChangeSource::Worktree {
+                area: DiffArea::Unstaged,
+                include_untracked: false,
+            },
+        }),
+    );
+    let list_load = session_effect(&effects).clone();
+    let effects = reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::ChangesLoaded {
+            repo_id,
+            view: list,
+            lifetime: list_load.lifetime,
+            generation: list_load.generation,
+            result: cancelled(),
+        }),
+    );
+    assert!(effects.is_empty());
+    assert!(matches!(
+        state.repos[0].change_lists[&list].files,
+        Loadable::NotLoaded
+    ));
+
+    // Back on the tab, both load again.
+    let effects = reduce(&mut repos, &ids, &mut state, Msg::SetActiveRepo { repo_id });
+    let resumed: Vec<_> = effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::DiffSession(work) => Some((work.view, work.generation)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        resumed,
+        vec![
+            (view, reload.generation + 1),
+            (list, list_load.generation + 1)
+        ]
+    );
+    assert!(state.repos[0].diff_sessions[&view].is_loading());
+    assert!(state.repos[0].change_lists[&list].is_loading());
+}
+
 #[test]
 fn requested_blame_is_loaded_again_after_reload_and_encoding_change() {
     let (mut repos, ids, mut state, repo_id) = setup();
