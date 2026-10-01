@@ -356,9 +356,9 @@ pub(in crate::view) fn markdown_preview_local_link_target(
 
     let (document_path, source) = match target {
         DiffTarget::WorkingTree { path, .. } => (path.as_path(), FileSource::WorkingDirectory),
-        DiffTarget::Commit { commit_id, path } => {
-            (path.as_path(), FileSource::Commit(commit_id.clone()))
-        }
+        DiffTarget::Commit {
+            commit_id, path, ..
+        } => (path.as_path(), FileSource::Commit(commit_id.clone())),
         DiffTarget::CommitRange { .. } => return None,
     };
     let document_path = markdown_preview_document_path(workdir, document_path)?;

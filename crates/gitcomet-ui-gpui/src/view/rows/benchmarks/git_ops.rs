@@ -1099,11 +1099,7 @@ fn git_ops_head_commit_id(repo: &Path) -> CommitId {
 /// file, so the whole-patch benchmarks compare the two commits instead.
 fn parent_range_target(repo: &Path, commit_id: CommitId) -> DiffTarget {
     let parent = git_stdout(repo, &["rev-parse", &format!("{}^", commit_id.as_ref())]);
-    DiffTarget::CommitRange {
-        from_commit_id: CommitId(parent.into()),
-        to_commit_id: Some(commit_id),
-        path: None,
-    }
+    DiffTarget::commit_range(CommitId(parent.into()), Some(commit_id), None)
 }
 
 pub(crate) fn run_git(repo: &Path, args: &[&str]) {

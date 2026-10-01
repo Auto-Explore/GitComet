@@ -454,6 +454,20 @@ pub(in crate::view) fn hash_branch_sidebar_rows(rows: &[BranchSidebarRow]) -> u6
     for row in rows.iter().take(256) {
         std::mem::discriminant(row).hash(&mut h);
         match row {
+            BranchSidebarRow::ContributionHeader {
+                title,
+                collapsed,
+                collapse_key,
+                ..
+            } => {
+                title.hash(&mut h);
+                collapsed.hash(&mut h);
+                collapse_key.hash(&mut h);
+            }
+            BranchSidebarRow::ContributionItem { label, key, .. } => {
+                label.hash(&mut h);
+                key.hash(&mut h);
+            }
             BranchSidebarRow::SectionHeader {
                 section,
                 top_border,
@@ -1026,11 +1040,13 @@ impl RepoSwitchMetrics {
 fn hash_repo_switch_outcome(state: &AppState, effects: &[Effect]) -> u64 {
     fn hash_diff_target(target: &DiffTarget, h: &mut FxHasher) {
         match target {
-            DiffTarget::WorkingTree { path, area } => {
+            DiffTarget::WorkingTree { path, area, .. } => {
                 path.hash(h);
                 (*area as u8).hash(h);
             }
-            DiffTarget::Commit { commit_id, path } => {
+            DiffTarget::Commit {
+                commit_id, path, ..
+            } => {
                 commit_id.hash(h);
                 path.hash(h);
             }
@@ -1038,6 +1054,7 @@ fn hash_repo_switch_outcome(state: &AppState, effects: &[Effect]) -> u64 {
                 from_commit_id,
                 to_commit_id,
                 path,
+                ..
             } => {
                 from_commit_id.hash(h);
                 to_commit_id.hash(h);

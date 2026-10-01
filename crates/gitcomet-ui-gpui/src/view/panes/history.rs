@@ -12,6 +12,7 @@ use smallvec::SmallVec;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
+mod annotations;
 pub(in crate::view) mod find;
 mod history_panel;
 mod indexed;
@@ -1106,7 +1107,7 @@ fn decide_pending_history_reveal(
 }
 
 pub(in super::super) struct HistoryView {
-    pub(in super::super) store: Arc<AppStore>,
+    pub(in super::super) store: crate::view::pane_store::PaneStore,
     state: Arc<AppState>,
     pub(in super::super) theme: AppTheme,
     pub(in super::super) ui_scale_percent: u32,
@@ -1169,6 +1170,7 @@ pub(in super::super) struct HistoryView {
     pub(in super::super) history_stash_ids_cache: Option<HistoryStashIdsCache>,
     pub(in super::super) history_scroll: UniformListScrollHandle,
     pub(in super::super) history_panel_focus_handle: FocusHandle,
+    pub(in crate::view) history_annotations: Option<annotations::HistoryAnnotations>,
     /// Minute tick that re-renders the table while the relative date format is
     /// active, so "2 mins ago" labels don't freeze. `None` for absolute formats.
     relative_time_tick: Option<gpui::Task<()>>,
@@ -1329,7 +1331,9 @@ impl HistoryView {
             repo.stashes_rev.hash(&mut hasher);
             repo.history_state.selected_commit_rev.hash(&mut hasher);
             repo.history_state.indexed.rev.hash(&mut hasher);
-            repo.file_browser.file_browser_rev.hash(&mut hasher);
+            // The browsed commit's mark. Not `file_browser_rev`: that moves on
+            // every sidebar search keystroke.
+            repo.file_browser.source.hash(&mut hasher);
             // The linked-worktree rows live in this table: their badge counts come
             // from the dirty scan and the selected row from the worktree selection,
             // so both revs have to move the fingerprint or the rows never repaint.
@@ -1457,8 +1461,12 @@ impl HistoryView {
         let scale = ui_scale::UiScale::from_percent(ui_scale_percent);
         let default_widths = scaled_history_column_widths(default_design_widths, scale);
 
+        let history_annotations = super::super::extension_host::registry(cx)
+            .filter(|registry| !registry.history_annotators().is_empty())
+            .map(|registry| annotations::HistoryAnnotations::new(registry.history_annotators()));
         Self {
-            store,
+            history_annotations,
+            store: store.into(),
             state,
             theme,
             ui_scale_percent,

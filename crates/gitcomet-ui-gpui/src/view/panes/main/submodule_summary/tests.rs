@@ -18,11 +18,12 @@ fn summary(count: usize) -> SubmoduleDiffSummary {
             to: Some(CommitId("b".into())),
             unavailable_reason: None,
             changes: (0..count)
-                .map(|ix| SubmoduleInnerChange {
-                    path: PathBuf::from(format!("src/deep/file_{ix:06}.rs")),
-                    kind: FileStatusKind::Modified,
-                    additions: Some(2),
-                    deletions: Some(1),
+                .map(|ix| {
+                    SubmoduleInnerChange::new(
+                        PathBuf::from(format!("src/deep/file_{ix:06}.rs")),
+                        FileStatusKind::Modified,
+                    )
+                    .with_line_counts(Some(2), Some(1))
                 })
                 .collect(),
         }],
@@ -56,10 +57,10 @@ fn publish(
                 checked_out_head: summary.checked_out_head.clone(),
                 status: SubmoduleStatus::HeadMismatch,
             }]));
-            repo.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-                path: summary.path.clone(),
-                area: DiffArea::Staged,
-            });
+            repo.diff_state.diff_target = Some(DiffTarget::working_tree(
+                summary.path.clone(),
+                DiffArea::Staged,
+            ));
             repo.diff_state.submodule_summary_rev = view
                 .state
                 .repos
@@ -347,11 +348,12 @@ fn summary_without_ranges(count: usize) -> SubmoduleDiffSummary {
     let mut summary = summary(count);
     summary.ranges = Vec::new();
     summary.live_unstaged = (0..count)
-        .map(|ix| SubmoduleInnerChange {
-            path: PathBuf::from(format!("src/deep/file_{ix:06}.rs")),
-            kind: FileStatusKind::Modified,
-            additions: Some(2),
-            deletions: Some(1),
+        .map(|ix| {
+            SubmoduleInnerChange::new(
+                PathBuf::from(format!("src/deep/file_{ix:06}.rs")),
+                FileStatusKind::Modified,
+            )
+            .with_line_counts(Some(2), Some(1))
         })
         .collect();
     summary
@@ -531,10 +533,10 @@ fn a_failed_load_releases_another_targets_summary_cache(cx: &mut gpui::TestAppCo
 
     // A second submodule whose load fails: the first one's rows are stale.
     restate(&view, cx, |repo| {
-        repo.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-            path: PathBuf::from("vendor/other"),
-            area: DiffArea::Staged,
-        });
+        repo.diff_state.diff_target = Some(DiffTarget::working_tree(
+            PathBuf::from("vendor/other"),
+            DiffArea::Staged,
+        ));
         repo.diff_state.submodule_summary = Loadable::Error("no such submodule".to_string());
         repo.diff_state.submodule_summary_rev += 1;
     });
@@ -584,11 +586,11 @@ fn a_commit_range_target_draws_no_submodule_summary(cx: &mut gpui::TestAppContex
     assert!(cx.debug_bounds("submodule_change_2").is_some());
 
     restate(&view, cx, |repo| {
-        repo.diff_state.diff_target = Some(DiffTarget::CommitRange {
-            from_commit_id: CommitId("a".into()),
-            to_commit_id: Some(CommitId("b".into())),
-            path: None,
-        });
+        repo.diff_state.diff_target = Some(DiffTarget::commit_range(
+            CommitId("a".into()),
+            Some(CommitId("b".into())),
+            None,
+        ));
         repo.diff_state.diff_target_rev += 1;
     });
 

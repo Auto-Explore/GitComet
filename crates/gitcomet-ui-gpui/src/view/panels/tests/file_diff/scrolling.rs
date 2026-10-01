@@ -187,10 +187,10 @@ fn diff_search_f3_continues_from_previous_location_after_patch_refresh(
     ));
     let _ = std::fs::create_dir_all(&workdir);
     let path = std::path::PathBuf::from("src/search_refresh.rs");
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: path.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        path.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
 
     let push_patch = |cx: &mut gpui::VisualTestContext, diff_rev: u64, unified: &str| {
         let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), unified);
@@ -467,10 +467,10 @@ pub(super) fn push_file_patch_diff_state_with_rev(
             .find_map(|line| line.strip_prefix("+++ b/"))
             .expect("the fixture must contain a single file patch"),
     );
-    let target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
-        path: path.clone(),
-    };
+    let target = gitcomet_core::domain::DiffTarget::commit(
+        gitcomet_core::domain::CommitId("deadbeef".into()),
+        path.clone(),
+    );
     let diff = gitcomet_core::domain::Diff::from_unified(target, &unified);
     let mut old_text = String::new();
     let mut new_text = String::new();
@@ -620,10 +620,7 @@ fn push_working_tree_full_file_horizontal_scroll_fixture_state(
     ));
     let _ = std::fs::create_dir_all(&workdir);
     let path = PathBuf::from("src/lib.rs");
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: path.clone(),
-        area,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(path.clone(), area);
     let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), &unified);
     let file_diff =
         gitcomet_core::domain::FileDiffText::new(path.clone(), Some(old_text), Some(new_text));

@@ -926,29 +926,24 @@ fn local_link_target_reads_from_the_tree_the_document_came_from() {
         markdown_preview_local_link_target(workdir, target, destination)
     };
 
-    let working_tree = DiffTarget::WorkingTree {
-        path: PathBuf::from("docs/preview.md"),
-        area: DiffArea::Unstaged,
-    };
+    let working_tree =
+        DiffTarget::working_tree(PathBuf::from("docs/preview.md"), DiffArea::Unstaged);
     assert_eq!(
         resolve(&working_tree, "../README.md"),
         Some((FileSource::WorkingDirectory, PathBuf::from("README.md")))
     );
     // A staged document still links into the working tree it lives in.
-    let staged = DiffTarget::WorkingTree {
-        path: PathBuf::from("docs/preview.md"),
-        area: DiffArea::Staged,
-    };
+    let staged = DiffTarget::working_tree(PathBuf::from("docs/preview.md"), DiffArea::Staged);
     assert_eq!(
         resolve(&staged, "other.md"),
         Some((FileSource::WorkingDirectory, PathBuf::from("docs/other.md")))
     );
 
     // A document shown at a commit links into that commit.
-    let at_commit = DiffTarget::Commit {
-        commit_id: CommitId("deadbeef".into()),
-        path: PathBuf::from("docs/preview.md"),
-    };
+    let at_commit = DiffTarget::commit(
+        CommitId("deadbeef".into()),
+        PathBuf::from("docs/preview.md"),
+    );
     assert_eq!(
         resolve(&at_commit, "./other.md"),
         Some((
@@ -958,33 +953,30 @@ fn local_link_target_reads_from_the_tree_the_document_came_from() {
     );
 
     // A range has no one document to resolve from.
-    let range = DiffTarget::CommitRange {
-        from_commit_id: CommitId("aaaa".into()),
-        to_commit_id: Some(CommitId("bbbb".into())),
-        path: Some(PathBuf::from("docs/preview.md")),
-    };
+    let range = DiffTarget::commit_range(
+        CommitId("aaaa".into()),
+        Some(CommitId("bbbb".into())),
+        Some(PathBuf::from("docs/preview.md")),
+    );
     assert_eq!(resolve(&range, "other.md"), None);
-    let range_to_worktree = DiffTarget::CommitRange {
-        from_commit_id: CommitId("aaaa".into()),
-        to_commit_id: None,
-        path: Some(PathBuf::from("docs/preview.md")),
-    };
+    let range_to_worktree = DiffTarget::commit_range(
+        CommitId("aaaa".into()),
+        None,
+        Some(PathBuf::from("docs/preview.md")),
+    );
     assert_eq!(resolve(&range_to_worktree, "other.md"), None);
 
     // Absolute document paths are taken relative to the workdir…
-    let absolute = DiffTarget::WorkingTree {
-        path: workdir.join("docs/preview.md"),
-        area: DiffArea::Unstaged,
-    };
+    let absolute = DiffTarget::working_tree(workdir.join("docs/preview.md"), DiffArea::Unstaged);
     assert_eq!(
         resolve(&absolute, "other.md"),
         Some((FileSource::WorkingDirectory, PathBuf::from("docs/other.md")))
     );
     // …and one outside it has no repository to link into.
-    let elsewhere = DiffTarget::WorkingTree {
-        path: PathBuf::from("/elsewhere/docs/preview.md"),
-        area: DiffArea::Unstaged,
-    };
+    let elsewhere = DiffTarget::working_tree(
+        PathBuf::from("/elsewhere/docs/preview.md"),
+        DiffArea::Unstaged,
+    );
     assert_eq!(resolve(&elsewhere, "other.md"), None);
 
     // A link the path resolver refuses stays refused whatever the source.

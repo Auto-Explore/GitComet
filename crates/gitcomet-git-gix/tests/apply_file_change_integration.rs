@@ -192,11 +192,11 @@ fn range_target_applies_the_combined_change_with_a_generated_message() {
 
 #[test]
 fn a_comparison_to_the_working_tree_has_no_change_to_apply() {
-    let worktree_range = DiffTarget::CommitRange {
-        from_commit_id: CommitId("abcdef1".into()),
-        to_commit_id: None,
-        path: Some(PathBuf::from("a.txt")),
-    };
+    let worktree_range = DiffTarget::commit_range(
+        CommitId("abcdef1".into()),
+        None,
+        Some(PathBuf::from("a.txt")),
+    );
     assert_eq!(ApplyChangeTarget::from_diff_target(&worktree_range), None);
 }
 

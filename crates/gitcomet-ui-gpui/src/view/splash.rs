@@ -21,7 +21,7 @@ static SPLASH_BACKDROP_DARK_IMAGE_CACHE: OnceLock<Arc<gpui::Image>> = OnceLock::
 static SPLASH_BACKDROP_LIGHT_IMAGE_CACHE: OnceLock<Arc<gpui::Image>> = OnceLock::new();
 
 /// Interstitial geometry (loading and git-unavailable cards, Home buttons).
-const SPLASH_CARD_MAX_WIDTH_PX: f32 = 560.0;
+const SPLASH_CARD_MAX_WIDTH_PX: f32 = components::INTERSTITIAL_CARD_MAX_WIDTH_PX;
 const SPLASH_BODY_MAX_WIDTH_PX: f32 = 440.0;
 const SPLASH_DETAIL_MAX_WIDTH_PX: f32 = 460.0;
 const SPLASH_CTA_HEIGHT_PX: f32 = 36.0;
@@ -193,8 +193,13 @@ impl GitCometView {
         self.state
             .git_runtime
             .unavailable_detail()
-            .unwrap_or("GitComet could not find a usable Git executable.")
-            .to_string()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| {
+                format!(
+                    "{} could not find a usable Git executable.",
+                    crate::view::product_name()
+                )
+            })
     }
 
     fn git_unavailable_status_icon(theme: AppTheme, ui_scale_percent: u32) -> AnyElement {
@@ -243,7 +248,7 @@ impl GitCometView {
     }
 
     pub(crate) fn blocks_repository_management_actions(&self) -> bool {
-        matches!(self.view_mode, GitCometViewMode::Normal) && !self.state.git_runtime.is_available()
+        !self.shell_action_allowed(super::shell_policy::ShellAction::RepositoryEntry)
     }
 
     pub(crate) fn is_home_screen_active(&self) -> bool {
@@ -372,54 +377,14 @@ impl GitCometView {
         content: impl IntoElement,
         theme: AppTheme,
     ) -> AnyElement {
-        let scaled_px = crate::ui_scale::scaler(self.ui_scale_percent);
-        let border_glow = with_alpha(
-            theme.colors.stroke.default,
-            if theme.is_dark { 0.86 } else { 0.74 },
-        );
-
-        div()
-            .id(id)
-            .debug_selector(move || id.to_string())
-            .relative()
-            .flex()
-            .flex_1()
-            .min_h(px(0.0))
-            .items_center()
-            .justify_center()
-            .overflow_hidden()
-            .px_3()
-            .py_4()
-            .bg(self.splash_backdrop_base())
-            .child(self.interstitial_backdrop())
-            .child(
-                div()
-                    .relative()
-                    .w_full()
-                    .max_w(scaled_px(SPLASH_CARD_MAX_WIDTH_PX))
-                    .bg(with_alpha(
-                        theme.colors.surface.panel,
-                        if theme.is_dark { 0.96 } else { 0.98 },
-                    ))
-                    .border_1()
-                    .border_color(border_glow)
-                    .rounded(px(theme.radii.panel))
-                    .shadow(vec![gpui::BoxShadow {
-                        color: gpui::rgba(if theme.is_dark {
-                            0x00000052
-                        } else {
-                            0x171a3b14
-                        })
-                        .into(),
-                        offset: point(px(0.0), px(22.0)),
-                        blur_radius: px(52.0),
-                        spread_radius: px(0.0),
-                        inset: false,
-                    }])
-                    .p_4()
-                    .child(content),
-            )
-            .into_any_element()
+        components::interstitial(
+            id,
+            self.splash_backdrop_base(),
+            self.interstitial_backdrop(),
+            content,
+            theme,
+            crate::ui_scale::UiScale::from_percent(self.ui_scale_percent),
+        )
     }
 
     fn git_unavailable_open_settings_button(
@@ -504,9 +469,10 @@ impl GitCometView {
                     .text_size(self.theme.ui_text(14.0))
                     .line_height(self.theme.ui_text(22.0))
                     .text_color(theme.colors.foreground.secondary)
-                    .child(
-                        "GitComet cannot open, refresh, or run repository actions until a Git executable is configured.",
-                    ),
+                    .child(format!(
+                        "{} cannot open, refresh, or run repository actions until a Git executable is configured.",
+                        crate::view::product_name()
+                    )),
             )
             .child(
                 div()
@@ -624,7 +590,10 @@ impl GitCometView {
                     div()
                         .text_size(self.theme.ui_text(14.0))
                         .text_color(theme.colors.foreground.secondary)
-                        .child("GitComet is opening your workspace."),
+                        .child(format!(
+                            "{} is opening your workspace.",
+                            crate::view::product_name()
+                        )),
                 )
                 .child(
                     div()
@@ -856,6 +825,14 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        if let Some(pane) = &self.focused_diff_pane {
+            return div()
+                .flex_1()
+                .min_h(px(0.0))
+                .child(pane.view())
+                .into_any_element();
+        }
+
         let theme = self.theme;
         let ui_scale_percent = self.ui_scale_percent;
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
@@ -871,7 +848,14 @@ impl GitCometView {
         if renders_full_chrome(self.view_mode) {
             // Terminal and/or reflog — see `render_bottom_panel` for which.
             let bottom_panel = self.render_bottom_panel(theme, window, cx);
-            let has_bottom_panel = bottom_panel.is_some();
+            let bottom_panel_resize_handle = bottom_panel
+                .is_some()
+                .then(|| self.terminal_panel_resize_handle(theme, cx));
+            let main_content = self.repository_main_content(cx);
+            let details_tabs = self.details_tab_content(cx);
+            let sidebar_sections = (!self.sidebar_collapsed)
+                .then(|| self.sidebar_section_content(window, cx))
+                .flatten();
             let content = div()
                 .flex()
                 .flex_col()
@@ -927,7 +911,20 @@ impl GitCometView {
                                     // a diff update) reuse the sidebar's layout
                                     // and paint. The wrapper fills this div, so
                                     // the width animation still re-lays it out.
-                                    d.child(stable_cached_fill_view(self.sidebar_pane.clone()))
+                                    match sidebar_sections {
+                                        None => d.child(stable_cached_fill_view(
+                                            self.sidebar_pane.clone(),
+                                        )),
+                                        // Extension sections sit below the
+                                        // sidebar's own, which keeps the rest.
+                                        Some(sections) => d
+                                            .flex()
+                                            .flex_col()
+                                            .child(div().flex_1().min_h(px(0.0)).child(
+                                                stable_cached_fill_view(self.sidebar_pane.clone()),
+                                            ))
+                                            .child(sections),
+                                    }
                                 })
                                 .when(self.sidebar_collapsed, |d| {
                                     d.child(self.collapsed_sidebar_rail(theme, cx))
@@ -960,17 +957,21 @@ impl GitCometView {
                                         .min_w(px(0.0))
                                         .min_h(px(0.0))
                                         .overflow_hidden()
-                                        .when_some(bottom_panel, |d, bottom_panel| {
-                                            d.flex()
-                                                .flex_col()
-                                                .child(div().flex_1().min_h(px(0.0)).child(
-                                                    stable_cached_fill_view(self.main_pane.clone()),
-                                                ))
-                                                .child(self.terminal_panel_resize_handle(theme, cx))
-                                                .child(bottom_panel)
-                                        })
-                                        .when(!has_bottom_panel, |d| {
-                                            d.child(stable_cached_fill_view(self.main_pane.clone()))
+                                        .map(|d| {
+                                            match (bottom_panel, bottom_panel_resize_handle) {
+                                                (Some(bottom_panel), Some(resize_handle)) => d
+                                                    .flex()
+                                                    .flex_col()
+                                                    .child(
+                                                        div()
+                                                            .flex_1()
+                                                            .min_h(px(0.0))
+                                                            .child(main_content),
+                                                    )
+                                                    .child(resize_handle)
+                                                    .child(bottom_panel),
+                                                _ => d.child(main_content),
+                                            }
                                         }),
                                 )
                                 .child(
@@ -988,10 +989,11 @@ impl GitCometView {
                                             // keep a hairline between main and the strip.
                                             d.border_l_1().border_color(theme.colors.stroke.subtle)
                                         })
-                                        .when(!self.details_collapsed, |d| {
-                                            d.child(div().flex_1().min_h(px(0.0)).child(
+                                        .when(!self.details_collapsed, |d| match details_tabs {
+                                            None => d.child(div().flex_1().min_h(px(0.0)).child(
                                                 stable_cached_fill_view(self.details_pane.clone()),
-                                            ))
+                                            )),
+                                            Some(content) => d.child(content),
                                         }),
                                 )
                                 .child(
@@ -1058,13 +1060,10 @@ impl GitCometView {
                             ))
                         })
                 })
-                .child(
-                    // Keep the bottom bar uncached. It paints after the details pane,
-                    // so reusing its cached paint range can replay a stale input-handler
-                    // index while a focused TextInput is temporarily detached during a
-                    // Wayland text-input redraw.
+                .child(stable_cached_fixed_height_view(
                     self.bottom_status_bar.clone(),
-                )
+                    bottom_status_bar_height(cx),
+                ))
                 .into_any_element();
 
             if self.should_show_git_unavailable_overlay() {

@@ -169,6 +169,17 @@ fn tag_names_model(
             }),
         });
         items.push(ContextMenuItem::Entry {
+            label: "Compare with merge base".into(),
+            icon: Some("icons/open_external.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::CompareWithMergeBase {
+                repo_id,
+                commit_id: commit_id.clone(),
+                label: compare_label.clone(),
+            }),
+        });
+        items.push(ContextMenuItem::Entry {
             label: "Clear comparison mark".into(),
             icon: Some("icons/generic_close.svg".into()),
             shortcut: None,

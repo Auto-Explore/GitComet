@@ -17,15 +17,10 @@ impl<'a> FileMenuSource<'a> {
     fn diff_target(self, path: &std::path::Path) -> DiffTarget {
         let path = path.to_path_buf();
         match self {
-            Self::Commit(commit_id) => DiffTarget::Commit {
-                commit_id: commit_id.clone(),
-                path,
-            },
-            Self::Range { from, to } => DiffTarget::CommitRange {
-                from_commit_id: from.clone(),
-                to_commit_id: to.cloned(),
-                path: Some(path),
-            },
+            Self::Commit(commit_id) => DiffTarget::commit(commit_id.clone(), path),
+            Self::Range { from, to } => {
+                DiffTarget::commit_range(from.clone(), to.cloned(), Some(path))
+            }
         }
     }
 

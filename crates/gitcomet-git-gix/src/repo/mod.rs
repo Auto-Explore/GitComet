@@ -42,6 +42,7 @@ pub(super) fn bstr_to_arc_str(bytes: &[u8]) -> Arc<str> {
 
 mod apply_change;
 mod blame;
+mod comparison;
 mod config;
 mod conflict_stages;
 mod diff;
@@ -472,14 +473,28 @@ pub(crate) struct GixRepo {
     log_file_follow_cache: std::sync::Mutex<Vec<LogFileFollowCacheEntry>>,
     log_paged_walk_cache: std::sync::Mutex<LogPagedWalkCache>,
     line_stats_memo: std::sync::Mutex<line_stats::LineStatsMemo>,
+    /// Stats the worktree walk found stale but content-clean; see
+    /// [`status::StatRefreshedIndex`].
+    stat_refreshed_index: std::sync::Mutex<Option<status::StatRefreshedIndex>>,
+    staged_line_stats_cache: std::sync::Mutex<Option<line_stats::StagedLineStatsCache>>,
     /// Immutable signature formats by oid. `None` means an unsigned commit.
     signature_format_cache: std::sync::Mutex<
         lru::LruCache<gix::ObjectId, Option<gitcomet_core::domain::SignatureFormat>>,
     >,
+    /// Fixed at open: refs the all-branches walk leaves out.
+    history_ref_filter: gitcomet_core::services::HistoryRefFilter,
 }
 
 impl GixRepo {
     pub(crate) fn new(workdir: PathBuf, repo: gix::ThreadSafeRepository) -> Self {
+        Self::new_with_options(workdir, repo, Default::default())
+    }
+
+    pub(crate) fn new_with_options(
+        workdir: PathBuf,
+        repo: gix::ThreadSafeRepository,
+        options: gitcomet_core::services::RepositoryOptions,
+    ) -> Self {
         let config_repo = config::ConfigRepo::new(repo.to_thread_local());
         Self {
             spec: RepoSpec { workdir },
@@ -500,9 +515,12 @@ impl GixRepo {
             log_file_follow_cache: std::sync::Mutex::new(Vec::new()),
             log_paged_walk_cache: std::sync::Mutex::new(LogPagedWalkCache::default()),
             line_stats_memo: std::sync::Mutex::default(),
+            stat_refreshed_index: std::sync::Mutex::new(None),
+            staged_line_stats_cache: std::sync::Mutex::new(None),
             signature_format_cache: std::sync::Mutex::new(lru::LruCache::new(
                 std::num::NonZeroUsize::new(signatures::SIGNATURE_CACHE_LIMIT).unwrap(),
             )),
+            history_ref_filter: options.history_ref_filter,
         }
     }
 
@@ -742,6 +760,24 @@ impl GitRepository for GixRepo {
 
     fn resolve_commit(&self, reference: &CommitId) -> Result<Commit> {
         self.resolve_commit_impl(reference)
+    }
+
+    fn compare_files(
+        &self,
+        from: &CommitId,
+        to: Option<&CommitId>,
+        options: &gitcomet_core::services::ComparisonOptions,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::services::Comparison> {
+        self.compare_files_impl(from, to, options, cancellation)
+    }
+
+    fn merge_base(&self, a: &CommitId, b: &CommitId) -> Result<Option<CommitId>> {
+        self.merge_base_impl(a, b)
+    }
+
+    fn is_ancestor(&self, ancestor: &CommitId, descendant: &CommitId) -> Result<bool> {
+        self.is_ancestor_impl(ancestor, descendant)
     }
 
     fn diff_range_files(
@@ -1199,6 +1235,14 @@ impl GitRepository for GixRepo {
 
     fn fetch_all_with_output_prune(&self, prune: bool) -> Result<CommandOutput> {
         self.fetch_all_with_output_impl(prune)
+    }
+
+    fn fetch_refspecs_with_output(
+        &self,
+        remote: &str,
+        refspecs: &[String],
+    ) -> Result<CommandOutput> {
+        self.fetch_refspecs_with_output_impl(remote, refspecs)
     }
 
     fn pull(&self, mode: PullMode) -> Result<()> {

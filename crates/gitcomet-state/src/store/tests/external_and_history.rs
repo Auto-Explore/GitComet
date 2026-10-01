@@ -199,10 +199,7 @@ fn external_worktree_change_refreshes_status_and_selected_diff() {
         &mut state,
         Msg::SelectDiff {
             repo_id: RepoId(1),
-            target: DiffTarget::WorkingTree {
-                path: PathBuf::from("a.txt"),
-                area: DiffArea::Unstaged,
-            },
+            target: DiffTarget::working_tree(PathBuf::from("a.txt"), DiffArea::Unstaged),
         },
     );
 
@@ -384,10 +381,7 @@ fn external_index_change_reloads_open_working_tree_diff() {
         &mut state,
         Msg::SelectDiff {
             repo_id,
-            target: DiffTarget::WorkingTree {
-                path: PathBuf::from("a.txt"),
-                area: DiffArea::Staged,
-            },
+            target: DiffTarget::working_tree(PathBuf::from("a.txt"), DiffArea::Staged),
         },
     );
 
@@ -581,10 +575,7 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
         &mut state,
         Msg::SelectDiff {
             repo_id: RepoId(1),
-            target: DiffTarget::WorkingTree {
-                path: PathBuf::from("a.txt"),
-                area: DiffArea::Unstaged,
-            },
+            target: DiffTarget::working_tree(PathBuf::from("a.txt"), DiffArea::Unstaged),
         },
     );
 
@@ -1069,10 +1060,10 @@ fn external_worktree_refresh_coalesces_status_while_status_is_in_flight() {
         &mut state,
         Msg::SelectDiff {
             repo_id: RepoId(1),
-            target: DiffTarget::WorkingTree {
-                path: PathBuf::from("crates/gitcomet-ui-gpui/src/smoke_tests.rs"),
-                area: DiffArea::Unstaged,
-            },
+            target: DiffTarget::working_tree(
+                PathBuf::from("crates/gitcomet-ui-gpui/src/smoke_tests.rs"),
+                DiffArea::Unstaged,
+            ),
         },
     );
 
@@ -1248,15 +1239,15 @@ fn state_with_blamed_unstaged_diff() -> (AppState, RepoId) {
     ));
     state.active_repo = Some(repo_id);
     state.repos[0].set_status(Loadable::Ready(Arc::new(RepoStatus::default())));
-    state.repos[0].diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: DiffArea::Unstaged,
-    });
-    state.repos[0].history_state.blame_path = Some(PathBuf::from("src/lib.rs"));
-    state.repos[0].history_state.blame_source = Some(
-        gitcomet_core::domain::BlameSource::WorkingTree(DiffArea::Unstaged),
-    );
-    state.repos[0].history_state.blame = Loadable::Ready(std::sync::Arc::new(vec![
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::working_tree(
+        PathBuf::from("src/lib.rs"),
+        DiffArea::Unstaged,
+    ));
+    state.repos[0].diff_state.blame_path = Some(PathBuf::from("src/lib.rs"));
+    state.repos[0].diff_state.blame_source = Some(gitcomet_core::domain::BlameSource::WorkingTree(
+        DiffArea::Unstaged,
+    ));
+    state.repos[0].diff_state.blame = Loadable::Ready(std::sync::Arc::new(vec![
         gitcomet_core::services::BlameLine {
             commit_id: Arc::from("1111111111111111111111111111111111111111"),
             author: Arc::from("Ada"),
@@ -1301,7 +1292,7 @@ fn repo_externally_changed_worktree_keeps_blame_until_content_changes() {
     );
     // ...but the annotations stay painted until that reload proves them stale.
     assert!(
-        matches!(state.repos[0].history_state.blame, Loadable::Ready(_)),
+        matches!(state.repos[0].diff_state.blame, Loadable::Ready(_)),
         "a worktree event alone must not invalidate blame"
     );
 }
@@ -1315,7 +1306,7 @@ fn repo_externally_changed_git_state_invalidates_loaded_blame() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let (mut state, repo_id) = state_with_blamed_unstaged_diff();
-    let previous = match &state.repos[0].history_state.blame {
+    let previous = match &state.repos[0].diff_state.blame {
         Loadable::Ready(lines) => Arc::clone(lines),
         other => panic!("expected a loaded blame, got {other:?}"),
     };
@@ -1337,25 +1328,25 @@ fn repo_externally_changed_git_state_invalidates_loaded_blame() {
         "a git-state change must reload the diff"
     );
     assert!(
-        matches!(state.repos[0].history_state.blame, Loadable::NotLoaded),
+        matches!(state.repos[0].diff_state.blame, Loadable::NotLoaded),
         "blame must be invalidated when refs may have moved"
     );
     // The outgoing annotations are held over so the column does not blank while
     // the reload runs.
     assert!(
         state.repos[0]
-            .history_state
+            .diff_state
             .retained_blame_while_loading
             .as_ref()
             .is_some_and(|held| Arc::ptr_eq(held, &previous)),
         "the previous annotations must be retained while blame reloads"
     );
     assert_eq!(
-        state.repos[0].history_state.blame_path.as_deref(),
+        state.repos[0].diff_state.blame_path.as_deref(),
         Some(std::path::Path::new("src/lib.rs"))
     );
     assert_eq!(
-        state.repos[0].history_state.blame_source,
+        state.repos[0].diff_state.blame_source,
         Some(gitcomet_core::domain::BlameSource::WorkingTree(
             DiffArea::Unstaged
         ))
@@ -1383,10 +1374,7 @@ fn reload_repo_clears_stale_navigation_history() {
     let commit_a = CommitId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into());
     let commit_b = CommitId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into());
     let snap = |c: &CommitId| crate::model::MainViewSnapshot {
-        diff_target: Some(DiffTarget::Commit {
-            commit_id: c.clone(),
-            path: PathBuf::from("src/lib.rs"),
-        }),
+        diff_target: Some(DiffTarget::commit(c.clone(), PathBuf::from("src/lib.rs"))),
         content_preview: false,
         edit_mode: false,
         selected_commit: Some(c.clone()),
@@ -1407,13 +1395,14 @@ fn reload_repo_clears_stale_navigation_history() {
         .record(crate::model::ViewHistoryEntry {
             source: gitcomet_core::domain::FileSource::Commit(commit_a.clone()),
             path: PathBuf::from("src/lib.rs"),
+            old_path: None,
         });
     // Make the live view match the nav tail so the reduce-wrapper's reconcile is
     // a no-op and the stack survives intact up to the point ReloadRepo runs.
-    state.repos[0].diff_state.diff_target = Some(DiffTarget::Commit {
-        commit_id: commit_b.clone(),
-        path: PathBuf::from("src/lib.rs"),
-    });
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::commit(
+        commit_b.clone(),
+        PathBuf::from("src/lib.rs"),
+    ));
     state.repos[0].set_selected_commit(Some(commit_b.clone()));
     assert_eq!(state.repos[0].navigation.main_history.entries.len(), 2);
 
@@ -3310,6 +3299,7 @@ fn external_tags_change_reloads_tags() {
         name: "v1.0.0".to_string(),
         target: CommitId("abc123".into()),
     }]));
+    let tags_rev = state.repos[0].tags_rev;
 
     let effects = reduce(
         &mut repos,
@@ -3326,15 +3316,33 @@ fn external_tags_change_reloads_tags() {
     );
 
     assert!(
-        matches!(state.repos[0].tags, Loadable::NotLoaded),
-        "tags should be reset to NotLoaded on external tags change"
+        matches!(&state.repos[0].tags, Loadable::Ready(tags) if tags.len() == 1),
+        "the loaded tags stay shown while they reload"
     );
+    assert_eq!(state.repos[0].tags_rev, tags_rev);
     assert!(
         effects
             .iter()
             .any(|e| matches!(e, Effect::LoadTags { repo_id: id } if *id == repo_id)),
         "expected LoadTags effect on external tags change"
     );
+
+    // An unchanged reload leaves the revision alone too: history keys its
+    // tag decorations on it.
+    let loaded = state.repos[0].tags.clone();
+    let Loadable::Ready(loaded) = loaded else {
+        unreachable!()
+    };
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::TagsLoaded {
+            repo_id,
+            result: Ok(loaded.as_ref().clone()),
+        }),
+    );
+    assert_eq!(state.repos[0].tags_rev, tags_rev);
 }
 
 #[test]
@@ -3410,8 +3418,8 @@ fn external_tags_change_without_git_state_flag_reloads_tags() {
     );
 
     assert!(
-        matches!(state.repos[0].tags, Loadable::NotLoaded),
-        "tags should be reset to NotLoaded when only the tags flag is set"
+        matches!(state.repos[0].tags, Loadable::Ready(_)),
+        "the loaded tags stay shown while they reload"
     );
     assert!(
         effects
@@ -4368,10 +4376,7 @@ fn open_repo_showing_working_tree_file() -> (
         &mut state,
         Msg::SelectDiff {
             repo_id: RepoId(1),
-            target: DiffTarget::WorkingTree {
-                path: PathBuf::from("a.txt"),
-                area: DiffArea::Unstaged,
-            },
+            target: DiffTarget::working_tree(PathBuf::from("a.txt"), DiffArea::Unstaged),
         },
     );
     reduce(
@@ -4411,7 +4416,7 @@ fn external_worktree_change_bumps_worktree_change_rev() {
             &mut state,
             Msg::RepoExternallyChanged {
                 repo_id: RepoId(1),
-                change,
+                change: change.clone(),
             },
         );
         assert_eq!(
@@ -4544,7 +4549,7 @@ fn repo_command_finished_bumps_local_worktree_write_rev_only_for_checkout_writer
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::FetchAll { repo_id: RepoId(1) },
+        Msg::Fetch(crate::msg::FetchMsg::All { repo_id: RepoId(1) }),
     );
     assert!(state.repos[0].pull_in_flight > 0);
     assert!(!state.repos[0].git_operation_in_flight());
@@ -4578,4 +4583,136 @@ fn repo_command_finished_bumps_local_worktree_write_rev_only_for_checkout_writer
     assert!(!state.repos[0].git_operation_in_flight());
     assert_eq!(state.repos[0].worktree_pull_in_flight, 0);
     assert_eq!(rev(&state), before + 1);
+}
+
+#[test]
+fn watcher_paths_are_readable_one_change_back_and_unknown_beyond() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    let seen = state.repos[0].worktree_change_rev;
+    let paths = crate::msg::ChangedPaths::known(vec!["src/lib.rs".into()]);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: RepoExternalChange {
+                paths: paths.clone(),
+                ..RepoExternalChange::worktree()
+            },
+        },
+    );
+    let repo = &state.repos[0];
+    assert_eq!(repo.worktree_paths_changed_since(seen), paths);
+    assert_eq!(
+        repo.worktree_paths_changed_since(repo.worktree_change_rev),
+        crate::msg::ChangedPaths::none()
+    );
+
+    // A change without paths (window activation) is unknown, and so is
+    // anything a consumer missed two changes back.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: RepoExternalChange::worktree(),
+        },
+    );
+    assert_eq!(
+        state.repos[0].worktree_paths_changed_since(seen),
+        crate::msg::ChangedPaths::Unknown
+    );
+}
+
+#[test]
+fn a_merge_base_comparison_loads_with_its_options_and_diffs_from_the_base() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    let (main, feature, fork) = (
+        CommitId("main".into()),
+        CommitId("feature".into()),
+        CommitId("fork".into()),
+    );
+    let options = gitcomet_core::services::ComparisonOptions::merge_base();
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CompareWithOptions {
+            repo_id,
+            from: main.clone(),
+            to: Some(feature.clone()),
+            options,
+            from_label: "main".into(),
+            to_label: "feature".into(),
+        },
+    );
+    let request = effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::LoadRangeFiles {
+                options: sent,
+                request,
+                ..
+            } => {
+                assert_eq!(*sent, options);
+                Some(*request)
+            }
+            _ => None,
+        })
+        .expect("the comparison loads its files");
+    let range = state.repos[0]
+        .history_state
+        .range_selection
+        .clone()
+        .unwrap();
+    assert_eq!(
+        range.diff_from(),
+        &main,
+        "until loaded, diffs start at from"
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
+            repo_id,
+            from: main.clone(),
+            to: Some(feature),
+            request,
+            result: Ok(gitcomet_core::services::Comparison::new(
+                fork.clone(),
+                Vec::new(),
+            )),
+        }),
+    );
+    let range = state.repos[0]
+        .history_state
+        .range_selection
+        .clone()
+        .unwrap();
+    assert_eq!(range.base, Some(fork.clone()));
+    assert_eq!(range.diff_from(), &fork);
 }

@@ -1240,8 +1240,7 @@ pub(super) fn set_test_file_status_with_conflict(
             Some(_)
         )
     );
-    repo.diff_state.diff_target =
-        Some(gitcomet_core::domain::DiffTarget::WorkingTree { path, area });
+    repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::working_tree(path, area));
     repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);
 }
 

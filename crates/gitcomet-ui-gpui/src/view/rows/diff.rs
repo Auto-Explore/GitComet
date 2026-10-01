@@ -881,7 +881,7 @@ impl MainPaneView {
         if !self.annotation_active() || !self.blame_matches_rendered_target() {
             return None;
         }
-        match &self.active_repo()?.history_state.blame {
+        match &self.bound_diff_state(self.active_repo()?).blame {
             gitcomet_state::model::Loadable::Ready(lines) => Some(lines),
             _ => None,
         }
@@ -899,19 +899,20 @@ impl MainPaneView {
             return None;
         }
         let repo = self.active_repo()?;
-        let lines = match &repo.history_state.blame {
+        let lines = match &self.bound_diff_state(repo).blame {
             gitcomet_state::model::Loadable::Ready(lines) => lines,
             gitcomet_state::model::Loadable::NotLoaded
-            | gitcomet_state::model::Loadable::Loading => {
-                repo.history_state.retained_blame_while_loading.as_ref()?
-            }
+            | gitcomet_state::model::Loadable::Loading => self
+                .bound_diff_state(repo)
+                .retained_blame_while_loading
+                .as_ref()?,
             gitcomet_state::model::Loadable::Error(_) => return None,
         };
         let path: std::sync::Arc<std::path::Path> =
-            std::sync::Arc::from(repo.history_state.blame_path.as_deref()?);
+            std::sync::Arc::from(self.bound_diff_state(repo).blame_path.as_deref()?);
         // When blaming a specific commit, that commit is the one currently being
         // viewed; "view file at this commit" on its own lines would be a no-op.
-        let viewed_commit = match &repo.history_state.blame_source {
+        let viewed_commit = match &self.bound_diff_state(repo).blame_source {
             Some(gitcomet_core::domain::BlameSource::Revision(Some(rev))) => {
                 Some(std::sync::Arc::<str>::from(rev.as_str()))
             }
@@ -919,7 +920,7 @@ impl MainPaneView {
         };
         // The blamed working-tree area, used to classify uncommitted lines as
         // staged vs unstaged. `None` for revision blame (no such distinction).
-        let area = match &repo.history_state.blame_source {
+        let area = match &self.bound_diff_state(repo).blame_source {
             Some(gitcomet_core::domain::BlameSource::WorkingTree(area)) => Some(*area),
             _ => None,
         };
@@ -1184,6 +1185,7 @@ impl MainPaneView {
                                 )
                             };
 
+                            let row_tint = this.hosted_row_tint(visible_ix, None);
                             let styled = if streamed_spec.is_some() {
                                 None
                             } else {
@@ -1228,34 +1230,33 @@ impl MainPaneView {
                                 )
                             };
 
-                            diff_row(tab_width,
-                                theme,
-                                ui_scale_percent,
-                                visible_ix,
-                                DiffClickKind::Line,
-                                selected,
-                                DiffViewMode::Inline,
-                                min_width,
-                                &line,
-                                visual_kind,
-                                None,
-                                None,
-                                styled,
-                                streamed_spec,
-                                Some(row.text.as_ref()),
-                                reveal_whitespace_chars,
-                                false,
-                                show_line_numbers,
-                                wrap,
-                                annotation_width,
-                                blame_ctx
+                            diff_row(DiffRowStyle {
+tab_width,
+theme,
+ui_scale_percent,
+mode: DiffViewMode::Inline,
+min_width,
+reveal_whitespace_chars,
+show_line_numbers,
+annotation_width
+}, visible_ix, DiffClickKind::Line, &line, DiffRowDecor {
+tint: row_tint,
+selected,
+visual_kind,
+file_stat: None,
+header_display: None,
+styled,
+streamed_spec,
+raw_text: Some(row.text.as_ref()),
+context_menu_active: false,
+wrap,
+row_blame: blame_ctx
                                     .as_ref()
                                     .and_then(|ctx| build_row_blame_paint_tracked(ctx, matches!(visual_kind, DiffLineKind::Context), line.old_line, line.new_line, &blame_prev_nl, wrap, theme)),
-                                annot_hover,
-                                stage_area,
-                                stage_hover,
-                                cx,
-                            )
+annot_hover,
+stage_area,
+stage_hover
+}, cx)
                         }
                     }
                 })
@@ -1442,7 +1443,8 @@ impl MainPaneView {
                         )
                     });
 
-                    let (line, cache_epoch, styled) = if let Some(row) = render_data.as_ref() {
+                    let row_tint = this.hosted_row_tint(visible_ix, None);
+let (line, cache_epoch, styled) = if let Some(row) = render_data.as_ref() {
                         let line = AnnotatedDiffLine {
                             kind: row.kind,
                             text: "".into(),
@@ -1536,6 +1538,7 @@ impl MainPaneView {
                             }
                             this.diff_text_segments_cache_set(inline_ix, cache_epoch, styled);
                         }
+
                         let styled = this.diff_text_segments_cache_get_for_query(
                             inline_ix,
                             query.as_ref(),
@@ -1550,37 +1553,36 @@ impl MainPaneView {
                     };
                     let _ = cache_epoch;
 
-                    diff_row(tab_width,
-                        theme,
-                        ui_scale_percent,
-                        visible_ix,
-                        DiffClickKind::Line,
-                        selected,
-                        DiffViewMode::Inline,
-                        min_width,
-                        &line,
-                        visual_kind,
-                        None,
-                        None,
-                        styled,
-                        streamed_spec,
-                        render_data
+                    diff_row(DiffRowStyle {
+tab_width,
+theme,
+ui_scale_percent,
+mode: DiffViewMode::Inline,
+min_width,
+reveal_whitespace_chars,
+show_line_numbers,
+annotation_width
+}, visible_ix, DiffClickKind::Line, &line, DiffRowDecor {
+tint: row_tint,
+selected,
+visual_kind,
+file_stat: None,
+header_display: None,
+styled,
+streamed_spec,
+raw_text: render_data
                             .as_ref()
                             .map(|row| row.text.as_ref())
                             .or_else(|| Some(diff_content_text(&line))),
-                        reveal_whitespace_chars,
-                        false,
-                        show_line_numbers,
-                        wrap,
-                        annotation_width,
-                        blame_ctx
+context_menu_active: false,
+wrap,
+row_blame: blame_ctx
                             .as_ref()
                             .and_then(|ctx| build_row_blame_paint_tracked(ctx, matches!(visual_kind, DiffLineKind::Context), line.old_line, line.new_line, &blame_prev_nl, wrap, theme)),
-                        annot_hover,
-                        stage_area,
-                        stage_hover,
-                        cx,
-                    )
+annot_hover,
+stage_area,
+stage_hover
+}, cx)
                 })
                 .collect();
         }
@@ -1692,6 +1694,7 @@ impl MainPaneView {
                             format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
                         active_context_menu_invoker.as_ref() == Some(&invoker)
                     });
+                let row_tint = this.hosted_row_tint(visible_ix, None);
                 let styled = if should_style && streamed_spec.is_none() {
                     this.diff_text_segments_cache_get_for_query(
                         src_ix,
@@ -1703,44 +1706,49 @@ impl MainPaneView {
                     None
                 };
                 diff_row(
-                    tab_width,
-                    theme,
-                    ui_scale_percent,
+                    DiffRowStyle {
+                        tab_width,
+                        theme,
+                        ui_scale_percent,
+                        mode: DiffViewMode::Inline,
+                        min_width,
+                        reveal_whitespace_chars,
+                        show_line_numbers,
+                        annotation_width,
+                    },
                     visible_ix,
                     click_kind,
-                    selected,
-                    DiffViewMode::Inline,
-                    min_width,
                     &line,
-                    visual_kind,
-                    file_stat,
-                    header_display,
-                    styled,
-                    streamed_spec,
-                    Some(if matches!(click_kind, DiffClickKind::Line) {
-                        diff_content_text(&line)
-                    } else {
-                        line.text.as_ref()
-                    }),
-                    reveal_whitespace_chars,
-                    context_menu_active,
-                    show_line_numbers,
-                    wrap,
-                    annotation_width,
-                    blame_ctx.as_ref().and_then(|ctx| {
-                        build_row_blame_paint_tracked(
-                            ctx,
-                            matches!(visual_kind, DiffLineKind::Context),
-                            line.old_line,
-                            line.new_line,
-                            &blame_prev_nl,
-                            wrap,
-                            theme,
-                        )
-                    }),
-                    annot_hover,
-                    stage_area,
-                    stage_hover,
+                    DiffRowDecor {
+                        tint: row_tint,
+                        selected,
+                        visual_kind,
+                        file_stat,
+                        header_display,
+                        styled,
+                        streamed_spec,
+                        raw_text: Some(if matches!(click_kind, DiffClickKind::Line) {
+                            diff_content_text(&line)
+                        } else {
+                            line.text.as_ref()
+                        }),
+                        context_menu_active,
+                        wrap,
+                        row_blame: blame_ctx.as_ref().and_then(|ctx| {
+                            build_row_blame_paint_tracked(
+                                ctx,
+                                matches!(visual_kind, DiffLineKind::Context),
+                                line.old_line,
+                                line.new_line,
+                                &blame_prev_nl,
+                                wrap,
+                                theme,
+                            )
+                        }),
+                        annot_hover,
+                        stage_area,
+                        stage_hover,
+                    },
                     cx,
                 )
             })
@@ -1978,6 +1986,7 @@ impl MainPaneView {
                             }
 
                             let row_has_content = file_diff_split_side_text(&row, is_left).is_some();
+                            let row_tint = this.hosted_row_tint(visible_ix, Some(if is_left { gitcomet_extension_api::DiffLineSide::Old } else { gitcomet_extension_api::DiffLineSide::New }));
                             let styled = if row_has_content && streamed_spec.is_none() {
                                 if let Some(key) = key {
                                     this.diff_text_segments_cache_get_for_query(
@@ -2018,6 +2027,7 @@ impl MainPaneView {
                                 annot_hover,
                                 stage_area,
                                 stage_hover,
+                                row_tint,
                                 cx,
                             )
                         }
@@ -2113,6 +2123,7 @@ impl MainPaneView {
                     }
 
                     let row_has_content = file_diff_split_side_text(&row, is_left).is_some();
+                    let row_tint = this.hosted_row_tint(visible_ix, Some(if is_left { gitcomet_extension_api::DiffLineSide::Old } else { gitcomet_extension_api::DiffLineSide::New }));
                     let styled = if row_has_content && streamed_spec.is_none() {
                         if let Some(key) = key {
                             this.diff_text_segments_cache_get_for_query(
@@ -2160,6 +2171,7 @@ impl MainPaneView {
                     annot_hover,
                     stage_area,
                     stage_hover,
+                    row_tint,
                     cx,
                 )
                 })
@@ -2204,6 +2216,14 @@ impl MainPaneView {
                             (false, true) => FileDiffRowKind::Add,
                             (false, false) => FileDiffRowKind::Context,
                         };
+                        let row_tint = this.hosted_row_tint(
+                            visible_ix,
+                            Some(if is_left {
+                                gitcomet_extension_api::DiffLineSide::Old
+                            } else {
+                                gitcomet_extension_api::DiffLineSide::New
+                            }),
+                        );
                         let (streamed_spec, styled) = if let Some(src_ix) = src_ix {
                             let language =
                                 this.diff_language_for_src_ix.get(src_ix).copied().flatten();
@@ -2310,6 +2330,7 @@ impl MainPaneView {
                             annot_hover,
                             stage_area,
                             stage_hover,
+                            row_tint,
                             cx,
                         )
                     }
@@ -2393,34 +2414,69 @@ impl MainPaneView {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn diff_row(
+struct DiffRowStyle {
     tab_width: usize,
     theme: AppTheme,
     ui_scale_percent: u32,
-    visible_ix: usize,
-    click_kind: DiffClickKind,
-    selected: bool,
     mode: DiffViewMode,
     min_width: Pixels,
-    line: &AnnotatedDiffLine,
+    reveal_whitespace_chars: bool,
+    show_line_numbers: bool,
+    annotation_width: Pixels,
+}
+
+struct DiffRowDecor<'a> {
+    tint: Option<gpui::Rgba>,
+    selected: bool,
     visual_kind: DiffLineKind,
     file_stat: Option<(usize, usize)>,
     header_display: Option<SharedString>,
-    styled: Option<&CachedDiffStyledText>,
+    styled: Option<&'a CachedDiffStyledText>,
     streamed_spec: Option<diff_canvas::StreamedDiffTextPaintSpec>,
-    raw_text: Option<&str>,
-    reveal_whitespace_chars: bool,
+    raw_text: Option<&'a str>,
     context_menu_active: bool,
-    show_line_numbers: bool,
     wrap: Option<diff_canvas::DiffTextWrapSlice>,
-    annotation_width: Pixels,
     row_blame: Option<diff_canvas::RowBlamePaint>,
     annot_hover: Option<(usize, AnnotArea)>,
     stage_area: Option<DiffArea>,
     stage_hover: Option<diff_canvas::DiffStageHover>,
+}
+
+fn diff_row(
+    style: DiffRowStyle,
+    visible_ix: usize,
+    click_kind: DiffClickKind,
+    line: &AnnotatedDiffLine,
+    decor: DiffRowDecor<'_>,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
+    let DiffRowStyle {
+        tab_width,
+        theme,
+        ui_scale_percent,
+        mode,
+        min_width,
+        reveal_whitespace_chars,
+        show_line_numbers,
+        annotation_width,
+    } = style;
+    let DiffRowDecor {
+        tint,
+        selected,
+        visual_kind,
+        file_stat,
+        header_display,
+        styled,
+        streamed_spec,
+        raw_text,
+        context_menu_active,
+        wrap,
+        row_blame,
+        annot_hover,
+        stage_area,
+        stage_hover,
+    } = decor;
+
     let on_click = cx.listener(move |this, e: &ClickEvent, _w, cx| {
         if this.consume_suppress_click_after_drag() {
             cx.notify();
@@ -2536,6 +2592,7 @@ fn diff_row(
     }
 
     let (mut bg, fg, gutter_fg) = diff_line_colors(theme, visual_kind);
+    bg = tint.unwrap_or(bg);
     if selected {
         bg = focused_diff_line_bg(theme, visual_kind);
     }
@@ -2985,6 +3042,7 @@ fn patch_split_column_row(
     annot_hover: Option<(usize, AnnotArea)>,
     stage_area: Option<DiffArea>,
     stage_hover: Option<diff_canvas::DiffStageHover>,
+    tint: Option<gpui::Rgba>,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     let line_kind = match (column, visual_kind) {
@@ -2997,6 +3055,7 @@ fn patch_split_column_row(
         _ => DiffLineKind::Context,
     };
     let (mut bg, fg, gutter_fg) = diff_line_colors(theme, line_kind);
+    bg = tint.unwrap_or(bg);
     if selected {
         bg = focused_diff_line_bg(theme, line_kind);
     }

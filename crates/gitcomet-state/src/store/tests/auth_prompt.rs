@@ -37,6 +37,7 @@ fn effect_git_auth(effect: &Effect) -> Option<&StagedGitAuth> {
         | Effect::CommitAmend { auth, .. }
         | Effect::SafePushAfterCommit { auth, .. }
         | Effect::FetchAll { auth, .. }
+        | Effect::FetchRefspecs { auth, .. }
         | Effect::Pull { auth, .. }
         | Effect::PullBranch { auth, .. }
         | Effect::PushWithTags { auth, .. }
@@ -1270,4 +1271,53 @@ fn tag_push_preview_discards_stale_results_and_does_not_start_auth_or_mark_push_
     ));
     assert!(state.auth_prompt.is_none());
     assert_eq!(state.repos[0].push_in_flight, 0);
+}
+
+/// A refspec fetch that needs credentials replays with exactly its remote
+/// and refspecs, authenticated, like a full fetch.
+#[test]
+fn submit_auth_prompt_replays_a_refspec_fetch() {
+    let _lock = super::staged_auth_test_lock();
+    clear_staged_git_auth();
+
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
+    let id_alloc = AtomicU64::new(1);
+    let command = RepoCommandKind::FetchRefspecs {
+        remote: "origin".to_string(),
+        refspecs: vec!["+refs/pull/7/head:refs/remotes/origin/pr/7".to_string()],
+    };
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: command.clone(),
+            result: Err(auth_error(
+                "git fetch failed: fatal: could not read Username for 'https://example.com': terminal prompts disabled",
+            )),
+        }),
+    );
+    assert_eq!(
+        state.auth_prompt.as_ref().map(|prompt| &prompt.operation),
+        Some(&AuthRetryOperation::RepoCommand { repo_id, command })
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SubmitAuthPrompt {
+            username: Some("alice".to_string()),
+            secret: "token".to_string(),
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::FetchRefspecs { remote, refspecs, .. }]
+            if remote == "origin" && refspecs == &["+refs/pull/7/head:refs/remotes/origin/pr/7"]
+    ));
+    assert!(effect_git_auth(&effects[0]).is_some());
+    assert_eq!(state.repos[0].pull_in_flight, 1);
 }

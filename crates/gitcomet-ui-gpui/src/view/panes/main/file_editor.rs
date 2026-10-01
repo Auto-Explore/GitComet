@@ -364,7 +364,7 @@ impl MainPaneView {
     /// Whether the pane is currently showing the editable buffer.
     pub(in crate::view) fn is_file_editor_active(&self) -> bool {
         self.active_repo()
-            .is_some_and(|repo| repo.diff_state.edit_mode)
+            .is_some_and(|repo| self.bound_diff_state(repo).edit_mode)
             && self.file_editor_path().is_some()
     }
 
@@ -415,10 +415,10 @@ impl MainPaneView {
     /// The working-tree file the editor is (or would be) editing.
     pub(in crate::view) fn file_editor_path(&self) -> Option<PathBuf> {
         let repo = self.active_repo()?;
-        if !repo.diff_state.edit_mode {
+        if !self.bound_diff_state(repo).edit_mode {
             return None;
         }
-        match repo.diff_state.diff_target.as_ref()? {
+        match self.bound_diff_state(repo).diff_target.as_ref()? {
             DiffTarget::WorkingTree { path, .. } => Some(path.clone()),
             _ => None,
         }
@@ -430,8 +430,11 @@ impl MainPaneView {
     /// workspace copy, so a commit's file resolves to the same path in the
     /// working tree.
     pub(in crate::view) fn editable_path_for_current_target(&self) -> Option<PathBuf> {
+        if !self.store.policy.allow_edit {
+            return None;
+        }
         let repo = self.active_repo()?;
-        match repo.diff_state.diff_target.as_ref()? {
+        match self.bound_diff_state(repo).diff_target.as_ref()? {
             DiffTarget::WorkingTree { path, .. } => Some(path.clone()),
             DiffTarget::Commit { path, .. } => Some(path.clone()),
             _ => None,

@@ -479,10 +479,10 @@ fn secondary_f_with_a_diff_visible_opens_diff_search_not_history_find(
 ) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let mut repo = find_fixture_repo(find_fixture_commits());
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        PathBuf::from("src/lib.rs"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
     repo.diff_state.diff_target = Some(target.clone());
     repo.diff_state.diff = Loadable::Ready(
         gitcomet_core::domain::Diff {
@@ -2576,6 +2576,8 @@ fn history_find_reselecting_a_commit_leaves_range_comparison(cx: &mut gpui::Test
         to: Some(CommitId("aaaa0000".into())),
         from_label: "base".into(),
         to_label: "tip".into(),
+        options: Default::default(),
+        base: None,
     });
     let (view, store, cx) = mount_find_fixture(cx, repo);
     open_find_with_shortcut(cx, &view);

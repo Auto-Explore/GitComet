@@ -1155,6 +1155,9 @@ impl MainPaneView {
         window: &Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.store.binding.is_some() && !self.store.policy.select_lines {
+            return;
+        }
         // Deliberately does not claim the press: the diff row's own release
         // handler reads the claim, and this gesture starts on that same row.
         // A drag that actually moved is suppressed by
@@ -1258,6 +1261,9 @@ impl MainPaneView {
         window: &Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.store.binding.is_some() && !self.store.policy.select_lines {
+            return;
+        }
         self.diff_text_selection_owner.adopt(window, cx);
         self.diff_text_pair_match = None;
         self.diff_text_occurrences.clear();
@@ -1279,6 +1285,9 @@ impl MainPaneView {
         position: Point<Pixels>,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.store.binding.is_some() && !self.store.policy.select_lines {
+            return;
+        }
         let Some(hit) = self.diff_text_hit_from_hitbox(visible_ix, region, position) else {
             return;
         };
@@ -2786,7 +2795,7 @@ impl MainPaneView {
     fn diff_copy_source(&self) -> crate::clipboard::CopySource {
         match self
             .active_repo()
-            .and_then(|repo| repo.diff_state.diff_target.as_ref())
+            .and_then(|repo| self.bound_diff_state(repo).diff_target.as_ref())
         {
             Some(DiffTarget::Commit { .. }) => crate::clipboard::CopySource::CommitDetailsDiff,
             Some(DiffTarget::CommitRange { .. }) => crate::clipboard::CopySource::CommitRangeDiff,
@@ -2825,7 +2834,7 @@ impl MainPaneView {
         let repo_id = repo.id;
         let workdir = repo.spec.workdir.clone();
 
-        let (area, allow_apply) = match repo.diff_state.diff_target.as_ref() {
+        let (area, allow_apply) = match self.bound_diff_state(repo).diff_target.as_ref() {
             Some(DiffTarget::WorkingTree { area, .. }) => (*area, true),
             _ => (DiffArea::Unstaged, false),
         };

@@ -28,6 +28,7 @@ mod harness {
 
     pub fn run() -> Result<(), String> {
         install_benchmark_process_ram_guard();
+        gitcomet_ui_gpui::benchmarks::install_live_runtime();
         let args = parse_cli_args(env::args().skip(1))?;
         let scenario = scenario_from_bench(&args.bench)?;
         let fixture = IdleResourceFixture::with_config(scenario, config_for_scenario(scenario));

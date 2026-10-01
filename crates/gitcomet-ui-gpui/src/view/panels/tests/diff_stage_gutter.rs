@@ -78,10 +78,7 @@ fn worktree_target(area: DiffArea) -> DiffTarget {
 }
 
 fn worktree_target_at(path: &str, area: DiffArea) -> DiffTarget {
-    DiffTarget::WorkingTree {
-        path: std::path::PathBuf::from(path),
-        area,
-    }
+    DiffTarget::working_tree(std::path::PathBuf::from(path), area)
 }
 
 /// Open a window showing the fixture diff in the default (whole-file) view and
@@ -347,10 +344,10 @@ fn stage_gutter_builds_a_reverse_appliable_patch_for_a_staged_diff(cx: &mut gpui
 fn stage_gutter_is_disabled_for_commit_diffs(cx: &mut gpui::TestAppContext) {
     let (view, cx) = open_stage_gutter_view(
         cx,
-        DiffTarget::Commit {
-            commit_id: CommitId("abcdef00112233bb".into()),
-            path: std::path::PathBuf::from("src/lib.rs"),
-        },
+        DiffTarget::commit(
+            CommitId("abcdef00112233bb".into()),
+            std::path::PathBuf::from("src/lib.rs"),
+        ),
         DiffViewMode::Inline,
     );
 
@@ -690,6 +687,22 @@ fn open_generated_diff_view(
     &mut gpui::VisualTestContext,
     std::path::PathBuf,
 ) {
+    open_generated_diff_view_with_status(cx, repo_id, lines, mode, 0)
+}
+
+/// [`open_generated_diff_view`] with `extra_unstaged` more modified files in
+/// the unstaged section around the diffed one.
+fn open_generated_diff_view_with_status(
+    cx: &mut gpui::TestAppContext,
+    repo_id: RepoId,
+    lines: usize,
+    mode: DiffViewMode,
+    extra_unstaged: usize,
+) -> (
+    gpui::Entity<super::super::GitCometView>,
+    &mut gpui::VisualTestContext,
+    std::path::PathBuf,
+) {
     use std::fmt::Write as _;
 
     let (mut old_text, mut new_text, mut body) = (String::new(), String::new(), String::new());
@@ -732,6 +745,29 @@ fn open_generated_diff_view(
         gitcomet_core::domain::FileStatusKind::Modified,
         DiffArea::Unstaged,
     );
+    if extra_unstaged > 0 {
+        let mut unstaged: Vec<_> = (0..extra_unstaged)
+            .map(|ix| gitcomet_core::domain::FileStatus {
+                path: format!("src/gen/file_{ix:06}.rs").into(),
+                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                conflict: None,
+            })
+            .collect();
+        unstaged.push(gitcomet_core::domain::FileStatus {
+            path: path.clone(),
+            kind: gitcomet_core::domain::FileStatusKind::Modified,
+            conflict: None,
+        });
+        unstaged.sort_by(|a, b| a.path.cmp(&b.path));
+        repo.status = Loadable::Ready(
+            gitcomet_core::domain::RepoStatus {
+                staged: Arc::new(Vec::new()),
+                unstaged: Arc::new(unstaged),
+            }
+            .into(),
+        );
+        repo.status_rev = repo.status_rev.wrapping_add(1);
+    }
     repo.diff_state.diff_target = Some(target.clone());
     repo.diff_state.diff_state_rev = 1;
     repo.diff_state.diff_rev = 1;
@@ -845,6 +881,153 @@ fn diff_view_real_frame_benchmark(cx: &mut gpui::TestAppContext) {
         percentile(&mut move_us, 50),
         percentile(&mut move_us, 95),
     );
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+/// Main-pane frame cost with a long unstaged list, as each diff scroll step
+/// pays it: the pane's own notify with the other panes cached. Ignored: a
+/// measurement, not a check.
+#[gpui::test]
+#[ignore = "timing probe"]
+fn timing_main_pane_frame_with_large_status(cx: &mut gpui::TestAppContext) {
+    use std::time::Instant;
+
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let _cached_views = crate::view::enable_stable_cached_views_for_test();
+    let extra: usize = std::env::var("GITCOMET_PROBE_STATUS_ENTRIES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(20_000);
+    let (view, cx, workdir) =
+        open_generated_diff_view_with_status(cx, RepoId(70932), 400, DiffViewMode::Inline, extra);
+    let notify_and_draw = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, app| {
+            let main_pane = view.read(app).main_pane.clone();
+            main_pane.update(app, |_pane, cx| cx.notify());
+            let _ = window.draw(app);
+        });
+    };
+    for _ in 0..5 {
+        notify_and_draw(cx);
+    }
+    // More frames give a profiler enough samples of the steady state.
+    let frames: usize = std::env::var("GITCOMET_PROBE_FRAMES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(60);
+    let mut frame_ms = Vec::with_capacity(frames);
+    for _ in 0..frames {
+        let started = Instant::now();
+        notify_and_draw(cx);
+        frame_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    frame_ms.sort_by(f64::total_cmp);
+    println!(
+        "timing main_pane_frame_with_large_status entries={extra} p50={:.3}ms p90={:.3}ms",
+        frame_ms[frames / 2],
+        frame_ms[frames * 9 / 10],
+    );
+    // The details pane lists the same entries; it re-renders on every status
+    // publication and every notify of the commit box (keystrokes, caret blink).
+    let mut details_ms = Vec::with_capacity(frames);
+    for _ in 0..frames {
+        let started = Instant::now();
+        cx.update(|window, app| {
+            let details = view.read(app).details_pane.clone();
+            details.update(app, |_pane, cx| cx.notify());
+            let _ = window.draw(app);
+        });
+        details_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    details_ms.sort_by(f64::total_cmp);
+    println!(
+        "timing details_pane_frame_with_large_status entries={extra} p50={:.3}ms p90={:.3}ms",
+        details_ms[frames / 2],
+        details_ms[frames * 9 / 10],
+    );
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+/// A diff scroll step's frame while a toast is open: the main pane's own
+/// notify, which also re-renders the root, with the other panes cached.
+/// Ignored: a measurement.
+#[gpui::test]
+#[ignore = "timing probe"]
+fn timing_main_pane_frame_with_open_toast(cx: &mut gpui::TestAppContext) {
+    use std::time::Instant;
+
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let _cached_views = crate::view::enable_stable_cached_views_for_test();
+    let (view, cx, workdir) =
+        open_generated_diff_view(cx, RepoId(70935), 400, DiffViewMode::Inline);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.toast_host.update(cx, |host, cx| {
+                host.push_toast(
+                    components::ToastKind::Warning,
+                    "a toast stays open while scrolling".into(),
+                    cx,
+                )
+            });
+        });
+    });
+    let notify_and_draw = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, app| {
+            let main_pane = view.read(app).main_pane.clone();
+            main_pane.update(app, |_pane, cx| cx.notify());
+            let _ = window.draw(app);
+        });
+    };
+    // Past the toast's fade-in.
+    for _ in 0..10 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(100));
+        notify_and_draw(cx);
+    }
+    const FRAMES: usize = 200;
+    let mut frame_ms = Vec::with_capacity(FRAMES);
+    for _ in 0..FRAMES {
+        let started = Instant::now();
+        notify_and_draw(cx);
+        frame_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    frame_ms.sort_by(f64::total_cmp);
+    println!(
+        "timing main_pane_frame_with_open_toast p50={:.3}ms p90={:.3}ms",
+        frame_ms[FRAMES / 2],
+        frame_ms[FRAMES * 9 / 10],
+    );
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+/// What the main pane's state application spends on its diff caches when
+/// the open diff did not change (a status or line-stats publication after a
+/// save): both checks confirm the cache per call. Ignored: a measurement.
+#[gpui::test]
+#[ignore = "timing probe"]
+fn timing_diff_cache_checks_on_unchanged_diff(cx: &mut gpui::TestAppContext) {
+    use std::time::Instant;
+
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let lines: usize = std::env::var("GITCOMET_PROBE_DIFF_LINES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(100_000);
+    let (view, cx, workdir) =
+        open_generated_diff_view(cx, RepoId(70933), lines, DiffViewMode::Inline);
+    let mut best = f64::MAX;
+    for _ in 0..20 {
+        let started = Instant::now();
+        cx.update(|_window, app| {
+            let main_pane = view.read(app).main_pane.clone();
+            main_pane.update(app, |pane, cx| {
+                pane.ensure_file_diff_cache(cx);
+                pane.ensure_rendered_patch_diff_cache(cx);
+            });
+        });
+        best = best.min(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    println!("timing diff_cache_checks_on_unchanged_diff lines={lines} best={best:.3}ms");
     let _ = std::fs::remove_dir_all(&workdir);
 }
 

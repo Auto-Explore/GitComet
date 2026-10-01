@@ -6,13 +6,7 @@ const SHA_A: &str = "0123456789abcdef0123456789abcdef01234567";
 const SHA_B: &str = "89abcdef0123456789abcdef0123456789abcdef";
 
 fn file(path: &str) -> CommitFileChange {
-    CommitFileChange {
-        path: std::path::PathBuf::from(path),
-        kind: FileStatusKind::Modified,
-        is_submodule: false,
-        additions: None,
-        deletions: None,
-    }
+    CommitFileChange::new(std::path::PathBuf::from(path), FileStatusKind::Modified)
 }
 
 fn push_commit(
@@ -374,4 +368,61 @@ fn folder_menu_collapses_and_expands_everything_under_it(cx: &mut gpui::TestAppC
     set_collapsed(cx, false);
     assert!(collapsed_dirs(cx).is_empty());
     assert_eq!(file_rows(cx, repo_id).len(), 3);
+}
+
+/// The file menu has no "Open diff"; the row's click opens the diff, and for a
+/// renamed file that diff reads its old side from the rename source.
+#[gpui::test]
+fn commit_file_click_opens_a_renamed_file_from_its_old_path(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(164);
+    push_commit(
+        &view,
+        cx,
+        repo_id,
+        SHA_A,
+        vec![
+            CommitFileChange::new(
+                std::path::PathBuf::from("src/new.rs"),
+                FileStatusKind::Renamed,
+            )
+            .with_old_path(Some(std::path::PathBuf::from("src/old.rs"))),
+        ],
+    );
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| {
+            this.store
+                .replace_snapshot_for_test(Arc::clone(&this.state));
+        });
+    });
+
+    click_row(
+        cx,
+        format!("commit_file_{}_0", repo_id.0),
+        gpui::Modifiers::default(),
+    );
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let target = loop {
+        let target = cx.update(|_window, app| {
+            view.read(app).store.snapshot().repos[0]
+                .diff_state
+                .diff_target
+                .clone()
+        });
+        if let Some(target) = target {
+            break target;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the row click should open the file's diff"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    assert_eq!(target.file_path(), Some(Path::new("src/new.rs")));
+    assert_eq!(target.old_file_path(), Some(Path::new("src/old.rs")));
 }

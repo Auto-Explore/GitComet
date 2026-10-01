@@ -50,10 +50,8 @@ pub struct PatchDiffPagedRowsFixture {
 
 impl PatchDiffPagedRowsFixture {
     pub fn new(lines: usize) -> Self {
-        let target = DiffTarget::WorkingTree {
-            path: std::path::PathBuf::from("src/lib.rs"),
-            area: DiffArea::Unstaged,
-        };
+        let target =
+            DiffTarget::working_tree(std::path::PathBuf::from("src/lib.rs"), DiffArea::Unstaged);
         let text = build_synthetic_unified_patch(lines);
         let diff = Arc::new(Diff::from_unified(target, text.as_str()));
         let mut pending_removes = 0usize;

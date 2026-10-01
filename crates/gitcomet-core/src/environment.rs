@@ -22,7 +22,7 @@ pub struct EnvironmentSnapshot {
 impl Default for EnvironmentSnapshot {
     fn default() -> Self {
         Self {
-            app_version: env!("CARGO_PKG_VERSION").into(),
+            app_version: crate::identity::current().version().into(),
             git_version: None,
             system: SystemDetails::default(),
             graphics: BTreeMap::new(),
@@ -175,7 +175,10 @@ impl EnvironmentSnapshot {
                     "build",
                     "Build",
                     (!self.app_version.trim().is_empty())
-                        .then(|| format!("GitComet v{}", self.app_version))
+                        .then(|| {
+                            let product = crate::identity::current().display_name();
+                            format!("{product} v{}", self.app_version)
+                        })
                         .as_deref(),
                 ),
                 row("git", "Git", self.git_version.as_deref()),

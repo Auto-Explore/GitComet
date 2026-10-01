@@ -385,8 +385,8 @@ fn text_file() -> io::Result<File> {
     tempfile::tempfile()
 }
 
-/// The XDG cache directory on systems whose temp dir may live in memory;
-/// macOS and Windows keep theirs on disk.
+/// The product's XDG cache directory on systems whose temp dir may live in
+/// memory; macOS and Windows keep theirs on disk.
 fn text_dir(xdg_cache_home: Option<&OsStr>, home: Option<&OsStr>) -> Option<PathBuf> {
     if cfg!(any(target_os = "macos", not(unix))) {
         return None;
@@ -394,7 +394,8 @@ fn text_dir(xdg_cache_home: Option<&OsStr>, home: Option<&OsStr>) -> Option<Path
     let non_empty =
         |path: Option<&OsStr>| path.map(PathBuf::from).filter(|path| path.is_absolute());
     let cache = non_empty(xdg_cache_home).or_else(|| Some(non_empty(home)?.join(".cache")))?;
-    Some(cache.join("gitcomet").join("history-find"))
+    let product = gitcomet_core::identity::current().directory_name();
+    Some(cache.join(product).join("history-find"))
 }
 
 #[derive(Debug)]

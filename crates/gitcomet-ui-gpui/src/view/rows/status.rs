@@ -577,7 +577,7 @@ fn render_status_rows_for_section(
                 selected_paths.contains(entry.path.as_path())
             } else {
                 selected.is_some_and(|t| match t {
-                    DiffTarget::WorkingTree { path, area } => {
+                    DiffTarget::WorkingTree { path, area, .. } => {
                         *area == section.diff_area() && path == &entry.path
                     }
                     _ => false,
@@ -1010,10 +1010,7 @@ fn status_row(
                 let modifiers = _e.modifiers();
                 this.focus_status_section(section, window, cx);
                 let modifies_selection = modifiers.shift || modifiers.control || modifiers.platform;
-                let target = DiffTarget::WorkingTree {
-                    path: (*path_for_row).clone(),
-                    area,
-                };
+                let target = DiffTarget::working_tree((*path_for_row).clone(), area);
                 let should_unselect = _e.standard_click()
                     && this.status_selected_paths_for_area(repo_id, area)
                         == std::slice::from_ref(path_for_row.as_ref())

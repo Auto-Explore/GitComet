@@ -406,10 +406,8 @@ pub struct InDiffTextSearchFixture {
 impl InDiffTextSearchFixture {
     pub fn new(lines: usize) -> Self {
         let total_lines = lines.max(1);
-        let target = DiffTarget::WorkingTree {
-            path: std::path::PathBuf::from("src/lib.rs"),
-            area: DiffArea::Unstaged,
-        };
+        let target =
+            DiffTarget::working_tree(std::path::PathBuf::from("src/lib.rs"), DiffArea::Unstaged);
         let text = build_synthetic_diff_search_unified_patch(total_lines);
         let diff = Arc::new(Diff::from_unified(target, text.as_str()));
         let visible_line_indices = diff

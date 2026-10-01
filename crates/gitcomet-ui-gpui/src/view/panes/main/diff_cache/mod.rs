@@ -9,7 +9,9 @@ use rustc_hash::FxHasher;
 mod file_diff;
 mod image_cache;
 mod patch_diff;
+mod shared_file;
 mod word_highlight;
+pub(in crate::view) use shared_file::SharedFileDiffCache;
 
 #[cfg(any(test, feature = "benchmarks"))]
 #[allow(unused_imports)]
@@ -316,10 +318,14 @@ impl MainPaneView {
         };
 
         let diff_target_for_task = diff_target.clone();
+        let patch_signature = patch_diff
+            .as_ref()
+            .filter(|_| file.is_some())
+            .map(|patch_diff| self.patch_diff_signature(patch_diff));
         let file_content_signature = file.as_ref().map(|file| {
             let mut signature = file_diff_text_signature(file.as_ref());
-            if let Some(patch_diff) = patch_diff.as_ref() {
-                signature ^= patch_diff_content_signature(patch_diff.as_ref()).rotate_left(1);
+            if let Some(patch_signature) = patch_signature {
+                signature ^= patch_signature.rotate_left(1);
             }
             signature ^= (self.diff_whitespace_mode.key().len() as u64).rotate_left(7);
             signature
@@ -424,10 +430,21 @@ impl MainPaneView {
         let seq = self.file_diff_cache_seq;
         self.file_diff_cache_inflight = Some(seq);
         let whitespace_mode = self.diff_whitespace_mode;
+        let shared_file = self
+            .hosted_decor
+            .as_ref()
+            .and_then(|decor| decor.file_cache.clone())
+            .filter(|cache| {
+                whitespace_mode == DiffWhitespaceMode::Show
+                    && cache.matches(&file, patch_diff.as_ref(), &workdir)
+            });
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
                 let rebuild_cache = move || {
+                    if let Some(cache) = shared_file {
+                        return cache.build().cloned().map_err(Clone::clone);
+                    }
                     build_file_diff_cache_rebuild_with_patch(
                         file.as_ref(),
                         &workdir,
@@ -709,6 +726,21 @@ impl MainPaneView {
         .detach();
     }
 
+    /// `patch_diff_content_signature`, reused while the store hands back the
+    /// same diff. Every state application checks both diff caches against it,
+    /// and hashing a large patch's whole text each time showed on the UI
+    /// thread after every save.
+    fn patch_diff_signature(&mut self, diff: &Arc<gitcomet_core::domain::Diff>) -> u64 {
+        if let Some((hashed, signature)) = &self.patch_signature_memo
+            && Arc::ptr_eq(hashed, diff)
+        {
+            return *signature;
+        }
+        let signature = patch_diff_content_signature(diff.as_ref());
+        self.patch_signature_memo = Some((Arc::clone(diff), signature));
+        signature
+    }
+
     pub(in crate::view) fn ensure_rendered_patch_diff_cache(
         &mut self,
         cx: &mut gpui::Context<Self>,
@@ -722,9 +754,10 @@ impl MainPaneView {
             && self.diff_cache_target == self.rendered_diff_target().cloned();
         let ready_content_changed = metadata_current
             && ready_diff.as_ref().is_some_and(|diff| {
-                self.patch_diff_row_len() != diff.lines.len()
-                    || self.diff_cache_content_signature
-                        != Some(patch_diff_content_signature(diff.as_ref()))
+                self.patch_diff_row_len() != diff.lines.len() || {
+                    let signature = self.patch_diff_signature(diff);
+                    self.diff_cache_content_signature != Some(signature)
+                }
             });
         let should_rebuild = !metadata_current || ready_content_changed;
         if should_rebuild {
@@ -751,8 +784,8 @@ impl MainPaneView {
         });
         let next_content_signature = next_cache_state
             .as_ref()
-            .and_then(|(_, _, _, _, diff)| diff.as_ref())
-            .map(|diff| patch_diff_content_signature(diff.as_ref()));
+            .and_then(|(_, _, _, _, diff)| diff.clone())
+            .map(|diff| self.patch_diff_signature(&diff));
         if let Some((repo_id, diff_rev, diff_target, _, diff)) = next_cache_state.as_ref() {
             let same_repo_and_target = self.diff_cache_repo_id == Some(*repo_id)
                 && self.diff_cache_target.as_ref() == diff_target.as_ref();

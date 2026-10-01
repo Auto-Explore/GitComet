@@ -649,11 +649,20 @@ impl GixRepo {
             .references()
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
 
+        // Refs the product leaves out of History. Every all-branches reader
+        // (pages, authors, the index, snapshots) starts from these tips, so
+        // excluding here reaches all of them and their caches.
+        let filter = &self.history_ref_filter;
+        let excluded = |reference: &gix::Reference<'_>| {
+            !filter.is_empty() && filter.excludes(&reference.name().as_bstr().to_string())
+        };
+
         // Fingerprint pass: names, raw targets and followed symbolic chains
         // only, no object lookups.
         let head_id = gix_head_id_or_none(repo)?;
         let mut hasher = FxHasher::default();
         head_id.hash(&mut hasher);
+        filter.hash(&mut hasher);
         let mut ref_count = 0usize;
         let iter = refs
             .all()
@@ -667,14 +676,19 @@ impl GixRepo {
             if matches!(
                 reference.name().category(),
                 Some(gix::reference::Category::Tag)
-            ) {
+            ) || excluded(&reference)
+            {
                 continue;
             }
             super::super::git_ops::hash_reference_identity(&mut hasher, &mut reference);
             ref_count += 1;
         }
         // Older stash entries are reflog-only and need explicit tips.
-        let stash_tips = stash_reflog_tips(repo, 50).unwrap_or_default();
+        let stash_tips = if filter.excludes("refs/stash") {
+            Vec::new()
+        } else {
+            stash_reflog_tips(repo, 50).unwrap_or_default()
+        };
         stash_tips.hash(&mut hasher);
         let fingerprint = hasher.finish();
 
@@ -709,7 +723,8 @@ impl GixRepo {
             if matches!(
                 reference.name().category(),
                 Some(gix::reference::Category::Tag)
-            ) {
+            ) || excluded(&reference)
+            {
                 continue;
             }
             let Some(id) = reference_commit_id(reference)? else {
@@ -919,7 +934,12 @@ impl GixRepo {
             // Working-tree tip: the newer side is the live worktree, which has no
             // tree object, so shell out to `git diff <from>` for the file list
             // (consistent with the unified diff shown in the main pane).
-            None => super::submodules::diff_commit_to_worktree_files(&self.spec.workdir, from),
+            None => super::super::comparison::commit_to_worktree_files(
+                &self.spec.workdir,
+                from,
+                false,
+                &CancellationToken::new(),
+            ),
         }
     }
 

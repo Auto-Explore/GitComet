@@ -1,5 +1,5 @@
 use super::*;
-use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
+use crate::kit::interaction as controls;
 
 fn annotated_toggle(
     theme: AppTheme,

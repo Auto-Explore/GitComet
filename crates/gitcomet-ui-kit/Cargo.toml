@@ -1,0 +1,52 @@
+[package]
+name = "gitcomet-ui-kit"
+description = "GitComet's GPUI foundations: runtime policy, appearance, theme, fonts, and components."
+build = "build.rs"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Test helpers for crates that test against the kit. Enabling it adds
+# functions only; it never changes runtime behavior.
+test-support = ["gpui/test-support", "dep:regex"]
+# Exposes internals the host's benchmarks measure.
+benchmarks = []
+
+# No dependency on gitcomet-state, the application, or the UI host:
+# scripts/ci/boundaries.py enforces it.
+[dependencies]
+fontdb = { workspace = true }
+gitcomet-core = { workspace = true }
+# `ui_probe` uses GPUI's opt-in frame event collector in normal app builds.
+gpui = { workspace = true, features = ["profiler"] }
+lru = { workspace = true }
+memchr = { workspace = true }
+palette = { workspace = true }
+regex = { workspace = true, optional = true }
+rustc-hash = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+smallvec = { workspace = true }
+smol = { workspace = true }
+unicode-segmentation = { workspace = true }
+url = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11-clipboard = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+gitcomet-win32-window-utils = { path = "../win32-window-utils" }
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+gpui_platform = { workspace = true }
+regex = { workspace = true }
+tempfile = { workspace = true }

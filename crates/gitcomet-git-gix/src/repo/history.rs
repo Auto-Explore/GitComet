@@ -989,10 +989,7 @@ impl GixRepo {
                 // GitComet would silently keep its old message.
                 if rebase_unplanned_message_edit(repo.path(), &plan) {
                     return Err(Error::new(ErrorKind::Backend(
-                        "this rebase has pending reword/squash steps that GitComet did not \
-                         plan; continue it in a terminal with `git rebase --continue`, or \
-                         abort the rebase"
-                            .to_string(),
+                        unplanned_rebase_edit_message(),
                     )));
                 }
                 cmd.env("GIT_EDITOR", shell_quote_path(&editor));
@@ -1000,11 +997,11 @@ impl GixRepo {
                 cmd.env("GITCOMET_GIT_DIR", repo.path());
             }
             PersistedReword::Damaged => {
-                return Err(Error::new(ErrorKind::Backend(
-                    "GitComet's reword data for this rebase is incomplete; continue it in a \
-                     terminal with `git rebase --continue`, or abort the rebase"
-                        .to_string(),
-                )));
+                return Err(Error::new(ErrorKind::Backend(format!(
+                    "{}'s reword data for this rebase is incomplete; continue it in a \
+                     terminal with `git rebase --continue`, or abort the rebase",
+                    gitcomet_core::identity::current().display_name()
+                ))));
             }
             PersistedReword::Absent => {
                 // `git rebase --continue` may open an editor to confirm the
@@ -1016,10 +1013,7 @@ impl GixRepo {
                 // in a terminal, continued here after a conflict).
                 if rebase_pending_message_edit(repo.path()) {
                     return Err(Error::new(ErrorKind::Backend(
-                        "this rebase has pending reword/squash steps that GitComet did not \
-                         plan; continue it in a terminal with `git rebase --continue`, or \
-                         abort the rebase"
-                            .to_string(),
+                        unplanned_rebase_edit_message(),
                     )));
                 }
                 cmd.env("GIT_EDITOR", "true");
@@ -2235,6 +2229,15 @@ done
 exit 0
 "#
     .to_string()
+}
+
+fn unplanned_rebase_edit_message() -> String {
+    format!(
+        "this rebase has pending reword/squash steps that {} did not \
+         plan; continue it in a terminal with `git rebase --continue`, or \
+         abort the rebase",
+        gitcomet_core::identity::current().display_name()
+    )
 }
 
 #[cfg(test)]

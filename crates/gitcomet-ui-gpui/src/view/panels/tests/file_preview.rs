@@ -1483,6 +1483,105 @@ fn large_file_preview_keeps_prepared_syntax_document_above_old_line_gate(
     std::fs::remove_dir_all(&workdir).expect("cleanup large preview fixture");
 }
 
+/// Main-pane frame cost with a large file preview open, as each scroll step
+/// pays it (the pane's own notify, other panes cached), with and without a
+/// search query. Ignored: a measurement, not a check.
+#[gpui::test]
+#[ignore = "timing probe"]
+fn timing_large_file_preview_frame(cx: &mut gpui::TestAppContext) {
+    use std::time::Instant;
+
+    let _cached_views = crate::view::enable_stable_cached_views_for_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(53);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_timing_large_file_preview",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("large_preview.rs");
+    let line_count = 30_000usize;
+    let lines: Arc<Vec<String>> = Arc::new(
+        (0..line_count)
+            .map(|ix| format!("let preview_value_{ix}: usize = compute({ix}, &state);"))
+            .collect(),
+    );
+    let preview_text = lines.join("\n");
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create preview workdir");
+    std::fs::write(workdir.join(&file_rel), &preview_text).expect("write preview fixture");
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Added,
+                gitcomet_core::domain::DiffArea::Staged,
+            );
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let path = workdir.join(&file_rel);
+            let lines = Arc::clone(&lines);
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(pane, path, lines, preview_text.len(), cx);
+            });
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "large file preview prepared syntax document",
+        |pane| {
+            pane.is_file_preview_active()
+                && pane.worktree_preview_text.len() == preview_text.len()
+                && pane.worktree_preview_prepared_syntax_document().is_some()
+        },
+        |pane| pane.worktree_preview_text.len(),
+    );
+    for query in ["", "preview_value_1"] {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    pane.diff_search_query = query.into();
+                    cx.notify();
+                });
+            });
+        });
+        let notify_and_draw = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                main_pane.update(app, |_pane, cx| cx.notify());
+                let _ = window.draw(app);
+            });
+        };
+        for _ in 0..5 {
+            notify_and_draw(cx);
+        }
+        const FRAMES: usize = 60;
+        let mut frame_ms = Vec::with_capacity(FRAMES);
+        for _ in 0..FRAMES {
+            let started = Instant::now();
+            notify_and_draw(cx);
+            frame_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+        }
+        frame_ms.sort_by(f64::total_cmp);
+        println!(
+            "timing large_file_preview_frame bytes={} query={:?} p50={:.3}ms p90={:.3}ms",
+            preview_text.len(),
+            query,
+            frame_ms[FRAMES / 2],
+            frame_ms[FRAMES * 9 / 10],
+        );
+    }
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
 #[gpui::test]
 fn oversized_json_preview_uses_visible_line_fallback_without_prepared_syntax_document(
     cx: &mut gpui::TestAppContext,
@@ -1823,10 +1922,10 @@ fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             let mut repo = opening_repo_state(repo_id, &workdir);
-            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::Commit {
-                commit_id: commit_id.clone(),
-                path: file_rel.clone(),
-            });
+            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::commit(
+                commit_id.clone(),
+                file_rel.clone(),
+            ));
             repo.diff_state.diff_state_rev = 1;
             repo.diff_state.diff = gitcomet_state::model::Loadable::Error(
                 "parsed patch diff should not be consulted for committed deleted preview".into(),
@@ -1851,13 +1950,10 @@ fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
                     committed_at: "2026-04-07T12:00:00Z".to_string(),
                     committed_at_unix: 0,
                     parent_ids: vec![],
-                    files: vec![gitcomet_core::domain::CommitFileChange {
-                        path: file_rel.clone(),
-                        kind: gitcomet_core::domain::FileStatusKind::Deleted,
-                        is_submodule: false,
-                        additions: None,
-                        deletions: None,
-                    }],
+                    files: vec![gitcomet_core::domain::CommitFileChange::new(
+                        file_rel.clone(),
+                        gitcomet_core::domain::FileStatusKind::Deleted,
+                    )],
                 },
             ));
             repo.history_state.commit_details_rev = 1;

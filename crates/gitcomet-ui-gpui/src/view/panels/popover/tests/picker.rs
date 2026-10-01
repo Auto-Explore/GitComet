@@ -1138,7 +1138,7 @@ fn workspace_row_shows_colour_dot_and_its_menu_icons_share_a_column(cx: &mut gpu
         cx.update(|_window, app| repo_picker::filtered_layout(popover_host.read(app), "").0),
         vec![repo_picker::RepoPickerEntry::Workspace(work_id)]
     );
-    assert!(cx.debug_bounds("picker_prompt_workspace_dot_0").is_some());
+    assert!(cx.debug_bounds("picker_prompt_swatch_0").is_some());
     assert!(
         cx.debug_bounds("picker_prompt_repository_badge_0")
             .is_none()

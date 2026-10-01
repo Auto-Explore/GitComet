@@ -480,10 +480,7 @@ fn file_diff_cache_rebuilds_when_patch_arrives_after_same_file_refresh(
         std::process::id()
     ));
     let path = std::path::PathBuf::from("src/refresh_highlights.rs");
-    let target = DiffTarget::WorkingTree {
-        path: path.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree(path.clone(), gitcomet_core::domain::DiffArea::Unstaged);
     let old_text = "fn main() {\n    let value = 1;\n    let stable = 10;\n}\n";
     let new_text = "fn main() {\n    let value = 2;\n    let stable = 10;\n    let added = value + stable;\n}\n";
     let unified = "\
@@ -990,10 +987,10 @@ fn untracked_svg_keeps_the_code_view_and_toggle_in_collapsed_mode(cx: &mut gpui:
     let path = PathBuf::from("assets/diagram.svg");
     let source = String::from_utf8(image_diff_svg_fixture(64, 64, "#22cc66"))
         .expect("svg fixture should be utf-8");
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: path.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        path.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
@@ -4775,10 +4772,10 @@ fn push_unstaged_text_diff_for_blame_toggle(
         std::process::id()
     ));
     let path = PathBuf::from("src/lib.rs");
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: path.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        path.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {

@@ -757,10 +757,10 @@ fn diff_file_text_handles_modify_delete_conflicts() {
     let opened = backend.open(repo).unwrap();
 
     let diff = opened
-        .diff_file_text(&DiffTarget::WorkingTree {
-            path: PathBuf::from("a.txt"),
-            area: DiffArea::Unstaged,
-        })
+        .diff_file_text(&DiffTarget::working_tree(
+            PathBuf::from("a.txt"),
+            DiffArea::Unstaged,
+        ))
         .unwrap()
         .expect("file diff for conflicted changes");
     assert_file_diff_text_sources(&diff, None, Some("theirs\n"));

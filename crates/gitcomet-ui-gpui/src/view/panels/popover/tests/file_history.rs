@@ -268,10 +268,10 @@ fn file_history_rows_are_reused_until_their_data_changes(cx: &mut gpui::TestAppC
         }),
         ("the commit being viewed", |host| {
             let mut state = (*host.state).clone();
-            state.repos[0].diff_state.diff_target = Some(DiffTarget::Commit {
-                commit_id: commit(1).id,
-                path: std::path::PathBuf::from("src/main.rs"),
-            });
+            state.repos[0].diff_state.diff_target = Some(DiffTarget::commit(
+                commit(1).id,
+                std::path::PathBuf::from("src/main.rs"),
+            ));
             host.state = Arc::new(state);
         }),
     ];
@@ -544,7 +544,7 @@ fn file_history_enter_activates_row_and_closes_picker(cx: &mut gpui::TestAppCont
     file_history_picker!(cx, host);
     let store = cx.update(|_, app| {
         let host = host.read(app);
-        let store = host.store.clone();
+        let store = host.store.store_for_test();
         store.replace_snapshot_for_test(Arc::clone(&host.state));
         store.insert_repo_for_test(
             RepoId(1),
@@ -563,10 +563,7 @@ fn file_history_enter_activates_row_and_closes_picker(cx: &mut gpui::TestAppCont
     let state = store.snapshot();
     assert_eq!(
         state.repos[0].diff_state.diff_target,
-        Some(DiffTarget::Commit {
-            commit_id: commit(0).id,
-            path: "src/main.rs".into()
-        })
+        Some(DiffTarget::commit(commit(0).id, "src/main.rs".into()))
     );
     assert_eq!(state.repos[0].navigation.view_history.entries.len(), 1);
 }
@@ -577,7 +574,7 @@ fn file_history_show_changes_opens_a_file_diff_and_closes_picker(cx: &mut gpui::
     file_history_picker!(cx, host);
     let store = cx.update(|_, app| {
         let host = host.read(app);
-        let store = host.store.clone();
+        let store = host.store.store_for_test();
         store.replace_snapshot_for_test(Arc::clone(&host.state));
         store.insert_repo_for_test(
             RepoId(1),
@@ -599,10 +596,7 @@ fn file_history_show_changes_opens_a_file_diff_and_closes_picker(cx: &mut gpui::
             assert!(!host.is_open());
         })
     });
-    let expected = DiffTarget::Commit {
-        commit_id: commit(1).id,
-        path: "src/main.rs".into(),
-    };
+    let expected = DiffTarget::commit(commit(1).id, "src/main.rs".into());
     super::branch::wait_until("file changes", || {
         store.snapshot().repos[0].diff_state.diff_target.as_ref() == Some(&expected)
     });
