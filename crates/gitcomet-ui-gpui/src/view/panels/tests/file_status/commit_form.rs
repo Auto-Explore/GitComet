@@ -43,6 +43,17 @@ fn staged_revert_offers_its_message_to_an_empty_commit_box(cx: &mut gpui::TestAp
     });
     assert_eq!(commit_box_text(cx), message);
 
+    // Repeated signing failures can suggest the same message more than once.
+    // A successful retry consumes it, and the auto-filled draft clears too.
+    for (text, rev, expected) in [(Some(message), 2, message), (None, 3, "")] {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                push_test_state(this, state_with(text, rev), cx);
+            });
+        });
+        assert_eq!(commit_box_text(cx), expected);
+    }
+
     // A message the user is already writing is never overwritten.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
@@ -56,7 +67,13 @@ fn staged_revert_offers_its_message_to_an_empty_commit_box(cx: &mut gpui::TestAp
     });
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            push_test_state(this, state_with(Some("Revert \"other\""), 2), cx);
+            push_test_state(this, state_with(Some("Revert \"other\""), 4), cx);
+        });
+    });
+    assert_eq!(commit_box_text(cx), "my own words");
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, state_with(None, 5), cx);
         });
     });
     assert_eq!(commit_box_text(cx), "my own words");

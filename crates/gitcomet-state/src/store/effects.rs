@@ -1046,9 +1046,10 @@ pub(super) fn schedule_effect(
             commit,
             mainline,
             summary,
+            auth,
         } => {
             repo_commands::schedule_cherry_pick_commit(
-                executor, repos, msg_tx, repo_id, commit_id, commit, mainline, summary,
+                executor, repos, msg_tx, repo_id, commit_id, commit, mainline, summary, auth,
             );
         }
         Effect::RevertCommit {
@@ -1061,6 +1062,24 @@ pub(super) fn schedule_effect(
         } => {
             repo_commands::schedule_revert_commit(
                 executor, repos, msg_tx, repo_id, commit_id, commit, mainline, summary, auth,
+            );
+        }
+        Effect::ApplyFileChange {
+            repo_id,
+            target,
+            commit,
+            commit_retry,
+            auth,
+        } => {
+            repo_commands::schedule_apply_file_change(
+                executor,
+                repos,
+                msg_tx,
+                repo_id,
+                target,
+                commit,
+                commit_retry,
+                auth,
             );
         }
         Effect::CreateBranch {
@@ -1549,11 +1568,13 @@ pub(super) fn schedule_effect(
             entries,
             interactive,
         ),
-        Effect::InteractiveCherryPick { repo_id, entries } => {
-            repo_commands::schedule_interactive_cherry_pick(
-                executor, repos, msg_tx, repo_id, entries,
-            )
-        }
+        Effect::InteractiveCherryPick {
+            repo_id,
+            entries,
+            commit,
+        } => repo_commands::schedule_interactive_cherry_pick(
+            executor, repos, msg_tx, repo_id, entries, commit,
+        ),
         Effect::MergeAbort { repo_id } => {
             repo_commands::schedule_merge_abort(executor, repos, msg_tx, repo_id)
         }

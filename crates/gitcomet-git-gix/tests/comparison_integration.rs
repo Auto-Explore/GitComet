@@ -108,7 +108,7 @@ fn a_renamed_file_lists_its_source_ids_and_modes_and_loads_its_old_side() {
     assert_eq!(file.new_mode, Some(FileMode::Executable));
 
     // The old side loads from the source path, not as an empty addition.
-    let target = DiffTarget::commit(renamed.clone(), None).for_change(file);
+    let target = DiffTarget::commit_change(renamed.clone(), file);
     assert_eq!(target.old_file_path(), Some(Path::new("old.txt")));
     assert_eq!(
         old_side_text(opened.as_ref(), &target).as_deref(),
@@ -120,7 +120,7 @@ fn a_renamed_file_lists_its_source_ids_and_modes_and_loads_its_old_side() {
 
     // Without the source the same file is an addition, which is what the
     // old code showed for every rename.
-    let bare = DiffTarget::commit(renamed.clone(), Some(PathBuf::from("new.txt")));
+    let bare = DiffTarget::commit(renamed.clone(), PathBuf::from("new.txt"));
     assert_eq!(old_side_text(opened.as_ref(), &bare), None);
     assert_eq!(bare, target, "equality ignores the derived rename source");
 

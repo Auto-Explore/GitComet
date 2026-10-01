@@ -83,6 +83,8 @@ pub enum RepoCommandKind {
     },
     InteractiveCherryPick {
         entries: Vec<InteractiveRebaseEntry>,
+        /// False merges every pick into the index without committing.
+        commit: bool,
     },
     CherryPick {
         commit_id: CommitId,
@@ -97,6 +99,11 @@ pub enum RepoCommandKind {
         /// Git's 1-based mainline parent for a merge commit.
         mainline: Option<usize>,
         summary: String,
+    },
+    ApplyFileChange {
+        target: gitcomet_core::domain::ApplyChangeTarget,
+        commit: bool,
+        commit_retry: Option<gitcomet_core::domain::ApplyFileChangeRetry>,
     },
     MergeAbort,
     CreateTag {
@@ -216,6 +223,7 @@ impl RepoCommandKind {
             | Self::InteractiveCherryPick { .. }
             | Self::CherryPick { .. }
             | Self::Revert { .. }
+            | Self::ApplyFileChange { .. }
             | Self::MergeAbort
             | Self::CheckoutConflict { .. }
             | Self::AcceptConflictDeletion { .. }
@@ -285,6 +293,7 @@ impl RepoCommandKind {
             | Self::InteractiveRebase { .. } => "Rebase",
             Self::InteractiveCherryPick { .. } | Self::CherryPick { .. } => "Cherry-pick",
             Self::Revert { .. } => "Revert",
+            Self::ApplyFileChange { .. } => "Apply change",
             Self::MergeAbort => "Abort merge",
             Self::CreateTag { .. } => "Create tag",
             Self::DeleteTag { .. } => "Delete tag",

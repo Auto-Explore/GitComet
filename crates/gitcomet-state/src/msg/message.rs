@@ -678,6 +678,13 @@ pub enum Msg {
         mainline: Option<usize>,
         summary: String,
     },
+    /// Applies files' change from a commit or comparison.
+    ApplyFileChange {
+        repo_id: RepoId,
+        target: gitcomet_core::domain::ApplyChangeTarget,
+        commit: bool,
+        commit_retry: Option<gitcomet_core::domain::ApplyFileChangeRetry>,
+    },
     CreateBranch {
         repo_id: RepoId,
         name: String,
@@ -977,6 +984,8 @@ pub enum Msg {
     InteractiveCherryPick {
         repo_id: RepoId,
         entries: Vec<InteractiveRebaseEntry>,
+        /// False merges every pick into the index without committing.
+        commit: bool,
     },
     CancelInteractiveRebaseSetup {
         repo_id: RepoId,
@@ -1323,9 +1332,15 @@ pub enum InternalMsg {
         repo_id: RepoId,
         result: Result<Option<String>, Error>,
     },
-    /// The message git prepared for the next commit (after a `--no-commit`
-    /// revert), offered as the commit box's starting text.
+    /// The message git prepared for an uncommitted revert or applied change,
+    /// offered as the commit box's starting text.
     CommitMessageSuggested {
+        repo_id: RepoId,
+        message: String,
+    },
+    /// An automatic commit consumed this suggestion. Clear only that message,
+    /// preserving a newer suggestion or a draft the user has edited.
+    CommitMessageSuggestionConsumed {
         repo_id: RepoId,
         message: String,
     },

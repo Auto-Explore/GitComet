@@ -74,16 +74,18 @@ fn diff_target_rendered_preview_kind_reads_diff_target_paths() {
         Some(RenderedPreviewKind::Svg)
     );
 
-    let markdown_target = DiffTarget::commit(
-        CommitId("deadbeef".into()),
-        Some(PathBuf::from("README.md")),
-    );
+    let markdown_target =
+        DiffTarget::commit(CommitId("deadbeef".into()), PathBuf::from("README.md"));
     assert_eq!(
         diff_target_rendered_preview_kind(Some(&markdown_target)),
         Some(RenderedPreviewKind::Markdown)
     );
 
-    let no_path_target = DiffTarget::commit(CommitId("deadbeef".into()), None);
+    let no_path_target = DiffTarget::commit_range(
+        CommitId("parent".into()),
+        Some(CommitId("deadbeef".into())),
+        None,
+    );
     assert_eq!(
         diff_target_rendered_preview_kind(Some(&no_path_target)),
         None

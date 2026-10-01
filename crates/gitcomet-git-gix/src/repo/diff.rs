@@ -108,7 +108,7 @@ impl GixRepo {
                     .arg("--first-parent")
                     .arg("--pretty=format:")
                     .arg(commit_id.as_ref());
-                Self::pathspec_with_source(&mut cmd, path.as_deref(), old_path.as_deref());
+                Self::pathspec_with_source(&mut cmd, Some(path), old_path.as_deref());
             }
             DiffTarget::CommitRange {
                 from_commit_id,
@@ -527,10 +527,6 @@ impl GixRepo {
                 old_path,
                 ..
             } => {
-                let Some(path) = path else {
-                    return Ok(None);
-                };
-
                 let parent = gix_first_parent_optional(&repo, commit_id.as_ref())?;
 
                 let old = match parent {
@@ -652,10 +648,6 @@ impl GixRepo {
                 old_path,
                 ..
             } => {
-                let Some(path) = path else {
-                    return Ok(None);
-                };
-
                 let repo = self.repo();
                 let blob_id = match side {
                     DiffPreviewTextSide::New => {
@@ -837,10 +829,6 @@ impl GixRepo {
                 old_path,
                 ..
             } => {
-                let Some(path) = path else {
-                    return Ok(None);
-                };
-
                 let repo = self.repo();
                 let parent = gix_first_parent_optional(&repo, commit_id.as_ref())?;
 
@@ -1176,9 +1164,7 @@ fn commit_path_diff_revisions(
 ) -> Result<Option<(std::path::PathBuf, Option<String>, String)>> {
     match target {
         DiffTarget::Commit {
-            commit_id,
-            path: Some(path),
-            ..
+            commit_id, path, ..
         } => Ok(Some((
             path.clone(),
             gix_first_parent_optional(repo, commit_id.as_ref())?,
@@ -2359,7 +2345,7 @@ mod tests {
         let head = super::super::history::gix_head_id_or_none(&repo.repo())
             .unwrap()
             .unwrap();
-        let target = DiffTarget::commit(CommitId(head.to_string().into()), Some("b.rs".into()))
+        let target = DiffTarget::commit(CommitId(head.to_string().into()), "b.rs".into())
             .with_old_path(Some("a.rs".into()));
         let patch = repo.diff_unified_impl(&target).unwrap();
         assert!(patch.contains("copy from a.rs\n"), "{patch}");

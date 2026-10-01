@@ -199,27 +199,33 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         // or rebase state on disk: replaying the original plan would be
         // rejected as already in progress (and its effect has no auth slot).
         // Continue the paused sequencer with the staged auth instead.
-        RepoCommandKind::InteractiveCherryPick { .. } => Msg::RebaseContinue { repo_id },
+        RepoCommandKind::InteractiveCherryPick { commit: true, .. } => {
+            Msg::RebaseContinue { repo_id }
+        }
+        // Uncommitted picks never sign or leave a sequencer; replay them, and
+        // the steps that already landed merge again as no-ops.
+        RepoCommandKind::InteractiveCherryPick {
+            entries,
+            commit: false,
+        } => Msg::InteractiveCherryPick {
+            repo_id,
+            entries,
+            commit: false,
+        },
+        // Replayed whole, like revert: a pick beside staged work rolls back a
+        // failed commit step, and one stopped at its commit step resumes there.
         RepoCommandKind::CherryPick {
             commit_id,
             commit,
             mainline,
             summary,
-        } => {
-            if commit {
-                Msg::RebaseContinue { repo_id }
-            } else {
-                // `--no-commit` picks never sign, so an auth prompt here is
-                // not a paused sequencer; replay the command itself.
-                Msg::CherryPickCommit {
-                    repo_id,
-                    commit_id,
-                    commit,
-                    mainline,
-                    summary,
-                }
-            }
-        }
+        } => Msg::CherryPickCommit {
+            repo_id,
+            commit_id,
+            commit,
+            mainline,
+            summary,
+        },
         // Replayed whole: the auth may be for the `--no-commit` step (a
         // promisor fetch), and a revert stopped at its commit step resumes
         // there with the same hooks skipped, which `revert --continue` would not.
@@ -234,6 +240,17 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
             commit,
             mainline,
             summary,
+        },
+        // Only a command with the failed commit's checkpoint can skip apply.
+        RepoCommandKind::ApplyFileChange {
+            target,
+            commit,
+            commit_retry,
+        } => Msg::ApplyFileChange {
+            repo_id,
+            target,
+            commit,
+            commit_retry,
         },
         RepoCommandKind::MergeAbort => Msg::MergeAbort { repo_id },
         RepoCommandKind::CreateTag {
@@ -374,7 +391,9 @@ fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> 
         | Effect::PushTag { auth: slot, .. }
         | Effect::DeleteRemoteTag { auth: slot, .. }
         | Effect::RebaseContinue { auth: slot, .. }
-        | Effect::RevertCommit { auth: slot, .. } => {
+        | Effect::CherryPickCommit { auth: slot, .. }
+        | Effect::RevertCommit { auth: slot, .. }
+        | Effect::ApplyFileChange { auth: slot, .. } => {
             *slot = Some(auth);
         }
         _ => {}

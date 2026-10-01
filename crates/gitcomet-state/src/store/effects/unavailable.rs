@@ -592,6 +592,7 @@ pub(super) fn send_unavailable_git_effect_result(
             commit,
             mainline,
             summary,
+            ..
         } => send(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
@@ -619,6 +620,23 @@ pub(super) fn send_unavailable_git_effect_result(
                     commit,
                     mainline,
                     summary,
+                },
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::ApplyFileChange {
+            repo_id,
+            target,
+            commit,
+            commit_retry,
+            ..
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::ApplyFileChange {
+                    target,
+                    commit,
+                    commit_retry,
                 },
                 result: Err(git_unavailable_error(runtime)),
             },
@@ -1104,10 +1122,14 @@ pub(super) fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
-        Effect::InteractiveCherryPick { repo_id, entries } => send(Msg::Internal(
+        Effect::InteractiveCherryPick {
+            repo_id,
+            entries,
+            commit,
+        } => send(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
-                command: RepoCommandKind::InteractiveCherryPick { entries },
+                command: RepoCommandKind::InteractiveCherryPick { entries, commit },
                 result: Err(git_unavailable_error(runtime)),
             },
         )),

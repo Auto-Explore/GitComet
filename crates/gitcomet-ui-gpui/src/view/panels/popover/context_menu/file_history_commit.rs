@@ -7,6 +7,29 @@ pub(in super::super) fn model(
     path: &std::path::Path,
 ) -> ContextMenuModel {
     let repo = this.state.repos.iter().find(|repo| repo.id == repo_id);
+    let is_submodule = repo.is_some_and(|repo| {
+        repo.head_gitlink_paths.contains(path)
+            || repo
+                .diff_state
+                .submodule_summary
+                .ready()
+                .is_some_and(|summary| summary.path == path)
+            || repo
+                .submodules
+                .ready()
+                .is_some_and(|modules| modules.iter().any(|module| module.path == path))
+            || repo
+                .history_state
+                .commit_details
+                .ready()
+                .is_some_and(|details| {
+                    details.id == *commit_id
+                        && details
+                            .files
+                            .iter()
+                            .any(|file| file.path == path && file.is_submodule)
+                })
+    });
     let commit = repo
         .and_then(|repo| repo.history_state.file_history.ready())
         .and_then(|page| page.commits.iter().find(|commit| commit.id == *commit_id));
@@ -78,6 +101,14 @@ pub(in super::super) fn model(
         },
     );
     items.push(ContextMenuItem::Separator);
+    if !is_submodule {
+        items.push(super::commit_file::apply_change_entry(
+            this,
+            repo_id,
+            gitcomet_core::domain::ApplyChangeTarget::commit(commit_id.clone(), path.to_path_buf()),
+        ));
+        items.push(ContextMenuItem::Separator);
+    }
     let actions = super::commit::action_items(this, repo_id, commit_id);
     let offset = items.len();
     items.extend(actions.items);

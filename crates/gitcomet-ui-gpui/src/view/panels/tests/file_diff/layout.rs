@@ -369,7 +369,7 @@ fn diff_content_mode_switches_regular_file_diff_between_patch_and_content(
     let path = PathBuf::from("src/lib.rs");
     let target = gitcomet_core::domain::DiffTarget::commit(
         gitcomet_core::domain::CommitId("deadbeef".into()),
-        Some(path.clone()),
+        path.clone(),
     );
     let unified = "\
 diff --git a/src/lib.rs b/src/lib.rs

@@ -1291,8 +1291,11 @@ impl GitCometView {
             let path = config
                 .display_path
                 .unwrap_or_else(|| format!("{} vs {}", config.label_left, config.label_right));
-            let target = gitcomet_core::domain::DiffTarget::commit(
-                gitcomet_core::domain::CommitId("snapshot".into()),
+            // A raw patch can span files and has no commit: a pathless range.
+            let snapshot = gitcomet_core::domain::CommitId("snapshot".into());
+            let target = gitcomet_core::domain::DiffTarget::commit_range(
+                snapshot.clone(),
+                Some(snapshot),
                 None,
             );
             let patch = gitcomet_core::domain::Diff::from_unified_owned(target, config.diff_text);

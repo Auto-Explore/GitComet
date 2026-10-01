@@ -1986,7 +1986,7 @@ pub(super) fn schedule_open_file_at_commit(
         } else {
             Msg::SelectDiff {
                 repo_id,
-                target: gitcomet_core::domain::DiffTarget::commit(commit_id, Some(resolved)),
+                target: gitcomet_core::domain::DiffTarget::commit(commit_id, resolved),
             }
         };
         send_or_log(&msg_tx, message);

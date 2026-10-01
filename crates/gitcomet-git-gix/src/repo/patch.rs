@@ -7,6 +7,27 @@ use std::io::Write;
 use std::path::Path;
 use tempfile::NamedTempFile;
 
+/// `patch` in a temp file for `git apply`, which reads it by path.
+pub(super) fn write_patch_file(patch: &[u8]) -> Result<NamedTempFile> {
+    let mut file = NamedTempFile::new().map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+    file.write_all(patch)
+        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+    Ok(file)
+}
+
+/// NUL-terminated paths for `--pathspec-from-file` with `--pathspec-file-nul`;
+/// a long path list would overflow a Windows command line.
+pub(super) fn write_pathspec_file<'a>(
+    paths: impl IntoIterator<Item = &'a [u8]>,
+) -> Result<NamedTempFile> {
+    let mut bytes = Vec::new();
+    for path in paths {
+        bytes.extend_from_slice(path);
+        bytes.push(0);
+    }
+    write_patch_file(&bytes)
+}
+
 impl GixRepo {
     pub(super) fn export_patch_with_output_impl(
         &self,
@@ -43,10 +64,7 @@ impl GixRepo {
         patch: &[u8],
         reverse: bool,
     ) -> Result<CommandOutput> {
-        let mut tmp_file = NamedTempFile::new().map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-        tmp_file
-            .write_all(patch)
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        let tmp_file = write_patch_file(patch)?;
         let tmp_path = tmp_file.path();
 
         let mut cmd = self.git_workdir_cmd();
@@ -73,10 +91,7 @@ impl GixRepo {
         patch: &[u8],
         reverse: bool,
     ) -> Result<CommandOutput> {
-        let mut tmp_file = NamedTempFile::new().map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-        tmp_file
-            .write_all(patch)
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        let tmp_file = write_patch_file(patch)?;
         let tmp_path = tmp_file.path();
 
         let mut cmd = self.git_workdir_cmd();

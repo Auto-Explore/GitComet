@@ -524,19 +524,13 @@ fn commit_file_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
             })
             .expect("expected commit file context menu model");
 
-        let target = model
-            .items
-            .iter()
-            .find_map(|item| match item {
-                ContextMenuItem::Entry { action, .. } => match action.as_ref() {
-                    ContextMenuAction::SelectDiff { target, .. } => Some(target),
-                    _ => None,
-                },
-                _ => None,
-            })
-            .expect("Open diff target");
-        assert_eq!(target.file_path(), Some(path.as_path()));
-        assert_eq!(target.old_file_path(), Some(old_path.as_path()));
+        // The row's click opens the diff, with its rename source; the menu
+        // does not repeat it.
+        assert!(!model.items.iter().any(|item| matches!(
+            item,
+            ContextMenuItem::Entry { action, .. }
+                if matches!(action.as_ref(), ContextMenuAction::SelectDiff { .. })
+        )));
 
         let open_file_action = model.items.iter().find_map(|item| match item {
             ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Open file" => {

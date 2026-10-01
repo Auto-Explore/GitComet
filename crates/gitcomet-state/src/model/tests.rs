@@ -122,7 +122,7 @@ fn nav_stack_reconcile_seeds_origin_pushes_and_updates_in_place() {
     let file_view = MainViewSnapshot {
         diff_target: Some(DiffTarget::commit(
             CommitId("aaa".into()),
-            Some(PathBuf::from("src/lib.rs")),
+            PathBuf::from("src/lib.rs"),
         )),
         edit_mode: false,
         content_preview: false,
@@ -323,7 +323,7 @@ fn reconcile_fold_collapses_consecutive_duplicate() {
     let file_diff = MainViewSnapshot {
         diff_target: Some(DiffTarget::commit(
             CommitId("aaa".into()),
-            Some(PathBuf::from("src/lib.rs")),
+            PathBuf::from("src/lib.rs"),
         )),
         edit_mode: false,
         content_preview: false,
@@ -470,7 +470,7 @@ fn app_state_clone_shares_heavy_repo_fields_via_arc() {
         files: Vec::new(),
     }));
     repo.diff_state.diff = Loadable::Ready(Arc::new(Diff {
-        target: DiffTarget::commit(CommitId("c1".into()), None),
+        target: DiffTarget::commit(CommitId("c1".into()), "a.txt".into()),
         lines: Vec::new(),
     }));
 

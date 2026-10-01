@@ -88,9 +88,7 @@ impl GixRepo {
                 submodule_worktree_diff_summary(&repo, path, cancellation)
             }
             DiffTarget::Commit {
-                commit_id,
-                path: Some(path),
-                ..
+                commit_id, path, ..
             } => submodule_commit_diff_summary(&repo, commit_id, path, cancellation),
             _ => Err(Error::new(ErrorKind::Unsupported(
                 "submodule summaries require a submodule working-tree target or committed submodule path",

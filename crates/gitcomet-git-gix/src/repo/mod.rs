@@ -40,6 +40,7 @@ pub(super) fn bstr_to_arc_str(bytes: &[u8]) -> Arc<str> {
     }
 }
 
+mod apply_change;
 mod blame;
 mod comparison;
 mod config;
@@ -1162,6 +1163,21 @@ impl GitRepository for GixRepo {
         self.revert_with_output_impl(id, commit, mainline)
     }
 
+    fn apply_file_change_with_output(
+        &self,
+        target: &gitcomet_core::domain::ApplyChangeTarget,
+        commit: bool,
+    ) -> Result<CommandOutput> {
+        self.apply_file_change_with_output_impl(target, commit, None)
+    }
+
+    fn commit_applied_file_change_with_output(
+        &self,
+        retry: &gitcomet_core::domain::ApplyFileChangeRetry,
+    ) -> Result<CommandOutput> {
+        self.apply_file_change_with_output_impl(&retry.target, true, Some(retry))
+    }
+
     fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()> {
         self.stash_create_impl(message, include_untracked)
     }
@@ -1331,8 +1347,9 @@ impl GitRepository for GixRepo {
     fn interactive_cherry_pick_with_output(
         &self,
         entries: &[InteractiveRebaseEntry],
+        commit: bool,
     ) -> Result<CommandOutput> {
-        self.interactive_cherry_pick_with_output_impl(entries)
+        self.interactive_cherry_pick_with_output_impl(entries, commit)
     }
 
     fn merge_abort_with_output(&self) -> Result<CommandOutput> {

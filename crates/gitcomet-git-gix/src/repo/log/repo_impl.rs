@@ -255,7 +255,7 @@ impl GixRepo {
 
         let target = commit.as_ref();
         for record in output.split('\u{1e}') {
-            let mut lines = record.lines().map(str::trim).filter(|l| !l.is_empty());
+            let mut lines = record.lines().filter(|line| !line.is_empty());
             let Some(hash) = lines.next() else {
                 continue;
             };
@@ -283,7 +283,14 @@ impl GixRepo {
         let status = fields.next().unwrap_or_default();
         let first = fields.next();
         let second = fields.next();
-        let to_path = |s: &str| path_buf_from_git_bytes(s.as_bytes(), "git name-status path");
+        let to_path = |s: &str| {
+            let (bytes, _) = gix::quote::ansi_c::undo(s.as_bytes().into()).map_err(|e| {
+                Error::new(ErrorKind::Backend(format!(
+                    "invalid git name-status path: {e}"
+                )))
+            })?;
+            path_buf_from_git_bytes(&bytes, "git name-status path")
+        };
         match status.chars().next() {
             // Rename/copy: the destination is the name in this commit's tree.
             Some('R') | Some('C') => second.map(to_path).transpose(),

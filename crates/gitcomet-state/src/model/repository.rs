@@ -704,10 +704,10 @@ impl RepoState {
     /// a diff of a file still means that file is the one open.
     pub fn open_file_path(&self) -> Option<&std::path::Path> {
         match self.diff_state.diff_target.as_ref()? {
-            DiffTarget::WorkingTree { path, .. } => Some(path.as_path()),
-            DiffTarget::Commit { path, .. } | DiffTarget::CommitRange { path, .. } => {
-                path.as_deref()
+            DiffTarget::WorkingTree { path, .. } | DiffTarget::Commit { path, .. } => {
+                Some(path.as_path())
             }
+            DiffTarget::CommitRange { path, .. } => path.as_deref(),
         }
     }
 

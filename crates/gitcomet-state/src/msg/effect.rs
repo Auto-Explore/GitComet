@@ -321,6 +321,8 @@ pub enum Effect {
         commit: bool,
         mainline: Option<usize>,
         summary: String,
+        /// Signing or fetch auth staged when a failed pick is replayed.
+        auth: Option<StagedGitAuth>,
     },
     RevertCommit {
         repo_id: RepoId,
@@ -329,6 +331,14 @@ pub enum Effect {
         mainline: Option<usize>,
         summary: String,
         /// Signing or fetch auth staged when a failed revert is replayed.
+        auth: Option<StagedGitAuth>,
+    },
+    ApplyFileChange {
+        repo_id: RepoId,
+        target: gitcomet_core::domain::ApplyChangeTarget,
+        commit: bool,
+        commit_retry: Option<gitcomet_core::domain::ApplyFileChangeRetry>,
+        /// Signing auth staged when a failed commit step is replayed.
         auth: Option<StagedGitAuth>,
     },
     CreateBranch {
@@ -633,6 +643,7 @@ pub enum Effect {
     InteractiveCherryPick {
         repo_id: RepoId,
         entries: Vec<InteractiveRebaseEntry>,
+        commit: bool,
     },
     /// Load the full `%B` messages of the commits selected for an
     /// interactive cherry-pick: the log page only carries subjects, and a

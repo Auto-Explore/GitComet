@@ -167,6 +167,12 @@ fn sequencer_effect_repo(effect: &Effect) -> Option<RepoId> {
         | Effect::InteractiveCherryPick { repo_id, .. }
         | Effect::CherryPickCommit { repo_id, .. }
         | Effect::RevertCommit { repo_id, .. }
+        // Its commit step can wait on a signer after the worktree changed.
+        | Effect::ApplyFileChange {
+            repo_id,
+            commit: true,
+            ..
+        }
         | Effect::MergeAbort { repo_id } => Some(*repo_id),
         _ => None,
     }
@@ -279,6 +285,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::CheckoutCommit { .. }
             | Msg::CherryPickCommit { .. }
             | Msg::RevertCommit { .. }
+            | Msg::ApplyFileChange { .. }
             | Msg::CreateBranch { .. }
             | Msg::CreateBranchAndCheckout { .. }
             | Msg::RenameBranch { .. }
@@ -1119,6 +1126,19 @@ fn reduce_inner(
             begin_head_changing_local_action(state, repo_id);
             actions_emit_effects::revert_commit(repo_id, commit_id, commit, mainline, summary)
         }
+        Msg::ApplyFileChange {
+            repo_id,
+            target,
+            commit,
+            commit_retry,
+        } => {
+            if commit {
+                begin_head_changing_local_action(state, repo_id);
+            } else {
+                begin_local_action(state, repo_id);
+            }
+            actions_emit_effects::apply_file_change(repo_id, target, commit, commit_retry)
+        }
         Msg::CreateBranch {
             repo_id,
             name,
@@ -1485,13 +1505,17 @@ fn reduce_inner(
             begin_local_action(state, repo_id);
             actions_emit_effects::interactive_rebase(repo_id, base, entries)
         }
-        Msg::InteractiveCherryPick { repo_id, entries } => {
+        Msg::InteractiveCherryPick {
+            repo_id,
+            entries,
+            commit,
+        } => {
             // A multi-pick can land some commits and then fail (a hook or
             // signer on a later step), so HEAD-dependent caches must be
             // invalidated up front like the single-pick path — the error
             // completion path does not clear them.
             begin_head_changing_local_action(state, repo_id);
-            actions_emit_effects::interactive_cherry_pick(repo_id, entries)
+            actions_emit_effects::interactive_cherry_pick(repo_id, entries, commit)
         }
         Msg::CancelInteractiveRebaseSetup { repo_id } => {
             actions_emit_effects::cancel_interactive_rebase_setup(state, repo_id)
@@ -1825,6 +1849,17 @@ fn reduce_inner(
             requested_ids,
             result,
         ),
+        Msg::Internal(crate::msg::InternalMsg::CommitMessageSuggestionConsumed {
+            repo_id,
+            message,
+        }) => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+                && repo_state.suggested_commit_message.as_deref() == Some(message.as_str())
+            {
+                repo_state.set_suggested_commit_message(None);
+            }
+            Vec::new()
+        }
         Msg::Internal(crate::msg::InternalMsg::CommitMessageSuggested { repo_id, message }) => {
             if let Some(repo_state) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
                 repo_state.set_suggested_commit_message(Some(message));
