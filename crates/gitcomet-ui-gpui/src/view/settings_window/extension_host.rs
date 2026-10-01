@@ -327,7 +327,7 @@ impl WindowHostImpl for SettingsHost {
     }
     fn toast(
         &self,
-        _: NotificationKind,
+        kind: NotificationKind,
         message: SharedString,
         actions: Vec<HostedAction>,
         cx: &mut App,
@@ -336,7 +336,7 @@ impl WindowHostImpl for SettingsHost {
         let view = self.view.clone();
         cx.defer(move |cx| {
             let _ = view.update(cx, |view, cx| {
-                view.extension_notice = Some((message, actions));
+                view.extension_notice = Some((kind, message, actions));
                 cx.notify();
             });
         });
@@ -386,6 +386,7 @@ struct SettingsMenu {
 }
 impl Render for SettingsMenu {
     fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let ui_scale = crate::ui_scale::UiScale::current(cx);
         div()
             .flex()
             .flex_col()
@@ -399,21 +400,32 @@ impl Render for SettingsMenu {
                         .bg(self.theme.colors.stroke.subtle)
                         .into_any_element(),
                     HostedMenuItem::Action {
-                        action, disabled, ..
+                        action,
+                        icon,
+                        disabled,
+                        ..
                     } => {
                         let action = action.clone();
                         let parent = self.parent.clone();
-                        components::Button::new(
+                        let mut button = components::Button::new(
                             format!("settings_hosted_action_{index}"),
                             action.label().clone(),
-                        )
-                        .disabled(*disabled)
-                        .on_click(self.theme, cx, move |_, _, window, cx| {
-                            let _ =
-                                parent.update(cx, |view, cx| view.close_hosted_dialog(window, cx));
-                            action.invoke(cx);
-                        })
-                        .into_any_element()
+                        );
+                        if let Some(icon) = icon.clone() {
+                            button = button.start_slot(crate::view::icons::svg_icon(
+                                icon,
+                                self.theme.colors.foreground.secondary,
+                                ui_scale.px(14.0),
+                            ));
+                        }
+                        button
+                            .disabled(*disabled)
+                            .on_click(self.theme, cx, move |_, _, window, cx| {
+                                let _ = parent
+                                    .update(cx, |view, cx| view.close_hosted_dialog(window, cx));
+                                action.invoke(cx);
+                            })
+                            .into_any_element()
                     }
                     _ => gpui::Empty.into_any_element(),
                 }

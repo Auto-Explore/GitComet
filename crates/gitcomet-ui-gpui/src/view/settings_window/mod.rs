@@ -564,7 +564,11 @@ pub(crate) struct SettingsWindowView {
     extension_window: Option<extension_host::SettingsExtensions>,
     window_gates: Option<super::window_gates::WindowGates>,
     extension_dialog: Option<extension_host::SettingsDialog>,
-    extension_notice: Option<(SharedString, Vec<gitcomet_extension_api::HostedAction>)>,
+    extension_notice: Option<(
+        gitcomet_extension_api::NotificationKind,
+        SharedString,
+        Vec<gitcomet_extension_api::HostedAction>,
+    )>,
     theme_mode: ThemeMode,
     theme: AppTheme,
     ui_scale_percent: u32,

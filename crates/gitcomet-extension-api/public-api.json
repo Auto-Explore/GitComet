@@ -22916,6 +22916,104 @@
     ],
     "name": "RowMark"
   },
+  "gitcomet_extension_api::SettingsPageContext": {
+    "attrs": [
+      "non_exhaustive"
+    ],
+    "definition": {
+      "struct": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "kind": {
+          "plain": {
+            "fields": [
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "crate::host::WindowHost",
+                      "type_path": "gitcomet_extension_api::WindowHost"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "host"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "gitcomet_ui_kit::theme::AppTheme",
+                      "type_path": "gitcomet_ui_kit::theme::AppTheme"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "theme"
+              }
+            ],
+            "has_stripped_fields": false
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "impls": [
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "SettingsPageContext",
+            "type_path": "gitcomet_extension_api::SettingsPageContext"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Clone",
+          "type_path": "core::clone::Clone"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "SettingsPageContext",
+            "type_path": "gitcomet_extension_api::SettingsPageContext"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Debug",
+          "type_path": "core::fmt::Debug"
+        }
+      }
+    ],
+    "name": "SettingsPageContext"
+  },
   "gitcomet_extension_api::SettingsPageDescriptor": {
     "attrs": [
       "non_exhaustive"
@@ -22983,8 +23081,8 @@
                               "type": {
                                 "resolved_path": {
                                   "args": null,
-                                  "path": "gitcomet_ui_kit::theme::AppTheme",
-                                  "type_path": "gitcomet_ui_kit::theme::AppTheme"
+                                  "path": "SettingsPageContext",
+                                  "type_path": "gitcomet_extension_api::SettingsPageContext"
                                 }
                               }
                             }
@@ -23143,8 +23241,8 @@
                                         {
                                           "resolved_path": {
                                             "args": null,
-                                            "path": "AppTheme",
-                                            "type_path": "gitcomet_ui_kit::theme::AppTheme"
+                                            "path": "SettingsPageContext",
+                                            "type_path": "gitcomet_extension_api::SettingsPageContext"
                                           }
                                         },
                                         {
@@ -23196,7 +23294,7 @@
                           "is_synthetic": true
                         }
                       },
-                      "name": "impl Fn(AppTheme, &mut Window, &mut App) -> AnyView + 'static"
+                      "name": "impl Fn(SettingsPageContext, &mut Window, &mut App) -> AnyView + 'static"
                     }
                   ],
                   "where_predicates": []
@@ -23290,8 +23388,8 @@
                                       {
                                         "resolved_path": {
                                           "args": null,
-                                          "path": "AppTheme",
-                                          "type_path": "gitcomet_ui_kit::theme::AppTheme"
+                                          "path": "SettingsPageContext",
+                                          "type_path": "gitcomet_extension_api::SettingsPageContext"
                                         }
                                       },
                                       {
@@ -34121,6 +34219,9 @@
   },
   "gitcomet_extension_api::contributions::RepositoryViewDescriptor": {
     "reexport": "gitcomet_extension_api::RepositoryViewDescriptor"
+  },
+  "gitcomet_extension_api::contributions::SettingsPageContext": {
+    "reexport": "gitcomet_extension_api::SettingsPageContext"
   },
   "gitcomet_extension_api::contributions::SettingsPageDescriptor": {
     "reexport": "gitcomet_extension_api::SettingsPageDescriptor"

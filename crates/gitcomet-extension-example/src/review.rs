@@ -14,12 +14,12 @@ use gitcomet_core::domain::Commit;
 use gitcomet_core::identity::WindowKind;
 use gitcomet_extension_api::{
     BottomPanelDescriptor, ChromeDescriptor, CloseDecision, CloseRequest, CloseScope,
-    CommandContext, CommandDescriptor, DetailsTabDescriptor, EntryOrigin, Extension, ExtensionId,
-    GateDecision, HistoryAnnotator, HistoryRowAnnotation, HostedAction, MenuLocation, Registrar,
-    RepositoryEntryRequest, RepositoryViewContext, RepositoryViewDescriptor, RowMark,
-    SettingsPageDescriptor, ShellEvent, SidebarProvider, SidebarRow, SidebarSectionDescriptor,
-    SidebarSectionRows, SlotSignal, StatusItemDescriptor, WindowExtension, WindowGateDescriptor,
-    WindowHost,
+    CommandContext, CommandDescriptor, DetailsTabDescriptor, DialogHandle, EntryOrigin, Extension,
+    ExtensionId, GateDecision, HistoryAnnotator, HistoryRowAnnotation, HostedAction, MenuLocation,
+    NotificationKind, Registrar, RepositoryEntryRequest, RepositoryViewContext,
+    RepositoryViewDescriptor, RowMark, SettingsPageContext, SettingsPageDescriptor, ShellEvent,
+    SidebarProvider, SidebarRow, SidebarSectionDescriptor, SidebarSectionRows, SlotSignal,
+    StatusItemDescriptor, WindowExtension, WindowGateDescriptor, WindowHost,
 };
 use gitcomet_ui_kit::components::{Button, ButtonStyle};
 use gitcomet_ui_kit::gpui::prelude::*;
@@ -27,6 +27,7 @@ use gitcomet_ui_kit::gpui::{
     AnyView, App, Context, Entity, Global, Window, WindowId, div, rgb_to_hsla, svg,
 };
 use gitcomet_ui_kit::theme::AppTheme;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -327,15 +328,16 @@ impl Render for ReviewStatus {
     }
 }
 
-/// The settings page: whether closing an unreviewed repository asks first.
+/// The settings page: whether closing an unreviewed repository asks first,
+/// and a reset that asks before it forgets anything.
 pub struct ReviewSettings {
-    theme: AppTheme,
+    context: SettingsPageContext,
     reviews: Entity<Reviews>,
 }
 
 impl Render for ReviewSettings {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
+        let theme = self.context.theme;
         let enabled = self.reviews.read(cx).confirm_close_unreviewed;
         let label = if enabled {
             "Ask before closing unreviewed repositories: on"
@@ -346,21 +348,101 @@ impl Render for ReviewSettings {
             .id("example_review_settings")
             .debug_selector(|| "example_review_settings".to_string())
             .p_2()
-            .child(Button::new("example_review_settings_toggle", label).on_click(
-                theme,
-                cx,
-                |this, _, _, cx| {
-                    this.reviews.update(cx, |reviews, cx| {
-                        reviews.confirm_close_unreviewed = !reviews.confirm_close_unreviewed;
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                Button::new("example_review_settings_toggle", label).on_click(
+                    theme,
+                    cx,
+                    |this, _, _, cx| {
+                        this.reviews.update(cx, |reviews, cx| {
+                            reviews.confirm_close_unreviewed = !reviews.confirm_close_unreviewed;
+                            cx.notify();
+                        });
+                        let enabled = this.reviews.read(cx).confirm_close_unreviewed;
+                        let value = serde_json::json!({ "confirm_close_unreviewed": enabled });
+                        let _ = gitcomet_extension_api::storage::save(&extension_id(), Some(value));
+                        let message = if enabled {
+                            "Closing an unreviewed repository will ask first"
+                        } else {
+                            "Unreviewed repositories close without asking"
+                        };
+                        let _ = this.context.host.toast(
+                            NotificationKind::Success,
+                            message,
+                            Vec::new(),
+                            cx,
+                        );
                         cx.notify();
-                    });
-                    let value = serde_json::json!({
-                        "confirm_close_unreviewed": this.reviews.read(cx).confirm_close_unreviewed,
-                    });
-                    let _ = gitcomet_extension_api::storage::save(&extension_id(), Some(value));
-                    cx.notify();
-                },
-            ))
+                    },
+                ),
+            )
+            .child(
+                Button::new("example_review_reset", "Reset review counts…").on_click(
+                    theme,
+                    cx,
+                    |this, _, _, cx| confirm_reset(&this.context.host, this.context.theme, cx),
+                ),
+            )
+    }
+}
+
+/// Asks in a hosted dialog before forgetting every window's counts.
+fn confirm_reset(host: &WindowHost, theme: AppTheme, cx: &mut App) {
+    let handle: Rc<RefCell<Option<DialogHandle>>> = Rc::default();
+    let shared = Rc::clone(&handle);
+    let window = host.clone();
+    let opened = host.open_dialog(
+        "Reset review counts?",
+        move |_, cx| -> AnyView {
+            cx.new(|_| ResetConfirm {
+                theme,
+                window,
+                handle: shared,
+            })
+            .into()
+        },
+        cx,
+    );
+    *handle.borrow_mut() = opened.ok();
+}
+
+/// The reset confirmation's body.
+struct ResetConfirm {
+    theme: AppTheme,
+    window: WindowHost,
+    handle: Rc<RefCell<Option<DialogHandle>>>,
+}
+
+impl Render for ResetConfirm {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("example_reset_confirm")
+            .debug_selector(|| "example_reset_confirm".to_string())
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child("Every window forgets how often its repositories were reviewed.")
+            .child(
+                Button::new("example_reset_confirm_button", "Reset")
+                    .style(ButtonStyle::Danger)
+                    .on_click(self.theme, cx, |this, _, _, cx| {
+                        reviews(cx).update(cx, |reviews, cx| {
+                            reviews.counts.values_mut().for_each(BTreeMap::clear);
+                            cx.notify();
+                        });
+                        if let Some(handle) = this.handle.borrow_mut().take() {
+                            handle.close(cx);
+                        }
+                        let _ = this.window.toast(
+                            NotificationKind::Success,
+                            "Review counts reset",
+                            Vec::new(),
+                            cx,
+                        );
+                    }),
+            )
     }
 }
 
@@ -602,11 +684,11 @@ impl Extension for ReviewExtension {
             )
             .settings_page(
                 "review-settings",
-                SettingsPageDescriptor::new("Review", ICON_PATH, |theme, _, cx| {
+                SettingsPageDescriptor::new("Review", ICON_PATH, |context, _, cx| {
                     let reviews = reviews(cx);
-                    cx.new(|_| ReviewSettings { theme, reviews }).into()
+                    cx.new(|_| ReviewSettings { context, reviews }).into()
                 })
-                .with_keywords("review unreviewed close confirm"),
+                .with_keywords("review unreviewed close confirm reset"),
             )
             .command(
                 "mark-reviewed",

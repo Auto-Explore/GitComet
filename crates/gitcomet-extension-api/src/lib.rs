@@ -37,7 +37,7 @@ pub use contributions::{
     BottomPanelDescriptor, ChromeDescriptor, CloseDecision, CloseGuard, CloseRequest, CloseScope,
     CommandContext, CommandDescriptor, CommandHandler, DetailsTabDescriptor, EntryOrigin,
     GateDecision, MenuLocation, Navigate, NavigationAvailability, RepositoryEntryGate,
-    RepositoryEntryRequest, RepositoryViewContext, RepositoryViewDescriptor,
+    RepositoryEntryRequest, RepositoryViewContext, RepositoryViewDescriptor, SettingsPageContext,
     SettingsPageDescriptor, SettingsTarget, SidebarSectionDescriptor, StatusItemDescriptor,
     ViewBuilder, ViewNavigation, ViewTarget, WindowGateDescriptor, WindowGatePredicate,
 };

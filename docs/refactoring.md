@@ -425,6 +425,12 @@ Since then:
   guards instead of quitting outright, and closing a focused tool quits it
   even if a Settings window is open, so `git mergetool`/`difftool` never
   waits on a leftover window.
+- Settings pages are built with a `SettingsPageContext` (the Settings
+  window's `WindowHost` and theme), so a page can confirm in a dialog and
+  report in a toast. The Settings window draws hosted dialogs, popovers, and
+  menus on the kit's modal and popover surfaces (menu icons included) and
+  notices as kit toasts of their kind; `WindowHost` documents which calls a
+  repository-less Settings window answers with `Unsupported`.
 
 ## History find (#532)
 

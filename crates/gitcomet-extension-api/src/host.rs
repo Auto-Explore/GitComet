@@ -344,6 +344,12 @@ impl PopOutWindow {
 }
 
 /// A weak handle to one window of the host.
+///
+/// A Settings window ([`WindowKind::Settings`](gitcomet_core::identity::WindowKind))
+/// has no repository: its state is empty, and navigation, repository panes
+/// and file lists, bottom panels, watches, `dispatch`, and workspace state
+/// answer [`HostError::Unsupported`]. Dialogs, popovers, menus, toasts,
+/// snapshot panes, pop-out windows, and syntax highlighting work there.
 #[derive(Clone)]
 pub struct WindowHost(Rc<dyn WindowHostImpl>);
 

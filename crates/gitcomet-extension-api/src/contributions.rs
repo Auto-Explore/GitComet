@@ -194,8 +194,24 @@ impl StatusItemDescriptor {
     }
 }
 
+/// What a settings page is built with: the Settings window's host, for
+/// dialogs, menus, and toasts, and its theme at that moment.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct SettingsPageContext {
+    pub host: WindowHost,
+    pub theme: AppTheme,
+}
+
+impl SettingsPageContext {
+    #[doc(hidden)]
+    pub fn new(host: WindowHost, theme: AppTheme) -> Self {
+        Self { host, theme }
+    }
+}
+
 /// A page in the Settings window. Settings builds only the selected page,
-/// each time it is selected, with the window's theme at that moment.
+/// each time it is selected.
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct SettingsPageDescriptor {
@@ -203,14 +219,14 @@ pub struct SettingsPageDescriptor {
     pub icon: SharedString,
     /// Extra search terms matched by the Settings search.
     pub keywords: SharedString,
-    pub build: ViewBuilder<AppTheme>,
+    pub build: ViewBuilder<SettingsPageContext>,
 }
 
 impl SettingsPageDescriptor {
     pub fn new(
         title: impl Into<SharedString>,
         icon: impl Into<SharedString>,
-        build: impl Fn(AppTheme, &mut Window, &mut App) -> AnyView + 'static,
+        build: impl Fn(SettingsPageContext, &mut Window, &mut App) -> AnyView + 'static,
     ) -> Self {
         Self {
             title: title.into(),
