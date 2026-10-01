@@ -14,7 +14,10 @@ pub(super) fn transaction(
     cmd.arg("-c")
         .arg(format!("user.name={}", identity.display_name()))
         .arg("-c")
-        .arg(format!("user.email={}@localhost", identity.executable_name()));
+        .arg(format!(
+            "user.email={}@localhost",
+            identity.executable_name()
+        ));
     if let Some(Ok(signature)) = repo.committer() {
         cmd.env(
             "GIT_COMMITTER_NAME",
