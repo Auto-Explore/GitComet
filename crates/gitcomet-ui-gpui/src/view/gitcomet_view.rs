@@ -1199,6 +1199,9 @@ impl GitCometView {
         });
         store.dispatch(Msg::SetDefaultTagType(default_tag_type));
         store.dispatch(Msg::SetRemoteSettings(remote_settings));
+        store.dispatch(Msg::SetMaintenanceSettings(MaintenanceSettings {
+            recommend: ui_preferences.maintenance.recommend,
+        }));
         store.dispatch(Msg::SetFileBrowserSettings(FileBrowserSettings {
             follow_selected_commit: ui_preferences.history.files_follow_selected_commit,
         }));
@@ -1932,6 +1935,7 @@ impl GitCometView {
         crate::app::record_startup_hook_invocation_for_test(cx, self.window_handle.window_id());
         self.maybe_show_user_survey_on_startup(cx);
         self.maybe_check_for_updates_on_startup(cx);
+        self.maybe_warn_outdated_git(cx);
     }
 
     pub(super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {

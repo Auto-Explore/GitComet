@@ -754,3 +754,46 @@ fn try_auth_prompt_submit_username_password_dispatches_submit(cx: &mut gpui::Tes
         || store_for_assert.snapshot().auth_prompt.is_none(),
     );
 }
+
+#[gpui::test]
+fn outdated_git_shows_one_sticky_update_notice(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    crate::view::git_version_notice::reset_outdated_git_notice_for_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let with_git = |version_output: &str| {
+        Arc::new(AppState {
+            git_runtime: GitRuntimeState {
+                preference: GitExecutablePreference::SystemPath,
+                availability: GitExecutableAvailability::Available {
+                    version_output: version_output.to_string(),
+                },
+            },
+            ..AppState::test_default()
+        })
+    };
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(with_git("git version 2.45.1.windows.1"), cx);
+            this.apply_state_snapshot(with_git("git version 2.55.0"), cx);
+            // Back to the same old git (another window, a re-probe): no repeat.
+            this.apply_state_snapshot(with_git("git version 2.45.1.windows.1"), cx);
+        });
+        let _ = window.draw(app);
+    });
+
+    let notices = cx.update(|_window, app| {
+        view.read(app)
+            .toast_host
+            .read(app)
+            .toasts_for_tests(app)
+            .into_iter()
+            .filter(|(_, message)| message.contains("older than 2.53"))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].0, components::ToastKind::Warning);
+    assert!(notices[0].1.starts_with("Git 2.45 is older"), "{notices:?}");
+}

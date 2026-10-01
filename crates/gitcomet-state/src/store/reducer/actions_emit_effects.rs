@@ -1188,14 +1188,7 @@ pub(super) fn repo_command_finished(
             | RepoCommandKind::RemoveSubmodule { .. }
     ) && result.is_ok();
     let command_succeeded = result.is_ok();
-    let fetch_like_command = matches!(
-        &command,
-        RepoCommandKind::FetchAll
-            | RepoCommandKind::FetchRefspecs { .. }
-            | RepoCommandKind::PruneMergedBranches
-            | RepoCommandKind::Pull { .. }
-            | RepoCommandKind::PullBranch { .. }
-    );
+    let fetch_like_command = command.fetches_objects();
     let refresh_remote_branches = fetch_like_command
         || matches!(
             &command,

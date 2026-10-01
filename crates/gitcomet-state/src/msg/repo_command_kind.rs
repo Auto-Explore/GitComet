@@ -15,6 +15,8 @@ pub enum RepoCommandKind {
     },
     PruneMergedBranches,
     PruneLocalTags,
+    /// `git maintenance run --auto`, started by the user.
+    RunMaintenance,
     Pull {
         mode: PullMode,
     },
@@ -243,6 +245,7 @@ impl RepoCommandKind {
             | Self::FetchRefspecs { .. }
             | Self::PruneMergedBranches
             | Self::PruneLocalTags
+            | Self::RunMaintenance
             | Self::Push
             | Self::PushWithTags { .. }
             | Self::PushAfterCommit { .. }
@@ -269,11 +272,29 @@ impl RepoCommandKind {
         }
     }
 
+    /// Commands that fetch, and so may leave new packs or run a repack.
+    pub(crate) fn fetches_objects(&self) -> bool {
+        matches!(
+            self,
+            Self::FetchAll
+                | Self::FetchRefspecs { .. }
+                | Self::PruneMergedBranches
+                | Self::Pull { .. }
+                | Self::PullBranch { .. }
+        )
+    }
+
+    /// Commands long enough to deserve a progress card with git's meters.
+    pub(crate) fn shows_progress(&self) -> bool {
+        self.fetches_objects() || matches!(self, Self::RunMaintenance)
+    }
+
     pub(crate) fn hook_activity_label(&self) -> &'static str {
         match self {
             Self::FetchAll | Self::FetchRefspecs { .. } => "Fetch",
             Self::PruneMergedBranches => "Prune branches",
             Self::PruneLocalTags => "Prune tags",
+            Self::RunMaintenance => "Maintenance",
             Self::Pull { .. } | Self::PullBranch { .. } => "Pull",
             Self::MergeRef { .. } => "Merge",
             Self::SquashRef { .. } | Self::SquashCommits { .. } => "Squash",

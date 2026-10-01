@@ -480,6 +480,9 @@ pub(super) fn run_command_with_timeout_auth(
         None
     };
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    // Meters stream to the operation's progress; the captured stderr reads as
+    // it would without them.
+    let strip_progress = cmd.get_args().any(|arg| arg == "--progress");
 
     timing.stage("prepare");
     let mut child = cmd.spawn().map_err(io_err)?;
@@ -528,6 +531,9 @@ pub(super) fn run_command_with_timeout_auth(
 
     let stdout = stdout_handle.join().unwrap_or_default();
     let mut stderr = stderr_handle.join().unwrap_or_default();
+    if strip_progress && let Ok(text) = std::str::from_utf8(&stderr) {
+        stderr = gitcomet_core::git_progress::strip_progress(text).into_bytes();
+    }
     timing.stage("workers-join");
     join_activity_output_aggregator(activity_handle);
     timing.stage("activity-finish");
@@ -939,7 +945,24 @@ pub(crate) fn run_git_simple_with_paths(
 pub(crate) use gitcomet_core::process::bytes_to_text_preserving_utf8;
 
 pub(crate) fn run_git_with_output(cmd: Command, label: &str) -> Result<CommandOutput> {
-    let output = run_git_checked_output(cmd, label)?;
+    command_output(label, run_git_checked_output(cmd, label)?)
+}
+
+/// [`run_git_with_output`] for work that can rightly take hours, such as a
+/// repack of a large repository; the user stops it rather than a timeout.
+pub(crate) fn run_git_with_output_and_timeout(
+    cmd: Command,
+    label: &str,
+    timeout: Duration,
+) -> Result<CommandOutput> {
+    let output = run_command_with_timeout(cmd, label, timeout, None)?;
+    if !output.status.success() {
+        return Err(git_command_failed_error(label, output));
+    }
+    command_output(label, output)
+}
+
+fn command_output(label: &str, output: Output) -> Result<CommandOutput> {
     let exit_code = output.status.code();
     let stdout = bytes_to_text_preserving_utf8(&output.stdout);
     let stderr = bytes_to_text_preserving_utf8(&output.stderr);

@@ -82,7 +82,7 @@ fn shallow_snapshot_uses_contents_even_when_stat_metadata_collides() {
     let workdir = tmp.path();
     init_test_repo(workdir);
     let repo = open_repo(workdir);
-    let local_repo = repo._repo.to_thread_local();
+    let local_repo = repo.repo();
     let shallow_file = local_repo.shallow_file();
 
     fs::write(&shallow_file, b"1111111111111111111111111111111111111111\n")
@@ -679,7 +679,7 @@ fn finishing_a_page_reports_a_request_that_was_superseded_while_it_was_built() {
     init_test_repo(workdir);
     commit_file(workdir, "a.txt", "one\n", "first");
     let repo = open_repo(workdir);
-    let shallow = shallow_snapshot(&repo._repo.to_thread_local()).expect("shallow snapshot");
+    let shallow = shallow_snapshot(&repo.repo()).expect("shallow snapshot");
 
     let key = repo.log_page_cache_key(
         HistoryMode::AllBranches,
@@ -718,7 +718,7 @@ fn deep_log_pages_share_a_total_cache_row_budget() {
     init_test_repo(tmp.path());
     commit_file(tmp.path(), "a.txt", "one\n", "first");
     let repo = open_repo(tmp.path());
-    let shallow = shallow_snapshot(&repo._repo.to_thread_local()).expect("shallow snapshot");
+    let shallow = shallow_snapshot(&repo.repo()).expect("shallow snapshot");
     let commit = repo.log_head_page_impl(1, None).unwrap().commits[0].clone();
     for limit in [4000, 4001, 4002, 20_000] {
         let key = repo.log_page_cache_key(
@@ -771,7 +771,7 @@ fn a_cached_page_keeps_the_page_that_follows_it_from_being_evicted() {
     repo.log_history_mode_page_impl(mode, 4, Some(&cursor))
         .expect("second page");
 
-    let local_repo = repo._repo.to_thread_local();
+    let local_repo = repo.repo();
     let head = gix_head_id_or_none(&local_repo).expect("head");
     let shallow = shallow_snapshot(&local_repo).expect("shallow snapshot");
     let second_key = repo.log_page_cache_key(
@@ -811,14 +811,15 @@ fn a_page_chunk_counts_lookahead_and_rejected_commits_as_visited() {
         );
     }
     let repo = open_repo(workdir);
-    let local_repo = repo._repo.to_thread_local();
+    let local_repo = repo.repo();
+    let (store, _) = repo.thread_safe_repo();
     let shallow = shallow_snapshot(&local_repo).expect("shallow snapshot");
     let head = gix_head_id_or_none(&local_repo)
         .expect("read head")
         .expect("head commit");
 
     let mut walk = new_log_paged_walk(
-        &repo._repo,
+        &store,
         [head],
         HistoryMode::FullReachable,
         &shallow,
@@ -831,7 +832,7 @@ fn a_page_chunk_counts_lookahead_and_rejected_commits_as_visited() {
         let mut on_chunk = |chunk: LogChunk| scanned.push(chunk.scanned);
         let mut emitter = ChunkEmitter::with_interval(&mut on_chunk, std::time::Duration::ZERO);
         log_page_from_paged_walk_state(
-            &repo._repo,
+            &store,
             &mut walk,
             2,
             None,
@@ -851,7 +852,7 @@ fn a_page_chunk_counts_lookahead_and_rejected_commits_as_visited() {
     );
 
     let mut rejected_walk = new_log_paged_walk(
-        &repo._repo,
+        &store,
         [head],
         HistoryMode::FullReachable,
         &shallow,
@@ -864,7 +865,7 @@ fn a_page_chunk_counts_lookahead_and_rejected_commits_as_visited() {
         let mut on_chunk = |chunk: LogChunk| rejected_scanned.push(chunk.scanned);
         let mut emitter = ChunkEmitter::with_interval(&mut on_chunk, std::time::Duration::ZERO);
         log_page_from_paged_walk_state(
-            &repo._repo,
+            &store,
             &mut rejected_walk,
             1,
             None,
@@ -1903,4 +1904,151 @@ fn resolve_commit_reports_an_unknown_reference() {
         repo.resolve_commit_impl(&CommitId("nosuchref".into()))
             .is_err()
     );
+}
+
+/// Repo whose store has pack A's index loaded but its data unmapped, while a
+/// repack replaced A and a directory now sits at A's `.pack` path: mapping it
+/// fails with an error other than NotFound (ENODEV here, access denied on
+/// Windows), which gix never recovers from by itself.
+fn repo_with_unmappable_loaded_pack(workdir: &Path) -> (GixRepo, String) {
+    init_test_repo(workdir);
+    commit_file(workdir, "a.txt", "one\n", "first");
+    let first = git_stdout(workdir, &["rev-parse", "HEAD"]);
+    git_success(workdir, &["branch", "aaa"]);
+    git_success(workdir, &["repack", "-a", "-d", "-q"]);
+    let pack_dir = workdir.join(".git/objects/pack");
+    let old_pack = fs::read_dir(&pack_dir)
+        .expect("read pack dir")
+        .map(|entry| entry.expect("pack dir entry").path())
+        .find(|path| path.extension().is_some_and(|ext| ext == "pack"))
+        .expect("pack after repack");
+
+    let repo = open_repo(workdir);
+    let first_id = gix::ObjectId::from_hex(first.as_bytes()).expect("first id");
+    assert!(
+        repo.repo().has_object(first_id),
+        "loads only pack A's index"
+    );
+
+    // The new commit goes on another branch so HEAD and `aaa` still peel into
+    // pack A before anything misses and makes gix rescan.
+    git_success(workdir, &["checkout", "-q", "-b", "zzz"]);
+    commit_file(workdir, "b.txt", "two\n", "second");
+    git_success(workdir, &["checkout", "-q", "-"]);
+    git_success(workdir, &["repack", "-a", "-d", "-q"]);
+    assert!(!old_pack.is_file(), "repack removed pack A");
+    fs::create_dir(&old_pack).expect("dir at old pack path");
+    // Non-empty so its size can't read as a too-small pack.
+    fs::write(old_pack.join("filler"), vec![b'x'; 4096]).expect("filler");
+    (repo, first)
+}
+
+#[test]
+fn all_branches_history_recovers_after_repack_replaces_loaded_pack_index() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (repo, first) = repo_with_unmappable_loaded_pack(tmp.path());
+
+    let result = gitcomet_core::services::GitRepository::read_history(
+        &repo,
+        HistoryMode::AllBranches,
+        None,
+        &gitcomet_core::services::HistoryReadRequest::Page {
+            limit: 50,
+            cursor: None,
+            snapshot: None,
+        },
+        &CancellationToken::new(),
+        &mut |_| {},
+    )
+    .expect("history after the store reopened");
+    let gitcomet_core::services::HistoryReadResult::Page { page, .. } = result else {
+        panic!("expected a page, got {result:?}");
+    };
+    assert_eq!(page.commits.len(), 2);
+    assert!(page.commits.iter().any(|c| c.id.as_ref() == first));
+}
+
+#[test]
+fn peel_failure_reports_underlying_io_error() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (repo, _) = repo_with_unmappable_loaded_pack(tmp.path());
+
+    let error = repo
+        .all_branches_tips(&repo.repo(), None)
+        .expect_err("stale store cannot map pack A");
+    let message = error.to_string();
+    assert!(
+        message.contains("Could not open pack data file"),
+        "{message}"
+    );
+    assert!(message.contains("os error"), "{message}");
+}
+
+#[test]
+fn reopen_object_store_drops_old_store_handles() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let workdir = tmp.path();
+    init_test_repo(workdir);
+    for index in 0..3 {
+        commit_file(
+            workdir,
+            "a.txt",
+            &format!("v{index}\n"),
+            &format!("c{index}"),
+        );
+    }
+    let second = git_stdout(workdir, &["rev-parse", "HEAD~1"]);
+    let repo = open_repo(workdir);
+    let first_page = repo
+        .log_history_mode_page_impl(HistoryMode::FullReachable, 1, None)
+        .expect("first page");
+    assert_eq!(repo.log_paged_walk_cache.lock().unwrap().entries.len(), 1);
+    repo.range_reader_repo().expect("range reader");
+
+    repo.reopen_object_store().expect("reopen");
+
+    assert!(repo.log_paged_walk_cache.lock().unwrap().entries.is_empty());
+    assert!(repo.range_reader.lock().unwrap().is_none());
+    let (store, generation) = repo.thread_safe_repo();
+    assert_eq!(generation, 1);
+    let config_store = repo
+        .repo_with_current_config()
+        .expect("config repo")
+        .into_sync()
+        .objects;
+    assert!(Arc::ptr_eq(&config_store, &store.objects));
+    // The old token no longer resumes anything, but the page is still right.
+    let next = repo
+        .log_history_mode_page_impl(
+            HistoryMode::FullReachable,
+            1,
+            first_page.next_cursor.as_ref(),
+        )
+        .expect("next page");
+    assert_eq!(next.commits[0].id.as_ref(), second);
+}
+
+#[test]
+fn config_change_reuses_the_object_store() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let workdir = tmp.path();
+    init_test_repo(workdir);
+    commit_file(workdir, "a.txt", "one\n", "first");
+    let repo = open_repo(workdir);
+    repo.repo_with_current_config().expect("config repo");
+
+    git_success(workdir, &["config", "gitcomet.test", "changed"]);
+    let config = repo.repo_with_current_config().expect("reloaded config");
+
+    assert_eq!(
+        config
+            .config_snapshot()
+            .string("gitcomet.test")
+            .map(|value| value.to_string()),
+        Some("changed".to_string())
+    );
+    assert!(Arc::ptr_eq(
+        &config.into_sync().objects,
+        &repo.thread_safe_repo().0.objects
+    ));
 }

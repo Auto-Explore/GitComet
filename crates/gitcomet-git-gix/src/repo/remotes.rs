@@ -972,7 +972,7 @@ impl GixRepo {
 
     fn fetch_all_command_impl(&self, prune: bool, capture_output: bool) -> Result<CommandOutput> {
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("fetch").arg("--all");
+        cmd.arg("fetch").arg("--progress").arg("--all");
         if prune {
             cmd.arg("--prune");
         } else {
@@ -1107,6 +1107,7 @@ impl GixRepo {
 
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("fetch")
+            .arg("--progress")
             .arg("--prune")
             .arg("--no-prune-tags")
             .arg("--")
@@ -1178,7 +1179,7 @@ impl GixRepo {
             cmd.arg("-c")
                 .arg(format!("remote.{remote}.pruneTags=false"));
         }
-        cmd.arg("pull");
+        cmd.arg("pull").arg("--progress");
         Self::append_pull_mode_args(&mut cmd, mode);
         cmd
     }
@@ -1998,6 +1999,7 @@ impl GixRepo {
         }
         cmd.arg("--no-pager")
             .arg("pull")
+            .arg("--progress")
             .arg("--no-rebase")
             .arg("--ff")
             .arg("--no-prune")

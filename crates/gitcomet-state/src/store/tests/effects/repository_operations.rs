@@ -3373,3 +3373,151 @@ fn rename_branch_force_effect_runs_in_other_worktree() {
         vec!["rename-force old feature".to_string()]
     );
 }
+
+#[test]
+fn pull_releases_the_object_store_before_its_refresh() {
+    use std::sync::Mutex;
+
+    struct RecordingRepo {
+        spec: RepoSpec,
+        calls: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl GitRepository for RecordingRepo {
+        fn spec(&self) -> &RepoSpec {
+            &self.spec
+        }
+        fn release_object_store(&self) {
+            self.calls.lock().unwrap().push("release");
+        }
+        fn log_head_page(
+            &self,
+            _limit: usize,
+            _cursor: Option<&LogCursor>,
+        ) -> Result<std::sync::Arc<LogPage>> {
+            unimplemented!()
+        }
+        fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
+            unimplemented!()
+        }
+        fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
+            unimplemented!()
+        }
+        fn current_branch(&self) -> Result<String> {
+            unimplemented!()
+        }
+        fn list_branches(&self) -> Result<Vec<Branch>> {
+            unimplemented!()
+        }
+        fn list_remotes(&self) -> Result<Vec<Remote>> {
+            unimplemented!()
+        }
+        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+            unimplemented!()
+        }
+        fn status(&self) -> Result<RepoStatus> {
+            unimplemented!()
+        }
+        fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
+            unimplemented!()
+        }
+        fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn delete_branch(&self, _name: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn checkout_branch(&self, _name: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+            unimplemented!()
+        }
+        fn stash_apply(&self, _index: usize) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_drop(&self, _index: usize) -> Result<()> {
+            unimplemented!()
+        }
+        fn stage(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+        fn unstage(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+        fn commit(&self, _message: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn fetch_all(&self) -> Result<()> {
+            unimplemented!()
+        }
+        fn pull(&self, _mode: PullMode) -> Result<()> {
+            self.calls.lock().unwrap().push("pull");
+            Ok(())
+        }
+        fn push(&self) -> Result<()> {
+            unimplemented!()
+        }
+        fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+    }
+
+    struct Backend;
+    impl GitBackend for Backend {
+        fn open(&self, _workdir: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            Err(Error::new(ErrorKind::Unsupported("test backend")))
+        }
+    }
+
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let executor = super::super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend);
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    repos.insert(
+        RepoId(1),
+        Arc::new(RecordingRepo {
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            calls: Arc::clone(&calls),
+        }),
+    );
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::Pull {
+            repo_id: RepoId(1),
+            mode: PullMode::Default,
+            prune: false,
+            auth: None,
+        },
+    );
+
+    let finished = loop {
+        match recv_effect_message(&msg_rx, Duration::from_secs(5)).expect("pull finishes") {
+            Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished { result, .. }) => {
+                break result;
+            }
+            _ => continue,
+        }
+    };
+    assert!(finished.is_ok(), "{finished:?}");
+    // Released before the finish message, so the refresh it triggers reads
+    // through a fresh store.
+    assert_eq!(*calls.lock().unwrap(), vec!["pull", "release"]);
+}

@@ -469,6 +469,7 @@ fn hook_activity_owns_wrapped_repo_action_failure_diagnostic() {
             label: "Checkout branch".to_string(),
             context: Some("feature/hooks".to_string()),
             time: SystemTime::UNIX_EPOCH,
+            progress_lane: false,
         }),
     );
     reduce(
@@ -540,6 +541,7 @@ fn hooked_repo_action_preserves_diagnostic_when_hooks_pass_before_git_fails() {
             label: "Checkout".to_string(),
             context: Some("01234567".to_string()),
             time: SystemTime::UNIX_EPOCH,
+            progress_lane: false,
         },
         crate::msg::InternalMsg::GitOperationEvent {
             repo_id,

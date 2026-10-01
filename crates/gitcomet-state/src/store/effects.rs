@@ -141,6 +141,7 @@ fn effect_requires_available_git(effect: &Effect) -> bool {
             | Effect::PersistRecentRepo { .. }
             | Effect::PersistRepoHistoryMode { .. }
             | Effect::PersistRepoHistoryModesBatch { .. }
+            | Effect::PersistRepoMaintenanceSnooze { .. }
             | Effect::CancelRepoLoads { .. }
             | Effect::CancelGitOperation { .. }
             | Effect::AbortCloneRepo { .. }
@@ -1366,6 +1367,26 @@ pub(super) fn schedule_effect(
         }
         Effect::PruneLocalTags { repo_id } => {
             repo_commands::schedule_prune_local_tags(executor, repos, msg_tx, repo_id)
+        }
+        Effect::CheckRepoMaintenance { repo_id } => {
+            repo_commands::schedule_check_maintenance(repos, msg_tx, repo_id)
+        }
+        Effect::PersistRepoMaintenanceSnooze { common_dir } => {
+            session_persist_executor.spawn(move || {
+                if let Err(error) = session::persist_repo_maintenance_snooze(&common_dir) {
+                    util::send_or_log(
+                        &msg_tx,
+                        Msg::Internal(crate::msg::InternalMsg::SessionPersistFailed {
+                            repo_id: None,
+                            action: "remember the maintenance reminder",
+                            error: error.to_string(),
+                        }),
+                    );
+                }
+            });
+        }
+        Effect::RunMaintenance { repo_id } => {
+            repo_commands::schedule_run_maintenance(repos, Arc::clone(backend), msg_tx, repo_id)
         }
         Effect::Pull {
             repo_id,

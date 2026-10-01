@@ -2753,7 +2753,7 @@ mod tests {
         std::fs::write(tmp.path().join(logical_path), b"fn unchanged() {}\n")
             .expect("write worktree source");
         let repo = open_repo(tmp.path());
-        let thread_local_repo = repo._repo.to_thread_local();
+        let thread_local_repo = repo.repo();
 
         let first = repo
             .cached_git_normalized_worktree_file_source(&thread_local_repo, logical_path)

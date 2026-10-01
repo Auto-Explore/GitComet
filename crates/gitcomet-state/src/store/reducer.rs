@@ -18,6 +18,7 @@ mod indexed_history;
 #[cfg(test)]
 mod line_stats_tests;
 mod loads;
+pub(super) mod maintenance;
 #[cfg(test)]
 mod nav_history_tests;
 mod repo_management;
@@ -318,6 +319,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::Fetch(crate::msg::FetchMsg::Refspecs { .. })
             | Msg::PruneMergedBranches { .. }
             | Msg::PruneLocalTags { .. }
+            | Msg::StartRepoMaintenance { .. }
             | Msg::Pull { .. }
             | Msg::PullBranch { .. }
             | Msg::MergeRef { .. }
@@ -740,6 +742,7 @@ fn reduce_inner(
             verify_commit_signatures,
         ),
         Msg::SetRemoteSettings(settings) => settings::set_remote_settings(state, settings),
+        Msg::SetMaintenanceSettings(settings) => maintenance::set_settings(state, settings),
         Msg::SetFileBrowserSettings(settings) => {
             effects::set_file_browser_settings(state, settings)
         }
@@ -755,6 +758,7 @@ fn reduce_inner(
             label,
             context,
             time,
+            progress_lane,
         }) => git_operations::git_operation_started(
             state,
             repo_id,
@@ -762,6 +766,7 @@ fn reduce_inner(
             label,
             context,
             time,
+            progress_lane,
         ),
         Msg::Internal(crate::msg::InternalMsg::GitOperationEvent {
             repo_id,
@@ -1372,6 +1377,11 @@ fn reduce_inner(
         }
         Msg::PruneLocalTags { repo_id } => {
             actions_emit_effects::prune_local_tags(repos, state, repo_id)
+        }
+        Msg::StartRepoMaintenance { repo_id } => maintenance::start(state, repo_id),
+        Msg::SnoozeRepoMaintenance { repo_id } => maintenance::snooze(state, repo_id),
+        Msg::Internal(crate::msg::InternalMsg::RepoMaintenanceChecked { repo_id, needed }) => {
+            maintenance::checked(state, repo_id, needed)
         }
         Msg::Pull { repo_id, mode } => actions_emit_effects::pull(repos, state, repo_id, mode),
         Msg::PullBranch {

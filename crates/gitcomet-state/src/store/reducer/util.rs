@@ -1327,6 +1327,7 @@ fn summarize_command(
             RepoCommandKind::FetchAll | RepoCommandKind::FetchRefspecs { .. } => "Fetch",
             RepoCommandKind::PruneMergedBranches => "Prune merged branches",
             RepoCommandKind::PruneLocalTags => "Prune local tags",
+            RepoCommandKind::RunMaintenance => "Maintenance",
             RepoCommandKind::Pull { .. } => "Pull",
             RepoCommandKind::PullBranch { .. } => "Pull",
             RepoCommandKind::MergeRef { .. } => "Merge",
@@ -1418,6 +1419,15 @@ fn summarize_command(
         }
         RepoCommandKind::PruneMergedBranches => "Prune merged branches: Completed".to_string(),
         RepoCommandKind::PruneLocalTags => "Prune local tags: Completed".to_string(),
+        RepoCommandKind::RunMaintenance => {
+            // The run prints nothing over a pipe; the backend returns its
+            // check instead when git found nothing to do.
+            if output.command == gitcomet_core::services::MAINTENANCE_CHECK_COMMAND {
+                "Maintenance: Not needed, the repository is already optimized".to_string()
+            } else {
+                "Maintenance: Completed".to_string()
+            }
+        }
         RepoCommandKind::Pull { .. } => {
             if output.stdout.contains("Already up to date") {
                 "Pull: Already up to date".to_string()
@@ -2446,6 +2456,30 @@ mod tests {
             assert_eq!(rendered_command, label);
             assert_eq!(summary, format!("{label} failed"));
         }
+    }
+
+    #[test]
+    fn maintenance_summary_reports_what_the_run_did() {
+        // Since git 2.54 the default strategy prints nothing over a pipe, even
+        // after a full repack.
+        let (_, silent_run) = summarize_command(
+            &RepoCommandKind::RunMaintenance,
+            &command_output("git maintenance run --auto", "", ""),
+            true,
+            None,
+        );
+        assert_eq!(silent_run, "Maintenance: Completed");
+
+        let (_, skipped) = summarize_command(
+            &RepoCommandKind::RunMaintenance,
+            &command_output(gitcomet_core::services::MAINTENANCE_CHECK_COMMAND, "", ""),
+            true,
+            None,
+        );
+        assert_eq!(
+            skipped,
+            "Maintenance: Not needed, the repository is already optimized"
+        );
     }
 
     #[test]

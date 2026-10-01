@@ -2,8 +2,8 @@
 //! the credentials the user then enters.
 
 use super::{
-    actions_emit_effects, begin_commit_action, reduce, refresh_selected_head_gitlink,
-    repo_management, util,
+    actions_emit_effects, begin_commit_action, external_and_history, maintenance, reduce,
+    refresh_selected_head_gitlink, repo_management, util,
 };
 use crate::model::AuthPromptKind;
 use crate::model::{AppState, AuthPromptState, AuthRetryOperation, PendingCommitRetry, RepoId};
@@ -131,6 +131,7 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         }
         RepoCommandKind::PruneMergedBranches => Msg::PruneMergedBranches { repo_id },
         RepoCommandKind::PruneLocalTags => Msg::PruneLocalTags { repo_id },
+        RepoCommandKind::RunMaintenance => Msg::StartRepoMaintenance { repo_id },
         RepoCommandKind::Pull { mode } => Msg::Pull { repo_id, mode },
         RepoCommandKind::PullBranch { remote, branch } => Msg::PullBranch {
             repo_id,
@@ -632,7 +633,18 @@ pub(super) fn repo_command_finished(
         refresh_selected_head_gitlink(repos, state, repo_id);
     }
 
-    let effects = actions_emit_effects::repo_command_finished(state, repo_id, command, result);
+    let maintenance_ended = matches!(command, RepoCommandKind::RunMaintenance);
+    let mut effects = actions_emit_effects::repo_command_finished(state, repo_id, command, result);
+    if maintenance_ended {
+        for (deferred_repo, change) in maintenance::finished(state, repo_id) {
+            effects.extend(external_and_history::repo_externally_changed(
+                repos,
+                state,
+                deferred_repo,
+                change,
+            ));
+        }
+    }
 
     if let Some(path) = removed_worktree_path {
         let repo_ids_to_close = state

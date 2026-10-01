@@ -18,7 +18,8 @@ impl GixRepo {
             gitcomet_core::git_ops_trace::GitOpTraceKind::LogWalk,
         );
         cancellation.check_cancelled()?;
-        let repo = self._repo.to_thread_local();
+        let (store, _) = self.thread_safe_repo();
+        let repo = store.to_thread_local();
         let shallow = shallow_snapshot(&repo)?;
         let tips = if mode == HistoryMode::AllBranches {
             self.all_branches_tips(&repo, Some(cancellation))?
@@ -30,7 +31,7 @@ impl GixRepo {
         let mut builder =
             HistoryIndexBuilder::new(snapshot, mode, repo.object_hash().len_in_bytes())?;
         let mut walk = new_log_paged_walk(
-            &self._repo,
+            &store,
             tips.iter().copied(),
             mode,
             &shallow,
@@ -44,7 +45,7 @@ impl GixRepo {
         for info in &mut walk.walk {
             cancellation.check_cancelled()?;
             let info = info.map_err(|error| {
-                Error::new(ErrorKind::Backend(format!("gix history index: {error}")))
+                crate::repo::object_store::gix_error("gix history index", &*error)
             })?;
             scanned += 1;
             if scanned.is_multiple_of(1024) && last_progress.elapsed() >= Duration::from_millis(100)
@@ -74,9 +75,10 @@ impl GixRepo {
                     .objects
                     .find_commit(info.id.as_ref(), &mut decode_buf)
                     .map_err(|error| {
-                        Error::new(ErrorKind::Backend(format!(
-                            "gix history index object: {error}"
-                        )))
+                        crate::repo::object_store::gix_error(
+                            "gix history index object",
+                            &gix::Error::from(error),
+                        )
                     })?;
                 if let Some(author) = &author
                     && !commit
@@ -131,7 +133,10 @@ impl GixRepo {
                 .objects
                 .find_commit(id.as_ref(), &mut header_buf)
                 .map_err(|error| {
-                    Error::new(ErrorKind::Backend(format!("gix history range: {error}")))
+                    crate::repo::object_store::gix_error(
+                        "gix history range",
+                        &gix::Error::from(error),
+                    )
                 })?;
             // Use precisely the indexed topology (including first-parent,
             // shallow boundaries and parents excluded by an author filter).

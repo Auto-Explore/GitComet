@@ -47,8 +47,18 @@ pub(super) fn send_unavailable_git_effect_result(
         | Effect::PersistRepoHistoryMode { .. }
         | Effect::PersistRepoHistoryModesBatch { .. }
         | Effect::PersistRepoHistoryAuthorFilter { .. }
+        | Effect::PersistRepoMaintenanceSnooze { .. }
+        // Unavailable git just means no recommendation.
+        | Effect::CheckRepoMaintenance { .. }
         | Effect::CancelRepoLoads { .. }
         | Effect::CancelGitOperation { .. } => {}
+        Effect::RunMaintenance { repo_id } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::RunMaintenance,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::OpenRepo { repo_id, path } => {
             send(Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
                 repo_id,
