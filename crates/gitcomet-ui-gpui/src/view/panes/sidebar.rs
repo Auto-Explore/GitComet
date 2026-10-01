@@ -2608,9 +2608,16 @@ impl SidebarPaneView {
                     // what was just cut, and that is the feedback the user needs.
                     let row_text_color = if cut {
                         theme.colors.foreground.disabled
+                    } else if entry.ignored && !selected && !is_open_file {
+                        theme.colors.foreground.secondary
                     } else {
                         file_browser_row_label_color(theme, selected || is_open_file)
                     };
+                    let row_style = row_style.tinted(crate::view::rows::explorer_row_tint(
+                        &theme,
+                        gitcomet_state::explorer::is_hidden_path(entry.path.as_path()),
+                        entry.ignored,
+                    ));
                     // The pen marks the file wherever it sits in the tree, so a user
                     // who navigated to it rather than to the pinned section still
                     // sees that it is holding unsaved text.
@@ -2626,7 +2633,7 @@ impl SidebarPaneView {
                                     && repo.is_some_and(|r| {
                                         r.file_browser.selection.paths.is_empty()
                                     })),
-                            open_row_bg,
+                            row_style.selection_fill(open_row_bg),
                         )
                         .open(context_menu_active);
 
@@ -2859,7 +2866,7 @@ impl SidebarPaneView {
                                     )
                                 })
                         })
-                        .child(if cut {
+                        .child(if cut || entry.ignored {
                             icon_slot_tinted(
                                 file_or_folder_icon_path(entry, is_expanded),
                                 icon_muted,

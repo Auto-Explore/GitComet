@@ -817,6 +817,23 @@ pub(in crate::view) fn file_kind_row_tint(
     Some(with_alpha(color, alpha))
 }
 
+/// Background wash for an explorer row that is normally out of sight; ignored
+/// wins over hidden. Hidden rows lean toward the canvas, away from the hover
+/// overlay, so they never read as hovered. Translucent like the kind tints.
+pub(in crate::view) fn explorer_row_tint(
+    theme: &AppTheme,
+    hidden: bool,
+    ignored: bool,
+) -> Option<gpui::Rgba> {
+    if ignored {
+        Some(with_alpha(theme.colors.status.warning.foreground, 0.10))
+    } else if hidden {
+        Some(with_alpha(theme.colors.surface.canvas, 0.45))
+    } else {
+        None
+    }
+}
+
 #[inline]
 fn row_tint_alpha(is_dark: bool) -> f32 {
     if is_dark {
@@ -1332,6 +1349,29 @@ mod tests {
                     "{kind:?} disc must have somewhere to move to",
                 );
             }
+        }
+    }
+
+    #[test]
+    fn explorer_rows_tint_ignored_over_hidden_and_never_like_hover() {
+        for theme in bundled_themes() {
+            assert_eq!(explorer_row_tint(&theme, false, false), None);
+            let ignored = explorer_row_tint(&theme, false, true).expect("ignored tint");
+            assert_eq!(explorer_row_tint(&theme, true, true), Some(ignored));
+            let hidden = explorer_row_tint(&theme, true, false).expect("hidden tint");
+            assert_ne!(hidden, ignored);
+
+            // Hover moves the chrome toward the text colour; a hidden row must
+            // move it the other way.
+            let chrome = theme.colors.surface.chrome;
+            let lightness = |c: gpui::Rgba| c.red + c.green + c.blue;
+            let hovered = composite_over(chrome, theme.hover_overlay());
+            let washed = composite_over(chrome, hidden);
+            assert!(
+                (lightness(hovered) - lightness(chrome)) * (lightness(washed) - lightness(chrome))
+                    < 0.0,
+                "{chrome:?}: hover {hovered:?}, hidden {washed:?}"
+            );
         }
     }
 

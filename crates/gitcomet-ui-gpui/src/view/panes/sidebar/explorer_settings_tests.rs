@@ -128,3 +128,67 @@ fn files_settings_menu_toggles_ignored_files_and_stays_open(cx: &mut gpui::TestA
         "the open menu repaints its check mark"
     );
 }
+
+fn visibility_state(show_hidden: bool) -> Arc<AppState> {
+    let entry = |name: &str, kind, ignored| FileEntry {
+        name: name.to_string(),
+        path: Arc::new(PathBuf::from(name)),
+        kind,
+        depth: 0,
+        ignored,
+    };
+    let mut state = (*files_state(SidebarMode::Files)).clone();
+    let browser = &mut state.repos[0].file_browser;
+    browser.entries = Loadable::Ready(Arc::new(vec![
+        entry(".github", FileEntryKind::Directory, false),
+        entry("ignored.log", FileEntryKind::File, true),
+        entry("plain.rs", FileEntryKind::File, false),
+    ]));
+    browser.show_hidden = show_hidden;
+    browser.show_ignored = true;
+    browser.bump_rev();
+    Arc::new(state)
+}
+
+#[gpui::test]
+fn tinted_rows_lay_out_like_plain_rows_and_hidden_ones_go_with_the_setting(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (view, cx) = sidebar_window(cx, visibility_state(true));
+    for scale in [100, 150] {
+        cx.update(|window, app| {
+            ui_scale::set_current(app, scale);
+            ui_scale::apply_to_window(window, scale);
+            window.refresh();
+        });
+        test_support::redraw(cx);
+        let labels = ["explorer_label_0", "explorer_label_1", "explorer_label_2"].map(|selector| {
+            cx.debug_bounds(selector)
+                .unwrap_or_else(|| panic!("{selector} is not painted at {scale}%"))
+        });
+        assert!(
+            labels
+                .iter()
+                .all(|label| label.size.height == labels[2].size.height),
+            "{labels:?} at {scale}%"
+        );
+    }
+
+    // Like the reducer, move the rev: the visible-row cache keys on it.
+    let mut state = (*visibility_state(false)).clone();
+    state.repos[0].file_browser.bump_rev();
+    let state = Arc::new(state);
+    cx.update(|_window, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(Arc::clone(&state));
+            test_support::push_test_state(view, state, cx);
+        })
+    });
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("explorer_label_1").is_some());
+    assert!(
+        cx.debug_bounds("explorer_label_2").is_none(),
+        ".github must leave the tree when hidden files are off"
+    );
+}
