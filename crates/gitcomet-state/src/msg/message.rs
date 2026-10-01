@@ -1,7 +1,8 @@
 use crate::model::GitLogTagFetchMode;
 use crate::model::{
     BranchExistsPromptState, ConflictFileLoadMode, DefaultTagType, FileBrowserSettings,
-    GitOperationOuterOutcome, RemoteSettings, RepoId, SidebarDataRequest, SidebarMode,
+    GitOperationOuterOutcome, MaintenanceSettings, RemoteSettings, RepoId, SidebarDataRequest,
+    SidebarMode,
 };
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::ConflictSession;
@@ -218,6 +219,7 @@ pub enum RepoWatchDegradedReason {
 #[derive(Debug, strum::IntoStaticStr)]
 pub enum Msg {
     IndexedHistory(crate::indexed_history::IndexedHistoryMsg),
+    DiffSession(crate::diff_session::DiffSessionMsg),
     HistoryAuthors(crate::history_authors::HistoryAuthorsMsg),
     HistoryFind(crate::history_find::HistoryFindMsg),
     OpenRepo(PathBuf),
@@ -279,6 +281,7 @@ pub enum Msg {
         verify_commit_signatures: bool,
     },
     SetRemoteSettings(RemoteSettings),
+    SetMaintenanceSettings(MaintenanceSettings),
     SetFileBrowserSettings(FileBrowserSettings),
     SetDefaultTagType(DefaultTagType),
     SetActiveRepo {
@@ -293,6 +296,29 @@ pub enum Msg {
     },
     RepoActivated {
         repo_id: RepoId,
+    },
+    /// A [`WatchLease`](crate::store::WatchLease) was taken or dropped. Sent
+    /// by the lease itself; not meant for dispatch by hand.
+    AcquireWatchLease {
+        repo_id: RepoId,
+        lifetime: u64,
+    },
+    ReleaseWatchLease {
+        repo_id: RepoId,
+        lifetime: u64,
+    },
+    /// Keep a linked worktree watched independently of the active repository.
+    WatchWorktree {
+        repo_id: RepoId,
+        lifetime: u64,
+        path: PathBuf,
+        watch: bool,
+    },
+    WorktreeExternallyChanged {
+        repo_id: RepoId,
+        lifetime: u64,
+        path: PathBuf,
+        change: RepoExternalChange,
     },
     RepoExternallyChanged {
         repo_id: RepoId,
@@ -353,6 +379,16 @@ pub enum Msg {
         repo_id: RepoId,
         from: CommitId,
         from_label: String,
+    },
+    /// A comparison with explicit options (a merge-base comparison, or one
+    /// that lists untracked files). `to: None` is the working tree.
+    CompareWithOptions {
+        repo_id: RepoId,
+        from: CommitId,
+        to: Option<CommitId>,
+        options: gitcomet_core::services::ComparisonOptions,
+        from_label: String,
+        to_label: String,
     },
     /// Clear an active range comparison, returning to single/empty selection.
     ClearComparison {
@@ -644,6 +680,13 @@ pub enum Msg {
         mainline: Option<usize>,
         summary: String,
     },
+    /// Applies files' change from a commit or comparison.
+    ApplyFileChange {
+        repo_id: RepoId,
+        target: gitcomet_core::domain::ApplyChangeTarget,
+        commit: bool,
+        commit_retry: Option<gitcomet_core::domain::ApplyFileChangeRetry>,
+    },
     CreateBranch {
         repo_id: RepoId,
         name: String,
@@ -822,13 +865,19 @@ pub enum Msg {
         repo_id: RepoId,
         context: SafePushAfterCommitContext,
     },
-    FetchAll {
-        repo_id: RepoId,
-    },
+    Fetch(super::FetchMsg),
     PruneMergedBranches {
         repo_id: RepoId,
     },
     PruneLocalTags {
+        repo_id: RepoId,
+    },
+    /// The user accepted git's maintenance recommendation.
+    StartRepoMaintenance {
+        repo_id: RepoId,
+    },
+    /// "Remind me later" on the maintenance recommendation.
+    SnoozeRepoMaintenance {
         repo_id: RepoId,
     },
     Pull {
@@ -945,6 +994,8 @@ pub enum Msg {
     InteractiveCherryPick {
         repo_id: RepoId,
         entries: Vec<InteractiveRebaseEntry>,
+        /// False merges every pick into the index without committing.
+        commit: bool,
     },
     CancelInteractiveRebaseSetup {
         repo_id: RepoId,
@@ -1151,6 +1202,8 @@ pub enum InternalMsg {
         label: String,
         context: Option<String>,
         time: SystemTime,
+        /// Shown as a progress card while it runs.
+        progress_lane: bool,
     },
     GitOperationEvent {
         repo_id: RepoId,
@@ -1189,6 +1242,10 @@ pub enum InternalMsg {
         repo_id: RepoId,
         spec: RepoSpec,
         repo: Arc<dyn GitRepository>,
+    },
+    RepoMaintenanceChecked {
+        repo_id: RepoId,
+        needed: bool,
     },
     RepoOpenedErr {
         repo_id: RepoId,
@@ -1291,9 +1348,15 @@ pub enum InternalMsg {
         repo_id: RepoId,
         result: Result<Option<String>, Error>,
     },
-    /// The message git prepared for the next commit (after a `--no-commit`
-    /// revert), offered as the commit box's starting text.
+    /// The message git prepared for an uncommitted revert or applied change,
+    /// offered as the commit box's starting text.
     CommitMessageSuggested {
+        repo_id: RepoId,
+        message: String,
+    },
+    /// An automatic commit consumed this suggestion. Clear only that message,
+    /// preserving a newer suggestion or a draft the user has edited.
+    CommitMessageSuggestionConsumed {
         repo_id: RepoId,
         message: String,
     },
@@ -1395,7 +1458,7 @@ pub enum InternalMsg {
         to: Option<CommitId>,
         /// The `Effect::LoadRangeFiles` request this answers.
         request: u64,
-        result: Result<Vec<CommitFileChange>, Error>,
+        result: Result<gitcomet_core::services::Comparison, Error>,
     },
     SquashMessagePreviewLoaded {
         repo_id: RepoId,

@@ -254,6 +254,17 @@ impl Default for RemotePreferences {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct MaintenancePreferences {
+    pub(super) recommend: bool,
+}
+
+impl Default for MaintenancePreferences {
+    fn default() -> Self {
+        Self { recommend: true }
+    }
+}
+
 /// Parsed, defaulted preferences shared by the root view and its child views.
 ///
 /// The on-disk session remains a backwards-compatible DTO of optional fields;
@@ -272,6 +283,7 @@ pub(super) struct UiPreferences {
     pub(super) file_editing: FileEditingPreferences,
     pub(super) repository: RepositoryPreferences,
     pub(super) remotes: RemotePreferences,
+    pub(super) maintenance: MaintenancePreferences,
     pub(super) terminal: TerminalPreferences,
 }
 
@@ -286,7 +298,7 @@ impl UiPreferences {
                 sidebar_collapsed: session.sidebar_collapsed.unwrap_or(false),
             },
             appearance: AppearancePreferences {
-                metrics: crate::appearance::Appearance::from_session(session),
+                metrics: crate::session_ui::appearance(session),
                 theme_mode: session
                     .theme_mode
                     .as_deref()
@@ -405,6 +417,9 @@ impl UiPreferences {
                     .fetch_prune_deleted_remote_branches
                     .unwrap_or(true),
             },
+            maintenance: MaintenancePreferences {
+                recommend: session.recommend_repo_maintenance.unwrap_or(true),
+            },
             terminal: TerminalPreferences::from_ui_session(session),
         }
     }
@@ -448,6 +463,10 @@ mod tests {
         );
         assert!(preferences.merge_tool.view_three_way);
         assert!(preferences.remotes.prune_deleted_remote_branches_on_fetch);
+        assert_eq!(
+            preferences.maintenance.recommend,
+            gitcomet_state::model::MaintenanceSettings::default().recommend
+        );
         assert_eq!(
             preferences.security.remote_markdown_images,
             RemoteMarkdownImagePolicy::AlwaysLoad

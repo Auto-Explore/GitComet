@@ -49,6 +49,10 @@ jobs:
         run: rustup show active-toolchain
       - name: Check formatting
         run: cargo fmt --all --check
+      - name: Check Rust source layout
+        run: bash scripts/check-rust-source-size.sh
+      - name: Check product identity literals
+        run: python3 scripts/ci/identity_literals.py
       - name: Install Python for CI helpers
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -109,11 +113,49 @@ jobs:
       - name: Clippy (libraries)
         run: cargo clippy --locked -p gitcomet-core -p gitcomet-state -p gitcomet-git-gix -p gitcomet-tree-sitter-alloc -- -D warnings
       - name: Clippy (headless app)
-        run: cargo clippy --locked -p gitcomet --no-default-features --features gix -- -D warnings
+        run: cargo clippy --locked -p gitcomet -p gitcomet-app --no-default-features --features gix -- -D warnings
+      - name: Check crate dependency boundaries
+        run: python3 scripts/ci/boundaries.py
       - uses: ./.github/actions/ci-finish
         if: always()
         with:
           name: clippy
+          cache-key: ${{ steps.setup.outputs.cache-key }}
+          cache-hit: ${{ steps.setup.outputs.cache-hit }}
+          cold-cache: ${{ inputs.cold-cache }}
+          compiled: "false"
+
+  ui-clippy:
+    name: UI and extension API lint
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install UI native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
+      - uses: ./.github/actions/ci-setup
+        id: setup
+        with:
+          context: ubuntu22-x64-ui-clippy
+          cold-cache: ${{ inputs.cold-cache }}
+          nextest: "false"
+          compiled: "false"
+      - name: Lint public libraries and host
+        run: cargo clippy --locked -p gitcomet-ui-kit -p gitcomet-extension-api -p gitcomet-extension-example -p gitcomet-ui-gpui -p gitcomet-app -- -D warnings
+      - name: Build public documentation
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --locked --no-deps -p gitcomet-ui-kit -p gitcomet-extension-api
+      - name: Check the extension public API snapshot
+        run: python3 scripts/ci/public_api.py
+      - name: Test the downstream example and API contracts
+        run: cargo test --locked -p gitcomet-extension-api -p gitcomet-extension-example
+      - uses: ./.github/actions/ci-finish
+        if: always()
+        with:
+          name: ui-clippy
           cache-key: ${{ steps.setup.outputs.cache-key }}
           cache-hit: ${{ steps.setup.outputs.cache-hit }}
           cold-cache: ${{ inputs.cold-cache }}

@@ -1,3 +1,6 @@
+use super::operation_progress::{
+    MAINTENANCE_RECOMMENDATION_TEXT, MaintenanceRecommendation, OperationProgress,
+};
 use super::*;
 use gitcomet_state::model::SubmoduleAddProgressState;
 
@@ -24,9 +27,16 @@ pub(super) struct ToastHost {
     clone_progress_dest: Option<std::sync::Arc<std::path::PathBuf>>,
     submodule_add_progress: Vec<SubmoduleAddProgressState>,
     hook_progress: Vec<HookProgressToast>,
+    operation_progress: Vec<OperationProgress>,
+    /// Asked until answered: never expires and is never pushed out of view.
+    maintenance_recommendations: Vec<MaintenanceRecommendation>,
+    /// Repaints elapsed times while an operation card is up.
+    progress_ticker: Option<gpui::Task<()>>,
     /// Progress remains live while Activity is open, but compact progress for
     /// the repository represented by that dialog must not render behind it.
     hook_activity_dialog_repo: Option<RepoId>,
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub(in crate::view) render_count: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -200,7 +210,12 @@ impl ToastHost {
             clone_progress_dest: None,
             submodule_add_progress: Vec::new(),
             hook_progress: Vec::new(),
+            operation_progress: Vec::new(),
+            maintenance_recommendations: Vec::new(),
+            progress_ticker: None,
             hook_activity_dialog_repo: None,
+            #[cfg(any(test, feature = "benchmarks"))]
+            render_count: 0,
         }
     }
 
@@ -253,7 +268,7 @@ impl ToastHost {
         if let Some(ix) = existing {
             let mut toast = self.toasts.remove(ix);
             if let ToastBody::Error(notice) = &mut toast.body {
-                Arc::make_mut(notice).repeat(report);
+                std::rc::Rc::make_mut(notice).repeat(report);
             }
             self.toasts.push(toast);
             cx.notify();
@@ -263,7 +278,7 @@ impl ToastHost {
         self.toasts.push(ToastState {
             id,
             kind: components::ToastKind::Error,
-            body: ToastBody::Error(Arc::new(ErrorNotice::new(report))),
+            body: ToastBody::Error(std::rc::Rc::new(ErrorNotice::new(report))),
             actions: Vec::new(),
             dismiss_behavior: ToastDismissBehavior::Remove,
             ttl: None,
@@ -272,12 +287,12 @@ impl ToastHost {
     }
 
     /// Errors on screen, newest first.
-    pub(super) fn error_notices(&self) -> Vec<(u64, Arc<ErrorNotice>)> {
+    pub(super) fn error_notices(&self) -> Vec<(u64, std::rc::Rc<ErrorNotice>)> {
         self.toasts
             .iter()
             .rev()
             .filter_map(|toast| match &toast.body {
-                ToastBody::Error(notice) => Some((toast.id, Arc::clone(notice))),
+                ToastBody::Error(notice) => Some((toast.id, std::rc::Rc::clone(notice))),
                 ToastBody::Text { .. } => None,
             })
             .collect()
@@ -363,6 +378,28 @@ impl ToastHost {
         );
     }
 
+    /// Like [`Self::push_toast_with_link`], but stays until closed.
+    pub(super) fn push_sticky_toast_with_link(
+        &mut self,
+        kind: components::ToastKind,
+        message: String,
+        link_url: String,
+        link_label: String,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.push_toast_inner(
+            kind,
+            message,
+            vec![ToastAction::OpenUrl {
+                url: link_url,
+                label: link_label,
+            }],
+            ToastDismissBehavior::Remove,
+            None,
+            cx,
+        );
+    }
+
     pub(super) fn push_hook_activity_toast(
         &mut self,
         kind: components::ToastKind,
@@ -437,6 +474,23 @@ impl ToastHost {
                 postpone_seconds,
             },
             None,
+            cx,
+        );
+    }
+
+    pub(in crate::view) fn push_hosted_toast(
+        &mut self,
+        kind: components::ToastKind,
+        message: String,
+        actions: Vec<gitcomet_extension_api::HostedAction>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.push_toast_inner(
+            kind,
+            message,
+            actions.into_iter().map(ToastAction::Hosted).collect(),
+            ToastDismissBehavior::Remove,
+            toast_ttl(kind),
             cx,
         );
     }
@@ -575,6 +629,10 @@ impl ToastHost {
         cx: &mut gpui::Context<Self>,
     ) {
         match action {
+            ToastAction::Hosted(action) => {
+                self.remove_toast(id, cx);
+                action.invoke(cx);
+            }
             ToastAction::OpenUrl { url, .. } => {
                 // Keep the toast until the open succeeds: it carries the URL and
                 // its button, so dismissing it up front would leave a user whose
@@ -710,6 +768,54 @@ impl ToastHost {
             self.hook_progress = next;
             cx.notify();
         }
+    }
+
+    pub(super) fn sync_operation_progress(
+        &mut self,
+        next: Vec<OperationProgress>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.operation_progress != next {
+            self.operation_progress = next;
+            cx.notify();
+        }
+        if self.operation_progress.is_empty() {
+            self.progress_ticker = None;
+        } else if self.progress_ticker.is_none()
+            && crate::ui_runtime::current().uses_progress_ticker()
+        {
+            self.progress_ticker = Some(cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(1))
+                        .await;
+                    if this.update(cx, |_, cx| cx.notify()).is_err() {
+                        break;
+                    }
+                }
+            }));
+        }
+    }
+
+    pub(super) fn sync_maintenance_recommendations(
+        &mut self,
+        next: Vec<MaintenanceRecommendation>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.maintenance_recommendations != next {
+            self.maintenance_recommendations = next;
+            cx.notify();
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn operation_progress_for_tests(&self) -> &[OperationProgress] {
+        &self.operation_progress
+    }
+
+    #[cfg(test)]
+    pub(super) fn has_progress_ticker_for_tests(&self) -> bool {
+        self.progress_ticker.is_some()
     }
 
     pub(super) fn set_hook_activity_dialog_repo(
@@ -923,6 +1029,221 @@ impl ToastHost {
                         ),
                 ),
         );
+        self.render_progress_shell(ui_scale, content)
+    }
+
+    fn render_maintenance_recommendation(
+        &self,
+        recommendation: &MaintenanceRecommendation,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let ui_scale = crate::ui_scale::UiScale::current(cx).with_appearance(theme.metrics);
+        let repo_id = recommendation.repo_id;
+        let dispatch = |msg: fn(RepoId) -> Msg| {
+            let root_view = self.root_view.clone();
+            move |_this: &mut Self,
+                  _e: &ClickEvent,
+                  _w: &mut Window,
+                  cx: &mut gpui::Context<Self>| {
+                let _ = root_view.update(cx, |root, _cx| root.store.dispatch(msg(repo_id)));
+            }
+        };
+        let start = components::Button::new(format!("maintenance_start_{}", repo_id.0), "Start")
+            .style(components::ButtonStyle::Outlined)
+            .on_click(
+                theme,
+                cx,
+                dispatch(|repo_id| Msg::StartRepoMaintenance { repo_id }),
+            )
+            .debug_selector(move || format!("maintenance_start_{}", repo_id.0));
+        let later = components::Button::new(
+            format!("maintenance_later_{}", repo_id.0),
+            "Remind me later",
+        )
+        .style(components::ButtonStyle::Transparent)
+        .borderless()
+        .on_click(
+            theme,
+            cx,
+            dispatch(|repo_id| Msg::SnoozeRepoMaintenance { repo_id }),
+        )
+        .debug_selector(move || format!("maintenance_later_{}", repo_id.0));
+
+        let content = div()
+            .debug_selector(move || format!("maintenance_recommendation_{}", repo_id.0))
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .flex_col()
+                    .gap_0p5()
+                    .child(
+                        div()
+                            .font_weight(FontWeight::BOLD)
+                            .child("Maintenance recommended"),
+                    )
+                    .child(
+                        div()
+                            .text_size(theme.ui_text(14.0))
+                            .text_color(theme.colors.foreground.secondary)
+                            .line_clamp(1)
+                            .overflow_hidden()
+                            .child(recommendation.repo_name.clone()),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(theme.ui_text(14.0))
+                    .child(MAINTENANCE_RECOMMENDATION_TEXT),
+            )
+            .child(
+                div()
+                    .pt_1()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(start)
+                    .child(later),
+            );
+        self.render_progress_shell(ui_scale, content)
+    }
+
+    fn render_operation_progress_toast(
+        &self,
+        progress: &OperationProgress,
+        now: std::time::SystemTime,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let ui_scale = crate::ui_scale::UiScale::current(cx).with_appearance(theme.metrics);
+        let operation_id = progress.operation_id;
+        let repo_id = progress.repo_id;
+        let accent = theme.colors.accent.foreground;
+        let percent = progress
+            .progress
+            .as_ref()
+            .and_then(|meter| meter.percent)
+            .unwrap_or(0);
+        let (fill_weight, remainder_weight) =
+            crate::view::clone_progress::clone_progress_segment_weights(percent);
+
+        let mut bar_fill = div()
+            .h_full()
+            .bg(with_alpha(accent, if theme.is_dark { 0.88 } else { 0.80 }))
+            .rounded(px(999.0))
+            .when(percent > 0, |this| this.min_w(px(2.0)));
+        bar_fill.style().flex_grow = Some(fill_weight);
+        bar_fill.style().flex_shrink = Some(0.0);
+        bar_fill.style().flex_basis = Some(relative(0.0).into());
+        let mut bar_remainder = div().h_full();
+        bar_remainder.style().flex_grow = Some(remainder_weight);
+        bar_remainder.style().flex_shrink = Some(0.0);
+        bar_remainder.style().flex_basis = Some(relative(0.0).into());
+
+        let root_view = self.root_view.clone();
+        let stop_button = components::Button::new(
+            format!("operation_progress_stop_{}", operation_id.0),
+            if progress.cancelling {
+                "Stopping…"
+            } else {
+                "Stop"
+            },
+        )
+        .style(components::ButtonStyle::Transparent)
+        .borderless()
+        .disabled(progress.cancelling)
+        .on_click(theme, cx, move |_this, _e, _w, cx| {
+            let _ = root_view.update(cx, |root, _cx| {
+                root.store.dispatch(Msg::CancelGitOperation {
+                    repo_id,
+                    operation_id,
+                });
+            });
+        })
+        .debug_selector(move || format!("operation_progress_stop_{}", operation_id.0));
+
+        let status = match progress.percent_label() {
+            Some(percent) => format!("{percent} · {}", progress.elapsed(now)),
+            None => progress.elapsed(now),
+        };
+        let content = div()
+            .debug_selector(move || format!("operation_progress_toast_{}", operation_id.0))
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(svg_spinner(
+                        ("operation_progress_spinner", operation_id.0),
+                        accent,
+                        ui_scale.px(16.0),
+                    ))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .flex_col()
+                            .gap_0p5()
+                            .child(div().font_weight(FontWeight::BOLD).child(progress.title()))
+                            .child(
+                                div()
+                                    .text_size(theme.ui_text(14.0))
+                                    .text_color(theme.colors.foreground.secondary)
+                                    .line_clamp(1)
+                                    .overflow_hidden()
+                                    .child(progress.subtitle.clone()),
+                            ),
+                    ),
+            )
+            .when_some(progress.explanation(), |this, explanation| {
+                this.child(div().text_size(theme.ui_text(14.0)).child(explanation))
+            })
+            .child(
+                div()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .text_size(theme.ui_text(14.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_color(accent)
+                            .line_clamp(1)
+                            .overflow_hidden()
+                            .child(progress.phase().to_string()),
+                    )
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child(status)),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .h(ui_scale.px(8.0))
+                    .flex()
+                    .rounded(px(999.0))
+                    .overflow_hidden()
+                    .bg(crate::view::clone_progress::clone_progress_bar_track_color(
+                        theme,
+                    ))
+                    .border_1()
+                    .border_color(
+                        crate::view::clone_progress::clone_progress_bar_border_color(theme),
+                    )
+                    .child(bar_fill)
+                    .child(bar_remainder),
+            )
+            .child(div().pt_1().child(stop_button));
+
         self.render_progress_shell(ui_scale, content)
     }
 
@@ -1144,6 +1465,10 @@ impl ToastHost {
 
 impl Render for ToastHost {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        #[cfg(any(test, feature = "benchmarks"))]
+        {
+            self.render_count += 1;
+        }
         let shows_hook_progress =
             |progress: &HookProgressToast| self.hook_activity_dialog_repo != Some(progress.repo_id);
         // Decide "nothing to show" before cloning anything: this renders every
@@ -1152,9 +1477,12 @@ impl Render for ToastHost {
             && self.clone_progress.is_none()
             && self.submodule_add_progress.is_empty()
             && !self.hook_progress.iter().any(&shows_hook_progress)
+            && self.operation_progress.is_empty()
+            && self.maintenance_recommendations.is_empty()
         {
             return div().into_any_element();
         }
+        let now = std::time::SystemTime::now();
         let hook_progress = self
             .hook_progress
             .iter()
@@ -1180,6 +1508,18 @@ impl Render for ToastHost {
         ));
         if !hook_progress.is_empty() {
             progress_toasts.push(self.render_hook_progress_toast(&hook_progress, cx));
+        }
+        for recommendation in self.maintenance_recommendations.clone() {
+            progress_toasts.push(self.render_maintenance_recommendation(&recommendation, cx));
+        }
+        for progress in self
+            .operation_progress
+            .iter()
+            .filter(|progress| progress.is_visible(now))
+            .cloned()
+            .collect::<Vec<_>>()
+        {
+            progress_toasts.push(self.render_operation_progress_toast(&progress, now, cx));
         }
         let has_progress = !progress_toasts.is_empty();
         let max_other = if has_progress { 2 } else { 3 };
@@ -1300,6 +1640,7 @@ impl Render for ToastHost {
                         .gap_2()
                         .children(t.actions.iter().enumerate().map(|(ix, action)| {
                             let label = match action {
+                                ToastAction::Hosted(action) => action.label().to_string(),
                                 ToastAction::OpenUrl { label, .. }
                                 | ToastAction::OpenSurvey { label, .. }
                                 | ToastAction::PostponeSurvey { label, .. }
@@ -1309,7 +1650,8 @@ impl Render for ToastHost {
                                 ToastAction::PostponeSurvey { .. } => {
                                     components::ButtonStyle::Transparent
                                 }
-                                ToastAction::OpenUrl { .. }
+                                ToastAction::Hosted(_)
+                                | ToastAction::OpenUrl { .. }
                                 | ToastAction::OpenSurvey { .. }
                                 | ToastAction::OpenHookActivity { .. } => {
                                     components::ButtonStyle::Outlined

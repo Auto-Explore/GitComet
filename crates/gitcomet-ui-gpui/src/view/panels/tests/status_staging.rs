@@ -39,22 +39,11 @@ enum Viewed {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    git_output(dir, args);
+    crate::test_support::git(dir, args);
 }
 
 fn git_output(dir: &Path, args: &[&str]) -> Vec<u8> {
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    output.stdout
+    crate::test_support::git(dir, args)
 }
 
 fn commit(dir: &Path, message: &str) {
@@ -256,13 +245,13 @@ fn exercise_with_failure(
             }
         });
     });
-    let target = DiffTarget::WorkingTree {
-        path: path.into(),
-        area: match viewed {
+    let target = DiffTarget::working_tree(
+        path.into(),
+        match viewed {
             Viewed::Diff(area) => area,
             _ => DiffArea::Unstaged,
         },
-    };
+    );
     store.dispatch(match viewed {
         Viewed::Diff(_) => Msg::SelectDiff {
             repo_id: REPO,
@@ -855,27 +844,26 @@ fn discarding_files_closes_only_the_affected_unstaged_diff(cx: &mut gpui::TestAp
     }
 }
 
-#[gpui::test]
-fn checking_out_a_conflict_side_preserves_an_unrelated_diff(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
-    let dir = tempfile::tempdir().unwrap();
-    git(dir.path(), &["init", "-q", "-b", "main"]);
+/// `main` and `theirs` both edit `a.txt`, merged with `--no-commit` into a
+/// conflict; `b.txt` is unchanged.
+fn conflicted_merge(dir: &Path) {
+    git(dir, &["init", "-q", "-b", "main"]);
     // Git for Windows defaults to autocrlf=true, so the backend's checkout would write CRLF.
-    git(dir.path(), &["config", "core.autocrlf", "false"]);
+    git(dir, &["config", "core.autocrlf", "false"]);
     for path in ["a.txt", "b.txt"] {
-        std::fs::write(dir.path().join(path), "base\n").unwrap();
+        std::fs::write(dir.join(path), "base\n").unwrap();
     }
-    git(dir.path(), &["add", "."]);
-    commit(dir.path(), "base");
-    git(dir.path(), &["checkout", "-qb", "theirs"]);
-    std::fs::write(dir.path().join("a.txt"), "theirs\n").unwrap();
-    commit(dir.path(), "theirs");
-    git(dir.path(), &["checkout", "-q", "main"]);
-    std::fs::write(dir.path().join("a.txt"), "ours\n").unwrap();
-    commit(dir.path(), "ours");
+    git(dir, &["add", "."]);
+    commit(dir, "base");
+    git(dir, &["checkout", "-qb", "theirs"]);
+    std::fs::write(dir.join("a.txt"), "theirs\n").unwrap();
+    commit(dir, "theirs");
+    git(dir, &["checkout", "-q", "main"]);
+    std::fs::write(dir.join("a.txt"), "ours\n").unwrap();
+    commit(dir, "ours");
     let merge = std::process::Command::new("git")
         .arg("-C")
-        .arg(dir.path())
+        .arg(dir)
         // Merge checks the committer identity even with --no-commit.
         .args([
             "-c",
@@ -895,6 +883,13 @@ fn checking_out_a_conflict_side_preserves_an_unrelated_diff(cx: &mut gpui::TestA
         "{}",
         String::from_utf8_lossy(&merge.stderr)
     );
+}
+
+#[gpui::test]
+fn checking_out_a_conflict_side_preserves_an_unrelated_diff(cx: &mut gpui::TestAppContext) {
+    let _guard = lock_visual_test();
+    let dir = tempfile::tempdir().unwrap();
+    conflicted_merge(dir.path());
     std::fs::write(dir.path().join("b.txt"), "base\nchanged\n").unwrap();
     let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
     let status = backend.status().unwrap();
@@ -915,10 +910,7 @@ fn checking_out_a_conflict_side_preserves_an_unrelated_diff(cx: &mut gpui::TestA
     crate::view::test_support::drain_store_worker(&view, cx);
     store.insert_repo_for_test(REPO, backend);
     super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo, REPO));
-    let target = DiffTarget::WorkingTree {
-        path: "b.txt".into(),
-        area: DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree("b.txt".into(), DiffArea::Unstaged);
     store.dispatch(Msg::SelectDiff {
         repo_id: REPO,
         target: target.clone(),
@@ -953,6 +945,79 @@ fn checking_out_a_conflict_side_preserves_an_unrelated_diff(cx: &mut gpui::TestA
     assert_eq!(
         snapshot.repos[0].diff_state.diff_target.as_ref(),
         Some(&target)
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+        "ours\n"
+    );
+    store.dispatch(Msg::CloseRepo { repo_id: REPO });
+    crate::view::test_support::drain_store_worker(&view, cx);
+}
+
+#[gpui::test]
+fn resolve_button_menu_discards_a_conflict_as_ours(cx: &mut gpui::TestAppContext) {
+    let _guard = lock_visual_test();
+    let dir = tempfile::tempdir().unwrap();
+    conflicted_merge(dir.path());
+    let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
+    let status = backend.status().unwrap();
+    let mut repo = opening_repo_state(REPO, dir.path());
+    repo.open = Loadable::Ready(());
+    repo.worktree_status = Loadable::Ready(status.unstaged.clone());
+    repo.staged_status = Loadable::Ready(status.staged.clone());
+    repo.status = Loadable::Ready(Arc::new(status));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
+    crate::view::test_support::drain_store_worker(&view, cx);
+    store.insert_repo_for_test(REPO, backend);
+    super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo, REPO));
+
+    let row = format!("status_row_{}_unstaged_0", REPO.0);
+    let bounds = cx.debug_bounds(Box::leak(row.into_boxed_str())).unwrap();
+    cx.simulate_mouse_move(bounds.center(), None, Modifiers::default());
+    draw_and_drain_test_window(cx);
+    click(cx, &format!("status_stage_button_{}_unstaged_0", REPO.0));
+    let popover = cx.update(|_, app| {
+        view.read(app)
+            .popover_host
+            .read(app)
+            .popover_kind_for_tests()
+    });
+    assert_eq!(
+        popover,
+        Some(PopoverKind::StatusConflictMenu {
+            repo_id: REPO,
+            area: DiffArea::Unstaged,
+            path: "a.txt".into(),
+        })
+    );
+
+    cx.update(|window, app| {
+        view.read(app).popover_host.clone().update(app, |host, cx| {
+            host.context_menu_activate_action(
+                ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
+                    repo_id: REPO,
+                    area: DiffArea::Unstaged,
+                    path: "a.txt".into(),
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    draw_and_drain_test_window(cx);
+    click(cx, "discard_changes_go");
+    wait_for(cx, &view, &store, "discard the conflict", |repo| {
+        repo.local_actions_in_flight == 0
+            && matches!(&repo.status, Loadable::Ready(status) if status.unstaged.is_empty())
+    });
+
+    let snapshot = store.snapshot();
+    assert!(
+        snapshot.repos[0].feedback.last_error.is_none(),
+        "{:?}",
+        snapshot.repos[0].feedback.last_error
     );
     assert_eq!(
         std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),

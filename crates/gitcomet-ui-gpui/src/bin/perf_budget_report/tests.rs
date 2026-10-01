@@ -1582,9 +1582,9 @@ fn timing_budgets_include_git_ops_targets() {
     assert!(labels.contains(&"git_ops/status_dirty_500_files"));
     assert!(labels.contains(&"git_ops/log_walk_10k_commits"));
     assert!(labels.contains(&"git_ops/log_walk_100k_commits_shallow"));
-    assert!(labels.contains(&"git_ops/diff_rename_heavy"));
-    assert!(labels.contains(&"git_ops/diff_binary_heavy"));
-    assert!(labels.contains(&"git_ops/diff_large_single_file_100k_lines"));
+    assert!(labels.contains(&"git_ops/diff_range_rename_heavy"));
+    assert!(labels.contains(&"git_ops/diff_range_binary_heavy"));
+    assert!(labels.contains(&"git_ops/diff_range_large_single_file_100k_lines"));
     assert!(labels.contains(&"git_ops/blame_large_file"));
     assert!(labels.contains(&"git_ops/file_history_first_page_sparse_100k_commits"));
 }
@@ -1605,9 +1605,12 @@ fn structural_budgets_include_git_ops_targets() {
     assert!(specs.contains(&("git_ops/log_walk_10k_commits", "log_walk_calls")));
     assert!(specs.contains(&("git_ops/log_walk_10k_commits", "status_calls")));
     assert!(specs.contains(&("git_ops/log_walk_100k_commits_shallow", "requested_commits")));
-    assert!(specs.contains(&("git_ops/diff_rename_heavy", "renamed_files")));
-    assert!(specs.contains(&("git_ops/diff_binary_heavy", "binary_files")));
-    assert!(specs.contains(&("git_ops/diff_large_single_file_100k_lines", "line_count")));
+    assert!(specs.contains(&("git_ops/diff_range_rename_heavy", "renamed_files")));
+    assert!(specs.contains(&("git_ops/diff_range_binary_heavy", "binary_files")));
+    assert!(specs.contains(&(
+        "git_ops/diff_range_large_single_file_100k_lines",
+        "line_count"
+    )));
     assert!(specs.contains(&("git_ops/blame_large_file", "blame_lines")));
     assert!(specs.contains(&(
         "git_ops/file_history_first_page_sparse_100k_commits",

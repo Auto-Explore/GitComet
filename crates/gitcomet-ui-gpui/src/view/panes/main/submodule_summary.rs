@@ -142,8 +142,11 @@ impl MainPaneView {
         };
         let still_shown = self.active_repo().is_some_and(|repo| {
             repo.id == cache.repo_id
-                && !matches!(repo.diff_state.submodule_summary, Loadable::NotLoaded)
-                && repo.diff_state.diff_target.as_ref() == Some(&cache.target)
+                && !matches!(
+                    self.bound_diff_state(repo).submodule_summary,
+                    Loadable::NotLoaded
+                )
+                && self.bound_diff_state(repo).diff_target.as_ref() == Some(&cache.target)
         });
         if !still_shown {
             self.submodule_summary_cache = None;
@@ -159,7 +162,7 @@ impl MainPaneView {
             return components::empty_state(theme, "Submodule", "No repository.")
                 .into_any_element();
         };
-        let Some(target) = repo.diff_state.diff_target.clone() else {
+        let Some(target) = self.bound_diff_state(repo).diff_target.clone() else {
             return components::empty_state(theme, "Submodule", "No submodule selected.")
                 .into_any_element();
         };
@@ -169,12 +172,12 @@ impl MainPaneView {
         // need releasing here.
         if !matches!(
             &target,
-            DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
+            DiffTarget::WorkingTree { .. } | DiffTarget::Commit { .. }
         ) {
             return components::empty_state(theme, "Submodule", "No submodule selected.")
                 .into_any_element();
         }
-        let summary = match &repo.diff_state.submodule_summary {
+        let summary = match &self.bound_diff_state(repo).submodule_summary {
             Loadable::Ready(summary) => Arc::clone(summary),
             state => {
                 let message = match state {
@@ -187,7 +190,7 @@ impl MainPaneView {
             }
         };
         let repo_id = repo.id;
-        let revision = repo.diff_state.submodule_summary_rev;
+        let revision = self.bound_diff_state(repo).submodule_summary_rev;
         let submodules_rev = repo.submodules_rev;
         let status = self
             .submodule_summary_cache

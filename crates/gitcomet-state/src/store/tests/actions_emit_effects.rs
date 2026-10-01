@@ -75,7 +75,12 @@ fn pull_and_push_mark_in_flight_until_command_finished() {
     );
     assert_eq!(state.repos[0].pull_in_flight, 1);
 
-    reduce(&mut repos, &id_alloc, &mut state, Msg::FetchAll { repo_id });
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Fetch(crate::msg::FetchMsg::All { repo_id }),
+    );
     assert_eq!(state.repos[0].pull_in_flight, 2);
 
     reduce(
@@ -297,7 +302,12 @@ fn pull_and_push_do_not_mark_in_flight_before_repo_is_opened() {
             mode: PullMode::Default,
         },
     );
-    reduce(&mut repos, &id_alloc, &mut state, Msg::FetchAll { repo_id });
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Fetch(crate::msg::FetchMsg::All { repo_id }),
+    );
     reduce(&mut repos, &id_alloc, &mut state, Msg::Push { repo_id });
 
     assert_eq!(state.repos[0].pull_in_flight, 0);
@@ -367,7 +377,12 @@ fn fetch_all_emits_effect_with_global_prune_setting() {
     state.repos.push(repo_state);
     state.remote_settings.prune_deleted_remote_branches_on_fetch = false;
 
-    let fetch_without_prune = reduce(&mut repos, &id_alloc, &mut state, Msg::FetchAll { repo_id });
+    let fetch_without_prune = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Fetch(crate::msg::FetchMsg::All { repo_id }),
+    );
     assert!(matches!(
         fetch_without_prune.as_slice(),
         [Effect::FetchAll {
@@ -379,7 +394,12 @@ fn fetch_all_emits_effect_with_global_prune_setting() {
     assert_eq!(state.repos[0].pull_in_flight, 1);
 
     state.remote_settings.prune_deleted_remote_branches_on_fetch = true;
-    let fetch_with_prune = reduce(&mut repos, &id_alloc, &mut state, Msg::FetchAll { repo_id });
+    let fetch_with_prune = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Fetch(crate::msg::FetchMsg::All { repo_id }),
+    );
     assert!(matches!(
         fetch_with_prune.as_slice(),
         [Effect::FetchAll {
@@ -389,6 +409,58 @@ fn fetch_all_emits_effect_with_global_prune_setting() {
         }]
     ));
     assert_eq!(state.repos[0].pull_in_flight, 2);
+}
+
+#[test]
+fn a_refspec_fetch_is_a_fetch_in_flight_and_refreshes_remote_branches_when_done() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    let refspecs = vec!["refs/heads/topic:refs/remotes/origin/topic".to_string()];
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Fetch(crate::msg::FetchMsg::Refspecs {
+            repo_id,
+            remote: "origin".to_string(),
+            refspecs: refspecs.clone(),
+        }),
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::FetchRefspecs { remote, refspecs: sent, auth: None, .. }]
+            if remote == "origin" && sent == &refspecs
+    ));
+    assert_eq!(state.repos[0].pull_in_flight, 1);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::FetchRefspecs {
+                remote: "origin".to_string(),
+                refspecs,
+            },
+            result: Ok(CommandOutput::empty_success("git fetch origin")),
+        }),
+    );
+    assert_eq!(state.repos[0].pull_in_flight, 0);
+    assert!(
+        matches!(state.repos[0].remote_branches, Loadable::Loading),
+        "a fetch reloads the remote branches"
+    );
 }
 
 #[test]
@@ -607,6 +679,86 @@ fn revert_commit_emits_effect() {
         }] if summary == "revert me"
     ));
     assert_eq!(state.repos[0].local_actions_in_flight, 1);
+}
+
+#[test]
+fn apply_file_change_emits_effect_and_keeps_the_diff_target() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+    let target = DiffTarget::commit_range(
+        CommitId("1111111111111111111111111111111111111111".into()),
+        Some(CommitId("2222222222222222222222222222222222222222".into())),
+        Some(PathBuf::from("src/lib.rs")),
+    );
+    let apply_target = gitcomet_core::domain::ApplyChangeTarget::from_diff_target(&target)
+        .expect("a comparison between commits can be applied");
+
+    for commit in [false, true] {
+        state.repos[0].set_diff_target(Some(target.clone()));
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::ApplyFileChange {
+                commit_retry: None,
+                repo_id,
+                target: apply_target.clone(),
+                commit,
+            },
+        );
+        assert!(
+            matches!(
+                effects.as_slice(),
+                [Effect::ApplyFileChange {
+                    commit_retry: None,
+                    repo_id: RepoId(1),
+                    target: effect_target,
+                    commit: effect_commit,
+                    auth: None,
+                }] if effect_target == &apply_target && *effect_commit == commit
+            ),
+            "commit={commit}: {effects:?}"
+        );
+        assert_eq!(state.repos[0].local_actions_in_flight, 1);
+        // A committing apply counts as a git operation while it runs, so the
+        // worktree write it makes is not taken for an outside edit.
+        assert_eq!(
+            state.repos[0].sequencer_actions_in_flight,
+            u32::from(commit)
+        );
+        assert_eq!(state.repos[0].git_operation_in_flight(), commit);
+
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::ApplyFileChange {
+                    commit_retry: None,
+                    target: apply_target.clone(),
+                    commit,
+                },
+                result: Ok(CommandOutput::default()),
+            }),
+        );
+        assert_eq!(state.repos[0].local_actions_in_flight, 0);
+        assert_eq!(state.repos[0].sequencer_actions_in_flight, 0);
+        // The source diff did not change, so the user keeps their place.
+        assert_eq!(
+            state.repos[0].diff_state.diff_target.as_ref(),
+            Some(&target)
+        );
+    }
 }
 
 #[test]
@@ -880,10 +1032,7 @@ fn selected_submodule_command_reloads_selected_summary() {
             checked_out_head: None,
             status: SubmoduleStatus::NotInitialized,
         }]));
-        let target = DiffTarget::WorkingTree {
-            path: command_path.to_path_buf(),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree(command_path.to_path_buf(), DiffArea::Unstaged);
         repo.diff_state.diff_target = Some(target.clone());
         repo.diff_state.submodule_summary = Loadable::Ready(Arc::new(SubmoduleDiffSummary {
             path: command_path.to_path_buf(),
@@ -897,10 +1046,7 @@ fn selected_submodule_command_reloads_selected_summary() {
             live_staged: Vec::new(),
             live_unstaged: Vec::new(),
         }));
-        let inline_target = DiffTarget::WorkingTree {
-            path: PathBuf::from("inner.rs"),
-            area: DiffArea::Unstaged,
-        };
+        let inline_target = DiffTarget::working_tree(PathBuf::from("inner.rs"), DiffArea::Unstaged);
         repo.diff_state.inline_submodule_diff = Some(crate::model::InlineSubmoduleDiffState {
             origin: crate::model::ForeignDiffOrigin::Submodule,
             submodule_repo_path: PathBuf::from("/tmp/repo/vendor/lib"),
@@ -1793,10 +1939,10 @@ fn commit_finished_clears_commit_state_and_requests_primary_refreshes() {
     ));
     state.repos[0].local_actions_in_flight = 1;
     state.repos[0].commit_in_flight = 1;
-    state.repos[0].diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: PathBuf::from("README.md"),
-        area: DiffArea::Unstaged,
-    });
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::working_tree(
+        PathBuf::from("README.md"),
+        DiffArea::Unstaged,
+    ));
     state.repos[0].diff_state.diff = Loadable::Loading;
     state.repos[0].diff_state.diff_file = Loadable::Loading;
     state.repos[0].diff_state.diff_file_image = Loadable::Loading;
@@ -1855,10 +2001,10 @@ fn repo_command_finished_stage_hunk_triggers_diff_reload_effects() {
         },
     ));
     state.repos[0].local_actions_in_flight = 1;
-    state.repos[0].diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: DiffArea::Unstaged,
-    });
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::working_tree(
+        PathBuf::from("src/lib.rs"),
+        DiffArea::Unstaged,
+    ));
 
     let effects = reduce(
         &mut repos,
@@ -1926,15 +2072,15 @@ fn repo_command_finished_stage_hunk_invalidates_loaded_blame() {
         },
     ));
     state.repos[0].local_actions_in_flight = 1;
-    state.repos[0].diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: PathBuf::from("src/lib.rs"),
-        area: DiffArea::Unstaged,
-    });
-    state.repos[0].history_state.blame_path = Some(PathBuf::from("src/lib.rs"));
-    state.repos[0].history_state.blame_source = Some(
-        gitcomet_core::domain::BlameSource::WorkingTree(DiffArea::Unstaged),
-    );
-    state.repos[0].history_state.blame = ready_working_tree_blame();
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::working_tree(
+        PathBuf::from("src/lib.rs"),
+        DiffArea::Unstaged,
+    ));
+    state.repos[0].diff_state.blame_path = Some(PathBuf::from("src/lib.rs"));
+    state.repos[0].diff_state.blame_source = Some(gitcomet_core::domain::BlameSource::WorkingTree(
+        DiffArea::Unstaged,
+    ));
+    state.repos[0].diff_state.blame = ready_working_tree_blame();
 
     reduce(
         &mut repos,
@@ -1948,16 +2094,16 @@ fn repo_command_finished_stage_hunk_invalidates_loaded_blame() {
     );
 
     assert!(
-        matches!(state.repos[0].history_state.blame, Loadable::NotLoaded),
+        matches!(state.repos[0].diff_state.blame, Loadable::NotLoaded),
         "blame must be invalidated so the annotation column reloads after staging"
     );
     // The target is preserved so the reload re-blames the same file/source.
     assert_eq!(
-        state.repos[0].history_state.blame_path.as_deref(),
+        state.repos[0].diff_state.blame_path.as_deref(),
         Some(std::path::Path::new("src/lib.rs"))
     );
     assert_eq!(
-        state.repos[0].history_state.blame_source,
+        state.repos[0].diff_state.blame_source,
         Some(gitcomet_core::domain::BlameSource::WorkingTree(
             DiffArea::Unstaged
         ))
@@ -1980,11 +2126,11 @@ fn commit_finished_invalidates_loaded_blame() {
     ));
     state.repos[0].local_actions_in_flight = 1;
     state.repos[0].commit_in_flight = 1;
-    state.repos[0].history_state.blame_path = Some(PathBuf::from("src/lib.rs"));
-    state.repos[0].history_state.blame_source = Some(
-        gitcomet_core::domain::BlameSource::WorkingTree(DiffArea::Staged),
-    );
-    state.repos[0].history_state.blame = ready_working_tree_blame();
+    state.repos[0].diff_state.blame_path = Some(PathBuf::from("src/lib.rs"));
+    state.repos[0].diff_state.blame_source = Some(gitcomet_core::domain::BlameSource::WorkingTree(
+        DiffArea::Staged,
+    ));
+    state.repos[0].diff_state.blame = ready_working_tree_blame();
 
     reduce(
         &mut repos,
@@ -1997,7 +2143,7 @@ fn commit_finished_invalidates_loaded_blame() {
     );
 
     assert!(
-        matches!(state.repos[0].history_state.blame, Loadable::NotLoaded),
+        matches!(state.repos[0].diff_state.blame, Loadable::NotLoaded),
         "blame must be invalidated after a commit so the annotation column reloads"
     );
 }
@@ -2015,10 +2161,10 @@ fn repo_command_finished_stage_hunk_with_svg_diff_triggers_text_and_image_reload
         },
     ));
     state.repos[0].local_actions_in_flight = 1;
-    state.repos[0].diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: PathBuf::from("icon.svg"),
-        area: DiffArea::Unstaged,
-    });
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::working_tree(
+        PathBuf::from("icon.svg"),
+        DiffArea::Unstaged,
+    ));
 
     let effects = reduce(
         &mut repos,
@@ -3040,10 +3186,7 @@ fn apply_worktree_patch_command_finished_reloads_png_diff_preview() {
             workdir: PathBuf::from("/tmp/repo"),
         },
     );
-    let target = DiffTarget::WorkingTree {
-        path: PathBuf::from("image.png"),
-        area: DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree(PathBuf::from("image.png"), DiffArea::Unstaged);
     repo_state.diff_state.diff_target = Some(target.clone());
     repo_state.diff_state.diff = Loadable::NotLoaded;
     repo_state.diff_state.diff_file = Loadable::NotLoaded;
@@ -3676,10 +3819,10 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         let repo = &mut state.repos[0];
         repo.local_actions_in_flight = 1;
         repo.commit_in_flight = 1;
-        repo.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-            path: PathBuf::from("a.txt"),
-            area: DiffArea::Unstaged,
-        });
+        repo.diff_state.diff_target = Some(DiffTarget::working_tree(
+            PathBuf::from("a.txt"),
+            DiffArea::Unstaged,
+        ));
         repo.diff_state.diff = Loadable::Loading;
         repo.diff_state.diff_file = Loadable::Loading;
         repo.diff_state.diff_file_image = Loadable::Loading;
@@ -4275,6 +4418,22 @@ fn a_suggested_commit_message_is_stored_for_the_commit_box() {
         Some("Revert \"change\"")
     );
     assert_ne!(state.repos[0].suggested_commit_message_rev, before);
+
+    for (consumed, expected) in [
+        ("some older message", Some("Revert \"change\"")),
+        ("Revert \"change\"", None),
+    ] {
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Internal(crate::msg::InternalMsg::CommitMessageSuggestionConsumed {
+                repo_id,
+                message: consumed.to_owned(),
+            }),
+        );
+        assert_eq!(state.repos[0].suggested_commit_message.as_deref(), expected);
+    }
 }
 
 #[test]
@@ -4387,6 +4546,25 @@ fn sequencer_commands_release_their_in_flight_count() {
                 commit: true,
                 mainline: None,
                 summary: "pick me".into(),
+            },
+        ),
+        (
+            Msg::ApplyFileChange {
+                commit_retry: None,
+                repo_id,
+                target: gitcomet_core::domain::ApplyChangeTarget::commit(
+                    commit_id.clone(),
+                    PathBuf::from("a.txt"),
+                ),
+                commit: true,
+            },
+            RepoCommandKind::ApplyFileChange {
+                commit_retry: None,
+                target: gitcomet_core::domain::ApplyChangeTarget::commit(
+                    commit_id.clone(),
+                    PathBuf::from("a.txt"),
+                ),
+                commit: true,
             },
         ),
         (
@@ -4511,6 +4689,48 @@ fn revert_finished_releases_local_action_and_clears_stale_force_push_lease() {
 }
 
 #[test]
+fn interactive_cherry_pick_carries_the_commit_choice_to_its_effect() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    state
+        .repos
+        .push(repo_with_head_dependent_cached_state(repo_id));
+    let entries = vec![gitcomet_core::services::InteractiveRebaseEntry {
+        action: gitcomet_core::services::InteractiveRebaseAction::Pick,
+        commit_id: "3333333333333333333333333333333333333333".to_string(),
+        summary: "pick me".to_string(),
+        message: "pick me".to_string(),
+        new_message: None,
+    }];
+
+    for commit in [true, false] {
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::InteractiveCherryPick {
+                repo_id,
+                entries: entries.clone(),
+                commit,
+            },
+        );
+        assert!(
+            matches!(
+                effects.as_slice(),
+                [Effect::InteractiveCherryPick {
+                    repo_id: RepoId(1),
+                    entries: sent,
+                    commit: sent_commit,
+                }] if sent == &entries && *sent_commit == commit
+            ),
+            "commit={commit}: {effects:?}"
+        );
+    }
+}
+
+#[test]
 fn interactive_cherry_pick_finished_clears_stale_force_push_lease() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
@@ -4534,6 +4754,7 @@ fn interactive_cherry_pick_finished_clears_stale_force_push_lease() {
                     message: "pick me".to_string(),
                     new_message: None,
                 }],
+                commit: true,
             },
             result: Ok(CommandOutput::empty_success("git cherry-pick")),
         }),
@@ -4692,10 +4913,10 @@ fn repo_command_finished_reset_clears_diff_state_and_unknown_repo_is_noop() {
     let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     let mut repo_state = repo_with_head_dependent_cached_state(repo_id);
-    repo_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-        path: PathBuf::from("a.txt"),
-        area: DiffArea::Staged,
-    });
+    repo_state.diff_state.diff_target = Some(DiffTarget::working_tree(
+        PathBuf::from("a.txt"),
+        DiffArea::Staged,
+    ));
     repo_state.diff_state.diff = Loadable::Loading;
     repo_state.diff_state.diff_file = Loadable::Loading;
     repo_state.diff_state.diff_file_image = Loadable::Loading;
@@ -4808,10 +5029,7 @@ fn stage_hunk_command_finished_reloads_commit_png_image_preview_only() {
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let repo_id = RepoId(1);
-    let target = DiffTarget::Commit {
-        commit_id: CommitId("abc123".into()),
-        path: Some(PathBuf::from("assets/icon.png")),
-    };
+    let target = DiffTarget::commit(CommitId("abc123".into()), PathBuf::from("assets/icon.png"));
     let mut repo_state = RepoState::new_opening(
         repo_id,
         RepoSpec {

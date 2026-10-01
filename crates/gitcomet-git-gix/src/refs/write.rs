@@ -10,12 +10,11 @@ pub(super) fn transaction(
     let mut cmd = crate::util::git_workdir_cmd_for(repo.workdir().unwrap_or(repo.git_dir()));
     // Ref edits, unlike commits, must also work before identity is configured.
     // Command-local fallback preserves configured identity and never writes config.
-    cmd.args([
-        "-c",
-        "user.name=GitComet",
-        "-c",
-        "user.email=gitcomet@localhost",
-    ]);
+    let identity = gitcomet_core::identity::current();
+    cmd.arg("-c")
+        .arg(format!("user.name={}", identity.display_name()))
+        .arg("-c")
+        .arg(format!("user.email={}@localhost", identity.executable_name()));
     if let Some(Ok(signature)) = repo.committer() {
         cmd.env(
             "GIT_COMMITTER_NAME",

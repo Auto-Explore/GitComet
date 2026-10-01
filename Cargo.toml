@@ -2,12 +2,17 @@
 resolver = "3"
 members = [
   "crates/gitcomet",
+  "crates/gitcomet-app",
   "crates/gitcomet-core",
+  "crates/gitcomet-extension-api",
+  "crates/gitcomet-extension-example",
+  "crates/gitcomet-extension-example-app",
   "crates/gitcomet-git-gix",
   "crates/gitcomet-state",
   "crates/gitcomet-fs-watch",
   "crates/gitcomet-tree-sitter-alloc",
   "crates/gitcomet-ui-gpui",
+  "crates/gitcomet-ui-kit",
 ]
 exclude = [
   "crates/win32-window-utils",
@@ -52,10 +57,12 @@ exclude = [
 
 default-members = [
   "crates/gitcomet",
+  "crates/gitcomet-app",
   "crates/gitcomet-core",
   "crates/gitcomet-git-gix",
   "crates/gitcomet-state",
   "crates/gitcomet-ui-gpui",
+  "crates/gitcomet-ui-kit",
 ]
 
 [workspace.package]
@@ -68,16 +75,20 @@ rust-version = "1.98.1"
 
 [workspace.dependencies]
 # Internal crates
+gitcomet-app = { path = "crates/gitcomet-app", default-features = false }
 gitcomet-core = { path = "crates/gitcomet-core" }
+gitcomet-extension-api = { path = "crates/gitcomet-extension-api" }
 gitcomet-git-gix = { path = "crates/gitcomet-git-gix" }
 gitcomet-state = { path = "crates/gitcomet-state" }
 gitcomet-tree-sitter-alloc = { path = "crates/gitcomet-tree-sitter-alloc" }
 gitcomet-ui-gpui = { path = "crates/gitcomet-ui-gpui", default-features = false }
+gitcomet-ui-kit = { path = "crates/gitcomet-ui-kit" }
 
 # External crates
 alacritty_terminal = "0.26"
 anyhow = "1"
-clap = { version = "4.6.7", features = ["derive"] }
+# `string`: the command's name and version come from the product identity.
+clap = { version = "4.6.7", features = ["derive", "string"] }
 criterion = "0.8.2"
 crc32fast = "1.5"
 flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
@@ -93,6 +104,8 @@ ctor = "1.0.13"
 dekobon-tree-sitter-groovy = "0.3.0"
 # Already in the tree via gix-filter; decodes and encodes non-UTF-8 file text.
 encoding_rs = { version = "0.8.42", default-features = false, features = ["alloc", "fast-legacy-encode"] }
+# Already in the tree via gix-index; the timestamp type of an in-memory index.
+filetime = "0.2.29"
 fontdb = "0.24.0"
 fs2 = "0.4.3"
 futures = "0.3.34"

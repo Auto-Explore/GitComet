@@ -836,7 +836,10 @@ impl RunningMonitor {
         for message in self.rx.try_iter() {
             match message {
                 Msg::RepoExternallyChanged { change: next, .. } => {
-                    change = Some(merge_change(change.unwrap_or(next), next));
+                    change = Some(match change.take() {
+                        Some(previous) => merge_change(previous, next),
+                        None => next,
+                    });
                 }
                 other => panic!("unexpected message: {other:?}"),
             }

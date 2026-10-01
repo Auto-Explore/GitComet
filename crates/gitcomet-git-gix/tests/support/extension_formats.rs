@@ -101,10 +101,7 @@ pub fn open_stage_commit_and_uncommitted_blame(hash: &str, refs: &str) {
         commits[0].id.as_ref()
     );
     fs::write(dir.path().join("file.txt"), "first\nsecond\n").unwrap();
-    let target = DiffTarget::WorkingTree {
-        path: "file.txt".into(),
-        area: DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree("file.txt".into(), DiffArea::Unstaged);
     assert!(repo.diff_unified(&target).unwrap().contains("+second"));
     assert!(repo.diff_file_text(&target).unwrap().is_some());
     repo.stash_create("sha256 stash", false).unwrap();
@@ -152,22 +149,19 @@ pub fn history_loose_commit_graph_and_packs(hash: &str, refs: &str) {
         assert_eq!(repo.diff_range_files(&empty, Some(&head)).unwrap().len(), 1);
         for path in [None, Some("file.txt".into())] {
             assert!(
-                repo.diff_unified(&DiffTarget::CommitRange {
-                    from_commit_id: empty.clone(),
-                    to_commit_id: Some(head.clone()),
+                repo.diff_unified(&DiffTarget::commit_range(
+                    empty.clone(),
+                    Some(head.clone()),
                     path
-                })
+                ))
                 .unwrap()
                 .contains("+root")
             );
         }
         assert!(
-            repo.diff_unified(&DiffTarget::Commit {
-                commit_id: head.clone(),
-                path: None
-            })
-            .unwrap()
-            .contains("+child")
+            repo.diff_unified(&DiffTarget::commit(head.clone(), "file.txt".into()))
+                .unwrap()
+                .contains("+child")
         );
     }
 }
@@ -203,10 +197,10 @@ pub fn submodules_and_unconfigured_gitlinks(hash: &str, refs: &str) {
     assert!(repo.status().unwrap().unstaged.is_empty());
     fs::write(parent.path().join("module/child.txt"), "edited\n").unwrap();
     assert_eq!(repo.status().unwrap().unstaged.len(), 1);
-    repo.submodule_diff_summary(&DiffTarget::WorkingTree {
-        path: "module".into(),
-        area: DiffArea::Unstaged,
-    })
+    repo.submodule_diff_summary(&DiffTarget::working_tree(
+        "module".into(),
+        DiffArea::Unstaged,
+    ))
     .unwrap();
     GixBackend.repository_watch_info(parent.path()).unwrap();
     // An index gitlink alone must not cause gix to consult the placeholder HEAD.
@@ -243,10 +237,7 @@ pub fn status_diff_commit_reflog_and_file_history(hash: &str, refs: &str) {
     assert!(repo.status().unwrap().unstaged.is_empty());
 
     fs::write(dir.path().join("notes.txt"), "one\ntwo\n").unwrap();
-    let worktree = DiffTarget::WorkingTree {
-        path: "notes.txt".into(),
-        area: DiffArea::Unstaged,
-    };
+    let worktree = DiffTarget::working_tree("notes.txt".into(), DiffArea::Unstaged);
     assert!(has_added_line(
         &repo.diff_parsed(&worktree).unwrap(),
         "+two"
@@ -262,10 +253,7 @@ pub fn status_diff_commit_reflog_and_file_history(hash: &str, refs: &str) {
     );
     let status = repo.status().unwrap();
     assert!(status.staged.is_empty() && status.unstaged.is_empty());
-    let commit = DiffTarget::Commit {
-        commit_id: second.clone(),
-        path: None,
-    };
+    let commit = DiffTarget::commit(second.clone(), "notes.txt".into());
     assert!(has_added_line(&repo.diff_parsed(&commit).unwrap(), "+two"));
 
     let cancellation = CancellationToken::new();

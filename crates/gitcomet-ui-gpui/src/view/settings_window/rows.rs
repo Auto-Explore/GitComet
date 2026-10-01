@@ -4,18 +4,11 @@ use crate::view::components::{ControlInteractionExt, InteractionState, Interacti
 
 /// The settings window's scale, carrying the appearance so anything sized
 /// through it follows the UI zoom and the density selection.
-const SETTINGS_TOGGLE_TRACK_WIDTH_PX: f32 = 28.0;
-const SETTINGS_TOGGLE_TRACK_COMFORTABLE_WIDTH_PX: f32 = 36.0;
-const SETTINGS_TOGGLE_TRACK_HEIGHT_PX: f32 = 16.0;
-const SETTINGS_TOGGLE_TRACK_COMFORTABLE_HEIGHT_PX: f32 = 20.0;
-const SETTINGS_TOGGLE_TRACK_INSET_PX: f32 = 2.0;
-const SETTINGS_TOGGLE_KNOB_SIZE_PX: f32 = 12.0;
-const SETTINGS_TOGGLE_KNOB_COMFORTABLE_SIZE_PX: f32 = 16.0;
 const SETTINGS_LICENSE_ROW_HEIGHT_PX: f32 = 24.0;
 const SETTINGS_LICENSE_ROW_COMFORTABLE_HEIGHT_PX: f32 = 32.0;
 pub(super) const SETTINGS_LICENSE_NAME_COLUMN_PX: f32 = 200.0;
 pub(super) const SETTINGS_LICENSE_VERSION_COLUMN_PX: f32 = 90.0;
-const SETTINGS_NAV_COLUMN_WIDTH_PX: f32 = 200.0;
+use crate::view::components::SETTINGS_NAV_COLUMN_WIDTH_PX;
 
 impl SettingsWindowView {
     pub(super) fn row_scale(&self, theme: AppTheme) -> crate::ui_scale::UiScale {
@@ -272,18 +265,7 @@ impl SettingsWindowView {
         container_id: &'static str,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
-        div()
-            .id(container_id)
-            .debug_selector(move || container_id.to_string())
-            .w_full()
-            .min_w(px(0.0))
-            .flex()
-            .flex_col()
-            .rounded(px(theme.radii.row))
-            .border_1()
-            .border_color(settings_dropdown_border_color(theme))
-            .bg(settings_dropdown_background(theme))
-            .overflow_hidden()
+        components::settings_detail_container(container_id, theme)
     }
 
     pub(super) fn summary_row(
@@ -294,68 +276,7 @@ impl SettingsWindowView {
         expanded: bool,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
-        let label_debug_id = format!("{id}_label");
-        let value_debug_id = format!("{id}_value");
-        div()
-            .id(id)
-            .debug_selector(move || id.to_string())
-            .w_full()
-            .px_2()
-            .pt_1()
-            .pb_3()
-            .flex()
-            .items_center()
-            .gap_2()
-            .rounded(px(theme.radii.row))
-            .border_b_1()
-            .border_color(settings_row_separator_color(theme))
-            .cursor(CursorStyle::PointingHand)
-            .overflow_hidden()
-            .control_interaction(InteractionStyle::new(theme), InteractionState::default())
-            .child(
-                div()
-                    .debug_selector(move || label_debug_id.clone())
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .text_size(theme.ui_text(14.0))
-                            .line_clamp(1)
-                            .whitespace_nowrap()
-                            .overflow_hidden()
-                            .child(label),
-                    ),
-            )
-            .child(
-                div()
-                    .debug_selector(move || value_debug_id.clone())
-                    .min_w(px(0.0))
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .gap_2()
-                    .text_size(theme.ui_text(14.0))
-                    .text_color(theme.colors.foreground.secondary)
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .min_w(px(0.0))
-                            .line_clamp(1)
-                            .whitespace_nowrap()
-                            .overflow_hidden()
-                            .child(value),
-                    )
-                    .child(div().flex_shrink_0().child(svg_icon(
-                        if expanded {
-                            "icons/chevron_down.svg"
-                        } else {
-                            "icons/arrow_right.svg"
-                        },
-                        theme.colors.foreground.secondary,
-                        self.row_scale(theme).px(12.0),
-                    ))),
-            )
+        components::settings_summary_row(id, label, value, expanded, theme, self.row_scale(theme))
     }
 
     pub(super) fn toggle_row(
@@ -365,82 +286,7 @@ impl SettingsWindowView {
         enabled: bool,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
-        let ui_scale = self.row_scale(theme);
-        let label_debug_id = format!("{id}_label");
-        let value_debug_id = format!("{id}_value");
-        div()
-            .id(id)
-            .debug_selector(move || id.to_string())
-            .w_full()
-            .px_2()
-            .pt_1()
-            .pb_3()
-            .flex()
-            .items_center()
-            .gap_2()
-            .rounded(px(theme.radii.row))
-            .border_b_1()
-            .border_color(settings_row_separator_color(theme))
-            .cursor(CursorStyle::PointingHand)
-            .overflow_hidden()
-            .control_interaction(InteractionStyle::new(theme), InteractionState::default())
-            .child(
-                div()
-                    .debug_selector(move || label_debug_id.clone())
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .text_size(theme.ui_text(14.0))
-                            .line_clamp(1)
-                            .whitespace_nowrap()
-                            .overflow_hidden()
-                            .child(label),
-                    ),
-            )
-            .child(
-                div()
-                    .debug_selector(move || value_debug_id.clone())
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .child(
-                        // Toggle-switch visual; the whole row stays the click
-                        // target, so this carries no handlers of its own.
-                        div()
-                            .w(ui_scale.row_height(
-                                SETTINGS_TOGGLE_TRACK_WIDTH_PX,
-                                SETTINGS_TOGGLE_TRACK_COMFORTABLE_WIDTH_PX,
-                            ))
-                            .h(ui_scale.row_height(
-                                SETTINGS_TOGGLE_TRACK_HEIGHT_PX,
-                                SETTINGS_TOGGLE_TRACK_COMFORTABLE_HEIGHT_PX,
-                            ))
-                            .rounded(px(theme.radii.pill))
-                            .flex()
-                            .items_center()
-                            .p(ui_scale.px(SETTINGS_TOGGLE_TRACK_INSET_PX))
-                            .when(enabled, |track| {
-                                track.justify_end().bg(theme.colors.accent.foreground)
-                            })
-                            .when(!enabled, |track| {
-                                track.justify_start().bg(with_alpha(
-                                    theme.colors.foreground.secondary,
-                                    if theme.is_dark { 0.35 } else { 0.30 },
-                                ))
-                            })
-                            .child(
-                                div()
-                                    .size(ui_scale.row_height(
-                                        SETTINGS_TOGGLE_KNOB_SIZE_PX,
-                                        SETTINGS_TOGGLE_KNOB_COMFORTABLE_SIZE_PX,
-                                    ))
-                                    .rounded(px(theme.radii.pill))
-                                    .bg(gpui::rgba(0xFFFFFFF2)),
-                            ),
-                    ),
-            )
+        components::settings_toggle_row(id, label, enabled, theme, self.row_scale(theme))
     }
 
     pub(super) fn info_row(
@@ -450,58 +296,7 @@ impl SettingsWindowView {
         value: impl IntoElement,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
-        let id = id.into();
-        let label_debug_id = format!("{id}_label");
-        let value_debug_id = format!("{id}_value");
-        div()
-            .id(id.clone())
-            .debug_selector(move || id.to_string())
-            .w_full()
-            .px_2()
-            .pt_1()
-            .pb_3()
-            .flex()
-            .items_center()
-            .gap_2()
-            .border_b_1()
-            .border_color(settings_row_separator_color(theme))
-            .overflow_hidden()
-            .child(
-                div()
-                    .debug_selector(move || label_debug_id.clone())
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .text_size(theme.ui_text(14.0))
-                            .line_clamp(1)
-                            .whitespace_nowrap()
-                            .overflow_hidden()
-                            .child(label),
-                    ),
-            )
-            .child(
-                div()
-                    .debug_selector(move || value_debug_id.clone())
-                    .min_w(px(0.0))
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .min_w(px(0.0))
-                            .max_w_full()
-                            .text_size(theme.ui_text(14.0))
-                            .font_family(UI_MONOSPACE_FONT_FAMILY)
-                            .text_color(theme.colors.foreground.secondary)
-                            .line_clamp(1)
-                            .whitespace_nowrap()
-                            .overflow_hidden()
-                            .child(value),
-                    ),
-            )
+        components::settings_info_row(id, label, value, theme)
     }
 
     /// Environment rows hold read-only fields so their values can be selected.
@@ -600,48 +395,7 @@ impl SettingsWindowView {
         value: SharedString,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
-        let label_debug_id = format!("{id}_label");
-        let value_debug_id = format!("{id}_value");
-        div()
-            .id(id)
-            .debug_selector(move || id.to_string())
-            .w_full()
-            .px_2()
-            .pt_1()
-            .pb_3()
-            .flex()
-            .flex_col()
-            .items_stretch()
-            .gap_0p5()
-            .rounded(px(theme.radii.row))
-            .border_b_1()
-            .border_color(settings_row_separator_color(theme))
-            .cursor(CursorStyle::PointingHand)
-            .control_interaction(InteractionStyle::new(theme), InteractionState::default())
-            .child(
-                div()
-                    .debug_selector(move || label_debug_id.clone())
-                    .min_w(px(0.0))
-                    .text_size(theme.ui_text(14.0))
-                    .child(label),
-            )
-            .child(
-                div()
-                    .debug_selector(move || value_debug_id.clone())
-                    .w_full()
-                    .min_w(px(0.0))
-                    .flex()
-                    .items_start()
-                    .gap_2()
-                    .text_size(theme.ui_text(14.0))
-                    .text_color(theme.colors.accent.foreground)
-                    .child(div().flex_1().min_w(px(0.0)).child(value))
-                    .child(div().flex_shrink_0().child(svg_icon(
-                        "icons/open_external.svg",
-                        theme.colors.accent.foreground,
-                        self.row_scale(theme).px(13.0),
-                    ))),
-            )
+        components::settings_link_row(id, label, value, theme, self.row_scale(theme))
     }
 
     /// One row per theme file the loader refused, named and with its reason.
@@ -704,7 +458,7 @@ impl SettingsWindowView {
     }
 
     pub(super) fn git_runtime_row(&self, theme: AppTheme) -> Stateful<gpui::Div> {
-        let min_git_version = format!("{MIN_GIT_MAJOR}.{MIN_GIT_MINOR}");
+        let min_git_version = gitcomet_core::process::GitVersion::MINIMUM;
         let (git_icon_path, git_icon_color, git_status_text): (
             &'static str,
             gpui::Rgba,
@@ -1486,7 +1240,7 @@ impl SettingsWindowView {
         title: &'static str,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
-        card_shell(id).child(card_title(title, theme).pb_2())
+        components::settings_card(id, title, theme)
     }
 
     /// A card whose title row ends in one compact action.
@@ -1497,24 +1251,7 @@ impl SettingsWindowView {
         action: impl IntoElement,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
-        card_shell(id).child(
-            div()
-                .w_full()
-                .min_w(px(0.0))
-                .pb_2()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(
-                    card_title(title, theme)
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .line_clamp(1)
-                        .whitespace_nowrap()
-                        .overflow_hidden(),
-                )
-                .child(div().flex_none().pr_2().child(action)),
-        )
+        components::settings_card_with_action(id, title, action, theme)
     }
 
     pub(super) fn subsection_heading(
@@ -1523,18 +1260,7 @@ impl SettingsWindowView {
         title: &'static str,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
-        let ui_scale = self.row_scale(theme);
-        div()
-            .id(id)
-            .debug_selector(move || id.to_string())
-            .w_full()
-            .px_2()
-            .pt(ui_scale.px(24.0))
-            .pb_2()
-            .text_size(theme.ui_text(14.0))
-            .font_weight(FontWeight::BOLD)
-            .text_color(theme.colors.foreground.primary)
-            .child(title)
+        components::settings_subsection_heading(id, title, theme, self.row_scale(theme))
     }
 
     pub(super) fn settings_nav_item(
@@ -1544,52 +1270,21 @@ impl SettingsWindowView {
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> Stateful<gpui::Div> {
-        let icon_color = if selected {
-            theme.colors.accent.foreground
-        } else {
-            theme.colors.foreground.secondary
-        };
-        div()
-            .id(category.nav_id())
-            .debug_selector(move || category.nav_id().to_string())
-            .w_full()
-            .px_2()
-            .py_1()
-            .flex()
-            .items_center()
-            .gap_2()
-            .rounded(px(theme.radii.row))
-            .cursor(CursorStyle::PointingHand)
-            .overflow_hidden()
-            .control_interaction(
-                InteractionStyle::new(theme),
-                InteractionState::default()
-                    .selected(selected, theme.colors.interaction.pressed_background),
-            )
-            .child(div().flex_shrink_0().child(svg_icon(
-                category.icon(),
-                icon_color,
-                self.row_scale(theme).px(15.0),
-            )))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .text_size(theme.ui_text(14.0))
-                    .when(selected, |d| d.font_weight(FontWeight::MEDIUM))
-                    .text_color(theme.colors.foreground.primary)
-                    .line_clamp(1)
-                    .whitespace_nowrap()
-                    .overflow_hidden()
-                    .child(category.label()),
-            )
-            .on_activate(
-                false,
-                controls::ControlActivation::Action,
-                cx.listener(move |this, _e: &ClickEvent, _window, cx| {
-                    this.select_category(category, cx);
-                }),
-            )
+        components::settings_nav_item(
+            category.nav_id(),
+            category.icon(),
+            category.label(),
+            selected,
+            theme,
+            self.row_scale(theme),
+        )
+        .on_activate(
+            false,
+            controls::ControlActivation::Action,
+            cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                this.select_category(category, cx);
+            }),
+        )
     }
 
     pub(super) fn render_settings_nav(
@@ -1613,13 +1308,22 @@ impl SettingsWindowView {
             .gap(px(1.0));
 
         let mut any_match = false;
+        let extension_selected = self.extension_page.is_some();
         for category in SettingsCategory::ALL.iter().copied() {
             if !category.matches_query(&query) {
                 continue;
             }
             any_match = true;
-            list = list.child(self.settings_nav_item(category, category == active, theme, cx));
+            list = list.child(self.settings_nav_item(
+                category,
+                !extension_selected && category == active,
+                theme,
+                cx,
+            ));
         }
+        let extension_items = self.extension_nav_items(&query, theme, cx);
+        any_match |= !extension_items.is_empty();
+        list = list.children(extension_items);
 
         if !any_match {
             list = list.child(
@@ -1653,24 +1357,4 @@ impl SettingsWindowView {
             )
             .child(list)
     }
-}
-
-fn card_shell(id: &'static str) -> Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .debug_selector(move || id.to_string())
-        .w_full()
-        .min_w(px(0.0))
-        .flex()
-        .flex_col()
-        .gap_2()
-}
-
-fn card_title(title: &'static str, theme: AppTheme) -> gpui::Div {
-    div()
-        .px_2()
-        .text_size(theme.ui_text(18.0))
-        .font_weight(FontWeight::BOLD)
-        .text_color(theme.colors.foreground.primary)
-        .child(title)
 }

@@ -110,6 +110,13 @@ impl ConfigRepo {
         }
     }
 
+    /// Keeps this config snapshot but reads objects through `repo`'s store.
+    pub(super) fn share_objects(&mut self, repo: &gix::ThreadSafeRepository) {
+        let mut shared = (*self.repo).clone();
+        shared.objects = repo.objects.clone();
+        self.repo = Arc::new(shared);
+    }
+
     fn is_current(&self) -> bool {
         self.branch.as_ref().is_none_or(|previous| {
             symbolic_head(&self.repo.to_thread_local()).is_ok_and(|name| name == *previous)
@@ -133,7 +140,11 @@ impl GixRepo {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         if !cached.is_current() {
-            *cached = ConfigRepo::new(self.reopen_repo()?);
+            // Fresh config over the tab's object store: a second store would
+            // map every pack again.
+            let mut fresh = self.reopen_repo()?.into_sync();
+            fresh.objects = self.thread_safe_repo().0.objects;
+            *cached = ConfigRepo::new(fresh.to_thread_local());
         }
         Ok(cached.repo.to_thread_local())
     }

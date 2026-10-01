@@ -2241,22 +2241,25 @@ fn interactive_cherry_pick_applies_multiple_commits_in_order() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     opened
-        .interactive_cherry_pick_with_output(&[
-            InteractiveRebaseEntry {
-                action: InteractiveRebaseAction::Pick,
-                commit_id: one_sha,
-                summary: "feature one".to_string(),
-                message: "feature one".to_string(),
-                new_message: None,
-            },
-            InteractiveRebaseEntry {
-                action: InteractiveRebaseAction::Pick,
-                commit_id: two_sha,
-                summary: "feature two".to_string(),
-                message: "feature two".to_string(),
-                new_message: None,
-            },
-        ])
+        .interactive_cherry_pick_with_output(
+            &[
+                InteractiveRebaseEntry {
+                    action: InteractiveRebaseAction::Pick,
+                    commit_id: one_sha,
+                    summary: "feature one".to_string(),
+                    message: "feature one".to_string(),
+                    new_message: None,
+                },
+                InteractiveRebaseEntry {
+                    action: InteractiveRebaseAction::Pick,
+                    commit_id: two_sha,
+                    summary: "feature two".to_string(),
+                    message: "feature two".to_string(),
+                    new_message: None,
+                },
+            ],
+            true,
+        )
         .unwrap();
 
     assert_eq!(fs::read_to_string(repo.join("one.txt")).unwrap(), "one\n");

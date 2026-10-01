@@ -1,5 +1,4 @@
 use super::*;
-use crate::kit::interaction::ControlInteractionExt as _;
 
 mod branch;
 mod branch_group;
@@ -21,6 +20,7 @@ mod diff_hunk;
 mod file_browser_file;
 mod file_browser_folder;
 pub(super) mod file_history_commit;
+mod file_list_folder;
 mod history_branch_filter;
 mod history_refs;
 mod local_file_link;
@@ -538,6 +538,11 @@ impl PopoverHost {
         cx: &gpui::Context<Self>,
     ) -> Option<ContextMenuModel> {
         match kind {
+            PopoverKind::Hosted { id, menu: true } => self
+                .extension_dialog
+                .as_ref()
+                .filter(|dialog| dialog.id == *id)
+                .and_then(|dialog| dialog.menu.clone()),
             PopoverKind::AppMenu => Some(app_menu::model(self)),
             PopoverKind::AddRepoMenu => Some(add_repo_menu::model()),
             PopoverKind::PullPicker => Some(pull::model(self)),
@@ -565,6 +570,11 @@ impl PopoverHost {
                 area,
                 path,
             } => Some(status_file::model(self, *repo_id, *area, path, cx)),
+            PopoverKind::StatusConflictMenu {
+                repo_id,
+                area,
+                path,
+            } => Some(status_file::conflict_model(self, *repo_id, *area, path, cx)),
             PopoverKind::BranchMenu { repo_id, target } => {
                 Some(branch::model(self, *repo_id, target))
             }
@@ -638,7 +648,28 @@ impl PopoverHost {
                 repo_id,
                 commit_id,
                 path,
-            } => Some(commit_file::model(self, *repo_id, commit_id, path)),
+            } => Some(commit_file::model(
+                self,
+                *repo_id,
+                commit_file::FileMenuSource::Commit(commit_id),
+                path,
+                cx,
+            )),
+            PopoverKind::CommitRangeFileMenu {
+                repo_id,
+                from_commit_id,
+                to_commit_id,
+                path,
+            } => Some(commit_file::model(
+                self,
+                *repo_id,
+                commit_file::FileMenuSource::Range {
+                    from: from_commit_id,
+                    to: to_commit_id.as_ref(),
+                },
+                path,
+                cx,
+            )),
             PopoverKind::CommitFileSortMenu { list } => {
                 Some(commit_file_sort::model(self, *list, cx))
             }
@@ -648,6 +679,25 @@ impl PopoverHost {
             PopoverKind::FileBrowserFolderMenu { repo_id, path } => {
                 Some(file_browser_folder::model(self, *repo_id, path))
             }
+            PopoverKind::FileListFolderMenu {
+                repo_id,
+                list,
+                key,
+                chain,
+                collapsed,
+                apply_source,
+            } => Some(file_list_folder::model(
+                self,
+                file_list_folder::FolderMenu {
+                    repo_id: *repo_id,
+                    list: *list,
+                    key,
+                    chain,
+                    collapsed: *collapsed,
+                    apply_source: apply_source.as_ref(),
+                },
+                cx,
+            )),
             PopoverKind::BranchGroupMenu {
                 repo_id,
                 section,
@@ -815,6 +865,7 @@ impl PopoverHost {
         let mut close_after_action = true;
         let mut restore_diff_panel_focus_after_action = false;
         match action {
+            ContextMenuAction::Hosted(action) => action.invoke(cx),
             ContextMenuAction::ToggleHistoryRefGroup { target } => {
                 self.expanded_history_ref = if self.expanded_history_ref.as_ref() == Some(&target) {
                     None
@@ -832,6 +883,13 @@ impl PopoverHost {
             }
             ContextMenuAction::AppMenu(action) => {
                 app_menu::activate(self, action, window, cx);
+                return;
+            }
+            ContextMenuAction::RunExtensionCommand { id, repo_id } => {
+                self.close_popover_and_restore_focus(window, cx);
+                let _ = self.root_view.update(cx, |root, cx| {
+                    root.run_extension_command_for(&id, Some(repo_id), cx);
+                });
                 return;
             }
             ContextMenuAction::AddRepoMenu(action) => {
@@ -913,6 +971,53 @@ impl PopoverHost {
             ContextMenuAction::ToggleFileBrowserDir { repo_id, path } => {
                 self.store
                     .dispatch(Msg::ToggleFileBrowserDir { repo_id, path });
+            }
+            ContextMenuAction::SetFileListFolderCollapsed {
+                repo_id,
+                list,
+                key,
+                chain,
+                collapsed,
+                recursive,
+            } => {
+                self.details_pane.update(cx, |pane, cx| {
+                    pane.set_file_list_folder_collapsed(
+                        repo_id, list, key, &chain, collapsed, recursive, cx,
+                    );
+                });
+            }
+            // The folder row's hover Stage/Unstage, from its menu.
+            ContextMenuAction::StageStatusFolder {
+                repo_id,
+                section,
+                key,
+            } => {
+                let paths = self
+                    .details_pane
+                    .read(cx)
+                    .status_folder_subtree_paths(repo_id, section, &key);
+                let area = section.diff_area();
+                if area == DiffArea::Unstaged
+                    && let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
+                        &self.state,
+                        repo_id,
+                        paths.clone(),
+                        // No selection was consumed, so cancelling must leave it.
+                        false,
+                    )
+                {
+                    let anchor = self.popover_anchor_point();
+                    self.open_popover_at(confirm, anchor, window, cx);
+                    return;
+                }
+                if !paths.is_empty() {
+                    crate::view::status_actions::stage_or_unstage_paths(
+                        &self.store,
+                        repo_id,
+                        area,
+                        paths,
+                    );
+                }
             }
             // The branch tree's collapse state is view-owned rather than a
             // store message, so these four go through the sidebar pane.
@@ -1076,7 +1181,13 @@ impl PopoverHost {
                 if let Some(workdir) = self.workdir_for_repo(repo_id) {
                     session::promote_recent_repo(&mut self.cached_recent_repos, &workdir);
                 }
-                self.store.dispatch(Msg::CloseRepo { repo_id });
+                // Deferred: the guards may open a prompt in this host.
+                let root_view = self.root_view.clone();
+                cx.defer(move |cx| {
+                    let _ = root_view.update(cx, |root, cx| {
+                        root.request_close_repos(vec![repo_id], None, cx);
+                    });
+                });
             }
             ContextMenuAction::MoveRepoToWorkspace {
                 repo_id,
@@ -1135,9 +1246,11 @@ impl PopoverHost {
                 repo_ids,
                 activate_after,
             } => {
-                self.store.dispatch(Msg::CloseRepos {
-                    repo_ids,
-                    activate_after,
+                let root_view = self.root_view.clone();
+                cx.defer(move |cx| {
+                    let _ = root_view.update(cx, |root, cx| {
+                        root.request_close_repos(repo_ids, activate_after, cx);
+                    });
                 });
             }
             ContextMenuAction::OpenSubmoduleDiffInTab { path, target } => {
@@ -1207,6 +1320,28 @@ impl PopoverHost {
                     label,
                 });
             }
+            ContextMenuAction::CompareWithMergeBase {
+                repo_id,
+                commit_id,
+                label,
+            } => {
+                if let Some(mark) = self
+                    .state
+                    .repos
+                    .iter()
+                    .find(|repo| repo.id == repo_id)
+                    .and_then(|repo| repo.navigation.comparison_mark.as_ref())
+                {
+                    self.store.dispatch(Msg::CompareWithOptions {
+                        repo_id,
+                        from: mark.commit_id.clone(),
+                        to: Some(commit_id),
+                        options: gitcomet_core::services::ComparisonOptions::merge_base(),
+                        from_label: mark.label.clone(),
+                        to_label: label,
+                    });
+                }
+            }
             ContextMenuAction::CompareWithWorkingTree {
                 repo_id,
                 commit_id,
@@ -1225,6 +1360,16 @@ impl PopoverHost {
                 let anchor = self.popover_anchor_point();
                 self.open_popover_at(
                     PopoverKind::CherryPickCommitConfirm { repo_id, commit_id },
+                    anchor,
+                    window,
+                    cx,
+                );
+                return;
+            }
+            ContextMenuAction::ApplyFileChange { repo_id, target } => {
+                let anchor = self.popover_anchor_point();
+                self.open_popover_at(
+                    PopoverKind::ApplyFileChangeConfirm { repo_id, target },
                     anchor,
                     window,
                     cx,
@@ -1513,7 +1658,8 @@ impl PopoverHost {
                 self.store.dispatch(Msg::LaunchMergetool { repo_id, path });
             }
             ContextMenuAction::FetchAll { repo_id } => {
-                self.store.dispatch(Msg::FetchAll { repo_id });
+                self.store
+                    .dispatch(Msg::Fetch(gitcomet_state::msg::FetchMsg::All { repo_id }));
             }
             ContextMenuAction::PruneMergedBranches { repo_id } => {
                 self.store.dispatch(Msg::PruneMergedBranches { repo_id });

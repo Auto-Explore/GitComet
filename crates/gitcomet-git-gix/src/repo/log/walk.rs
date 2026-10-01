@@ -153,7 +153,7 @@ pub(crate) fn new_commit_time_walk(
         .sorting(gix::traverse::commit::simple::Sorting::ByCommitTime(
             CommitTimeOrder::NewestFirst,
         ))
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix walk: {e}"))))?
+        .map_err(|e| crate::repo::object_store::gix_error("gix walk", &gix::Error::from(e)))?
         // Set after the sorting, the way `rev_walk` does: first-parent mode
         // walks the chain in order rather than by date, and asking for it
         // swaps the queue.
@@ -230,9 +230,10 @@ pub(crate) fn new_log_paged_walk(
                 if let Some(cancellation) = cancellation {
                     cancellation.check_cancelled()?;
                 }
-                return Err(Error::new(ErrorKind::Backend(format!(
-                    "gix date-order walk: {error}"
-                ))));
+                return Err(crate::repo::object_store::gix_error(
+                    "gix date-order walk",
+                    &gix::Error::from(error),
+                ));
             }
         }
     };
@@ -597,7 +598,7 @@ pub(crate) fn log_page_from_paged_walk_state(
                         if let Some(cancellation) = cancellation {
                             cancellation.check_cancelled()?;
                         }
-                        return Err(Error::new(ErrorKind::Backend(format!("gix walk: {error}"))));
+                        return Err(crate::repo::object_store::gix_error("gix walk", &*error));
                     }
                 };
 

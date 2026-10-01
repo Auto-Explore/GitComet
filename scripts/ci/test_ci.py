@@ -21,7 +21,10 @@ import time
 import unittest
 from unittest.mock import patch
 
+import boundaries
 import cache
+import identity_literals
+import inventory
 import report
 import runtime
 
@@ -663,6 +666,42 @@ class RunnerTests(unittest.TestCase):
                 self.assertTrue(Path(first["LOCALAPPDATA"]).is_relative_to(directory))
                 self.assertTrue(Path(first["LOCALAPPDATA"]).is_dir())
 
+    def test_metadata_keeps_feature_switches_but_not_package_selection(self):
+        self.assertEqual(runner.feature_args(runner.CONTEXTS["app"]), ["--no-default-features", "--features", "gix"])
+        self.assertEqual(runner.feature_args(runner.CONTEXTS["workspace"]),
+                         ["--no-default-features", "--features", "gix,gitcomet-ui-gpui/default"])
+        self.assertEqual(runner.feature_args(runner.CONTEXTS["core"]), [])
+        self.assertEqual(runner.feature_args(runner.CONTEXTS["example"]), [])
+
+    def test_the_example_product_builds_outside_the_workspace_context(self):
+        workspace = runner.CONTEXTS["workspace"]
+        for package in runner.EXAMPLE_PACKAGES:
+            self.assertIn(package, workspace[workspace.index("--exclude"):])
+            self.assertIn(package, runner.CONTEXTS["example"])
+
+    def test_every_gpui_harness_runs_in_libtest_with_isolated_settings(self):
+        packages = {"core": "gitcomet-core", "ui": runner.UI, "kit": "gitcomet-ui-kit",
+                    "example": "gitcomet-extension-example"}
+        self.assertEqual(runner.gpui_packages(packages), runner.GPUI_PACKAGES)
+        self.assertEqual(runner.nextest_filter([], runner.gpui_packages(packages)),
+                         "not (package(=gitcomet-ui-gpui) | package(=gitcomet-ui-kit) | "
+                         "package(=gitcomet-extension-example))")
+        # A package absent from the metadata cannot appear in a filterset.
+        self.assertEqual(runner.gpui_packages({"core": "gitcomet-core", "ui": runner.UI}), (runner.UI,))
+        self.assertIsNone(runner.nextest_filter([], ()))
+        self.assertFalse(runner.uses_libtest("gitcomet-core"))
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
+                patch.dict(os.environ, {"GITCOMET_SESSION_FILE": "personal-session.json"}), runner.ExitStack() as cleanup:
+            (runner.paths("kit") / "binaries.json").write_text(
+                json.dumps({"rust-build-meta": {"target-directory": directory}}))
+            for package in runner.GPUI_PACKAGES:
+                with self.subTest(package=package):
+                    self.assertTrue(runner.uses_libtest(package))
+                    env = runner.suite_env("kit", {"package-name": package, "binary-path": str(Path(directory) / "t")},
+                                           cleanup=cleanup)
+                    self.assertNotIn("GITCOMET_SESSION_FILE", env)
+                    self.assertEqual(env["GITCOMET_DISABLE_SESSION_PERSIST"], "1")
+
     def test_ui_appdata_is_removed_after_success_failure_and_interruption(self):
         # Exercise Windows appdata ownership on any host without changing
         # pathlib's platform-dependent Path implementation.
@@ -744,7 +783,9 @@ class RunnerTests(unittest.TestCase):
                 routed = {}
 
                 def run_nextest(name, command, **kwargs):
-                    ran = ["process::isolated"] if "conflict_session" in command[command.index("-E") + 1] else \
+                    # Without a GPUI package or a batch there is nothing to exclude.
+                    expression = command[command.index("-E") + 1] if "-E" in command else ""
+                    ran = ["process::isolated"] if "conflict_session" in expression else \
                           ["conflict_session::pure", "process::isolated"]
                     routed.update(dict.fromkeys(ran, "nextest"))
                     (target / "nextest/ci/junit.xml").write_text('<testsuites><testsuite name="gitcomet-core">' +
@@ -1338,6 +1379,152 @@ class ApplicationProbeTests(unittest.TestCase):
                     application_probe.main()
                 self.assertEqual(error.exception.code, 2)
                 self.assertFalse((Path(directory) / "application-probe").exists())
+
+
+class InventoryTests(unittest.TestCase):
+    def compare(self, old, new):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = [Path(directory) / "old.json", Path(directory) / "new.json", Path(directory) / "map.json"]
+            paths[0].write_text(json.dumps(old))
+            paths[1].write_text(json.dumps(new))
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as errors:
+                code = inventory.compare(paths[0], paths[1], paths[2])
+            return code, json.loads(paths[2].read_text()), errors.getvalue()
+
+    def test_moves_into_child_modules_map_one_to_one(self):
+        code, mapping, _ = self.compare(
+            {"ui:lib:ui": {"view::tests::a": False, "view::tests::b": True, "other::c": False}},
+            {"ui:lib:ui": {"view::tests::group::a": False, "view::tests::other::b": True, "other::c": False}})
+        self.assertEqual(code, 0)
+        self.assertEqual(mapping["ui:lib:ui"], {"view::tests::a": "view::tests::group::a",
+                                                "view::tests::b": "view::tests::other::b", "other::c": "other::c"})
+        code, mapping, _ = self.compare({"exe:bin:exe": {"tests::a": False}}, {"exe:bin:exe": {"launch::tests::a": False}})
+        self.assertEqual((code, mapping["exe:bin:exe"]), (0, {"tests::a": "launch::tests::a"}))
+
+    def test_dropped_renamed_reignored_or_moved_up_tests_fail(self):
+        cases = [
+            ({"view::tests::a": False}, {}),
+            ({"view::tests::a": False}, {"view::tests::renamed": False}),
+            ({"view::tests::a": False}, {"view::tests::group::a": True}),
+            ({"view::tests::group::a": False}, {"view::a": False}),
+            ({"view::tests::a": False}, {"tests::view::a": False}),
+            ({"view::tests::a": False}, {"view::tests::x::a": False, "view::tests::y::a": False}),
+        ]
+        for old, new in cases:
+            with self.subTest(old=old, new=new):
+                code, _, errors = self.compare({"ui:lib:ui": old}, {"ui:lib:ui": new} if new else {"ui:lib:ui": {"z": False}})
+                self.assertEqual(code, 1, errors)
+
+    def test_declared_harness_moves_and_replacements_are_accepted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old, new, replaced = (Path(directory) / name for name in ("old.json", "new.json", "replaced.json"))
+            old.write_text(json.dumps({"exe:bin:exe": {"cli::tests::a": False, "dirs::b": False},
+                                       "core:lib:core": {"x": False}}))
+            new.write_text(json.dumps({"app:lib:app": {"cli::tests::a": False},
+                                       "core:lib:core": {"x": False, "platform::dirs::tests::b": False}}))
+            replaced.write_text(json.dumps({
+                "removed": {"app:lib:app dirs::b": "covered by platform::dirs::tests::b"},
+                "added": {"core:lib:core platform::dirs::tests::b": "replaces dirs::b"}}))
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                self.assertEqual(inventory.compare(old, new, None, ["exe:bin:exe=app:lib:app"], replaced), 0)
+                self.assertEqual(inventory.compare(old, new, None, ["exe:bin:exe=app:lib:app"]), 1)
+
+    def test_a_test_cannot_change_harness(self):
+        code, _, errors = self.compare({"a:lib:a": {"t": False}, "b:lib:b": {"u": False}},
+                                       {"a:lib:a": {"u": False}, "b:lib:b": {"t": False}})
+        self.assertEqual(code, 1, errors)
+
+    def test_package_names_come_from_path_and_registry_ids(self):
+        self.assertEqual(inventory.package_name("path+file:///x/crates/gitcomet-core#0.2.6"), "gitcomet-core")
+        self.assertEqual(inventory.package_name("path+file:///x/crates/win32-window-utils#gitcomet-win32-window-utils@0.1.0"),
+                         "gitcomet-win32-window-utils")
+
+
+class BoundaryTests(unittest.TestCase):
+    def test_tree_output_yields_package_names_including_repeated_subtrees(self):
+        output = ("gitcomet-ui-kit v0.2.6 (/x/crates/gitcomet-ui-kit)\n"
+                  "gpui-ce v0.2.2 (https://github.com/Havunen/gpui-ce.git?rev=1#1)\n"
+                  "gitcomet-core v0.2.6 (/x/crates/gitcomet-core) (*)\n\n")
+        self.assertEqual(boundaries.parse_tree(output), {"gitcomet-ui-kit", "gpui-ce", "gitcomet-core"})
+
+    def test_forbidden_reachable_packages_are_reported_but_the_package_itself_is_not(self):
+        rules = {package: forbidden for package, _, forbidden in boundaries.RULES}
+        self.assertEqual(boundaries.violations("gitcomet-ui-kit", {"gitcomet-ui-kit", "gpui-ce", "gitcomet-ui-gpui"},
+                                               rules["gitcomet-ui-kit"]), ["gitcomet-ui-gpui"])
+        self.assertEqual(boundaries.violations("gitcomet", {"gitcomet", "gitcomet-core"}, rules["gitcomet"]), [])
+        self.assertIn("gpui-ce", rules["gitcomet-app"])
+        self.assertIn("gitcomet-ui-gpui", rules["gitcomet-extension-api"])
+
+    def test_missing_packages_are_skipped_and_violations_fail(self):
+        reached = {"gitcomet-core": {"gitcomet-core"}, "gitcomet": {"gitcomet", "gpui-ce"}}
+        with patch.object(boundaries, "workspace_packages", return_value={"gitcomet-core", "gitcomet"}), \
+                patch.object(boundaries, "reachable", side_effect=lambda package, features: reached[package]), \
+                redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(boundaries.main(), 1)
+        self.assertIn("skip gitcomet-ui-kit", out.getvalue())
+        self.assertIn("gitcomet (--no-default-features --features gix) reaches forbidden packages: gpui-ce", err.getvalue())
+
+
+class IdentityLiteralTests(unittest.TestCase):
+    def test_scan_includes_new_files_and_tolerates_deleted_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "crates/example/src"
+            source.mkdir(parents=True)
+            deleted = source / "deleted.rs"
+            deleted.write_text('const NAME: &str = "GitComet";')
+            subprocess.run(["git", "init", "-q", directory], check=True)
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            deleted.unlink()
+            (source / "new.rs").write_text('const NAME: &str = "GitComet";')
+            with patch.object(identity_literals, "ROOT", root):
+                self.assertEqual(identity_literals.scan(),
+                                 {("crates/example/src/new.rs", "display-name"): 1})
+
+    def test_only_production_string_literals_count(self):
+        source = """
+// GitComet in a comment is fine
+/* "gitcomet" in a block comment too */
+const A: &str = "Open GitComet";
+const B: &str = r#"gitcomet.desktop"#;
+const C: &str = "gitcomet_core::x GITCOMET_SESSION_FILE";
+const D: &str = concat!(env!("CARGO_PKG_REPOSITORY"), "/x");
+fn f() -> char { '"' }
+const E: &str = "https://github.com/Auto-Explore/x";
+#[cfg(test)]
+mod tests {
+    const T: &str = "GitComet gitcomet";
+    fn g() { let _ = "}"; }
+}
+const F: &str = "after the test module: gitcomet-gui";
+"""
+        self.assertEqual(identity_literals.scan_text(source),
+                         {"display-name": 1, "identifier": 2, "vendor": 1, "package-metadata": 1})
+
+    def test_test_files_are_not_scanned(self):
+        for path in ("crates/a/src/tests.rs", "crates/a/src/x_tests.rs", "crates/a/tests/it.rs",
+                     "crates/a/src/view/tests/mod.rs", "crates/a/benches/b.rs", "crates/a/src/test_support.rs"):
+            self.assertTrue(identity_literals.is_test_path(path), path)
+        self.assertFalse(identity_literals.is_test_path("crates/a/src/testsuite.rs"))
+
+    def test_counts_must_match_exactly(self):
+        allowed = {("a.rs", "identifier"): (2, "wire format"), ("b.rs", "display-name"): (1, "x")}
+        self.assertEqual(identity_literals.compare({("a.rs", "identifier"): 2, ("b.rs", "display-name"): 1}, allowed), [])
+        problems = identity_literals.compare({("a.rs", "identifier"): 3, ("c.rs", "vendor"): 1}, allowed)
+        self.assertEqual(len(problems), 3)
+        self.assertTrue(any("1 new identifier" in problem for problem in problems))
+        self.assertTrue(any("b.rs: display-name exception allows 1 but 0 remain" in problem for problem in problems))
+
+    def test_allowlist_round_trips_reasons(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "allow.txt"
+            path.write_text("# header\na.rs identifier 1 argv wire marker\n")
+            identity_literals.write({("a.rs", "identifier"): 2, ("b.rs", "vendor"): 1},
+                                    identity_literals.read_allowlist(path), path)
+            entries = identity_literals.read_allowlist(path)
+            self.assertEqual(entries[("a.rs", "identifier")], (2, "argv wire marker"))
+            self.assertTrue(entries[("b.rs", "vendor")][1].startswith("TODO"))
+            self.assertTrue(path.read_text().startswith("# header\n"))
 
 
 class ReportTests(unittest.TestCase):

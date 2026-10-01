@@ -15,42 +15,35 @@ for value in "$production_limit" "$test_limit"; do
   fi
 done
 
-# Lines before the file's first top-level `#[cfg(test)]`, i.e. everything that
-# ships. An inline test module is measured against the test limit instead, so a
-# large module is never split just because its tests grew — splitting the tests
-# out is a choice, not something this check forces.
-production_lines() {
-  awk '
-    /^#\[cfg\(test\)\]/ { print NR - 1; found = 1; exit }
-    END { if (!found) print NR }
-  ' "$1"
-}
-
+# Every file is measured by its physical line count. An inline test module
+# counts against its production file: move a large one into a child
+# `tests.rs` (or a `tests/` directory), which is measured against the test
+# limit. Small cohesive inline tests may stay.
 failed=0
 checked=0
-# `git ls-files` rather than `find`: it lists exactly the tracked sources, so a
-# nested `target/` or any other build output can never be measured.
-while IFS= read -r file; do
+# Include new sources during local development, and skip tracked deletions.
+# Git's excludes keep build output out of this inventory.
+while IFS= read -r -d '' file; do
+  [[ -f "$file" ]] || continue
   checked=$((checked + 1))
   case "$file" in
     */tests/* | */benches/* | */tests.rs | *_tests.rs)
       kind="test/benchmark"
       limit="$test_limit"
-      lines="$(wc -l < "$file")"
       ;;
     *)
       kind="production"
       limit="$production_limit"
-      lines="$(production_lines "$file")"
       ;;
   esac
+  lines="$(wc -l < "$file")"
 
   if ((lines > limit)); then
-    printf '%s has %d %s lines; %s Rust files are limited to %d.\n' \
-      "$file" "$lines" "$kind" "$kind" "$limit" >&2
+    printf '%s has %d lines; %s Rust files are limited to %d.\n' \
+      "$file" "$lines" "$kind" "$limit" >&2
     failed=1
   fi
-done < <(git ls-files -z -- 'crates/**/*.rs' | tr '\0' '\n')
+done < <(git ls-files --cached --others --exclude-standard -z -- 'crates/**/*.rs')
 
 if ((failed)); then
   echo "Split the reported file into cohesive modules before adding more code." >&2

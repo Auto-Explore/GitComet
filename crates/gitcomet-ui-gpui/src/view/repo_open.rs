@@ -227,13 +227,7 @@ impl GitCometView {
             return false;
         };
 
-        if self.request_terminal_shutdown_action(TerminalShutdownAction::CloseRepo { repo_id }, cx)
-        {
-            return true;
-        }
-
-        self.store.dispatch(Msg::CloseRepo { repo_id });
-        cx.notify();
+        self.request_close_repos(vec![repo_id], None, cx);
         true
     }
 
@@ -456,6 +450,23 @@ impl GitCometView {
             .clone_from(&workspace.repositories);
         self.persisted_workspace_active_repository
             .clone_from(&workspace.active_repository);
+        let mut workspace = workspace;
+        let (allowed, denials) = super::extension_host::filter_entries(
+            std::mem::take(&mut workspace.repositories),
+            gitcomet_extension_api::EntryOrigin::WorkspaceRestore,
+            cx,
+        );
+        workspace.repositories = allowed;
+        if workspace
+            .active_repository
+            .as_ref()
+            .is_some_and(|active| !workspace.repositories.contains(active))
+        {
+            workspace.active_repository = None;
+        }
+        for reason in denials {
+            self.push_toast(components::ToastKind::Warning, reason.to_string(), cx);
+        }
         if !workspace.repositories.is_empty() {
             // Pending bootstrap keeps the saved membership through snapshots
             // taken before the store has reduced the restore.
@@ -620,9 +631,12 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                // Every command from `git_command()` carries the ext guard.
+                // Every command from `git_command()` carries the ext guard
+                // and never starts git's automatic maintenance.
                 std::ffi::OsString::from("-c"),
                 std::ffi::OsString::from("protocol.ext.allow=never"),
+                std::ffi::OsString::from("-c"),
+                std::ffi::OsString::from("maintenance.auto=false"),
                 std::ffi::OsString::from("-C"),
                 path.as_os_str().to_owned(),
                 std::ffi::OsString::from("init"),

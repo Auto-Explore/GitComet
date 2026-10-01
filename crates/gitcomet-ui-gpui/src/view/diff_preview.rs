@@ -16,9 +16,7 @@ fn preview_abs_path(
 ) -> Option<std::path::PathBuf> {
     let rel_path = match target? {
         DiffTarget::WorkingTree { path, .. } => path.clone(),
-        DiffTarget::Commit {
-            path: Some(path), ..
-        }
+        DiffTarget::Commit { path, .. }
         | DiffTarget::CommitRange {
             path: Some(path), ..
         } => path.clone(),
@@ -158,10 +156,7 @@ mod tests {
     #[test]
     fn new_file_preview_extracts_added_lines() {
         let workdir = PathBuf::from("repo");
-        let target = DiffTarget::WorkingTree {
-            path: PathBuf::from("new.txt"),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree(PathBuf::from("new.txt"), DiffArea::Unstaged);
         let diff = vec![
             line(DiffLineKind::Header, "diff --git a/new.txt b/new.txt"),
             line(DiffLineKind::Header, "new file mode 100644"),
@@ -181,10 +176,7 @@ mod tests {
     #[test]
     fn new_file_preview_returns_none_when_diff_has_removes() {
         let workdir = PathBuf::from("repo");
-        let target = DiffTarget::WorkingTree {
-            path: PathBuf::from("new.txt"),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree(PathBuf::from("new.txt"), DiffArea::Unstaged);
         let diff = vec![
             line(DiffLineKind::Header, "diff --git a/new.txt b/new.txt"),
             line(DiffLineKind::Header, "new file mode 100644"),
@@ -198,10 +190,7 @@ mod tests {
     #[test]
     fn deleted_file_preview_extracts_removed_lines() {
         let workdir = PathBuf::from("repo");
-        let target = DiffTarget::WorkingTree {
-            path: PathBuf::from("old.txt"),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree(PathBuf::from("old.txt"), DiffArea::Unstaged);
         let diff = vec![
             line(DiffLineKind::Header, "diff --git a/old.txt b/old.txt"),
             line(DiffLineKind::Header, "deleted file mode 100644"),
@@ -221,10 +210,7 @@ mod tests {
     #[test]
     fn deleted_file_preview_returns_none_when_diff_has_adds() {
         let workdir = PathBuf::from("repo");
-        let target = DiffTarget::WorkingTree {
-            path: PathBuf::from("old.txt"),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree(PathBuf::from("old.txt"), DiffArea::Unstaged);
         let diff = vec![
             line(DiffLineKind::Header, "diff --git a/old.txt b/old.txt"),
             line(DiffLineKind::Header, "deleted file mode 100644"),
@@ -238,10 +224,7 @@ mod tests {
     #[test]
     fn new_file_preview_source_len_respects_missing_final_newline_marker() {
         let workdir = PathBuf::from("repo");
-        let target = DiffTarget::WorkingTree {
-            path: PathBuf::from("new.txt"),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree(PathBuf::from("new.txt"), DiffArea::Unstaged);
         let diff = vec![
             line(DiffLineKind::Header, "diff --git a/new.txt b/new.txt"),
             line(DiffLineKind::Header, "new file mode 100644"),
@@ -257,10 +240,7 @@ mod tests {
     #[test]
     fn deleted_file_preview_source_len_respects_missing_final_newline_marker() {
         let workdir = PathBuf::from("repo");
-        let target = DiffTarget::WorkingTree {
-            path: PathBuf::from("old.txt"),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree(PathBuf::from("old.txt"), DiffArea::Unstaged);
         let diff = vec![
             line(DiffLineKind::Header, "diff --git a/old.txt b/old.txt"),
             line(DiffLineKind::Header, "deleted file mode 100644"),

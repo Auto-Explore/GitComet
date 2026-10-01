@@ -13,8 +13,7 @@ pub(super) fn panel(
     let mainline_choices = mainline.choices;
     let is_merge = mainline_choices.len() > 1;
     let selected_mainline = is_merge.then_some(this.commit_mainline).flatten();
-    let sha = commit_id.as_ref();
-    let short = sha.get(0..7).unwrap_or(sha).to_string();
+    let short = commit_id.short().to_string();
     let summary = commit_mainline::commit_summary(this, repo_id, &commit_id);
     let repo = this.state.repos.iter().find(|repo| repo.id == repo_id);
     let destination = merge_commit_destination_label(repo);

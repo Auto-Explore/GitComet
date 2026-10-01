@@ -58,6 +58,10 @@ use tempfile::TempDir;
 
 mod conflict;
 mod diff_fixtures;
+#[cfg(feature = "benchmarks")]
+mod extension_fixtures;
+#[cfg(feature = "benchmarks")]
+pub use extension_fixtures::*;
 mod git_ops;
 mod picker_fixtures;
 mod real_repo;

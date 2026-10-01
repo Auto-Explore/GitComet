@@ -15,6 +15,7 @@ use super::RepoPathList;
 #[derive(Clone, Debug, strum::IntoStaticStr)]
 pub enum Effect {
     IndexedHistory(crate::indexed_history::IndexedHistoryEffect),
+    DiffSession(crate::diff_session::DiffSessionEffect),
     HistoryAuthors(crate::history_authors::HistoryAuthorsEffect),
     HistoryFind(crate::history_find::HistoryFindEffect),
     PersistSession {
@@ -200,6 +201,7 @@ pub enum Effect {
         from: CommitId,
         /// `None` lists files between `from` and the working tree.
         to: Option<CommitId>,
+        options: gitcomet_core::services::ComparisonOptions,
         /// Echoed back on the reply so a completion that lost a race against a
         /// newer load can be dropped. See `HistoryState::range_files_request`.
         request: u64,
@@ -319,6 +321,8 @@ pub enum Effect {
         commit: bool,
         mainline: Option<usize>,
         summary: String,
+        /// Signing or fetch auth staged when a failed pick is replayed.
+        auth: Option<StagedGitAuth>,
     },
     RevertCommit {
         repo_id: RepoId,
@@ -327,6 +331,14 @@ pub enum Effect {
         mainline: Option<usize>,
         summary: String,
         /// Signing or fetch auth staged when a failed revert is replayed.
+        auth: Option<StagedGitAuth>,
+    },
+    ApplyFileChange {
+        repo_id: RepoId,
+        target: gitcomet_core::domain::ApplyChangeTarget,
+        commit: bool,
+        commit_retry: Option<gitcomet_core::domain::ApplyFileChangeRetry>,
+        /// Signing auth staged when a failed commit step is replayed.
         auth: Option<StagedGitAuth>,
     },
     CreateBranch {
@@ -500,10 +512,25 @@ pub enum Effect {
         prune: bool,
         auth: Option<StagedGitAuth>,
     },
+    FetchRefspecs {
+        repo_id: RepoId,
+        remote: String,
+        refspecs: Vec<String>,
+        auth: Option<StagedGitAuth>,
+    },
     PruneMergedBranches {
         repo_id: RepoId,
     },
     PruneLocalTags {
+        repo_id: RepoId,
+    },
+    CheckRepoMaintenance {
+        repo_id: RepoId,
+    },
+    PersistRepoMaintenanceSnooze {
+        common_dir: std::path::PathBuf,
+    },
+    RunMaintenance {
         repo_id: RepoId,
     },
     Pull {
@@ -625,6 +652,7 @@ pub enum Effect {
     InteractiveCherryPick {
         repo_id: RepoId,
         entries: Vec<InteractiveRebaseEntry>,
+        commit: bool,
     },
     /// Load the full `%B` messages of the commits selected for an
     /// interactive cherry-pick: the log page only carries subjects, and a

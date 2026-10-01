@@ -108,10 +108,10 @@ fn files_and_reftable_twins_have_the_same_refs_status_history_and_reflogs() {
             let status = repo.status().unwrap();
             assert_eq!(status.staged.len(), 1);
             assert!(
-                repo.diff_file_text(&DiffTarget::WorkingTree {
-                    path: "renamed.txt".into(),
-                    area: DiffArea::Staged
-                })
+                repo.diff_file_text(&DiffTarget::working_tree(
+                    "renamed.txt".into(),
+                    DiffArea::Staged
+                ))
                 .unwrap()
                 .is_some()
             );
@@ -281,10 +281,7 @@ fn shallow_and_no_checkout_clones_use_native_refs_and_index_fallback() {
         assert_eq!(cloned.commit_details(&head).unwrap().id, head);
         assert!(
             cloned
-                .diff_file_text(&DiffTarget::Commit {
-                    commit_id: head.clone(),
-                    path: Some("file.txt".into())
-                })
+                .diff_file_text(&DiffTarget::commit(head.clone(), "file.txt".into()))
                 .unwrap()
                 .is_some()
         );

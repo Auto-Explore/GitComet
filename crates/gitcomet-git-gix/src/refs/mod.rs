@@ -382,9 +382,10 @@ impl<'r> RefsView<'r> {
         if self.common.is_none() {
             let mut head = self.repo.head().map_err(failure)?;
             let name = head.referent_name().map(ToOwned::to_owned);
+            // Classified so a pack I/O failure triggers the history store retry.
             let id = head
                 .try_peel_to_id()
-                .map_err(failure)?
+                .map_err(|e| crate::repo::object_store::gix_error("gix head peel", &e))?
                 .map(|id| id.detach());
             return match (name, id) {
                 (Some(name), id) => Ok(HeadState::Symbolic { name, id }),

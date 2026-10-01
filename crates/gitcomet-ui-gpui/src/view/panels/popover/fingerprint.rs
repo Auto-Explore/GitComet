@@ -148,6 +148,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::ChangeTrackingSettings
+        | PopoverKind::Hosted { .. }
         | PopoverKind::ErrorDetails { .. } => None,
 
         // Popovers that implicitly use the currently active repo.
@@ -161,6 +162,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::InteractiveRebaseActionMenu { .. }
         | PopoverKind::InteractiveRebaseAutosquashMenu
         | PopoverKind::TerminalShutdownConfirm(_)
+        | PopoverKind::CloseGuardConfirm(_)
         | PopoverKind::UnsavedFileEditsConfirm(_)
         | PopoverKind::ConflictResolverInputRowMenu { .. }
         | PopoverKind::ConflictResolverChunkMenu { .. }
@@ -184,6 +186,8 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::PushSetUpstreamPrompt { repo_id, .. }
         | PopoverKind::ForcePushConfirm { repo_id }
         | PopoverKind::CherryPickCommitConfirm { repo_id, .. }
+        | PopoverKind::InteractiveCherryPickConfirm { repo_id, .. }
+        | PopoverKind::ApplyFileChangeConfirm { repo_id, .. }
         | PopoverKind::RevertCommitConfirm { repo_id, .. }
         | PopoverKind::MergeCommitConfirm { repo_id, .. }
         | PopoverKind::MergeAbortConfirm { repo_id }
@@ -191,6 +195,8 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::ForceDeleteBranchConfirm { repo_id, .. }
         | PopoverKind::ForceRemoveWorktreeConfirm { repo_id, .. }
         | PopoverKind::DiscardChangesConfirm { repo_id, .. }
+        | PopoverKind::DiscardFolderChangesConfirm { repo_id, .. }
+        | PopoverKind::FileListFolderMenu { repo_id, .. }
         | PopoverKind::AddToGitignorePrompt { repo_id, .. }
         | PopoverKind::StageConflictMarkersConfirm { repo_id, .. }
         | PopoverKind::PullReconcilePrompt { repo_id }
@@ -201,6 +207,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::DiffEditorMenu { repo_id, .. }
         | PopoverKind::CommitMenu { repo_id, .. }
         | PopoverKind::StatusFileMenu { repo_id, .. }
+        | PopoverKind::StatusConflictMenu { repo_id, .. }
         | PopoverKind::BranchMenu { repo_id, .. }
         | PopoverKind::BranchSectionMenu { repo_id, .. }
         | PopoverKind::BranchGroupMenu { repo_id, .. }
@@ -208,6 +215,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::SidebarAncestorMenu { repo_id, .. }
         | PopoverKind::DeleteBranchesConfirm { repo_id, .. }
         | PopoverKind::CommitFileMenu { repo_id, .. }
+        | PopoverKind::CommitRangeFileMenu { repo_id, .. }
         | PopoverKind::FileBrowserFileMenu { repo_id, .. }
         | PopoverKind::FileBrowserFolderMenu { repo_id, .. }
         | PopoverKind::BrowseHistoryMenu { repo_id }
@@ -260,6 +268,16 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         // repaint when it lands rather than keep a label that is now a lie.
         PopoverKind::FileBrowserFolderMenu { .. } => {
             repo.file_browser.file_browser_rev.hash(hasher);
+        }
+
+        // File counts come from the lists' files, and Apply follows the busy
+        // state. Collapse state is view-local and only changes by closing it.
+        PopoverKind::FileListFolderMenu { .. } | PopoverKind::DiscardFolderChangesConfirm { .. } => {
+            repo.history_rewrite_busy().hash(hasher);
+            repo.history_state.commit_details_rev.hash(hasher);
+            repo.history_state.range_files_rev.hash(hasher);
+            repo.worktree_status_cache_rev().hash(hasher);
+            repo.staged_status_cache_rev().hash(hasher);
         }
 
         PopoverKind::Repo {
@@ -439,6 +457,22 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             repo.history_rewrite_busy().hash(hasher);
         }
 
+        // The buttons follow the repo's busy state.
+        PopoverKind::ApplyFileChangeConfirm { .. }
+        | PopoverKind::InteractiveCherryPickConfirm { .. } => {
+            repo.history_rewrite_busy().hash(hasher);
+        }
+
+        // "Apply change" follows the repo's busy state.
+        PopoverKind::CommitFileMenu { .. } => {
+            repo.history_rewrite_busy().hash(hasher);
+        }
+        // The submodule flag of a row comes from the loaded file list.
+        PopoverKind::CommitRangeFileMenu { .. } => {
+            repo.history_state.range_files_rev.hash(hasher);
+            repo.history_rewrite_busy().hash(hasher);
+        }
+
         // Most prompt-style popovers don't require live state updates.
         PopoverKind::InteractiveRebaseActionMenu { .. }
         | PopoverKind::InteractiveRebaseAutosquashMenu
@@ -453,11 +487,11 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         // Its member list is resolved when it opens and carried on the kind, so
         // it must not change under the user mid-confirmation.
         | PopoverKind::DeleteBranchesConfirm { .. }
-        | PopoverKind::CommitFileMenu { .. }
         | PopoverKind::FileBrowserFileMenu { .. }
         | PopoverKind::BrowseHistoryMenu { .. }
         | PopoverKind::SubmoduleInnerDiffMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
+        | PopoverKind::StatusConflictMenu { .. }
         | PopoverKind::StageConflictMarkersConfirm { .. }
         // Its contents are computed once when it opens and then owned by the
         // text input. Re-hashing status would rebuild the dialog under the
@@ -478,12 +512,14 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::AppMenu
         | PopoverKind::AddRepoMenu
         | PopoverKind::TerminalShutdownConfirm(_)
+        | PopoverKind::CloseGuardConfirm(_)
         | PopoverKind::UnsavedFileEditsConfirm(_)
         | PopoverKind::TerminalMenu { .. }
         | PopoverKind::RepoPicker { .. }
         | PopoverKind::CloneRepo
         | PopoverKind::ReflogEntryMenu { .. }
         | PopoverKind::ErrorDetails { .. }
+        | PopoverKind::Hosted { .. }
         | PopoverKind::CommitPrompt { .. } => {}
     }
 }
@@ -572,6 +608,10 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             message.hash(hasher);
         }
         PopoverKind::CloneRepo => 4u8.hash(hasher),
+        PopoverKind::Hosted { id, .. } => {
+            111u8.hash(hasher);
+            id.hash(hasher);
+        }
         PopoverKind::ChangeTrackingSettings => 66u8.hash(hasher),
         PopoverKind::DiffContentModeSettings => 67u8.hash(hasher),
         PopoverKind::TextFormatMenu { section } => {
@@ -681,6 +721,20 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             repo_id.hash(hasher);
             commit_id.hash(hasher);
         }
+        PopoverKind::ApplyFileChangeConfirm { repo_id, target } => {
+            111u8.hash(hasher);
+            repo_id.hash(hasher);
+            target.hash(hasher);
+        }
+        PopoverKind::InteractiveCherryPickConfirm { repo_id, entries } => {
+            113u8.hash(hasher);
+            repo_id.hash(hasher);
+            entries.len().hash(hasher);
+            for entry in entries {
+                entry.commit_id.hash(hasher);
+                std::mem::discriminant(&entry.action).hash(hasher);
+            }
+        }
         PopoverKind::MergeCommitConfirm { repo_id, commit_id } => {
             83u8.hash(hasher);
             repo_id.hash(hasher);
@@ -723,6 +777,32 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             hash_diff_area(*area, hasher);
             path.hash(hasher);
         }
+        PopoverKind::FileListFolderMenu {
+            repo_id,
+            list,
+            key,
+            chain,
+            collapsed,
+            apply_source,
+        } => {
+            114u8.hash(hasher);
+            repo_id.hash(hasher);
+            list.hash(hasher);
+            key.hash(hasher);
+            chain.hash(hasher);
+            collapsed.hash(hasher);
+            apply_source.hash(hasher);
+        }
+        PopoverKind::DiscardFolderChangesConfirm {
+            repo_id,
+            section,
+            folder,
+        } => {
+            115u8.hash(hasher);
+            repo_id.hash(hasher);
+            (*section as u8).hash(hasher);
+            folder.hash(hasher);
+        }
         PopoverKind::AddToGitignorePrompt {
             repo_id,
             area,
@@ -758,6 +838,11 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             prompt.summary.terminal_count.hash(hasher);
             prompt.summary.running_command_count.hash(hasher);
             prompt.summary.repo_names.hash(hasher);
+        }
+        PopoverKind::CloseGuardConfirm(prompt) => {
+            112u8.hash(hasher);
+            prompt.action.hash(hasher);
+            prompt.reasons.hash(hasher);
         }
         PopoverKind::UnsavedFileEditsConfirm(prompt) => {
             68u8.hash(hasher);
@@ -854,6 +939,16 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             hash_diff_area(*area, hasher);
             path.hash(hasher);
         }
+        PopoverKind::StatusConflictMenu {
+            repo_id,
+            area,
+            path,
+        } => {
+            116u8.hash(hasher);
+            repo_id.hash(hasher);
+            hash_diff_area(*area, hasher);
+            path.hash(hasher);
+        }
         PopoverKind::BranchMenu { repo_id, target } => {
             44u8.hash(hasher);
             repo_id.hash(hasher);
@@ -872,6 +967,18 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             46u8.hash(hasher);
             repo_id.hash(hasher);
             commit_id.hash(hasher);
+            path.hash(hasher);
+        }
+        PopoverKind::CommitRangeFileMenu {
+            repo_id,
+            from_commit_id,
+            to_commit_id,
+            path,
+        } => {
+            112u8.hash(hasher);
+            repo_id.hash(hasher);
+            from_commit_id.hash(hasher);
+            to_commit_id.hash(hasher);
             path.hash(hasher);
         }
         PopoverKind::FileBrowserFileMenu { repo_id, path } => {

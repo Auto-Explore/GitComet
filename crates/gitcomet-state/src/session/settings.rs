@@ -68,6 +68,7 @@ pub struct UiSettings {
     pub commit_push_after_enabled: Option<bool>,
     pub default_tag_type: Option<DefaultTagType>,
     pub fetch_prune_deleted_remote_branches: Option<bool>,
+    pub recommend_repo_maintenance: Option<bool>,
     pub git_executable_path: Option<Option<PathBuf>>,
     pub external_code_editor: Option<Option<ExternalCodeEditorSetting>>,
 }
@@ -89,9 +90,7 @@ macro_rules! apply_setting {
 }
 
 pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Result<()> {
-    with_session_file_persist_lock(|| {
-        let mut file = load_file(path).unwrap_or_default();
-        file.version = CURRENT_SESSION_FILE_VERSION;
+    update_session_file(path, |file| {
         if settings.window_width.is_some() && settings.window_height.is_some() {
             file.window_width = settings.window_width;
             file.window_height = settings.window_height;
@@ -177,6 +176,7 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         apply_setting!(settings, file, commit_push_after_enabled);
         apply_setting!(settings, file, default_tag_type);
         apply_setting!(settings, file, fetch_prune_deleted_remote_branches);
+        apply_setting!(settings, file, recommend_repo_maintenance);
         if let Some(path) = settings.git_executable_path {
             file.git_executable_path = path.map(|path| path_storage_key(&path));
         }
@@ -184,7 +184,7 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
             file.external_code_editor = editor.map(external_code_editor_to_file);
         }
 
-        persist_to_path(path, &file)
+        SessionUpdate::Write
     })
 }
 
@@ -202,11 +202,9 @@ pub fn persist_mergetool_window_size_to_path(
     height: u32,
     path: &Path,
 ) -> io::Result<()> {
-    with_session_file_persist_lock(|| {
-        let mut file = load_file(path).unwrap_or_default();
-        file.version = CURRENT_SESSION_FILE_VERSION;
+    update_session_file(path, |file| {
         file.mergetool_window_width = Some(width);
         file.mergetool_window_height = Some(height);
-        persist_to_path(path, &file)
+        SessionUpdate::Write
     })
 }

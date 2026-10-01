@@ -36,7 +36,36 @@ fn should_auto_install_linux_desktop_integration(
     !no_desktop_install_flag_present && !system_desktop_entry_present
 }
 
-/// Whether a package (deb, rpm, distro) installed `gitcomet.desktop` in `$XDG_DATA_DIRS`.
+/// The launcher entry for `identity`: GitComet's template with the product's
+/// name, icon, window class, and the running executable.
+#[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
+fn desktop_entry_for_identity(
+    template: &str,
+    identity: &gitcomet_core::identity::ProductIdentity,
+    exec_arg: &str,
+) -> String {
+    let mut out = String::with_capacity(template.len() + 128);
+    for line in template.lines() {
+        let replacement = match line.split_once('=').map(|(key, _)| key) {
+            Some("Exec") => Some(exec_arg),
+            Some("Name") => Some(identity.display_name()),
+            Some("Icon" | "StartupWMClass") => Some(identity.app_id()),
+            _ => None,
+        };
+        match replacement {
+            Some(value) => {
+                out.push_str(line.split_once('=').map_or(line, |(key, _)| key));
+                out.push('=');
+                out.push_str(value);
+            }
+            None => out.push_str(line),
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Whether a package (deb, rpm, distro) installed the product's launcher in `$XDG_DATA_DIRS`.
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn system_desktop_entry_present(
     xdg_data_dirs: Option<&std::ffi::OsStr>,
@@ -46,9 +75,10 @@ fn system_desktop_entry_present(
     let dirs = xdg_data_dirs
         .filter(|dirs| !dirs.is_empty())
         .unwrap_or_else(|| std::ffi::OsStr::new("/usr/local/share:/usr/share"));
+    let entry = gitcomet_core::identity::current().desktop_file_name();
     std::env::split_paths(dirs)
         .filter(|dir| dir.is_absolute())
-        .any(|dir| exists(&dir.join("applications/gitcomet.desktop")))
+        .any(|dir| exists(&dir.join("applications").join(&entry)))
 }
 
 impl GitCometView {
@@ -79,10 +109,21 @@ impl GitCometView {
             return;
         };
 
-        let desktop_path = data_home.join("applications/gitcomet.desktop");
-        let all_icons_exist = ICON_SIZES.iter().all(|size| {
+        let identity = gitcomet_core::identity::current();
+        let desktop_path = data_home
+            .join("applications")
+            .join(identity.desktop_file_name());
+        let icon_file = format!("{}.png", identity.app_id());
+        // Custom branding ships one large icon; GitComet ships every size.
+        let sizes: &[u32] = if identity.branding().app_icon_png.is_some() {
+            &[512]
+        } else {
+            ICON_SIZES
+        };
+        let all_icons_exist = sizes.iter().all(|size| {
             data_home
-                .join(format!("icons/hicolor/{size}x{size}/apps/gitcomet.png"))
+                .join(format!("icons/hicolor/{size}x{size}/apps"))
+                .join(&icon_file)
                 .exists()
         });
         if desktop_path.exists() && all_icons_exist {
@@ -144,6 +185,14 @@ impl GitCometView {
                             (512, ICON_512_PNG),
                         ];
 
+                        let identity = gitcomet_core::identity::current();
+                        let branded_icon = identity.branding().app_icon_png.map(|png| [(512, png)]);
+                        let icon_assets: &[(u32, &[u8])] = match &branded_icon {
+                            Some(icon) => icon,
+                            None => ICON_ASSETS,
+                        };
+                        let icon_file_name = format!("{}.png", identity.app_id());
+
                         let exe = std::env::current_exe().map_err(|_| {
                             "Desktop install failed: could not resolve executable path".to_string()
                         })?;
@@ -158,35 +207,24 @@ impl GitCometView {
 
                         let applications_dir = data_home.join("applications");
                         let icons_root = data_home.join("icons/hicolor");
-                        let desktop_path = applications_dir.join("gitcomet.desktop");
-                        let icon_path = icons_root.join("512x512/apps/gitcomet.png");
+                        let desktop_path = applications_dir.join(identity.desktop_file_name());
+                        let icon_path = icons_root.join("512x512/apps").join(&icon_file_name);
 
                         fs::create_dir_all(&applications_dir)
                             .map_err(|e| format!("Desktop install failed: {e}"))?;
 
-                        use std::fmt::Write as _;
-
-                        let mut desktop_out = String::with_capacity(DESKTOP_TEMPLATE.len() + 128);
-                        for line in DESKTOP_TEMPLATE.lines() {
-                            if line.starts_with("Exec=") {
-                                desktop_out.push_str("Exec=");
-                                let _ = writeln!(
-                                    &mut desktop_out,
-                                    "{}",
-                                    desktop_entry_exec_path_arg(&exe)?
-                                );
-                            } else {
-                                desktop_out.push_str(line);
-                                desktop_out.push('\n');
-                            }
-                        }
+                        let desktop_out = desktop_entry_for_identity(
+                            DESKTOP_TEMPLATE,
+                            identity,
+                            &desktop_entry_exec_path_arg(&exe)?,
+                        );
 
                         fs::write(&desktop_path, desktop_out.as_bytes())
                             .map_err(|e| format!("Desktop install failed: {e}"))?;
 
-                        for (size, icon_bytes) in ICON_ASSETS {
+                        for (size, icon_bytes) in icon_assets {
                             let icon_dir = icons_root.join(format!("{size}x{size}/apps"));
-                            let icon_file = icon_dir.join("gitcomet.png");
+                            let icon_file = icon_dir.join(&icon_file_name);
                             fs::create_dir_all(&icon_dir)
                                 .and_then(|_| fs::write(&icon_file, icon_bytes))
                                 .map_err(|e| format!("Desktop install failed: {e}"))?;
@@ -227,6 +265,33 @@ impl GitCometView {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn desktop_entry_names_the_installed_product() {
+        let template = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/linux/gitcomet.desktop"
+        ));
+        let gitcomet = gitcomet_core::identity::ProductIdentity::gitcomet();
+        let entry = super::desktop_entry_for_identity(template, &gitcomet, "\"/usr/bin/gitcomet\"");
+        assert!(entry.contains("\nName=GitComet\n"), "{entry}");
+        assert!(entry.contains("\nExec=\"/usr/bin/gitcomet\"\n"), "{entry}");
+        assert!(entry.contains("\nIcon=gitcomet\n"), "{entry}");
+        assert!(entry.contains("\nStartupWMClass=gitcomet\n"), "{entry}");
+
+        let pro = gitcomet_core::identity::ProductIdentity::builder("Comet Pro", "comet-pro")
+            .build()
+            .unwrap();
+        let entry = super::desktop_entry_for_identity(template, &pro, "\"/opt/pro\"");
+        assert!(entry.contains("\nName=Comet Pro\n"), "{entry}");
+        assert!(entry.contains("\nIcon=comet-pro\n"), "{entry}");
+        assert!(entry.contains("\nStartupWMClass=comet-pro\n"), "{entry}");
+        assert!(
+            entry.contains("\nCategories=Development;RevisionControl;\n"),
+            "{entry}"
+        );
+        assert!(!entry.contains("gitcomet"), "{entry}");
+    }
+
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     use super::system_desktop_entry_present;
     use super::{desktop_entry_exec_path_arg, should_auto_install_linux_desktop_integration};

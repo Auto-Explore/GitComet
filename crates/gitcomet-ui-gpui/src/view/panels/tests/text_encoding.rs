@@ -43,10 +43,10 @@ fn file_state_for_path(
     encoding: Option<TextEncoding>,
 ) -> Arc<AppState> {
     let mut repo = opening_repo_state(repo_id, workdir);
-    repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: PathBuf::from(path),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    });
+    repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::working_tree(
+        PathBuf::from(path),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    ));
     repo.diff_state.content_preview = true;
     repo.diff_state.edit_mode = edit;
     // The reducer moves these revisions with the values; the pane only
@@ -620,10 +620,11 @@ fn tab_width_changes_refresh_patch_search_with_unchanged_rows(cx: &mut gpui::Tes
     let (view, cx) = open_window(cx);
     let workdir = tempfile::tempdir().unwrap();
     let repo_id = gitcomet_state::model::RepoId(9513);
-    let target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: gitcomet_core::domain::CommitId("feedface".into()),
-        path: None,
-    };
+    let target = gitcomet_core::domain::DiffTarget::commit_range(
+        gitcomet_core::domain::CommitId("parent".into()),
+        Some(gitcomet_core::domain::CommitId("feedface".into())),
+        None,
+    );
     let diff = gitcomet_core::domain::Diff::from_unified(
         target.clone(),
         "diff --git a/a.txt b/a.txt\n@@ -0,0 +1 @@\n+\tneedle\n",

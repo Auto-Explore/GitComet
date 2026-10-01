@@ -4,7 +4,6 @@ use super::{
     LOG_PAGED_WALK_CACHE_LIMIT, LogFileFollowCacheEntry, LogFileFollowCacheKey, LogPageCacheEntry,
     LogPageCacheKey, LogPageSeed, LogPagedWalk, LogPagedWalkCacheEntry, LogPagedWalkFilter,
     LogPagedWalkState, ShallowSnapshot, bstr_to_arc_str, object_id_from_commit_id, oid_to_arc_str,
-    submodules,
 };
 use crate::util::{
     bytes_to_text_preserving_utf8, parse_git_log_pretty_records_from_reader,
