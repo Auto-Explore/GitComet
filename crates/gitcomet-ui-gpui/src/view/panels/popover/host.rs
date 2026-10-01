@@ -804,6 +804,8 @@ impl PopoverHost {
         let clone_repo_focus = DialogFocus::new(cx);
         let create_tag_focus = DialogFocus::new(cx);
         let create_tag_annotated_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let filesystem_conflict_apply_to_all_focus_handle =
+            cx.focus_handle().tab_index(0).tab_stop(true);
         let remote_add_focus = DialogFocus::new(cx);
         let remote_edit_focus = DialogFocus::new(cx);
         let push_upstream_focus = DialogFocus::new(cx);
@@ -950,6 +952,8 @@ impl PopoverHost {
             create_branch_from_ref_focus,
             create_tag_annotated: false,
             create_tag_annotated_focus_handle,
+            filesystem_conflict_apply_to_all: false,
+            filesystem_conflict_apply_to_all_focus_handle,
             checkout_remote_branch_focus,
             stash_message_input,
             stash_focus,
@@ -1251,6 +1255,15 @@ impl PopoverHost {
         matches!(self.popover, Some(PopoverKind::UnsavedFileEditsConfirm(_)))
     }
 
+    pub(in crate::view) fn has_open_popover(&self) -> bool {
+        self.popover.is_some()
+    }
+
+    /// The file-operation dialog on screen, if any.
+    pub(in crate::view) fn open_filesystem_prompt_id(&self) -> Option<u64> {
+        self.popover.as_ref().and_then(filesystem_prompt_id)
+    }
+
     #[cfg(test)]
     pub(crate) fn activate_closed_repo_picker_entry_for_test(
         &mut self,
@@ -1279,6 +1292,7 @@ impl PopoverHost {
 
     pub(in crate::view) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
         let dismissing_unsaved_prompt = self.showing_unsaved_file_edits_prompt();
+        let dismissed_filesystem_prompt = self.open_filesystem_prompt_id();
         let dismissing_hook_activity = self.is_hook_activity_workflow_open();
         if dismissing_hook_activity {
             self.hook_activity_text = Default::default();
@@ -1312,7 +1326,13 @@ impl PopoverHost {
                 if dismissing_hook_activity {
                     root.set_hook_activity_dialog_repo(None, cx);
                 }
+                // Esc and the scrim cancel; buttons resolved before closing.
+                if let Some(prompt_id) = dismissed_filesystem_prompt {
+                    root.filesystem_dialog_dismissed(prompt_id, cx);
+                }
                 root.set_history_refs_hover_item_menu_open(false, cx);
+                // A file-operation dialog may be waiting for this one to close.
+                root.notify_if_filesystem_dialog_queued(cx);
             });
         });
         cx.notify();
@@ -2542,6 +2562,15 @@ impl PopoverHost {
         // collision cannot emit a fresh prompt later.
         if self.popover.as_ref() != Some(&kind) {
             self.resolve_open_branch_exists_prompt(BranchExistsChoice::Cancel);
+            // A displaced file-operation dialog comes back once this one closes.
+            if let Some(prompt_id) = self.open_filesystem_prompt_id() {
+                let root_view = self.root_view.clone();
+                cx.defer(move |cx| {
+                    let _ = root_view.update(cx, |root, cx| {
+                        root.filesystem_dialog_displaced(prompt_id, cx);
+                    });
+                });
+            }
         }
         self.save_commit_prompt_draft(cx);
         self.clear_truncated_tooltip(cx);
@@ -3140,6 +3169,10 @@ impl PopoverHost {
                     // Focus the primary (Rebase) button so Enter confirms and
                     // Tab/Esc still reach Cancel.
                     window.focus(&self.rebase_onto_submit_focus_handle, cx);
+                }
+                PopoverKind::FilesystemConflict(_) => {
+                    self.filesystem_conflict_apply_to_all = false;
+                    window.focus(&self.prompt_tab_group_focus_handle, cx);
                 }
                 // Must sit above the generic confirm-dialog arm below, which
                 // would otherwise swallow it and park focus on the tab group

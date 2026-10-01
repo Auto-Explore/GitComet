@@ -148,7 +148,10 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::ChangeTrackingSettings
-        | PopoverKind::ErrorDetails { .. } => None,
+        | PopoverKind::ErrorDetails { .. }
+        | PopoverKind::FilesystemConflict(_)
+        | PopoverKind::DeletePermanentlyConfirm(_)
+        | PopoverKind::FilesystemUnsavedEditsConfirm(_) => None,
 
         // Popovers that implicitly use the currently active repo.
         PopoverKind::BranchPicker { .. }
@@ -486,6 +489,9 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::AddRepoMenu
         | PopoverKind::TerminalShutdownConfirm(_)
         | PopoverKind::UnsavedFileEditsConfirm(_)
+        | PopoverKind::FilesystemConflict(_)
+        | PopoverKind::DeletePermanentlyConfirm(_)
+        | PopoverKind::FilesystemUnsavedEditsConfirm(_)
         | PopoverKind::TerminalMenu { .. }
         | PopoverKind::RepoPicker { .. }
         | PopoverKind::CloneRepo
@@ -770,6 +776,24 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             68u8.hash(hasher);
             prompt.action.hash(hasher);
             prompt.waiting_for_writes.hash(hasher);
+            prompt.files.hash(hasher);
+        }
+        PopoverKind::FilesystemConflict(prompt) => {
+            120u8.hash(hasher);
+            prompt.prompt_id.hash(hasher);
+            prompt.destination.hash(hasher);
+            prompt.can_merge.hash(hasher);
+            prompt.remaining.hash(hasher);
+            prompt.in_directory_merge.hash(hasher);
+        }
+        PopoverKind::DeletePermanentlyConfirm(prompt) => {
+            121u8.hash(hasher);
+            prompt.prompt_id.hash(hasher);
+            prompt.names.hash(hasher);
+        }
+        PopoverKind::FilesystemUnsavedEditsConfirm(prompt) => {
+            122u8.hash(hasher);
+            prompt.prompt_id.hash(hasher);
             prompt.files.hash(hasher);
         }
         PopoverKind::DiffHunkMenu { repo_id, src_ix } => {

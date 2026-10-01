@@ -1794,6 +1794,15 @@ pub(crate) fn filesystem_has_unsaved_buffers(paths: &[PathBuf], cx: &App) -> boo
     })
 }
 
+/// The given paths that are, or contain, a buffer with unsaved edits.
+pub(crate) fn filesystem_unsaved_buffer_paths(paths: &[PathBuf], cx: &App) -> Vec<PathBuf> {
+    paths
+        .iter()
+        .filter(|path| filesystem_has_unsaved_buffers(std::slice::from_ref(*path), cx))
+        .cloned()
+        .collect()
+}
+
 pub(crate) fn resolve_filesystem_buffers(paths: &[PathBuf], save: bool, cx: &mut App) {
     for docs in filesystem_document_windows(cx) {
         let _ = docs.update(cx, |docs, cx| docs.filesystem_resolve(paths, save, cx));

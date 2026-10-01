@@ -42,33 +42,7 @@ pub(super) fn panel(
     let save_action = prompt.action;
     let dialog = ConfirmDialog::new(title, DIALOG_440_WIDTH)
         .text(theme, detail)
-        .section(
-            div()
-                .px_2()
-                .pb_1()
-                .text_size(theme.ui_text(14.0))
-                .text_color(theme.colors.foreground.secondary)
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        // Capped: a long list would push the buttons out of the
-                        // dialog, and the count above already says how many.
-                        .children(prompt.files.iter().take(8).map(|label| {
-                            div()
-                                .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-                                .ml_2()
-                                .child(label.clone())
-                        }))
-                        .when(prompt.files.len() > 8, |d| {
-                            d.child(
-                                div()
-                                    .ml_2()
-                                    .child(format!("…and {} more", prompt.files.len() - 8)),
-                            )
-                        }),
-                ),
-        );
+        .file_list(theme, &prompt.files);
 
     dialog.render(
         theme,

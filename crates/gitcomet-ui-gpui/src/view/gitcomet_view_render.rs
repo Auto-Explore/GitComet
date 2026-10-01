@@ -7,7 +7,7 @@ use tooltip::clear_visible_tooltip_text_for_test;
 impl Render for GitCometView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         self.process_native_transfers(window, cx);
-        self.prompt_filesystem_conflict(window, cx);
+        self.open_pending_filesystem_dialog(window, cx);
         #[cfg(test)]
         clear_visible_tooltip_text_for_test();
 

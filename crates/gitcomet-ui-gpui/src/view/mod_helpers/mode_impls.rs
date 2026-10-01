@@ -284,6 +284,11 @@ pub(crate) enum PopoverKind {
     AddRepoMenu,
     TerminalShutdownConfirm(TerminalShutdownPrompt),
     UnsavedFileEditsConfirm(UnsavedFileEditsPrompt),
+    /// A file operation found an item with the same name at its destination.
+    FilesystemConflict(FilesystemConflictPrompt),
+    DeletePermanentlyConfirm(DeletePermanentlyPrompt),
+    /// A file operation would remove or replace items with unsaved edits.
+    FilesystemUnsavedEditsConfirm(FilesystemUnsavedEditsPrompt),
     TerminalMenu {
         repo_id: RepoId,
         session_seq: u64,
@@ -1044,6 +1049,38 @@ pub(in crate::view) struct UnsavedFileEditsPrompt {
     pub(in crate::view) waiting_for_writes: bool,
     /// Display labels, repo-qualified when the list spans more than one repo.
     pub(in crate::view) files: Vec<SharedString>,
+}
+
+/// Display data for a filesystem dialog; the request it answers stays in the
+/// root view, keyed by `prompt_id`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct FilesystemConflictPrompt {
+    pub(in crate::view) prompt_id: u64,
+    pub(in crate::view) destination: std::path::PathBuf,
+    pub(in crate::view) can_merge: bool,
+    /// Other queued collisions of the same operation when the dialog opened.
+    pub(in crate::view) remaining: usize,
+    /// A folder merge is running; more collisions may follow one by one.
+    pub(in crate::view) in_directory_merge: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct DeletePermanentlyPrompt {
+    pub(in crate::view) prompt_id: u64,
+    pub(in crate::view) names: Vec<SharedString>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct FilesystemUnsavedEditsPrompt {
+    pub(in crate::view) prompt_id: u64,
+    pub(in crate::view) files: Vec<SharedString>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) enum FilesystemUnsavedEditsChoice {
+    Cancel,
+    Save,
+    Discard,
 }
 
 #[derive(Clone, Copy, Debug)]

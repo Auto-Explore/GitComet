@@ -555,8 +555,10 @@ fn transfer_without_rendering(cx: &mut gpui::TestAppContext, outcome: TransferOu
             "the native receipt must wait for a conflict decision"
         );
         assert!(
-            !cx.has_pending_prompt(),
-            "only rendering should display the conflict prompt"
+            cx.update(
+                |_, app| crate::view::test_support::popover_kind(root.read(app), app).is_none()
+            ),
+            "only rendering should display the conflict dialog"
         );
         cx.update(|_, app| root.update(app, |root, cx| root.cancel_filesystem_operations(cx)));
         assert_eq!(
@@ -584,6 +586,119 @@ fn transfer_without_rendering(cx: &mut gpui::TestAppContext, outcome: TransferOu
         std::fs::read_to_string(other_file).unwrap(),
         "unsaved edits in another window"
     );
+}
+
+#[gpui::test]
+fn replace_asks_about_unsaved_edits_in_a_themed_dialog(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::filesystem::TransferIntent;
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (root, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        crate::app::install_app_shortcuts_for_test(app, Arc::new(TestBackend));
+        let _ = window.draw(app);
+        window.activate_window();
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let workdir =
+        gitcomet_core::path_utils::canonicalize_or_original(directory.path().to_path_buf());
+    let source = workdir.join("a.txt");
+    let destination = workdir.join("dest");
+    let target = destination.join("a.txt");
+    std::fs::write(&source, "new contents").unwrap();
+    std::fs::create_dir(&destination).unwrap();
+    std::fs::write(&target, "old contents").unwrap();
+    cx.update(|_, app| {
+        root.read(app)
+            .documents
+            .clone()
+            .update(app, |docs, cx| docs.open(target.clone(), true, cx))
+    });
+    drain(&root, cx);
+    let buffer = cx.update(|_, app| {
+        let docs = root.read(app).documents.read(app);
+        docs.buffers[&docs.active.unwrap()].clone()
+    });
+    cx.update(|_, app| {
+        buffer.update(app, |buffer, cx| {
+            buffer.editing = true;
+            buffer.input.update(cx, |input, cx| {
+                input.set_read_only(false, cx);
+                input.set_text("unsaved edits", cx);
+            });
+        })
+    });
+    cx.run_until_parked();
+
+    // Feeds store results to the view and renders until `done` holds.
+    let pump_until = |cx: &mut gpui::VisualTestContext,
+                      done: &dyn Fn(&GitCometView, &gpui::App) -> bool| {
+        for _ in 0..400 {
+            cx.update(|_, app| {
+                root.update(app, |root, cx| {
+                    crate::view::test_support::sync_store_snapshot(root, cx)
+                })
+            });
+            cx.run_until_parked();
+            cx.update(|window, app| {
+                let _ = window.draw(app);
+            });
+            cx.run_until_parked();
+            if cx.update(|_, app| done(root.read(app), app)) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        false
+    };
+    let popover =
+        |root: &GitCometView, app: &gpui::App| crate::view::test_support::popover_kind(root, app);
+    let click = |cx: &mut gpui::VisualTestContext, selector: &'static str| {
+        let center = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} must be drawn"))
+            .center();
+        cx.simulate_mouse_down(center, gpui::MouseButton::Left, gpui::Modifiers::default());
+        cx.simulate_mouse_up(center, gpui::MouseButton::Left, gpui::Modifiers::default());
+        cx.run_until_parked();
+    };
+
+    let request = Request::new(Operation::Transfer {
+        sources: vec![source.clone()],
+        destination: destination.clone(),
+        intent: TransferIntent::Copy,
+    });
+    cx.update(|window, app| {
+        root.update(app, |root, cx| {
+            root.submit_filesystem_operation(request, None, window, cx)
+        })
+    });
+    assert!(pump_until(cx, &|root, app| matches!(
+        popover(root, app),
+        Some(PopoverKind::FilesystemConflict(_))
+    )));
+    click(cx, "filesystem_conflict_replace");
+    assert!(
+        pump_until(cx, &|root, app| matches!(
+            popover(root, app),
+            Some(PopoverKind::FilesystemUnsavedEditsConfirm(prompt))
+                if prompt.files == vec![SharedString::from("a.txt")]
+        )),
+        "replacing a dirty buffer asks first"
+    );
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "old contents");
+
+    click(cx, "filesystem_unsaved_edits_discard");
+    assert!(
+        pump_until(cx, &|root, app| popover(root, app).is_none()
+            && !root.file_operations.has_pending()
+            && std::fs::read_to_string(&target)
+                .is_ok_and(|text| text == "new contents")),
+        "discarding lets the replace run"
+    );
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "new contents");
+    assert_eq!(std::fs::read_to_string(&source).unwrap(), "new contents");
 }
 
 #[gpui::test]

@@ -684,6 +684,15 @@ impl PopoverHost {
             PopoverKind::UnsavedFileEditsConfirm(prompt) => {
                 unsaved_file_edits_confirm::panel(self, prompt, cx)
             }
+            PopoverKind::FilesystemConflict(prompt) => {
+                filesystem_conflict_prompt::panel(self, prompt, cx)
+            }
+            PopoverKind::DeletePermanentlyConfirm(prompt) => {
+                delete_permanently_confirm::panel(self, prompt, cx)
+            }
+            PopoverKind::FilesystemUnsavedEditsConfirm(prompt) => {
+                filesystem_unsaved_edits_confirm::panel(self, prompt, cx)
+            }
         };
 
         let is_right = matches!(anchor_corner, Anchor::TopRight | Anchor::BottomRight);
