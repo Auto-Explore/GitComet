@@ -505,6 +505,15 @@ pub enum Effect {
     PruneLocalTags {
         repo_id: RepoId,
     },
+    CheckRepoMaintenance {
+        repo_id: RepoId,
+    },
+    PersistRepoMaintenanceSnooze {
+        common_dir: std::path::PathBuf,
+    },
+    RunMaintenance {
+        repo_id: RepoId,
+    },
     Pull {
         repo_id: RepoId,
         mode: PullMode,

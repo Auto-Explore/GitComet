@@ -4,8 +4,8 @@ use gitcomet_core::domain::Upstream;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::{
-    CommandOutput, ConflictSide, ForcePushLease, GitRepository, InteractiveRebaseEntry, PullMode,
-    RemoteUrlKind, ResetMode, SafePushAfterCommitContext, SafePushAfterCommitTarget,
+    CommandOutput, ConflictSide, ForcePushLease, GitBackend, GitRepository, InteractiveRebaseEntry,
+    PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitContext, SafePushAfterCommitTarget,
     SubmoduleTrustTarget,
 };
 use std::path::{Component, Path, PathBuf};
@@ -34,6 +34,7 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
         RepoCommandKind::FetchAll => "All remotes".to_string(),
         RepoCommandKind::PruneMergedBranches => "Merged local branches".to_string(),
         RepoCommandKind::PruneLocalTags => "Local tags missing on remotes".to_string(),
+        RepoCommandKind::RunMaintenance => "Repacking objects".to_string(),
         RepoCommandKind::Pull { mode } => pull_mode_suffix(*mode).map_or_else(
             || "Configured upstream → current branch".to_string(),
             |mode| format!("Configured upstream → current branch · {mode}"),
@@ -203,11 +204,24 @@ fn schedule_repo_command_with_context<F>(
         repo_id,
         msg_tx,
         move |repo, msg_tx| {
-            let operation = GitOperationTask::start(repo_id, label, context, &msg_tx);
+            let fetches_objects = command.fetches_objects();
+            let operation = GitOperationTask::start_with_progress_lane(
+                repo_id,
+                label,
+                context,
+                command.shows_progress(),
+                &msg_tx,
+            );
             let result = {
                 let _scope = operation.attach();
-                run(repo)
+                run(Arc::clone(&repo))
             };
+            if fetches_objects {
+                // The refresh this command triggers should read the new packs
+                // through a fresh store, and old packs must not stay mapped.
+                repo.release_object_store();
+                super::repo_load::release_all_worktree_scan_handles();
+            }
             let outcome = GitOperationTask::outcome(&result);
             operation.finish(
                 outcome,
@@ -911,6 +925,72 @@ pub(super) fn schedule_prune_local_tags(
         repo_id,
         RepoCommandKind::PruneLocalTags,
         |repo| repo.prune_local_tags_with_output(),
+    );
+}
+
+/// Maintenance can run for hours, so it gets a thread of its own rather than
+/// holding one of the primary pool's.
+fn maintenance_executor() -> TaskExecutor {
+    TaskExecutor::shared_for_store(super::super::executor::StoreExecutorPool::Maintenance, 1)
+}
+
+/// Asks git whether the repository needs maintenance, at most once a day per
+/// repository: the claim lives in the session file, shared by its worktrees
+/// and every window.
+pub(super) fn schedule_check_maintenance(
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+) {
+    spawn_with_repo(
+        &maintenance_executor(),
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            let Some(common_dir) = repo.common_dir() else {
+                return;
+            };
+            if !crate::session::claim_repo_maintenance_check(&common_dir).unwrap_or(false) {
+                return;
+            }
+            // Unsupported or failed checks only mean no recommendation.
+            let needed = repo.maintenance_needed().unwrap_or(false);
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(InternalMsg::RepoMaintenanceChecked { repo_id, needed }),
+            );
+        },
+    );
+}
+
+pub(super) fn schedule_run_maintenance(
+    repos: &RepoMap,
+    backend: Arc<dyn GitBackend>,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+) {
+    schedule_repo_command(
+        &maintenance_executor(),
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::RunMaintenance,
+        move |repo| {
+            // Every store mapping these packs, in any window, keeps Windows
+            // from deleting them; afterwards, stores must see the new pack.
+            let common_dir = repo.common_dir();
+            let release = || {
+                if let Some(common_dir) = &common_dir {
+                    backend.release_object_stores(common_dir);
+                }
+                super::repo_load::release_all_worktree_scan_handles();
+            };
+            release();
+            let result = repo.run_maintenance_with_output();
+            release();
+            result
+        },
     );
 }
 

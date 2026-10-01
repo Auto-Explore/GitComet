@@ -902,6 +902,9 @@ fn run_command_with_timeout_auth(
         None
     };
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    // Meters stream to the operation's progress; the captured stderr reads as
+    // it would without them.
+    let strip_progress = cmd.get_args().any(|arg| arg == "--progress");
 
     timing.stage("prepare");
     let mut child = cmd.spawn().map_err(io_err)?;
@@ -950,6 +953,9 @@ fn run_command_with_timeout_auth(
 
     let stdout = stdout_handle.join().unwrap_or_default();
     let mut stderr = stderr_handle.join().unwrap_or_default();
+    if strip_progress && let Ok(text) = std::str::from_utf8(&stderr) {
+        stderr = gitcomet_core::git_progress::strip_progress(text).into_bytes();
+    }
     timing.stage("workers-join");
     join_activity_output_aggregator(activity_handle);
     timing.stage("activity-finish");
@@ -1480,7 +1486,24 @@ pub(crate) fn run_git_simple_with_paths(
 pub(crate) use gitcomet_core::process::bytes_to_text_preserving_utf8;
 
 pub(crate) fn run_git_with_output(cmd: Command, label: &str) -> Result<CommandOutput> {
-    let output = run_git_checked_output(cmd, label)?;
+    command_output(label, run_git_checked_output(cmd, label)?)
+}
+
+/// [`run_git_with_output`] for work that can rightly take hours, such as a
+/// repack of a large repository; the user stops it rather than a timeout.
+pub(crate) fn run_git_with_output_and_timeout(
+    cmd: Command,
+    label: &str,
+    timeout: Duration,
+) -> Result<CommandOutput> {
+    let output = run_command_with_timeout(cmd, label, timeout, None)?;
+    if !output.status.success() {
+        return Err(git_command_failed_error(label, output));
+    }
+    command_output(label, output)
+}
+
+fn command_output(label: &str, output: Output) -> Result<CommandOutput> {
     let exit_code = output.status.code();
     let stdout = bytes_to_text_preserving_utf8(&output.stdout);
     let stderr = bytes_to_text_preserving_utf8(&output.stderr);
@@ -2628,6 +2651,37 @@ mod tests {
                 std::ffi::OsStr::new("protocol.ext.allow=never"),
             ]
         }));
+    }
+
+    #[test]
+    fn repository_git_commands_do_not_start_auto_maintenance() {
+        let repo = tempfile::tempdir().expect("tempdir");
+        let trace_dir = tempfile::tempdir().expect("trace tempdir");
+        let trace = trace_dir.path().join("trace2.json");
+        run_git_test_setup(repo.path(), &["init", "--quiet"]);
+        for (key, value) in [
+            ("user.name", "Test"),
+            ("user.email", "test@example.com"),
+            ("commit.gpgsign", "false"),
+        ] {
+            run_git_test_setup(repo.path(), &["config", key, value]);
+        }
+
+        let output = git_workdir_cmd_for(repo.path())
+            .env("GIT_TRACE2_EVENT", &trace)
+            .args(["commit", "--allow-empty", "--quiet", "-m", "c"])
+            .output()
+            .expect("run git commit");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // Git starts `maintenance run --auto` after every commit unless
+        // `maintenance.auto` is false; GitComet only recommends maintenance.
+        let events = std::fs::read_to_string(&trace).expect("trace2 events");
+        assert!(events.contains("\"name\":\"commit\""), "{events}");
+        assert!(!events.contains("\"maintenance\""), "{events}");
     }
 
     #[cfg(unix)]

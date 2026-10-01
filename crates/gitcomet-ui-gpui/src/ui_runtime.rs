@@ -54,6 +54,11 @@ impl UiRuntime {
         matches!(self.mode, UiRuntimeMode::Live)
     }
 
+    /// Repaints the elapsed time on progress cards once a second.
+    pub(crate) const fn uses_progress_ticker(self) -> bool {
+        matches!(self.mode, UiRuntimeMode::Live)
+    }
+
     pub(crate) const fn uses_cursor_blink(self) -> bool {
         matches!(self.mode, UiRuntimeMode::Live)
     }

@@ -88,6 +88,11 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("spec", spec)
                 .finish_non_exhaustive(),
+            InternalMsg::RepoMaintenanceChecked { repo_id, needed } => f
+                .debug_struct("RepoMaintenanceChecked")
+                .field("repo_id", repo_id)
+                .field("needed", needed)
+                .finish(),
             InternalMsg::RepoOpenedErr {
                 repo_id,
                 spec,

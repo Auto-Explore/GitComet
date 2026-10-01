@@ -364,51 +364,6 @@ fn git_executable_scope_note_mentions_browser_only_scope() {
 }
 
 #[test]
-fn parse_git_version_extracts_first_version_token() {
-    assert_eq!(
-        parse_git_version("git version 2.50.7"),
-        Some(GitVersion {
-            major: 2,
-            minor: 50
-        })
-    );
-}
-
-#[test]
-fn parse_git_version_token_accepts_numeric_prefixes_and_rejects_non_numeric_prefixes() {
-    assert_eq!(
-        parse_git_version_token("2.45.1.windows.1"),
-        Some(GitVersion {
-            major: 2,
-            minor: 45
-        })
-    );
-    assert_eq!(parse_git_version_token("v2.45.1"), None);
-    assert_eq!(parse_u32_prefix("53rc1"), Some(53));
-    assert_eq!(parse_u32_prefix("rc53"), None);
-}
-
-#[test]
-fn supported_version_requires_minimum_2_50() {
-    assert!(is_supported_git_version(GitVersion {
-        major: MIN_GIT_MAJOR,
-        minor: MIN_GIT_MINOR,
-    }));
-    assert!(is_supported_git_version(GitVersion {
-        major: MIN_GIT_MAJOR,
-        minor: MIN_GIT_MINOR + 1,
-    }));
-    assert!(!is_supported_git_version(GitVersion {
-        major: MIN_GIT_MAJOR,
-        minor: MIN_GIT_MINOR - 1,
-    }));
-    assert!(is_supported_git_version(GitVersion {
-        major: MIN_GIT_MAJOR + 1,
-        minor: 0,
-    }));
-}
-
-#[test]
 fn settings_window_titlebar_options_match_platform_chrome_strategy() {
     let options = settings_window_titlebar_options();
     assert_eq!(
@@ -1947,6 +1902,10 @@ fn settings_window_containers_fill_available_width_when_content_wraps(
         (SettingsCategory::Remotes, "settings_window_remotes_card"),
         (SettingsCategory::Tags, "settings_window_tags_card"),
         (
+            SettingsCategory::Maintenance,
+            "settings_window_maintenance_card",
+        ),
+        (
             SettingsCategory::GitExecutable,
             "settings_window_git_executable",
         ),
@@ -2693,6 +2652,58 @@ fn remote_prune_toggle_reaches_the_global_store_setting(cx: &mut gpui::TestAppCo
         &store,
         "the Remotes setting to reach the store",
         |state| !state.remote_settings.prune_deleted_remote_branches_on_fetch,
+    );
+}
+
+#[gpui::test]
+fn maintenance_toggle_reaches_the_store_and_withdraws_cards(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
+    let mut seeded = (*store.snapshot()).clone();
+    let mut repo = gitcomet_state::model::RepoState::new_opening(
+        gitcomet_state::model::RepoId(1),
+        gitcomet_core::domain::RepoSpec {
+            workdir: PathBuf::from("/tmp/maintenance-toggle"),
+        },
+    );
+    repo.maintenance.recommended = true;
+    seeded.repos.push(repo);
+    store.replace_snapshot_for_test(std::sync::Arc::new(seeded));
+    let (_main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        open_settings_window(app);
+    });
+    cx.run_until_parked();
+
+    let settings_window = cx.update(|_window, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window should be open")
+    });
+    wait_for_store(
+        cx,
+        &store,
+        "the default setting to reach the store",
+        |state| state.maintenance_settings.recommend && state.repos[0].maintenance.recommended,
+    );
+
+    cx.update(|_window, app| {
+        let _ = settings_window.update(app, |settings, _window, cx| {
+            settings.set_recommend_repo_maintenance(false, cx);
+        });
+    });
+    wait_for_store(
+        cx,
+        &store,
+        "the Maintenance setting to reach the store",
+        |state| {
+            !state.maintenance_settings.recommend
+                && state.repos.iter().all(|repo| !repo.maintenance.recommended)
+        },
     );
 }
 

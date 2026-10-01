@@ -56,6 +56,8 @@ pub(super) enum StoreExecutorPool {
     Metadata,
     Signatures,
     SessionPersist,
+    /// `git maintenance`, which can run for hours; one thread of its own.
+    Maintenance,
 }
 
 pub(super) struct TaskExecutor {
@@ -202,6 +204,7 @@ impl TaskExecutor {
         static SIGNATURES: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
         static METADATA: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
         static SESSION_PERSIST: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
+        static MAINTENANCE: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
 
         let (cell, name) = match pool {
             StoreExecutorPool::Primary => (&PRIMARY, "gitcomet-store-primary"),
@@ -210,6 +213,7 @@ impl TaskExecutor {
             StoreExecutorPool::SessionPersist => {
                 (&SESSION_PERSIST, "gitcomet-store-session-persist")
             }
+            StoreExecutorPool::Maintenance => (&MAINTENANCE, "gitcomet-store-maintenance"),
         };
 
         Self {

@@ -336,7 +336,7 @@ fn available_git_runtime_state() -> GitRuntimeState {
     GitRuntimeState {
         preference: GitExecutablePreference::SystemPath,
         availability: GitExecutableAvailability::Available {
-            version_output: "git version 2.51.0".to_string(),
+            version_output: "git version 2.55.0".to_string(),
         },
     }
 }
@@ -7417,4 +7417,47 @@ fn home_cross_deletes_a_saved_workspace_but_not_an_open_one(cx: &mut gpui::TestA
         assert!(crate::workspaces::workspace(app, saved_id).is_none());
         assert!(crate::workspaces::workspace(app, open_id).is_some());
     });
+}
+
+#[gpui::test]
+fn outdated_git_shows_one_sticky_update_notice(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    super::git_version_notice::reset_outdated_git_notice_for_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let with_git = |version_output: &str| {
+        Arc::new(AppState {
+            git_runtime: GitRuntimeState {
+                preference: GitExecutablePreference::SystemPath,
+                availability: GitExecutableAvailability::Available {
+                    version_output: version_output.to_string(),
+                },
+            },
+            ..AppState::test_default()
+        })
+    };
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(with_git("git version 2.45.1.windows.1"), cx);
+            this.apply_state_snapshot(with_git("git version 2.55.0"), cx);
+            // Back to the same old git (another window, a re-probe): no repeat.
+            this.apply_state_snapshot(with_git("git version 2.45.1.windows.1"), cx);
+        });
+        let _ = window.draw(app);
+    });
+
+    let notices = cx.update(|_window, app| {
+        view.read(app)
+            .toast_host
+            .read(app)
+            .toasts_for_tests(app)
+            .into_iter()
+            .filter(|(_, message)| message.contains("older than 2.53"))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].0, components::ToastKind::Warning);
+    assert!(notices[0].1.starts_with("Git 2.45 is older"), "{notices:?}");
 }

@@ -14,6 +14,19 @@ pub struct RepoExternalChange {
 impl RepoExternalChange {
     #[allow(non_upper_case_globals)]
     pub const Worktree: Self = Self::worktree();
+
+    /// Every kind of change either side reports.
+    pub const fn union(self, other: Self) -> Self {
+        Self {
+            worktree: self.worktree || other.worktree,
+            index: self.index || other.index,
+            git_state: self.git_state || other.git_state,
+            tags: self.tags || other.tags,
+            verification_context: self.verification_context || other.verification_context,
+            text_attributes: self.text_attributes || other.text_attributes,
+        }
+    }
+
     #[allow(non_upper_case_globals)]
     pub const Index: Self = Self::index();
     #[allow(non_upper_case_globals)]

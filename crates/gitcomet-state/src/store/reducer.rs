@@ -8,6 +8,7 @@ mod history_authors;
 mod indexed_history;
 #[cfg(test)]
 mod line_stats_tests;
+pub(super) mod maintenance;
 mod repo_management;
 mod util;
 
@@ -319,6 +320,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::FetchAll { .. }
             | Msg::PruneMergedBranches { .. }
             | Msg::PruneLocalTags { .. }
+            | Msg::StartRepoMaintenance { .. }
             | Msg::Pull { .. }
             | Msg::PullBranch { .. }
             | Msg::MergeRef { .. }
@@ -494,6 +496,7 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         RepoCommandKind::FetchAll => Msg::FetchAll { repo_id },
         RepoCommandKind::PruneMergedBranches => Msg::PruneMergedBranches { repo_id },
         RepoCommandKind::PruneLocalTags => Msg::PruneLocalTags { repo_id },
+        RepoCommandKind::RunMaintenance => Msg::StartRepoMaintenance { repo_id },
         RepoCommandKind::Pull { mode } => Msg::Pull { repo_id, mode },
         RepoCommandKind::PullBranch { remote, branch } => Msg::PullBranch {
             repo_id,
@@ -1117,6 +1120,7 @@ fn reduce_inner(
             state.remote_settings = settings;
             Vec::new()
         }
+        Msg::SetMaintenanceSettings(settings) => maintenance::set_settings(state, settings),
         Msg::SetFileBrowserSettings(settings) => {
             effects::set_file_browser_settings(state, settings)
         }
@@ -1135,9 +1139,10 @@ fn reduce_inner(
             label,
             context,
             time,
+            progress_lane,
         }) => {
             if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
-                git_hook_activity::started(repo, operation_id, label, context, time);
+                git_hook_activity::started(repo, operation_id, label, context, time, progress_lane);
             }
             Vec::new()
         }
@@ -1973,6 +1978,11 @@ fn reduce_inner(
         }
         Msg::PruneLocalTags { repo_id } => {
             actions_emit_effects::prune_local_tags(repos, state, repo_id)
+        }
+        Msg::StartRepoMaintenance { repo_id } => maintenance::start(state, repo_id),
+        Msg::SnoozeRepoMaintenance { repo_id } => maintenance::snooze(state, repo_id),
+        Msg::Internal(crate::msg::InternalMsg::RepoMaintenanceChecked { repo_id, needed }) => {
+            maintenance::checked(state, repo_id, needed)
         }
         Msg::Pull { repo_id, mode } => actions_emit_effects::pull(repos, state, repo_id, mode),
         Msg::PullBranch {
@@ -2972,8 +2982,19 @@ fn reduce_inner(
                 refresh_selected_head_gitlink(repos, state, repo_id);
             }
 
-            let effects =
+            let maintenance_ended = matches!(command, RepoCommandKind::RunMaintenance);
+            let mut effects =
                 actions_emit_effects::repo_command_finished(state, repo_id, command, result);
+            if maintenance_ended {
+                for (deferred_repo, change) in maintenance::finished(state, repo_id) {
+                    effects.extend(external_and_history::repo_externally_changed(
+                        repos,
+                        state,
+                        deferred_repo,
+                        change,
+                    ));
+                }
+            }
 
             if let Some(path) = removed_worktree_path {
                 let repo_ids_to_close = state

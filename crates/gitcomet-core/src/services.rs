@@ -148,6 +148,10 @@ pub fn refresh_history_page(
     }
 }
 
+/// The label of the check a maintenance run returns when git found nothing
+/// to do; the run itself writes nothing to a pipe, so its output can't tell.
+pub const MAINTENANCE_CHECK_COMMAND: &str = "git maintenance is-needed --auto";
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CommandOutput {
     pub command: String,
@@ -421,6 +425,10 @@ pub enum SafePushAfterCommitDecision {
 
 pub trait GitRepository: Send + Sync {
     fn spec(&self) -> &RepoSpec;
+
+    /// Drops held object-store handles so their pack files can be deleted and
+    /// packs written since become visible; later reads reopen the store.
+    fn release_object_store(&self) {}
 
     /// Distinct author names across the complete, unfiltered history scope.
     /// Called on demand, independently of the visible commit metadata cache.
@@ -1225,6 +1233,27 @@ pub trait GitRepository: Send + Sync {
             "pruning merged branches is not implemented for this backend",
         )))
     }
+    /// The shared git directory (the main `.git` of a linked worktree),
+    /// canonicalized; worktrees of one repository share its maintenance.
+    fn common_dir(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+    /// Whether the repository needs substantial maintenance: git's gc
+    /// thresholds (`gc.auto` loose objects, `gc.autoPackLimit` packs).
+    fn maintenance_needed(&self) -> Result<bool> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "maintenance checks are not implemented for this backend",
+        )))
+    }
+    /// Runs the maintenance git recommends, in the foreground, reporting
+    /// progress through the attached git operation. When git finds nothing
+    /// to do it skips the run and returns the check, labelled
+    /// [`MAINTENANCE_CHECK_COMMAND`].
+    fn run_maintenance_with_output(&self) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "maintenance is not implemented for this backend",
+        )))
+    }
     fn prune_local_tags_with_output(&self) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "pruning local tags is not implemented for this backend",
@@ -1890,6 +1919,10 @@ pub struct RepositoryWatchInfo {
 pub trait GitBackend: Send + Sync {
     fn open(&self, workdir: &Path) -> Result<Arc<dyn GitRepository>>;
 
+    /// Releases the object stores of every repository this backend opened on
+    /// `common_dir`, in every window, so git can delete the packs they map.
+    fn release_object_stores(&self, _common_dir: &Path) {}
+
     /// Resolve metadata and ignore/configuration sources without running status or filters.
     fn repository_watch_info(&self, _workdir: &Path) -> Result<Option<RepositoryWatchInfo>> {
         Ok(None)
@@ -1993,6 +2026,8 @@ mod tests {
         // Likewise: "not a gitlink" is the safe answer for a backend that
         // cannot read HEAD trees.
         assert!(!repo.head_path_is_gitlink(path).unwrap());
+        // A backend without a long-lived store has nothing to release.
+        repo.release_object_store();
 
         assert_unsupported(repo.log_all_branches_page(25, Some(&cursor)));
         assert_unsupported(repo.log_file_page(path, 25, None));
@@ -2021,6 +2056,9 @@ mod tests {
         assert_unsupported(repo.create_tag_with_output("v1.0.0", "HEAD", None, false));
         assert_unsupported(repo.delete_tag_with_output("v1.0.0"));
         assert_unsupported(repo.prune_merged_branches_with_output());
+        assert_unsupported(repo.maintenance_needed());
+        assert_unsupported(repo.run_maintenance_with_output());
+        assert_eq!(repo.common_dir(), None);
         assert_unsupported(repo.prune_local_tags_with_output());
         assert_unsupported(repo.push_tag_with_output("origin", "v1.0.0"));
         assert_unsupported(repo.delete_remote_tag_with_output("origin", "v1.0.0"));

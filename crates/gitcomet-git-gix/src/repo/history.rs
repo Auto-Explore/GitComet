@@ -22,7 +22,7 @@ pub(super) fn gix_head_id_or_none(repo: &gix::Repository) -> Result<Option<gix::
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix head: {e}"))))?;
     head.try_peel_to_id()
         .map(|id| id.map(|id| id.detach()))
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix head peel: {e}"))))
+        .map_err(|e| crate::repo::object_store::gix_error("gix head peel", &e))
 }
 
 /// Upper bound on the number of commits a single squash may cover; a runaway

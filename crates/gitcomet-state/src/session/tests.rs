@@ -203,6 +203,14 @@ fn session_file_persist_lock_is_shared_by_session_writers() {
     assert_session_writer_waits_for_shared_lock("persist-survey-postponed", |path| {
         persist_survey_prompt_postponed_to_path(&path, "survey", 60, 123)
     });
+    assert_session_writer_waits_for_shared_lock("claim-maintenance-check", |path| {
+        let repo = path.with_file_name("maintenance-repo");
+        claim_repo_maintenance_check_to_path(&path, &repo, 123).map(|_| ())
+    });
+    assert_session_writer_waits_for_shared_lock("persist-maintenance-snooze", |path| {
+        let repo = path.with_file_name("maintenance-repo");
+        persist_repo_maintenance_snooze_to_path(&path, &repo, 123)
+    });
 }
 
 #[test]
@@ -2756,6 +2764,35 @@ fn persist_ui_settings_round_trips_commit_push_after_enabled() {
 }
 
 #[test]
+fn persist_ui_settings_round_trips_recommend_repo_maintenance() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("session.json");
+    persist_to_path(
+        &path,
+        &UiSessionFile {
+            version: CURRENT_SESSION_FILE_VERSION,
+            ..UiSessionFile::default()
+        },
+    )
+    .expect("seed session file");
+    assert_eq!(load_from_path(&path).recommend_repo_maintenance, None);
+
+    persist_ui_settings_to_path(
+        UiSettings {
+            recommend_repo_maintenance: Some(false),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .expect("persist maintenance setting");
+
+    assert_eq!(
+        load_from_path(&path).recommend_repo_maintenance,
+        Some(false)
+    );
+}
+
+#[test]
 fn persist_ui_settings_round_trips_fetch_prune_deleted_remote_branches() {
     let dir = env::temp_dir().join(format!(
         "gitcomet-ui-settings-test-{}-{}",
@@ -3817,4 +3854,77 @@ fn mergetool_window_size_falls_back_to_the_legacy_size() {
         ),
         (Some(900), Some(600))
     );
+}
+
+#[test]
+fn repo_maintenance_check_is_claimed_once_a_day() {
+    let path = unique_session_test_dir("maintenance-claim").join("session.json");
+    let repo = Path::new("/work/alpha/.git");
+    let day = MAINTENANCE_CHECK_INTERVAL_SECONDS;
+
+    assert!(claim_repo_maintenance_check_to_path(&path, repo, 1_000).unwrap());
+    assert!(!claim_repo_maintenance_check_to_path(&path, repo, 1_000 + day - 1).unwrap());
+    // Another repository keeps its own day.
+    assert!(
+        claim_repo_maintenance_check_to_path(&path, Path::new("/work/beta/.git"), 1_001).unwrap()
+    );
+    assert!(claim_repo_maintenance_check_to_path(&path, repo, 1_000 + day).unwrap());
+}
+
+#[test]
+fn repo_maintenance_snooze_holds_off_the_next_check() {
+    let path = unique_session_test_dir("maintenance-snooze").join("session.json");
+    let repo = Path::new("/work/alpha/.git");
+    let day = MAINTENANCE_CHECK_INTERVAL_SECONDS;
+    assert!(claim_repo_maintenance_check_to_path(&path, repo, 1_000).unwrap());
+
+    // Snoozed half a day after the check: the next check waits for the snooze.
+    persist_repo_maintenance_snooze_to_path(&path, repo, 1_000 + day / 2).unwrap();
+    assert!(!claim_repo_maintenance_check_to_path(&path, repo, 1_000 + day).unwrap());
+    assert!(
+        claim_repo_maintenance_check_to_path(
+            &path,
+            repo,
+            1_000 + day / 2 + MAINTENANCE_SNOOZE_SECONDS
+        )
+        .unwrap()
+    );
+}
+
+#[test]
+fn malformed_repo_maintenance_entry_keeps_the_session() {
+    let path = unique_session_test_dir("maintenance-lenient").join("session.json");
+    let session = serde_json::json!({
+        "version": CURRENT_SESSION_FILE_VERSION,
+        "theme_mode": "dark",
+        "open_repos": ["/work/alpha"],
+        "repo_maintenance": {
+            "/work/alpha/.git": {"last_checked_unix_seconds": "yesterday"},
+            "/work/beta/.git": {"last_checked_unix_seconds": 1000}
+        }
+    });
+    fs::write(&path, serde_json::to_vec(&session).expect("encode")).expect("seed session");
+
+    assert_eq!(load_from_path(&path).theme_mode.as_deref(), Some("dark"));
+    assert!(
+        claim_repo_maintenance_check_to_path(&path, Path::new("/work/alpha/.git"), 1_500).unwrap()
+    );
+    assert!(
+        !claim_repo_maintenance_check_to_path(&path, Path::new("/work/beta/.git"), 1_500).unwrap()
+    );
+    assert_eq!(load_from_path(&path).theme_mode.as_deref(), Some("dark"));
+}
+
+#[test]
+fn repo_maintenance_entries_are_pruned_oldest_first() {
+    let path = unique_session_test_dir("maintenance-prune").join("session.json");
+    for index in 0..300u64 {
+        let repo = PathBuf::from(format!("/work/repo-{index:03}/.git"));
+        claim_repo_maintenance_check_to_path(&path, &repo, 1_000 + index).unwrap();
+    }
+    let file = load_file(&path).expect("session");
+    let entries = file.repo_maintenance.expect("entries");
+    assert_eq!(entries.len(), 256);
+    assert!(!entries.contains_key("/work/repo-000/.git"));
+    assert!(entries.contains_key("/work/repo-299/.git"));
 }

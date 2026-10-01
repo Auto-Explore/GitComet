@@ -100,6 +100,18 @@ impl Default for RemoteSettings {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MaintenanceSettings {
+    /// Check daily whether a repository needs maintenance, and offer to run it.
+    pub recommend: bool,
+}
+
+impl Default for MaintenanceSettings {
+    fn default() -> Self {
+        Self { recommend: true }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FileBrowserSettings {
     /// Active file browsing follows the selected history row.
     pub follow_selected_commit: bool,
@@ -726,6 +738,7 @@ pub struct AppState {
     pub remote_url_policy: RemoteUrlPolicy,
     pub git_log_settings: GitLogSettings,
     pub remote_settings: RemoteSettings,
+    pub maintenance_settings: MaintenanceSettings,
     pub file_browser_settings: FileBrowserSettings,
     pub sidebar_mode: SidebarMode,
     pub default_tag_type: DefaultTagType,
@@ -993,6 +1006,10 @@ pub struct GitHookOperation {
     pub output_bytes: usize,
     pub output_truncated: bool,
     pub latest_line: String,
+    /// Shown as a progress card while it runs (fetch, pull, maintenance).
+    pub progress_lane: bool,
+    /// The newest meter git printed, or one GitComet measured itself.
+    pub progress: Option<gitcomet_core::git_progress::GitProgressMeter>,
 }
 
 impl GitHookOperation {
@@ -1714,6 +1731,21 @@ pub struct TagPushPreviewState {
     pub result: Loadable<Arc<gitcomet_core::tag_push::TagPushPreview>>,
 }
 
+/// GitComet's side of a repository's maintenance: git's recommendation and a
+/// run the user started. Git never runs it by itself for GitComet's commands.
+#[derive(Clone, Debug, Default)]
+pub struct RepoMaintenanceState {
+    /// When a check was last requested; focus and tab switches ask at most
+    /// hourly, and the effect enforces the daily limit.
+    pub check_requested_at: Option<SystemTime>,
+    /// Git recommends maintenance and the user has not answered yet.
+    pub recommended: bool,
+    /// A maintenance run is in flight.
+    pub running: bool,
+    /// Watcher changes held back while maintenance rewrites these objects.
+    pub deferred_change: Option<crate::msg::RepoExternalChange>,
+}
+
 #[derive(Clone, Debug)]
 pub struct RepoState {
     pub id: RepoId,
@@ -1739,6 +1771,10 @@ pub struct RepoState {
     /// wait for these alone, so a merge tool cannot lock them out.
     pub sequencer_actions_in_flight: u32,
     pub commit_in_flight: u32,
+    /// The shared git directory (the main `.git` of a linked worktree), set
+    /// once the repository opens; tabs of one repository share maintenance.
+    pub common_dir: Option<Arc<std::path::Path>>,
+    pub maintenance: RepoMaintenanceState,
 
     pub open: Loadable<()>,
     pub history_state: HistoryState,
@@ -1868,6 +1904,8 @@ impl RepoState {
             local_actions_in_flight: 0,
             sequencer_actions_in_flight: 0,
             commit_in_flight: 0,
+            common_dir: None,
+            maintenance: RepoMaintenanceState::default(),
             open: Loadable::Loading,
             history_state: HistoryState::default(),
             head_branch: Loadable::NotLoaded,
