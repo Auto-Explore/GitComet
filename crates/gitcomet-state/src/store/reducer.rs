@@ -1099,6 +1099,14 @@ fn reduce_inner(
                 if !ignored {
                     repo.file_browser.pending_recursive_expansions.clear();
                 }
+                // Keyboard actions must not reach rows that just disappeared.
+                if !hidden {
+                    let revealed = &repo.file_browser.revealed_paths;
+                    repo.file_browser.selection.retain(|path| {
+                        !crate::explorer::is_hidden_path(path)
+                            || revealed.iter().any(|shown| shown.starts_with(path))
+                    });
+                }
                 repo.file_browser.stale = true;
                 repo.file_browser.bump_rev();
                 return vec![Effect::LoadFileBrowser {

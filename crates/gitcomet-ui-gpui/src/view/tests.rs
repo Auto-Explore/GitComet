@@ -6735,7 +6735,7 @@ fn explorer_ctrl_x_after_a_plain_click_cuts_the_clicked_file(cx: &mut gpui::Test
 }
 
 #[gpui::test]
-fn explorer_folder_click_preserves_sources_and_keyboard_paste_uses_focused_folder(
+fn explorer_chevron_click_keeps_the_selection_and_keyboard_paste_uses_focused_folder(
     cx: &mut gpui::TestAppContext,
 ) {
     let _guard = crate::test_support::lock_visual_test();
@@ -6789,7 +6789,7 @@ fn explorer_folder_click_preserves_sources_and_keyboard_paste_uses_focused_folde
         .selection
         .paths
         .clone();
-    click(cx, "file_browser_row_0", Default::default());
+    click(cx, "explorer_chevron_0", Default::default());
     pump_until(cx, "folder expanded", |_| {
         store.snapshot().repos[0]
             .file_browser
@@ -6826,7 +6826,7 @@ fn explorer_folder_click_preserves_sources_and_keyboard_paste_uses_focused_folde
         store.snapshot().repos[0].file_browser.selection.paths == selected
     });
     sync_view_snapshot(cx, &view);
-    click(cx, "file_browser_row_0", Default::default());
+    click(cx, "explorer_chevron_0", Default::default());
     pump_until(cx, "folder collapsed", |_| {
         !store.snapshot().repos[0]
             .file_browser
@@ -6846,7 +6846,7 @@ fn explorer_folder_click_preserves_sources_and_keyboard_paste_uses_focused_folde
             vec![directory.path().join("source.txt")]
         );
     });
-    // Paste immediately after the folder click, before the model can publish
+    // Paste immediately after the chevron click, before the model can publish
     // its new focus. Keyboard routing must honor the click we just handled.
     cx.simulate_keystrokes(if cfg!(target_os = "macos") {
         "cmd-end"
@@ -6862,7 +6862,7 @@ fn explorer_folder_click_preserves_sources_and_keyboard_paste_uses_focused_folde
             == Some(Path::new("source.txt"))
     });
     sync_view_snapshot(cx, &view);
-    click(cx, "file_browser_row_0", Default::default());
+    click(cx, "explorer_chevron_0", Default::default());
     cx.simulate_keystrokes(if cfg!(target_os = "macos") {
         "cmd-v"
     } else {
@@ -6906,6 +6906,110 @@ fn explorer_folder_click_preserves_sources_and_keyboard_paste_uses_focused_folde
         directory.path().join("destination/external.txt").exists()
     });
     assert!(external.path().join("external.txt").exists());
+}
+
+#[gpui::test]
+fn explorer_folder_row_click_selects_focuses_and_toggles(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("source.txt"), "clipboard content").unwrap();
+    std::fs::create_dir(directory.path().join("destination")).unwrap();
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.repos[0].spec.workdir = directory.path().to_path_buf();
+    state.sidebar_mode = gitcomet_state::model::SidebarMode::Files;
+    state.repos[0].file_browser.entries = Loadable::Ready(Arc::new(vec![
+        FileEntry {
+            name: "destination".into(),
+            path: Arc::new("destination".into()),
+            kind: FileEntryKind::Directory,
+            depth: 0,
+        },
+        FileEntry {
+            name: "source.txt".into(),
+            path: Arc::new("source.txt".into()),
+            kind: FileEntryKind::File,
+            depth: 0,
+        },
+    ]));
+    state.repos[0].file_browser.bump_rev();
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+    let primary = gpui::Modifiers {
+        control: !cfg!(target_os = "macos"),
+        platform: cfg!(target_os = "macos"),
+        ..Default::default()
+    };
+    let click = |cx: &mut gpui::VisualTestContext, selector: &'static str, modifiers| {
+        let position = cx.debug_bounds(selector).unwrap().center();
+        cx.simulate_mouse_down(position, gpui::MouseButton::Left, modifiers);
+        cx.simulate_mouse_up(position, gpui::MouseButton::Left, modifiers);
+    };
+    let expanded = |store: &AppStore| {
+        store.snapshot().repos[0]
+            .file_browser
+            .expanded_dirs
+            .contains(&PathBuf::from("destination"))
+    };
+    let only_destination: std::collections::BTreeSet<PathBuf> = [PathBuf::from("destination")].into_iter().collect();
+
+    click(cx, "file_browser_row_1", primary);
+    pump_until(cx, "file selected", |_| {
+        store.snapshot().repos[0].file_browser.selection.paths.len() == 1
+    });
+    sync_view_snapshot(cx, &view);
+    // A plain row click replaces the selection, focuses the folder and opens it.
+    click(cx, "file_browser_row_0", Default::default());
+    pump_until(cx, "folder expanded", |_| expanded(&store));
+    let snapshot = store.snapshot();
+    assert_eq!(snapshot.repos[0].file_browser.selection.paths, only_destination);
+    assert_eq!(
+        snapshot.repos[0].file_browser.selection.focused.as_deref(),
+        Some(Path::new("destination"))
+    );
+    sync_view_snapshot(cx, &view);
+    // A second click closes it and keeps it selected.
+    click(cx, "file_browser_row_0", Default::default());
+    pump_until(cx, "folder collapsed", |_| !expanded(&store));
+    assert_eq!(
+        store.snapshot().repos[0].file_browser.selection.paths,
+        only_destination
+    );
+    sync_view_snapshot(cx, &view);
+    // A modified click extends the selection without toggling.
+    click(cx, "file_browser_row_1", primary);
+    pump_until(cx, "selection extended", |_| {
+        store.snapshot().repos[0].file_browser.selection.paths.len() == 2
+    });
+    assert!(!expanded(&store), "a modified click must not toggle the folder");
+    sync_view_snapshot(cx, &view);
+    // The clipboard is independent of the selection the click replaced.
+    click(cx, "file_browser_row_1", Default::default());
+    pump_until(cx, "file selected alone", |_| {
+        store.snapshot().repos[0].file_browser.selection.paths
+            == [PathBuf::from("source.txt")].into_iter().collect::<std::collections::BTreeSet<_>>()
+    });
+    sync_view_snapshot(cx, &view);
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-c"
+    } else {
+        "ctrl-c"
+    });
+    click(cx, "file_browser_row_0", Default::default());
+    pump_until(cx, "folder selected", |_| {
+        store.snapshot().repos[0].file_browser.selection.paths == only_destination
+    });
+    sync_view_snapshot(cx, &view);
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-v"
+    } else {
+        "ctrl-v"
+    });
+    pump_until(cx, "file pasted into the clicked folder", |_| {
+        directory.path().join("destination/source.txt").exists()
+    });
 }
 
 #[gpui::test]

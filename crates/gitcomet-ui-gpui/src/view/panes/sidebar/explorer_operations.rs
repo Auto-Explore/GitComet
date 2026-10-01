@@ -259,12 +259,23 @@ impl SidebarPaneView {
     ) {
         if modifiers.control || modifiers.platform || modifiers.shift {
             self.explorer_select(path, modifiers, false, window, cx);
-        } else if let Some(repo_id) = self.active_repo_id() {
-            self.explorer_focus_path(path.clone(), window, cx);
-            // The reducer preserves the forced expansion of a filtered tree.
-            self.store
-                .dispatch(Msg::ToggleFileBrowserDir { repo_id, path });
+            return;
         }
+        // A plain click makes the folder the selection, then opens or closes it.
+        self.explorer_select(path.clone(), gpui::Modifiers::default(), false, window, cx);
+        self.toggle_explorer_dir(path);
+    }
+
+    /// The chevron only opens or closes the folder; the selection stays, so a
+    /// multi-selection survives browsing into another folder.
+    pub(super) fn explorer_chevron_click(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.explorer_focus_path(path.clone(), window, cx);
+        self.toggle_explorer_dir(path);
     }
 
     pub(super) fn explorer_background_click(
@@ -532,10 +543,7 @@ impl SidebarPaneView {
                                 || (key == "right" && !expanded)
                                 || (key == "left" && expanded))
                         {
-                            self.store.dispatch(Msg::ToggleFileBrowserDir {
-                                repo_id: repo.id,
-                                path,
-                            });
+                            self.toggle_explorer_dir(path);
                         } else if key == "left" {
                             if let Some(parent) =
                                 path.parent().filter(|p| !p.as_os_str().is_empty())

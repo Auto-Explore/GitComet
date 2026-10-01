@@ -102,6 +102,63 @@ fn focusing_an_explorer_row_preserves_selection_and_range_anchor() {
 }
 
 #[test]
+fn hiding_dot_files_drops_them_from_the_selection_unless_revealed() {
+    let (mut repos, ids, mut state, repo_id) = ready_state(SidebarMode::Files);
+    let paths: Vec<_> = [".env", ".github/ci.yml", "src"]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    let file_browser = &mut state.repos[0].file_browser;
+    file_browser.selection.paths = paths.iter().cloned().collect();
+    file_browser.selection.focused = Some(paths[0].clone());
+    file_browser
+        .revealed_paths
+        .insert(PathBuf::from(".github/ci.yml"));
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::SetExplorerVisibility {
+            repo_id,
+            hidden: false,
+            ignored: false,
+        },
+    );
+    let selection = &state.repos[0].file_browser.selection;
+    assert_eq!(
+        selection.paths,
+        [PathBuf::from(".github/ci.yml"), PathBuf::from("src")]
+            .into_iter()
+            .collect()
+    );
+    assert_eq!(selection.focused, None, "focus on a hidden row goes too");
+}
+
+#[test]
+fn a_complete_listing_drops_selected_paths_that_are_gone() {
+    let (mut repos, ids, mut state, repo_id) = ready_state(SidebarMode::Files);
+    state.repos[0].file_browser.selection.paths = ["src", "ignored.log"]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+            cancellation: None,
+            repo_id,
+            source: FileSource::WorkingDirectory,
+            result: Ok(vec![dir_entry("src")]),
+        }),
+    );
+    assert_eq!(
+        state.repos[0].file_browser.selection.paths,
+        [PathBuf::from("src")].into_iter().collect()
+    );
+}
+
+#[test]
 fn file_repository_discovery_honors_nested_repositories_and_linked_worktrees() {
     let directory = tempfile::tempdir().unwrap();
     let outer = directory.path().join("outer");

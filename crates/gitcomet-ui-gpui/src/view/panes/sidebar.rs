@@ -2268,9 +2268,7 @@ impl SidebarPaneView {
                             .revealed_paths
                             .iter()
                             .any(|revealed| revealed.starts_with(path.as_ref()))
-                        || !path
-                            .components()
-                            .any(|c| c.as_os_str().as_encoded_bytes().starts_with(b".")))
+                        || !gitcomet_state::explorer::is_hidden_path(path))
             })
         });
         rows.append(&mut tree_rows);
@@ -2830,22 +2828,16 @@ impl SidebarPaneView {
                             let path = (*entry.path).clone();
                             chevron_slot(is_directory && !expansion_frozen, is_expanded)
                                 .id(("explorer_chevron", ix))
+                                .debug_selector(move || format!("explorer_chevron_{ix}"))
                                 .when(is_directory && !expansion_frozen, |d| {
                                     // The innermost click target owns the click,
                                     // so the row's own activation does not also run.
                                     d.on_activate(
                                         false,
                                         controls::ControlActivation::Composite,
-                                        cx.listener(
-                                            move |this, event: &gpui::ClickEvent, window, cx| {
-                                                this.explorer_folder_click(
-                                                    path.clone(),
-                                                    event.modifiers(),
-                                                    window,
-                                                    cx,
-                                                );
-                                            },
-                                        ),
+                                        cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
+                                            this.explorer_chevron_click(path.clone(), window, cx);
+                                        }),
                                     )
                                 })
                         })

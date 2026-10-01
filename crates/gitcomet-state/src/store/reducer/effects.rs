@@ -2341,6 +2341,16 @@ pub(super) fn file_browser_loaded(
                             })
                             .map(|entry| Arc::clone(&entry.path)),
                     );
+                    // A complete listing drops selected paths that are gone; a
+                    // partial one (a newer walk is queued) may predate them.
+                    if !has_pending {
+                        let present: FxHashSet<&std::path::Path> =
+                            v.iter().map(|entry| entry.path.as_path()).collect();
+                        repo_state
+                            .file_browser
+                            .selection
+                            .retain(|path| present.contains(path));
+                    }
                     let entries = Arc::new(v);
                     reopen = pending.map(|pending| (Arc::clone(&entries), pending));
                     Loadable::Ready(entries)
