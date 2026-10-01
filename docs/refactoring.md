@@ -447,6 +447,12 @@ Since then:
   instead of opening from inside a click handler. Outside the live runtime
   (`UiRuntime::launches_applications`) the launch goes to GPUI's platform,
   which a test platform only records, so no test starts a browser.
+- The repository-view and details-tab strips are kit `NavTab`s with icons:
+  History and Details show their own, a repository view its descriptor's
+  icon, and a details tab the new optional `DetailsTabDescriptor::with_icon`.
+  `NavTab` tints its icon like its label and names its parts (`{id}_icon`,
+  `{id}_badge`); tab ids are unchanged, and without extensions there is
+  still no strip.
 
 ## History find (#532)
 

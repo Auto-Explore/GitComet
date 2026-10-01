@@ -17,17 +17,23 @@ use gitcomet_extension_api::{
 };
 use std::rc::Rc;
 
-/// A contribution built per repository: its title and builder.
+/// A contribution built per repository: its title, tab icon and builder.
 pub(in crate::view) trait RoutedContribution {
     fn title(&self) -> SharedString;
+    fn icon(&self) -> Option<SharedString>;
     fn builder(&self) -> ViewBuilder<RepositoryViewContext>;
 }
 
 macro_rules! routed_contribution {
-    ($descriptor:ty) => {
+    ($descriptor:ty, |$this:ident| $icon:expr) => {
         impl RoutedContribution for $descriptor {
             fn title(&self) -> SharedString {
                 self.title.clone()
+            }
+
+            fn icon(&self) -> Option<SharedString> {
+                let $this = self;
+                $icon
             }
 
             fn builder(&self) -> ViewBuilder<RepositoryViewContext> {
@@ -37,9 +43,10 @@ macro_rules! routed_contribution {
     };
 }
 
-routed_contribution!(RepositoryViewDescriptor);
-routed_contribution!(DetailsTabDescriptor);
-routed_contribution!(SidebarSectionDescriptor);
+routed_contribution!(RepositoryViewDescriptor, |view| (!view.icon.is_empty())
+    .then(|| view.icon.clone()));
+routed_contribution!(DetailsTabDescriptor, |tab| tab.icon.clone());
+routed_contribution!(SidebarSectionDescriptor, |_section| None);
 
 /// Built views of one contribution kind per repository, and which one each
 /// repository shows (absent: the built-in content).
@@ -70,6 +77,13 @@ impl<D: RoutedContribution + Clone> ViewRouter<D> {
 
     fn titles(&self) -> Vec<SharedString> {
         self.views.iter().map(|(_, view)| view.title()).collect()
+    }
+
+    fn tabs(&self) -> Vec<(SharedString, Option<SharedString>)> {
+        self.views
+            .iter()
+            .map(|(_, view)| (view.title(), view.icon()))
+            .collect()
     }
 
     /// The selected view for `repo`: `None` is the built-in content.
@@ -356,49 +370,54 @@ impl GitCometView {
     }
 
     /// A strip of navigation tabs: the built-in content first, then each
-    /// contribution.
+    /// contribution with its icon.
     fn routed_strip(
         &self,
         area: RoutedArea,
-        titles: Vec<SharedString>,
+        tabs: Vec<(SharedString, Option<SharedString>)>,
         selected: Option<usize>,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        let (prefix, builtin, builtin_id) = match area {
-            RoutedArea::Main => ("repository_view", "History", "repository_view_history"),
-            RoutedArea::Details => ("details_tab", "Details", "details_tab_details"),
+        let (prefix, builtin_id, builtin, builtin_icon) = match area {
+            RoutedArea::Main => (
+                "repository_view",
+                "repository_view_history",
+                "History",
+                "icons/history.svg",
+            ),
+            RoutedArea::Details => (
+                "details_tab",
+                "details_tab_details",
+                "Details",
+                "icons/side_panel_right.svg",
+            ),
         };
         let theme = self.theme;
         let ui_scale = ui_scale::UiScale::current(cx);
         let strip_id = format!("{prefix}_strip");
         let selector = strip_id.clone();
+        let builtin = (builtin.into(), Some(builtin_icon.into()));
         let mut strip = components::navigation_tab_strip(theme.colors.surface.canvas, ui_scale)
             .id(SharedString::from(strip_id))
             .debug_selector(move || selector.clone())
             .border_b_1()
-            .border_color(theme.colors.stroke.subtle)
-            .child(components::navigation_tab_metrics(
-                components::navigation_tab(builtin_id, builtin, selected.is_none(), None, theme)
-                    .on_click(theme, cx, move |this, _, window, cx| {
-                        this.select_routed_view(area, None, window, cx);
-                    }),
-                theme,
-                ui_scale,
-            ));
-        for (index, title) in titles.into_iter().enumerate() {
-            strip = strip.child(components::navigation_tab_metrics(
-                components::navigation_tab(
-                    format!("{prefix}_{index}"),
-                    title,
-                    selected == Some(index),
-                    None,
-                    theme,
-                )
-                .on_click(theme, cx, move |this, _, window, cx| {
-                    this.select_routed_view(area, Some(index), window, cx);
+            .border_color(theme.colors.stroke.subtle);
+        let entries = std::iter::once((builtin_id.to_string(), builtin, None)).chain(
+            tabs.into_iter()
+                .enumerate()
+                .map(|(index, tab)| (format!("{prefix}_{index}"), tab, Some(index))),
+        );
+        for (id, (title, icon), index) in entries {
+            let mut tab = components::NavTab::new(id, title).selected(selected == index);
+            if let Some(icon) = icon {
+                tab = tab.icon(icon);
+            }
+            strip = strip.child(tab.render(theme, ui_scale).on_activate(
+                false,
+                controls::ControlActivation::ManagedFocus,
+                cx.listener(move |this, _, window, cx| {
+                    this.select_routed_view(area, index, window, cx);
                 }),
-                theme,
-                ui_scale,
             ));
         }
         strip
@@ -417,8 +436,8 @@ impl GitCometView {
         };
         let selected = router.selected(repo);
         let active = router.active_view(repo);
-        let titles = router.titles();
-        let strip = self.routed_strip(RoutedArea::Main, titles, selected, cx);
+        let tabs = router.tabs();
+        let strip = self.routed_strip(RoutedArea::Main, tabs, selected, cx);
         let body = match active {
             Some(view) => div().size_full().child(view).into_any_element(),
             None => history(),
@@ -451,8 +470,8 @@ impl GitCometView {
         };
         let selected = router.selected(repo);
         let active = router.active_view(repo);
-        let titles = router.titles();
-        let strip = self.routed_strip(RoutedArea::Details, titles, selected, cx);
+        let tabs = router.tabs();
+        let strip = self.routed_strip(RoutedArea::Details, tabs, selected, cx);
         let body = match active {
             Some(view) => div().flex_1().min_h(px(0.0)).child(view).into_any_element(),
             None => details(),

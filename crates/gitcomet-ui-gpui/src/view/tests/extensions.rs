@@ -364,6 +364,36 @@ fn saved_workspace_state_is_restored_when_a_window_opens(cx: &mut gpui::TestAppC
     cx.update(|app| assert_eq!(review::reviews(app).read(app).count(window_id, &repo), 3));
 }
 
+/// Both strips show an icon on every tab: the built-in one's own and each
+/// contribution's.
+#[gpui::test]
+fn view_and_details_tabs_show_their_icons(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    cx.update(install_example);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            test_support::push_test_state(
+                this,
+                state_with_repo(RepoId(1), Path::new("/tmp/extension-tab-icons")),
+                cx,
+            )
+        });
+    });
+    test_support::redraw(cx);
+    for selector in [
+        "repository_view_history_icon",
+        "repository_view_0_icon",
+        "repository_view_1_icon",
+        "details_tab_details_icon",
+        "details_tab_0_icon",
+    ] {
+        assert!(cx.debug_bounds(selector).is_some(), "{selector}");
+    }
+}
+
 #[gpui::test]
 fn repository_views_switch_with_history_and_are_kept(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();

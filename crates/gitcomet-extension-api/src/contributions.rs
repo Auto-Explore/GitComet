@@ -134,6 +134,8 @@ impl BottomPanelDescriptor {
 #[non_exhaustive]
 pub struct DetailsTabDescriptor {
     pub title: SharedString,
+    /// Shown before the title in the tab strip.
+    pub icon: Option<SharedString>,
     pub build: ViewBuilder<RepositoryViewContext>,
 }
 
@@ -144,8 +146,14 @@ impl DetailsTabDescriptor {
     ) -> Self {
         Self {
             title: title.into(),
+            icon: None,
             build: Rc::new(build),
         }
+    }
+
+    pub fn with_icon(mut self, icon: impl Into<SharedString>) -> Self {
+        self.icon = Some(icon.into());
+        self
     }
 }
 

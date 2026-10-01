@@ -679,7 +679,8 @@ impl Extension for ReviewExtension {
                 DetailsTabDescriptor::new("Review", |context, _window, cx| {
                     cx.new(|cx| ReviewCount::new(context, "example_review_details", cx))
                         .into()
-                }),
+                })
+                .with_icon(ICON_PATH),
             )
             .sidebar_section(
                 "review-sidebar",
