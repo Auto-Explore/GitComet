@@ -494,7 +494,12 @@ fn report_error(state: &mut AppState, repo_id: Option<RepoId>, message: String) 
 /// propagates to the base branch and syncs the `git-annex` branch, where a
 /// plain merge would commit adjusted content to the wrong branch and a plain
 /// push would publish the adjusted branch. `None`: plain Git applies.
-fn annex_takeover(state: &mut AppState, repo_id: RepoId, pull: bool) -> Option<Vec<Effect>> {
+fn annex_takeover(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    pull: bool,
+) -> Option<Vec<Effect>> {
     let settings = state.large_file_settings;
     let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
     if !repo.annex_takes_over_pull_push(&settings) {
@@ -515,12 +520,9 @@ fn annex_takeover(state: &mut AppState, repo_id: RepoId, pull: bool) -> Option<V
     } else {
         gitcomet_core::large_files::LargeFileCommand::AnnexPush { content }
     };
-    begin_local_action(state, repo_id);
-    Some(vec![Effect::RunLargeFileCommand {
-        repo_id,
-        command,
-        auth: None,
-    }])
+    Some(actions_emit_effects::run_large_file_command(
+        repos, state, repo_id, command,
+    ))
 }
 
 /// Branch operations git-annex has no equivalent for are refused on an
@@ -539,7 +541,7 @@ fn annex_adjusted_refusal(
         state,
         repo_id,
         action,
-        "is not available here: Pull and Push go through git-annex",
+        "is not available here: adjusted content must not be merged or published through plain Git",
     )
 }
 
@@ -971,8 +973,31 @@ fn submit_auth_prompt(
         }
     };
 
+    // A conflicting operation can defer this retry. Attach its credentials to
+    // the newly queued command just as we attach them to an immediate effect.
+    let queued_before = match &prompt.operation {
+        AuthRetryOperation::RepoCommand { repo_id, .. }
+        | AuthRetryOperation::SafePushAfterCommit { repo_id, .. } => state
+            .repos
+            .iter()
+            .find(|repo| repo.id == *repo_id)
+            .map(|repo| (*repo_id, repo.pending.large_file_commands.len())),
+        _ => None,
+    };
     match retry_msg_for_auth_operation(prompt.operation) {
-        Some(msg) => attach_git_auth_to_effects(reduce(repos, id_alloc, state, msg), auth),
+        Some(msg) => {
+            let effects = reduce(repos, id_alloc, state, msg);
+            if let Some((repo_id, before)) = queued_before
+                && let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id)
+                && repo.pending.large_file_commands.len() > before
+                && let Some(queued) = repo.pending.large_file_commands.back_mut()
+            {
+                queued.auth = Some(auth);
+                effects
+            } else {
+                attach_git_auth_to_effects(effects, auth)
+            }
+        }
         None => Vec::new(),
     }
 }
@@ -2027,12 +2052,7 @@ fn reduce_inner(
             actions_emit_effects::append_gitignore_patterns(repo_id, patterns)
         }
         Msg::RunLargeFileCommand { repo_id, command } => {
-            begin_local_action(state, repo_id);
-            vec![Effect::RunLargeFileCommand {
-                repo_id,
-                command,
-                auth: None,
-            }]
+            actions_emit_effects::run_large_file_command(repos, state, repo_id, command)
         }
         Msg::LoadAnnexWhereis { repo_id, keys } => {
             let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
@@ -2136,7 +2156,7 @@ fn reduce_inner(
             actions_emit_effects::commit_amend(repo_id, message)
         }
         Msg::SafePushAfterCommit { repo_id, context } => {
-            match annex_takeover(state, repo_id, false) {
+            match annex_takeover(repos, state, repo_id, false) {
                 Some(effects) => effects,
                 None => actions_emit_effects::safe_push_after_commit(repo_id, context),
             }
@@ -2148,7 +2168,7 @@ fn reduce_inner(
         Msg::PruneLocalTags { repo_id } => {
             actions_emit_effects::prune_local_tags(repos, state, repo_id)
         }
-        Msg::Pull { repo_id, mode } => match annex_takeover(state, repo_id, true) {
+        Msg::Pull { repo_id, mode } => match annex_takeover(repos, state, repo_id, true) {
             Some(effects) => effects,
             None => actions_emit_effects::pull(repos, state, repo_id, mode),
         },
@@ -2161,10 +2181,16 @@ fn reduce_inner(
             None => actions_emit_effects::pull_branch(repos, state, repo_id, remote, branch),
         },
         Msg::MergeRef { repo_id, reference } => {
+            if let Some(effects) = annex_adjusted_refusal(state, repo_id, "Merge") {
+                return effects;
+            }
             begin_local_action(state, repo_id);
             actions_emit_effects::merge_ref(repo_id, reference)
         }
         Msg::SquashRef { repo_id, reference } => {
+            if let Some(effects) = annex_adjusted_refusal(state, repo_id, "Squash merge") {
+                return effects;
+            }
             begin_local_action(state, repo_id);
             actions_emit_effects::squash_ref(repo_id, reference)
         }
@@ -2221,7 +2247,7 @@ fn reduce_inner(
             }
             vec![]
         }
-        Msg::Push { repo_id } => match annex_takeover(state, repo_id, false) {
+        Msg::Push { repo_id } => match annex_takeover(repos, state, repo_id, false) {
             Some(effects) => effects,
             None => actions_emit_effects::push(repos, state, repo_id),
         },
@@ -2229,7 +2255,7 @@ fn reduce_inner(
             repo_id,
             target,
             set_upstream,
-        } => match annex_takeover(state, repo_id, false) {
+        } => match annex_takeover(repos, state, repo_id, false) {
             Some(effects) => effects,
             None => {
                 actions_emit_effects::push_after_commit(repos, state, repo_id, target, set_upstream)
@@ -2250,7 +2276,7 @@ fn reduce_inner(
             repo_id,
             remote,
             branch,
-        } => match annex_takeover(state, repo_id, false) {
+        } => match annex_takeover(repos, state, repo_id, false) {
             Some(effects) => effects,
             None => actions_emit_effects::push_set_upstream(repos, state, repo_id, remote, branch),
         },
@@ -3081,7 +3107,7 @@ fn reduce_inner(
                 util::clear_staged_git_auth_env();
                 state.auth_prompt = Some(prompt);
             }
-            if push_after_commit && let Some(push) = annex_takeover(state, repo_id, false) {
+            if push_after_commit && let Some(push) = annex_takeover(repos, state, repo_id, false) {
                 effects.extend(push);
             } else if push_after_commit
                 && let (Some(outcome), Some(pending_commit)) = (outcome, pending_commit)
@@ -3123,7 +3149,7 @@ fn reduce_inner(
                 util::clear_staged_git_auth_env();
                 state.auth_prompt = Some(prompt);
             }
-            if push_after_commit && let Some(push) = annex_takeover(state, repo_id, false) {
+            if push_after_commit && let Some(push) = annex_takeover(repos, state, repo_id, false) {
                 effects.extend(push);
             } else if push_after_commit
                 && let (Some(outcome), Some(pending_commit)) = (outcome, pending_commit)
@@ -3183,8 +3209,12 @@ fn reduce_inner(
                 refresh_selected_head_gitlink(repos, state, repo_id);
             }
 
-            let effects =
+            let mut effects =
                 actions_emit_effects::repo_command_finished(state, repo_id, command, result);
+
+            effects.extend(actions_emit_effects::start_queued_large_file_commands(
+                repos, state, repo_id,
+            ));
 
             if let Some(path) = removed_worktree_path {
                 let repo_ids_to_close = state

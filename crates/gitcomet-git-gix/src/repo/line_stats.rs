@@ -3,20 +3,28 @@ use super::log::{
     read_commit_stats_blob,
 };
 use crate::util::path_buf_from_git_bytes;
-use gitcomet_core::domain::{FileStatus, FileStatusKind, LineStats, UncommittedLineStats};
+use gitcomet_core::domain::{
+    DiffArea, FileStatus, FileStatusKind, LineStats, UncommittedLineStats,
+};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CancellationToken, Result};
 use gix::error::ResultExt as _;
+use gix::prelude::FindExt as _;
 use rustc_hash::FxHashMap;
 use std::path::PathBuf;
 
 /// Mirrors the blob-side cap in `commit_stats`.
 const WORKTREE_MAX_BYTES: u64 = 4 * 1024 * 1024;
 
-/// Counts keyed by both sides' content ids (`None` is no content), kept from
-/// the last scan so a refresh re-diffs only files whose content moved.
-pub(super) type LineStatsMemo =
-    FxHashMap<(Option<gix::ObjectId>, Option<gix::ObjectId>), LineStats>;
+type LineStatsKey = (DiffArea, Option<gix::ObjectId>, Option<gix::ObjectId>);
+
+/// The two lanes have different rules for pointers. Keep counts separate,
+/// and classify index blobs by id before touching any worktree payload.
+#[derive(Default)]
+pub(super) struct LineStatsMemo {
+    counts: FxHashMap<LineStatsKey, LineStats>,
+    annex_index_blobs: FxHashMap<gix::ObjectId, bool>,
+}
 
 /// One scan's view of the memo: hits carry over into `next`, which replaces
 /// the memo, so it only ever holds the current changes.
@@ -27,30 +35,48 @@ struct MemoScan {
 }
 
 impl MemoScan {
-    fn counts(
-        &mut self,
-        key: (Option<gix::ObjectId>, Option<gix::ObjectId>),
-        diff: impl FnOnce() -> LineStats,
-    ) -> LineStats {
-        if let Some(&stats) = self.previous.get(&key).or_else(|| self.next.get(&key)) {
-            self.next.insert(key, stats);
-            return stats;
+    fn counts(&mut self, key: LineStatsKey, diff: impl FnOnce() -> LineStats) -> LineStats {
+        if let Some(&entry) = self
+            .previous
+            .counts
+            .get(&key)
+            .or_else(|| self.next.counts.get(&key))
+        {
+            self.next.counts.insert(key, entry);
+            return entry;
         }
         #[cfg(test)]
         LINE_STATS_DIFFS.with(|diffs| diffs.set(diffs.get() + 1));
-        let stats = diff();
+        let entry = diff();
         // Unknown is cheap to rediscover (size cap, binary sniff) or may be
         // transient (an unreadable object), so it is never kept.
-        if stats.additions.is_some() {
-            self.next.insert(key, stats);
+        if entry.additions.is_some() {
+            self.next.counts.insert(key, entry);
         }
-        stats
+        entry
+    }
+
+    fn index_is_annex_pointer(
+        &mut self,
+        id: gix::ObjectId,
+        read: impl FnOnce() -> Option<bool>,
+    ) -> Option<bool> {
+        let is_pointer = self
+            .previous
+            .annex_index_blobs
+            .get(&id)
+            .or_else(|| self.next.annex_index_blobs.get(&id))
+            .copied()
+            .or_else(read)?;
+        self.next.annex_index_blobs.insert(id, is_pointer);
+        Some(is_pointer)
     }
 }
 
 #[cfg(test)]
 thread_local! {
     static LINE_STATS_DIFFS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static LINE_STATS_WORKTREE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -73,7 +99,7 @@ impl super::GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<UncommittedLineStats> {
         cancellation.check_cancelled()?;
-        let repo = self.repo();
+        let repo = self.status_repo();
         // Taken, not held: a concurrent scan starts cold instead of waiting.
         let mut scan = MemoScan {
             previous: std::mem::take(&mut *self.line_stats_memo()),
@@ -89,7 +115,8 @@ impl super::GixRepo {
         *self.line_stats_memo() = if result.is_ok() {
             next
         } else {
-            previous.extend(next);
+            previous.counts.extend(next.counts);
+            previous.annex_index_blobs.extend(next.annex_index_blobs);
             previous
         };
         result
@@ -156,7 +183,7 @@ fn staged_line_stats(
             };
             let path = path_buf_from_git_bytes(location.as_ref(), "gix staged line stats path")
                 .or_erased()?;
-            let stats = memo.counts((old_id, new_id), || {
+            let stats = memo.counts((DiffArea::Staged, old_id, new_id), || {
                 commit_file_line_stats(repo, old_id, new_id, &mut scratch).into()
             });
             out.insert(path, stats);
@@ -239,11 +266,27 @@ fn unstaged_entry_line_stats(
     let rel = gix::path::into_bstr(entry.path.as_path());
     let index_id = index.entry_by_path(rel.as_ref()).map(|found| found.id);
 
-    // Comparing needs git-annex's clean filter, which hashes the whole file and
-    // writes its keys database on every refresh. Annexed content is rarely
-    // line-oriented anyway.
-    if index_is_annex_pointer(repo, index_id, index_blob) {
-        return LineStats::UNKNOWN;
+    let mut index_blob_loaded = false;
+    if let Some(id) = index_id {
+        match memo.index_is_annex_pointer(id, || {
+            let header = repo.find_header(id).ok()?;
+            if header.kind() != gix::object::Kind::Blob {
+                return None;
+            }
+            if header.size() > gitcomet_core::annex::POINTER_MAX_BYTES as u64 {
+                return Some(false);
+            }
+            // A larger blob cannot be a pointer; leave its decompression to
+            // a diff miss, after the worktree's size and binary checks.
+            index_blob.clear();
+            index_blob_loaded = repo.objects.find_blob(&id, index_blob).is_ok();
+            index_blob_loaded.then(|| gitcomet_core::annex::key_from_pointer(index_blob).is_some())
+        }) {
+            // Unlocked content cannot be compared without annex's clean
+            // filter. Its size and hash cannot make these counts known.
+            Some(true) | None => return LineStats::UNKNOWN,
+            Some(false) => {}
+        }
     }
 
     worktree.clear();
@@ -259,32 +302,16 @@ fn unstaged_entry_line_stats(
     }
 
     let mut diff = || {
-        if !read_commit_stats_blob(repo, index_id, index_blob) {
+        if !index_blob_loaded && !read_commit_stats_blob(repo, index_id, index_blob) {
             return LineStats::UNKNOWN;
         }
         line_stats_from_bytes(index_blob.as_slice(), worktree.as_slice()).into()
     };
     // Hashing costs a fraction of the diff an unchanged file then skips.
     match gix::objs::compute_hash(repo.object_hash(), gix::objs::Kind::Blob, worktree) {
-        Ok(worktree_id) => memo.counts((index_id, Some(worktree_id)), diff),
+        Ok(worktree_id) => memo.counts((DiffArea::Unstaged, index_id, Some(worktree_id)), diff),
         Err(_) => diff(),
     }
-}
-
-/// Reads only a pointer-sized index blob, so ordinary files still skip the
-/// index read on a memo hit.
-fn index_is_annex_pointer(
-    repo: &gix::Repository,
-    index_id: Option<gix::ObjectId>,
-    buf: &mut Vec<u8>,
-) -> bool {
-    let Some(id) = index_id else {
-        return false;
-    };
-    repo.find_header(id)
-        .is_ok_and(|header| header.size() <= gitcomet_core::annex::POINTER_MAX_BYTES as u64)
-        && read_commit_stats_blob(repo, Some(id), buf)
-        && gitcomet_core::annex::key_from_pointer(buf).is_some()
 }
 
 /// Reads a worktree file as git would store it. `false` means over the size
@@ -299,6 +326,9 @@ fn read_worktree_git_bytes(
     out: &mut Vec<u8>,
 ) -> bool {
     use std::io::Read as _;
+
+    #[cfg(test)]
+    LINE_STATS_WORKTREE_READS.with(|reads| reads.set(reads.get() + 1));
 
     let full = gix_repo.spec.workdir.join(relative);
     let Ok(metadata) = std::fs::symlink_metadata(&full) else {
@@ -340,6 +370,130 @@ fn read_worktree_git_bytes(
 mod tests {
     use super::*;
     use crate::repo::status::tests::{git_success, init_test_repo, open_repo, write_file};
+
+    #[test]
+    fn review_unlocked_annex_stats_skip_payload_reads_on_every_refresh() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        write_file(
+            dir,
+            "asset.bin",
+            "/annex/objects/WORM-s3000000-m1--payload\n",
+        );
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "annex pointer"]);
+        std::fs::write(dir.join("asset.bin"), vec![b'x'; 3_000_000]).unwrap();
+        let repo = open_repo(dir);
+        let entries = [FileStatus {
+            path: "asset.bin".into(),
+            kind: FileStatusKind::Modified,
+            conflict: None,
+        }];
+        LINE_STATS_WORKTREE_READS.with(|reads| reads.set(0));
+        for _ in 0..2 {
+            assert_eq!(
+                repo.line_stats_for_entries_impl(&entries, &CancellationToken::new())
+                    .unwrap()
+                    .unstaged[std::path::Path::new("asset.bin")],
+                LineStats::UNKNOWN
+            );
+        }
+        assert_eq!(
+            LINE_STATS_WORKTREE_READS.with(|reads| reads.get()),
+            0,
+            "unknown annex counts must not read/hash the unlocked payload"
+        );
+    }
+
+    #[test]
+    fn review_line_stats_memo_separates_identical_pairs_in_each_lane() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        for path in ["staged.txt", "unstaged.txt"] {
+            write_file(dir, path, "before\n");
+        }
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "seed"]);
+        for path in ["staged.txt", "unstaged.txt"] {
+            write_file(dir, path, "after\n");
+        }
+        git_success(dir, &["add", "staged.txt"]);
+        let repo = open_repo(dir);
+        let token = CancellationToken::new();
+        take_line_stats_diffs_for_tests();
+        let first = repo.uncommitted_line_stats_impl(&token).unwrap();
+        assert_eq!(
+            take_line_stats_diffs_for_tests(),
+            2,
+            "each lane must compute its own entry before reusing it"
+        );
+        assert_eq!(repo.uncommitted_line_stats_impl(&token).unwrap(), first);
+        assert_eq!(take_line_stats_diffs_for_tests(), 0);
+    }
+
+    #[test]
+    fn line_stats_do_not_run_annex_filters_on_ordinary_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        write_file(dir, "notes.txt", "before\n");
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "seed"]);
+        // Annex installs a catch-all filter, including files stored in Git.
+        write_file(dir, ".gitattributes", "* filter=annex\n");
+        git_success(
+            dir,
+            &["config", "filter.annex.clean", "printf 'filtered\\n'; cat"],
+        );
+        git_success(dir, &["config", "filter.annex.required", "true"]);
+        let repo = open_repo(dir);
+        write_file(dir, "notes.txt", "after\nextra\n");
+        let entries = [FileStatus {
+            path: "notes.txt".into(),
+            kind: FileStatusKind::Modified,
+            conflict: None,
+        }];
+        let stats = repo
+            .line_stats_for_entries_impl(&entries, &CancellationToken::new())
+            .unwrap();
+        assert_eq!(
+            stats.unstaged[std::path::Path::new("notes.txt")],
+            LineStats {
+                additions: Some(2),
+                deletions: Some(1),
+            }
+        );
+    }
+
+    #[test]
+    fn annex_payload_counts_never_reuse_staged_pointer_counts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        git_success(dir, &["config", "annex.uuid", "test-annex"]);
+        for path in ["staged.bin", "unstaged.bin"] {
+            write_file(dir, path, "/annex/objects/WORM-s8-m1--payload\n");
+        }
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "pointers"]);
+        for path in ["staged.bin", "unstaged.bin"] {
+            write_file(dir, path, "payload\n");
+        }
+        git_success(dir, &["add", "staged.bin"]);
+        let stats = open_repo(dir)
+            .uncommitted_line_stats_impl(&CancellationToken::new())
+            .unwrap();
+        assert_eq!(
+            stats.staged[std::path::Path::new("staged.bin")].additions,
+            Some(1)
+        );
+        assert_eq!(
+            stats.unstaged[std::path::Path::new("unstaged.bin")],
+            LineStats::UNKNOWN
+        );
+    }
 
     #[test]
     fn supplied_status_counts_match_standalone_across_file_kinds() {
@@ -697,11 +851,11 @@ mod tests {
             })
         );
 
-        // Staging moves big's pair, same ids, into the other lane: no diff.
+        // Moving a pair to the staged lane computes that lane's own entry.
         git_success(dir, &["add", "big.txt"]);
         take_line_stats_diffs_for_tests();
         let staged = scan(&repo);
-        assert_eq!(take_line_stats_diffs_for_tests(), 0);
+        assert_eq!(take_line_stats_diffs_for_tests(), 1);
         assert_eq!(staged, scan(&open_repo(dir)));
         assert!(
             !staged

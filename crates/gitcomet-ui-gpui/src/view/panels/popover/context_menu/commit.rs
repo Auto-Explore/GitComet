@@ -614,9 +614,10 @@ fn model_with_header(
     // about to refuse. `commit_is_ancestor_of_head` already looks the repository
     // up this way.
     let merge_repo = this.state.repos.iter().find(|repo| repo.id == repo_id);
-    let merge_into_current_disabled =
-        !super::super::merge_commit_confirm::merge_commit_repo_is_ready(merge_repo)
-            || commit_is_ancestor_of_head(this, repo_id, commit_id);
+    let merge_into_current_disabled = !super::super::merge_commit_confirm::merge_commit_is_allowed(
+        merge_repo,
+        &this.state.large_file_settings,
+    ) || commit_is_ancestor_of_head(this, repo_id, commit_id);
     let merge_destination =
         super::super::merge_commit_confirm::merge_commit_destination_label(merge_repo);
     items.push(ContextMenuItem::Entry {

@@ -150,6 +150,7 @@ impl AnnexTrust {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct AnnexRepository {
     pub uuid: String,
+    /// The description stored in uuid.log, without local remote decoration.
     pub description: String,
     /// Local git remote name, when this clone can reach it directly.
     pub remote_name: Option<String>,
@@ -170,6 +171,17 @@ impl AnnexRepository {
     /// Name for menus: the remote name, else the description.
     pub fn display_name(&self) -> &str {
         self.remote_name.as_deref().unwrap_or(&self.description)
+    }
+
+    /// The description as `git annex info` displays it in this clone.
+    pub fn display_description(&self) -> String {
+        match &self.remote_name {
+            Some(name) if self.description.is_empty() || self.description == *name => {
+                format!("[{name}]")
+            }
+            Some(name) => format!("{} [{name}]", self.description),
+            None => self.description.clone(),
+        }
     }
 }
 
@@ -559,6 +571,16 @@ impl LargeFileCommand {
                 | Self::AnnexEnableRemote { .. }
                 | Self::AnnexInitRemote { .. }
         )
+    }
+
+    /// Fetches and merges remote changes into the checkout.
+    pub fn pulls(&self) -> bool {
+        matches!(self, Self::AnnexPull { .. } | Self::AnnexSync { .. })
+    }
+
+    /// Publishes repository changes, sharing the ordinary push activity lane.
+    pub fn pushes(&self) -> bool {
+        matches!(self, Self::AnnexPush { .. } | Self::AnnexSync { .. })
     }
 
     /// Rewrites files in the checkout: content replaces pointers or the

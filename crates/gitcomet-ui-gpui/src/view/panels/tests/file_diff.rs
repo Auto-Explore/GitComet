@@ -7693,6 +7693,10 @@ fn lfs_payload_diff_disables_pointer_patch_actions(cx: &mut gpui::TestAppContext
                 gitcomet_core::domain::FileStatusKind::Modified,
                 gitcomet_core::domain::DiffArea::Unstaged,
             );
+            repo.diff_state.diff = Loadable::Ready(Arc::new(gitcomet_core::domain::Diff::from_unified(
+                repo.diff_state.diff_target.clone().unwrap(),
+                "diff --git a/data.txt b/data.txt\nindex 1111111..2222222 100644\n--- a/data.txt\n+++ b/data.txt\n@@ -1,3 +1,3 @@\n version https://git-lfs.github.com/spec/v1\n-oid sha256:old\n+oid sha256:new\n size 12\n",
+            )));
             let side = LargeFileSide {
                 pointer: LargeFilePointer::Lfs(gitcomet_core::lfs::LfsPointer {
                     oid: gitcomet_core::lfs::LfsOid([9; 32]),
@@ -7711,6 +7715,16 @@ fn lfs_payload_diff_disables_pointer_patch_actions(cx: &mut gpui::TestAppContext
             repo.diff_state.diff_file_rev = 1;
             push_test_state(this, app_state_with_repo(repo, repo_id), cx);
             assert_eq!(this.main_pane.read(cx).diff_stage_gutter_area(), None);
+            this.popover_host.update(cx, |host, cx| {
+                // Row four is also a valid pointer-patch hunk index. Even a
+                // stale or programmatically opened menu must not act on it.
+                let model = host.context_menu_model(&PopoverKind::DiffHunkMenu { repo_id, src_ix: 4 }, cx).unwrap();
+                let entries: Vec<_> = model.items.iter().filter_map(|item| match item {
+                    ContextMenuItem::Entry { disabled, .. } => Some(*disabled),
+                    _ => None,
+                }).collect();
+                assert_eq!(entries, [true, true]);
+            });
         });
     });
 }
@@ -7774,6 +7788,38 @@ fn lfs_collapsed_diff_keeps_payload_changes_and_expands_context(cx: &mut gpui::T
                 )
             },
         );
+        let visible_ix = cx.update(|_, app| {
+            view.read(app)
+                .main_pane
+                .read(app)
+                .collapsed_diff_hunk_visible_indices[0]
+        });
+        let regions: &[DiffTextRegion] = match mode {
+            DiffViewMode::Inline => &[DiffTextRegion::Inline],
+            DiffViewMode::Split => &[DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight],
+        };
+        for &region in regions {
+            let click = wait_for_diff_text_click_position_for_offset_range(
+                cx,
+                &view,
+                visible_ix,
+                region,
+                0..1,
+                "LFS hunk header",
+            );
+            cx.simulate_mouse_down(click, MouseButton::Right, Modifiers::default());
+            cx.simulate_mouse_up(click, MouseButton::Right, Modifiers::default());
+            draw_and_drain_test_window(cx);
+            cx.update(|_, app| {
+                assert!(!matches!(
+                    view.read(app)
+                        .popover_host
+                        .read(app)
+                        .popover_kind_for_tests(),
+                    Some(PopoverKind::DiffHunkMenu { .. })
+                ));
+            });
+        }
         cx.update(|_, app| {
             view.read(app).main_pane.clone().update(app, |pane, cx| {
                 assert_eq!(

@@ -2412,11 +2412,16 @@ fn fetch_all_skips_git_annex_special_remotes_without_a_url() {
 
     let opened = GixBackend.open(&work_repo).expect("open work repo");
     for prune in [false, true] {
-        opened
+        let output = opened
             .fetch_all_with_output_prune(prune)
             .unwrap_or_else(|e| {
                 panic!("fetch all (prune={prune}) must skip the special remote: {e}")
             });
+        assert!(
+            output.command.starts_with("git fetch --multiple "),
+            "{}",
+            output.command
+        );
     }
     assert_eq!(
         run_git_capture(&work_repo, &["rev-parse", "refs/remotes/origin/main"]).trim(),
@@ -2431,4 +2436,41 @@ fn fetch_all_skips_git_annex_special_remotes_without_a_url() {
         "bedc0087-3c8e-4519-a212-17ff40f8b29b",
         "the user's remote configuration is left untouched"
     );
+}
+
+#[test]
+fn review_fetch_all_respects_order_of_skip_aliases_for_annex_special_remote() {
+    let _guard = remote_management_test_lock();
+    for keys in [
+        ["skipDefaultUpdate", "skipFetchAll"],
+        ["skipFetchAll", "skipDefaultUpdate"],
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, work_repo) = init_work_repo_with_remote(dir.path(), "origin");
+        run_git(
+            &work_repo,
+            &["config", "remote.backup.annex-uuid", "special-backup"],
+        );
+        run_git(
+            &work_repo,
+            &["config", &format!("remote.backup.{}", keys[0]), "true"],
+        );
+        run_git(
+            &work_repo,
+            &["config", &format!("remote.backup.{}", keys[1]), "false"],
+        );
+        assert!(
+            !run_git_status(&work_repo, &["fetch", "--all"]).success(),
+            "Git uses the last alias, so it attempts the URL-less remote"
+        );
+        let opened = GixBackend.open(&work_repo).unwrap();
+        for prune in [false, true] {
+            let output = opened.fetch_all_with_output_prune(prune).expect("Fetch All must exclude the special remote even when the last skip setting is false");
+            assert!(
+                output.command.starts_with("git fetch --multiple "),
+                "{}",
+                output.command
+            );
+        }
+    }
 }

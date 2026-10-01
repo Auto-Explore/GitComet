@@ -1872,7 +1872,7 @@ fn annex_support(initialized: bool) -> gitcomet_core::large_files::LargeFileSupp
         },
         gitcomet_core::large_files::AnnexRepository {
             uuid: "u-backup".into(),
-            description: "[backup]".into(),
+            description: String::new(),
             remote_name: Some("backup".into()),
             special_type: Some("directory".into()),
             special_name: None,
@@ -1891,6 +1891,160 @@ fn annex_support(initialized: bool) -> gitcomet_core::large_files::LargeFileSupp
         },
     ];
     support
+}
+
+#[gpui::test]
+fn review_annex_sync_menu_disables_only_for_a_running_pull_or_push(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(991);
+    for (pull, worktree_pull, push, disabled) in
+        [(1, 0, 0, false), (1, 1, 0, true), (0, 0, 1, true)]
+    {
+        cx.update(|_, app| {
+            view.update(app, |this, cx| {
+                let mut repo = opening_repo_state(repo_id, &std::env::temp_dir());
+                repo.large_file_support = Loadable::Ready(Arc::new(annex_support(true)));
+                repo.pull_in_flight = pull;
+                repo.worktree_pull_in_flight = worktree_pull;
+                repo.push_in_flight = push;
+                push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+            });
+        });
+        cx.update(|_, app| {
+            view.update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    let model = host
+                        .context_menu_model(
+                            &PopoverKind::annex(repo_id, AnnexPopoverKind::SectionMenu),
+                            cx,
+                        )
+                        .unwrap();
+                    assert_eq!(
+                        context_menu_entry_disabled(&model, "Sync with remotes"),
+                        disabled
+                    );
+                });
+            });
+        });
+    }
+}
+
+#[gpui::test]
+fn review_adjusted_branch_menus_disable_merge_and_squash(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(992);
+    let commit_id = CommitId("deadbeefdeadbeef".into());
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            let mut repo = commit_menu_test_repo(repo_id, &commit_id);
+            repo.head_branch = Loadable::Ready("adjusted/main(unlocked)".into());
+            repo.large_file_support = Loadable::Ready(Arc::new(annex_support(true)));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                for target in [
+                    BranchMenuTarget::local("feature".to_string()),
+                    BranchMenuTarget::remote("origin".to_string(), "feature".to_string()),
+                ] {
+                    let model = host
+                        .context_menu_model(&PopoverKind::BranchMenu { repo_id, target }, cx)
+                        .unwrap();
+                    assert!(context_menu_entry_disabled(&model, "Merge into current"));
+                    assert!(context_menu_entry_disabled(&model, "Squash into current"));
+                }
+                let model = host
+                    .context_menu_model(
+                        &PopoverKind::CommitMenu {
+                            repo_id,
+                            commit_id: commit_id.clone(),
+                        },
+                        cx,
+                    )
+                    .unwrap();
+                assert!(context_menu_entry_disabled(
+                    &model,
+                    "Merge deadbeef into adjusted/main(unlocked)"
+                ));
+            });
+        });
+    });
+}
+
+#[gpui::test]
+fn review_annex_repository_menu_shows_description_with_local_remote_name(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(993);
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &std::env::temp_dir());
+            let mut support = annex_support(true);
+            support.annex.repositories[1].description = "Archive".into();
+            repo.large_file_support = Loadable::Ready(Arc::new(support));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                let model = host.context_menu_model(&PopoverKind::annex(repo_id, AnnexPopoverKind::RepositoryMenu { uuid: "u-backup".into() }), cx).unwrap();
+                assert!(matches!(&model.items[0], ContextMenuItem::Header(label) if label.as_ref() == "Archive [backup]"));
+            });
+        });
+    });
+}
+
+#[gpui::test]
+fn review_hunk_menu_uses_rendered_large_file_target(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::large_files::{LargeFileContent, LargeFilePointer, LargeFileSide};
+    use gitcomet_state::model::{ForeignDiffOrigin, InlineSubmoduleDiffState};
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(994);
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &std::env::temp_dir());
+            let target = DiffTarget::WorkingTree { path: "asset.txt".into(), area: DiffArea::Unstaged };
+            let diff = Arc::new(gitcomet_core::domain::Diff::from_unified(target.clone(), "diff --git a/asset.txt b/asset.txt\n--- a/asset.txt\n+++ b/asset.txt\n@@ -1 +1 @@\n-before\n+after\n"));
+            repo.diff_state.diff_target = Some(target.clone());
+            repo.diff_state.diff = Loadable::Ready(diff.clone());
+            repo.diff_state.diff_file = Loadable::Ready(Some(Arc::new(gitcomet_core::domain::FileDiffText::new("asset.txt".into(), Some("before\n".into()), Some("after\n".into())))));
+            let large = LargeFileSide {
+                pointer: LargeFilePointer::Lfs(gitcomet_core::lfs::LfsPointer { oid: gitcomet_core::lfs::LfsOid([9; 32]), size: 12 }),
+                content: LargeFileContent::Available,
+            };
+            repo.diff_state.inline_submodule_diff = Some(InlineSubmoduleDiffState {
+                origin: ForeignDiffOrigin::Submodule, submodule_repo_path: "/tmp/sub".into(), parent_submodule_path: "sub".into(),
+                entries: Arc::from([]), selected_ix: 0, target, rev: 1, diff_rev: 1,
+                diff: Loadable::Ready(diff), diff_file_rev: 1,
+                diff_file: Loadable::Ready(Some(Arc::new(gitcomet_core::domain::FileDiffText::new("asset.txt".into(), Some("before\n".into()), Some("after\n".into())).with_large_sides(Some(large.clone()), Some(large))))),
+                diff_file_image: Loadable::NotLoaded,
+            });
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            assert!(this.main_pane.read(cx).has_large_file_text_diff());
+            this.popover_host.update(cx, |host, cx| {
+                let model = host
+                    .context_menu_model(&PopoverKind::DiffHunkMenu { repo_id, src_ix: 3 }, cx)
+                    .unwrap();
+                assert!(context_menu_entry_disabled(&model, "Stage hunk"));
+            });
+        });
+    });
 }
 
 fn annex_row(present: Option<bool>) -> gitcomet_core::large_files::UncommittedLargeFiles {

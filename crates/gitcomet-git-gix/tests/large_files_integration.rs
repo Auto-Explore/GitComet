@@ -2156,6 +2156,53 @@ fn silent_lfs_commands() -> [gitcomet_core::large_files::LargeFileCommand; 3] {
 }
 
 #[cfg(unix)]
+#[test]
+fn lfs_fetch_batches_share_credentials_only_within_one_operation() {
+    use gitcomet_core::auth::{GitAuthKind, ScopedStagedGitAuth, StagedGitAuth};
+    use gitcomet_core::large_files::LargeFileCommand;
+    const SCRIPT: &str = r#"#!/bin/sh
+case "$1" in
+  fetch)
+    secret=$("$GIT_ASKPASS" "Password:")
+    [ "$secret" = "lfs-test-secret" ] || { echo 'Authentication failed' >&2; exit 1; }
+    echo fetch >> "$GITCOMET_LFS_TEST_ROOT/fetched"
+    ;;
+esac
+"#;
+    with_lfs_shim(
+        "lfs_fetch_batches_share_credentials_only_within_one_operation",
+        SCRIPT,
+        |repo| {
+            let paths: Vec<PathBuf> = (0..130).map(|i| format!("file-{i}.bin").into()).collect();
+            for path in &paths {
+                fs::write(repo.join(path), "payload\n").unwrap();
+            }
+            git(repo, &["add", "."]);
+            git(repo, &["commit", "-qm", "files"]);
+            let opened = GixBackend.open(repo).unwrap();
+            let command = LargeFileCommand::LfsPull { paths };
+            {
+                let _auth = ScopedStagedGitAuth::stage(StagedGitAuth {
+                    kind: GitAuthKind::UsernamePassword,
+                    username: Some("test".into()),
+                    secret: "lfs-test-secret".into(),
+                });
+                opened.run_large_file_command(&command).unwrap();
+            }
+            let root = PathBuf::from(std::env::var_os("GITCOMET_LFS_TEST_ROOT").unwrap());
+            assert_eq!(
+                fs::read_to_string(root.join("fetched")).unwrap(),
+                "fetch\nfetch\n"
+            );
+            assert!(
+                opened.run_large_file_command(&command).is_err(),
+                "credentials must expire after the operation"
+            );
+        },
+    );
+}
+
+#[cfg(unix)]
 fn prepare_slow_clean_filter(repo: &Path, clean: &str) {
     fs::write(repo.join("file.slow"), "content\n").unwrap();
     git(repo, &["add", "file.slow"]);

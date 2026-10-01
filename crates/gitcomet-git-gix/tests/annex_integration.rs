@@ -651,7 +651,13 @@ fn status_and_line_stats_never_start_the_annex_filter() {
         },
     )
     .unwrap();
+    fs::write(repo.join("notes.txt"), "before\n").unwrap();
+    git(
+        &repo,
+        &["-c", "annex.largefiles=nothing", "add", "notes.txt"],
+    );
     git(&repo, &["commit", "-qam", "unlock"]);
+    fs::write(repo.join("notes.txt"), "after\nextra\n").unwrap();
     // Same size, new mtime: Git would have to hash the file to know.
     let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
     fs::File::options()
@@ -672,13 +678,20 @@ fn status_and_line_stats_never_start_the_annex_filter() {
     assert!(!log.exists(), "status started git-annex");
     assert_eq!(
         status.unstaged.len(),
-        1,
+        2,
         "like `git status`, the stale file reads as modified until restaged"
     );
-    opened
+    let stats = opened
         .uncommitted_line_stats_for_status_cancellable(&status, &CancellationToken::new())
         .unwrap();
     assert!(!log.exists(), "line stats started git-annex");
+    assert_eq!(
+        stats.unstaged[Path::new("notes.txt")],
+        gitcomet_core::domain::LineStats {
+            additions: Some(2),
+            deletions: Some(1)
+        }
+    );
 }
 
 /// What an interrupted `get` leaves: content in place, Git's index stat data
@@ -1456,7 +1469,7 @@ fn repositories_read_from_logs_match_git_annex_info() {
         .map(|repo| {
             (
                 repo.uuid.clone(),
-                repo.description.clone(),
+                repo.display_description(),
                 repo.trust.label().to_string(),
                 repo.here,
             )
@@ -1846,6 +1859,78 @@ printf '{"command":"get","file":"big.bin","success":true}\n'
             );
         },
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn annex_transfer_ignores_non_utf8_lines_and_reads_later_results() {
+    const SCRIPT: &str = r#"#!/bin/sh
+case "$*" in *restage*) exit 0 ;; esac
+printf '\377 remote diagnostic\n'
+case "$*" in *bad.bin*) printf '{"command":"get","file":"bad\377.bin","success":false,"error-messages":["unavailable"]}\n'; exit 0 ;; esac
+printf '{"command":"get","file":"big.bin","success":true}\n'
+"#;
+    with_annex_shim(
+        "annex_transfer_ignores_non_utf8_lines_and_reads_later_results",
+        SCRIPT,
+        |repo| {
+            git(repo, &["init", "-q"]);
+            let output = open(repo)
+                .run_large_file_command(&LargeFileCommand::AnnexGet {
+                    paths: paths("big.bin"),
+                    from: None,
+                })
+                .unwrap();
+            assert_eq!(output.stdout, "big.bin");
+            let error = open(repo)
+                .run_large_file_command(&LargeFileCommand::AnnexGet {
+                    paths: paths("bad.bin"),
+                    from: None,
+                })
+                .unwrap_err();
+            let gitcomet_core::error::ErrorKind::Git(failure) = error.kind() else {
+                panic!("expected the failed item: {error}");
+            };
+            assert!(failure.detail().unwrap().contains("unavailable"));
+        },
+    );
+}
+
+#[test]
+fn annex_descriptions_round_trip_without_local_remote_names() {
+    require_annex!();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_annex_repo(dir.path());
+    git(&repo, &["annex", "describe", "backup", "usb"]);
+    let opened = open(&repo);
+    let support = opened
+        .large_file_support_cancellable(&CancellationToken::new())
+        .unwrap();
+    let remote = support
+        .annex
+        .repositories
+        .iter()
+        .find(|r| r.remote_name.as_deref() == Some("backup"))
+        .unwrap();
+    assert_eq!(remote.description, "usb");
+    assert_eq!(remote.display_description(), "usb [backup]");
+    opened
+        .run_large_file_command(&LargeFileCommand::AnnexDescribe {
+            repository: remote.uuid.clone(),
+            description: remote.description.clone(),
+        })
+        .unwrap();
+    let support = opened
+        .large_file_support_cancellable(&CancellationToken::new())
+        .unwrap();
+    let refreshed = support
+        .annex
+        .repositories
+        .iter()
+        .find(|r| r.uuid == remote.uuid)
+        .unwrap();
+    assert_eq!(refreshed.description, "usb");
+    assert_eq!(refreshed.display_description(), "usb [backup]");
 }
 
 #[cfg(unix)]

@@ -20,6 +20,12 @@ use std::str;
 
 const PENDING_UPSTREAM_CONFIG_KEY: &str = "gitcometPendingUpstream";
 
+struct FetchAllRemotes {
+    names: Vec<String>,
+    /// Name the eligible remotes explicitly when --all would contact annex.
+    explicit: bool,
+}
+
 /// Display label for `git remote add`; the URL is masked because the label
 /// ends up in the command log and error toasts, unlike the argv.
 fn remote_add_label(name: &str, url: &str) -> String {
@@ -388,17 +394,28 @@ fn is_annex_special_remote(config: &gix::config::Snapshot<'_>, remote_name: &str
 
 /// Read a boolean directly from the matching `[remote "..."]` sections. This
 /// avoids interpolating the remote name into a dotted config key, where names
-/// containing `=` can be parsed as part of the value instead.
+/// containing `=` can be parsed as part of the value instead. Aliases share
+/// one setting in Git, so the last occurrence of any alias wins.
 fn remote_config_boolean(
     config: &gix::config::Snapshot<'_>,
     remote_name: &str,
-    value_name: &str,
+    value_names: &[&str],
 ) -> Option<bool> {
     let remote_name = remote_name.as_bytes().as_bstr();
     let value = config
         .sections_by_name("remote")?
         .filter(|section| section.header().subsection_name() == Some(remote_name))
-        .filter_map(|section| section.value_implicit(value_name))
+        .filter_map(|section| {
+            let name = section
+                .value_names()
+                .filter(|name| {
+                    value_names
+                        .iter()
+                        .any(|alias| name.eq_ignore_ascii_case(alias))
+                })
+                .last()?;
+            section.value_implicit(&name)
+        })
         .last()?;
     match value {
         // A key without `=` is Git's implicit true spelling.
@@ -576,35 +593,26 @@ impl GixRepo {
 
     /// Remotes `git fetch --all` contacts, in Git's own order. A remote it
     /// skips says nothing about whether that remote's branches still exist.
-    fn fetch_all_remote_names(&self) -> Result<Vec<String>> {
-        let repo = self.reopen_repo()?;
+    fn fetch_all_remotes(&self) -> Result<FetchAllRemotes> {
+        let repo = self.repo_with_current_config()?;
         let config = repo.config_snapshot();
         let mut names = Vec::new();
+        let mut explicit = false;
         for name in repo.remote_names() {
             let name = name.to_str_lossy().into_owned();
-            let skipped = ["skipFetchAll", "skipDefaultUpdate"]
-                .into_iter()
-                .any(|key| remote_config_boolean(&config, &name, key).unwrap_or(false));
-            if !skipped && !is_annex_special_remote(&config, &name) {
+            let skipped =
+                remote_config_boolean(&config, &name, &["skipFetchAll", "skipDefaultUpdate"])
+                    .unwrap_or(false);
+            if skipped {
+                continue;
+            }
+            if is_annex_special_remote(&config, &name) {
+                explicit = true;
+            } else {
                 names.push(name);
             }
         }
-        Ok(names)
-    }
-
-    /// Git-annex special remotes Git itself would still try to fetch.
-    fn unfetchable_annex_remotes(&self) -> Result<Vec<String>> {
-        let repo = self.reopen_repo()?;
-        let config = repo.config_snapshot();
-        Ok(repo
-            .remote_names()
-            .into_iter()
-            .map(|name| name.to_str_lossy().into_owned())
-            .filter(|name| {
-                !remote_config_boolean(&config, name, "skipFetchAll").unwrap_or(false)
-                    && is_annex_special_remote(&config, name)
-            })
-            .collect())
+        Ok(FetchAllRemotes { names, explicit })
     }
 
     /// Configured branch upstreams. `tracking_ref` is populated only when the
@@ -1020,26 +1028,26 @@ impl GixRepo {
         Ok(branches)
     }
 
-    fn fetch_all_command_impl(&self, prune: bool, capture_output: bool) -> Result<CommandOutput> {
+    fn fetch_all_command_impl(
+        &self,
+        remotes: &FetchAllRemotes,
+        prune: bool,
+        capture_output: bool,
+    ) -> Result<CommandOutput> {
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("fetch");
         // `--all` would also try a git-annex special remote left without
         // `skipFetchAll`, and fail. Name the fetchable remotes instead.
-        let explicit = if self.unfetchable_annex_remotes()?.is_empty() {
-            cmd.arg("--all");
-            None
+        let scope = if remotes.explicit {
+            "--multiple"
         } else {
-            cmd.arg("--multiple");
-            Some(self.fetch_all_remote_names()?)
+            "--all"
         };
-        if prune {
-            cmd.arg("--prune");
-        } else {
-            cmd.arg("--no-prune");
-        }
+        let prune_arg = if prune { "--prune" } else { "--no-prune" };
+        cmd.arg(scope).arg(prune_arg);
         cmd.arg("--no-prune-tags");
-        if let Some(remotes) = explicit {
-            if remotes.is_empty() {
+        if remotes.explicit {
+            if remotes.names.is_empty() {
                 return Ok(CommandOutput {
                     command: "git fetch".to_string(),
                     stdout: String::new(),
@@ -1047,27 +1055,23 @@ impl GixRepo {
                     exit_code: Some(0),
                 });
             }
-            cmd.arg("--").args(remotes);
+            cmd.arg("--").args(&remotes.names);
         }
         run_git_command_with_optional_output(
             cmd,
-            if prune {
-                "git fetch --all --prune --no-prune-tags"
-            } else {
-                "git fetch --all --no-prune --no-prune-tags"
-            },
+            &format!("git fetch {scope} {prune_arg} --no-prune-tags"),
             capture_output,
         )
     }
 
     fn fetch_all_command_with_optional_output_impl(
         &self,
-        remotes: &[String],
+        remotes: &FetchAllRemotes,
         prune: bool,
         capture_output: bool,
     ) -> Result<CommandOutput> {
         if !prune {
-            return self.fetch_all_command_impl(false, capture_output);
+            return self.fetch_all_command_impl(remotes, false, capture_output);
         }
 
         // `--prune` deletes every destination the remote's own refspecs map, so
@@ -1075,17 +1079,17 @@ impl GixRepo {
         // mirrors) would lose local tags and branches along with stale
         // remote-tracking refs. A remote whose refspecs cannot be read takes
         // the same scoped path rather than risk the broad prune.
-        let needs_scoped_prune = remotes.iter().any(|remote| {
+        let needs_scoped_prune = remotes.names.iter().any(|remote| {
             !self
                 .remote_prunes_only_tracking_refs(remote)
                 .unwrap_or(false)
         });
         if !needs_scoped_prune {
-            return self.fetch_all_command_impl(true, capture_output);
+            return self.fetch_all_command_impl(remotes, true, capture_output);
         }
 
-        let mut outputs = vec![self.fetch_all_command_impl(false, capture_output)?];
-        for remote in remotes {
+        let mut outputs = vec![self.fetch_all_command_impl(remotes, false, capture_output)?];
+        for remote in &remotes.names {
             outputs.push(
                 self.prune_remote_tracking_refs_command_with_optional_output_impl(
                     remote,
@@ -1094,7 +1098,7 @@ impl GixRepo {
             );
         }
         Ok(combine_command_outputs(
-            "git fetch --all --no-prune --no-prune-tags && git fetch --prune per remote",
+            &format!("{} && git fetch --prune per remote", outputs[0].command),
             &outputs,
         ))
     }
@@ -1107,10 +1111,10 @@ impl GixRepo {
         // Only the remotes this fetch contacts are authoritative about their
         // upstreams. A remote it skips can have a configured upstream with no
         // remote-tracking ref for reasons this fetch says nothing about.
-        let remotes = self.fetch_all_remote_names()?;
+        let remotes = self.fetch_all_remotes()?;
         let tracked_before_fetch = if prune {
             let configured =
-                self.configured_remote_upstreams(UpstreamCleanupScope::Remotes(&remotes))?;
+                self.configured_remote_upstreams(UpstreamCleanupScope::Remotes(&remotes.names))?;
             self.configured_upstreams_with_tracking_presence(configured, true)?
         } else {
             Vec::new()
@@ -1130,7 +1134,7 @@ impl GixRepo {
             return Ok(output);
         }
         let unlinked =
-            self.unlink_missing_remote_upstreams(UpstreamCleanupScope::Remotes(&remotes));
+            self.unlink_missing_remote_upstreams(UpstreamCleanupScope::Remotes(&remotes.names));
         Ok(append_unlinked_upstreams(output, &unlinked))
     }
 
@@ -2406,7 +2410,7 @@ impl GixRepo {
         // Keep configured upstreams intact until merged local branches have
         // been selected: that command intentionally uses a missing upstream as
         // one of its deletion criteria. Surviving branches are unlinked below.
-        let remotes = self.fetch_all_remote_names()?;
+        let remotes = self.fetch_all_remotes()?;
         let fetch_output =
             self.fetch_all_command_with_optional_output_impl(&remotes, true, true)?;
 
@@ -2499,7 +2503,7 @@ impl GixRepo {
             exit_code: Some(0),
         };
         let unlinked =
-            self.unlink_missing_remote_upstreams(UpstreamCleanupScope::Remotes(&remotes));
+            self.unlink_missing_remote_upstreams(UpstreamCleanupScope::Remotes(&remotes.names));
         Ok(append_unlinked_upstreams(output, &unlinked))
     }
 }

@@ -57,6 +57,10 @@ pub(super) fn model(
     // revert, or unconcluded merge is in flight; grey the entry out instead
     // of letting the click surface that refusal.
     let history_rewrite_disabled = repo.is_some_and(|r| r.history_rewrite_busy());
+    let merge_disabled = !super::super::merge_commit_confirm::merge_commit_is_allowed(
+        repo,
+        &this.state.large_file_settings,
+    );
     let branch_commit_id: Option<CommitId> = match target {
         BranchMenuTarget::Local { name } => repo.and_then(|repo| {
             repo.branches
@@ -229,7 +233,7 @@ pub(super) fn model(
                 label: "Merge into current".into(),
                 icon: Some("icons/swap.svg".into()),
                 shortcut: None,
-                disabled: false,
+                disabled: merge_disabled,
                 action: Box::new(ContextMenuAction::MergeRef {
                     repo_id,
                     reference: action_reference.clone(),
@@ -239,7 +243,7 @@ pub(super) fn model(
                 label: "Squash into current".into(),
                 icon: Some("icons/arrow_right.svg".into()),
                 shortcut: None,
-                disabled: false,
+                disabled: merge_disabled,
                 action: Box::new(ContextMenuAction::SquashRef {
                     repo_id,
                     reference: action_reference.clone(),
@@ -288,7 +292,7 @@ pub(super) fn model(
                 label: "Merge into current".into(),
                 icon: Some("icons/swap.svg".into()),
                 shortcut: None,
-                disabled: false,
+                disabled: merge_disabled,
                 action: Box::new(ContextMenuAction::MergeRef {
                     repo_id,
                     reference: action_reference.clone(),
@@ -298,7 +302,7 @@ pub(super) fn model(
                 label: "Squash into current".into(),
                 icon: Some("icons/arrow_right.svg".into()),
                 shortcut: None,
-                disabled: false,
+                disabled: merge_disabled,
                 action: Box::new(ContextMenuAction::SquashRef {
                     repo_id,
                     reference: action_reference.clone(),

@@ -770,7 +770,7 @@ impl super::GixRepo {
         }
         if metadata.is_file()
             && metadata.len() <= MAX_POINTER_BYTES
-            && let Ok(bytes) = std::fs::read(&full)
+            && let Some(bytes) = read_pointer_candidate(&full)
             && let Some(classified) = classify_bytes(&bytes, false)
         {
             return Some((classified, LargeFileWorktree::Pointer));

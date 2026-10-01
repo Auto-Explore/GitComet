@@ -1724,12 +1724,20 @@ pub struct RepoFeedbackState {
     pub(crate) command_log_operation_id: Option<GitOperationId>,
 }
 
-/// Deferred operation context retained between an initial failure and the
-/// user's follow-up action (authentication retry or confirmed force-push).
+/// Deferred context for authentication retries, confirmed force pushes and
+/// queued large-file commands.
 #[derive(Clone, Debug, Default)]
 pub struct RepoPendingState {
     pub commit_retry: Option<PendingCommitRetry>,
     pub force_push_lease: Option<ForcePushLease>,
+    /// Annex operations waiting for a conflicting pull or push to finish.
+    pub(crate) large_file_commands: std::collections::VecDeque<PendingLargeFileCommand>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PendingLargeFileCommand {
+    pub command: gitcomet_core::large_files::LargeFileCommand,
+    pub auth: Option<gitcomet_core::auth::StagedGitAuth>,
 }
 
 /// The three related navigation mechanisms owned by one repository.
@@ -2338,6 +2346,14 @@ impl RepoState {
     /// Pull and Push of the current branch go through git-annex.
     pub fn annex_takes_over_pull_push(&self, settings: &LargeFileSettings) -> bool {
         settings.annex_pull_push && self.annex_adjusted_branch().is_some()
+    }
+
+    pub fn large_file_command_busy(
+        &self,
+        command: &gitcomet_core::large_files::LargeFileCommand,
+    ) -> bool {
+        (command.pulls() && self.worktree_pull_in_flight > 0)
+            || (command.pushes() && self.push_in_flight > 0)
     }
 
     /// The lock held on `path`, when the lock list has loaded.

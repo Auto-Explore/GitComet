@@ -343,6 +343,85 @@ fn bump_in_flight(
     }
 }
 
+pub(super) fn run_large_file_command(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    command: gitcomet_core::large_files::LargeFileCommand,
+) -> Vec<Effect> {
+    run_large_file_command_with_auth(repos, state, repo_id, command, None)
+}
+
+fn run_large_file_command_with_auth(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    command: gitcomet_core::large_files::LargeFileCommand,
+    auth: Option<StagedGitAuth>,
+) -> Vec<Effect> {
+    let pulls = command.pulls();
+    let pushes = command.pushes();
+    if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id)
+        && repo.large_file_command_busy(&command)
+    {
+        let label = command.label();
+        repo.pending
+            .large_file_commands
+            .push_back(crate::model::PendingLargeFileCommand { command, auth });
+        repo.bump_ops_rev();
+        super::util::push_notification(
+            state,
+            crate::model::AppNotificationKind::Info,
+            format!("{label} queued until the running pull or push finishes."),
+        );
+        return Vec::new();
+    }
+    if pulls {
+        bump_in_flight(repos, state, repo_id, InFlightKind::WorktreePull);
+    }
+    if pushes {
+        bump_in_flight(repos, state, repo_id, InFlightKind::Push);
+    }
+    super::begin_local_action(state, repo_id);
+    vec![Effect::RunLargeFileCommand {
+        repo_id,
+        command,
+        auth,
+    }]
+}
+
+pub(super) fn start_queued_large_file_commands(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+) -> Vec<Effect> {
+    let mut effects = Vec::new();
+    loop {
+        let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+            break;
+        };
+        let Some(next) = repo.pending.large_file_commands.front() else {
+            break;
+        };
+        if repo.large_file_command_busy(&next.command) {
+            break;
+        }
+        let next = repo
+            .pending
+            .large_file_commands
+            .pop_front()
+            .expect("queued command");
+        effects.extend(run_large_file_command_with_auth(
+            repos,
+            state,
+            repo_id,
+            next.command,
+            next.auth,
+        ));
+    }
+    effects
+}
+
 pub(super) fn fetch_all(
     repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
     state: &mut AppState,
@@ -1012,14 +1091,32 @@ pub(super) fn safe_push_after_commit_finished(
     }
 }
 
-/// Support facts come from config, remotes, `.gitattributes`, HEAD and
-/// git-annex's logs. A reload reads the index and every attributes file, so
+/// Support facts come from config, remotes, `.gitattributes`, HEAD,
+/// git-annex's logs and local object stores. A reload reads the index and every attributes file, so
 /// commands that change none of those skip it.
 fn command_may_change_large_file_support(command: &RepoCommandKind) -> bool {
     match command {
-        RepoCommandKind::LargeFile { .. }
+        RepoCommandKind::LargeFile { command } => {
+            use gitcomet_core::large_files::LargeFileCommand as C;
+            match command {
+                C::LfsPull { .. } | C::LfsFetchForDiff { .. }
+                | C::LfsInstall | C::LfsTrack { .. } | C::LfsFetchAll
+                | C::AnnexAdd { .. } | C::AnnexPull { .. } | C::AnnexPush { .. }
+                | C::AnnexSync { .. } | C::AnnexInit | C::AnnexAdjust { .. }
+                | C::AnnexLeaveAdjusted { .. } | C::AnnexEnableRemote { .. }
+                | C::AnnexInitRemote { .. } | C::AnnexTrust { .. }
+                | C::AnnexDescribe { .. } | C::AnnexNumcopies { .. }
+                | C::AnnexWebapp | C::AnnexStopAssistant | C::AnnexRestage => true,
+                C::LfsPushAll { .. } | C::LfsPrune
+                | C::LfsFsck | C::LfsLock { .. } | C::LfsUnlock { .. }
+                | C::AnnexGet { .. } | C::AnnexGetKeys { .. } | C::AnnexDrop { .. }
+                | C::AnnexCopy { .. } | C::AnnexMove { .. } | C::AnnexUnlock { .. }
+                | C::AnnexLock { .. } | C::AnnexFsck
+                | C::AnnexDropUnused { .. } => false,
+            }
+        }
         // New commits or checked-out files can bring other `.gitattributes`.
-        | RepoCommandKind::Pull { .. }
+        RepoCommandKind::Pull { .. }
         | RepoCommandKind::PullBranch { .. }
         | RepoCommandKind::MergeRef { .. }
         | RepoCommandKind::SquashRef { .. }
@@ -1251,6 +1348,16 @@ pub(super) fn repo_command_finished(
     }
 
     let mut extra_effects = Vec::new();
+    if let RepoCommandKind::LargeFile { command } = &command {
+        if command.pulls() {
+            repo_state.pull_in_flight = repo_state.pull_in_flight.saturating_sub(1);
+            repo_state.worktree_pull_in_flight =
+                repo_state.worktree_pull_in_flight.saturating_sub(1);
+        }
+        if command.pushes() {
+            repo_state.push_in_flight = repo_state.push_in_flight.saturating_sub(1);
+        }
+    }
     if refresh_remote_branches && !matches!(repo_state.remote_branches, Loadable::Ready(_)) {
         // A fetch may have updated or pruned refs even when a later phase failed.
         // Keep a successful pre-command snapshot visible while it is revalidated;

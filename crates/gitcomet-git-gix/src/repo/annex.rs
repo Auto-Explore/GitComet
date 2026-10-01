@@ -245,7 +245,8 @@ const BUILTIN_REPOSITORIES: [(&str, &str); 2] = [
 
 /// Repositories as `git annex info` lists them: every uuid with a description
 /// or a remote, dead ones left out, grouped by trust and ordered by uuid.
-/// A remote's name joins its description the way git-annex shows it.
+/// Descriptions stay unadorned so they can be edited without saving a local
+/// remote name into uuid.log.
 fn repositories_from_logs(
     uuid_log: &str,
     trust_log: &str,
@@ -279,17 +280,6 @@ fn repositories_from_logs(
                 Some("1") => AnnexTrust::Trusted,
                 Some("0") => AnnexTrust::Untrusted,
                 _ => AnnexTrust::Semitrusted,
-            };
-            let description = match remote {
-                Some(remote) => {
-                    let name = format!("[{}]", remote.name);
-                    if description.is_empty() || description == remote.name {
-                        name
-                    } else {
-                        format!("{description} {name}")
-                    }
-                }
-                None => description,
             };
             Some(AnnexRepository {
                 description,
@@ -584,8 +574,13 @@ impl super::GixRepo {
             };
             let mut last_emit: Option<std::time::Instant> = None;
             let mut pending = None;
-            for line in std::io::BufReader::new(stdout).lines() {
+            // Ignore malformed records, including non-UTF-8 output from a
+            // remote helper, while continuing to drain the transfer's pipe.
+            for line in std::io::BufReader::new(stdout).split(b'\n') {
                 let line = line.map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+                // Preserve item failures even if a filename or diagnostic
+                // inside its JSON string is not valid UTF-8.
+                let line = String::from_utf8_lossy(&line);
                 let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
                     continue;
                 };
@@ -1067,13 +1062,14 @@ mod tests {
                     AnnexTrust::Semitrusted
                 ),
                 ("aaa", "laptop", AnnexTrust::Semitrusted),
-                ("bbb", "[backup]", AnnexTrust::Semitrusted),
+                ("bbb", "backup", AnnexTrust::Semitrusted),
                 ("ccc", "usb drive", AnnexTrust::Untrusted),
             ],
             "dead ones are left out; the newest description wins"
         );
         assert!(repos[1].here);
         assert_eq!(repos[2].display_name(), "backup");
+        assert_eq!(repos[2].display_description(), "[backup]");
         assert_eq!(repos[2].special_type.as_deref(), Some("directory"));
         // Not enabled here, so only remote.log knows its type and name.
         assert_eq!(repos[3].special_type.as_deref(), Some("rsync"));

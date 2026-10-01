@@ -697,7 +697,7 @@ impl PopoverHost {
                 target,
             )),
             PopoverKind::DiffHunkMenu { repo_id, src_ix } => {
-                Some(diff_hunk::model(self, *repo_id, *src_ix))
+                Some(diff_hunk::model(self, *repo_id, *src_ix, cx))
             }
             PopoverKind::DiffEditorMenu {
                 repo_id,
@@ -1917,7 +1917,7 @@ impl PopoverHost {
                 }
             }
             ContextMenuAction::StageHunk { repo_id, src_ix } => {
-                if let Some(patch) = self.build_unified_patch_for_hunk_src_ix(repo_id, src_ix) {
+                if let Some(patch) = self.build_unified_patch_for_hunk_src_ix(repo_id, src_ix, cx) {
                     self.store.dispatch(Msg::StageHunk { repo_id, patch });
                 } else {
                     self.push_toast(
@@ -1928,7 +1928,7 @@ impl PopoverHost {
                 }
             }
             ContextMenuAction::UnstageHunk { repo_id, src_ix } => {
-                if let Some(patch) = self.build_unified_patch_for_hunk_src_ix(repo_id, src_ix) {
+                if let Some(patch) = self.build_unified_patch_for_hunk_src_ix(repo_id, src_ix, cx) {
                     self.store.dispatch(Msg::UnstageHunk { repo_id, patch });
                 } else {
                     self.push_toast(
@@ -2239,9 +2239,17 @@ impl PopoverHost {
         &self,
         repo_id: RepoId,
         hunk_src_ix: usize,
+        cx: &gpui::App,
     ) -> Option<gitcomet_state::msg::ContentBytes> {
-        let repo = self.state.repos.iter().find(|r| r.id == repo_id)?;
-        let Loadable::Ready(diff) = &repo.diff_state.diff else {
+        let pane = self.main_pane.read(cx);
+        // Payload row numbers do not address hunks in the Git pointer patch.
+        if pane.active_repo_id() != Some(repo_id)
+            || pane.is_inline_submodule_diff_active()
+            || pane.has_large_file_text_diff()
+        {
+            return None;
+        }
+        let Some(Loadable::Ready(diff)) = pane.rendered_patch_diff_loadable() else {
             return None;
         };
         crate::view::diff_utils::build_unified_patch_for_hunk(diff.lines.as_slice(), hunk_src_ix)

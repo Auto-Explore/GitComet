@@ -109,11 +109,43 @@ pub(super) fn status_file_items(
         None => {
             // Tracking converts the file on the next add; tracked files are
             // re-added now so the change shows up staged.
-            let renormalize = if is_untracked {
-                Vec::new()
+            let worktree: rustc_hash::FxHashMap<_, _> = repo
+                .worktree_status_entries()
+                .unwrap_or_default()
+                .iter()
+                .map(|entry| (entry.path.as_path(), entry.kind))
+                .collect();
+            let staged: rustc_hash::FxHashMap<_, _> = if area == DiffArea::Staged {
+                repo.staged_status_entries()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|entry| (entry.path.as_path(), entry.kind))
+                    .collect()
             } else {
-                paths.to_vec()
+                rustc_hash::FxHashMap::default()
             };
+            let lane = match area {
+                DiffArea::Staged => &staged,
+                DiffArea::Unstaged => &worktree,
+            };
+            let renormalize: Vec<_> = paths
+                .iter()
+                .filter(|candidate| {
+                    if is_untracked && candidate.as_path() == path {
+                        return false;
+                    }
+                    // --renormalize also stages deletions. Only re-add tracked,
+                    // present files from this lane of the selection.
+                    use gitcomet_core::domain::FileStatusKind as K;
+                    lane.get(candidate.as_path()).is_some_and(|kind| {
+                        !matches!(kind, K::Deleted | K::Untracked | K::Conflicted)
+                    }) && !worktree
+                        .get(candidate.as_path())
+                        .is_some_and(|kind| matches!(kind, K::Deleted | K::Conflicted))
+                        && repo.large_file_state(area, candidate).is_none()
+                })
+                .cloned()
+                .collect();
             if let Some(ext) = path.extension().and_then(|ext| ext.to_str()) {
                 items.push(entry(
                     with_missing_suffix(&format!("Track *.{ext} in Git LFS"), missing),
@@ -124,7 +156,11 @@ pub(super) fn status_file_items(
                         patterns: vec![format!("*.{ext}")],
                         filename: false,
                         lockable: false,
-                        renormalize: renormalize.clone(),
+                        renormalize: renormalize
+                            .iter()
+                            .filter(|candidate| candidate.extension() == path.extension())
+                            .cloned()
+                            .collect(),
                     },
                 ));
             }
@@ -232,4 +268,190 @@ fn lfs_in_use(repo: &RepoState) -> bool {
         &repo.large_file_support,
         gitcomet_state::model::Loadable::Ready(support) if support.lfs.in_use()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gitcomet_core::domain::{FileStatus, FileStatusKind as K, RepoSpec, RepoStatus};
+    use gitcomet_state::model::Loadable;
+    use std::path::{Path, PathBuf};
+
+    fn track_test_repo() -> RepoState {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: "/tmp/repo".into(),
+            },
+        );
+        let mut support = gitcomet_core::large_files::LargeFileSupport::default();
+        support.lfs.filter_configured = true;
+        repo.large_file_support = Loadable::Ready(Arc::new(support));
+        repo
+    }
+
+    fn file_status(path: &str, kind: K) -> FileStatus {
+        FileStatus {
+            path: path.into(),
+            kind,
+            conflict: None,
+        }
+    }
+
+    fn extension_renormalize(repo: &RepoState, area: DiffArea, paths: &[PathBuf]) -> Vec<PathBuf> {
+        status_file_items(
+            &AppState::test_default(),
+            repo,
+            area,
+            &paths[0],
+            paths,
+            false,
+        )
+        .into_iter()
+        .find_map(|item| match item {
+            ContextMenuItem::Entry { action, .. } => match *action {
+                ContextMenuAction::RunLargeFileCommand {
+                    command:
+                        LargeFileCommand::LfsTrack {
+                            filename: false,
+                            renormalize,
+                            ..
+                        },
+                    ..
+                } => Some(renormalize),
+                _ => None,
+            },
+            _ => None,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn review_track_uses_current_status_lanes_after_worktree_only_refresh() {
+        for area in [DiffArea::Staged, DiffArea::Unstaged] {
+            for removed_kind in [K::Deleted, K::Conflicted] {
+                let mut repo = track_test_repo();
+                let old = Arc::new(vec![
+                    file_status("hero.psd", K::Modified),
+                    file_status("removed.psd", K::Modified),
+                ]);
+                repo.status = Loadable::Ready(
+                    RepoStatus {
+                        staged: old.clone(),
+                        unstaged: old,
+                    }
+                    .into(),
+                );
+                repo.worktree_status = Loadable::Ready(Arc::new(vec![
+                    file_status("hero.psd", K::Modified),
+                    file_status("removed.psd", removed_kind),
+                ]));
+                let paths = vec!["hero.psd".into(), "removed.psd".into()];
+                assert_eq!(
+                    extension_renormalize(&repo, area, &paths),
+                    vec![PathBuf::from("hero.psd")],
+                    "{area:?} {removed_kind:?}"
+                );
+            }
+        }
+        let mut repo = track_test_repo();
+        repo.status = Loadable::Ready(RepoStatus::default().into());
+        repo.staged_status = Loadable::Ready(Arc::new(vec![file_status("hero.psd", K::Added)]));
+        assert_eq!(
+            extension_renormalize(&repo, DiffArea::Staged, &["hero.psd".into()]),
+            vec![PathBuf::from("hero.psd")]
+        );
+    }
+
+    #[test]
+    fn review_track_large_selection_scaling() {
+        for count in [1_000, 2_000, 5_000] {
+            let mut repo = track_test_repo();
+            let entries: Vec<_> = (0..count)
+                .map(|i| file_status(&format!("asset-{i}.psd"), K::Modified))
+                .collect();
+            let paths: Vec<_> = entries.iter().map(|entry| entry.path.clone()).collect();
+            repo.status = Loadable::Ready(
+                RepoStatus {
+                    staged: Arc::default(),
+                    unstaged: Arc::new(entries),
+                }
+                .into(),
+            );
+            let started = std::time::Instant::now();
+            assert_eq!(
+                extension_renormalize(&repo, DiffArea::Unstaged, &paths),
+                paths
+            );
+            eprintln!("LFS track {count} selected files: {:?}", started.elapsed());
+        }
+    }
+
+    #[test]
+    fn track_extension_renormalizes_only_matching_present_tracked_files() {
+        let state = AppState::test_default();
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: "/tmp/repo".into(),
+            },
+        );
+        let mut support = gitcomet_core::large_files::LargeFileSupport::default();
+        support.lfs.filter_configured = true;
+        repo.large_file_support = Loadable::Ready(Arc::new(support));
+        let entries: Vec<_> = [
+            ("hero.psd", K::Modified),
+            ("other.psd", K::Modified),
+            ("notes.txt", K::Modified),
+            ("removed.psd", K::Deleted),
+            ("new.psd", K::Untracked),
+            ("conflict.psd", K::Conflicted),
+        ]
+        .into_iter()
+        .map(|(path, kind)| FileStatus {
+            path: path.into(),
+            kind,
+            conflict: None,
+        })
+        .collect();
+        let paths: Vec<_> = entries.iter().map(|entry| entry.path.clone()).collect();
+        repo.status = Loadable::Ready(
+            RepoStatus {
+                staged: Arc::new(vec![]),
+                unstaged: Arc::new(entries),
+            }
+            .into(),
+        );
+        let items = status_file_items(
+            &state,
+            &repo,
+            DiffArea::Unstaged,
+            Path::new("hero.psd"),
+            &paths,
+            false,
+        );
+        let command = items
+            .iter()
+            .find_map(|item| match item {
+                ContextMenuItem::Entry { action, .. } => match action.as_ref() {
+                    ContextMenuAction::RunLargeFileCommand {
+                        command:
+                            LargeFileCommand::LfsTrack {
+                                patterns,
+                                renormalize,
+                                ..
+                            },
+                        ..
+                    } => Some((patterns, renormalize)),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(*command.0, vec!["*.psd".to_string()]);
+        assert_eq!(
+            *command.1,
+            vec![PathBuf::from("hero.psd"), PathBuf::from("other.psd")]
+        );
+    }
 }

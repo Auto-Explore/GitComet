@@ -141,7 +141,19 @@ impl GixRepo {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         if !cached.is_current() {
-            *cached = ConfigRepo::new(self.reopen_repo()?);
+            // Resolve includes with a fresh open, then install that config on
+            // a handle sharing our original index and object store. Retaining
+            // the fresh repository would keep a second parsed index alive.
+            let fresh = self.reopen_repo()?;
+            let mut repo = self.repo();
+            let mut config = repo.config_snapshot_mut();
+            *config = fresh.config_snapshot().plumbing().clone();
+            config.commit().map_err(|error| {
+                gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Backend(format!(
+                    "gix refresh config: {error}"
+                )))
+            })?;
+            *cached = ConfigRepo::new(repo);
         }
         Ok(cached.repo.to_thread_local())
     }
@@ -150,6 +162,28 @@ impl GixRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_refresh_keeps_the_shared_index() {
+        use crate::repo::status::tests::{git_success, init_test_repo, open_repo, write_file};
+        let dir = tempfile::tempdir().unwrap();
+        init_test_repo(dir.path());
+        write_file(dir.path(), "file.txt", "content\n");
+        git_success(dir.path(), &["add", "."]);
+        let repo = open_repo(dir.path());
+        let original = repo.repo().index().unwrap();
+        git_success(dir.path(), &["config", "core.whitespace", "tabwidth=8"]);
+        let current = repo.repo_with_current_config().unwrap();
+        assert_eq!(
+            current.config_snapshot().string("core.whitespace").unwrap(),
+            "tabwidth=8"
+        );
+        let refreshed = current.index().unwrap();
+        assert!(
+            std::ptr::eq(&**original, &**refreshed),
+            "config refresh must reuse the parsed index"
+        );
+    }
 
     #[test]
     fn review_detached_head_commits_do_not_reopen_config() {

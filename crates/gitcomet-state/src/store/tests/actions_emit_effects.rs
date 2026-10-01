@@ -5375,9 +5375,10 @@ fn large_file_command_runs_as_a_local_action_and_lock_changes_reload_locks() {
         "a lock change reloads the lock list: {effects:?}"
     );
     assert!(
-        effects
+        !effects
             .iter()
-            .any(|e| matches!(e, Effect::LoadLargeFileSupport { .. }))
+            .any(|e| matches!(e, Effect::LoadLargeFileSupport { .. })),
+        "a file lock does not change the support summary"
     );
 }
 
@@ -5726,7 +5727,21 @@ fn pull_and_push_on_adjusted_branch_use_git_annex() {
         ),
         "{effects:?}"
     );
-    assert_eq!(state.repos[0].pull_in_flight, 0);
+    assert_eq!(state.repos[0].pull_in_flight, 1);
+    assert_eq!(state.repos[0].worktree_pull_in_flight, 1);
+    assert!(
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Pull {
+                repo_id,
+                mode: PullMode::Default,
+            }
+        )
+        .is_empty(),
+        "repeated Pull must not start another annex process"
+    );
 
     state.large_file_settings.annex_sync_content = true;
     let effects = reduce(&mut repos, &id_alloc, &mut state, Msg::Push { repo_id });
@@ -5873,6 +5888,243 @@ fn annex_repo_on(state: &mut AppState, head: &str) {
     state.repos[0].head_branch = Loadable::Ready(head.to_string());
 }
 
+#[test]
+fn review_commit_and_amend_push_wait_for_running_push() {
+    use crate::msg::InternalMsg;
+    for amend in [false, true] {
+        let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
+        annex_repo_on(&mut state, "adjusted/main(unlocked)");
+        reduce(&mut repos, &id_alloc, &mut state, Msg::Push { repo_id });
+        state.repos[0].pending.commit_retry = Some(crate::model::PendingCommitRetry {
+            message: "ship".into(),
+            amend,
+            push_after_commit: true,
+        });
+        let result = Ok(gitcomet_core::services::CommitOperationOutcome {
+            local_branch: Some("adjusted/main(unlocked)".into()),
+            pre_head: None,
+            post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+        });
+        let message = if amend {
+            InternalMsg::CommitAmendFinished { repo_id, result }
+        } else {
+            InternalMsg::CommitFinished { repo_id, result }
+        };
+        let effects = reduce(&mut repos, &id_alloc, &mut state, Msg::Internal(message));
+        assert!(!runs_annex(&effects, false));
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Internal(InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::LargeFile {
+                    command: gitcomet_core::large_files::LargeFileCommand::AnnexPush {
+                        content: false,
+                    },
+                },
+                result: Ok(CommandOutput::default()),
+            }),
+        );
+        assert!(
+            runs_annex(&effects, false),
+            "the push after {amend:?} must run once the previous push finishes: {effects:?}"
+        );
+        assert_eq!(state.repos[0].push_in_flight, 1);
+        finish_large_file_effects(&mut repos, &id_alloc, &mut state, &effects);
+        assert_eq!(state.repos[0].push_in_flight, 0);
+    }
+}
+
+#[test]
+fn review_annex_sync_is_not_blocked_by_fetch_or_prune() {
+    use gitcomet_core::large_files::LargeFileCommand as C;
+    for operation in 0..3 {
+        for command in [
+            C::AnnexPull { content: false },
+            C::AnnexSync { content: true },
+        ] {
+            let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
+            let message = match operation {
+                0 => Msg::FetchAll { repo_id },
+                1 => Msg::PruneMergedBranches { repo_id },
+                _ => Msg::PruneLocalTags { repo_id },
+            };
+            reduce(&mut repos, &id_alloc, &mut state, message);
+            let effects = reduce(
+                &mut repos,
+                &id_alloc,
+                &mut state,
+                Msg::RunLargeFileCommand {
+                    repo_id,
+                    command: command.clone(),
+                },
+            );
+            assert!(effects.iter().any(|effect| matches!(effect, Effect::RunLargeFileCommand { command: actual, .. } if actual == &command)), "fetch/prune {operation} must not suppress {command:?}: {effects:?}");
+            finish_large_file_effects(&mut repos, &id_alloc, &mut state, &effects);
+            assert_eq!(state.repos[0].pull_in_flight, 1);
+            assert_eq!(state.repos[0].worktree_pull_in_flight, 0);
+            assert_eq!(state.repos[0].push_in_flight, 0);
+        }
+    }
+}
+
+#[test]
+fn review_busy_annex_commands_provide_feedback_and_run_when_ready() {
+    use gitcomet_core::large_files::LargeFileCommand as C;
+    for command in [
+        C::AnnexPull { content: false },
+        C::AnnexPush { content: false },
+        C::AnnexSync { content: true },
+    ] {
+        let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
+        let first = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::RunLargeFileCommand {
+                repo_id,
+                command: C::AnnexSync { content: false },
+            },
+        );
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::RunLargeFileCommand {
+                repo_id,
+                command: command.clone(),
+            },
+        );
+        assert!(effects.is_empty());
+        assert!(
+            !state.notifications.is_empty(),
+            "a queued {command:?} must tell the user"
+        );
+        let Effect::RunLargeFileCommand {
+            command: running, ..
+        } = &first[0]
+        else {
+            panic!("{first:?}")
+        };
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::LargeFile {
+                    command: running.clone(),
+                },
+                result: Ok(CommandOutput::default()),
+            }),
+        );
+        assert!(effects.iter().any(|effect| matches!(effect, Effect::RunLargeFileCommand { command: actual, .. } if actual == &command)), "{effects:?}");
+    }
+}
+
+#[test]
+fn queued_annex_push_runs_after_plain_push_success_failure_or_cancellation() {
+    use gitcomet_core::large_files::LargeFileCommand as C;
+    for error in [
+        None,
+        Some(ErrorKind::Cancelled),
+        Some(ErrorKind::Backend("push failed".into())),
+    ] {
+        let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
+        reduce(&mut repos, &id_alloc, &mut state, Msg::Push { repo_id });
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::RunLargeFileCommand {
+                repo_id,
+                command: C::AnnexPush { content: true },
+            },
+        );
+        assert!(effects.is_empty());
+        assert_eq!(state.repos[0].pending.large_file_commands.len(), 1);
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::Push,
+                result: match error {
+                    Some(error) => Err(Error::new(error)),
+                    None => Ok(CommandOutput::default()),
+                },
+            }),
+        );
+        assert!(state.repos[0].pending.large_file_commands.is_empty());
+        assert!(runs_annex(&effects, false), "{effects:?}");
+        assert_eq!(state.repos[0].push_in_flight, 1);
+        assert_eq!(state.repos[0].local_actions_in_flight, 1);
+        finish_large_file_effects(&mut repos, &id_alloc, &mut state, &effects);
+        assert_eq!(state.repos[0].push_in_flight, 0);
+        assert_eq!(state.repos[0].local_actions_in_flight, 0);
+    }
+}
+
+#[test]
+fn review_restage_and_lfs_downloads_rescan_support_in_inactive_repo() {
+    use gitcomet_core::large_files::LargeFileCommand as C;
+    for command in [
+        C::AnnexRestage,
+        C::LfsPull {
+            paths: vec!["asset.bin".into()],
+        },
+        C::LfsFetchForDiff {
+            target: DiffTarget::WorkingTree {
+                path: "asset.bin".into(),
+                area: DiffArea::Unstaged,
+            },
+        },
+    ] {
+        let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
+        assert_ne!(state.active_repo, Some(repo_id));
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::LargeFile {
+                    command: command.clone(),
+                },
+                result: Ok(CommandOutput::default()),
+            }),
+        );
+        assert!(effects.iter().any(|effect| matches!(effect, Effect::LoadLargeFileSupport { repo_id: actual } if *actual == repo_id)), "{command:?}: {effects:?}");
+    }
+}
+
+#[test]
+fn review_adjusted_merge_refusal_explains_merge_risk() {
+    for squash in [false, true] {
+        let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
+        annex_repo_on(&mut state, "adjusted/main(unlocked)");
+        let message = if squash {
+            Msg::SquashRef {
+                repo_id,
+                reference: "feature".into(),
+            }
+        } else {
+            Msg::MergeRef {
+                repo_id,
+                reference: "feature".into(),
+            }
+        };
+        assert!(reduce(&mut repos, &id_alloc, &mut state, message).is_empty());
+        let reason = state.repos[0].feedback.last_error.as_ref().unwrap();
+        assert!(
+            reason.contains("adjusted content") && reason.contains("Check out main"),
+            "{reason}"
+        );
+    }
+}
+
 fn runs_annex(effects: &[Effect], pull: bool) -> bool {
     use gitcomet_core::large_files::LargeFileCommand;
     effects.iter().any(|effect| {
@@ -5893,6 +6145,33 @@ fn runs_annex(effects: &[Effect], pull: bool) -> bool {
             )
         )
     })
+}
+
+fn finish_large_file_effects(
+    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    id_alloc: &AtomicU64,
+    state: &mut AppState,
+    effects: &[Effect],
+) {
+    for effect in effects {
+        if let Effect::RunLargeFileCommand {
+            repo_id, command, ..
+        } = effect
+        {
+            reduce(
+                repos,
+                id_alloc,
+                state,
+                Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+                    repo_id: *repo_id,
+                    command: RepoCommandKind::LargeFile {
+                        command: command.clone(),
+                    },
+                    result: Ok(CommandOutput::default()),
+                }),
+            );
+        }
+    }
 }
 
 /// Support is loaded once per repo open, but HEAD moves under it: a checkout
@@ -5977,6 +6256,8 @@ fn every_pull_and_push_path_on_an_adjusted_branch_avoids_plain_git() {
         let label = format!("{msg:?}");
         let effects = reduce(&mut repos, &id_alloc, &mut state, msg);
         assert!(runs_annex(&effects, false), "{label}: {effects:?}");
+        assert_eq!(state.repos[0].push_in_flight, 1);
+        finish_large_file_effects(&mut repos, &id_alloc, &mut state, &effects);
     }
 
     state.repos[0].pending.commit_retry = Some(crate::model::PendingCommitRetry {
@@ -6005,6 +6286,8 @@ fn every_pull_and_push_path_on_an_adjusted_branch_avoids_plain_git() {
         "{effects:?}"
     );
 
+    finish_large_file_effects(&mut repos, &id_alloc, &mut state, &effects);
+
     for msg in [
         Msg::PullBranch {
             repo_id,
@@ -6012,6 +6295,14 @@ fn every_pull_and_push_path_on_an_adjusted_branch_avoids_plain_git() {
             branch: "feature".into(),
         },
         Msg::ForcePush { repo_id },
+        Msg::MergeRef {
+            repo_id,
+            reference: "feature".into(),
+        },
+        Msg::SquashRef {
+            repo_id,
+            reference: "feature".into(),
+        },
         Msg::ForcePushWithLease {
             repo_id,
             lease: test_force_push_lease(),
@@ -6130,10 +6421,38 @@ fn only_commands_that_can_change_support_reload_it() {
             annotated: false,
         },
         RepoCommandKind::FetchAll,
+        RepoCommandKind::LargeFile {
+            command: LargeFileCommand::LfsLock {
+                paths: vec!["a.bin".into()],
+            },
+        },
+        RepoCommandKind::LargeFile {
+            command: LargeFileCommand::AnnexGet {
+                paths: vec!["a.bin".into()],
+                from: None,
+            },
+        },
+        RepoCommandKind::LargeFile {
+            command: LargeFileCommand::AnnexDrop {
+                paths: vec!["a.bin".into()],
+                from: None,
+                force: false,
+            },
+        },
+        RepoCommandKind::LargeFile {
+            command: LargeFileCommand::AnnexLock {
+                paths: vec!["a.bin".into()],
+            },
+        },
     ] {
         assert!(!reloads(quiet.clone()), "{quiet:?}");
     }
     for loud in [
+        RepoCommandKind::LargeFile {
+            command: LargeFileCommand::LfsPull {
+                paths: vec!["a.bin".into()],
+            },
+        },
         RepoCommandKind::LargeFile {
             command: LargeFileCommand::AnnexInit,
         },
@@ -6146,6 +6465,71 @@ fn only_commands_that_can_change_support_reload_it() {
         },
     ] {
         assert!(reloads(loud.clone()), "{loud:?}");
+    }
+}
+
+#[test]
+fn annex_network_commands_release_busy_state_after_failure_or_cancellation() {
+    use gitcomet_core::large_files::LargeFileCommand as C;
+    for command in [
+        C::AnnexPull { content: false },
+        C::AnnexPush { content: false },
+        C::AnnexSync { content: true },
+    ] {
+        for kind in [
+            gitcomet_core::error::ErrorKind::Cancelled,
+            gitcomet_core::error::ErrorKind::Backend("transfer failed".into()),
+        ] {
+            let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
+            let message = || Msg::RunLargeFileCommand {
+                repo_id,
+                command: command.clone(),
+            };
+            assert_eq!(
+                reduce(&mut repos, &id_alloc, &mut state, message()).len(),
+                1
+            );
+            assert_eq!(
+                state.repos[0].pull_in_flight,
+                u32::from(!matches!(command, C::AnnexPush { .. }))
+            );
+            assert_eq!(
+                state.repos[0].worktree_pull_in_flight,
+                state.repos[0].pull_in_flight
+            );
+            assert_eq!(
+                state.repos[0].push_in_flight,
+                u32::from(!matches!(command, C::AnnexPull { .. }))
+            );
+            assert_eq!(state.repos[0].local_actions_in_flight, 1);
+            reduce(
+                &mut repos,
+                &id_alloc,
+                &mut state,
+                Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+                    repo_id,
+                    command: RepoCommandKind::LargeFile {
+                        command: command.clone(),
+                    },
+                    result: Err(gitcomet_core::error::Error::new(kind)),
+                }),
+            );
+            let repo = &state.repos[0];
+            assert_eq!(
+                (
+                    repo.pull_in_flight,
+                    repo.worktree_pull_in_flight,
+                    repo.push_in_flight,
+                    repo.local_actions_in_flight
+                ),
+                (0, 0, 0, 0)
+            );
+            assert_eq!(
+                reduce(&mut repos, &id_alloc, &mut state, message()).len(),
+                1,
+                "retry starts after busy state is released"
+            );
+        }
     }
 }
 

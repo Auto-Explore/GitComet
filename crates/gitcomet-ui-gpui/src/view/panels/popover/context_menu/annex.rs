@@ -59,6 +59,25 @@ fn prompt_entry(
     }
 }
 
+fn network_entry(
+    text: &str,
+    icon: &'static str,
+    missing: bool,
+    repo: &RepoState,
+    command: LargeFileCommand,
+) -> ContextMenuItem {
+    ContextMenuItem::Entry {
+        label: label(text, missing),
+        icon: Some(icon.into()),
+        shortcut: None,
+        disabled: missing || repo.large_file_command_busy(&command),
+        action: Box::new(ContextMenuAction::RunLargeFileCommand {
+            repo_id: repo.id,
+            command,
+        }),
+    }
+}
+
 fn trust_entry(
     repo_id: RepoId,
     repository: String,
@@ -236,11 +255,11 @@ pub(super) fn pull_items(state: &AppState, repo: Option<&RepoState>) -> Vec<Cont
     let content = state.large_file_settings.annex_sync_content;
     vec![
         ContextMenuItem::Separator,
-        entry(
+        network_entry(
             "Pull with git-annex",
             "icons/arrow_down.svg",
             missing,
-            repo.id,
+            repo,
             LargeFileCommand::AnnexPull { content },
         ),
         entry(
@@ -265,18 +284,18 @@ pub(super) fn push_items(state: &AppState, repo: Option<&RepoState>) -> Vec<Cont
     let content = state.large_file_settings.annex_sync_content;
     vec![
         ContextMenuItem::Separator,
-        entry(
+        network_entry(
             "Push with git-annex",
             "icons/arrow_up.svg",
             missing,
-            repo.id,
+            repo,
             LargeFileCommand::AnnexPush { content },
         ),
-        entry(
+        network_entry(
             "Sync with git-annex (pull and push)",
             "icons/refresh.svg",
             missing,
-            repo.id,
+            repo,
             LargeFileCommand::AnnexSync { content },
         ),
     ]
@@ -312,11 +331,11 @@ pub(super) fn section_model(this: &PopoverHost, repo_id: RepoId) -> ContextMenuM
     }
     let content = state.large_file_settings.annex_sync_content;
     items.extend([
-        entry(
+        network_entry(
             "Sync with remotes",
             "icons/refresh.svg",
             missing,
-            repo_id,
+            repo.expect("loaded support belongs to an open repository"),
             LargeFileCommand::AnnexSync { content },
         ),
         entry(
@@ -469,7 +488,7 @@ pub(super) fn repository_model(
         return ContextMenuModel::new(vec![ContextMenuItem::Header("Repository".into())]);
     };
     let mut items = vec![
-        ContextMenuItem::Header(target.display_name().to_string().into()),
+        ContextMenuItem::Header(target.display_description().into()),
         ContextMenuItem::Label(
             format!(
                 "{} · {}",

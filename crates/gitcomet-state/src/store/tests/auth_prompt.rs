@@ -54,6 +54,123 @@ fn effect_git_auth(effect: &Effect) -> Option<&StagedGitAuth> {
 }
 
 #[test]
+fn review_busy_annex_auth_retry_keeps_credentials_until_push_runs() {
+    use gitcomet_core::large_files::LargeFileCommand as C;
+    let _lock = super::staged_auth_test_lock();
+    clear_staged_git_auth();
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
+    let id_alloc = AtomicU64::new(1);
+    reduce(&mut repos, &id_alloc, &mut state, Msg::Push { repo_id });
+    state.auth_prompt = Some(AuthPromptState {
+        kind: AuthPromptKind::UsernamePassword,
+        reason: "auth required".into(),
+        operation: AuthRetryOperation::RepoCommand {
+            repo_id,
+            command: RepoCommandKind::LargeFile {
+                command: C::AnnexPush { content: true },
+            },
+        },
+    });
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SubmitAuthPrompt {
+            username: Some("alice".into()),
+            secret: "test-token".into(),
+        },
+    );
+    assert!(effects.is_empty(), "wait until the push finishes");
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::Push,
+            result: Ok(gitcomet_core::services::CommandOutput::default()),
+        }),
+    );
+    let auth = effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::RunLargeFileCommand {
+                command: C::AnnexPush { content: true },
+                auth,
+                ..
+            } => auth.as_ref(),
+            _ => None,
+        })
+        .expect("the queued retry must keep its credentials");
+    assert_eq!(auth.username.as_deref(), Some("alice"));
+    assert_eq!(auth.secret, "test-token");
+    clear_staged_git_auth();
+}
+
+#[test]
+fn safe_push_auth_retry_preserves_credentials_when_annex_takeover_is_queued() {
+    use gitcomet_core::large_files::LargeFileCommand as C;
+    let _lock = super::staged_auth_test_lock();
+    clear_staged_git_auth();
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
+    let mut support = gitcomet_core::large_files::LargeFileSupport::default();
+    support.annex.uuid = Some("here".into());
+    state.repos[0].large_file_support = Loadable::Ready(Arc::new(support));
+    state.repos[0].head_branch = Loadable::Ready("adjusted/main(unlocked)".into());
+    let id_alloc = AtomicU64::new(1);
+    reduce(&mut repos, &id_alloc, &mut state, Msg::Push { repo_id });
+    state.auth_prompt = Some(AuthPromptState {
+        kind: AuthPromptKind::UsernamePassword,
+        reason: "auth required".into(),
+        operation: AuthRetryOperation::SafePushAfterCommit {
+            repo_id,
+            context: gitcomet_core::services::SafePushAfterCommitContext {
+                amend: false,
+                local_branch: Some("adjusted/main(unlocked)".into()),
+                pre_head: None,
+                post_head: None,
+            },
+        },
+    });
+    assert!(
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::SubmitAuthPrompt {
+                username: Some("alice".into()),
+                secret: "test-token".into(),
+            }
+        )
+        .is_empty()
+    );
+    assert_eq!(state.repos[0].pending.large_file_commands.len(), 1);
+    assert_eq!(
+        state.repos[0].pending.large_file_commands[0]
+            .auth
+            .as_ref()
+            .map(|auth| auth.secret.as_str()),
+        Some("test-token")
+    );
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::LargeFile {
+                command: C::AnnexPush { content: false },
+            },
+            result: Ok(gitcomet_core::services::CommandOutput::default()),
+        }),
+    );
+    assert!(effects.iter().any(|effect| matches!(effect, Effect::RunLargeFileCommand { auth: Some(auth), .. } if auth.secret == "test-token")));
+    clear_staged_git_auth();
+}
+
+#[test]
 fn repo_command_finished_auth_error_sets_username_password_prompt() {
     let repo_id = RepoId(1);
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");

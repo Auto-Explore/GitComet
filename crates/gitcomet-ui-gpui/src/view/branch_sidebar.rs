@@ -1747,7 +1747,7 @@ fn push_annex_section_rows(
                 });
             rows.push(BranchSidebarRow::AnnexRepositoryItem {
                 uuid: repository.uuid.clone().into(),
-                name: repository.display_name().to_string().into(),
+                name: repository.display_description().into(),
                 detail: format!("{kind} · {}", repository.trust.label()).into(),
                 here: repository.here,
                 untrusted: repository.trust == gitcomet_core::large_files::AnnexTrust::Untrusted,
@@ -2572,7 +2572,7 @@ mod tests {
             },
             gitcomet_core::large_files::AnnexRepository {
                 uuid: "u-backup".into(),
-                description: "[backup]".into(),
+                description: String::new(),
                 remote_name: Some("backup".into()),
                 special_type: Some("directory".into()),
                 special_name: None,
@@ -2624,7 +2624,12 @@ mod tests {
                     true,
                     false
                 ),
-                ("backup".into(), "directory · untrusted".into(), false, true),
+                (
+                    "[backup]".into(),
+                    "directory · untrusted".into(),
+                    false,
+                    true
+                ),
             ]
         );
 
@@ -2676,6 +2681,17 @@ mod tests {
                 .iter()
                 .any(|row| matches!(row, BranchSidebarRow::AnnexHeader { .. }))
         );
+    }
+
+    #[test]
+    fn review_annex_sidebar_displays_raw_description_with_remote_decoration() {
+        let mut repo = annex_repo();
+        let Loadable::Ready(support) = &mut repo.large_file_support else {
+            panic!("support")
+        };
+        Arc::make_mut(support).annex.repositories[2].description = "Archive".into();
+        let rows = branch_sidebar_rows(&repo, &BTreeSet::new(), &BTreeSet::new(), "");
+        assert!(rows.iter().any(|row| matches!(row, BranchSidebarRow::AnnexRepositoryItem { name, .. } if name.as_ref() == "Archive [backup]")));
     }
 
     #[test]

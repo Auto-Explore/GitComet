@@ -26,7 +26,12 @@ fn annex_card_keys(
     use gitcomet_core::large_files::{LargeFileContent, LargeFilePointer};
     let mut keys = Vec::new();
     for side in [old, new].into_iter().flatten() {
-        if missing_only && side.content == LargeFileContent::Available {
+        if missing_only
+            && matches!(
+                side.content,
+                LargeFileContent::Available | LargeFileContent::TooLarge { .. }
+            )
+        {
             continue;
         }
         if let LargeFilePointer::Annex(key) = &side.pointer
@@ -1496,6 +1501,17 @@ mod tests {
         );
         assert_eq!(
             annex_card_keys(Some(&old), None, false),
+            ["SHA256E-s3--old.bin"]
+        );
+        let too_large = LargeFileSide {
+            content: LargeFileContent::TooLarge {
+                bytes: 20 * 1024 * 1024,
+            },
+            ..old.clone()
+        };
+        assert!(annex_card_keys(Some(&too_large), None, true).is_empty());
+        assert_eq!(
+            annex_card_keys(Some(&too_large), None, false),
             ["SHA256E-s3--old.bin"]
         );
     }

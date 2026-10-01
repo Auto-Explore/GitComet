@@ -46,6 +46,17 @@ impl super::GixRepo {
         &self,
         command: &LargeFileCommand,
     ) -> Result<CommandOutput> {
+        // A download may fetch several batches, and locks may involve more
+        // than one command. Every step of a retry needs the same credentials.
+        if command.is_annex() {
+            // Annex scopes its own credentials, excluding failure cleanup.
+            self.run_large_file_command_inner(command)
+        } else {
+            crate::util::with_shared_git_auth(|| self.run_large_file_command_inner(command))
+        }
+    }
+
+    fn run_large_file_command_inner(&self, command: &LargeFileCommand) -> Result<CommandOutput> {
         // Explicit LFS/annex commands need a Cancel control even when they
         // produce no hook events, output or transfer progress.
         if let Some(operation) = git_operation::current() {
