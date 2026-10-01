@@ -11,9 +11,11 @@ impl Render for GitCometView {
         #[cfg(test)]
         clear_visible_tooltip_text_for_test();
 
+        let gate_content = self.window_gate_content(window, cx);
+
         // The repository bar takes drops once repositories are open; Home
         // takes them before that.
-        let external_repo_drop_enabled = renders_full_chrome(self.view_mode);
+        let external_repo_drop_enabled = !self.window_gated && renders_full_chrome(self.view_mode);
         if self.external_drag_paths.is_some()
             && (!external_repo_drop_enabled
                 || (!cx.has_active_drag() && !self.external_drag_drop_pending))
@@ -25,7 +27,9 @@ impl Render for GitCometView {
         let font_preferences = crate::font_preferences::current(cx);
         debug_assert!(matches!(
             self.view_mode,
-            GitCometViewMode::Normal | GitCometViewMode::FocusedMergetool
+            GitCometViewMode::Normal
+                | GitCometViewMode::FocusedMergetool
+                | GitCometViewMode::FocusedDiff
         ));
         let next_window_size = window.viewport_size();
         let previous_window_width = self.last_window_size.width;
@@ -91,6 +95,14 @@ impl Render for GitCometView {
                 window,
                 cx,
             );
+        }
+
+        if let Some(prompt) = self.pending_close_guard_prompt.take() {
+            let anchor = point(
+                self.last_window_size.width / 2.0,
+                self.last_window_size.height / 2.0,
+            );
+            self.open_popover_at(PopoverKind::CloseGuardConfirm(prompt), anchor, window, cx);
         }
 
         if let Some(prompt) = self.pending_terminal_shutdown_prompt.take() {
@@ -202,6 +214,7 @@ impl Render for GitCometView {
         }
 
         let decorations = window.window_decorations();
+        self.sync_frame_decorations(decorations, cx);
         let (tiling, client_inset) = match decorations {
             Decorations::Client { tiling } => (
                 Some(tiling),
@@ -216,7 +229,7 @@ impl Render for GitCometView {
             .map(cursor_style_for_resize_edge)
             .unwrap_or(CursorStyle::Arrow);
 
-        let center_content = self.center_content(window, cx);
+        let center_content = gate_content.unwrap_or_else(|| self.center_content(window, cx));
         let font_features =
             crate::font_preferences::applied_font_features(font_preferences.use_font_ligatures);
         let show_custom_window_chrome =
@@ -265,12 +278,14 @@ impl Render for GitCometView {
         {
             let summary = report.summary.clone();
 
-            let report_button =
+            // A product without an issue tracker offers only Ignore.
+            let report_button = (!report.issue_url.is_empty()).then(|| {
                 components::Button::new("startup_crash_report_open", "Report Issue")
                     .style(components::ButtonStyle::Filled)
                     .on_click(theme, cx, |this, _e, _w, cx| {
                         this.report_startup_crash_report(cx);
-                    });
+                    })
+            });
 
             let ignore_button =
                 components::Button::new("startup_crash_report_ignore", "Ignore Crash")
@@ -318,15 +333,19 @@ impl Render for GitCometView {
                                 div()
                                     .text_size(theme.ui_text(14.0))
                                     .font_weight(FontWeight::BOLD)
-                                    .child("GitComet recovered from program crash"),
+                                    .child(format!(
+                                        "{} recovered from program crash",
+                                        crate::view::product_name()
+                                    )),
                             )
                             .child(
                                 div()
                                     .text_size(theme.ui_text(14.0))
                                     .text_color(theme.colors.foreground.secondary)
-                                    .child(
-                                        "Would you like to contribute by reporting issue to GitComet GitHub repository?",
-                                    ),
+                                    .child(format!(
+                                        "Would you like to contribute by reporting the issue to the {} developers?",
+                                        crate::view::product_name()
+                                    )),
                             )
                             .child(
                                 div()
@@ -340,7 +359,7 @@ impl Render for GitCometView {
                                     .flex()
                                     .items_center()
                                     .gap_1()
-                                    .child(report_button)
+                                    .children(report_button)
                                     .child(ignore_button),
                             ),
                     ),
@@ -498,7 +517,31 @@ impl Render for GitCometView {
         }
         root = root.child(UiScaleScrollCapture { view: cx.entity() });
         root = root
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if this.view_mode != GitCometViewMode::FocusedDiff
+                    || event.keystroke.modifiers != gpui::Modifiers::default()
+                    || !matches!(event.keystroke.key.as_str(), "escape" | "q")
+                    || window.context_stack().iter().any(|context| {
+                        context.contains("TextInput")
+                            || context.contains("ContextMenu")
+                            || context.contains("PopoverPrompt")
+                    })
+                {
+                    return;
+                }
+                let handle = window.window_handle();
+                cx.defer(move |cx| {
+                    let _ = handle.update(cx, |_, window, cx| {
+                        crate::app::close_window_or_warn(window, cx)
+                    });
+                });
+                cx.stop_propagation();
+            }))
             .on_action(cx.listener(|this, _: &OpenActiveViewSearch, window, cx| {
+                if !this.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
+                    cx.stop_propagation();
+                    return;
+                }
                 let handled = this
                     .main_pane
                     .update(cx, |pane, cx| pane.open_search_for_active_view(window, cx));
@@ -506,6 +549,12 @@ impl Render for GitCometView {
                     cx.stop_propagation();
                 }
             }))
+            .on_action(cx.listener(
+                |this, action: &super::extension_host::RunExtensionCommand, _window, cx| {
+                    this.run_extension_command(&action.id, cx);
+                    cx.stop_propagation();
+                },
+            ))
             .on_action(cx.listener(|this, _: &ToggleCommandPalette, window, cx| {
                 if !command_palette_available(this.view_mode) {
                     cx.stop_propagation();
@@ -531,10 +580,18 @@ impl Render for GitCometView {
                 cx.stop_propagation();
             }))
             .on_action(cx.listener(|this, _: &LocateFileInExplorer, _window, cx| {
+                if !this.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
+                    cx.stop_propagation();
+                    return;
+                }
                 this.locate_open_file_in_explorer(cx);
                 cx.stop_propagation();
             }))
             .on_action(cx.listener(|this, _: &OpenRemoteInBrowser, window, cx| {
+                if !this.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
+                    cx.stop_propagation();
+                    return;
+                }
                 this.open_remote_in_browser(window, cx);
                 cx.stop_propagation();
             }))
@@ -545,6 +602,10 @@ impl Render for GitCometView {
                 }
             }))
             .on_action(cx.listener(|this, _: &TextInputCommitSubmit, window, cx| {
+                if !this.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
+                    cx.stop_propagation();
+                    return;
+                }
                 let handled = this.details_pane.update(cx, |pane, cx| {
                     pane.handle_commit_submit_shortcut(window, cx)
                 });
@@ -553,6 +614,10 @@ impl Render for GitCometView {
                 }
             }))
             .on_action(cx.listener(|this, _: &TextInputDiffPrevFile, _window, cx| {
+                if !this.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
+                    cx.stop_propagation();
+                    return;
+                }
                 if !show_diff_file_navigation(this.view_mode) {
                     cx.stop_propagation();
                     return;
@@ -561,6 +626,10 @@ impl Render for GitCometView {
                 cx.stop_propagation();
             }))
             .on_action(cx.listener(|this, _: &TextInputDiffNextFile, _window, cx| {
+                if !this.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
+                    cx.stop_propagation();
+                    return;
+                }
                 if !show_diff_file_navigation(this.view_mode) {
                     cx.stop_propagation();
                     return;
@@ -585,6 +654,10 @@ impl Render for GitCometView {
                 },
             ))
             .on_action(cx.listener(|this, _: &DiffPrevFile, _window, cx| {
+                if !this.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
+                    cx.stop_propagation();
+                    return;
+                }
                 if !show_diff_file_navigation(this.view_mode) {
                     cx.stop_propagation();
                     return;
@@ -593,6 +666,10 @@ impl Render for GitCometView {
                 cx.stop_propagation();
             }))
             .on_action(cx.listener(|this, _: &DiffNextFile, _window, cx| {
+                if !this.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
+                    cx.stop_propagation();
+                    return;
+                }
                 if !show_diff_file_navigation(this.view_mode) {
                     cx.stop_propagation();
                     return;
@@ -717,7 +794,7 @@ impl Render for GitCometView {
             .child(stable_overlay_view(self.history_refs_hover_host.clone()))
             .child(stable_overlay_view(self.commit_message_hover_host.clone()))
             .child(stable_overlay_view(self.popover_host.clone()))
-            .child(stable_overlay_view(self.toast_host.clone()))
+            .child(stable_cached_overlay_view(self.toast_host.clone()))
             .child(stable_overlay_view(self.tooltip_host.clone()));
 
         root = root.child(chrome::window_frame(

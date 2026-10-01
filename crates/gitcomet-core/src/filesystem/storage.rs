@@ -130,7 +130,8 @@ pub(super) fn sweep(root: &Path) {
         }
         if retains_items(&dir) {
             crate::process::write_stderr_line(format_args!(
-                "gitcomet: kept filesystem recovery data from an earlier session at {}",
+                "{}: kept filesystem recovery data from an earlier session at {}",
+                crate::identity::current().executable_name(),
                 dir.display()
             ));
         } else {

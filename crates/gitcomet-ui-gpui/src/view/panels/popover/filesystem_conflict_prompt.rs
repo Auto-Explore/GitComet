@@ -1,5 +1,5 @@
 use super::*;
-use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
+use crate::kit::interaction as controls;
 use gitcomet_core::filesystem::ConflictChoice;
 
 /// Answers the open dialog in the root view, then closes it.

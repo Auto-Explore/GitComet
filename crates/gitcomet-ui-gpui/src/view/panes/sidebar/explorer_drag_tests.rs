@@ -855,10 +855,10 @@ fn explorer_root_creation_follows_pinned_rows_and_pinned_rows_reject_drops(
     let mut state = (*explorer_state()).clone();
     let repo = &mut state.repos[0];
     repo.spec.workdir = directory.path().to_path_buf();
-    repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: PathBuf::from("alpha/one.rs"),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    });
+    repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::working_tree(
+        PathBuf::from("alpha/one.rs"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    ));
     repo.diff_state.content_preview = true;
     repo.diff_state.edit_mode = true;
     let state = Arc::new(state);
@@ -905,9 +905,9 @@ fn explorer_root_creation_follows_pinned_rows_and_pinned_rows_reject_drops(
             let rows = pane.read(app).file_browser_visible_rows(app);
             assert!(matches!(
                 rows[0],
-                FileBrowserVisibleRow::UnsavedHeader { .. }
+                FileBrowserVisibleRow::FileSetHeader { .. }
             ));
-            assert!(matches!(rows[1], FileBrowserVisibleRow::UnsavedFile { .. }));
+            assert!(matches!(rows[1], FileBrowserVisibleRow::FileSetFile { .. }));
             assert!(matches!(
                 rows[2],
                 FileBrowserVisibleRow::NameEntry { depth: 0 }

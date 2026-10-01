@@ -171,7 +171,7 @@ impl SidebarPaneView {
                 let count =
                     rows.iter()
                         .filter(|row| match row {
-                            FileBrowserVisibleRow::UnsavedFile { path } => {
+                            FileBrowserVisibleRow::FileSetFile { path, .. } => {
                                 file_search_matches(&matchers, &path.to_string_lossy())
                             }
                             FileBrowserVisibleRow::Entry { entry_index, .. } => entries
@@ -181,7 +181,7 @@ impl SidebarPaneView {
                                         &entries[*entry_index].path.to_string_lossy(),
                                     )
                                 }),
-                            FileBrowserVisibleRow::UnsavedHeader { .. }
+                            FileBrowserVisibleRow::FileSetHeader { .. }
                             | FileBrowserVisibleRow::NameEntry { .. } => false,
                         })
                         .count();

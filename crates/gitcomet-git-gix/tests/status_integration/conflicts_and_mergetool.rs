@@ -757,10 +757,10 @@ fn diff_file_text_handles_modify_delete_conflicts() {
     let opened = backend.open(repo).unwrap();
 
     let diff = opened
-        .diff_file_text(&DiffTarget::WorkingTree {
-            path: PathBuf::from("a.txt"),
-            area: DiffArea::Unstaged,
-        })
+        .diff_file_text(&DiffTarget::working_tree(
+            PathBuf::from("a.txt"),
+            DiffArea::Unstaged,
+        ))
         .unwrap()
         .expect("file diff for conflicted changes");
     assert_file_diff_text_sources(&diff, None, Some("theirs\n"));
@@ -936,6 +936,66 @@ fn checkout_conflict_side_stages_resolution() {
 
     let on_disk = fs::read_to_string(repo.join("a.txt")).unwrap();
     assert_eq!(on_disk, "theirs\n");
+}
+
+#[test]
+fn discard_resolves_merge_conflicts_as_ours_beside_plain_changes() {
+    let _ = ensure_isolated_git_test_env();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "base\n");
+    write(repo, "b.txt", "b\n");
+    write(repo, "c.txt", "base c\n");
+    run_git(repo, &["add", "."]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write(repo, "a.txt", "theirs\n");
+    write(repo, "c.txt", "theirs c\n");
+    run_git(repo, &["add", "."]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "theirs"],
+    );
+
+    run_git(repo, &["checkout", "-"]);
+    write(repo, "a.txt", "ours\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(repo, &["rm", "c.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "ours"],
+    );
+
+    run_git_expect_failure(repo, &["merge", "feature"]);
+    write(repo, "b.txt", "dirty\n");
+
+    let opened = GixBackend.open(repo).unwrap();
+    opened
+        .discard_worktree_changes(&[Path::new("a.txt"), Path::new("b.txt"), Path::new("c.txt")])
+        .unwrap();
+
+    assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "ours\n");
+    assert_eq!(fs::read_to_string(repo.join("b.txt")).unwrap(), "b\n");
+    assert!(!repo.join("c.txt").exists());
+    let status = opened.status().unwrap();
+    assert!(
+        status.unstaged.is_empty() && status.staged.is_empty(),
+        "expected a clean status, got {status:?}"
+    );
+    assert!(
+        repo.join(".git/MERGE_HEAD").exists(),
+        "the merge stays in progress"
+    );
 }
 
 #[cfg(unix)]

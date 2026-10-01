@@ -191,9 +191,15 @@ impl GitCometView {
         let title = crate::workspaces::with_workspace_for_window(
             cx,
             self.window_handle.window_id(),
-            |workspace| format!("{} — GitComet", workspace.display_name()),
+            |workspace| {
+                format!(
+                    "{} — {}",
+                    workspace.display_name(),
+                    crate::view::product_name()
+                )
+            },
         )
-        .unwrap_or_else(|| "GitComet".to_string());
+        .unwrap_or_else(|| crate::view::product_name().to_string());
         if self.native_window_title != title {
             self.native_window_title.clone_from(&title);
             let window_handle = self.window_handle;
@@ -460,6 +466,46 @@ impl GitCometView {
             })
             .collect::<Vec<_>>();
 
+        let next_operation_progress = next
+            .repos
+            .iter()
+            .flat_map(|repo| {
+                let name = repo.spec.workdir.file_name().map_or_else(
+                    || repo.spec.workdir.display().to_string(),
+                    |name| name.to_string_lossy().into_owned(),
+                );
+                repo.feedback
+                    .hook_activity
+                    .iter()
+                    // Hook runs already have their own card.
+                    .filter(|operation| {
+                        operation.progress_lane
+                            && !operation.has_hooks()
+                            && operation.status.is_active()
+                    })
+                    .map(move |operation| {
+                        super::operation_progress::OperationProgress::from_operation(
+                            repo.id, &name, operation,
+                        )
+                    })
+            })
+            .collect::<Vec<_>>();
+
+        let next_maintenance_recommendations = next
+            .repos
+            .iter()
+            .filter(|repo| repo.maintenance.recommended)
+            .map(
+                |repo| super::operation_progress::MaintenanceRecommendation {
+                    repo_id: repo.id,
+                    repo_name: repo.spec.workdir.file_name().map_or_else(
+                        || repo.spec.workdir.display().to_string(),
+                        |name| name.to_string_lossy().into_owned(),
+                    ),
+                },
+            )
+            .collect::<Vec<_>>();
+
         let active_hook_chains = next_hook_progress
             .iter()
             .map(|(repo_id, operation)| (*repo_id, operation.id))
@@ -519,6 +565,8 @@ impl GitCometView {
             host.sync_clone_progress(next.clone.as_ref(), cx);
             host.sync_submodule_add_progress(&next_submodule_add_progress, cx);
             host.sync_hook_progress(next_hook_progress, cx);
+            host.sync_operation_progress(next_operation_progress, cx);
+            host.sync_maintenance_recommendations(next_maintenance_recommendations, cx);
             host.set_hook_activity_dialog_repo(hook_activity_workflow_repo, cx);
         });
 
@@ -540,6 +588,13 @@ impl GitCometView {
             .iter()
             .any(|repo| !next.repos.iter().any(|next_repo| next_repo.id == repo.id));
         self.state = next;
+        if let Some(extension_window) = self.extension_window.as_ref() {
+            extension_window.set_state(&self.state, cx);
+        }
+        self.retain_open_repository_views();
+        if self.repository_views.is_some() {
+            self.sync_extension_navigation(cx);
+        }
         if !self.document_routing.pending.is_empty() {
             self.finish_document_routing(cx);
         }
@@ -598,6 +653,9 @@ impl GitCometView {
         self.sync_reflog_panels_with_state();
         if !prev_git_runtime_available && self.state.git_runtime.is_available() {
             self.resume_after_git_runtime_recovery();
+        }
+        if git_runtime_changed {
+            self.maybe_warn_outdated_git(cx);
         }
         for msg in follow_up_msgs {
             self.store.dispatch(msg);
@@ -745,6 +803,8 @@ mod tests {
             output_bytes: 0,
             output_truncated: false,
             latest_line: String::new(),
+            progress_lane: false,
+            progress: None,
         }
     }
 

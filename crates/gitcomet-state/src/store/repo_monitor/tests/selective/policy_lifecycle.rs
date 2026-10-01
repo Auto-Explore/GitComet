@@ -313,7 +313,7 @@ fn delayed_file_removal_refreshes_before_excluding_its_replacement_directory() {
         let removed = notify::Event::new(kind).add_path(path.clone());
         let effect = summarize(&snapshot, &mut rules, &removed);
         assert!(
-            effect.change.is_some_and(|change| change.worktree),
+            effect.change.as_ref().is_some_and(|change| change.worktree),
             "{kind:?}"
         );
         rules

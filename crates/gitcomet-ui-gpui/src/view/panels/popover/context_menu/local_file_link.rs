@@ -38,7 +38,7 @@ fn model_for_local_file_link(
         ]);
     }
     items.push(ContextMenuItem::Entry {
-        label: "Open in GitComet".into(),
+        label: format!("Open in {}", crate::view::product_name()).into(),
         icon: Some("icons/file.svg".into()),
         shortcut: None,
         disabled: missing,

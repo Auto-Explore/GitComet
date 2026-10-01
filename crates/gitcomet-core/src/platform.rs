@@ -1,5 +1,7 @@
 //! Platform probing shared by the CLI launch guard and the UI's GUI-environment
-//! detection.
+//! detection, and the product's per-user directories.
+
+pub mod dirs;
 
 /// Detects WSL from explicit environment signals or the Linux kernel release.
 ///

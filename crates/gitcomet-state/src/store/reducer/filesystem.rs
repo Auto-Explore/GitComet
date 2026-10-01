@@ -91,6 +91,7 @@ pub(super) fn paths_changed(state: &mut AppState, changes: &[PathChange]) -> Vec
                 if let DiffTarget::WorkingTree {
                     path,
                     area: DiffArea::Unstaged,
+                    ..
                 } = target
                     && let Some(next) = retarget(path)
                 {
@@ -162,25 +163,16 @@ mod tests {
         use crate::model::ViewHistoryEntry;
         use gitcomet_core::domain::CommitId;
         let old = PathBuf::from("folder/nested/file");
-        let live = DiffTarget::WorkingTree {
-            path: old.clone(),
-            area: DiffArea::Unstaged,
-        };
+        let live = DiffTarget::working_tree(old.clone(), DiffArea::Unstaged);
         let targets = [
             live.clone(),
-            DiffTarget::WorkingTree {
-                path: old.clone(),
-                area: DiffArea::Staged,
-            },
-            DiffTarget::Commit {
-                commit_id: CommitId("abc".into()),
-                path: Some(old.clone()),
-            },
-            DiffTarget::CommitRange {
-                from_commit_id: CommitId("abc".into()),
-                to_commit_id: Some(CommitId("def".into())),
-                path: Some(old.clone()),
-            },
+            DiffTarget::working_tree(old.clone(), DiffArea::Staged),
+            DiffTarget::commit(CommitId("abc".into()), old.clone()),
+            DiffTarget::commit_range(
+                CommitId("abc".into()),
+                Some(CommitId("def".into())),
+                Some(old.clone()),
+            ),
         ];
         for original in &targets {
             for edit in [false, true] {
@@ -192,10 +184,7 @@ mod tests {
                     } else {
                         "folder/nested/new"
                     });
-                    let new_live = DiffTarget::WorkingTree {
-                        path: new.clone(),
-                        area: DiffArea::Unstaged,
-                    };
+                    let new_live = DiffTarget::working_tree(new.clone(), DiffArea::Unstaged);
                     let mut state = selected_repo(root);
                     let repo = &mut state.repos[0];
                     repo.diff_state.content_preview = original == &live;
@@ -212,6 +201,7 @@ mod tests {
                         repo.navigation.view_history.record(ViewHistoryEntry {
                             source,
                             path: old.clone(),
+                            old_path: None,
                         });
                     }
                     repo.diff_state.diff_target = Some(original.clone());

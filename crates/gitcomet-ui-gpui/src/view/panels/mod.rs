@@ -35,6 +35,10 @@ pub(in crate::view) enum AppMenuAction {
     InstallDesktopIntegration,
     Quit,
     CloseWindow,
+    /// An extension command, by contribution id.
+    ExtensionCommand {
+        id: SharedString,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -56,6 +60,12 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         path: std::path::PathBuf,
         action: panes::ExplorerAction,
+    },
+    Hosted(gitcomet_extension_api::HostedAction),
+    /// An extension command for one repository tab.
+    RunExtensionCommand {
+        id: SharedString,
+        repo_id: RepoId,
     },
     /// Read the open file in this encoding; `None` goes back to attributes
     /// and detection.
@@ -267,6 +277,11 @@ pub(in crate::view) enum ContextMenuAction {
         commit_id: CommitId,
         label: String,
     },
+    CompareWithMergeBase {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        label: String,
+    },
     CompareWithWorkingTree {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -286,6 +301,28 @@ pub(in crate::view) enum ContextMenuAction {
     RevertCommit {
         repo_id: RepoId,
         commit_id: CommitId,
+    },
+    /// Expands or collapses a file list folder; `recursive` takes every folder
+    /// below it along.
+    SetFileListFolderCollapsed {
+        repo_id: RepoId,
+        list: crate::view::rows::FileListId,
+        key: std::sync::Arc<std::path::Path>,
+        chain: std::sync::Arc<[std::sync::Arc<std::path::Path>]>,
+        collapsed: bool,
+        recursive: bool,
+    },
+    /// Stages (or, in the staged section, unstages) everything under a status
+    /// tree folder.
+    StageStatusFolder {
+        repo_id: RepoId,
+        section: StatusSection,
+        key: std::sync::Arc<std::path::Path>,
+    },
+    /// Opens the "Apply change" confirmation for files of a commit or comparison.
+    ApplyFileChange {
+        repo_id: RepoId,
+        target: gitcomet_core::domain::ApplyChangeTarget,
     },
     /// Opens the squash confirmation prompt for the current multi-selection.
     SquashSelectedCommits {
@@ -702,7 +739,7 @@ mod repo_tabs_bar;
 #[cfg(test)]
 pub(in crate::view) use action_bar::action_bar_breakpoints;
 pub(super) use action_bar::{ActionBarView, action_bar_density, action_bar_height};
-pub(super) use bottom_status_bar::BottomStatusBarView;
+pub(super) use bottom_status_bar::{BottomStatusBarView, bottom_status_bar_height};
 pub(super) use popover::{PopoverHost, PopoverHostInit};
 #[cfg(feature = "benchmarks")]
 pub(in crate::view) use popover::{

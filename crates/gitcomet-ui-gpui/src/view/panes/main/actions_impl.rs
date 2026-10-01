@@ -31,6 +31,12 @@ impl MainPaneView {
         kind: DiffClickKind,
         shift: bool,
     ) {
+        if !self.store.policy.select_lines {
+            return;
+        }
+        if self.select_hosted_row(clicked_visible_ix, shift) {
+            return;
+        }
         if self.is_file_diff_view_active() {
             self.handle_file_diff_row_click(clicked_visible_ix, shift);
             return;
@@ -47,6 +53,9 @@ impl MainPaneView {
         kind: DiffClickKind,
         shift: bool,
     ) {
+        if !self.store.policy.select_lines {
+            return;
+        }
         let list_len = self.diff_visible_len();
         if list_len == 0 {
             self.diff_selection_anchor = None;
@@ -105,6 +114,9 @@ impl MainPaneView {
         kind: DiffClickKind,
         shift: bool,
     ) {
+        if !self.store.policy.select_lines {
+            return;
+        }
         let list_len = self.diff_visible_len();
         if list_len == 0 {
             self.diff_selection_anchor = None;
@@ -153,6 +165,9 @@ impl MainPaneView {
     }
 
     pub(super) fn handle_file_diff_row_click(&mut self, clicked_visible_ix: usize, shift: bool) {
+        if !self.store.policy.select_lines {
+            return;
+        }
         let list_len = self.diff_visible_len();
         if list_len == 0 {
             self.diff_selection_anchor = None;
@@ -342,6 +357,7 @@ impl MainPaneView {
             }
             return;
         }
+        let target = self.diff_list_index(target);
         self.diff_scroll.scroll_to_item_strict(target, strategy);
         if self.diff_view == DiffViewMode::Split {
             self.diff_split_right_scroll
@@ -351,7 +367,7 @@ impl MainPaneView {
 
     fn has_active_diff_target(&self) -> bool {
         self.active_repo()
-            .and_then(|repo| repo.diff_state.diff_target.as_ref())
+            .and_then(|repo| self.bound_diff_state(repo).diff_target.as_ref())
             .is_some()
     }
 
@@ -406,6 +422,13 @@ impl MainPaneView {
             self.diff_search_prev_match();
             return true;
         }
+        if self.history_is_active_surface()
+            && self.history_view.update(cx, |history, cx| {
+                history.history_find_is_open() && history.history_find_step(false, cx)
+            })
+        {
+            return true;
+        }
         self.navigate_prev_diff_change(cx)
     }
 
@@ -415,6 +438,13 @@ impl MainPaneView {
     ) -> bool {
         if self.diff_search_active {
             self.diff_search_next_match();
+            return true;
+        }
+        if self.history_is_active_surface()
+            && self.history_view.update(cx, |history, cx| {
+                history.history_find_is_open() && history.history_find_step(true, cx)
+            })
+        {
             return true;
         }
         self.navigate_next_diff_change(cx)

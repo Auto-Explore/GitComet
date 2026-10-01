@@ -231,10 +231,7 @@ mod tests {
             text.push_str(&format!("+line {ix}{suffix}\n"));
         }
         text.push_str("+\tneedle\n");
-        let target = DiffTarget::WorkingTree {
-            path: "a.txt".into(),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree("a.txt".into(), DiffArea::Unstaged);
         let diff = Arc::new(Diff::from_unified(target, &text));
         let provider = Arc::new(PagedPatchDiffRows::new(diff.clone(), 256));
         let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -697,7 +694,7 @@ impl MainPaneView {
             tab_width: self.display_tab_width,
             repo: self
                 .active_repo()
-                .map(|repo| (repo.id, repo.diff_state.diff_target_rev)),
+                .map(|repo| (repo.id, self.bound_diff_state(repo).diff_target_rev)),
             patch: (self.diff_cache_repo_id, self.diff_cache_rev),
             file: (
                 self.file_diff_cache_repo_id,

@@ -106,17 +106,11 @@ pub fn select_conflict_rendering_mode(
 
 #[cfg(any(test, feature = "benchmarks"))]
 pub(in crate::view) fn preview_line_starts(text: &str) -> Vec<usize> {
+    // Empty text previews no lines.
     if text.is_empty() {
         return Vec::new();
     }
-    let mut starts = Vec::with_capacity(text.len().saturating_div(64).saturating_add(1));
-    starts.push(0);
-    for (ix, byte) in text.bytes().enumerate() {
-        if byte == b'\n' {
-            starts.push(ix.saturating_add(1));
-        }
-    }
-    starts
+    gitcomet_core::text_utils::line_starts(text)
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
@@ -773,23 +767,13 @@ pub(in crate::view) fn indexed_line_text<'a>(
     line_starts: &[usize],
     line_ix: usize,
 ) -> Option<&'a str> {
-    if text.is_empty() {
+    // Unlike the diff panes, the empty line after a trailing newline has no
+    // text here.
+    let range = gitcomet_core::text_utils::line_byte_range(line_starts, text.len(), line_ix)?;
+    if range.start >= text.len() {
         return None;
     }
-    let text_len = text.len();
-    let start = line_starts.get(line_ix).copied().unwrap_or(text_len);
-    if start >= text_len {
-        return None;
-    }
-    let mut end = line_starts
-        .get(line_ix.saturating_add(1))
-        .copied()
-        .unwrap_or(text_len)
-        .min(text_len);
-    if end > start && text.as_bytes().get(end.saturating_sub(1)) == Some(&b'\n') {
-        end = end.saturating_sub(1);
-    }
-    Some(text.get(start..end).unwrap_or(""))
+    Some(text.get(range).unwrap_or(""))
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

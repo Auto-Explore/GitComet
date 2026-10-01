@@ -13,6 +13,18 @@ const BOTTOM_STATUS_BAR_ITEM_HEIGHT_PX: f32 = 18.0;
 const BOTTOM_STATUS_BAR_ITEM_COMFORTABLE_HEIGHT_PX: f32 = 26.0;
 const PANE_TOGGLE_ICON_SIZE_PX: f32 = 16.0;
 
+/// The bar's height. It is mounted behind a stable cache boundary, which needs
+/// the height before the bar renders; the bar draws itself at the same height.
+pub(in super::super) fn bottom_status_bar_height<C>(cx: &mut C) -> Pixels
+where
+    C: gpui::BorrowAppContext,
+{
+    crate::ui_scale::UiScale::current(cx).row_height(
+        BOTTOM_STATUS_BAR_HEIGHT_PX,
+        BOTTOM_STATUS_BAR_COMFORTABLE_HEIGHT_PX,
+    )
+}
+
 fn pro_launch_label(today: jiff::civil::Date) -> SharedString {
     let launch_date = jiff::civil::date(2026, 10, 7);
     let days = today.duration_until(launch_date).as_secs() / 86_400;
@@ -82,6 +94,13 @@ pub(in super::super) struct BottomStatusBarView {
     active_context_menu_invoker: Option<SharedString>,
     minimized_hook_activity_repos: rustc_hash::FxHashSet<RepoId>,
     pro_launch_label: SharedString,
+    /// Extension status items in registration order, built once the window
+    /// has opened. Empty without extensions.
+    extension_items: Vec<(Option<gitcomet_extension_api::ViewTarget>, gpui::AnyView)>,
+    active_view: gitcomet_extension_api::ViewTarget,
+    edition_strip: Option<gpui::AnyView>,
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub(in crate::view) render_count: usize,
 }
 
 impl BottomStatusBarView {
@@ -113,7 +132,46 @@ impl BottomStatusBarView {
             minimized_hook_activity_repos: Default::default(),
             // Use local calendar days and keep the startup label for this window.
             pro_launch_label: pro_launch_label(jiff::Zoned::now().date()),
+            extension_items: Vec::new(),
+            active_view: gitcomet_extension_api::ViewTarget::History,
+            edition_strip: None,
+            #[cfg(any(test, feature = "benchmarks"))]
+            render_count: 0,
         }
+    }
+
+    #[cfg(test)]
+    pub(in super::super) fn extension_item_count(&self) -> usize {
+        self.extension_items.len()
+    }
+
+    pub(in super::super) fn set_extension_items(
+        &mut self,
+        items: Vec<(Option<gitcomet_extension_api::ViewTarget>, gpui::AnyView)>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.extension_items = items;
+        cx.notify();
+    }
+
+    pub(in crate::view) fn set_active_view(
+        &mut self,
+        view: gitcomet_extension_api::ViewTarget,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.active_view != view {
+            self.active_view = view;
+            cx.notify();
+        }
+    }
+
+    pub(in crate::view) fn set_edition_strip(
+        &mut self,
+        view: Option<gpui::AnyView>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.edition_strip = view;
+        cx.notify();
     }
 
     fn hook_activity_summary(state: &AppState) -> (Option<RepoId>, usize, bool) {
@@ -185,6 +243,10 @@ impl BottomStatusBarView {
 
 impl Render for BottomStatusBarView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        #[cfg(any(test, feature = "benchmarks"))]
+        {
+            self.render_count += 1;
+        }
         let theme = self.theme;
         let filesystem_pending = self
             .root_view
@@ -326,76 +388,84 @@ impl Render for BottomStatusBarView {
 
         // Branding strip: the edition badge moved down here from the title bar,
         // where it crowded the repository tabs.
-        let discord_badge = status_bar_chip(
-            "bottom_status_bar_discord",
-            theme.colors.accent.foreground,
-            ui_scale_percent,
-            theme,
-        )
-        .child(
-            gpui::svg()
-                .path("icons/discord.svg")
-                .w(scaled_px(12.0))
-                .h(scaled_px(12.0))
-                .flex_shrink_0()
-                .text_color(theme.colors.foreground.secondary)
-                .group_hover("bottom_status_bar_discord", move |s| {
-                    s.text_color(theme.colors.accent.foreground)
+        let name = crate::view::product_name();
+        let discord_badge = crate::view::community_url().map(|url| {
+            status_bar_chip(
+                "bottom_status_bar_discord",
+                theme.colors.accent.foreground,
+                ui_scale_percent,
+                theme,
+            )
+            .child(
+                gpui::svg()
+                    .path("icons/discord.svg")
+                    .w(scaled_px(12.0))
+                    .h(scaled_px(12.0))
+                    .flex_shrink_0()
+                    .text_color(theme.colors.foreground.secondary)
+                    .group_hover("bottom_status_bar_discord", move |s| {
+                        s.text_color(theme.colors.accent.foreground)
+                    }),
+            )
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(move |_this, _e: &ClickEvent, _window, cx| {
+                    cx.stop_propagation();
+                    cx.open_url(url);
                 }),
-        )
-        .on_activate(
-            false,
-            controls::ControlActivation::Action,
-            cx.listener(|_this, _e: &ClickEvent, _window, cx| {
-                cx.stop_propagation();
-                cx.open_url(DISCORD_URL);
-            }),
-        )
-        .gitcomet_tooltip(theme, "Join the GitComet Discord".into());
+            )
+            .gitcomet_tooltip(theme, format!("Join the {name} Discord").into())
+        });
 
-        let free_badge = status_bar_chip(
-            "bottom_status_bar_free_badge",
-            theme.colors.accent.foreground,
-            ui_scale_percent,
-            theme,
-        )
-        .text_size(theme.ui_text(11.0))
-        .line_height(scaled_px(theme.metrics.ui_text(12.0)))
-        .font_weight(FontWeight::NORMAL)
-        .text_color(with_alpha(
-            theme.colors.foreground.primary,
-            if theme.is_dark { 0.72 } else { 0.62 },
-        ))
-        .on_activate(
-            false,
-            controls::ControlActivation::Action,
-            cx.listener(|_this, _e: &ClickEvent, _window, cx| {
-                cx.stop_propagation();
-                cx.open_url(EDITIONS_URL);
-            }),
-        )
-        .gitcomet_tooltip(theme, "See GitComet editions".into())
-        .child("FREE");
+        let editions = crate::view::editions_url();
+        let free_badge = editions.map(|url| {
+            status_bar_chip(
+                "bottom_status_bar_free_badge",
+                theme.colors.accent.foreground,
+                ui_scale_percent,
+                theme,
+            )
+            .text_size(theme.ui_text(11.0))
+            .line_height(scaled_px(theme.metrics.ui_text(12.0)))
+            .font_weight(FontWeight::NORMAL)
+            .text_color(with_alpha(
+                theme.colors.foreground.primary,
+                if theme.is_dark { 0.72 } else { 0.62 },
+            ))
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(move |_this, _e: &ClickEvent, _window, cx| {
+                    cx.stop_propagation();
+                    cx.open_url(url);
+                }),
+            )
+            .gitcomet_tooltip(theme, format!("See {name} editions").into())
+            .child("FREE")
+        });
 
-        let pro_link = status_bar_chip(
-            "bottom_status_bar_pro_link",
-            theme.colors.accent.foreground,
-            ui_scale_percent,
-            theme,
-        )
-        .text_size(theme.ui_text(11.0))
-        .line_height(scaled_px(theme.metrics.ui_text(12.0)))
-        .text_color(theme.colors.foreground.secondary)
-        .on_activate(
-            false,
-            controls::ControlActivation::Action,
-            cx.listener(|_this, _e: &ClickEvent, _window, cx| {
-                cx.stop_propagation();
-                cx.open_url(EDITIONS_URL);
-            }),
-        )
-        .gitcomet_tooltip(theme, "See GitComet Pro".into())
-        .child(self.pro_launch_label.clone());
+        let pro_link = editions.map(|url| {
+            status_bar_chip(
+                "bottom_status_bar_pro_link",
+                theme.colors.accent.foreground,
+                ui_scale_percent,
+                theme,
+            )
+            .text_size(theme.ui_text(11.0))
+            .line_height(scaled_px(theme.metrics.ui_text(12.0)))
+            .text_color(theme.colors.foreground.secondary)
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(move |_this, _e: &ClickEvent, _window, cx| {
+                    cx.stop_propagation();
+                    cx.open_url(url);
+                }),
+            )
+            .gitcomet_tooltip(theme, format!("See {name} Pro").into())
+            .child(self.pro_launch_label.clone())
+        });
 
         // GPUI paints an SVG as a mask tinted by the text color, so the mark's
         // own brand blue never reaches the screen. Apply that blue explicitly
@@ -426,19 +496,26 @@ impl Render for BottomStatusBarView {
                     .debug_selector(|| "bottom_status_bar_brand".to_string())
                     .text_size(theme.ui_text(11.0))
                     .line_height(scaled_px(theme.metrics.ui_text(12.0)))
-                    .child("GitComet"),
+                    .child(name),
             )
-            .on_activate(
-                false,
-                controls::ControlActivation::Action,
-                cx.listener(|_this, _e: &ClickEvent, _window, cx| {
-                    cx.stop_propagation();
-                    cx.open_url(WEBSITE_URL);
-                }),
-            )
-            .gitcomet_tooltip(theme, "Open gitcomet.dev".into());
+            .when_some(crate::view::website_url(), |brand, url| {
+                brand
+                    .on_activate(
+                        false,
+                        controls::ControlActivation::Action,
+                        cx.listener(move |_this, _e: &ClickEvent, _window, cx| {
+                            cx.stop_propagation();
+                            cx.open_url(url);
+                        }),
+                    )
+                    .gitcomet_tooltip(
+                        theme,
+                        format!("Open {}", url.trim_start_matches("https://")).into(),
+                    )
+            });
 
-        let version_label: SharedString = format!("v{}", env!("CARGO_PKG_VERSION")).into();
+        let version_label: SharedString =
+            format!("v{}", gitcomet_core::identity::current().version()).into();
         let version_link = div()
             .id("bottom_status_bar_version")
             .debug_selector(|| "bottom_status_bar_version".to_string())
@@ -450,24 +527,23 @@ impl Render for BottomStatusBarView {
             .text_color(theme.colors.foreground.secondary)
             .tab_index(0)
             .control_interaction(InteractionStyle::link(theme), InteractionState::default())
-            .on_activate(
-                false,
-                controls::ControlActivation::Action,
-                cx.listener(|_this, _e: &ClickEvent, _window, cx| {
-                    cx.stop_propagation();
-                    cx.open_url(RELEASES_URL);
-                }),
-            )
-            .gitcomet_tooltip(theme, "View GitComet releases".into())
+            .when_some(crate::view::releases_url(), |link, url| {
+                link.on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(move |_this, _e: &ClickEvent, _window, cx| {
+                        cx.stop_propagation();
+                        cx.open_url(url);
+                    }),
+                )
+                .gitcomet_tooltip(theme, format!("View {name} releases").into())
+            })
             .child(version_label);
 
         div()
             .id("bottom_status_bar")
             .w_full()
-            .h(scaled_px(theme.metrics.row_height(
-                BOTTOM_STATUS_BAR_HEIGHT_PX,
-                BOTTOM_STATUS_BAR_COMFORTABLE_HEIGHT_PX,
-            )))
+            .h(bottom_status_bar_height(cx))
             .flex_none()
             .flex()
             .items_center()
@@ -518,6 +594,16 @@ impl Render for BottomStatusBarView {
                     .flex()
                     .items_center()
                     .gap(scaled_px(2.0))
+                    // Extension indicators sit with the host's own status
+                    // controls, never between the branding chips.
+                    .children(
+                        self.extension_items
+                            .iter()
+                            .filter(|(view, _)| {
+                                view.as_ref().is_none_or(|view| view == &self.active_view)
+                            })
+                            .map(|(_, view)| view.clone()),
+                    )
                     .child(details_toggle)
                     .child(hook_activity_button)
                     .child(
@@ -542,20 +628,31 @@ impl Render for BottomStatusBarView {
                             .gitcomet_tooltip(theme, "Documents".into())
                             .debug_selector(|| "bottom_documents".into()),
                     )
-                    .child(
-                        // Branding chips want more air between them than the
-                        // toggles, which read as one control group.
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(scaled_px(6.0))
-                            .pl(scaled_px(6.0))
-                            .child(discord_badge)
-                            .child(free_badge)
-                            .child(pro_link)
-                            .child(brand)
-                            .child(version_link),
-                    ),
+                    .children(self.edition_strip.clone())
+                    .when(self.edition_strip.is_none(), |row| {
+                        row.child(
+                            // Branding chips want more air between them than the
+                            // toggles, which read as one control group.
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(scaled_px(6.0))
+                                .pl(scaled_px(6.0))
+                                .children(discord_badge)
+                                .children(free_badge)
+                                .children(pro_link)
+                                .child(brand)
+                                .child(version_link)
+                                .when(cfg!(debug_assertions), |row| {
+                                    row.child(
+                                        div()
+                                            .id("build_dev_badge")
+                                            .text_size(theme.ui_text(10.0))
+                                            .child("DEV"),
+                                    )
+                                }),
+                        )
+                    }),
             )
     }
 }

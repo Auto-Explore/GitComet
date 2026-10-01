@@ -539,6 +539,32 @@ where
     })
 }
 
+/// Saves (`Some`) or clears (`None`) an extension's state for a workspace.
+/// The manager's record is the authority; the workspace writer persists it.
+pub(crate) fn set_workspace_extension_state<C>(
+    cx: &mut C,
+    workspace_id: WorkspaceId,
+    namespace: &str,
+    value: Option<serde_json::Value>,
+) -> Result<bool, session::ExtensionNamespaceError>
+where
+    C: BorrowMut<App>,
+{
+    if let Some(value) = &value {
+        session::check_extension_namespace_size(value)?;
+    }
+    Ok(update_workspace(cx, workspace_id, |workspace| {
+        if workspace.extensions.get(namespace) == value.as_ref() {
+            return false;
+        }
+        workspace
+            .extensions
+            .set(namespace, value)
+            .expect("the size was checked above");
+        true
+    }))
+}
+
 /// A blank name clears it, falling back to the automatic name.
 pub(crate) fn set_workspace_name<C>(cx: &mut C, workspace_id: WorkspaceId, name: &str) -> bool
 where

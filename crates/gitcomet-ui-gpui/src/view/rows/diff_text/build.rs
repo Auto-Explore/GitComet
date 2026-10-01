@@ -462,11 +462,21 @@ pub(in crate::view) enum DiffSearchMatchEmphasis {
 
 /// Same shape for the search-match highlight, off `editor.search_match_*`.
 ///
-/// Shared with the file editor, which paints this wash through its highlight
-/// provider rather than through these row builders.
-pub(in crate::view) fn query_highlight_colors(theme: AppTheme) -> (gpui::Rgba, Option<gpui::Rgba>) {
+/// Painted outside these row builders through [`query_highlight_style`].
+pub(super) fn query_highlight_colors(theme: AppTheme) -> (gpui::Rgba, Option<gpui::Rgba>) {
     let foreground = (!theme.is_dark).then_some(theme.colors.editor.search_match_foreground);
     (theme.colors.editor.search_match_background, foreground)
+}
+
+/// [`query_highlight_colors`] as a highlight, for washing matches over styled
+/// text with [`crate::text_runs::overlay_highlights`].
+pub(in crate::view) fn query_highlight_style(theme: AppTheme) -> gpui::HighlightStyle {
+    let (background, foreground) = query_highlight_colors(theme);
+    gpui::HighlightStyle {
+        color: foreground.map(IntoColor::into_color),
+        background_color: Some(background.into_color()),
+        ..gpui::HighlightStyle::default()
+    }
 }
 
 /// The wash for the match the cursor is on: the same token `TextInput` fills a

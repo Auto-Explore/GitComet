@@ -26,10 +26,10 @@ fn file_state(
     edit: bool,
 ) -> Arc<AppState> {
     let mut repo = opening_repo_state(repo_id, workdir);
-    repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: file_rel.to_path_buf(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    });
+    repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::working_tree(
+        file_rel.to_path_buf(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    ));
     repo.diff_state.content_preview = true;
     repo.diff_state.edit_mode = edit;
     app_state_with_repo(repo, repo_id)
@@ -643,10 +643,10 @@ async fn reopening_a_file_the_editor_still_holds_catches_up(cx: &mut gpui::TestA
     // Look at another file's diff: the editor keeps holding main.rs.
     let mut elsewhere = AppState::clone(&h.current());
     elsewhere.repos[0].diff_state.diff_target =
-        Some(gitcomet_core::domain::DiffTarget::WorkingTree {
-            path: "other.rs".into(),
-            area: gitcomet_core::domain::DiffArea::Unstaged,
-        });
+        Some(gitcomet_core::domain::DiffTarget::working_tree(
+            "other.rs".into(),
+            gitcomet_core::domain::DiffArea::Unstaged,
+        ));
     elsewhere.repos[0].diff_state.content_preview = false;
     elsewhere.repos[0].diff_state.edit_mode = false;
     h.push(cx, elsewhere);
@@ -776,10 +776,10 @@ async fn review_regression_auto_saved_repo_move_keeps_stashed_edits_for_explicit
     let other = std::path::PathBuf::from("other.rs");
     std::fs::write(h.workdir.join(&other), "fn other() {}\n").expect("write other file");
     let mut state = AppState::clone(&h.current());
-    state.repos[0].diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: other,
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    });
+    state.repos[0].diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::working_tree(
+        other,
+        gitcomet_core::domain::DiffArea::Unstaged,
+    ));
     h.push(cx, state);
     h.update_pane(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
     assert_eq!(h.editor_text(cx), "fn other() {}\n");
@@ -981,10 +981,10 @@ async fn a_pending_scroll_restore_does_not_leak_into_the_next_file(cx: &mut gpui
         pane.reload_worktree_preview_keeping_scroll(cx)
     });
     let mut other = AppState::clone(&h.current());
-    other.repos[0].diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: "other.rs".into(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    });
+    other.repos[0].diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::working_tree(
+        "other.rs".into(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    ));
     h.push(cx, other);
     h.update_pane(cx, |pane, cx| pane.ensure_selected_file_preview_loaded(cx));
     draw_and_drain_test_window(cx);

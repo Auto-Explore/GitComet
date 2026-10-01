@@ -31,12 +31,6 @@ pub(super) enum GitCompatibility {
     Checking,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct GitVersion {
-    pub(super) major: u32,
-    pub(super) minor: u32,
-}
-
 #[derive(Clone, Debug)]
 pub(super) struct TerminalSettingsStatus {
     pub(super) is_error: bool,
@@ -197,8 +191,11 @@ impl SettingsRuntimeInfo {
 }
 
 pub(super) fn git_runtime_info_from_state(runtime: GitRuntimeState) -> GitRuntimeInfo {
-    let compatibility_message =
-        format!("GitComet has been tested only with Git {MIN_GIT_MAJOR}.{MIN_GIT_MINOR} or newer.");
+    let compatibility_message = format!(
+        "{} requires Git {} or newer.",
+        crate::view::product_name(),
+        gitcomet_core::process::GitVersion::MINIMUM
+    );
     let compatibility = if matches!(
         runtime.availability,
         gitcomet_core::process::GitExecutableAvailability::Checking
@@ -207,8 +204,8 @@ pub(super) fn git_runtime_info_from_state(runtime: GitRuntimeState) -> GitRuntim
     } else if !runtime.is_available() {
         GitCompatibility::Unavailable
     } else {
-        match runtime.version_output().and_then(parse_git_version) {
-            Some(version) if is_supported_git_version(version) => GitCompatibility::Supported,
+        match runtime.version() {
+            Some(version) if version.is_supported() => GitCompatibility::Supported,
             Some(_) => GitCompatibility::TooOld,
             None => GitCompatibility::Unknown,
         }
@@ -238,33 +235,6 @@ pub(super) fn git_runtime_info_from_state(runtime: GitRuntimeState) -> GitRuntim
         compatibility,
         detail,
     }
-}
-
-pub(super) fn parse_git_version(raw: &str) -> Option<GitVersion> {
-    raw.split_whitespace().find_map(parse_git_version_token)
-}
-
-pub(super) fn parse_git_version_token(token: &str) -> Option<GitVersion> {
-    let mut parts = token.split('.');
-    let major = parse_u32_prefix(parts.next()?)?;
-    let minor = parse_u32_prefix(parts.next()?)?;
-    Some(GitVersion { major, minor })
-}
-
-pub(super) fn parse_u32_prefix(part: &str) -> Option<u32> {
-    let end = part
-        .char_indices()
-        .find_map(|(ix, ch)| (!ch.is_ascii_digit()).then_some(ix))
-        .unwrap_or(part.len());
-    if end == 0 {
-        return None;
-    }
-    part[..end].parse::<u32>().ok()
-}
-
-pub(super) fn is_supported_git_version(version: GitVersion) -> bool {
-    version.major > MIN_GIT_MAJOR
-        || (version.major == MIN_GIT_MAJOR && version.minor >= MIN_GIT_MINOR)
 }
 
 pub(super) const GPG_DESCRIPTION: &str =

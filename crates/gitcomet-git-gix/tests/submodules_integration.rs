@@ -242,10 +242,10 @@ fn list_submodules_reports_missing_gitmodules_mapping() {
     assert_eq!(submodules[0].status, SubmoduleStatus::MissingMapping);
     assert_eq!(submodules[0].recorded_head.as_ref(), submodule_head);
     let summary = opened
-        .submodule_diff_summary(&DiffTarget::WorkingTree {
-            path: PathBuf::from("submod"),
-            area: DiffArea::Unstaged,
-        })
+        .submodule_diff_summary(&DiffTarget::working_tree(
+            PathBuf::from("submod"),
+            DiffArea::Unstaged,
+        ))
         .unwrap();
     assert_eq!(summary.status, Some(SubmoduleStatus::MissingMapping));
     assert!(summary.checkout_available);
@@ -309,10 +309,10 @@ fn list_submodules_reports_not_initialized_and_head_mismatch() {
     assert_eq!(not_initialized[0].recorded_head.as_ref(), original_head);
     assert_eq!(not_initialized[0].checked_out_head, None);
     let summary = opened
-        .submodule_diff_summary(&DiffTarget::WorkingTree {
-            path: PathBuf::from("sm"),
-            area: DiffArea::Unstaged,
-        })
+        .submodule_diff_summary(&DiffTarget::working_tree(
+            PathBuf::from("sm"),
+            DiffArea::Unstaged,
+        ))
         .unwrap();
     assert_eq!(summary.status, Some(SubmoduleStatus::NotInitialized));
     assert!(!summary.checkout_available);
@@ -483,10 +483,10 @@ fn list_submodules_recurses_into_nested_submodules() {
     );
 
     let nested = opened
-        .submodule_diff_summary(&DiffTarget::WorkingTree {
-            path: PathBuf::from("mods/child/nested/grand"),
-            area: DiffArea::Unstaged,
-        })
+        .submodule_diff_summary(&DiffTarget::working_tree(
+            PathBuf::from("mods/child/nested/grand"),
+            DiffArea::Unstaged,
+        ))
         .expect("summarize the nested gitlink against its owning repository");
     assert_eq!(nested.path, PathBuf::from("mods/child/nested/grand"));
     assert!(nested.checkout_available);
@@ -525,10 +525,7 @@ fn submodule_summary_ignores_broken_sibling_indexes_and_honors_cancellation() {
     let paths: Vec<_> = listed.iter().map(|s| s.path.clone()).collect();
     assert!(paths.contains(&PathBuf::from("wanted")), "{paths:?}");
     assert!(paths.contains(&PathBuf::from("unrelated")), "{paths:?}");
-    let target = DiffTarget::WorkingTree {
-        path: PathBuf::from("wanted"),
-        area: DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree(PathBuf::from("wanted"), DiffArea::Unstaged);
     let token = gitcomet_core::services::CancellationToken::new();
     let summary = repo
         .submodule_diff_summary_cancellable(&target, &token)
@@ -696,10 +693,10 @@ fn list_submodules_reports_merge_conflicted_gitlinks() {
         "0000000000000000000000000000000000000000"
     );
     let summary = opened
-        .submodule_diff_summary(&DiffTarget::WorkingTree {
-            path: PathBuf::from("sm"),
-            area: DiffArea::Unstaged,
-        })
+        .submodule_diff_summary(&DiffTarget::working_tree(
+            PathBuf::from("sm"),
+            DiffArea::Unstaged,
+        ))
         .unwrap();
     assert_eq!(summary.status, Some(SubmoduleStatus::MergeConflict));
     assert_eq!(
@@ -732,10 +729,10 @@ fn submodule_summary_keeps_head_pointer_after_gitlink_is_removed_from_index() {
     run_git(&parent, &["rm", "--cached", "sm"]);
     let repo = GixBackend.open(&parent).unwrap();
     let summary = repo
-        .submodule_diff_summary(&DiffTarget::WorkingTree {
-            path: PathBuf::from("sm"),
-            area: DiffArea::Staged,
-        })
+        .submodule_diff_summary(&DiffTarget::working_tree(
+            PathBuf::from("sm"),
+            DiffArea::Staged,
+        ))
         .unwrap();
     assert!(summary.checkout_available);
     assert_eq!(
@@ -767,10 +764,10 @@ fn submodule_worktree_summary_treats_new_submodule_head_gitlink_as_missing() {
         .open(&parent_repo)
         .expect("open parent repository with staged submodule");
     let summary = opened
-        .submodule_diff_summary(&DiffTarget::WorkingTree {
-            path: submodule_path.to_path_buf(),
-            area: DiffArea::Staged,
-        })
+        .submodule_diff_summary(&DiffTarget::working_tree(
+            submodule_path.to_path_buf(),
+            DiffArea::Staged,
+        ))
         .expect("load staged added submodule summary");
     let staged_range = summary
         .ranges
@@ -839,10 +836,10 @@ fn submodule_commit_summary_treats_missing_submodule_history_as_unavailable() {
         .open(&parent_repo)
         .expect("open parent repository with missing submodule commit");
     let summary = opened
-        .submodule_diff_summary(&DiffTarget::Commit {
-            commit_id: CommitId(parent_commit.into()),
-            path: Some(submodule_path.to_path_buf()),
-        })
+        .submodule_diff_summary(&DiffTarget::commit(
+            CommitId(parent_commit.into()),
+            submodule_path.to_path_buf(),
+        ))
         .expect("load committed submodule summary");
     let range = summary
         .ranges
@@ -1592,10 +1589,10 @@ fn checked_out_submodules_always_report_checkout_available() {
     assert_eq!(listed.len(), 2);
     for submodule in &listed {
         let summary = repo
-            .submodule_diff_summary(&DiffTarget::WorkingTree {
-                path: submodule.path.clone(),
-                area: DiffArea::Unstaged,
-            })
+            .submodule_diff_summary(&DiffTarget::working_tree(
+                submodule.path.clone(),
+                DiffArea::Unstaged,
+            ))
             .expect("summarize a configured submodule");
         assert_eq!(summary.status, Some(submodule.status));
         assert!(

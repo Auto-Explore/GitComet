@@ -446,13 +446,7 @@ pub(crate) fn scrollbar_flag_for_change_hint(hint: MarkdownChangeHint) -> u8 {
 
 /// Build a vec of byte offsets for the start of each line.
 pub(crate) fn build_line_starts(source: &str) -> Vec<usize> {
-    let mut starts = vec![0usize];
-    for (i, b) in source.bytes().enumerate() {
-        if b == b'\n' {
-            starts.push(i + 1);
-        }
-    }
-    starts
+    gitcomet_core::text_utils::line_starts(source)
 }
 
 /// Convert a byte offset to a 0-based line index.

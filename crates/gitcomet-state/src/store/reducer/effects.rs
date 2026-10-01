@@ -13,10 +13,10 @@ use gitcomet_core::conflict_session::{
     ConflictResolverStrategy, ConflictSession, reconstruct_conflict_marker_sides,
 };
 use gitcomet_core::domain::{
-    Branch, Commit, CommitDetails, CommitFileChange, CommitId, CommitSignature, EMPTY_TREE_ID,
-    FileEntry, FileSource, FileStatusKind, LogCursor, LogPage, RecentCommitMessage, RefMetadata,
-    ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoStatus, StashEntry, Submodule, Tag,
-    UpstreamDivergence, Worktree, WorktreeDirtySummary,
+    Branch, Commit, CommitDetails, CommitId, CommitSignature, EMPTY_TREE_ID, FileEntry, FileSource,
+    FileStatusKind, LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote,
+    RemoteBranch, RemoteTag, RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence, Worktree,
+    WorktreeDirtySummary,
 };
 use gitcomet_core::error::Error;
 use gitcomet_core::merge::{MergeSource, OrderedSelection};
@@ -107,11 +107,11 @@ pub(super) fn blame_loaded(
     result: std::result::Result<Vec<gitcomet_core::services::BlameLine>, Error>,
 ) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-        && repo_state.history_state.blame_path.as_ref() == Some(&path)
-        && repo_state.history_state.blame_source.as_ref() == Some(&source)
+        && repo_state.diff_state.blame_path.as_ref() == Some(&path)
+        && repo_state.diff_state.blame_source.as_ref() == Some(&source)
     {
-        let retained = repo_state.history_state.retained_blame_while_loading.take();
-        repo_state.history_state.blame = match result {
+        let retained = repo_state.diff_state.retained_blame_while_loading.take();
+        repo_state.diff_state.blame = match result {
             // Reuse the retained allocation when the reload produced identical
             // annotations, so the view's `Arc`-identity fingerprints and the
             // memoized blame time range stay valid and nothing repaints.
@@ -844,90 +844,23 @@ pub(super) fn select_commit_multi(
     commit_id: CommitId,
     mode: CommitSelectMode,
     clicked_index: Option<usize>,
-    mut visible_order: Option<Vec<CommitId>>,
+    visible_order: Option<Vec<CommitId>>,
 ) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
 
-    let log_rev = repo_state.history_state.log_rev;
-    let mut sel = repo_state.history_state.multi_selection.clone();
-
-    let focus = match mode {
-        CommitSelectMode::Single => {
-            collapse_multi_selection_to(&mut sel, commit_id.clone(), clicked_index, log_rev);
-            commit_id
-        }
-        CommitSelectMode::Toggle => {
-            if let Some(ix) = sel.commits.iter().position(|c| *c == commit_id) {
-                Arc::make_mut(&mut sel.commits).remove(ix);
-                let Some(focus) = sel.commits.last().cloned() else {
-                    // Toggled the last commit away: clear the selection
-                    // entirely (also dissolves the multi-selection).
-                    repo_state.set_selected_commit(None);
-                    repo_state.set_commit_details(Loadable::NotLoaded);
-                    return Vec::new();
-                };
-                focus
-            } else {
-                Arc::make_mut(&mut sel.commits).push(commit_id.clone());
-                sel.anchor = Some(commit_id.clone());
-                sel.anchor_index = clicked_index;
-                sel.anchor_log_rev = Some(log_rev);
-                commit_id
-            }
-        }
-        CommitSelectMode::Range => {
-            let entries = visible_order.as_deref().unwrap_or(&[]);
-            let clicked_ix = commit_selection_entry_index(entries, &commit_id, clicked_index);
-            match clicked_ix {
-                None => {
-                    collapse_multi_selection_to(
-                        &mut sel,
-                        commit_id.clone(),
-                        clicked_index,
-                        log_rev,
-                    );
-                }
-                Some(clicked_ix) => {
-                    let anchor_ix = sel
-                        .anchor
-                        .as_ref()
-                        .and_then(|anchor| {
-                            let trusted_hint = sel
-                                .anchor_index
-                                .filter(|_| sel.anchor_log_rev == Some(log_rev));
-                            commit_selection_entry_index(entries, anchor, trusted_hint)
-                        })
-                        .unwrap_or(clicked_ix);
-                    let (a, b) = if anchor_ix <= clicked_ix {
-                        (anchor_ix, clicked_ix)
-                    } else {
-                        (clicked_ix, anchor_ix)
-                    };
-                    sel.commits = Arc::new(if a == 0 && b + 1 == entries.len() {
-                        visible_order.take().unwrap()
-                    } else {
-                        entries[a..=b].to_vec()
-                    });
-                    if sel.anchor.is_none() {
-                        sel.anchor = Some(commit_id.clone());
-                    }
-                    sel.anchor_index = Some(anchor_ix);
-                    sel.anchor_log_rev = Some(log_rev);
-                }
-            }
-            commit_id
-        }
-        CommitSelectMode::PreserveIfSelected => {
-            // Keep an existing multi-selection intact when the clicked commit
-            // is already part of it — only the focus moves. Otherwise collapse
-            // to the clicked commit like a plain click.
-            if !sel.commits.contains(&commit_id) {
-                collapse_multi_selection_to(&mut sel, commit_id.clone(), clicked_index, log_rev);
-            }
-            commit_id
-        }
+    let (sel, focus) = repo_state.history_state.multi_selection.select(
+        commit_id,
+        mode,
+        clicked_index,
+        visible_order,
+        repo_state.history_state.log_rev,
+    );
+    let Some(focus) = focus else {
+        repo_state.set_selected_commit(None);
+        repo_state.set_commit_details(Loadable::NotLoaded);
+        return Vec::new();
     };
 
     repo_state.set_commit_multi_selection(sel);
@@ -1122,6 +1055,29 @@ pub(super) fn compare_range(
     to_label: String,
     source: ComparisonSource,
 ) -> Vec<Effect> {
+    compare_range_with_options(
+        state,
+        repo_id,
+        from,
+        to,
+        from_label,
+        to_label,
+        Default::default(),
+        source,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn compare_range_with_options(
+    state: &mut AppState,
+    repo_id: RepoId,
+    from: CommitId,
+    to: Option<CommitId>,
+    from_label: String,
+    to_label: String,
+    options: gitcomet_core::services::ComparisonOptions,
+    source: ComparisonSource,
+) -> Vec<Effect> {
     let request = {
         let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
             return Vec::new();
@@ -1130,10 +1086,8 @@ pub(super) fn compare_range(
             repo_state.set_commit_multi_selection(CommitMultiSelection::default());
         }
         repo_state.set_range_selection(Some(RangeSelection {
-            from: from.clone(),
-            to: to.clone(),
-            from_label,
-            to_label,
+            options,
+            ..RangeSelection::new(from.clone(), to.clone(), from_label, to_label)
         }));
         repo_state.set_range_files(Loadable::Loading);
         repo_state.begin_range_files_load()
@@ -1144,6 +1098,7 @@ pub(super) fn compare_range(
         repo_id,
         from,
         to,
+        options,
         request,
     });
     effects
@@ -1222,7 +1177,7 @@ pub(super) fn range_files_loaded(
     from: CommitId,
     to: Option<CommitId>,
     request: u64,
-    result: std::result::Result<Vec<CommitFileChange>, Error>,
+    result: std::result::Result<gitcomet_core::services::Comparison, Error>,
 ) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
@@ -1251,7 +1206,18 @@ pub(super) fn range_files_loaded(
     }
 
     let next = match result {
-        Ok(files) => Loadable::Ready(Arc::new(files)),
+        Ok(comparison) => {
+            if let Some(range) = repo_state.history_state.range_selection.as_ref()
+                && range.base.as_ref() != Some(&comparison.base)
+            {
+                let range = RangeSelection {
+                    base: Some(comparison.base),
+                    ..range.clone()
+                };
+                repo_state.set_range_selection(Some(range));
+            }
+            Loadable::Ready(Arc::new(comparison.files))
+        }
         Err(e) => {
             push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
             Loadable::Error(e.to_string())
@@ -1264,36 +1230,19 @@ pub(super) fn range_files_loaded(
     if !std::mem::take(&mut repo_state.history_state.range_files_refresh_queued) {
         return Vec::new();
     }
+    let options = repo_state
+        .history_state
+        .range_selection
+        .as_ref()
+        .map(|range| range.options)
+        .unwrap_or_default();
     vec![Effect::LoadRangeFiles {
         repo_id,
         from,
         to,
+        options,
         request: repo_state.begin_range_files_load(),
     }]
-}
-
-fn collapse_multi_selection_to(
-    sel: &mut crate::model::CommitMultiSelection,
-    commit_id: CommitId,
-    clicked_index: Option<usize>,
-    log_rev: u64,
-) {
-    sel.commits = Arc::new(vec![commit_id.clone()]);
-    sel.anchor = Some(commit_id);
-    sel.anchor_index = clicked_index;
-    sel.anchor_log_rev = Some(log_rev);
-}
-
-/// Resolves `target`'s index in `entries`, preferring the index hint when it
-/// still points at the target.
-fn commit_selection_entry_index(
-    entries: &[CommitId],
-    target: &CommitId,
-    index_hint: Option<usize>,
-) -> Option<usize> {
-    index_hint
-        .filter(|&ix| entries.get(ix) == Some(target))
-        .or_else(|| entries.iter().position(|id| id == target))
 }
 
 pub(super) fn select_commit_and_load_details(
@@ -1689,9 +1638,9 @@ pub(super) fn load_blame(
     // frames forks another `git blame --line-porcelain` for the same file.
     // `blame_path` + `blame_source` identify the request exactly, which a
     // repo-wide `RepoLoadsInFlight` bit could not.
-    let same_target = repo_state.history_state.blame_path.as_ref() == Some(&path)
-        && repo_state.history_state.blame_source.as_ref() == Some(&source);
-    if same_target && repo_state.history_state.blame.is_loading() {
+    let same_target = repo_state.diff_state.blame_path.as_ref() == Some(&path)
+        && repo_state.diff_state.blame_source.as_ref() == Some(&source);
+    if same_target && repo_state.diff_state.blame.is_loading() {
         return Vec::new();
     }
     if same_target {
@@ -1702,9 +1651,9 @@ pub(super) fn load_blame(
         // Re-targeting: anything held over describes a different file.
         repo_state.clear_retained_blame();
     }
-    repo_state.history_state.blame_path = Some(path.clone());
-    repo_state.history_state.blame_source = Some(source.clone());
-    repo_state.history_state.blame = Loadable::Loading;
+    repo_state.diff_state.blame_path = Some(path.clone());
+    repo_state.diff_state.blame_source = Some(source.clone());
+    repo_state.diff_state.blame = Loadable::Loading;
     vec![Effect::LoadBlame {
         repo_id,
         path,
@@ -2241,7 +2190,7 @@ fn browse_open_content_path(repo: &RepoState) -> Option<PendingFileBrowserReopen
         return None;
     }
     let path = match &repo.diff_state.diff_target {
-        Some(gitcomet_core::domain::DiffTarget::Commit { path: Some(p), .. }) => p.clone(),
+        Some(gitcomet_core::domain::DiffTarget::Commit { path: p, .. }) => p.clone(),
         Some(gitcomet_core::domain::DiffTarget::WorkingTree { path, .. }) => path.clone(),
         _ => return None,
     };
@@ -2284,8 +2233,11 @@ fn reopen_after_retarget(
                 && entry.path.as_path() == reopen.path.as_path()
         }) {
             ReopenDecision::Close
-        } else if super::diff_selection::content_view_target(source.clone(), reopen.path.clone())
-            == repo.diff_state.diff_target
+        } else if super::diff_selection::content_view_target(
+            source.clone(),
+            reopen.path.clone(),
+            None,
+        ) == repo.diff_state.diff_target
         {
             // Already showing this file at this point (retarget bounced back).
             ReopenDecision::Skip

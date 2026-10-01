@@ -107,6 +107,7 @@ impl GixRepo {
             // extra thread/channel hop.
             let direct = collect_index_worktree_status_direct(
                 &repo,
+                &self.stat_refreshed_index,
                 &mut unstaged,
                 may_have_gitlinks,
                 cancellation,
@@ -211,6 +212,7 @@ impl GixRepo {
         let mut unstaged = Vec::new();
         let direct = collect_index_worktree_status_direct(
             &repo,
+            &self.stat_refreshed_index,
             &mut unstaged,
             may_have_gitlinks,
             cancellation,
@@ -564,7 +566,7 @@ fn remove_conflicted_paths_from_staged(
 /// cover `index.skipHash` repositories whose trailer is a useless null hash.
 ///
 /// Opens `.git/index` a single time and derives every field from that one handle.
-fn repo_index_stamp(repo: &gix::Repository) -> RepoFileStamp {
+pub(super) fn repo_index_stamp(repo: &gix::Repository) -> RepoFileStamp {
     index_stamp_for(repo.index_path().as_path(), repo.object_hash())
 }
 
@@ -775,8 +777,26 @@ fn collect_index_worktree_item(
     Ok(())
 }
 
+/// The on-disk index with the stats a worktree walk found stale but
+/// content-clean, as `git status` would write them back. Status never writes
+/// `.git/index` (see `maybe_persist_status_outcome_changes`), so without this
+/// every refresh re-hashes each file that was touched without changing, which
+/// is ~20x the walk with `text=auto` filtering.
+pub(super) struct StatRefreshedIndex {
+    /// gix's snapshot of `.git/index` this copy was derived from; any rewrite
+    /// of the file replaces the snapshot and drops the copy.
+    base: gix::worktree::Index,
+    index: gix::index::File,
+}
+
+/// Re-hashing less than this per walk is cheaper than holding a second copy of
+/// the index.
+const STAT_REFRESH_MIN_BYTES: u64 = 256 * 1024;
+const STAT_REFRESH_MIN_ENTRIES: usize = 64;
+
 fn collect_index_worktree_status_direct(
     repo: &gix::Repository,
+    stat_refresh: &std::sync::Mutex<Option<StatRefreshedIndex>>,
     unstaged: &mut Vec<FileStatus>,
     may_have_gitlinks: bool,
     cancellation: &CancellationToken,
@@ -784,22 +804,90 @@ fn collect_index_worktree_status_direct(
     let index = repo
         .index_or_empty()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
-    collect_index_worktree_status_direct_from_index(
+    let refreshed = stat_refresh
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take()
+        .filter(|refreshed| std::sync::Arc::ptr_eq(&refreshed.base, &index));
+    // Every stat the walk records is read after this instant. gix compares
+    // the stamp with mtimes in whole seconds, and a write landing just after
+    // it can carry a coarser mtime from the second before (the file clock
+    // lags the wall clock), so the stamp stays one second back: such a write
+    // still compares racy, as it would against git's own index mtime.
+    let stamp = filetime::FileTime::from_unix_time(filetime::FileTime::now().unix_seconds() - 1, 0);
+    let (status, changes) = collect_index_worktree_status_direct_from_index(
         repo,
-        &index,
+        refreshed
+            .as_ref()
+            .map_or(&index, |refreshed| &refreshed.index),
         unstaged,
         may_have_gitlinks,
         cancellation,
-    )
+    )?;
+    let refreshed = apply_stat_refresh(refreshed, &index, changes, stamp);
+    *stat_refresh
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = refreshed;
+    Ok(status)
+}
+
+/// Applies a walk's stat updates to the in-memory copy, as git's index write
+/// would: new stats for content-clean entries, size 0 for racily modified ones
+/// (so they keep comparing as changed once the timestamp moves past them).
+fn apply_stat_refresh(
+    refreshed: Option<StatRefreshedIndex>,
+    base: &gix::worktree::Index,
+    changes: Vec<IndexWorktreeApplyChange>,
+    stamp: filetime::FileTime,
+) -> Option<StatRefreshedIndex> {
+    if changes.is_empty() {
+        return refreshed;
+    }
+    let mut refreshed = match refreshed {
+        Some(refreshed) => refreshed,
+        None => {
+            let rehashed_bytes: u64 = changes
+                .iter()
+                .map(|change| match change {
+                    IndexWorktreeApplyChange::NewStat { stat, .. } => u64::from(stat.size),
+                    IndexWorktreeApplyChange::SetSizeToZero { .. } => 0,
+                })
+                .sum();
+            if rehashed_bytes < STAT_REFRESH_MIN_BYTES && changes.len() < STAT_REFRESH_MIN_ENTRIES {
+                return None;
+            }
+            StatRefreshedIndex {
+                base: base.clone(),
+                index: (***base).clone(),
+            }
+        }
+    };
+    let entries = refreshed.index.entries_mut();
+    for change in changes {
+        match change {
+            IndexWorktreeApplyChange::NewStat { entry_index, stat } => {
+                if let Some(entry) = entries.get_mut(entry_index) {
+                    entry.stat = stat;
+                }
+            }
+            IndexWorktreeApplyChange::SetSizeToZero { entry_index } => {
+                if let Some(entry) = entries.get_mut(entry_index) {
+                    entry.stat.size = 0;
+                }
+            }
+        }
+    }
+    refreshed.index.set_timestamp(stamp);
+    Some(refreshed)
 }
 
 fn collect_index_worktree_status_direct_from_index(
     repo: &gix::Repository,
-    index: &gix::worktree::Index,
+    index: &gix::index::File,
     unstaged: &mut Vec<FileStatus>,
     may_have_gitlinks: bool,
     cancellation: &CancellationToken,
-) -> Result<DirectIndexWorktreeStatus> {
+) -> Result<(DirectIndexWorktreeStatus, Vec<IndexWorktreeApplyChange>)> {
     let dirwalk_options = repo
         .dirwalk_options()
         .map_err(|e| {
@@ -835,12 +923,14 @@ fn collect_index_worktree_status_direct_from_index(
             cancellation,
         )?
     };
-    let index_stamp_after_write =
-        maybe_persist_direct_index_changes(repo, index, collection.index_changes);
-    Ok(DirectIndexWorktreeStatus {
-        has_conflicted_unstaged: collection.has_conflicted_unstaged,
-        index_stamp_after_write,
-    })
+    Ok((
+        DirectIndexWorktreeStatus {
+            has_conflicted_unstaged: collection.has_conflicted_unstaged,
+            // Status stays read-only: the stat refresh lives in memory only.
+            index_stamp_after_write: None,
+        },
+        collection.index_changes,
+    ))
 }
 
 #[derive(Clone, Copy)]
@@ -860,7 +950,7 @@ impl gix::status::plumbing::index_as_worktree::traits::SubmoduleStatus for NoopS
 
 fn collect_index_worktree_status_direct_with_submodule<S>(
     repo: &gix::Repository,
-    index: &gix::worktree::Index,
+    index: &gix::index::File,
     dirwalk_options: gix::dirwalk::Options,
     unstaged: &mut Vec<FileStatus>,
     submodule: S,
@@ -1036,14 +1126,18 @@ fn collect_index_worktree_status_entry<U>(
 ) -> Result<()> {
     match entry {
         gix::status::plumbing::index_as_worktree_with_renames::Entry::Modification {
+            entry_index,
             rela_path,
             status,
             ..
         } => {
-            if let gix::status::plumbing::index_as_worktree::EntryStatus::NeedsUpdate(_stat) =
+            if let gix::status::plumbing::index_as_worktree::EntryStatus::NeedsUpdate(stat) =
                 &status
             {
-                index_changes.push(IndexWorktreeApplyChange::NewStat);
+                index_changes.push(IndexWorktreeApplyChange::NewStat {
+                    entry_index,
+                    stat: *stat,
+                });
                 return Ok(());
             }
             if matches!(
@@ -1055,7 +1149,7 @@ fn collect_index_worktree_status_entry<U>(
                     },
                 )
             ) {
-                index_changes.push(IndexWorktreeApplyChange::SetSizeToZero);
+                index_changes.push(IndexWorktreeApplyChange::SetSizeToZero { entry_index });
             }
             let path = path_buf_from_git_bytes(
                 rela_path.as_ref(),
@@ -1183,8 +1277,13 @@ struct StatusEntryCollection {
 }
 
 enum IndexWorktreeApplyChange {
-    NewStat,
-    SetSizeToZero,
+    NewStat {
+        entry_index: usize,
+        stat: gix::index::entry::Stat,
+    },
+    SetSizeToZero {
+        entry_index: usize,
+    },
 }
 
 fn maybe_persist_status_outcome_changes(
@@ -1199,17 +1298,6 @@ fn maybe_persist_status_outcome_changes(
     // replays a coalesced refresh, on the assumption that a completed status read produces no
     // filesystem events. If this ever returns `Some(..)` (persisting a write-back), revisit that
     // reducer logic first or the loop returns.
-    None
-}
-
-fn maybe_persist_direct_index_changes(
-    _repo: &gix::Repository,
-    _index: &gix::worktree::Index,
-    _index_changes: Vec<IndexWorktreeApplyChange>,
-) -> Option<RepoFileStamp> {
-    // Same invariant as `maybe_persist_status_outcome_changes`: keep status collection read-only
-    // so monitor-driven refreshes do not recursively manufacture new worktree events, which the
-    // reducer's unconditional replay depends on.
     None
 }
 
@@ -1461,9 +1549,9 @@ pub(crate) mod tests {
     use rustc_hash::FxHashMap;
 
     use super::{
-        apply_porcelain_v2_gitlink_status_record, collect_unmerged_conflicts,
-        conflict_kind_from_stage_mask, map_directory_entry_status, map_entry_status,
-        map_porcelain_v2_status_char, remove_conflicted_paths_from_staged,
+        STAT_REFRESH_MIN_ENTRIES, apply_porcelain_v2_gitlink_status_record,
+        collect_unmerged_conflicts, conflict_kind_from_stage_mask, map_directory_entry_status,
+        map_entry_status, map_porcelain_v2_status_char, remove_conflicted_paths_from_staged,
         should_supplement_unmerged_conflicts, sort_and_dedup_status_entries, tree_id_for_commit,
     };
     use gitcomet_core::domain::{FileConflictKind, FileStatus, FileStatusKind};
@@ -2694,6 +2782,189 @@ pub(crate) mod tests {
             println!(
                 "tracked={tracked} dirty={dirty} staged={staged}: gix status {status_ms} ms | \
                  two numstat spawns {spawn_ms} ms | in-process pass {in_process_ms} ms (best of 5)"
+            );
+        }
+    }
+
+    /// The in-memory stat refresh moves the index timestamp past every entry it
+    /// verified. A racily clean entry whose content did change must then keep
+    /// comparing as changed, so the refresh zeroes its size as git's index
+    /// write does; with only the new timestamp it would read as clean.
+    #[test]
+    fn stat_refresh_keeps_a_racily_modified_file_modified() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+        // Rewriting the file below changes its ctime; the race is about mtime.
+        git_success(workdir, &["config", "core.trustctime", "false"]);
+        // Enough touched-but-unchanged files for the refresh to be kept.
+        let touched = STAT_REFRESH_MIN_ENTRIES + 16;
+        for index in 0..touched {
+            write_file(workdir, &format!("touched/{index:03}.txt"), "same\n");
+        }
+        write_file(workdir, "racy.txt", "foo\n");
+        git_success(workdir, &["add", "."]);
+        git_success(workdir, &["commit", "-q", "-m", "seed"]);
+
+        let now = filetime::FileTime::now().unix_seconds();
+        let entry_mtime = filetime::FileTime::from_unix_time(now - 50, 0);
+        filetime::set_file_mtime(workdir.join("racy.txt"), entry_mtime).expect("mtime");
+        git_success(workdir, &["update-index", "-q", "--refresh"]);
+        // Same size and mtime as the index entry, different content.
+        write_file(workdir, "racy.txt", "bar\n");
+        filetime::set_file_mtime(workdir.join("racy.txt"), entry_mtime).expect("mtime");
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        for index in 0..touched {
+            write_file(workdir, &format!("touched/{index:03}.txt"), "same\n");
+        }
+        // An index older than the entry makes it racy.
+        filetime::set_file_mtime(
+            workdir.join(".git/index"),
+            filetime::FileTime::from_unix_time(now - 100, 0),
+        )
+        .expect("index mtime");
+
+        let repo = open_repo(workdir);
+        let expected = vec![file_status("racy.txt", FileStatusKind::Modified)];
+        assert_eq!(repo.worktree_status_impl().expect("status"), expected);
+        assert!(
+            repo.stat_refreshed_index.lock().expect("lock").is_some(),
+            "the touched files should have produced an in-memory refresh"
+        );
+        assert_eq!(repo.worktree_status_impl().expect("status"), expected);
+    }
+
+    /// A write landing right after a walk starts can carry a coarser mtime
+    /// from the second before, below the walk's nanosecond clock. Git's
+    /// index stamp is such an mtime itself; the in-memory stamp must stay
+    /// behind the walk's second so that write still compares racy.
+    #[test]
+    fn stat_refresh_catches_a_write_stamped_just_before_the_walk() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+        git_success(workdir, &["config", "core.trustctime", "false"]);
+        let touched = STAT_REFRESH_MIN_ENTRIES + 16;
+        for index in 0..touched {
+            write_file(workdir, &format!("touched/{index:03}.txt"), "same\n");
+        }
+        write_file(workdir, "racy.txt", "foo\n");
+        git_success(workdir, &["add", "."]);
+        git_success(workdir, &["commit", "-q", "-m", "seed"]);
+        // Touched, so the walk produces the in-memory refresh.
+        for index in 0..touched {
+            write_file(workdir, &format!("touched/{index:03}.txt"), "same\n");
+        }
+        let repo = open_repo(workdir);
+
+        // Early in a second, so the walk below stays inside it.
+        let now = loop {
+            let now = filetime::FileTime::now();
+            if now.nanoseconds() < 300_000_000 {
+                break now;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        // The stamp a write a few milliseconds after the walk starts can get
+        // from the file clock: the last instant of the previous second.
+        let just_before = filetime::FileTime::from_unix_time(now.unix_seconds() - 1, 999_000_000);
+        filetime::set_file_mtime(workdir.join("racy.txt"), just_before).expect("mtime");
+        assert_eq!(repo.worktree_status_impl().expect("status"), vec![]);
+        assert_eq!(
+            filetime::FileTime::now().unix_seconds(),
+            now.unix_seconds(),
+            "the walk left the second it started in; rerun"
+        );
+        assert!(repo.stat_refreshed_index.lock().expect("lock").is_some());
+
+        // Same size and stat as the refreshed entry, different content.
+        write_file(workdir, "racy.txt", "bar\n");
+        filetime::set_file_mtime(workdir.join("racy.txt"), just_before).expect("mtime");
+        assert_eq!(
+            repo.worktree_status_impl().expect("status"),
+            vec![file_status("racy.txt", FileStatusKind::Modified)]
+        );
+    }
+
+    /// Worktree status after files were touched without changing content, as
+    /// build tools, formatters and editors saving unchanged buffers do. Status
+    /// never writes the index back, so each refresh re-hashes every such file
+    /// unless the refreshed stats are remembered.
+    #[test]
+    #[ignore = "timing probe"]
+    fn timing_worktree_status_after_touch() {
+        // Process CPU time: the hashing runs on every core, so wall time on a
+        // wide machine hides most of it.
+        fn cpu_ms() -> f64 {
+            let stat = fs::read_to_string("/proc/self/stat").unwrap_or_default();
+            let fields: Vec<&str> = stat
+                .rsplit_once(')')
+                .map(|(_, rest)| rest.split_whitespace().collect())
+                .unwrap_or_default();
+            let ticks: f64 = fields
+                .get(11..13)
+                .map(|t| t.iter().filter_map(|v| v.parse::<f64>().ok()).sum())
+                .unwrap_or(0.0);
+            ticks * 10.0
+        }
+        let body = "some representative source text here\n".repeat(256);
+        for (files, attributes) in [(2_000usize, false), (10_000, false), (10_000, true)] {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let workdir = tmp.path();
+            init_test_repo(workdir);
+            if attributes {
+                write_file(workdir, ".gitattributes", "* text=auto\n");
+            }
+            for index in 0..files {
+                write_file(
+                    workdir,
+                    &format!("src/mod{:02}/file{index:05}.rs", index % 64),
+                    &body,
+                );
+            }
+            git_success(workdir, &["add", "."]);
+            git_success(workdir, &["commit", "-q", "-m", "seed"]);
+            // Rewrite identical bytes: new mtimes (past git's one-second
+            // granularity), same content.
+            std::thread::sleep(std::time::Duration::from_millis(1100));
+            for index in 0..files {
+                write_file(
+                    workdir,
+                    &format!("src/mod{:02}/file{index:05}.rs", index % 64),
+                    &body,
+                );
+            }
+            let gix_repo = open_repo(workdir);
+            let start = std::time::Instant::now();
+            let first = gix_repo.worktree_status_impl().expect("status");
+            let first_ms = start.elapsed().as_secs_f64() * 1e3;
+            assert!(first.is_empty(), "touched files are unchanged");
+            // Refreshes are debounced (250 ms to 2 s): the next one starts in a
+            // later second, when the touched files are no longer racy.
+            std::thread::sleep(std::time::Duration::from_millis(1100));
+            let mut best = f64::MAX;
+            let cpu_start = cpu_ms();
+            for _ in 0..20 {
+                let start = std::time::Instant::now();
+                let again = gix_repo.worktree_status_impl().expect("status");
+                best = best.min(start.elapsed().as_secs_f64() * 1e3);
+                assert!(again.is_empty());
+            }
+            let repeat_cpu = (cpu_ms() - cpu_start) / 20.0;
+            // Control: the same tree once git has written the new stats back.
+            git_success(workdir, &["update-index", "-q", "--refresh"]);
+            let fresh = open_repo(workdir);
+            let _ = fresh.worktree_status_impl().expect("status");
+            let mut clean = f64::MAX;
+            let cpu_start = cpu_ms();
+            for _ in 0..20 {
+                let start = std::time::Instant::now();
+                let _ = fresh.worktree_status_impl().expect("status");
+                clean = clean.min(start.elapsed().as_secs_f64() * 1e3);
+            }
+            let clean_cpu = (cpu_ms() - cpu_start) / 20.0;
+            println!(
+                "timing worktree_status_after_touch files={files} text_auto={attributes} first={first_ms:.2}ms repeat_best={best:.2}ms repeat_cpu={repeat_cpu:.1}ms refreshed_index={clean:.2}ms refreshed_cpu={clean_cpu:.1}ms"
             );
         }
     }

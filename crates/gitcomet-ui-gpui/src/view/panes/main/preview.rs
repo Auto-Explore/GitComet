@@ -724,7 +724,7 @@ impl MainPaneView {
             target,
             Some(
                 DiffTarget::WorkingTree { .. }
-                    | DiffTarget::Commit { path: Some(_), .. }
+                    | DiffTarget::Commit { .. }
                     | DiffTarget::CommitRange { path: Some(_), .. }
             )
         )
@@ -1038,7 +1038,9 @@ impl MainPaneView {
 
     pub(in crate::view) fn untracked_directory_notice(&self) -> Option<SharedString> {
         let repo = self.active_repo()?;
-        let DiffTarget::WorkingTree { path, area } = repo.diff_state.diff_target.as_ref()? else {
+        let DiffTarget::WorkingTree { path, area, .. } =
+            self.bound_diff_state(repo).diff_target.as_ref()?
+        else {
             return None;
         };
         let abs_path = if path.is_absolute() {
@@ -1282,11 +1284,9 @@ impl MainPaneView {
     ) -> Option<crate::view::rows::MarkdownImageRoot> {
         let repo = self.active_repo()?;
         let workdir = repo.spec.workdir.clone();
-        let path = match repo.diff_state.diff_target.as_ref()? {
-            DiffTarget::WorkingTree { path, .. } => path.clone(),
-            DiffTarget::Commit { path, .. } | DiffTarget::CommitRange { path, .. } => {
-                path.clone()?
-            }
+        let path = match self.bound_diff_state(repo).diff_target.as_ref()? {
+            DiffTarget::WorkingTree { path, .. } | DiffTarget::Commit { path, .. } => path.clone(),
+            DiffTarget::CommitRange { path, .. } => path.clone()?,
         };
         let document = crate::view::rows::markdown_preview_document_path(&workdir, &path)?;
         Some(crate::view::rows::MarkdownImageRoot {
@@ -1425,7 +1425,7 @@ impl MainPaneView {
         }
         let repo = self.active_repo()?;
         let workdir = repo.spec.workdir.as_path();
-        let target = repo.diff_state.diff_target.as_ref()?;
+        let target = self.bound_diff_state(repo).diff_target.as_ref()?;
         let (source, path) =
             crate::view::rows::markdown_preview_local_link_target(workdir, target, destination)?;
         let source = if self.markdown_preview_row_shows_old_version(region, row_ix) {
@@ -1746,7 +1746,9 @@ impl MainPaneView {
     ) -> Option<std::path::PathBuf> {
         let repo = self.active_repo()?;
         let workdir = repo.spec.workdir.clone();
-        let DiffTarget::WorkingTree { path, area } = repo.diff_state.diff_target.as_ref()? else {
+        let DiffTarget::WorkingTree { path, area, .. } =
+            self.bound_diff_state(repo).diff_target.as_ref()?
+        else {
             return None;
         };
         if *area != DiffArea::Unstaged {
@@ -1769,10 +1771,10 @@ impl MainPaneView {
     ) -> Option<std::path::PathBuf> {
         let repo = self.active_repo()?;
         let workdir = repo.spec.workdir.clone();
-        let target = repo.diff_state.diff_target.as_ref()?;
+        let target = self.bound_diff_state(repo).diff_target.as_ref()?;
 
         match target {
-            DiffTarget::WorkingTree { path, area } => {
+            DiffTarget::WorkingTree { path, area, .. } => {
                 if *area != DiffArea::Staged {
                     return None;
                 }
@@ -1789,8 +1791,7 @@ impl MainPaneView {
                 })
             }
             DiffTarget::Commit {
-                commit_id,
-                path: Some(path),
+                commit_id, path, ..
             } => {
                 let details = match &repo.history_state.commit_details {
                     Loadable::Ready(d) => d,
@@ -1817,10 +1818,10 @@ impl MainPaneView {
     ) -> Option<std::path::PathBuf> {
         let repo = self.active_repo()?;
         let workdir = repo.spec.workdir.clone();
-        let target = repo.diff_state.diff_target.as_ref()?;
+        let target = self.bound_diff_state(repo).diff_target.as_ref()?;
 
         match target {
-            DiffTarget::WorkingTree { path, area } => {
+            DiffTarget::WorkingTree { path, area, .. } => {
                 let is_deleted = repo
                     .status_entry_for_path(*area, path.as_path())
                     .is_some_and(|entry| entry.kind == FileStatusKind::Deleted);
@@ -1834,8 +1835,7 @@ impl MainPaneView {
                 })
             }
             DiffTarget::Commit {
-                commit_id,
-                path: Some(path),
+                commit_id, path, ..
             } => {
                 let details = match &repo.history_state.commit_details {
                     Loadable::Ready(d) => d,
@@ -1861,19 +1861,17 @@ impl MainPaneView {
     /// (working-tree path on disk, or the file path within a commit).
     pub(in super::super::super) fn content_preview_abs_path(&self) -> Option<std::path::PathBuf> {
         let repo = self.active_repo()?;
-        if !repo.diff_state.content_preview {
+        if !self.bound_diff_state(repo).content_preview {
             return None;
         }
         let workdir = repo.spec.workdir.clone();
-        match repo.diff_state.diff_target.as_ref()? {
+        match self.bound_diff_state(repo).diff_target.as_ref()? {
             DiffTarget::WorkingTree { path, .. } => Some(if path.is_absolute() {
                 path.clone()
             } else {
                 workdir.join(path)
             }),
-            DiffTarget::Commit {
-                path: Some(path), ..
-            } => Some(workdir.join(path)),
+            DiffTarget::Commit { path, .. } => Some(workdir.join(path)),
             _ => None,
         }
     }
@@ -1885,10 +1883,10 @@ impl MainPaneView {
         &self,
     ) -> Option<std::path::PathBuf> {
         let repo = self.active_repo()?;
-        if !repo.diff_state.content_preview {
+        if !self.bound_diff_state(repo).content_preview {
             return None;
         }
-        match repo.diff_state.diff_target.as_ref()? {
+        match self.bound_diff_state(repo).diff_target.as_ref()? {
             DiffTarget::WorkingTree { .. } => self.content_preview_abs_path(),
             DiffTarget::Commit { .. } => self.preview_text_file_source_path_for_side(
                 gitcomet_core::domain::DiffPreviewTextSide::New,
@@ -1902,7 +1900,7 @@ impl MainPaneView {
         side: gitcomet_core::domain::DiffPreviewTextSide,
     ) -> Option<std::path::PathBuf> {
         let repo = self.active_repo()?;
-        match &repo.diff_state.diff_preview_text_file {
+        match &self.bound_diff_state(repo).diff_preview_text_file {
             Loadable::Ready(Some(file)) if file.side == side => Some(file.path.clone()),
             _ => None,
         }
@@ -1960,12 +1958,12 @@ impl MainPaneView {
             };
             return Some((request, key));
         };
-        let attributes = match &repo.diff_state.text_attributes {
+        let attributes = match &self.bound_diff_state(repo).text_attributes {
             Loadable::Loading => return None,
             Loadable::Ready(attributes) => Arc::clone(attributes),
             Loadable::NotLoaded | Loadable::Error(_) => Arc::default(),
         };
-        let encoding = repo.diff_state.selected_encoding_override();
+        let encoding = self.bound_diff_state(repo).selected_encoding_override();
         let key = TextDecodeKey {
             kind,
             attributes: attributes.decoding_encodings(),
@@ -2101,7 +2099,7 @@ impl MainPaneView {
     ) {
         if self
             .active_repo()
-            .is_some_and(|repo| repo.diff_state.content_preview)
+            .is_some_and(|repo| self.bound_diff_state(repo).content_preview)
         {
             match (
                 self.content_preview_abs_path(),
@@ -2371,7 +2369,8 @@ impl MainPaneView {
         let DiffTarget::WorkingTree {
             path,
             area: DiffArea::Unstaged,
-        } = repo.diff_state.diff_target.as_ref()?
+            ..
+        } = self.bound_diff_state(repo).diff_target.as_ref()?
         else {
             return None;
         };

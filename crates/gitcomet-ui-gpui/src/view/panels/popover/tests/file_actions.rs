@@ -481,7 +481,33 @@ fn commit_file_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
     let repo_id = RepoId(2);
     let commit_id = CommitId("deadbeefdeadbeef".into());
     let path = std::path::PathBuf::from("src/main.rs");
+    let old_path = std::path::PathBuf::from("src/old.rs");
 
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = commit_menu_test_repo(repo_id, &commit_id);
+            repo.history_state.commit_details =
+                Loadable::Ready(Arc::new(gitcomet_core::domain::CommitDetails {
+                    id: commit_id.clone(),
+                    message: "Rename".into(),
+                    author_name: String::new(),
+                    author_email: String::new(),
+                    authored_at_unix: 0,
+                    committed_at: String::new(),
+                    committed_at_unix: 0,
+                    parent_ids: Vec::new(),
+                    files: vec![
+                        gitcomet_core::domain::CommitFileChange::new(
+                            path.clone(),
+                            gitcomet_core::domain::FileStatusKind::Renamed,
+                        )
+                        .with_old_path(Some(old_path.clone())),
+                    ],
+                }));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.run_until_parked();
     cx.update(|_window, app| {
         let model = view
             .update(app, |this, cx| {
@@ -497,6 +523,14 @@ fn commit_file_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
                 })
             })
             .expect("expected commit file context menu model");
+
+        // The row's click opens the diff, with its rename source; the menu
+        // does not repeat it.
+        assert!(!model.items.iter().any(|item| matches!(
+            item,
+            ContextMenuItem::Entry { action, .. }
+                if matches!(action.as_ref(), ContextMenuAction::SelectDiff { .. })
+        )));
 
         let open_file_action = model.items.iter().find_map(|item| match item {
             ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Open file" => {
@@ -665,13 +699,13 @@ fn unopened_submodule_menus_disable_open_in_code_editor(cx: &mut gpui::TestAppCo
                     committed_at: String::new(),
                     committed_at_unix: 0,
                     parent_ids: Vec::new(),
-                    files: vec![gitcomet_core::domain::CommitFileChange {
-                        path: path.clone(),
-                        kind: gitcomet_core::domain::FileStatusKind::Modified,
-                        is_submodule: true,
-                        additions: None,
-                        deletions: None,
-                    }],
+                    files: vec![
+                        gitcomet_core::domain::CommitFileChange::new(
+                            path.clone(),
+                            gitcomet_core::domain::FileStatusKind::Modified,
+                        )
+                        .with_submodule(true),
+                    ],
                 }
                 .into(),
             );
@@ -1482,7 +1516,6 @@ fn file_browser_file_menu_groups_working_tree_actions_in_order(cx: &mut gpui::Te
         menu_outline(&model),
         [
             "Open",
-            "Open diff",
             "Edit file",
             "—",
             "New file",
@@ -1588,7 +1621,6 @@ fn file_browser_file_menu_for_a_commit_source_has_no_explorer_groups(
         menu_outline(&model),
         [
             "Open",
-            "Open diff",
             "Edit file",
             "—",
             "File history",

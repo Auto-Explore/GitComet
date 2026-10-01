@@ -19,14 +19,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 mod build;
+mod changed_rows;
 mod render;
 #[cfg(test)]
 mod tests;
 
 pub(in crate::view) use build::{FileTree, FileTreeItem};
+pub(in crate::view) use changed_rows::{
+    ChangedFileRow, DirectoryToggle, changed_file_directory_row, changed_file_row,
+};
 pub(in crate::view) use render::{
     DirectoryRowDetail, DirectoryRowProps, directory_row, directory_row_detail_for_width,
-    file_row_indent_px,
+    file_list_folder_menu_invoker, file_row_indent_px,
 };
 
 /// Display row index, directory rows included.
@@ -44,6 +48,16 @@ pub(in crate::view) enum FileListId {
     CommitFiles,
     WorktreeFiles,
     RangeFiles,
+}
+
+/// Ctrl/Shift-click selection in a commit or comparison file list, with the
+/// status lists' anchor rules.
+#[derive(Clone, Debug, Default)]
+pub(in crate::view) struct FileListMultiSelection {
+    pub(in crate::view) paths: Vec<std::path::PathBuf>,
+    pub(in crate::view) anchor: Option<std::path::PathBuf>,
+    pub(in crate::view) anchor_index: Option<usize>,
+    pub(in crate::view) anchor_order_rev: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -234,7 +248,7 @@ impl FileListOrdered<'_> {
 /// hidden.
 #[derive(Clone, Debug, Default)]
 pub(in crate::view) struct CollapsedDirs {
-    set: FxHashSet<Arc<Path>>,
+    set: Arc<FxHashSet<Arc<Path>>>,
     rev: u64,
 }
 
@@ -252,16 +266,37 @@ impl CollapsedDirs {
     /// later merges away would strand the collapse on no row at all.
     pub(in crate::view) fn collapse(&mut self, key: Arc<Path>, chain: &[Arc<Path>]) {
         for segment in chain {
-            self.set.remove(segment);
+            Arc::make_mut(&mut self.set).remove(segment);
         }
-        self.set.insert(key);
+        Arc::make_mut(&mut self.set).insert(key);
         self.rev = self.rev.wrapping_add(1);
     }
 
     pub(in crate::view) fn expand(&mut self, chain: &[Arc<Path>]) {
         let mut changed = false;
         for segment in chain {
-            changed |= self.set.remove(segment);
+            changed |= Arc::make_mut(&mut self.set).remove(segment);
+        }
+        if changed {
+            self.rev = self.rev.wrapping_add(1);
+        }
+    }
+
+    /// Expand the folder `key` names and every folder below it.
+    pub(in crate::view) fn expand_under(&mut self, key: &Path, chain: &[Arc<Path>]) {
+        let before = self.set.len();
+        Arc::make_mut(&mut self.set).retain(|dir| !dir.starts_with(key) && !chain.contains(dir));
+        if self.set.len() != before {
+            self.rev = self.rev.wrapping_add(1);
+        }
+    }
+
+    /// Collapse every folder in `dirs`. A row is collapsed when any segment of
+    /// its chain is, so marking each directory path covers folded rows too.
+    pub(in crate::view) fn collapse_all(&mut self, dirs: impl IntoIterator<Item = Arc<Path>>) {
+        let mut changed = false;
+        for dir in dirs {
+            changed |= Arc::make_mut(&mut self.set).insert(dir);
         }
         if changed {
             self.rev = self.rev.wrapping_add(1);

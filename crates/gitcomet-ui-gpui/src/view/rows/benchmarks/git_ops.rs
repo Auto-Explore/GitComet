@@ -20,7 +20,7 @@ enum GitOpsScenario {
         requested_commits: usize,
         author: String,
     },
-    DiffCommit {
+    DiffRange {
         target: DiffTarget,
         changed_files: usize,
         renamed_files: usize,
@@ -193,22 +193,20 @@ impl GitOpsFixture {
         }
     }
 
-    pub fn diff_rename_heavy(renamed_files: usize) -> Self {
+    pub fn diff_range_rename_heavy(renamed_files: usize) -> Self {
         let renamed_files = renamed_files.max(1);
         let (repo_root, commit_id) = build_git_ops_diff_rename_repo(renamed_files);
         let backend = GixBackend;
         let repo = backend
             .open(repo_root.path())
-            .expect("open git_ops diff_rename_heavy benchmark repo");
+            .expect("open git_ops diff_range_rename_heavy benchmark repo");
 
+        let target = parent_range_target(repo_root.path(), commit_id);
         Self {
             _repo_root: repo_root,
             repo,
-            scenario: GitOpsScenario::DiffCommit {
-                target: DiffTarget::Commit {
-                    commit_id,
-                    path: None,
-                },
+            scenario: GitOpsScenario::DiffRange {
+                target,
                 changed_files: renamed_files,
                 renamed_files,
                 binary_files: 0,
@@ -217,23 +215,21 @@ impl GitOpsFixture {
         }
     }
 
-    pub fn diff_binary_heavy(binary_files: usize, bytes_per_file: usize) -> Self {
+    pub fn diff_range_binary_heavy(binary_files: usize, bytes_per_file: usize) -> Self {
         let binary_files = binary_files.max(1);
         let bytes_per_file = bytes_per_file.max(1);
         let (repo_root, commit_id) = build_git_ops_binary_diff_repo(binary_files, bytes_per_file);
         let backend = GixBackend;
         let repo = backend
             .open(repo_root.path())
-            .expect("open git_ops diff_binary_heavy benchmark repo");
+            .expect("open git_ops diff_range_binary_heavy benchmark repo");
 
+        let target = parent_range_target(repo_root.path(), commit_id);
         Self {
             _repo_root: repo_root,
             repo,
-            scenario: GitOpsScenario::DiffCommit {
-                target: DiffTarget::Commit {
-                    commit_id,
-                    path: None,
-                },
+            scenario: GitOpsScenario::DiffRange {
+                target,
                 changed_files: binary_files,
                 renamed_files: 0,
                 binary_files,
@@ -242,23 +238,21 @@ impl GitOpsFixture {
         }
     }
 
-    pub fn diff_large_single_file(line_count: usize, line_bytes: usize) -> Self {
+    pub fn diff_range_large_single_file(line_count: usize, line_bytes: usize) -> Self {
         let line_count = line_count.max(1);
         let line_bytes = line_bytes.max(16);
         let (repo_root, commit_id) = build_git_ops_large_diff_repo(line_count, line_bytes);
         let backend = GixBackend;
         let repo = backend
             .open(repo_root.path())
-            .expect("open git_ops diff_large_single_file benchmark repo");
+            .expect("open git_ops diff_range_large_single_file benchmark repo");
 
+        let target = parent_range_target(repo_root.path(), commit_id);
         Self {
             _repo_root: repo_root,
             repo,
-            scenario: GitOpsScenario::DiffCommit {
-                target: DiffTarget::Commit {
-                    commit_id,
-                    path: None,
-                },
+            scenario: GitOpsScenario::DiffRange {
+                target,
                 changed_files: 1,
                 renamed_files: 0,
                 binary_files: 0,
@@ -391,7 +385,7 @@ impl GitOpsFixture {
                 metrics.commits_returned = u64::try_from(commits_returned).unwrap_or(u64::MAX);
             }
             (
-                GitOpsScenario::DiffCommit {
+                GitOpsScenario::DiffRange {
                     changed_files,
                     renamed_files,
                     binary_files,
@@ -500,7 +494,7 @@ impl GitOpsFixture {
                     GitOpsOutcome::LogWalk { commits_returned },
                 )
             }
-            GitOpsScenario::DiffCommit { target, .. } => {
+            GitOpsScenario::DiffRange { target, .. } => {
                 let diff = self
                     .repo
                     .diff_parsed(target)
@@ -833,7 +827,7 @@ fn build_git_ops_ref_repo(total_refs: usize) -> TempDir {
 }
 
 fn build_git_ops_diff_rename_repo(renamed_files: usize) -> (TempDir, CommitId) {
-    let repo_root = tempfile::tempdir().expect("create git_ops diff_rename_heavy tempdir");
+    let repo_root = tempfile::tempdir().expect("create git_ops diff_range_rename_heavy tempdir");
     let repo = repo_root.path();
     init_git_ops_repo(repo);
     run_git(repo, &["config", "diff.renames", "true"]);
@@ -887,7 +881,7 @@ fn build_git_ops_binary_diff_repo(
     binary_files: usize,
     bytes_per_file: usize,
 ) -> (TempDir, CommitId) {
-    let repo_root = tempfile::tempdir().expect("create git_ops diff_binary_heavy tempdir");
+    let repo_root = tempfile::tempdir().expect("create git_ops diff_range_binary_heavy tempdir");
     let repo = repo_root.path();
     init_git_ops_repo(repo);
 
@@ -1099,6 +1093,13 @@ fn init_git_ops_repo(repo: &Path) {
 
 fn git_ops_head_commit_id(repo: &Path) -> CommitId {
     CommitId(git_stdout(repo, &["rev-parse", "HEAD"]).into())
+}
+
+/// A commit's whole patch against its first parent. Commit targets name one
+/// file, so the whole-patch benchmarks compare the two commits instead.
+fn parent_range_target(repo: &Path, commit_id: CommitId) -> DiffTarget {
+    let parent = git_stdout(repo, &["rev-parse", &format!("{}^", commit_id.as_ref())]);
+    DiffTarget::commit_range(CommitId(parent.into()), Some(commit_id), None)
 }
 
 pub(crate) fn run_git(repo: &Path, args: &[&str]) {

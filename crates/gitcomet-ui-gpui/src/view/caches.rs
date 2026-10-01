@@ -555,7 +555,8 @@ impl HistoryWhenVm {
     }
 }
 
-const HISTORY_SHORT_SHA_LEN: usize = 8;
+/// Characters of a commit id the history list shows.
+pub(in crate::view) const HISTORY_SHORT_SHA_LEN: usize = 8;
 
 #[derive(Clone, Debug)]
 pub(in crate::view) struct HistoryShortShaVm {
@@ -676,11 +677,7 @@ type HistoryRefItemsByTarget<'a> = FxHashMap<&'a str, HistoryRefItems>;
 
 #[inline]
 pub(in crate::view) fn history_commit_is_probable_stash_tip(commit: &Commit) -> bool {
-    if !(2..=3).contains(&commit.parent_ids.len()) {
-        return false;
-    }
-    let summary: &str = &commit.summary;
-    (summary.starts_with("WIP on ") || summary.starts_with("On ")) && summary.contains(": ")
+    gitcomet_core::history_find::is_probable_stash_summary(commit.parent_ids.len(), &commit.summary)
 }
 
 pub(in crate::view) fn analyze_history_stashes<'a>(

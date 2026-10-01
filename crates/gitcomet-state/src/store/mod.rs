@@ -73,8 +73,11 @@ fn is_control_command(command: &StoreWorkerCommand) -> bool {
     match command {
         StoreWorkerCommand::Msg(msg) | StoreWorkerCommand::Traced(msg, _) => is_control_msg(msg),
         StoreWorkerCommand::Shutdown => true,
+        StoreWorkerCommand::Repository { .. } => true,
         #[cfg(any(test, feature = "test-support"))]
         StoreWorkerCommand::InsertRepoForTest { .. } => true,
+        #[cfg(any(test, feature = "test-support"))]
+        StoreWorkerCommand::DisableRepoMonitorsForTest => true,
     }
 }
 
@@ -169,6 +172,7 @@ struct WorkerLoopContext<'a> {
     repo_load_executor: &'a TaskExecutor,
     metadata_executor: &'a TaskExecutor,
     signature_executor: &'a TaskExecutor,
+    history_find_executor: &'a std::sync::LazyLock<TaskExecutor>,
     session_persist_executor: &'a TaskExecutor,
     backend: &'a Arc<dyn GitBackend>,
     publication: &'a AtomicU64,
@@ -271,39 +275,73 @@ impl WorkerLoopContext<'_> {
             self.thread_msg_tx.is_alive(),
         );
 
-        // Keep filesystem monitoring scoped to the active repository only, to minimize
-        // OS watcher load in large multi-repo sessions.
-        let (active_repo, active_workdir) = {
+        // Keep filesystem monitoring scoped to the active repository, plus any
+        // a watch lease holds, to minimize OS watcher load in large multi-repo
+        // sessions.
+        let (active_repo, watched): (Option<RepoId>, Vec<(RepoId, std::path::PathBuf, bool)>) = {
             let state = self.thread_state.read().unwrap_or_else(|e| e.into_inner());
-            let active_repo = state.active_repo;
-            let active_workdir = active_repo.and_then(|repo_id| {
-                state
-                    .repos
-                    .iter()
-                    .find(|r| r.id == repo_id)
-                    .map(|r| r.spec.workdir.clone())
-            });
-            (active_repo, active_workdir)
+            let watched = state
+                .repos
+                .iter()
+                .filter(|repo| {
+                    state.active_repo == Some(repo.id) || state.watch_leases.contains_key(&repo.id)
+                })
+                .map(|repo| {
+                    let leased = state.watch_leases.contains_key(&repo.id);
+                    (repo.id, repo.spec.workdir.clone(), leased)
+                })
+                .collect();
+            (state.active_repo, watched)
         };
 
         for repo_id in self.repo_monitors.running_repo_ids() {
-            if Some(repo_id) != active_repo {
+            if !watched
+                .iter()
+                .any(|(watched_id, _, _)| *watched_id == repo_id)
+            {
                 self.repo_monitors.stop(repo_id);
             }
         }
 
-        if let Some(repo_id) = active_repo
-            && let Some(workdir) = active_workdir
-            && repos.contains_key(&repo_id)
-        {
-            self.repo_monitors.start(
-                repo_id,
-                workdir,
-                self.thread_msg_tx.clone(),
-                Arc::clone(self.active_repo_id),
-                Arc::clone(self.backend),
-            );
+        for (repo_id, workdir, leased) in watched {
+            if repos.contains_key(&repo_id) {
+                self.repo_monitors.start(
+                    repo_id,
+                    workdir,
+                    self.thread_msg_tx.clone(),
+                    Arc::clone(self.active_repo_id),
+                    Arc::clone(self.backend),
+                );
+                self.repo_monitors.set_leased(repo_id, leased);
+            }
         }
+
+        let worktrees = {
+            let state = self
+                .thread_state
+                .read()
+                .unwrap_or_else(|error| error.into_inner());
+            let mut wanted: Vec<_> = state.worktree_watch_leases.keys().cloned().collect();
+            if let Some(repo) = state
+                .repos
+                .iter()
+                .find(|repo| state.active_repo == Some(repo.id))
+                && let Some(path) = &repo.history_state.worktree_selection
+                && path != &repo.spec.workdir
+            {
+                let selected = (repo.id, repo.lifetime(), path.clone());
+                if !wanted.contains(&selected) {
+                    wanted.push(selected);
+                }
+            }
+            wanted
+        };
+        self.repo_monitors.reconcile_worktrees(
+            worktrees,
+            self.thread_msg_tx.clone(),
+            Arc::clone(self.active_repo_id),
+            Arc::clone(self.backend),
+        );
 
         for effect in effects {
             gitcomet_core::op_trace::record_current(
@@ -344,6 +382,7 @@ impl WorkerLoopContext<'_> {
                     session_persist_executor: self.session_persist_executor,
                     metadata_executor: self.metadata_executor,
                     signature_executor: self.signature_executor,
+                    history_find_executor: self.history_find_executor,
                 },
                 self.thread_state,
                 self.backend,
@@ -353,6 +392,60 @@ impl WorkerLoopContext<'_> {
                 effect,
             );
         }
+    }
+}
+
+/// Keeps a repository's file watcher running while it is not the active
+/// repository. Leases count: the watcher stops when the last is dropped
+/// (unless the repository is active). A lease never keeps the store alive.
+#[must_use = "dropping the lease releases the watch"]
+pub struct WorktreeWatchLease {
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    lifetime: u64,
+    path: std::path::PathBuf,
+}
+
+impl Drop for WorktreeWatchLease {
+    fn drop(&mut self) {
+        self.msg_tx.dispatch(Msg::WatchWorktree {
+            repo_id: self.repo_id,
+            lifetime: self.lifetime,
+            path: self.path.clone(),
+            watch: false,
+        });
+    }
+}
+
+/// A counted watch of one open repository lifetime.
+#[must_use = "dropping the lease releases the watch"]
+pub struct WatchLease {
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    lifetime: u64,
+}
+
+impl WatchLease {
+    pub fn repo_id(&self) -> RepoId {
+        self.repo_id
+    }
+}
+
+impl Drop for WatchLease {
+    fn drop(&mut self) {
+        self.msg_tx.dispatch(Msg::ReleaseWatchLease {
+            repo_id: self.repo_id,
+            lifetime: self.lifetime,
+        });
+    }
+}
+
+impl std::fmt::Debug for WatchLease {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WatchLease")
+            .field("repo_id", &self.repo_id)
+            .field("lifetime", &self.lifetime)
+            .finish()
     }
 }
 
@@ -368,11 +461,17 @@ pub struct AppStore {
 
 struct StorePublicLifetime {
     msg_tx: StoreWorkerSender,
+    #[cfg(any(test, feature = "test-support"))]
+    history_find_dispatches: AtomicU64,
 }
 
 impl StorePublicLifetime {
     fn new(msg_tx: StoreWorkerSender) -> Self {
-        Self { msg_tx }
+        Self {
+            msg_tx,
+            #[cfg(any(test, feature = "test-support"))]
+            history_find_dispatches: AtomicU64::new(0),
+        }
     }
 }
 
@@ -444,6 +543,11 @@ impl AppStore {
                 TaskExecutor::shared_for_store(StoreExecutorPool::Signatures, 1);
             let session_persist_executor =
                 TaskExecutor::shared_for_store(StoreExecutorPool::SessionPersist, 1);
+            // Find scans read all of history, so each window gets its own.
+            let history_find_executor: std::sync::LazyLock<TaskExecutor> =
+                std::sync::LazyLock::new(|| {
+                    TaskExecutor::named(crate::history_find::HISTORY_FIND_THREAD, 1)
+                });
             let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
             let mut repo_task_tokens: FxHashMap<RepoId, RepoTaskToken> = FxHashMap::default();
             let mut repo_monitors = RepoMonitorManager::new();
@@ -456,9 +560,29 @@ impl AppStore {
                     StoreWorkerCommand::Msg(msg) => (*msg, None),
                     StoreWorkerCommand::Traced(msg, stamp) => (*msg, Some(stamp)),
                     StoreWorkerCommand::Shutdown => break,
+                    StoreWorkerCommand::Repository {
+                        repo_id,
+                        lifetime,
+                        reply,
+                    } => {
+                        let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
+                        let repository = state
+                            .repos
+                            .iter()
+                            .any(|repo| repo.id == repo_id && repo.lifetime() == lifetime)
+                            .then(|| repos.get(&repo_id).cloned())
+                            .flatten();
+                        let _ = reply.send(repository);
+                        continue;
+                    }
                     #[cfg(any(test, feature = "test-support"))]
                     StoreWorkerCommand::InsertRepoForTest { repo_id, repo } => {
                         repos.insert(repo_id, repo);
+                        continue;
+                    }
+                    #[cfg(any(test, feature = "test-support"))]
+                    StoreWorkerCommand::DisableRepoMonitorsForTest => {
+                        repo_monitors.disable();
                         continue;
                     }
                 };
@@ -576,6 +700,7 @@ impl AppStore {
                     repo_load_executor: &repo_load_executor,
                     metadata_executor: &metadata_executor,
                     signature_executor: &signature_executor,
+                    history_find_executor: &history_find_executor,
                     session_persist_executor: &session_persist_executor,
                     backend: &backend,
                     publication: &thread_publication,
@@ -681,12 +806,18 @@ impl AppStore {
                             &mut repos,
                             &id_alloc,
                             |app_state, repos, id| {
-                                reduce(
+                                let mut effects = reduce(
                                     repos,
                                     id,
                                     app_state,
                                     Msg::RepoExternallyChanged { repo_id, change },
-                                )
+                                );
+                                // A day-long session gets its daily check on
+                                // focus; the reducer throttles it hourly.
+                                effects.extend(reducer::maintenance::request_check(
+                                    app_state, repo_id,
+                                ));
+                                effects
                             },
                         );
                     }
@@ -723,6 +854,15 @@ impl AppStore {
     }
 
     pub fn dispatch(&self, msg: Msg) {
+        #[cfg(any(test, feature = "test-support"))]
+        if matches!(
+            &msg,
+            Msg::HistoryFind(crate::history_find::HistoryFindMsg::Find { .. })
+        ) {
+            self.public_lifetime
+                .history_find_dispatches
+                .fetch_add(1, Ordering::Relaxed);
+        }
         self.msg_tx.dispatch(msg);
     }
 
@@ -754,9 +894,56 @@ impl AppStore {
         Ok(None)
     }
 
+    /// Watches this lifetime of `repo_id` until the lease is dropped. Closing
+    /// and reopening the repository never transfers an outstanding lease.
+    pub fn watch_worktree(
+        &self,
+        repo_id: RepoId,
+        lifetime: u64,
+        path: std::path::PathBuf,
+    ) -> WorktreeWatchLease {
+        self.msg_tx.dispatch(Msg::WatchWorktree {
+            repo_id,
+            lifetime,
+            path: path.clone(),
+            watch: true,
+        });
+        WorktreeWatchLease {
+            msg_tx: self.msg_tx.clone(),
+            repo_id,
+            lifetime,
+            path,
+        }
+    }
+
+    pub fn watch_repository(&self, repo_id: RepoId, lifetime: u64) -> WatchLease {
+        self.msg_tx
+            .dispatch(Msg::AcquireWatchLease { repo_id, lifetime });
+        WatchLease {
+            msg_tx: self.msg_tx.clone(),
+            repo_id,
+            lifetime,
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn history_find_dispatch_count_for_test(&self) -> u64 {
+        self.public_lifetime
+            .history_find_dispatches
+            .load(Ordering::Relaxed)
+    }
+
     pub fn snapshot(&self) -> Arc<AppState> {
         let state = self.state.read().unwrap_or_else(|e| e.into_inner());
         Arc::clone(&state)
+    }
+
+    /// Reads a backend handle for this repository lifetime on a worker thread.
+    /// This waits for the store worker; do not call from the UI thread or a reducer.
+    /// An old handle never resolves to a reopened repository with the same id.
+    pub fn repository(&self, repo_id: RepoId, lifetime: u64) -> Option<Arc<dyn GitRepository>> {
+        self.msg_tx.repository(repo_id, lifetime)
     }
 
     /// [`Self::snapshot`] without blocking: `None` while the reducer holds
@@ -800,6 +987,14 @@ impl AppStore {
     #[doc(hidden)]
     pub fn insert_repo_for_test(&self, repo_id: RepoId, repo: Arc<dyn GitRepository>) {
         self.msg_tx.insert_repo_for_test(repo_id, repo);
+    }
+
+    /// Never starts a filesystem monitor for any repository. For tests over
+    /// real repositories whose assertions a watcher refresh would disturb.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn disable_repo_monitors_for_test(&self) {
+        self.msg_tx.disable_repo_monitors_for_test();
     }
 }
 

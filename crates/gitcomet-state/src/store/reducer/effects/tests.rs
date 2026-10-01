@@ -464,8 +464,8 @@ fn blame_loaded_requires_matching_path_and_source() {
 
     {
         let repo = repo_mut(&mut state, repo_id);
-        repo.history_state.blame_path = Some(path.clone());
-        repo.history_state.blame_source = Some(source.clone());
+        repo.diff_state.blame_path = Some(path.clone());
+        repo.diff_state.blame_source = Some(source.clone());
     }
 
     blame_loaded(
@@ -476,7 +476,7 @@ fn blame_loaded_requires_matching_path_and_source() {
         Ok(Vec::new()),
     );
     assert!(matches!(
-        repo_mut(&mut state, repo_id).history_state.blame,
+        repo_mut(&mut state, repo_id).diff_state.blame,
         Loadable::NotLoaded
     ));
 
@@ -488,7 +488,7 @@ fn blame_loaded_requires_matching_path_and_source() {
         Ok(Vec::new()),
     );
     assert!(matches!(
-        repo_mut(&mut state, repo_id).history_state.blame,
+        repo_mut(&mut state, repo_id).diff_state.blame,
         Loadable::Ready(_)
     ));
 
@@ -500,7 +500,7 @@ fn blame_loaded_requires_matching_path_and_source() {
         Err(backend_error("blame failed")),
     );
     let repo = repo_mut(&mut state, repo_id);
-    assert!(matches!(repo.history_state.blame, Loadable::Error(_)));
+    assert!(matches!(repo.diff_state.blame, Loadable::Error(_)));
     assert_eq!(repo.feedback.diagnostics.len(), 1);
 }
 
@@ -737,14 +737,14 @@ fn load_requests_set_loading_and_emit_effects() {
     ));
     {
         let repo = repo_mut(&mut state, repo_id);
-        assert_eq!(repo.history_state.blame_path.as_ref(), Some(&blame_path));
+        assert_eq!(repo.diff_state.blame_path.as_ref(), Some(&blame_path));
         assert_eq!(
-            repo.history_state.blame_source,
+            repo.diff_state.blame_source,
             Some(gitcomet_core::domain::BlameSource::Revision(Some(
                 "HEAD".to_string()
             )))
         );
-        assert!(repo.history_state.blame.is_loading());
+        assert!(repo.diff_state.blame.is_loading());
     }
 
     let effects = load_worktrees(&mut state, repo_id);
@@ -2351,10 +2351,7 @@ fn browse_open_content_path_captures_previews_only() {
     let path = PathBuf::from("src/main.rs");
     let repo = repo_mut(&mut state, repo_id);
     repo.diff_state.content_preview = true;
-    repo.set_diff_target(Some(DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: Some(path.clone()),
-    }));
+    repo.set_diff_target(Some(DiffTarget::commit(commit_id.clone(), path.clone())));
     assert_eq!(
         browse_open_content_path(repo),
         Some(PendingFileBrowserReopen {
@@ -2364,10 +2361,10 @@ fn browse_open_content_path_captures_previews_only() {
     );
 
     // WorkingTree target
-    repo.set_diff_target(Some(DiffTarget::WorkingTree {
-        path: path.clone(),
-        area: DiffArea::Unstaged,
-    }));
+    repo.set_diff_target(Some(DiffTarget::working_tree(
+        path.clone(),
+        DiffArea::Unstaged,
+    )));
     assert_eq!(
         browse_open_content_path(repo).map(|reopen| reopen.path),
         Some(path)
@@ -2377,13 +2374,6 @@ fn browse_open_content_path_captures_previews_only() {
     repo.diff_state.edit_mode = true;
     assert!(browse_open_content_path(repo).is_none());
     repo.diff_state.edit_mode = false;
-
-    // Commit with path: None → None
-    repo.set_diff_target(Some(DiffTarget::Commit {
-        commit_id,
-        path: None,
-    }));
-    assert!(browse_open_content_path(repo).is_none());
 
     // diff_target is None → None
     repo.set_diff_target(None);
@@ -2395,10 +2385,10 @@ fn open_preview_at(state: &mut AppState, repo_id: RepoId, commit: &CommitId, pat
     let repo = repo_mut(state, repo_id);
     repo.diff_state.content_preview = true;
     repo.diff_state.edit_mode = false;
-    repo.set_diff_target(Some(DiffTarget::Commit {
-        commit_id: commit.clone(),
-        path: Some(PathBuf::from(path)),
-    }));
+    repo.set_diff_target(Some(DiffTarget::commit(
+        commit.clone(),
+        PathBuf::from(path),
+    )));
 }
 
 fn load_selected_diffs(effects: &[Effect]) -> usize {
@@ -2452,10 +2442,7 @@ fn browse_repository_at_commit_reopens_active_file_once_the_listing_lands() {
     let repo = repo_mut(&mut state, repo_id);
     assert_eq!(
         repo.diff_state.diff_target,
-        Some(DiffTarget::Commit {
-            commit_id: commit_b,
-            path: Some(PathBuf::from("src/lib.rs")),
-        })
+        Some(DiffTarget::commit(commit_b, PathBuf::from("src/lib.rs")))
     );
     assert!(repo.diff_state.content_preview);
     assert!(repo.file_browser.pending_reopen.is_none());
@@ -2490,10 +2477,10 @@ fn reset_browse_to_live_reopens_active_file_once_the_listing_lands() {
     assert_eq!(load_selected_diffs(&effects), 1);
     assert_eq!(
         repo_mut(&mut state, repo_id).diff_state.diff_target,
-        Some(DiffTarget::WorkingTree {
-            path: PathBuf::from("README.md"),
-            area: DiffArea::Unstaged,
-        })
+        Some(DiffTarget::working_tree(
+            PathBuf::from("README.md"),
+            DiffArea::Unstaged
+        ))
     );
 }
 
@@ -2619,10 +2606,10 @@ fn the_editor_is_never_retargeted_by_a_browse() {
         let repo = repo_mut(&mut state, repo_id);
         repo.diff_state.content_preview = true;
         repo.diff_state.edit_mode = true;
-        repo.set_diff_target(Some(DiffTarget::WorkingTree {
-            path: PathBuf::from("src/lib.rs"),
-            area: DiffArea::Unstaged,
-        }));
+        repo.set_diff_target(Some(DiffTarget::working_tree(
+            PathBuf::from("src/lib.rs"),
+            DiffArea::Unstaged,
+        )));
     }
     let commit_b = CommitId("bbbbbbbb".into());
     browse_repository_at_commit(&mut state, repo_id, commit_b.clone());
@@ -2808,10 +2795,7 @@ fn browse_repository_at_commit_same_commit_with_file_open_does_not_reopen() {
         let repo = repo_mut(&mut state, repo_id);
         repo.file_browser.source = FileSource::Commit(commit_id.clone());
         repo.diff_state.content_preview = true;
-        repo.diff_state.diff_target = Some(DiffTarget::Commit {
-            commit_id: commit_id.clone(),
-            path: Some(file_path),
-        });
+        repo.diff_state.diff_target = Some(DiffTarget::commit(commit_id.clone(), file_path));
     }
 
     // Browse the SAME commit — source unchanged, no LoadFileBrowser emitted
@@ -2875,10 +2859,7 @@ fn load_blame_reloads_when_target_changes_while_loading() {
     let effects = load_blame(&mut state, repo_id, other.clone(), source);
     assert_eq!(effects.len(), 1);
     assert_eq!(
-        repo_mut(&mut state, repo_id)
-            .history_state
-            .blame_path
-            .as_ref(),
+        repo_mut(&mut state, repo_id).diff_state.blame_path.as_ref(),
         Some(&other)
     );
 }
@@ -2892,17 +2873,17 @@ fn load_blame_retains_ready_annotations_for_the_same_target() {
     let lines = Arc::new(vec![blame_line("let x = 1;")]);
     {
         let repo = repo_mut(&mut state, repo_id);
-        repo.history_state.blame_path = Some(path.clone());
-        repo.history_state.blame_source = Some(source.clone());
-        repo.history_state.blame = Loadable::Ready(Arc::clone(&lines));
+        repo.diff_state.blame_path = Some(path.clone());
+        repo.diff_state.blame_source = Some(source.clone());
+        repo.diff_state.blame = Loadable::Ready(Arc::clone(&lines));
     }
 
     load_blame(&mut state, repo_id, path, source);
 
     let repo = repo_mut(&mut state, repo_id);
-    assert!(repo.history_state.blame.is_loading());
+    assert!(repo.diff_state.blame.is_loading());
     assert!(
-        repo.history_state
+        repo.diff_state
             .retained_blame_while_loading
             .as_ref()
             .is_some_and(|held| Arc::ptr_eq(held, &lines)),
@@ -2917,16 +2898,16 @@ fn load_blame_drops_retained_annotations_when_retargeting() {
     let source = gitcomet_core::domain::BlameSource::WorkingTree(DiffArea::Unstaged);
     {
         let repo = repo_mut(&mut state, repo_id);
-        repo.history_state.blame_path = Some(PathBuf::from("src/lib.rs"));
-        repo.history_state.blame_source = Some(source.clone());
-        repo.history_state.blame = Loadable::Ready(Arc::new(vec![blame_line("let x = 1;")]));
+        repo.diff_state.blame_path = Some(PathBuf::from("src/lib.rs"));
+        repo.diff_state.blame_source = Some(source.clone());
+        repo.diff_state.blame = Loadable::Ready(Arc::new(vec![blame_line("let x = 1;")]));
     }
 
     load_blame(&mut state, repo_id, PathBuf::from("src/main.rs"), source);
 
     assert!(
         repo_mut(&mut state, repo_id)
-            .history_state
+            .diff_state
             .retained_blame_while_loading
             .is_none(),
         "annotations for a different file must never be painted"
@@ -2944,9 +2925,9 @@ fn blame_loaded_reuses_the_retained_allocation_when_unchanged() {
     let lines = Arc::new(vec![blame_line("let x = 1;")]);
     {
         let repo = repo_mut(&mut state, repo_id);
-        repo.history_state.blame_path = Some(path.clone());
-        repo.history_state.blame_source = Some(source.clone());
-        repo.history_state.blame = Loadable::Ready(Arc::clone(&lines));
+        repo.diff_state.blame_path = Some(path.clone());
+        repo.diff_state.blame_source = Some(source.clone());
+        repo.diff_state.blame = Loadable::Ready(Arc::clone(&lines));
     }
     load_blame(&mut state, repo_id, path.clone(), source.clone());
 
@@ -2959,8 +2940,8 @@ fn blame_loaded_reuses_the_retained_allocation_when_unchanged() {
     );
 
     let repo = repo_mut(&mut state, repo_id);
-    assert!(matches!(&repo.history_state.blame, Loadable::Ready(got) if Arc::ptr_eq(got, &lines)));
-    assert!(repo.history_state.retained_blame_while_loading.is_none());
+    assert!(matches!(&repo.diff_state.blame, Loadable::Ready(got) if Arc::ptr_eq(got, &lines)));
+    assert!(repo.diff_state.retained_blame_while_loading.is_none());
 }
 
 #[test]
@@ -2972,9 +2953,9 @@ fn blame_loaded_replaces_the_retained_allocation_when_changed() {
     let lines = Arc::new(vec![blame_line("let x = 1;")]);
     {
         let repo = repo_mut(&mut state, repo_id);
-        repo.history_state.blame_path = Some(path.clone());
-        repo.history_state.blame_source = Some(source.clone());
-        repo.history_state.blame = Loadable::Ready(Arc::clone(&lines));
+        repo.diff_state.blame_path = Some(path.clone());
+        repo.diff_state.blame_source = Some(source.clone());
+        repo.diff_state.blame = Loadable::Ready(Arc::clone(&lines));
     }
     load_blame(&mut state, repo_id, path.clone(), source.clone());
 
@@ -2987,8 +2968,8 @@ fn blame_loaded_replaces_the_retained_allocation_when_changed() {
     );
 
     let repo = repo_mut(&mut state, repo_id);
-    assert!(matches!(&repo.history_state.blame, Loadable::Ready(got) if !Arc::ptr_eq(got, &lines)));
-    assert!(repo.history_state.retained_blame_while_loading.is_none());
+    assert!(matches!(&repo.diff_state.blame, Loadable::Ready(got) if !Arc::ptr_eq(got, &lines)));
+    assert!(repo.diff_state.retained_blame_while_loading.is_none());
 }
 
 #[test]

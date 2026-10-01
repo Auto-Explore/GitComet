@@ -2,12 +2,17 @@
 resolver = "3"
 members = [
   "crates/gitcomet",
+  "crates/gitcomet-app",
   "crates/gitcomet-core",
+  "crates/gitcomet-extension-api",
+  "crates/gitcomet-extension-example",
+  "crates/gitcomet-extension-example-app",
   "crates/gitcomet-git-gix",
   "crates/gitcomet-state",
   "crates/gitcomet-fs-watch",
   "crates/gitcomet-tree-sitter-alloc",
   "crates/gitcomet-ui-gpui",
+  "crates/gitcomet-ui-kit",
 ]
 exclude = [
   "crates/gitcomet-filesystem-native",
@@ -53,10 +58,12 @@ exclude = [
 
 default-members = [
   "crates/gitcomet",
+  "crates/gitcomet-app",
   "crates/gitcomet-core",
   "crates/gitcomet-git-gix",
   "crates/gitcomet-state",
   "crates/gitcomet-ui-gpui",
+  "crates/gitcomet-ui-kit",
 ]
 
 [workspace.package]
@@ -69,16 +76,20 @@ rust-version = "1.98.1"
 
 [workspace.dependencies]
 # Internal crates
+gitcomet-app = { path = "crates/gitcomet-app", default-features = false }
 gitcomet-core = { path = "crates/gitcomet-core" }
+gitcomet-extension-api = { path = "crates/gitcomet-extension-api" }
 gitcomet-git-gix = { path = "crates/gitcomet-git-gix" }
 gitcomet-state = { path = "crates/gitcomet-state" }
 gitcomet-tree-sitter-alloc = { path = "crates/gitcomet-tree-sitter-alloc" }
 gitcomet-ui-gpui = { path = "crates/gitcomet-ui-gpui", default-features = false }
+gitcomet-ui-kit = { path = "crates/gitcomet-ui-kit" }
 
 # External crates
 alacritty_terminal = "0.26"
 anyhow = "1"
-clap = { version = "4.6.7", features = ["derive"] }
+# `string`: the command's name and version come from the product identity.
+clap = { version = "4.6.7", features = ["derive", "string"] }
 criterion = "0.8.2"
 # Charset guess for files that are not UTF-8 (the detector Firefox uses).
 chardetng = { version = "1.0.0", default-features = false }
@@ -92,15 +103,17 @@ ctor = "1.0.13"
 dekobon-tree-sitter-groovy = "0.3.0"
 # Already in the tree via gix-filter; decodes and encodes non-UTF-8 file text.
 encoding_rs = { version = "0.8.42", default-features = false, features = ["alloc", "fast-legacy-encode"] }
+# Already in the tree via gix-index; the timestamp type of an in-memory index.
+filetime = "0.2.29"
 fontdb = "0.24.0"
 fs2 = "0.4.3"
 futures = "0.3.34"
 gix = { version = "0.88.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "status", "blame", "sha1"] }
 # Already in the tree via gix; Git-compatible quoting for attribute patterns.
 gix-quote = "0.9.0"
-gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "cba96ad851888097037c6519f0d4c161df178303" }
-gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "cba96ad851888097037c6519f0d4c161df178303", features = ["font-kit"] }
-gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "cba96ad851888097037c6519f0d4c161df178303" }
+gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "8df3e6d704ab56cf693a7613e35ae5dacc5f125a" }
+gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "8df3e6d704ab56cf693a7613e35ae5dacc5f125a", features = ["font-kit"] }
+gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "8df3e6d704ab56cf693a7613e35ae5dacc5f125a" }
 image = "0.25.10"
 # Already in the tree via gix-date; used directly for system-timezone lookups.
 jiff = "0.2"
@@ -120,8 +133,7 @@ rustfs-mimalloc = "0.5.6"
 rustfs-mimalloc-sys = "0.5.6"
 rustix = { version = "1.1.5", default-features = false, features = ["std", "process"] }
 semver = "1.0.28"
-sha2 = "0.10.9"
-filetime = "0.2.27"
+sha2 = "0.11.0"
 schemars = "1.2.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
@@ -134,7 +146,7 @@ sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 tempfile = "3.27.0"
 thiserror = "2.0"
 tree-sitter = "0.27.0"
-uuid = { version = "1.25.0", features = ["serde", "v4"] }
+uuid = { version = "1.26.1", features = ["serde", "v4"] }
 # Fifteen of the grammars below are `path = "vendor/..."` purely to shrink the
 # release binary: they are upstream's source, regenerated with a larger
 # small-state threshold. tree-sitter's generator gives a parse state either a

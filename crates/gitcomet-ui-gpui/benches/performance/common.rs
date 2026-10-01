@@ -230,6 +230,7 @@ pub(crate) fn markdown_preview_measurement_time() -> Duration {
 
 pub(crate) fn benchmark_criterion() -> Criterion {
     install_benchmark_process_ram_guard();
+    gitcomet_ui_gpui::benchmarks::install_live_runtime();
     install_tree_sitter_tracking_allocator();
     Criterion::default()
 }

@@ -204,10 +204,10 @@ impl RealRepoFixture {
                 .as_deref()
                 .unwrap_or("HEAD")
                 .to_string();
-            Some(DiffTarget::Commit {
-                commit_id: CommitId(resolve_commitish(&worktree, &commitish).into()),
-                path: Some(diff_path),
-            })
+            Some(DiffTarget::commit(
+                CommitId(resolve_commitish(&worktree, &commitish).into()),
+                diff_path,
+            ))
         } else {
             None
         };

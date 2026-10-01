@@ -542,9 +542,7 @@ pub(super) fn diff_target_rendered_preview_kind(
 ) -> Option<RenderedPreviewKind> {
     let path = match target? {
         DiffTarget::WorkingTree { path, .. } => path.as_path(),
-        DiffTarget::Commit {
-            path: Some(path), ..
-        } => path.as_path(),
+        DiffTarget::Commit { path, .. } => path.as_path(),
         _ => return None,
     };
     preview_path_rendered_kind(path)
@@ -1031,6 +1029,17 @@ pub struct GitCometView {
     pub(super) repo_tabs_bar: Entity<RepoTabsBarView>,
     pub(super) action_bar: Entity<ActionBarView>,
     pub(super) bottom_status_bar: Entity<BottomStatusBarView>,
+    /// Present only when an extension is registered.
+    pub(super) window_gates: Option<super::window_gates::WindowGates>,
+    pub(super) window_gated: bool,
+    pub(super) extension_window: Option<super::extension_host::ExtensionWindow>,
+    /// Present only when an extension registers a repository view.
+    pub(super) repository_views: Option<super::repository_views::RepositoryViewRouter>,
+    /// Present only when an extension registers a details tab.
+    pub(super) details_tabs:
+        Option<super::repository_views::ViewRouter<gitcomet_extension_api::DetailsTabDescriptor>>,
+    /// Present only when an extension registers a sidebar section.
+    pub(super) sidebar_sections: Option<super::repository_views::SidebarSections>,
     pub(super) tooltip_host: Entity<TooltipHost>,
     pub(super) toast_host: Entity<ToastHost>,
     pub(super) history_refs_hover_host: Entity<HistoryRefsHoverHost>,
@@ -1043,6 +1052,7 @@ pub struct GitCometView {
     /// Focus to hand back when an overlay opened from a background window
     /// closes. Shared by the command palette and the Reveal Commit dialog.
     pub(super) pre_palette_focus: Option<FocusHandle>,
+    pub(super) focused_diff_pane: Option<gitcomet_extension_api::DiffPane>,
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
     pub(super) submodule_diff_bootstrap: Option<SubmoduleDiffBootstrap>,
     pub(super) deferred_repo_bootstrap: Option<DeferredRepoBootstrap>,
@@ -1091,6 +1101,7 @@ pub struct GitCometView {
     /// Which of the bottom panel's contents is currently visible for a repo,
     /// when more than one is open. Absent (and single-panel repos) fall back
     /// to whichever panel is actually open.
+    pub(super) bottom_panel_providers: super::bottom_panel_providers::Providers,
     pub(super) active_bottom_panel: FxHashMap<RepoId, BottomPanelTab>,
     pub(super) commit_push_after_enabled: bool,
     pub(super) diff_scroll_sync: DiffScrollSync,
@@ -1131,6 +1142,8 @@ pub struct GitCometView {
     pub(super) external_drag_drop_pending: bool,
 
     pub(super) hover_resize_edge: Option<ResizeEdge>,
+    /// The decorations the last render saw; see `sync_frame_decorations`.
+    pub(super) frame_decorations: Option<gpui::Decorations>,
 
     pub(super) sidebar_collapsed: bool,
     /// Which sidebar section is currently shown in the collapsed-rail popover, if
@@ -1158,6 +1171,7 @@ pub struct GitCometView {
 
     pub(super) last_mouse_pos: Point<Pixels>,
     pub(super) pending_terminal_shutdown_prompt: Option<TerminalShutdownPrompt>,
+    pub(super) pending_close_guard_prompt: Option<CloseGuardPrompt>,
     pub(super) pending_unsaved_file_edits_prompt: Option<UnsavedFileEditsPrompt>,
     /// Waits for the dispatched writes to drain before the close/quit it was
     /// asked to retry.

@@ -364,51 +364,6 @@ fn git_executable_scope_note_mentions_browser_only_scope() {
 }
 
 #[test]
-fn parse_git_version_extracts_first_version_token() {
-    assert_eq!(
-        parse_git_version("git version 2.50.7"),
-        Some(GitVersion {
-            major: 2,
-            minor: 50
-        })
-    );
-}
-
-#[test]
-fn parse_git_version_token_accepts_numeric_prefixes_and_rejects_non_numeric_prefixes() {
-    assert_eq!(
-        parse_git_version_token("2.45.1.windows.1"),
-        Some(GitVersion {
-            major: 2,
-            minor: 45
-        })
-    );
-    assert_eq!(parse_git_version_token("v2.45.1"), None);
-    assert_eq!(parse_u32_prefix("53rc1"), Some(53));
-    assert_eq!(parse_u32_prefix("rc53"), None);
-}
-
-#[test]
-fn supported_version_requires_minimum_2_50() {
-    assert!(is_supported_git_version(GitVersion {
-        major: MIN_GIT_MAJOR,
-        minor: MIN_GIT_MINOR,
-    }));
-    assert!(is_supported_git_version(GitVersion {
-        major: MIN_GIT_MAJOR,
-        minor: MIN_GIT_MINOR + 1,
-    }));
-    assert!(!is_supported_git_version(GitVersion {
-        major: MIN_GIT_MAJOR,
-        minor: MIN_GIT_MINOR - 1,
-    }));
-    assert!(is_supported_git_version(GitVersion {
-        major: MIN_GIT_MAJOR + 1,
-        minor: 0,
-    }));
-}
-
-#[test]
 fn settings_window_titlebar_options_match_platform_chrome_strategy() {
     let options = settings_window_titlebar_options();
     assert_eq!(
@@ -418,7 +373,7 @@ fn settings_window_titlebar_options_match_platform_chrome_strategy() {
     );
     assert_eq!(
         options.title.as_ref().map(ToString::to_string),
-        Some(SETTINGS_WINDOW_TITLE.to_string()),
+        Some("Settings: GitComet".to_string()),
         "settings window titlebar should keep the OS-visible title"
     );
     assert_eq!(
@@ -578,7 +533,7 @@ fn settings_window_sets_platform_title(cx: &mut gpui::TestAppContext) {
 
     assert_eq!(
         settings_cx.window_title().as_deref(),
-        Some(SETTINGS_WINDOW_TITLE),
+        Some("Settings: GitComet"),
         "expected settings window to expose the native OS title"
     );
 }
@@ -833,7 +788,7 @@ fn expanded_theme_section_renders_theme_utilities_and_opens_theme_guide(
     settings_cx.simulate_click(guide_bounds.center(), Modifiers::default());
     settings_cx.run_until_parked();
 
-    assert_eq!(cx.opened_url(), Some(THEMES_GUIDE_URL.to_string()));
+    assert_eq!(cx.opened_url(), themes_guide_url());
 }
 
 #[gpui::test]
@@ -1532,7 +1487,7 @@ fn settings_window_open_source_licenses_row_switches_content(cx: &mut gpui::Test
 
     assert_eq!(
         settings_cx.window_title().as_deref(),
-        Some(SETTINGS_WINDOW_TITLE),
+        Some("Settings: GitComet"),
         "expected the settings window to keep its OS title"
     );
     assert!(
@@ -1624,7 +1579,10 @@ fn settings_window_professional_edition_waitlist_row_opens_editions_page(
     settings_cx.simulate_click(row_bounds.center(), Modifiers::default());
     settings_cx.run_until_parked();
 
-    assert_eq!(cx.opened_url(), Some(EDITIONS_URL.to_string()));
+    assert_eq!(
+        cx.opened_url(),
+        Some(crate::view::editions_url().unwrap().to_string())
+    );
 }
 
 #[gpui::test]
@@ -1946,6 +1904,10 @@ fn settings_window_containers_fill_available_width_when_content_wraps(
         (SettingsCategory::GitLog, "settings_window_git_log_card"),
         (SettingsCategory::Remotes, "settings_window_remotes_card"),
         (SettingsCategory::Tags, "settings_window_tags_card"),
+        (
+            SettingsCategory::Maintenance,
+            "settings_window_maintenance_card",
+        ),
         (
             SettingsCategory::GitExecutable,
             "settings_window_git_executable",
@@ -2693,6 +2655,58 @@ fn remote_prune_toggle_reaches_the_global_store_setting(cx: &mut gpui::TestAppCo
         &store,
         "the Remotes setting to reach the store",
         |state| !state.remote_settings.prune_deleted_remote_branches_on_fetch,
+    );
+}
+
+#[gpui::test]
+fn maintenance_toggle_reaches_the_store_and_withdraws_cards(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
+    let mut seeded = (*store.snapshot()).clone();
+    let mut repo = gitcomet_state::model::RepoState::new_opening(
+        gitcomet_state::model::RepoId(1),
+        gitcomet_core::domain::RepoSpec {
+            workdir: PathBuf::from("/tmp/maintenance-toggle"),
+        },
+    );
+    repo.maintenance.recommended = true;
+    seeded.repos.push(repo);
+    store.replace_snapshot_for_test(std::sync::Arc::new(seeded));
+    let (_main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        open_settings_window(app);
+    });
+    cx.run_until_parked();
+
+    let settings_window = cx.update(|_window, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window should be open")
+    });
+    wait_for_store(
+        cx,
+        &store,
+        "the default setting to reach the store",
+        |state| state.maintenance_settings.recommend && state.repos[0].maintenance.recommended,
+    );
+
+    cx.update(|_window, app| {
+        let _ = settings_window.update(app, |settings, _window, cx| {
+            settings.set_recommend_repo_maintenance(false, cx);
+        });
+    });
+    wait_for_store(
+        cx,
+        &store,
+        "the Maintenance setting to reach the store",
+        |state| {
+            !state.maintenance_settings.recommend
+                && state.repos.iter().all(|repo| !repo.maintenance.recommended)
+        },
     );
 }
 
@@ -3745,7 +3759,7 @@ fn the_executables_page_links_to_the_signature_guide(cx: &mut gpui::TestAppConte
     settings_cx.simulate_click(guide_bounds.center(), Modifiers::default());
     settings_cx.run_until_parked();
 
-    assert_eq!(cx.opened_url(), Some(SIGNATURE_GUIDE_URL.to_string()));
+    assert_eq!(cx.opened_url(), signature_guide_url());
 }
 
 #[test]
@@ -3826,7 +3840,7 @@ fn workspaces_page_edits_colour_theme_name_and_deletes(cx: &mut gpui::TestAppCon
     );
     let row: &'static str = format!("settings_window_workspace_{id}").leak();
     assert!(settings_cx.debug_bounds(row).is_some());
-    let dot: &'static str = format!("settings_window_workspace_dot_{id}").leak();
+    let dot: &'static str = format!("settings_window_swatch_{id}").leak();
     assert!(
         settings_cx.debug_bounds(dot).is_some(),
         "rows are the picker's workspace rows, colour dot included"
@@ -4114,4 +4128,131 @@ fn settings_window_renders_every_category_within_a_bounded_stack() {
         .unwrap()
         .join()
         .unwrap();
+}
+
+#[gpui::test]
+fn settings_pages_are_listed_and_built_only_when_selected(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    cx.update(|app| {
+        let registry = gitcomet_extension_api::Registry::build(vec![Box::new(
+            gitcomet_extension_example::review::ReviewExtension,
+        )])
+        .expect("valid registration");
+        crate::view::extension_host::install(registry, app);
+    });
+    let (_settings, cx) = cx.add_window_view(SettingsWindowView::new);
+    crate::view::test_support::redraw(cx);
+    let nav = "settings_window_nav_extension_com.example.review/review-settings";
+    assert!(cx.debug_bounds(nav).is_some(), "the page is listed");
+    assert!(
+        cx.debug_bounds("example_review_settings").is_none(),
+        "an unselected page is not built"
+    );
+
+    let center = cx.debug_bounds(nav).unwrap().center();
+    cx.simulate_click(center, gpui::Modifiers::default());
+    crate::view::test_support::redraw(cx);
+    assert!(cx.debug_bounds("example_review_settings").is_some());
+
+    let general = cx
+        .debug_bounds("settings_window_nav_general")
+        .unwrap()
+        .center();
+    cx.simulate_click(general, gpui::Modifiers::default());
+    crate::view::test_support::redraw(cx);
+    assert!(cx.debug_bounds("example_review_settings").is_none());
+    assert!(cx.debug_bounds("settings_window_general").is_some());
+}
+
+#[gpui::test]
+fn settings_extensions_have_a_host_revisioned_gates_and_window_lifetime(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_extension_api::*;
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
+    let _guard = lock_visual_test();
+    struct Instance(Rc<Cell<usize>>);
+    impl WindowExtension for Instance {}
+    impl Drop for Instance {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+    struct ExtensionProbe {
+        host: Rc<RefCell<Option<WindowHost>>>,
+        drops: Rc<Cell<usize>>,
+        active: Rc<Cell<bool>>,
+        calls: Rc<Cell<usize>>,
+        signal: SlotSignal,
+    }
+    impl Extension for ExtensionProbe {
+        fn id(&self) -> ExtensionId {
+            ExtensionId::new("com.example.settings-test").unwrap()
+        }
+        fn register(&self, r: &mut Registrar) {
+            let active = self.active.clone();
+            let calls = self.calls.clone();
+            r.window_gate(
+                "gate",
+                WindowGateDescriptor {
+                    signal: self.signal.clone(),
+                    active: Rc::new(move |host, _| {
+                        assert_eq!(host.kind(), gitcomet_core::identity::WindowKind::Settings);
+                        calls.set(calls.get() + 1);
+                        active.get()
+                    }),
+                    build: Rc::new(|_, _, cx| cx.new(|_| gpui::Empty).into()),
+                },
+            );
+        }
+        fn window_opened(
+            &self,
+            host: WindowHost,
+            _: &mut Window,
+            _: &mut App,
+        ) -> Option<Box<dyn WindowExtension>> {
+            *self.host.borrow_mut() = Some(host);
+            Some(Box::new(Instance(self.drops.clone())))
+        }
+    }
+    let host = Rc::new(RefCell::new(None));
+    let drops = Rc::new(Cell::new(0));
+    let active = Rc::new(Cell::new(true));
+    let calls = Rc::new(Cell::new(0));
+    let signal = SlotSignal::default();
+    cx.update(|app| {
+        crate::view::extension_host::install(
+            Registry::build(vec![Box::new(ExtensionProbe {
+                host: host.clone(),
+                drops: drops.clone(),
+                active: active.clone(),
+                calls: calls.clone(),
+                signal: signal.clone(),
+            })])
+            .unwrap(),
+            app,
+        )
+    });
+    let (_, cx) = cx.add_window_view(SettingsWindowView::new);
+    cx.run_until_parked();
+    let host = host.borrow().clone().expect("settings window host");
+    for _ in 0..3 {
+        crate::view::test_support::redraw(cx);
+    }
+    assert_eq!(calls.get(), 1, "unchanged gates are not reevaluated");
+    assert!(cx.debug_bounds("settings_window_general").is_none());
+    active.set(false);
+    signal.bump();
+    host.notifier().notify(Slot::Gate);
+    cx.run_until_parked();
+    crate::view::test_support::redraw(cx);
+    assert!(cx.debug_bounds("settings_window_general").is_some());
+    assert_eq!(calls.get(), 2);
+    cx.update(|window, _| window.remove_window());
+    cx.run_until_parked();
+    assert_eq!(drops.get(), 1);
+    cx.cx.update(|app| assert!(!host.is_open(app)));
 }
