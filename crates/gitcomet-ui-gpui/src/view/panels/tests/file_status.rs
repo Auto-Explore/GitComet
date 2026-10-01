@@ -1,160 +1,6 @@
 use super::*;
 
 #[gpui::test]
-fn patch_diff_search_query_keeps_stable_style_cache_entries(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
-    let (view, cx) = cx.add_window_view(|window, cx| {
-        super::super::GitCometView::new(store, events, None, window, cx)
-    });
-
-    let repo_id = gitcomet_state::model::RepoId(22);
-    let workdir = std::env::temp_dir().join(format!(
-        "gitcomet_ui_test_{}_patch_search",
-        std::process::id()
-    ));
-
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            let target = gitcomet_core::domain::DiffTarget::CommitRange {
-                from_commit_id: gitcomet_core::domain::CommitId("parent".into()),
-                to_commit_id: Some(gitcomet_core::domain::CommitId("feedface".into())),
-                path: None,
-            };
-
-            let diff = gitcomet_core::domain::Diff {
-                target: target.clone(),
-                lines: vec![
-                    gitcomet_core::domain::DiffLine {
-                        kind: gitcomet_core::domain::DiffLineKind::Header,
-                        text: "diff --git a/foo.rs b/foo.rs".into(),
-                    },
-                    gitcomet_core::domain::DiffLine {
-                        kind: gitcomet_core::domain::DiffLineKind::Hunk,
-                        text: "@@ -1,1 +1,1 @@".into(),
-                    },
-                    gitcomet_core::domain::DiffLine {
-                        kind: gitcomet_core::domain::DiffLineKind::Context,
-                        text: " fn main() { let x = 1; }".into(),
-                    },
-                ],
-            };
-
-            let mut repo = opening_repo_state(repo_id, &workdir);
-            repo.status = gitcomet_state::model::Loadable::Ready(
-                gitcomet_core::domain::RepoStatus::default().into(),
-            );
-            repo.diff_state.diff_target = Some(target);
-            repo.diff_state.diff_rev = 1;
-            repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(diff.into());
-
-            let next_state = app_state_with_repo(repo, repo_id);
-
-            push_test_state(this, Arc::clone(&next_state), cx);
-        });
-    });
-
-    cx.update(|window, app| {
-        window.refresh();
-        let _ = window.draw(app);
-    });
-
-    let mut stable_highlights_hash_before = 0u64;
-    let mut stable_text_hash_before = 0u64;
-    cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        let pane = main_pane.read(app);
-        let stable = pane
-            .diff_text_segments_cache
-            .get(2)
-            .and_then(|entry| entry.as_ref().map(|entry| &entry.styled))
-            .expect("expected stable cache entry for context row before search");
-        assert!(
-            pane.diff_text_query_segments_cache.is_empty(),
-            "query overlay cache should start empty"
-        );
-        stable_highlights_hash_before = stable.highlights_hash;
-        stable_text_hash_before = stable.text_hash;
-    });
-
-    cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
-            pane.diff_search_active = true;
-            pane.diff_search_input.update(cx, |input, cx| {
-                input.set_text("main", cx);
-            });
-            cx.notify();
-        });
-    });
-
-    cx.update(|window, app| {
-        window.refresh();
-        let _ = window.draw(app);
-    });
-
-    cx.update(|window, app| {
-        window.refresh();
-        let _ = window.draw(app);
-    });
-
-    cx.update(|_window, app| {
-        let details_pane = view.read(app).details_pane.clone();
-        details_pane.update(app, |pane, cx| {
-            pane.untracked_height = Some(px(263.5));
-            cx.notify();
-        });
-    });
-
-    cx.update(|window, app| {
-        window.refresh();
-        let _ = window.draw(app);
-    });
-
-    cx.update(|_window, app| {
-        let details_pane = view.read(app).details_pane.clone();
-        details_pane.update(app, |pane, cx| {
-            pane.untracked_height = Some(px(263.5));
-            cx.notify();
-        });
-    });
-
-    cx.update(|window, app| {
-        window.refresh();
-        let _ = window.draw(app);
-    });
-
-    cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        let pane = main_pane.read(app);
-
-        let stable_after = pane
-            .diff_text_segments_cache
-            .get(2)
-            .and_then(|entry| entry.as_ref().map(|entry| &entry.styled))
-            .expect("expected stable cache entry for context row after search query update");
-        assert_eq!(
-            stable_after.highlights_hash, stable_highlights_hash_before,
-            "search query updates should not rewrite stable style highlights"
-        );
-        assert_eq!(
-            stable_after.text_hash, stable_text_hash_before,
-            "search query updates should not rewrite stable styled text"
-        );
-
-        assert_eq!(pane.diff_text_query_cache_query.as_ref(), "main");
-        let query_overlay = pane
-            .diff_text_query_segments_cache
-            .get(2)
-            .and_then(|entry| entry.as_ref().map(|entry| &entry.styled))
-            .expect("expected query overlay cache entry for searched context row");
-        assert_ne!(
-            query_overlay.highlights_hash, stable_after.highlights_hash,
-            "query overlay should layer match highlighting on top of stable highlights"
-        );
-    });
-}
-
-#[gpui::test]
 fn worktree_preview_search_query_clears_row_cache_without_dropping_source_path(
     cx: &mut gpui::TestAppContext,
 ) {
@@ -3827,6 +3673,17 @@ fn staged_revert_offers_its_message_to_an_empty_commit_box(cx: &mut gpui::TestAp
     });
     assert_eq!(commit_box_text(cx), message);
 
+    // Repeated signing failures can suggest the same message more than once.
+    // A successful retry consumes it, and the auto-filled draft clears too.
+    for (text, rev, expected) in [(Some(message), 2, message), (None, 3, "")] {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                push_test_state(this, state_with(text, rev), cx);
+            });
+        });
+        assert_eq!(commit_box_text(cx), expected);
+    }
+
     // A message the user is already writing is never overwritten.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
@@ -3840,7 +3697,13 @@ fn staged_revert_offers_its_message_to_an_empty_commit_box(cx: &mut gpui::TestAp
     });
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            push_test_state(this, state_with(Some("Revert \"other\""), 2), cx);
+            push_test_state(this, state_with(Some("Revert \"other\""), 4), cx);
+        });
+    });
+    assert_eq!(commit_box_text(cx), "my own words");
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, state_with(None, 5), cx);
         });
     });
     assert_eq!(commit_box_text(cx), "my own words");

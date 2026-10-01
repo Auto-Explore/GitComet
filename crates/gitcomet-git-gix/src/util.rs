@@ -556,6 +556,26 @@ fn git_timeout_error(
     )))
 }
 
+/// "a.txt", "a.txt and b.txt", or "a.txt, b.txt and 3 more" for messages.
+pub(crate) fn describe_path_list<P: AsRef<[u8]>>(paths: &[P]) -> String {
+    const SHOWN: usize = 3;
+    let names: Vec<String> = paths
+        .iter()
+        .take(if paths.len() > SHOWN + 1 {
+            SHOWN
+        } else {
+            paths.len()
+        })
+        .map(|path| bytes_to_text_preserving_utf8(path.as_ref()))
+        .collect();
+    match (names.as_slice(), paths.len() - names.len()) {
+        ([], _) => String::new(),
+        ([only], 0) => only.clone(),
+        ([init @ .., last], 0) => format!("{} and {last}", init.join(", ")),
+        (shown, more) => format!("{} and {more} more", shown.join(", ")),
+    }
+}
+
 pub(crate) fn git_command_failed_error(label: &str, output: Output) -> Error {
     let Output {
         status,

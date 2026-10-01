@@ -1123,10 +1123,10 @@ impl CommitCard {
 mod diff_canvas;
 mod file_list;
 pub(in crate::view) use file_list::{
-    CollapsedDirs, DirectoryRowDetail, DirectoryRowProps, FileListId, FileListPlan,
-    FileListPlanCache, FileListRow, FileOrdinal, FileTree, FileTreeItem, RowIx, directory_row,
-    directory_row_detail_for_width, file_list_projection_key, file_list_projection_key_scoped,
-    file_row_indent_px,
+    CollapsedDirs, DirectoryRowDetail, DirectoryRowProps, FileListId, FileListMultiSelection,
+    FileListPlan, FileListPlanCache, FileListRow, FileOrdinal, FileTree, FileTreeItem, RowIx,
+    directory_row, directory_row_detail_for_width, file_list_folder_menu_invoker,
+    file_list_projection_key, file_list_projection_key_scoped, file_row_indent_px,
 };
 mod diff_text;
 mod history;
@@ -1137,6 +1137,7 @@ mod markdown_document;
 mod markdown_flow_text;
 pub(in crate::view) mod sidebar;
 mod status;
+pub(in crate::view) use status::apply_file_list_selection_click;
 
 #[cfg(feature = "benchmarks")]
 pub(crate) mod benchmarks;

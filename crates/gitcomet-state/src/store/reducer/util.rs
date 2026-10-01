@@ -346,7 +346,7 @@ pub(super) fn selected_diff_load_plan(
     let supports_file = matches!(
         target,
         DiffTarget::WorkingTree { .. }
-            | DiffTarget::Commit { path: _, .. }
+            | DiffTarget::Commit { .. }
             | DiffTarget::CommitRange { path: Some(_), .. }
     );
     let preview = diff_target_preview_flags(target);
@@ -367,7 +367,7 @@ pub(super) fn selected_diff_load_plan(
     };
 
     SelectedDiffLoadPlan {
-        load_patch_diff: !preview_only,
+        load_patch_diff: supports_file && !preview_only,
         // An SVG counts as an image, so it never reaches the text-file preview
         // path and the diff pane's Code view is the only place its source is
         // ever shown. That view reads the loaded file text, so it has to load
@@ -1631,7 +1631,24 @@ fn summarize_command(
                 format!("Rebase onto {base}: {state}")
             }
         }
-        RepoCommandKind::InteractiveCherryPick { entries } => {
+        RepoCommandKind::InteractiveCherryPick {
+            entries,
+            commit: false,
+        } => {
+            if output
+                .stdout
+                .contains("GITCOMET_CHERRY_PICK_ALREADY_APPLIED")
+            {
+                "Current branch already has all the changes from the cherry-picked commits."
+                    .to_string()
+            } else {
+                format!("Cherry-picked {} commits without committing", entries.len())
+            }
+        }
+        RepoCommandKind::InteractiveCherryPick {
+            entries,
+            commit: true,
+        } => {
             let state = if sequencer_paused(output) {
                 "Paused at a conflict"
             } else {
@@ -1652,8 +1669,7 @@ fn summarize_command(
                 "Current branch already has all the changes from the cherry-picked commit."
                     .to_string()
             } else {
-                let sha = commit_id.as_ref();
-                let short = sha.get(0..7).unwrap_or(sha);
+                let short = commit_id.short();
                 let summary = summary.lines().next().unwrap_or("").trim();
                 if *commit {
                     format!("Cherry-picked {short}: {summary}")
@@ -1662,24 +1678,36 @@ fn summarize_command(
                 }
             }
         }
-        RepoCommandKind::ApplyFileChange { target, commit } => {
-            let (path, revision) = gitcomet_core::services::apply_file_change_source(target)
-                .map(|(path, revision)| (path.display().to_string(), revision))
-                .unwrap_or_default();
-            if output
+        RepoCommandKind::ApplyFileChange { target, commit, .. } => {
+            let revision = gitcomet_core::services::apply_change_revision(&target.source);
+            let already_applied = output
                 .stdout
-                .contains(gitcomet_core::services::APPLY_FILE_CHANGE_ALREADY_APPLIED_SENTINEL)
-            {
-                format!("Current branch already has the change to {path} from {revision}.")
-            } else if output
-                .stdout
-                .contains(gitcomet_core::services::APPLY_FILE_CHANGE_ALREADY_STAGED_SENTINEL)
-            {
-                format!("The change to {path} from {revision} is already staged.")
-            } else if *commit {
-                format!("Applied and committed the change to {path} from {revision}")
-            } else {
-                format!("Applied the change to {path} from {revision} without committing")
+                .contains(gitcomet_core::services::APPLY_FILE_CHANGE_ALREADY_APPLIED_SENTINEL);
+            match (target.paths.as_slice(), already_applied, *commit) {
+                ([path], true, _) => format!(
+                    "Current branch already has the change to {} from {revision}.",
+                    path.display()
+                ),
+                ([path], false, true) => format!(
+                    "Applied and committed the change to {} from {revision}",
+                    path.display()
+                ),
+                ([path], false, false) => format!(
+                    "Applied the change to {} from {revision} without committing",
+                    path.display()
+                ),
+                (paths, true, _) => format!(
+                    "Current branch already has the changes to these {} files from {revision}.",
+                    paths.len()
+                ),
+                (paths, false, true) => format!(
+                    "Applied and committed the changes to {} files from {revision}",
+                    paths.len()
+                ),
+                (paths, false, false) => format!(
+                    "Applied the changes to {} files from {revision} without committing",
+                    paths.len()
+                ),
             }
         }
         RepoCommandKind::Revert {
@@ -1688,8 +1716,7 @@ fn summarize_command(
             summary,
             ..
         } => {
-            let sha = commit_id.as_ref();
-            let short = sha.get(0..7).unwrap_or(sha);
+            let short = commit_id.short();
             if output
                 .stdout
                 .contains(gitcomet_core::services::REVERT_NOTHING_TO_REVERT_SENTINEL)
@@ -2071,7 +2098,7 @@ mod tests {
         assert!(!diff_target_is_svg(&range_without_path));
         assert_eq!(
             diff_reload_effects(&repo_state, repo_id, range_without_path).len(),
-            1
+            0
         );
     }
 
@@ -2503,10 +2530,11 @@ mod tests {
             (RepoCommandKind::MergeAbort, "Merge"),
             (
                 RepoCommandKind::ApplyFileChange {
-                    target: DiffTarget::Commit {
-                        commit_id: CommitId("abcdef1234567890".into()),
-                        path: PathBuf::from("a.txt"),
-                    },
+                    commit_retry: None,
+                    target: gitcomet_core::domain::ApplyChangeTarget::commit(
+                        CommitId("abcdef1234567890".into()),
+                        PathBuf::from("a.txt"),
+                    ),
                     commit: false,
                 },
                 "Apply change",
@@ -2951,20 +2979,56 @@ mod tests {
             "Current branch already has all the changes from the cherry-picked commit."
         );
 
-        let apply = |commit: bool, to: Option<&str>| RepoCommandKind::ApplyFileChange {
-            target: match to {
-                Some(to) => DiffTarget::CommitRange {
-                    from_commit_id: CommitId("abcdef1234567890".into()),
-                    to_commit_id: Some(CommitId(to.into())),
-                    path: Some(PathBuf::from("src/a.rs")),
-                },
-                None => DiffTarget::Commit {
-                    commit_id: CommitId("abcdef1234567890".into()),
-                    path: PathBuf::from("src/a.rs"),
-                },
-            },
+        let multi_pick = |commit: bool| RepoCommandKind::InteractiveCherryPick {
+            entries: vec![
+                gitcomet_core::services::InteractiveRebaseEntry {
+                    action: gitcomet_core::services::InteractiveRebaseAction::Pick,
+                    commit_id: "1111111".into(),
+                    summary: "one".into(),
+                    message: "one".into(),
+                    new_message: None,
+                };
+                2
+            ],
             commit,
         };
+        let multi_summary = |commit: bool, stdout: &str| {
+            summarize_command(
+                &multi_pick(commit),
+                &command_output("git cherry-pick 2 commits", stdout, ""),
+                true,
+                None,
+            )
+            .1
+        };
+        assert_eq!(multi_summary(true, ""), "Cherry-pick 2 commits: Completed");
+        assert_eq!(
+            multi_summary(false, ""),
+            "Cherry-picked 2 commits without committing"
+        );
+        assert_eq!(
+            multi_summary(false, "GITCOMET_CHERRY_PICK_ALREADY_APPLIED"),
+            "Current branch already has all the changes from the cherry-picked commits."
+        );
+
+        let apply_paths =
+            |commit: bool, to: Option<&str>, paths: &[&str]| RepoCommandKind::ApplyFileChange {
+                commit_retry: None,
+                target: gitcomet_core::domain::ApplyChangeTarget {
+                    source: match to {
+                        Some(to) => gitcomet_core::domain::ApplyChangeSource::Range {
+                            from: CommitId("abcdef1234567890".into()),
+                            to: CommitId(to.into()),
+                        },
+                        None => gitcomet_core::domain::ApplyChangeSource::Commit(CommitId(
+                            "abcdef1234567890".into(),
+                        )),
+                    },
+                    paths: paths.iter().map(PathBuf::from).collect(),
+                },
+                commit,
+            };
+        let apply = |commit: bool, to: Option<&str>| apply_paths(commit, to, &["src/a.rs"]);
         for (kind, stdout, expected) in [
             (
                 apply(false, None),
@@ -2982,9 +3046,19 @@ mod tests {
                 "Current branch already has the change to src/a.rs from abcdef1.",
             ),
             (
-                apply(false, None),
-                gitcomet_core::services::APPLY_FILE_CHANGE_ALREADY_STAGED_SENTINEL,
-                "The change to src/a.rs from abcdef1 is already staged.",
+                apply_paths(false, None, &["src/a.rs", "src/b.rs"]),
+                "",
+                "Applied the changes to 2 files from abcdef1 without committing",
+            ),
+            (
+                apply_paths(true, Some("1234567890abcdef"), &["a", "b", "c"]),
+                "",
+                "Applied and committed the changes to 3 files from abcdef1..1234567",
+            ),
+            (
+                apply_paths(true, None, &["src/a.rs", "src/b.rs"]),
+                gitcomet_core::services::APPLY_FILE_CHANGE_ALREADY_APPLIED_SENTINEL,
+                "Current branch already has the changes to these 2 files from abcdef1.",
             ),
         ] {
             let (_, summary) = summarize_command(

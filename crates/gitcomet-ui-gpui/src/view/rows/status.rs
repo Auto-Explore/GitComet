@@ -136,6 +136,32 @@ fn apply_status_multi_selection_to_slice(
     set_status_multi_selection_single(selection, clicked_path, clicked_index, order_rev);
 }
 
+/// A commit or comparison file list click, by the status lists' rules on a
+/// single lane.
+pub(in crate::view) fn apply_file_list_selection_click(
+    selection: &mut FileListMultiSelection,
+    clicked_path: std::path::PathBuf,
+    clicked_index: Option<usize>,
+    modifiers: gpui::Modifiers,
+    order_rev: Option<u64>,
+    entries: Option<&[std::path::PathBuf]>,
+) {
+    apply_status_multi_selection_to_slice(
+        StatusMultiSelectionSlice {
+            selected: &mut selection.paths,
+            anchor: &mut selection.anchor,
+            anchor_index: &mut selection.anchor_index,
+            anchor_order_rev: &mut selection.anchor_order_rev,
+        },
+        clicked_path,
+        clicked_index,
+        modifiers,
+        order_rev,
+        true,
+        entries,
+    );
+}
+
 fn status_selection_entry_index_hint(
     entries: &[std::path::PathBuf],
     target: &std::path::Path,
@@ -465,6 +491,13 @@ fn render_status_rows_for_section(
                         group.clone(),
                         cx,
                     );
+                    let list = crate::view::rows::FileListId::Status(section);
+                    let menu_invoker =
+                        crate::view::rows::file_list_folder_menu_invoker(repo_id.0, list, &key);
+                    let menu_open =
+                        this.active_context_menu_invoker.as_ref() == Some(&menu_invoker);
+                    let menu_key = Arc::clone(&key);
+                    let menu_chain = Arc::clone(&chain);
                     return Some(
                         crate::view::rows::directory_row(crate::view::rows::DirectoryRowProps {
                             theme,
@@ -479,6 +512,7 @@ fn render_status_rows_for_section(
                                 .row_height(STATUS_ROW_HEIGHT_PX, 32.0),
                             row_group: Some(group),
                             detail,
+                            menu_open,
                         })
                         .debug_selector(move || {
                             format!("status_dir_{}_{}_{}", repo_id.0, section.id_label(), ix)
@@ -499,6 +533,27 @@ fn render_status_rows_for_section(
                                     collapsed,
                                     cx,
                                 );
+                            }),
+                        )
+                        .on_pointer_click(
+                            MouseButton::Right,
+                            cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                                cx.stop_propagation();
+                                this.open_popover_at(
+                                    PopoverKind::FileListFolderMenu {
+                                        repo_id,
+                                        list,
+                                        key: Arc::clone(&menu_key),
+                                        chain: Arc::clone(&menu_chain),
+                                        collapsed,
+                                        apply_source: None,
+                                    }
+                                    .invoked_by(menu_invoker.clone()),
+                                    e.position,
+                                    window,
+                                    cx,
+                                );
+                                cx.notify();
                             }),
                         )
                         .into_any_element(),

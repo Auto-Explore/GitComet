@@ -114,13 +114,18 @@ pub(in super::super) struct DetailsPaneView {
     pending_amend_prefill: Option<RepoId>,
     /// Suggestion (repo and rev) already offered to the commit box, so git's
     /// prepared message is applied once and never re-applied.
-    applied_commit_suggestion: Option<(RepoId, u64)>,
+    applied_commit_suggestions: rustc_hash::FxHashMap<RepoId, (u64, Option<String>)>,
     pub(in super::super) commit_message_user_edited: bool,
     pub(in super::super) commit_message_last_text: SharedString,
     pub(in super::super) commit_message_programmatic_change: bool,
 
     pub(in super::super) status_multi_selection: FxHashMap<RepoId, StatusMultiSelection>,
     pub(in super::super) status_multi_selection_last_status: FxHashMap<RepoId, (u64, u64)>,
+    /// Row selection of the commit and comparison file lists.
+    pub(in super::super) file_list_selection: FxHashMap<
+        (RepoId, crate::view::rows::FileListId),
+        crate::view::rows::FileListMultiSelection,
+    >,
 
     pub(in super::super) commit_details_delay: Option<CommitDetailsDelayState>,
     pub(in super::super) commit_details_delay_seq: u64,
@@ -534,12 +539,13 @@ impl DetailsPaneView {
             commit_push_after_enabled,
             pending_commit_amend: None,
             pending_amend_prefill: None,
-            applied_commit_suggestion: None,
+            applied_commit_suggestions: rustc_hash::FxHashMap::default(),
             commit_message_user_edited: false,
             commit_message_last_text: SharedString::default(),
             commit_message_programmatic_change: false,
             status_multi_selection: FxHashMap::default(),
             status_multi_selection_last_status: FxHashMap::default(),
+            file_list_selection: FxHashMap::default(),
             commit_details_delay: None,
             commit_details_delay_seq: 0,
             path_display_cache: std::cell::RefCell::new(path_display::PathDisplayCache::default()),
@@ -1050,6 +1056,8 @@ impl DetailsPaneView {
         // The filter too: a stale "Renamed" empties the list under a header
         // still counting changes.
         self.list_filter.retain(|(_, entry), _| *entry != list);
+        self.file_list_selection
+            .retain(|(_, entry), _| *entry != list);
     }
 
     pub(in super::super) fn file_list_layout_for(
@@ -1827,6 +1835,232 @@ impl DetailsPaneView {
             .collect()
     }
 
+    /// The commit or comparison list's files in drawn order, with whether each
+    /// is a submodule, for shift-click ranges and actions on the selection.
+    fn commit_list_files_in_drawn_order(
+        &self,
+        repo_id: RepoId,
+        list: crate::view::rows::FileListId,
+    ) -> Vec<(std::path::PathBuf, bool)> {
+        let Some(repo) = self.active_repo().filter(|repo| repo.id == repo_id) else {
+            return Vec::new();
+        };
+        let (files, order) = match list {
+            crate::view::rows::FileListId::CommitFiles => {
+                let Loadable::Ready(details) = &repo.history_state.commit_details else {
+                    return Vec::new();
+                };
+                (
+                    &details.files[..],
+                    self.active_commit_file_source_indices(repo_id),
+                )
+            }
+            crate::view::rows::FileListId::RangeFiles => {
+                let Loadable::Ready(files) = &repo.history_state.range_files else {
+                    return Vec::new();
+                };
+                (&files[..], self.active_range_file_source_indices(repo_id))
+            }
+            _ => return Vec::new(),
+        };
+        order
+            .iter()
+            .flat_map(|order| order.iter())
+            .filter_map(|source_ix| files.get(*source_ix))
+            .map(|file| (file.path.clone(), file.is_submodule))
+            .collect()
+    }
+
+    /// Identity of a commit or comparison list's drawn order, validating a
+    /// cached shift-click anchor like [`Self::status_anchor_order_rev`].
+    fn commit_list_anchor_order_rev(
+        &self,
+        repo_id: RepoId,
+        list: crate::view::rows::FileListId,
+    ) -> Option<u64> {
+        use std::hash::{Hash, Hasher};
+        let repo = self.active_repo().filter(|repo| repo.id == repo_id)?;
+        let mut hasher = rustc_hash::FxHasher::default();
+        match list {
+            crate::view::rows::FileListId::CommitFiles => {
+                repo.history_state.commit_details_rev.hash(&mut hasher)
+            }
+            _ => repo.history_state.range_files_rev.hash(&mut hasher),
+        }
+        self.file_list_sort_for(list).hash(&mut hasher);
+        self.file_list_filter_for(list).hash(&mut hasher);
+        self.file_list_layout_for(repo_id, list)
+            .key()
+            .hash(&mut hasher);
+        self.file_list_collapsed_for(repo_id, list)
+            .rev()
+            .hash(&mut hasher);
+        Some(hasher.finish())
+    }
+
+    /// Applies a click on a commit or comparison file row to its selection.
+    pub(in super::super) fn commit_list_selection_apply_click(
+        &mut self,
+        repo_id: RepoId,
+        list: crate::view::rows::FileListId,
+        clicked_path: std::path::PathBuf,
+        display_position: Option<usize>,
+        modifiers: gpui::Modifiers,
+    ) {
+        let order_rev = self.commit_list_anchor_order_rev(repo_id, list);
+        let entries = modifiers.shift.then(|| {
+            self.commit_list_files_in_drawn_order(repo_id, list)
+                .into_iter()
+                .map(|(path, _)| path)
+                .collect::<Vec<_>>()
+        });
+        crate::view::rows::apply_file_list_selection_click(
+            self.file_list_selection.entry((repo_id, list)).or_default(),
+            clicked_path,
+            display_position,
+            modifiers,
+            order_rev,
+            entries.as_deref(),
+        );
+    }
+
+    pub(in super::super) fn commit_list_selected_paths(
+        &self,
+        repo_id: RepoId,
+        list: crate::view::rows::FileListId,
+    ) -> &[std::path::PathBuf] {
+        self.file_list_selection
+            .get(&(repo_id, list))
+            .map(|selection| selection.paths.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// The files an action on `clicked_path` covers: the whole selection when
+    /// it holds more than one file and includes the clicked one, else just
+    /// that file. Submodules carry no file change and are left out.
+    pub(in super::super) fn commit_list_paths_for_action(
+        &self,
+        repo_id: RepoId,
+        list: crate::view::rows::FileListId,
+        clicked_path: &std::path::Path,
+    ) -> Vec<std::path::PathBuf> {
+        let selection = self.commit_list_selected_paths(repo_id, list);
+        if selection.len() < 2 || !selection.iter().any(|path| path == clicked_path) {
+            return vec![clicked_path.to_path_buf()];
+        }
+        let selected: rustc_hash::FxHashSet<&std::path::Path> =
+            selection.iter().map(std::path::PathBuf::as_path).collect();
+        // Drawn order, so the dialog and the commit list files as shown.
+        self.commit_list_files_in_drawn_order(repo_id, list)
+            .into_iter()
+            .filter(|(path, is_submodule)| !is_submodule && selected.contains(path.as_path()))
+            .map(|(path, _)| path)
+            .collect()
+    }
+
+    /// Every file a list shows, in drawn order.
+    fn file_list_paths(
+        &self,
+        repo_id: RepoId,
+        list: crate::view::rows::FileListId,
+    ) -> Vec<std::path::PathBuf> {
+        use crate::view::rows::FileListId;
+        match list {
+            FileListId::Status(section) => self.status_display_order_paths(repo_id, section),
+            FileListId::CommitFiles | FileListId::RangeFiles => self
+                .commit_list_files_in_drawn_order(repo_id, list)
+                .into_iter()
+                .map(|(path, _)| path)
+                .collect(),
+            FileListId::WorktreeFiles => {
+                let (Some(repo), Some(summary)) = (
+                    self.active_repo().filter(|repo| repo.id == repo_id),
+                    self.selected_worktree_summary(),
+                ) else {
+                    return Vec::new();
+                };
+                self.cached_worktree_file_inputs(repo_id, repo.worktree_dirty_rev, summary)
+                    .files
+                    .iter()
+                    .map(|file| file.path.clone())
+                    .collect()
+            }
+        }
+    }
+
+    /// The files under a folder row, in drawn order, without submodules —
+    /// including any a nested collapse hides, as the folder's Stage does.
+    pub(in super::super) fn file_list_folder_files(
+        &self,
+        repo_id: RepoId,
+        list: crate::view::rows::FileListId,
+        key: &std::path::Path,
+    ) -> Vec<std::path::PathBuf> {
+        use crate::view::rows::FileListId;
+        match list {
+            FileListId::Status(section) => self.status_folder_subtree_paths(repo_id, section, key),
+            FileListId::CommitFiles | FileListId::RangeFiles => self
+                .commit_list_files_in_drawn_order(repo_id, list)
+                .into_iter()
+                .filter(|(path, is_submodule)| !is_submodule && path.starts_with(key))
+                .map(|(path, _)| path)
+                .collect(),
+            FileListId::WorktreeFiles => self
+                .file_list_paths(repo_id, list)
+                .into_iter()
+                .filter(|path| path.starts_with(key))
+                .collect(),
+        }
+    }
+
+    /// Expands or collapses a folder row; `recursive` takes every folder
+    /// below it along.
+    #[allow(clippy::too_many_arguments)]
+    pub(in super::super) fn set_file_list_folder_collapsed(
+        &mut self,
+        repo_id: RepoId,
+        list: crate::view::rows::FileListId,
+        key: Arc<std::path::Path>,
+        chain: &[Arc<std::path::Path>],
+        collapse: bool,
+        recursive: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        // Every directory between the folder and its files has a row, or is
+        // a segment of one; marking each collapses them all.
+        let below: Vec<Arc<std::path::Path>> = if collapse && recursive {
+            let mut dirs = rustc_hash::FxHashSet::default();
+            for path in self.file_list_paths(repo_id, list) {
+                let mut dir = path.parent();
+                while let Some(parent) = dir {
+                    if parent == key.as_ref() || !parent.starts_with(&key) {
+                        break;
+                    }
+                    if !dirs.insert(Arc::<std::path::Path>::from(parent)) {
+                        break;
+                    }
+                    dir = parent.parent();
+                }
+            }
+            dirs.into_iter().collect()
+        } else {
+            Vec::new()
+        };
+        let entry = self.file_list_collapsed.entry((repo_id, list)).or_default();
+        match (collapse, recursive) {
+            (true, false) => entry.collapse(key, chain),
+            (false, false) => entry.expand(chain),
+            (false, true) => entry.expand_under(&key, chain),
+            (true, true) => entry.collapse_all(std::iter::once(key).chain(below)),
+        }
+        cx.notify();
+    }
+
+    pub(in super::super) fn clear_commit_list_selections(&mut self, repo_id: RepoId) {
+        self.file_list_selection
+            .retain(|(selection_repo, _), _| *selection_repo != repo_id);
+    }
+
     /// Expand whatever hides the commit file at `position` and return its row.
     /// Mirrors [`Self::reveal_status_row`]: in a tree the position among files
     /// is not the row index, and a collapsed file has no row at all.
@@ -2099,6 +2333,8 @@ impl DetailsPaneView {
                 .retain(|(_, list), _| *list != crate::view::rows::FileListId::CommitFiles);
             self.file_list_collapsed
                 .retain(|(_, list), _| *list != crate::view::rows::FileListId::CommitFiles);
+            self.file_list_selection
+                .retain(|(_, list), _| *list != crate::view::rows::FileListId::CommitFiles);
         }
         if switched_repo || prev_worktree_selection != next_worktree_selection {
             self.forget_file_list_view_state(crate::view::rows::FileListId::WorktreeFiles);
@@ -2222,22 +2458,42 @@ impl DetailsPaneView {
         self.update_commit_details_delay(cx);
     }
 
-    /// Offers the message git prepared for the next commit (after a staged
-    /// revert) as the commit box's starting text, once and only when empty.
+    /// Offers Git's message once per suggestion and only when the box is empty.
+    /// When an automatic commit consumes it, clear only the unchanged autofill.
     fn apply_suggested_commit_message(&mut self, cx: &mut gpui::Context<Self>) {
         let Some(repo) = self.active_repo() else {
             return;
         };
-        let suggestion = (repo.id, repo.suggested_commit_message_rev);
-        if self.applied_commit_suggestion == Some(suggestion) {
+        let repo_id = repo.id;
+        let rev = repo.suggested_commit_message_rev;
+        if self
+            .applied_commit_suggestions
+            .get(&repo_id)
+            .is_some_and(|(seen, _)| *seen == rev)
+        {
             return;
         }
         let message = repo.suggested_commit_message.clone();
-        self.applied_commit_suggestion = Some(suggestion);
-        if let Some(message) = message
-            && self.commit_message_is_empty(cx)
-        {
-            self.set_commit_message_programmatically(message, cx);
+        let previous = self.applied_commit_suggestions.insert(repo_id, (rev, None));
+        match message {
+            Some(message) if self.commit_message_is_empty(cx) => {
+                self.set_commit_message_programmatically(message.clone(), cx);
+                self.applied_commit_suggestions
+                    .insert(repo_id, (rev, Some(message)));
+            }
+            Some(message) => {
+                if previous.as_ref().and_then(|(_, text)| text.as_ref()) == Some(&message) {
+                    self.applied_commit_suggestions
+                        .insert(repo_id, (rev, Some(message)));
+                }
+            }
+            None => {
+                if let Some((_, Some(previous))) = previous
+                    && self.commit_message_input.read(cx).text() == previous
+                {
+                    self.set_commit_message_programmatically(String::new(), cx);
+                }
+            }
         }
     }
 

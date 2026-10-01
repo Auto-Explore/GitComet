@@ -15,6 +15,19 @@ pub(super) fn write_patch_file(patch: &[u8]) -> Result<NamedTempFile> {
     Ok(file)
 }
 
+/// NUL-terminated paths for `--pathspec-from-file` with `--pathspec-file-nul`;
+/// a long path list would overflow a Windows command line.
+pub(super) fn write_pathspec_file<'a>(
+    paths: impl IntoIterator<Item = &'a [u8]>,
+) -> Result<NamedTempFile> {
+    let mut bytes = Vec::new();
+    for path in paths {
+        bytes.extend_from_slice(path);
+        bytes.push(0);
+    }
+    write_patch_file(&bytes)
+}
+
 impl GixRepo {
     pub(super) fn export_patch_with_output_impl(
         &self,

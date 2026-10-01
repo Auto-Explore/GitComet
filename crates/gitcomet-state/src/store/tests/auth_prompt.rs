@@ -1010,28 +1010,94 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
         );
     }
 
-    // Replayed whole: the backend finds the change already staged and only
-    // commits it.
-    let apply_target = gitcomet_core::domain::DiffTarget::Commit {
-        commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
-        path: PathBuf::from("a.txt"),
-    };
-    let apply_effects = replay_case(RepoCommandKind::ApplyFileChange {
-        target: apply_target.clone(),
+    // A single pick is replayed whole too: one beside staged work rolled its
+    // failed commit step back, and one stopped at the commit step resumes.
+    for commit in [true, false] {
+        let pick_effects = replay_case(RepoCommandKind::CherryPick {
+            commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
+            commit,
+            mainline: None,
+            summary: "pick me".to_string(),
+        });
+        assert!(
+            matches!(
+                pick_effects.as_slice(),
+                [Effect::CherryPickCommit {
+                    repo_id: RepoId(1),
+                    commit: replayed,
+                    mainline: None,
+                    auth: Some(_),
+                    ..
+                }] if *replayed == commit
+            ),
+            "commit={commit}: {pick_effects:?}"
+        );
+    }
+
+    // A committing multi-pick continues git's paused sequencer; an
+    // uncommitted one keeps no sequencer and is replayed whole.
+    let multi_entries = vec![gitcomet_core::services::InteractiveRebaseEntry {
+        action: gitcomet_core::services::InteractiveRebaseAction::Pick,
+        commit_id: "deadbeef".to_string(),
+        summary: "pick me".to_string(),
+        message: "pick me".to_string(),
+        new_message: None,
+    }];
+    let committing_multi_effects = replay_case(RepoCommandKind::InteractiveCherryPick {
+        entries: multi_entries.clone(),
         commit: true,
     });
     assert!(
         matches!(
-            apply_effects.as_slice(),
-            [Effect::ApplyFileChange {
+            committing_multi_effects.as_slice(),
+            [Effect::RebaseContinue {
                 repo_id: RepoId(1),
-                target,
-                commit: true,
                 auth: Some(_),
-            }] if target == &apply_target
+            }]
         ),
-        "{apply_effects:?}"
+        "{committing_multi_effects:?}"
     );
+    let uncommitted_multi_effects = replay_case(RepoCommandKind::InteractiveCherryPick {
+        entries: multi_entries.clone(),
+        commit: false,
+    });
+    assert!(
+        matches!(
+            uncommitted_multi_effects.as_slice(),
+            [Effect::InteractiveCherryPick {
+                repo_id: RepoId(1),
+                entries,
+                commit: false,
+            }] if entries == &multi_entries
+        ),
+        "{uncommitted_multi_effects:?}"
+    );
+
+    // A failure before staging replays the apply; a commit failure carries
+    // the checkpoint so the authenticated retry commits only that result.
+    let apply_target = gitcomet_core::domain::ApplyChangeTarget::commit(
+        gitcomet_core::domain::CommitId("deadbeef".into()),
+        PathBuf::from("a.txt"),
+    );
+    let retry = gitcomet_core::domain::ApplyFileChangeRetry {
+        target: apply_target.clone(),
+        head: Some(CommitId("12345678".into())),
+        index: Vec::new(),
+    };
+    for commit_retry in [None, Some(retry)] {
+        let apply_effects = replay_case(RepoCommandKind::ApplyFileChange {
+            commit_retry: commit_retry.clone(),
+            target: apply_target.clone(),
+            commit: true,
+        });
+        assert!(
+            matches!(apply_effects.as_slice(), [Effect::ApplyFileChange {
+            commit_retry: replayed,
+            repo_id: RepoId(1), target, commit: true, auth: Some(_),
+        }] if target == &apply_target && replayed == &commit_retry),
+            "{apply_effects:?}"
+        );
+    }
 
     let non_replayable_effects = replay_case(RepoCommandKind::StageHunk);
     assert!(non_replayable_effects.is_empty());

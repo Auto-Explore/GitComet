@@ -476,7 +476,6 @@ pub(crate) struct GixRepo {
     signature_format_cache: std::sync::Mutex<
         lru::LruCache<gix::ObjectId, Option<gitcomet_core::domain::SignatureFormat>>,
     >,
-    staged_applied_change: std::sync::Mutex<Option<apply_change::StagedAppliedChange>>,
 }
 
 impl GixRepo {
@@ -504,7 +503,6 @@ impl GixRepo {
             signature_format_cache: std::sync::Mutex::new(lru::LruCache::new(
                 std::num::NonZeroUsize::new(signatures::SIGNATURE_CACHE_LIMIT).unwrap(),
             )),
-            staged_applied_change: std::sync::Mutex::new(None),
         }
     }
 
@@ -1131,10 +1129,17 @@ impl GitRepository for GixRepo {
 
     fn apply_file_change_with_output(
         &self,
-        target: &DiffTarget,
+        target: &gitcomet_core::domain::ApplyChangeTarget,
         commit: bool,
     ) -> Result<CommandOutput> {
-        self.apply_file_change_with_output_impl(target, commit)
+        self.apply_file_change_with_output_impl(target, commit, None)
+    }
+
+    fn commit_applied_file_change_with_output(
+        &self,
+        retry: &gitcomet_core::domain::ApplyFileChangeRetry,
+    ) -> Result<CommandOutput> {
+        self.apply_file_change_with_output_impl(&retry.target, true, Some(retry))
     }
 
     fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()> {
@@ -1298,8 +1303,9 @@ impl GitRepository for GixRepo {
     fn interactive_cherry_pick_with_output(
         &self,
         entries: &[InteractiveRebaseEntry],
+        commit: bool,
     ) -> Result<CommandOutput> {
-        self.interactive_cherry_pick_with_output_impl(entries)
+        self.interactive_cherry_pick_with_output_impl(entries, commit)
     }
 
     fn merge_abort_with_output(&self) -> Result<CommandOutput> {

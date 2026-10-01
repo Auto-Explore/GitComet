@@ -55,13 +55,13 @@ fn inline_submodule_selected_diff_load_plan(target: &DiffTarget) -> SelectedDiff
     let supports_file = matches!(
         target,
         DiffTarget::WorkingTree { .. }
-            | DiffTarget::Commit { path: _, .. }
+            | DiffTarget::Commit { .. }
             | DiffTarget::CommitRange { path: Some(_), .. }
     );
     let preview = diff_target_preview_flags(target);
 
     SelectedDiffLoadPlan {
-        load_patch_diff: true,
+        load_patch_diff: supports_file,
         load_file_text: supports_file && (!preview.wants_image || preview.is_svg),
         preview_text_side: None,
         load_submodule_summary: false,

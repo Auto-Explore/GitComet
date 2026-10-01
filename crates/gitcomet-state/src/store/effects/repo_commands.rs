@@ -92,7 +92,7 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
         RepoCommandKind::RebaseContinue => "Current rebase".to_string(),
         RepoCommandKind::RebaseAbort => "Current rebase".to_string(),
         RepoCommandKind::InteractiveRebase { base, .. } => format!("Current branch onto {base}"),
-        RepoCommandKind::InteractiveCherryPick { entries } => match entries.as_slice() {
+        RepoCommandKind::InteractiveCherryPick { entries, .. } => match entries.as_slice() {
             [] => "Selected commits".to_string(),
             [entry] => {
                 message_subject(&entry.summary).unwrap_or_else(|| short_commit_id(&entry.commit_id))
@@ -111,8 +111,11 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
             commit_id, summary, ..
         } => message_subject(summary).unwrap_or_else(|| short_commit_id(commit_id.as_ref())),
         RepoCommandKind::ApplyFileChange { target, .. } => {
-            let (path, revision) = gitcomet_core::services::apply_file_change_source(target)?;
-            format!("{} · {revision}", path.display())
+            let revision = gitcomet_core::services::apply_change_revision(&target.source);
+            match target.paths.as_slice() {
+                [path] => format!("{} · {revision}", path.display()),
+                paths => format!("{} files · {revision}", paths.len()),
+            }
         }
         RepoCommandKind::MergeAbort => "Current merge".to_string(),
         RepoCommandKind::CreateTag { name, target, .. } => format!("{name} at {target}"),
@@ -190,7 +193,7 @@ fn schedule_repo_command_with_context<F>(
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
-    command: RepoCommandKind,
+    mut command: RepoCommandKind,
     context_override: Option<String>,
     run: F,
 ) where
@@ -213,6 +216,13 @@ fn schedule_repo_command_with_context<F>(
                 run(repo)
             };
             let outcome = GitOperationTask::outcome(&result);
+            if let RepoCommandKind::ApplyFileChange { commit_retry, .. } = &mut command
+                && let Err(error) = &result
+                && let ErrorKind::Git(failure) = error.kind()
+                && let Some(retry) = failure.apply_file_change_retry()
+            {
+                *commit_retry = Some(retry.clone());
+            }
             operation.finish(
                 outcome,
                 InternalMsg::RepoCommandFinished {
@@ -1414,6 +1424,7 @@ pub(super) fn schedule_interactive_cherry_pick(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     entries: Vec<InteractiveRebaseEntry>,
+    commit: bool,
 ) {
     let command_entries = entries.clone();
     schedule_repo_command(
@@ -1423,8 +1434,9 @@ pub(super) fn schedule_interactive_cherry_pick(
         repo_id,
         RepoCommandKind::InteractiveCherryPick {
             entries: command_entries,
+            commit,
         },
-        move |repo| repo.interactive_cherry_pick_with_output(&entries),
+        move |repo| repo.interactive_cherry_pick_with_output(&entries, commit),
     );
 }
 
@@ -1437,6 +1449,7 @@ pub(super) fn schedule_cherry_pick_commit(
     commit: bool,
     mainline: Option<usize>,
     summary: String,
+    auth: Option<StagedGitAuth>,
 ) {
     let command_commit_id = commit_id.clone();
     schedule_repo_command(
@@ -1450,7 +1463,11 @@ pub(super) fn schedule_cherry_pick_commit(
             mainline,
             summary,
         },
-        move |repo| repo.cherry_pick_with_output(&commit_id, commit, mainline),
+        move |repo| {
+            run_with_git_auth(auth, || {
+                repo.cherry_pick_with_output(&commit_id, commit, mainline)
+            })
+        },
     );
 }
 
@@ -1503,8 +1520,9 @@ pub(super) fn schedule_apply_file_change(
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
-    target: gitcomet_core::domain::DiffTarget,
+    target: gitcomet_core::domain::ApplyChangeTarget,
     commit: bool,
+    commit_retry: Option<gitcomet_core::domain::ApplyFileChangeRetry>,
     auth: Option<StagedGitAuth>,
 ) {
     let command_target = target.clone();
@@ -1517,10 +1535,13 @@ pub(super) fn schedule_apply_file_change(
         RepoCommandKind::ApplyFileChange {
             target: command_target,
             commit,
+            commit_retry: commit_retry.clone(),
         },
         move |repo| {
-            let output =
-                run_with_git_auth(auth, || repo.apply_file_change_with_output(&target, commit));
+            let output = run_with_git_auth(auth, || match &commit_retry {
+                Some(retry) => repo.commit_applied_file_change_with_output(retry),
+                None => repo.apply_file_change_with_output(&target, commit),
+            });
             // A change left staged or conflicted still needs a commit the user
             // types, so offer the message the committing path would use.
             let awaits_commit = match &output {
@@ -1539,10 +1560,16 @@ pub(super) fn schedule_apply_file_change(
                     )
                 ),
             };
-            if awaits_commit && let Some(message) = applied_change_commit_message(&*repo, &target) {
+            if (awaits_commit || (commit && output.is_ok()))
+                && let Some(message) = applied_change_commit_message(&*repo, &target)
+            {
                 send_or_log(
                     &suggestion_tx,
-                    Msg::Internal(InternalMsg::CommitMessageSuggested { repo_id, message }),
+                    Msg::Internal(if awaits_commit {
+                        InternalMsg::CommitMessageSuggested { repo_id, message }
+                    } else {
+                        InternalMsg::CommitMessageSuggestionConsumed { repo_id, message }
+                    }),
                 );
             }
             output
@@ -1554,26 +1581,19 @@ pub(super) fn schedule_apply_file_change(
 /// or for a comparison one naming the range.
 fn applied_change_commit_message(
     repo: &dyn gitcomet_core::services::GitRepository,
-    target: &gitcomet_core::domain::DiffTarget,
+    target: &gitcomet_core::domain::ApplyChangeTarget,
 ) -> Option<String> {
-    use gitcomet_core::domain::DiffTarget;
-    match target {
-        DiffTarget::Commit { commit_id, .. } => repo
+    use gitcomet_core::domain::ApplyChangeSource;
+    match &target.source {
+        ApplyChangeSource::Commit(commit_id) => repo
             .commit_messages(std::slice::from_ref(commit_id))
             .ok()?
             .pop()
             .map(|message| message.trim_end().to_string())
             .filter(|message| !message.is_empty()),
-        DiffTarget::CommitRange {
-            from_commit_id,
-            to_commit_id: Some(to_commit_id),
-            path: Some(path),
-        } => Some(gitcomet_core::services::apply_file_change_range_message(
-            from_commit_id,
-            to_commit_id,
-            path,
-        )),
-        _ => None,
+        ApplyChangeSource::Range { from, to } => Some(
+            gitcomet_core::services::apply_file_change_range_message(from, to, &target.paths),
+        ),
     }
 }
 

@@ -44,6 +44,7 @@ mod app_menu;
 mod author_filter;
 mod branch;
 mod browse_history;
+mod cherry_pick;
 mod clone;
 mod commit;
 mod context_shortcuts;

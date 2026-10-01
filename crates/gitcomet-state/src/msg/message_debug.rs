@@ -230,6 +230,11 @@ impl std::fmt::Debug for InternalMsg {
                 .field("requested_count", &requested_ids.len())
                 .field("ok", &result.is_ok())
                 .finish(),
+            InternalMsg::CommitMessageSuggestionConsumed { repo_id, message } => f
+                .debug_struct("CommitMessageSuggestionConsumed")
+                .field("repo_id", repo_id)
+                .field("message_len", &message.len())
+                .finish(),
             InternalMsg::CommitMessageSuggested { repo_id, message } => f
                 .debug_struct("CommitMessageSuggested")
                 .field("repo_id", repo_id)

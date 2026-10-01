@@ -21,6 +21,7 @@ mod diff_hunk;
 mod file_browser_file;
 mod file_browser_folder;
 pub(super) mod file_history_commit;
+mod file_list_folder;
 mod history_branch_filter;
 mod history_refs;
 mod local_file_link;
@@ -643,6 +644,7 @@ impl PopoverHost {
                 *repo_id,
                 commit_file::FileMenuSource::Commit(commit_id),
                 path,
+                cx,
             )),
             PopoverKind::CommitRangeFileMenu {
                 repo_id,
@@ -657,6 +659,7 @@ impl PopoverHost {
                     to: to_commit_id.as_ref(),
                 },
                 path,
+                cx,
             )),
             PopoverKind::CommitFileSortMenu { list } => {
                 Some(commit_file_sort::model(self, *list, cx))
@@ -667,6 +670,25 @@ impl PopoverHost {
             PopoverKind::FileBrowserFolderMenu { repo_id, path } => {
                 Some(file_browser_folder::model(self, *repo_id, path))
             }
+            PopoverKind::FileListFolderMenu {
+                repo_id,
+                list,
+                key,
+                chain,
+                collapsed,
+                apply_source,
+            } => Some(file_list_folder::model(
+                self,
+                file_list_folder::FolderMenu {
+                    repo_id: *repo_id,
+                    list: *list,
+                    key,
+                    chain,
+                    collapsed: *collapsed,
+                    apply_source: apply_source.as_ref(),
+                },
+                cx,
+            )),
             PopoverKind::BranchGroupMenu {
                 repo_id,
                 section,
@@ -932,6 +954,53 @@ impl PopoverHost {
             ContextMenuAction::ToggleFileBrowserDir { repo_id, path } => {
                 self.store
                     .dispatch(Msg::ToggleFileBrowserDir { repo_id, path });
+            }
+            ContextMenuAction::SetFileListFolderCollapsed {
+                repo_id,
+                list,
+                key,
+                chain,
+                collapsed,
+                recursive,
+            } => {
+                self.details_pane.update(cx, |pane, cx| {
+                    pane.set_file_list_folder_collapsed(
+                        repo_id, list, key, &chain, collapsed, recursive, cx,
+                    );
+                });
+            }
+            // The folder row's hover Stage/Unstage, from its menu.
+            ContextMenuAction::StageStatusFolder {
+                repo_id,
+                section,
+                key,
+            } => {
+                let paths = self
+                    .details_pane
+                    .read(cx)
+                    .status_folder_subtree_paths(repo_id, section, &key);
+                let area = section.diff_area();
+                if area == DiffArea::Unstaged
+                    && let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
+                        &self.state,
+                        repo_id,
+                        paths.clone(),
+                        // No selection was consumed, so cancelling must leave it.
+                        false,
+                    )
+                {
+                    let anchor = self.popover_anchor_point();
+                    self.open_popover_at(confirm, anchor, window, cx);
+                    return;
+                }
+                if !paths.is_empty() {
+                    crate::view::status_actions::stage_or_unstage_paths(
+                        &self.store,
+                        repo_id,
+                        area,
+                        paths,
+                    );
+                }
             }
             // The branch tree's collapse state is view-owned rather than a
             // store message, so these four go through the sidebar pane.

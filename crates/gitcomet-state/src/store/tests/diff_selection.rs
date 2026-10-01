@@ -1614,7 +1614,7 @@ fn select_diff_for_conflicted_svg_prefers_conflict_loader_over_preview_effects()
 }
 
 #[test]
-fn select_diff_for_a_range_without_path_only_loads_patch() {
+fn select_diff_for_a_range_without_path_does_not_load_a_whole_patch() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::test_default();
@@ -1644,7 +1644,7 @@ fn select_diff_for_a_range_without_path_only_loads_patch() {
 
     let repo_state = state.repos.first().expect("repo state to exist");
     assert_eq!(repo_state.diff_state.diff_target, Some(target.clone()));
-    assert!(repo_state.diff_state.diff.is_loading());
+    assert!(matches!(repo_state.diff_state.diff, Loadable::NotLoaded));
     assert!(matches!(
         repo_state.diff_state.diff_file,
         Loadable::NotLoaded
@@ -1657,7 +1657,7 @@ fn select_diff_for_a_range_without_path_only_loads_patch() {
         effects.as_slice(),
         [Effect::LoadSelectedDiff {
             repo_id: RepoId(1),
-            load_patch_diff: true,
+            load_patch_diff: false,
             load_file_text: false,
             load_file_image: false,
             load_submodule_summary: false,

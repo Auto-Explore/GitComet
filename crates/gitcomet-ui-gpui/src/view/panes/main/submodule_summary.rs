@@ -169,7 +169,7 @@ impl MainPaneView {
         // need releasing here.
         if !matches!(
             &target,
-            DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: _, .. }
+            DiffTarget::WorkingTree { .. } | DiffTarget::Commit { .. }
         ) {
             return components::empty_state(theme, "Submodule", "No submodule selected.")
                 .into_any_element();

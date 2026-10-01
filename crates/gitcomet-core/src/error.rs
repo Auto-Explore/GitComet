@@ -38,6 +38,7 @@ pub struct GitFailure {
     stdout: Vec<u8>,
     stderr: Vec<u8>,
     detail: Option<String>,
+    apply_file_change_retry: Option<Box<crate::domain::ApplyFileChangeRetry>>,
 }
 
 impl GitFailure {
@@ -56,6 +57,7 @@ impl GitFailure {
             stdout,
             stderr,
             detail,
+            apply_file_change_retry: None,
         }
     }
 
@@ -81,6 +83,18 @@ impl GitFailure {
 
     pub fn detail(&self) -> Option<&str> {
         self.detail.as_deref()
+    }
+
+    pub fn with_apply_file_change_retry(
+        mut self,
+        retry: crate::domain::ApplyFileChangeRetry,
+    ) -> Self {
+        self.apply_file_change_retry = Some(Box::new(retry));
+        self
+    }
+
+    pub fn apply_file_change_retry(&self) -> Option<&crate::domain::ApplyFileChangeRetry> {
+        self.apply_file_change_retry.as_deref()
     }
 }
 

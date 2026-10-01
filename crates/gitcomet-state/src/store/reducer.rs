@@ -569,27 +569,33 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         // or rebase state on disk: replaying the original plan would be
         // rejected as already in progress (and its effect has no auth slot).
         // Continue the paused sequencer with the staged auth instead.
-        RepoCommandKind::InteractiveCherryPick { .. } => Msg::RebaseContinue { repo_id },
+        RepoCommandKind::InteractiveCherryPick { commit: true, .. } => {
+            Msg::RebaseContinue { repo_id }
+        }
+        // Uncommitted picks never sign or leave a sequencer; replay them, and
+        // the steps that already landed merge again as no-ops.
+        RepoCommandKind::InteractiveCherryPick {
+            entries,
+            commit: false,
+        } => Msg::InteractiveCherryPick {
+            repo_id,
+            entries,
+            commit: false,
+        },
+        // Replayed whole, like revert: a pick beside staged work rolls back a
+        // failed commit step, and one stopped at its commit step resumes there.
         RepoCommandKind::CherryPick {
             commit_id,
             commit,
             mainline,
             summary,
-        } => {
-            if commit {
-                Msg::RebaseContinue { repo_id }
-            } else {
-                // `--no-commit` picks never sign, so an auth prompt here is
-                // not a paused sequencer; replay the command itself.
-                Msg::CherryPickCommit {
-                    repo_id,
-                    commit_id,
-                    commit,
-                    mainline,
-                    summary,
-                }
-            }
-        }
+        } => Msg::CherryPickCommit {
+            repo_id,
+            commit_id,
+            commit,
+            mainline,
+            summary,
+        },
         // Replayed whole: the auth may be for the `--no-commit` step (a
         // promisor fetch), and a revert stopped at its commit step resumes
         // there with the same hooks skipped, which `revert --continue` would not.
@@ -605,12 +611,16 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
             mainline,
             summary,
         },
-        // Replayed whole: a run whose commit step failed finds the change
-        // already staged and goes straight to the commit.
-        RepoCommandKind::ApplyFileChange { target, commit } => Msg::ApplyFileChange {
+        // Only a command with the failed commit's checkpoint can skip apply.
+        RepoCommandKind::ApplyFileChange {
+            target,
+            commit,
+            commit_retry,
+        } => Msg::ApplyFileChange {
             repo_id,
             target,
             commit,
+            commit_retry,
         },
         RepoCommandKind::MergeAbort => Msg::MergeAbort { repo_id },
         RepoCommandKind::CreateTag {
@@ -750,6 +760,7 @@ fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> 
         | Effect::PushTag { auth: slot, .. }
         | Effect::DeleteRemoteTag { auth: slot, .. }
         | Effect::RebaseContinue { auth: slot, .. }
+        | Effect::CherryPickCommit { auth: slot, .. }
         | Effect::RevertCommit { auth: slot, .. }
         | Effect::ApplyFileChange { auth: slot, .. } => {
             *slot = Some(auth);
@@ -1578,13 +1589,14 @@ fn reduce_inner(
             repo_id,
             target,
             commit,
+            commit_retry,
         } => {
             if commit {
                 begin_head_changing_local_action(state, repo_id);
             } else {
                 begin_local_action(state, repo_id);
             }
-            actions_emit_effects::apply_file_change(repo_id, target, commit)
+            actions_emit_effects::apply_file_change(repo_id, target, commit, commit_retry)
         }
         Msg::CreateBranch {
             repo_id,
@@ -2169,13 +2181,17 @@ fn reduce_inner(
             begin_local_action(state, repo_id);
             actions_emit_effects::interactive_rebase(repo_id, base, entries)
         }
-        Msg::InteractiveCherryPick { repo_id, entries } => {
+        Msg::InteractiveCherryPick {
+            repo_id,
+            entries,
+            commit,
+        } => {
             // A multi-pick can land some commits and then fail (a hook or
             // signer on a later step), so HEAD-dependent caches must be
             // invalidated up front like the single-pick path — the error
             // completion path does not clear them.
             begin_head_changing_local_action(state, repo_id);
-            actions_emit_effects::interactive_cherry_pick(repo_id, entries)
+            actions_emit_effects::interactive_cherry_pick(repo_id, entries, commit)
         }
         Msg::CancelInteractiveRebaseSetup { repo_id } => {
             actions_emit_effects::cancel_interactive_rebase_setup(state, repo_id)
@@ -2540,6 +2556,17 @@ fn reduce_inner(
             requested_ids,
             result,
         ),
+        Msg::Internal(crate::msg::InternalMsg::CommitMessageSuggestionConsumed {
+            repo_id,
+            message,
+        }) => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+                && repo_state.suggested_commit_message.as_deref() == Some(message.as_str())
+            {
+                repo_state.set_suggested_commit_message(None);
+            }
+            Vec::new()
+        }
         Msg::Internal(crate::msg::InternalMsg::CommitMessageSuggested { repo_id, message }) => {
             if let Some(repo_state) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
                 repo_state.set_suggested_commit_message(Some(message));

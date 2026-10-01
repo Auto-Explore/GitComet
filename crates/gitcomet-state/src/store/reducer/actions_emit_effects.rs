@@ -62,6 +62,7 @@ pub(super) fn cherry_pick_commit(
         commit,
         mainline,
         summary,
+        auth: None,
     }]
 }
 
@@ -82,11 +83,17 @@ pub(super) fn revert_commit(
     }]
 }
 
-pub(super) fn apply_file_change(repo_id: RepoId, target: DiffTarget, commit: bool) -> Vec<Effect> {
+pub(super) fn apply_file_change(
+    repo_id: RepoId,
+    target: gitcomet_core::domain::ApplyChangeTarget,
+    commit: bool,
+    commit_retry: Option<gitcomet_core::domain::ApplyFileChangeRetry>,
+) -> Vec<Effect> {
     vec![Effect::ApplyFileChange {
         repo_id,
         target,
         commit,
+        commit_retry,
         auth: None,
     }]
 }
@@ -703,8 +710,13 @@ pub(super) fn open_interactive_cherry_pick_setup(
 pub(super) fn interactive_cherry_pick(
     repo_id: RepoId,
     entries: Vec<InteractiveRebaseEntry>,
+    commit: bool,
 ) -> Vec<Effect> {
-    vec![Effect::InteractiveCherryPick { repo_id, entries }]
+    vec![Effect::InteractiveCherryPick {
+        repo_id,
+        entries,
+        commit,
+    }]
 }
 
 pub(super) fn cancel_interactive_rebase_setup(

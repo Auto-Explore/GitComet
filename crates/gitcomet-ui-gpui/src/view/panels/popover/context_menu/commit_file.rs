@@ -37,14 +37,34 @@ impl<'a> FileMenuSource<'a> {
             Self::Range { to, .. } => to,
         }
     }
+
+    fn list(self) -> crate::view::rows::FileListId {
+        match self {
+            Self::Commit(_) => crate::view::rows::FileListId::CommitFiles,
+            Self::Range { .. } => crate::view::rows::FileListId::RangeFiles,
+        }
+    }
+
+    /// Where "Apply change" takes this file's change from. A comparison to
+    /// the working tree has no change to apply: it is already in the checkout.
+    pub(super) fn apply_source(self) -> Option<gitcomet_core::domain::ApplyChangeSource> {
+        use gitcomet_core::domain::ApplyChangeSource;
+        match self {
+            Self::Commit(commit_id) => Some(ApplyChangeSource::Commit(commit_id.clone())),
+            Self::Range { from, to } => to.map(|to| ApplyChangeSource::Range {
+                from: from.clone(),
+                to: to.clone(),
+            }),
+        }
+    }
 }
 
-/// "Apply change" for a commit or comparison file diff. Shares cherry-pick's
+/// "Apply change" for files of a commit or comparison. Shares cherry-pick's
 /// icon and is disabled while history is being rewritten, like cherry-pick.
 pub(super) fn apply_change_entry(
     this: &PopoverHost,
     repo_id: RepoId,
-    target: DiffTarget,
+    target: gitcomet_core::domain::ApplyChangeTarget,
 ) -> ContextMenuItem {
     let busy = this
         .state
@@ -52,8 +72,12 @@ pub(super) fn apply_change_entry(
         .iter()
         .find(|repo| repo.id == repo_id)
         .is_none_or(|repo| repo.history_rewrite_busy());
+    let label = match target.paths.len() {
+        1 => "Apply change".into(),
+        count => format!("Apply changes ({count})").into(),
+    };
     ContextMenuItem::Entry {
-        label: "Apply change".into(),
+        label,
         icon: Some("icons/arrow_up.svg".into()),
         shortcut: Some("A".into()),
         disabled: busy,
@@ -66,6 +90,7 @@ pub(super) fn model(
     repo_id: RepoId,
     source: FileMenuSource<'_>,
     path: &std::path::Path,
+    cx: &gpui::Context<PopoverHost>,
 ) -> ContextMenuModel {
     let is_submodule = this
         .state
@@ -207,11 +232,21 @@ pub(super) fn model(
             },
         }),
     });
-    // A comparison to the working tree has no change to apply: it is
-    // already in the checkout.
-    if source.tip().is_some() {
+    if let Some(apply_source) = source.apply_source() {
+        // A right-click inside a multi-selection applies the whole selection.
+        let paths =
+            this.details_pane
+                .read(cx)
+                .commit_list_paths_for_action(repo_id, source.list(), path);
         items.push(ContextMenuItem::Separator);
-        items.push(apply_change_entry(this, repo_id, source.diff_target(path)));
+        items.push(apply_change_entry(
+            this,
+            repo_id,
+            gitcomet_core::domain::ApplyChangeTarget {
+                source: apply_source,
+                paths,
+            },
+        ));
         items.push(ContextMenuItem::Separator);
     }
     if let Some(permalink) = source.tip().and_then(|tip| {

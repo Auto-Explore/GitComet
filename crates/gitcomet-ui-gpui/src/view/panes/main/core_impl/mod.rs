@@ -228,7 +228,7 @@ impl MainPaneView {
             line_stats_rev.hash(&mut hasher);
             // The file list a commit or comparison diff navigates through.
             let file_list_rev = match repo.diff_state.diff_target {
-                Some(DiffTarget::Commit { path: _, .. }) => repo.history_state.commit_details_rev,
+                Some(DiffTarget::Commit { .. }) => repo.history_state.commit_details_rev,
                 Some(DiffTarget::CommitRange { path: Some(_), .. }) => {
                     repo.history_state.range_files_rev
                 }

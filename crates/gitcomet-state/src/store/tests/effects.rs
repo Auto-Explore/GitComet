@@ -4052,7 +4052,20 @@ fn apply_file_change_fixture(repo: &Path) -> String {
 
 /// Runs one `ApplyFileChange` effect and returns every message it sent, in
 /// order, ending with its `RepoCommandFinished` unwrapped from the operation.
-fn run_apply_file_change_effect(repo: &Path, target: DiffTarget, commit: bool) -> Vec<Msg> {
+fn run_apply_file_change_effect(
+    repo: &Path,
+    target: gitcomet_core::domain::ApplyChangeTarget,
+    commit: bool,
+) -> Vec<Msg> {
+    run_apply_file_change_effect_with_retry(repo, target, commit, None)
+}
+
+fn run_apply_file_change_effect_with_retry(
+    repo: &Path,
+    target: gitcomet_core::domain::ApplyChangeTarget,
+    commit: bool,
+    commit_retry: Option<gitcomet_core::domain::ApplyFileChangeRetry>,
+) -> Vec<Msg> {
     struct Backend;
     impl GitBackend for Backend {
         fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
@@ -4077,6 +4090,7 @@ fn run_apply_file_change_effect(repo: &Path, target: DiffTarget, commit: bool) -
         &repos,
         msg_tx,
         Effect::ApplyFileChange {
+            commit_retry,
             repo_id,
             target,
             commit,
@@ -4085,14 +4099,11 @@ fn run_apply_file_change_effect(repo: &Path, target: DiffTarget, commit: bool) -
     );
     let mut msgs = Vec::new();
     loop {
-        let msg = msg_rx
-            .recv_timeout(Duration::from_secs(20))
-            .expect("apply file change should finish");
-        if let Msg::Internal(crate::msg::InternalMsg::GitOperationFinished { message, .. }) = msg {
-            msgs.push(Msg::Internal(*message));
-            return msgs;
+        match recv_effect_message(&msg_rx, Duration::from_secs(20)) {
+            Ok(msg) => msgs.push(msg),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return msgs,
+            Err(error) => panic!("apply file change did not finish: {error}"),
         }
-        msgs.push(msg);
     }
 }
 
@@ -4111,10 +4122,10 @@ fn suggested_messages(msgs: &[Msg]) -> Vec<&str> {
 fn apply_file_change_offers_the_source_message_only_while_uncommitted() {
     let dir = tempfile::tempdir().expect("tempdir");
     let picked = apply_file_change_fixture(dir.path());
-    let target = DiffTarget::Commit {
-        commit_id: CommitId(picked.as_str().into()),
-        path: PathBuf::from("a.txt"),
-    };
+    let target = gitcomet_core::domain::ApplyChangeTarget::commit(
+        CommitId(picked.as_str().into()),
+        PathBuf::from("a.txt"),
+    );
 
     let staged = run_apply_file_change_effect(dir.path(), target.clone(), false);
     assert_eq!(suggested_messages(&staged), ["feature subject\n\nbody"]);
@@ -4126,6 +4137,7 @@ fn apply_file_change_offers_the_source_message_only_while_uncommitted() {
     ));
 
     // Committing needs no message from the user.
+    run_git(dir.path(), &["reset", "--hard", "HEAD"]);
     let committed = run_apply_file_change_effect(dir.path(), target, true);
     assert!(suggested_messages(&committed).is_empty(), "{committed:?}");
     assert!(matches!(
@@ -4142,10 +4154,10 @@ fn a_conflicted_apply_file_change_still_offers_the_message() {
     let picked = apply_file_change_fixture(dir.path());
     fs::write(dir.path().join("a.txt"), "one\nMAIN\n").expect("write main edit");
     run_git(dir.path(), &["commit", "-q", "-am", "main edit"]);
-    let target = DiffTarget::Commit {
-        commit_id: CommitId(picked.as_str().into()),
-        path: PathBuf::from("a.txt"),
-    };
+    let target = gitcomet_core::domain::ApplyChangeTarget::commit(
+        CommitId(picked.as_str().into()),
+        PathBuf::from("a.txt"),
+    );
 
     let msgs = run_apply_file_change_effect(dir.path(), target, true);
 
@@ -4164,10 +4176,10 @@ fn an_already_applied_change_offers_no_message() {
     let picked = apply_file_change_fixture(dir.path());
     fs::write(dir.path().join("a.txt"), "one\nTWO\n").expect("write same edit");
     run_git(dir.path(), &["commit", "-q", "-am", "same edit"]);
-    let target = DiffTarget::Commit {
-        commit_id: CommitId(picked.as_str().into()),
-        path: PathBuf::from("a.txt"),
-    };
+    let target = gitcomet_core::domain::ApplyChangeTarget::commit(
+        CommitId(picked.as_str().into()),
+        PathBuf::from("a.txt"),
+    );
 
     let msgs = run_apply_file_change_effect(dir.path(), target, false);
 
@@ -4183,18 +4195,39 @@ fn a_failed_commit_step_offers_the_message() {
     let picked = apply_file_change_fixture(dir.path());
     run_git(dir.path(), &["config", "commit.gpgsign", "true"]);
     run_git(dir.path(), &["config", "gpg.program", "false"]);
-    let target = DiffTarget::Commit {
-        commit_id: CommitId(picked.as_str().into()),
-        path: PathBuf::from("a.txt"),
-    };
+    let target = gitcomet_core::domain::ApplyChangeTarget::commit(
+        CommitId(picked.as_str().into()),
+        PathBuf::from("a.txt"),
+    );
 
-    let msgs = run_apply_file_change_effect(dir.path(), target, true);
+    let msgs = run_apply_file_change_effect(dir.path(), target.clone(), true);
 
     assert_eq!(suggested_messages(&msgs), ["feature subject\n\nbody"]);
+    let Some(Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+        command:
+            RepoCommandKind::ApplyFileChange {
+                commit_retry: Some(retry),
+                ..
+            },
+        result: Err(_),
+        ..
+    })) = msgs.last()
+    else {
+        panic!("failed commit must carry its checkpoint: {msgs:?}")
+    };
+
+    run_git(dir.path(), &["config", "commit.gpgsign", "false"]);
+    let committed =
+        run_apply_file_change_effect_with_retry(dir.path(), target, true, Some(retry.clone()));
+    assert!(suggested_messages(&committed).is_empty());
+    assert!(committed.iter().any(|msg| matches!(msg,
+        Msg::Internal(crate::msg::InternalMsg::CommitMessageSuggestionConsumed { message, .. })
+            if message == "feature subject\n\nbody"
+    )));
     assert!(matches!(
-        msgs.last(),
+        committed.last(),
         Some(Msg::Internal(
-            crate::msg::InternalMsg::RepoCommandFinished { result: Err(_), .. }
+            crate::msg::InternalMsg::RepoCommandFinished { result: Ok(_), .. }
         ))
     ));
 }
@@ -6620,6 +6653,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 commit: true,
                 mainline: None,
                 summary: "pick me".into(),
+                auth: None,
             },
             1,
         ),
@@ -6636,11 +6670,12 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         ),
         (
             Effect::ApplyFileChange {
+                commit_retry: None,
                 repo_id,
-                target: DiffTarget::Commit {
-                    commit_id: commit_id.clone(),
-                    path: PathBuf::from("tracked.txt"),
-                },
+                target: gitcomet_core::domain::ApplyChangeTarget::commit(
+                    commit_id.clone(),
+                    PathBuf::from("tracked.txt"),
+                ),
                 commit: false,
                 auth: None,
             },

@@ -710,7 +710,7 @@ impl MainPaneView {
             target,
             Some(
                 DiffTarget::WorkingTree { .. }
-                    | DiffTarget::Commit { path: _, .. }
+                    | DiffTarget::Commit { .. }
                     | DiffTarget::CommitRange { path: Some(_), .. }
             )
         )

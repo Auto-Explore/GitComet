@@ -39,9 +39,9 @@ impl std::fmt::Display for CommitId {
 }
 
 impl CommitId {
-    /// The id abbreviated to git's default seven characters.
+    /// A fixed seven-character prefix for compact labels.
     pub fn short(&self) -> &str {
-        self.0.get(..7).unwrap_or(&self.0)
+        short_commit_id(&self.0)
     }
 
     /// Whether this id is git's "not committed yet" marker rather than a real
@@ -49,6 +49,15 @@ impl CommitId {
     pub fn is_uncommitted(&self) -> bool {
         is_uncommitted_commit_id(&self.0)
     }
+}
+
+/// A fixed seven-character prefix for labels that do not require a unique
+/// abbreviation. Accepts a borrowed string to avoid allocating a `CommitId`.
+pub fn short_commit_id(id: &str) -> &str {
+    &id[..id
+        .char_indices()
+        .nth(7)
+        .map_or(id.len(), |(index, _)| index)]
 }
 
 /// Whether `id` is git's all-zero "not committed yet" object id, emitted by
@@ -619,6 +628,76 @@ impl DiffTarget {
             Self::CommitRange { path, .. } => path.as_deref(),
         }
     }
+}
+
+/// Where the change "Apply change" applies comes from.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum ApplyChangeSource {
+    /// A commit's change against its first parent.
+    Commit(CommitId),
+    /// The difference between two commits.
+    Range { from: CommitId, to: CommitId },
+}
+
+/// Files whose change "Apply change" takes from one source, named as they
+/// are in the checkout.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct ApplyChangeTarget {
+    pub source: ApplyChangeSource,
+    pub paths: Vec<PathBuf>,
+}
+
+impl ApplyChangeTarget {
+    pub fn commit(commit_id: CommitId, path: PathBuf) -> Self {
+        Self {
+            source: ApplyChangeSource::Commit(commit_id),
+            paths: vec![path],
+        }
+    }
+
+    pub fn range(from: CommitId, to: CommitId, paths: Vec<PathBuf>) -> Self {
+        Self {
+            source: ApplyChangeSource::Range { from, to },
+            paths,
+        }
+    }
+
+    /// The target for one file diff; `None` for a working-tree diff or a
+    /// comparison to the working tree, which have no change to apply.
+    pub fn from_diff_target(target: &DiffTarget) -> Option<Self> {
+        match target {
+            DiffTarget::Commit { commit_id, path } => {
+                Some(Self::commit(commit_id.clone(), path.clone()))
+            }
+            DiffTarget::CommitRange {
+                from_commit_id,
+                to_commit_id: Some(to_commit_id),
+                path: Some(path),
+            } => Some(Self::range(
+                from_commit_id.clone(),
+                to_commit_id.clone(),
+                vec![path.clone()],
+            )),
+            _ => None,
+        }
+    }
+}
+
+/// The exact result of an apply whose commit step failed. Carried by the
+/// retried command so reopening a repository neither loses it nor leaves
+/// hidden state that can make a later, independent apply commit staged work.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ApplyFileChangeRetry {
+    pub target: ApplyChangeTarget,
+    pub head: Option<CommitId>,
+    pub index: Vec<ApplyFileChangeIndexEntry>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ApplyFileChangeIndexEntry {
+    pub path: PathBuf,
+    /// Git tree mode and object id, or `None` for a deleted path.
+    pub version: Option<(u16, CommitId)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

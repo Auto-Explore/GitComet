@@ -1736,11 +1736,13 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
         "A",
         ContextMenuAction::ApplyFileChange {
             repo_id: rid,
-            target: DiffTarget::Commit {
-                commit_id: cid,
-                path
-            }
-        } if *rid == repo_id && cid == &commit_id && path == &commit_file_path
+            target,
+        } if *rid == repo_id
+            && target
+                == &gitcomet_core::domain::ApplyChangeTarget::commit(
+                    commit_id.clone(),
+                    commit_file_path.clone(),
+                )
     );
     assert_shortcut_action!(
         commit_file_model,
@@ -1884,7 +1886,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     assert_shortcut_action!(
         conflicted_status_model,
         "Enter",
-        ContextMenuAction::OpenFile { repo_id: rid, path }
+        ContextMenuAction::SelectConflictDiff { repo_id: rid, path }
             if *rid == repo_id && path == &conflicted_path
     );
     assert_shortcut_action!(

@@ -1,4 +1,4 @@
-use gitcomet_core::domain::{CommitId, DiffTarget, Upstream};
+use gitcomet_core::domain::{CommitId, Upstream};
 use gitcomet_core::services::{
     ConflictSide, ForcePushLease, InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode,
     SafePushAfterCommitTarget, SubmoduleTrustTarget,
@@ -78,6 +78,8 @@ pub enum RepoCommandKind {
     },
     InteractiveCherryPick {
         entries: Vec<InteractiveRebaseEntry>,
+        /// False merges every pick into the index without committing.
+        commit: bool,
     },
     CherryPick {
         commit_id: CommitId,
@@ -94,8 +96,9 @@ pub enum RepoCommandKind {
         summary: String,
     },
     ApplyFileChange {
-        target: DiffTarget,
+        target: gitcomet_core::domain::ApplyChangeTarget,
         commit: bool,
+        commit_retry: Option<gitcomet_core::domain::ApplyFileChangeRetry>,
     },
     MergeAbort,
     CreateTag {

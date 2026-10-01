@@ -2391,6 +2391,8 @@ impl DetailsPaneView {
             this.commit_files_path_alignment_group
                 .visible_rows(visible_signature)
         });
+        let multi_selected =
+            multi_selected_paths(this, repo_id, crate::view::rows::FileListId::CommitFiles);
 
         let rows: Vec<(usize, crate::view::rows::FileListRow)> = range
             .filter_map(|row_ix| {
@@ -2412,6 +2414,18 @@ impl DetailsPaneView {
                         additions,
                         deletions,
                     } => {
+                        let menu_invoker = crate::view::rows::file_list_folder_menu_invoker(
+                            repo_id.0,
+                            crate::view::rows::FileListId::CommitFiles,
+                            &key,
+                        );
+                        let menu_open = has_active_menu
+                            && this.active_context_menu_invoker.as_ref() == Some(&menu_invoker);
+                        let menu_key = Arc::clone(&key);
+                        let menu_chain = Arc::clone(&chain);
+                        let menu_apply_source = Some(
+                            gitcomet_core::domain::ApplyChangeSource::Commit(details.id.clone()),
+                        );
                         return Some(
                             crate::view::rows::directory_row(
                                 crate::view::rows::DirectoryRowProps {
@@ -2432,6 +2446,7 @@ impl DetailsPaneView {
                                         additions.is_some() || deletions.is_some(),
                                         ui_scale_percent,
                                     ),
+                                    menu_open,
                                 },
                             )
                             .debug_selector(move || format!("commit_file_dir_{}_{}", repo_id.0, ix))
@@ -2450,6 +2465,27 @@ impl DetailsPaneView {
                                         collapsed,
                                         cx,
                                     );
+                                }),
+                            )
+                            .on_pointer_click(
+                                MouseButton::Right,
+                                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                                    cx.stop_propagation();
+                                    this.open_popover_at(
+                                        PopoverKind::FileListFolderMenu {
+                                            repo_id,
+                                            list: crate::view::rows::FileListId::CommitFiles,
+                                            key: Arc::clone(&menu_key),
+                                            chain: Arc::clone(&menu_chain),
+                                            collapsed,
+                                            apply_source: menu_apply_source.clone(),
+                                        }
+                                        .invoked_by(menu_invoker.clone()),
+                                        e.position,
+                                        window,
+                                        cx,
+                                    );
+                                    cx.notify();
                                 }),
                             )
                             .into_any_element(),
@@ -2491,17 +2527,21 @@ impl DetailsPaneView {
                     .into();
                     this.active_context_menu_invoker.as_ref() == Some(&invoker)
                 };
-                let selected = repo
-                    .diff_state
-                    .diff_target
-                    .as_ref()
-                    .is_some_and(|t| match t {
-                        DiffTarget::Commit {
-                            commit_id: t_commit_id,
-                            path: t_path,
-                        } => t_commit_id == &commit_id && t_path == &f.path,
-                        _ => false,
-                    });
+                let selected = match &multi_selected {
+                    Some(paths) => paths.contains(&f.path),
+                    None => repo
+                        .diff_state
+                        .diff_target
+                        .as_ref()
+                        .is_some_and(|t| match t {
+                            DiffTarget::Commit {
+                                commit_id: t_commit_id,
+                                path: t_path,
+                            } => t_commit_id == &commit_id && t_path == &f.path,
+                            _ => false,
+                        }),
+                };
+                let display_position = plan.display_position(ordinal);
                 let row_group: SharedString = format!("commit_file_row_{ix}").into();
                 let interaction = crate::view::rows::FileRowInteraction::new(
                     theme,
@@ -2584,6 +2624,18 @@ impl DetailsPaneView {
                             if !e.standard_click() {
                                 return;
                             }
+                            let list = crate::view::rows::FileListId::CommitFiles;
+                            if select_file_list_row(
+                                this,
+                                repo_id,
+                                list,
+                                &path_for_click,
+                                display_position,
+                                e.modifiers(),
+                            ) {
+                                cx.notify();
+                                return;
+                            }
                             let target = DiffTarget::Commit {
                                 commit_id: commit_id_for_click.clone(),
                                 path: (*path_for_click).clone(),
@@ -2594,6 +2646,7 @@ impl DetailsPaneView {
                             });
 
                             if selected {
+                                this.file_list_selection.remove(&(repo_id, list));
                                 this.store.dispatch(Msg::ClearDiffSelection { repo_id });
                             } else {
                                 this.focus_diff_panel(window, cx);
@@ -2711,6 +2764,16 @@ impl DetailsPaneView {
                         additions,
                         deletions,
                     } => {
+                        let menu_invoker = crate::view::rows::file_list_folder_menu_invoker(
+                            repo_id.0,
+                            crate::view::rows::FileListId::WorktreeFiles,
+                            &key,
+                        );
+                        let menu_open =
+                            this.active_context_menu_invoker.as_ref() == Some(&menu_invoker);
+                        let menu_key = Arc::clone(&key);
+                        let menu_chain = Arc::clone(&chain);
+                        let menu_apply_source = None;
                         return Some(
                             crate::view::rows::directory_row(
                                 crate::view::rows::DirectoryRowProps {
@@ -2731,6 +2794,7 @@ impl DetailsPaneView {
                                         additions.is_some() || deletions.is_some(),
                                         ui_scale_percent,
                                     ),
+                                    menu_open,
                                 },
                             )
                             .debug_selector(move || {
@@ -2751,6 +2815,27 @@ impl DetailsPaneView {
                                         collapsed,
                                         cx,
                                     );
+                                }),
+                            )
+                            .on_pointer_click(
+                                MouseButton::Right,
+                                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                                    cx.stop_propagation();
+                                    this.open_popover_at(
+                                        PopoverKind::FileListFolderMenu {
+                                            repo_id,
+                                            list: crate::view::rows::FileListId::WorktreeFiles,
+                                            key: Arc::clone(&menu_key),
+                                            chain: Arc::clone(&menu_chain),
+                                            collapsed,
+                                            apply_source: menu_apply_source.clone(),
+                                        }
+                                        .invoked_by(menu_invoker.clone()),
+                                        e.position,
+                                        window,
+                                        cx,
+                                    );
+                                    cx.notify();
                                 }),
                             )
                             .into_any_element(),
@@ -2915,6 +3000,8 @@ impl DetailsPaneView {
             this.range_files_path_alignment_group
                 .visible_rows(visible_signature)
         });
+        let multi_selected =
+            multi_selected_paths(this, repo_id, crate::view::rows::FileListId::RangeFiles);
 
         let rows: Vec<(usize, crate::view::rows::FileListRow)> = range
             .filter_map(|row_ix| {
@@ -2936,6 +3023,21 @@ impl DetailsPaneView {
                         additions,
                         deletions,
                     } => {
+                        let menu_invoker = crate::view::rows::file_list_folder_menu_invoker(
+                            repo_id.0,
+                            crate::view::rows::FileListId::RangeFiles,
+                            &key,
+                        );
+                        let menu_open = has_active_menu
+                            && this.active_context_menu_invoker.as_ref() == Some(&menu_invoker);
+                        let menu_key = Arc::clone(&key);
+                        let menu_chain = Arc::clone(&chain);
+                        let menu_apply_source =
+                            to.clone()
+                                .map(|to| gitcomet_core::domain::ApplyChangeSource::Range {
+                                    from: from.clone(),
+                                    to,
+                                });
                         return Some(
                             crate::view::rows::directory_row(
                                 crate::view::rows::DirectoryRowProps {
@@ -2956,6 +3058,7 @@ impl DetailsPaneView {
                                         additions.is_some() || deletions.is_some(),
                                         ui_scale_percent,
                                     ),
+                                    menu_open,
                                 },
                             )
                             .debug_selector(move || format!("range_file_dir_{}_{}", repo_id.0, ix))
@@ -2974,6 +3077,27 @@ impl DetailsPaneView {
                                         collapsed,
                                         cx,
                                     );
+                                }),
+                            )
+                            .on_pointer_click(
+                                MouseButton::Right,
+                                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                                    cx.stop_propagation();
+                                    this.open_popover_at(
+                                        PopoverKind::FileListFolderMenu {
+                                            repo_id,
+                                            list: crate::view::rows::FileListId::RangeFiles,
+                                            key: Arc::clone(&menu_key),
+                                            chain: Arc::clone(&menu_chain),
+                                            collapsed,
+                                            apply_source: menu_apply_source.clone(),
+                                        }
+                                        .invoked_by(menu_invoker.clone()),
+                                        e.position,
+                                        window,
+                                        cx,
+                                    );
+                                    cx.notify();
                                 }),
                             )
                             .into_any_element(),
@@ -3007,7 +3131,12 @@ impl DetailsPaneView {
                     to_commit_id: to.clone(),
                     path: Some(f.path.clone()),
                 };
-                let selected = repo.diff_state.diff_target.as_ref() == Some(&target);
+                let selected = match &multi_selected {
+                    Some(paths) => paths.contains(&f.path),
+                    None => repo.diff_state.diff_target.as_ref() == Some(&target),
+                };
+                let display_position = plan.display_position(ordinal);
+                let path_for_click = Arc::new(f.path.clone());
                 let context_menu_active = has_active_menu
                     && this.active_context_menu_invoker.as_ref()
                         == Some(&range_file_menu_invoker(repo_id, &target));
@@ -3091,12 +3220,25 @@ impl DetailsPaneView {
                             if !e.standard_click() {
                                 return;
                             }
+                            let list = crate::view::rows::FileListId::RangeFiles;
+                            if select_file_list_row(
+                                this,
+                                repo_id,
+                                list,
+                                &path_for_click,
+                                display_position,
+                                e.modifiers(),
+                            ) {
+                                cx.notify();
+                                return;
+                            }
                             let selected = this.active_repo().is_some_and(|repo| {
                                 repo.id == repo_id
                                     && repo.diff_state.diff_target.as_ref()
                                         == Some(&*target_for_click)
                             });
                             if selected {
+                                this.file_list_selection.remove(&(repo_id, list));
                                 this.store.dispatch(Msg::ClearDiffSelection { repo_id });
                             } else {
                                 this.focus_diff_panel(window, cx);
@@ -3141,6 +3283,38 @@ impl DetailsPaneView {
             })
             .collect()
     }
+}
+
+/// The rows a commit or comparison list highlights for its selection; `None`
+/// leaves the highlight to the previewed diff, as for a single selected row.
+fn multi_selected_paths(
+    this: &DetailsPaneView,
+    repo_id: RepoId,
+    list: crate::view::rows::FileListId,
+) -> Option<rustc_hash::FxHashSet<std::path::PathBuf>> {
+    let paths = this.commit_list_selected_paths(repo_id, list);
+    (paths.len() > 1).then(|| paths.iter().cloned().collect())
+}
+
+/// Records a click in a commit or comparison list's selection. Returns true
+/// for a Ctrl/Cmd or Shift click, which only changes the selection and leaves
+/// the previewed diff alone.
+fn select_file_list_row(
+    this: &mut DetailsPaneView,
+    repo_id: RepoId,
+    list: crate::view::rows::FileListId,
+    path: &std::path::Path,
+    display_position: Option<usize>,
+    modifiers: gpui::Modifiers,
+) -> bool {
+    this.commit_list_selection_apply_click(
+        repo_id,
+        list,
+        path.to_path_buf(),
+        display_position,
+        modifiers,
+    );
+    modifiers.shift || modifiers.control || modifiers.platform
 }
 
 /// Identifies the comparison file row whose menu is open, so the row can show

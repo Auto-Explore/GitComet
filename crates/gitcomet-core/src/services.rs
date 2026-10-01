@@ -315,37 +315,34 @@ pub const REVERT_NOTHING_TO_REVERT_SENTINEL: &str = "GITCOMET_REVERT_NOTHING_TO_
 pub const APPLY_FILE_CHANGE_ALREADY_APPLIED_SENTINEL: &str =
     "GITCOMET_APPLY_CHANGE_ALREADY_APPLIED";
 
-/// Marker for a file change that is already staged but not yet committed, and
-/// no commit was requested.
-pub const APPLY_FILE_CHANGE_ALREADY_STAGED_SENTINEL: &str = "GITCOMET_APPLY_CHANGE_ALREADY_STAGED";
-
-/// The file an applied change touches and the revision it comes from, as
-/// messages name them: `abc1234`, or `abc1234..def5678` for a comparison.
-/// `None` for a target "Apply change" does not support.
-pub fn apply_file_change_source(target: &DiffTarget) -> Option<(&Path, String)> {
-    match target {
-        DiffTarget::Commit { commit_id, path } => Some((path, commit_id.short().to_owned())),
-        DiffTarget::CommitRange {
-            from_commit_id,
-            to_commit_id: Some(to_commit_id),
-            path: Some(path),
-        } => Some((
-            path,
-            format!("{}..{}", from_commit_id.short(), to_commit_id.short()),
-        )),
-        _ => None,
+/// The revision an applied change comes from, as messages name it:
+/// `abc1234`, or `abc1234..def5678` for a comparison.
+pub fn apply_change_revision(source: &ApplyChangeSource) -> String {
+    match source {
+        ApplyChangeSource::Commit(commit_id) => commit_id.short().to_owned(),
+        ApplyChangeSource::Range { from, to } => format!("{}..{}", from.short(), to.short()),
     }
 }
 
-/// Commit message for a file change applied from a comparison, which has no
-/// single source commit message to reuse.
-pub fn apply_file_change_range_message(from: &CommitId, to: &CommitId, path: &Path) -> String {
-    format!(
-        "Apply {} from {}..{}",
-        path.display(),
-        from.short(),
-        to.short()
-    )
+/// Commit message for file changes applied from a comparison, which has no
+/// single source commit message to reuse. More than one file is listed in
+/// the body.
+pub fn apply_file_change_range_message(
+    from: &CommitId,
+    to: &CommitId,
+    paths: &[PathBuf],
+) -> String {
+    let range = format!("{}..{}", from.short(), to.short());
+    match paths {
+        [path] => format!("Apply {} from {range}", path.display()),
+        _ => {
+            let mut message = format!("Apply {} files from {range}\n", paths.len());
+            for path in paths {
+                message.push_str(&format!("\n- {}", path.display()));
+            }
+            message
+        }
+    }
 }
 
 /// Command label of a Continue that skipped a revert its resolution left empty.
@@ -1130,16 +1127,27 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
-    /// Applies one file's change from a `Commit` or `CommitRange` file diff to
+    /// Applies the change to `target`'s files from a commit or comparison to
     /// the index and worktree with a 3-way fallback, then with `commit`
-    /// commits just that path.
+    /// commits just those paths.
     fn apply_file_change_with_output(
         &self,
-        _target: &DiffTarget,
+        _target: &crate::domain::ApplyChangeTarget,
         _commit: bool,
     ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "applying a file change is not implemented for this backend",
+        )))
+    }
+
+    /// Retry only the failed commit step, after checking that HEAD and the
+    /// applied paths still match the checkpoint returned by that failure.
+    fn commit_applied_file_change_with_output(
+        &self,
+        _retry: &crate::domain::ApplyFileChangeRetry,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "committing an applied file change is not implemented for this backend",
         )))
     }
 
@@ -1203,9 +1211,12 @@ pub trait GitRepository: Send + Sync {
             "git rebase -i is not implemented for this backend",
         )))
     }
+    /// Picks `entries` in order. Without `commit` every pick only merges into
+    /// the index and worktree, and reword/squash/fixup steps are refused.
     fn interactive_cherry_pick_with_output(
         &self,
         _entries: &[InteractiveRebaseEntry],
+        _commit: bool,
     ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "interactive cherry-pick is not implemented for this backend",
@@ -2066,10 +2077,7 @@ mod tests {
         assert_unsupported(repo.cherry_pick_with_output(&commit, true, None));
         assert_unsupported(repo.revert_with_output(&commit, true, None));
         assert_unsupported(repo.apply_file_change_with_output(
-            &DiffTarget::Commit {
-                commit_id: commit.clone(),
-                path: path.to_path_buf(),
-            },
+            &crate::domain::ApplyChangeTarget::commit(commit.clone(), path.to_path_buf()),
             false,
         ));
         assert_unsupported(repo.rebase_with_output("main"));

@@ -543,6 +543,13 @@ impl MainPaneView {
 
                     // Reset the segment cache to avoid mixing patch/file indices.
                     this.clear_diff_text_style_caches();
+                    // A same-length replacement does not rebuild the visible
+                    // row mapping. Its search document can still hold the old
+                    // rows under the incoming revision, so replace it too.
+                    this.diff_search_document = None;
+                    if this.diff_search_has_query() {
+                        this.diff_search_schedule_preserving_current(cx);
+                    }
                     cx.notify();
                 });
             },

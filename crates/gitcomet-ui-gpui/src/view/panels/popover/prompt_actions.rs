@@ -202,6 +202,9 @@ impl PopoverHost {
             PopoverKind::CherryPickCommitConfirm { repo_id, commit_id } => {
                 cherry_pick_commit_confirm::panel(self, repo_id, commit_id, cx)
             }
+            PopoverKind::InteractiveCherryPickConfirm { repo_id, entries } => {
+                interactive_cherry_pick_confirm::panel(self, repo_id, entries, cx)
+            }
             PopoverKind::RevertCommitConfirm { repo_id, commit_id } => {
                 revert_commit_confirm::panel(self, repo_id, commit_id, cx)
             }
@@ -227,6 +230,11 @@ impl PopoverHost {
                 area,
                 path,
             } => discard_changes_confirm::panel(self, repo_id, area, path.clone(), cx),
+            PopoverKind::DiscardFolderChangesConfirm {
+                repo_id,
+                section,
+                folder,
+            } => discard_folder_changes_confirm::panel(self, repo_id, section, folder, cx),
             PopoverKind::AddToGitignorePrompt {
                 repo_id,
                 area,
@@ -485,6 +493,7 @@ impl PopoverHost {
             PopoverKind::FileBrowserFolderMenu { repo_id, path } => {
                 self.context_menu_view(PopoverKind::FileBrowserFolderMenu { repo_id, path }, cx)
             }
+            kind @ PopoverKind::FileListFolderMenu { .. } => self.context_menu_view(kind, cx),
             PopoverKind::BranchGroupMenu {
                 repo_id,
                 section,

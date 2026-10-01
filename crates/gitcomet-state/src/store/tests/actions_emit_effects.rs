@@ -627,6 +627,8 @@ fn apply_file_change_emits_effect_and_keeps_the_diff_target() {
         to_commit_id: Some(CommitId("2222222222222222222222222222222222222222".into())),
         path: Some(PathBuf::from("src/lib.rs")),
     };
+    let apply_target = gitcomet_core::domain::ApplyChangeTarget::from_diff_target(&target)
+        .expect("a comparison between commits can be applied");
 
     for commit in [false, true] {
         state.repos[0].set_diff_target(Some(target.clone()));
@@ -635,8 +637,9 @@ fn apply_file_change_emits_effect_and_keeps_the_diff_target() {
             &id_alloc,
             &mut state,
             Msg::ApplyFileChange {
+                commit_retry: None,
                 repo_id,
-                target: target.clone(),
+                target: apply_target.clone(),
                 commit,
             },
         );
@@ -644,11 +647,12 @@ fn apply_file_change_emits_effect_and_keeps_the_diff_target() {
             matches!(
                 effects.as_slice(),
                 [Effect::ApplyFileChange {
+                    commit_retry: None,
                     repo_id: RepoId(1),
                     target: effect_target,
                     commit: effect_commit,
                     auth: None,
-                }] if effect_target == &target && *effect_commit == commit
+                }] if effect_target == &apply_target && *effect_commit == commit
             ),
             "commit={commit}: {effects:?}"
         );
@@ -668,7 +672,8 @@ fn apply_file_change_emits_effect_and_keeps_the_diff_target() {
             Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
                 command: RepoCommandKind::ApplyFileChange {
-                    target: target.clone(),
+                    commit_retry: None,
+                    target: apply_target.clone(),
                     commit,
                 },
                 result: Ok(CommandOutput::default()),
@@ -4350,6 +4355,22 @@ fn a_suggested_commit_message_is_stored_for_the_commit_box() {
         Some("Revert \"change\"")
     );
     assert_ne!(state.repos[0].suggested_commit_message_rev, before);
+
+    for (consumed, expected) in [
+        ("some older message", Some("Revert \"change\"")),
+        ("Revert \"change\"", None),
+    ] {
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Internal(crate::msg::InternalMsg::CommitMessageSuggestionConsumed {
+                repo_id,
+                message: consumed.to_owned(),
+            }),
+        );
+        assert_eq!(state.repos[0].suggested_commit_message.as_deref(), expected);
+    }
 }
 
 #[test]
@@ -4466,18 +4487,20 @@ fn sequencer_commands_release_their_in_flight_count() {
         ),
         (
             Msg::ApplyFileChange {
+                commit_retry: None,
                 repo_id,
-                target: DiffTarget::Commit {
-                    commit_id: commit_id.clone(),
-                    path: PathBuf::from("a.txt"),
-                },
+                target: gitcomet_core::domain::ApplyChangeTarget::commit(
+                    commit_id.clone(),
+                    PathBuf::from("a.txt"),
+                ),
                 commit: true,
             },
             RepoCommandKind::ApplyFileChange {
-                target: DiffTarget::Commit {
-                    commit_id: commit_id.clone(),
-                    path: PathBuf::from("a.txt"),
-                },
+                commit_retry: None,
+                target: gitcomet_core::domain::ApplyChangeTarget::commit(
+                    commit_id.clone(),
+                    PathBuf::from("a.txt"),
+                ),
                 commit: true,
             },
         ),
@@ -4603,6 +4626,48 @@ fn revert_finished_releases_local_action_and_clears_stale_force_push_lease() {
 }
 
 #[test]
+fn interactive_cherry_pick_carries_the_commit_choice_to_its_effect() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    state
+        .repos
+        .push(repo_with_head_dependent_cached_state(repo_id));
+    let entries = vec![gitcomet_core::services::InteractiveRebaseEntry {
+        action: gitcomet_core::services::InteractiveRebaseAction::Pick,
+        commit_id: "3333333333333333333333333333333333333333".to_string(),
+        summary: "pick me".to_string(),
+        message: "pick me".to_string(),
+        new_message: None,
+    }];
+
+    for commit in [true, false] {
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::InteractiveCherryPick {
+                repo_id,
+                entries: entries.clone(),
+                commit,
+            },
+        );
+        assert!(
+            matches!(
+                effects.as_slice(),
+                [Effect::InteractiveCherryPick {
+                    repo_id: RepoId(1),
+                    entries: sent,
+                    commit: sent_commit,
+                }] if sent == &entries && *sent_commit == commit
+            ),
+            "commit={commit}: {effects:?}"
+        );
+    }
+}
+
+#[test]
 fn interactive_cherry_pick_finished_clears_stale_force_push_lease() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
@@ -4626,6 +4691,7 @@ fn interactive_cherry_pick_finished_clears_stale_force_push_lease() {
                     message: "pick me".to_string(),
                     new_message: None,
                 }],
+                commit: true,
             },
             result: Ok(CommandOutput::empty_success("git cherry-pick")),
         }),

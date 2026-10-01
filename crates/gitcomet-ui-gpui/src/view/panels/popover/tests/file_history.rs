@@ -419,6 +419,26 @@ fn right_click_history_row(cx: &mut gpui::VisualTestContext) {
 }
 
 #[gpui::test]
+fn file_history_row_menu_hides_apply_change_for_a_submodule(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    file_history_picker!(cx, host);
+    cx.update(|_, app| {
+        host.update(app, |host, _cx| {
+            let path = std::path::PathBuf::from("src/main.rs");
+            let mut state = host.state.as_ref().clone();
+            state.repos[0].head_gitlink_paths.insert(path.clone());
+            host.state = Arc::new(state);
+            let model =
+                context_menu::file_history_commit::model(host, RepoId(1), &commit(0).id, &path);
+            assert!(!model.items.iter().any(|item| matches!(item,
+                ContextMenuItem::Entry { action, .. }
+                if matches!(action.as_ref(), ContextMenuAction::ApplyFileChange { .. })
+            )));
+        });
+    });
+}
+
+#[gpui::test]
 fn file_history_row_menu_offers_file_and_commit_actions_and_routes_keyboard(
     cx: &mut gpui::TestAppContext,
 ) {

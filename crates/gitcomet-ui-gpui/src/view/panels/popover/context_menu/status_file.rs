@@ -130,6 +130,19 @@ pub(super) fn model(
     ));
     items.push(ContextMenuItem::Separator);
 
+    if is_conflicted {
+        items.push(ContextMenuItem::Entry {
+            label: "Resolve conflicts".into(),
+            icon: Some("icons/pencil.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::SelectConflictDiff {
+                repo_id,
+                path: path.to_path_buf(),
+            }),
+        });
+    }
+
     items.push(ContextMenuItem::Entry {
         label: "Open file".into(),
         icon: Some("icons/file.svg".into()),

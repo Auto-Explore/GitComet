@@ -1057,3 +1057,217 @@ fn comparison_file_menu_offers_apply_change_only_between_commits(cx: &mut gpui::
     );
     assert!(to_worktree.iter().any(|label| label == "Open file"));
 }
+
+fn click_with(
+    cx: &mut gpui::VisualTestContext,
+    selector: &'static str,
+    modifiers: gpui::Modifiers,
+) {
+    let center = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} should render"))
+        .center();
+    cx.simulate_mouse_move(center, None, modifiers);
+    cx.simulate_mouse_down(center, gpui::MouseButton::Left, modifiers);
+    cx.simulate_mouse_up(center, gpui::MouseButton::Left, modifiers);
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+}
+
+fn range_selection(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: RepoId,
+) -> Vec<String> {
+    cx.update(|_window, app| {
+        view.read(app)
+            .details_pane
+            .read(app)
+            .commit_list_selected_paths(repo_id, crate::view::rows::FileListId::RangeFiles)
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect()
+    })
+}
+
+fn previewed_diff(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> Option<DiffTarget> {
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        view.read(app)
+            .details_pane
+            .read(app)
+            .active_repo()
+            .and_then(|repo| repo.diff_state.diff_target.clone())
+    })
+}
+
+fn ctrl() -> gpui::Modifiers {
+    gpui::Modifiers {
+        control: true,
+        ..Default::default()
+    }
+}
+
+fn shift() -> gpui::Modifiers {
+    gpui::Modifiers {
+        shift: true,
+        ..Default::default()
+    }
+}
+
+/// Ctrl/Cmd-click toggles rows into the selection and Shift-click spans
+/// from the anchor; neither opens a diff.
+#[gpui::test]
+fn comparison_rows_multi_select_with_ctrl_and_shift(cx: &mut gpui::TestAppContext) {
+    let repo_id = RepoId(122);
+    let (view, cx) = draw_comparison_view(cx, repo_id, 2, 0, Files::Loaded(5));
+
+    click_with(cx, "range_file_122_1", gpui::Modifiers::default());
+    let previewed = previewed_diff(cx, &view);
+    assert_eq!(range_selection(cx, &view, repo_id), ["src/file_1.rs"]);
+
+    click_with(cx, "range_file_122_3", ctrl());
+    assert_eq!(
+        range_selection(cx, &view, repo_id),
+        ["src/file_1.rs", "src/file_3.rs"]
+    );
+    assert_eq!(
+        previewed_diff(cx, &view),
+        previewed,
+        "Ctrl-click opens no diff"
+    );
+
+    click_with(cx, "range_file_122_3", ctrl());
+    assert_eq!(range_selection(cx, &view, repo_id), ["src/file_1.rs"]);
+
+    // The anchor stays on the last Ctrl-clicked row, as in the status lists.
+    click_with(cx, "range_file_122_4", shift());
+    assert_eq!(
+        range_selection(cx, &view, repo_id),
+        ["src/file_3.rs", "src/file_4.rs"]
+    );
+    click_with(cx, "range_file_122_1", ctrl());
+    click_with(cx, "range_file_122_4", shift());
+    assert_eq!(
+        range_selection(cx, &view, repo_id),
+        [
+            "src/file_1.rs",
+            "src/file_2.rs",
+            "src/file_3.rs",
+            "src/file_4.rs"
+        ]
+    );
+    assert_eq!(
+        previewed_diff(cx, &view),
+        previewed,
+        "Shift-click opens no diff"
+    );
+
+    click_with(cx, "range_file_122_0", gpui::Modifiers::default());
+    assert_eq!(range_selection(cx, &view, repo_id), ["src/file_0.rs"]);
+}
+
+/// A right-click inside the selection offers its files; outside it, only the
+/// clicked file.
+#[gpui::test]
+fn comparison_file_menu_applies_the_selection_it_was_opened_in(cx: &mut gpui::TestAppContext) {
+    let repo_id = RepoId(123);
+    let (view, cx) = draw_comparison_view(cx, repo_id, 2, 0, Files::Loaded(4));
+    click_with(cx, "range_file_123_0", gpui::Modifiers::default());
+    click_with(cx, "range_file_123_2", ctrl());
+    let menu = |path: &str| PopoverKind::CommitRangeFileMenu {
+        repo_id,
+        from_commit_id: CommitId(sha(1).into()),
+        to_commit_id: Some(CommitId(sha(0).into())),
+        path: std::path::PathBuf::from(path),
+    };
+
+    let inside = entry_labels(cx, &view, menu("src/file_2.rs"));
+    assert!(
+        inside.iter().any(|label| label == "Apply changes (2)"),
+        "{inside:?}"
+    );
+    let outside = entry_labels(cx, &view, menu("src/file_3.rs"));
+    assert!(
+        outside.iter().any(|label| label == "Apply change"),
+        "{outside:?}"
+    );
+
+    right_click(cx, "range_file_123_2");
+    assert_eq!(
+        range_selection(cx, &view, repo_id),
+        ["src/file_0.rs", "src/file_2.rs"],
+        "a right-click keeps the selection"
+    );
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.context_menu_activate_action(
+                    ContextMenuAction::ApplyFileChange {
+                        repo_id,
+                        target: gitcomet_core::domain::ApplyChangeTarget::range(
+                            CommitId(sha(1).into()),
+                            CommitId(sha(0).into()),
+                            vec![
+                                std::path::PathBuf::from("src/file_0.rs"),
+                                std::path::PathBuf::from("src/file_2.rs"),
+                            ],
+                        ),
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+    });
+    assert!(matches!(
+        open_popover(cx, &view),
+        Some(PopoverKind::ApplyFileChangeConfirm { target, .. }) if target.paths.len() == 2
+    ));
+}
+
+/// A comparison tree's folder menu applies the folder's files from the range.
+#[gpui::test]
+fn comparison_folder_menu_applies_the_range_to_its_files(cx: &mut gpui::TestAppContext) {
+    let repo_id = RepoId(124);
+    let (view, cx) = draw_comparison_view(cx, repo_id, 2, 0, Files::Loaded(3));
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.toggle_file_list_layout(
+                    repo_id,
+                    crate::view::rows::FileListId::RangeFiles,
+                    cx,
+                );
+            });
+        });
+    });
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+
+    right_click(cx, "range_file_dir_124_0");
+
+    let kind = open_popover(cx, &view).expect("the folder menu opens");
+    assert!(
+        matches!(
+            &kind,
+            PopoverKind::FileListFolderMenu {
+                list: crate::view::rows::FileListId::RangeFiles,
+                apply_source: Some(gitcomet_core::domain::ApplyChangeSource::Range { from, to }),
+                ..
+            } if from.as_ref() == sha(1) && to.as_ref() == sha(0)
+        ),
+        "{kind:?}"
+    );
+    let labels = entry_labels(cx, &view, kind);
+    assert!(
+        labels.iter().any(|label| label == "Apply changes (3)"),
+        "{labels:?}"
+    );
+}

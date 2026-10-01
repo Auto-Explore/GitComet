@@ -184,6 +184,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::PushSetUpstreamPrompt { repo_id, .. }
         | PopoverKind::ForcePushConfirm { repo_id }
         | PopoverKind::CherryPickCommitConfirm { repo_id, .. }
+        | PopoverKind::InteractiveCherryPickConfirm { repo_id, .. }
         | PopoverKind::ApplyFileChangeConfirm { repo_id, .. }
         | PopoverKind::RevertCommitConfirm { repo_id, .. }
         | PopoverKind::MergeCommitConfirm { repo_id, .. }
@@ -192,6 +193,8 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::ForceDeleteBranchConfirm { repo_id, .. }
         | PopoverKind::ForceRemoveWorktreeConfirm { repo_id, .. }
         | PopoverKind::DiscardChangesConfirm { repo_id, .. }
+        | PopoverKind::DiscardFolderChangesConfirm { repo_id, .. }
+        | PopoverKind::FileListFolderMenu { repo_id, .. }
         | PopoverKind::AddToGitignorePrompt { repo_id, .. }
         | PopoverKind::StageConflictMarkersConfirm { repo_id, .. }
         | PopoverKind::PullReconcilePrompt { repo_id }
@@ -262,6 +265,16 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         // repaint when it lands rather than keep a label that is now a lie.
         PopoverKind::FileBrowserFolderMenu { .. } => {
             repo.file_browser.file_browser_rev.hash(hasher);
+        }
+
+        // File counts come from the lists' files, and Apply follows the busy
+        // state. Collapse state is view-local and only changes by closing it.
+        PopoverKind::FileListFolderMenu { .. } | PopoverKind::DiscardFolderChangesConfirm { .. } => {
+            repo.history_rewrite_busy().hash(hasher);
+            repo.history_state.commit_details_rev.hash(hasher);
+            repo.history_state.range_files_rev.hash(hasher);
+            repo.worktree_status_cache_rev().hash(hasher);
+            repo.staged_status_cache_rev().hash(hasher);
         }
 
         PopoverKind::Repo {
@@ -442,7 +455,8 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         }
 
         // The buttons follow the repo's busy state.
-        PopoverKind::ApplyFileChangeConfirm { .. } => {
+        PopoverKind::ApplyFileChangeConfirm { .. }
+        | PopoverKind::InteractiveCherryPickConfirm { .. } => {
             repo.history_rewrite_busy().hash(hasher);
         }
 
@@ -700,7 +714,16 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::ApplyFileChangeConfirm { repo_id, target } => {
             111u8.hash(hasher);
             repo_id.hash(hasher);
-            view_fingerprint::hash_diff_target(target, hasher);
+            target.hash(hasher);
+        }
+        PopoverKind::InteractiveCherryPickConfirm { repo_id, entries } => {
+            113u8.hash(hasher);
+            repo_id.hash(hasher);
+            entries.len().hash(hasher);
+            for entry in entries {
+                entry.commit_id.hash(hasher);
+                std::mem::discriminant(&entry.action).hash(hasher);
+            }
         }
         PopoverKind::MergeCommitConfirm { repo_id, commit_id } => {
             83u8.hash(hasher);
@@ -743,6 +766,32 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             repo_id.hash(hasher);
             hash_diff_area(*area, hasher);
             path.hash(hasher);
+        }
+        PopoverKind::FileListFolderMenu {
+            repo_id,
+            list,
+            key,
+            chain,
+            collapsed,
+            apply_source,
+        } => {
+            114u8.hash(hasher);
+            repo_id.hash(hasher);
+            list.hash(hasher);
+            key.hash(hasher);
+            chain.hash(hasher);
+            collapsed.hash(hasher);
+            apply_source.hash(hasher);
+        }
+        PopoverKind::DiscardFolderChangesConfirm {
+            repo_id,
+            section,
+            folder,
+        } => {
+            115u8.hash(hasher);
+            repo_id.hash(hasher);
+            (*section as u8).hash(hasher);
+            folder.hash(hasher);
         }
         PopoverKind::AddToGitignorePrompt {
             repo_id,

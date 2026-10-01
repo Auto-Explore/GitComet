@@ -205,14 +205,20 @@ pub(crate) enum PopoverKind {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    /// Commit-or-not choice for a multi-commit cherry-pick; `entries` is the
+    /// editor's plan as it was when Start was clicked.
+    InteractiveCherryPickConfirm {
+        repo_id: RepoId,
+        entries: Vec<gitcomet_core::services::InteractiveRebaseEntry>,
+    },
     RevertCommitConfirm {
         repo_id: RepoId,
         commit_id: CommitId,
     },
-    /// "Apply change": `target` is the file diff whose change is applied.
+    /// "Apply change": `target` names the files whose change is applied.
     ApplyFileChangeConfirm {
         repo_id: RepoId,
-        target: DiffTarget,
+        target: gitcomet_core::domain::ApplyChangeTarget,
     },
     MergeCommitConfirm {
         repo_id: RepoId,
@@ -278,6 +284,24 @@ pub(crate) enum PopoverKind {
     },
     CommitFileSortMenu {
         list: crate::view::rows::FileListId,
+    },
+    /// Right-click menu of a folder row in a file list's tree view.
+    FileListFolderMenu {
+        repo_id: RepoId,
+        list: crate::view::rows::FileListId,
+        /// The folder's path; for a folded chain, its deepest segment.
+        key: std::sync::Arc<std::path::Path>,
+        chain: std::sync::Arc<[std::sync::Arc<std::path::Path>]>,
+        collapsed: bool,
+        /// Where "Apply changes" takes the folder's files from; `None` for a
+        /// list with no change to apply.
+        apply_source: Option<gitcomet_core::domain::ApplyChangeSource>,
+    },
+    /// Confirms discarding every change under a status tree folder.
+    DiscardFolderChangesConfirm {
+        repo_id: RepoId,
+        section: StatusSection,
+        folder: std::sync::Arc<std::path::Path>,
     },
     PreviousCommitMessagesMenu {
         repo_id: RepoId,
