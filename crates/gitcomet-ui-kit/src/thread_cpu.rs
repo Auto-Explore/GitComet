@@ -79,26 +79,31 @@ mod tests {
         assert_eq!(parse_schedstat(""), None);
     }
 
+    /// The worker spins until its own CPU time, not the wall clock, reaches
+    /// 30 ms, and the sample is taken once it says so: on a loaded CI box a
+    /// thread gets much less CPU than it spends waiting.
     #[cfg(target_os = "linux")]
     #[test]
     fn a_busy_thread_accumulates_cpu_time_under_its_own_name() {
-        let (tid_tx, tid_rx) = std::sync::mpsc::channel();
+        let (busy_tx, busy_rx) = std::sync::mpsc::channel();
         let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
         let worker = std::thread::Builder::new()
             .name("cpu-probe-busy".into())
             .spawn(move || {
-                tid_tx
-                    .send(gitcomet_core::op_trace::current_os_tid().unwrap())
-                    .unwrap();
+                let tid = gitcomet_core::op_trace::current_os_tid().unwrap();
                 let started = std::time::Instant::now();
-                while started.elapsed() < std::time::Duration::from_millis(30) {
-                    std::hint::black_box(0u64.wrapping_add(1));
+                while thread_cpu_ns(tid).unwrap() < 30_000_000
+                    && started.elapsed() < std::time::Duration::from_secs(30)
+                {
+                    for _ in 0..10_000 {
+                        std::hint::black_box(0u64.wrapping_add(1));
+                    }
                 }
+                busy_tx.send(tid).unwrap();
                 stop_rx.recv().unwrap();
             })
             .unwrap();
-        let tid = tid_rx.recv().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(40));
+        let tid = busy_rx.recv().unwrap();
         let sample = sample_process_threads();
         let busy = sample
             .iter()
@@ -107,8 +112,8 @@ mod tests {
         assert_eq!(busy.name, "cpu-probe-busy");
         assert!(busy.timeslices >= 1);
         assert!(
-            busy.cpu_ns >= 20_000_000,
-            "spun ~30 ms, saw {} ns",
+            busy.cpu_ns >= 30_000_000,
+            "spun 30 ms of CPU time, saw {} ns",
             busy.cpu_ns
         );
         assert_eq!(thread_cpu_ns(tid).map(|ns| ns >= busy.cpu_ns), Some(true));
