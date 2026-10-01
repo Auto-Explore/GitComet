@@ -704,6 +704,15 @@ pub(super) struct LayoutState {
     pub(super) last: Option<TextInputLayout>,
     pub(super) line_starts: Option<Arc<[usize]>>,
     pub(super) bounds: Option<Bounds<Pixels>>,
+    /// The vertical scroll handle's offset `bounds` was laid out with. Read in
+    /// prepaint: a mirror or a sibling's caret reveal can move a shared handle
+    /// before this element paints.
+    pub(super) painted_scroll_offset: Option<Point<Pixels>>,
+    /// Lines the last frame shaped as its visible window. A wrapped layout
+    /// keeps empty placeholders for the rest, indistinguishable from empty lines.
+    pub(super) painted_line_range: Range<usize>,
+    /// Bumped by every paint.
+    pub(super) paint_seq: u64,
     pub(super) line_height: Pixels,
     pub(super) shape_style_epoch: u64,
     pub(super) plain_line_cache: FxHashMap<ShapedRowCacheKey, ShapedLine>,
@@ -716,6 +725,9 @@ impl LayoutState {
             last: None,
             line_starts: None,
             bounds: None,
+            painted_scroll_offset: None,
+            painted_line_range: 0..0,
+            paint_seq: 0,
             line_height: px(0.0),
             shape_style_epoch: 1,
             plain_line_cache: FxHashMap::default(),
@@ -792,6 +804,17 @@ pub(super) struct InteractionState {
     /// the next paint; resolving that press to byte 0 caused a one-frame
     /// selection from the top of the document.
     pub(super) pending_mouse_selection_anchor: Option<Point<Pixels>>,
+    /// Where the drag's pointer is, even past the window edge. The autoscroll
+    /// ticker scrolls toward it and re-resolves the head from it.
+    pub(super) drag_pointer: Option<Point<Pixels>>,
+    /// The head still needs resolving at `drag_pointer`. Otherwise a tick that
+    /// did not scroll leaves the selection alone, so typing during a held drag
+    /// is not overwritten.
+    pub(super) drag_resolve_pending: bool,
+    /// `layout.paint_seq` at the last autoscroll step: one step per painted
+    /// frame, so a hit-test is never more than one step ahead of the layout.
+    pub(super) drag_step_paint_seq: Option<u64>,
+    pub(super) drag_autoscroll_task: Option<gpui::Task<()>>,
     pub(super) suppress_right_click: bool,
     pub(super) context_menu: Option<TextInputContextMenuState>,
     pub(super) vertical_motion_x: Option<Pixels>,
@@ -836,6 +859,10 @@ impl InteractionState {
             took_press: false,
             mouse_selection_anchor: None,
             pending_mouse_selection_anchor: None,
+            drag_pointer: None,
+            drag_resolve_pending: false,
+            drag_step_paint_seq: None,
+            drag_autoscroll_task: None,
             suppress_right_click: false,
             context_menu: None,
             vertical_motion_x: None,
