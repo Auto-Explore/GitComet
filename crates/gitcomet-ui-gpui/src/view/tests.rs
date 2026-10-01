@@ -6645,6 +6645,96 @@ fn explorer_selection_keyboard_cut_and_document_navigation_are_focus_scoped(
 }
 
 #[gpui::test]
+fn explorer_ctrl_x_after_a_plain_click_cuts_the_clicked_file(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
+    // The production keymap, including the TextInput chords a stray focus would hit.
+    install_app_shortcuts_for_test(cx, backend);
+    cx.update(|_, app| crate::app::bind_text_input_keys_for_test(app));
+    let directory = tempfile::tempdir().unwrap();
+    for name in ["a.txt", "b.txt"] {
+        std::fs::write(directory.path().join(name), "saved").unwrap();
+    }
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.repos[0].spec.workdir = directory.path().to_path_buf();
+    state.sidebar_mode = gitcomet_state::model::SidebarMode::Files;
+    state.repos[0].file_browser.entries = Loadable::Ready(Arc::new(
+        ["a.txt", "b.txt"]
+            .into_iter()
+            .map(|name| FileEntry {
+                name: name.into(),
+                path: Arc::new(PathBuf::from(name)),
+                kind: FileEntryKind::File,
+                depth: 0,
+            })
+            .collect(),
+    ));
+    state.repos[0].file_browser.bump_rev();
+    let entries = state.repos[0].file_browser.entries.clone();
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+    // Opening the file reloads the listing, which TestBackend leaves empty.
+    let reseed = |cx: &mut gpui::VisualTestContext| {
+        let mut state = (*store.snapshot()).clone();
+        state.repos[0].file_browser.entries = entries.clone();
+        state.repos[0].file_browser.bump_rev();
+        store.replace_snapshot_for_test(Arc::new(state));
+        sync_view_snapshot(cx, &view);
+    };
+    let cut = if cfg!(target_os = "macos") {
+        "cmd-x"
+    } else {
+        "ctrl-x"
+    };
+    // The second round clicks the row that the first one opened and selected.
+    for round in 0..2 {
+        let row = cx.debug_bounds("file_browser_row_0").unwrap().center();
+        cx.simulate_mouse_down(row, gpui::MouseButton::Left, Default::default());
+        cx.simulate_mouse_up(row, gpui::MouseButton::Left, Default::default());
+        pump_until(cx, "file selection", |_| {
+            store.snapshot().repos[0]
+                .file_browser
+                .selection
+                .paths
+                .contains(Path::new("a.txt"))
+        });
+        cx.run_until_parked();
+        reseed(cx);
+        cx.update(|window, app| {
+            let focused = window.focused(app).is_some();
+            assert!(
+                view.read(app).sidebar_pane.read(app).explorer_has_focus_for_test(window),
+                "round {round}: the clicked tree must keep the keyboard (anything focused: {focused})"
+            );
+        });
+        eprintln!("TEMPDEBUG before ctrl-x");
+        cx.simulate_keystrokes(cut);
+        cx.run_until_parked();
+        eprintln!("TEMPDEBUG after ctrl-x");
+        cx.update(|_, app| {
+            view.update(app, |_, cx| {
+                let files = crate::clipboard::read_files(cx).expect("the cut reached the clipboard");
+                assert_eq!(files.intent, gitcomet_core::filesystem::TransferIntent::Move);
+                assert_eq!(files.paths, vec![directory.path().join("a.txt")]);
+            })
+        });
+        eprintln!("TEMPDEBUG redraw");
+        test_support::redraw(cx);
+        eprintln!("TEMPDEBUG redraw done");
+        assert!(
+            cx.debug_bounds("explorer_cut_marker_0").is_some(),
+            "round {round}: the cut row shows its marker"
+        );
+        // Escape cancels the cut before the next round.
+        cx.simulate_keystrokes("escape");
+        sync_view_snapshot(cx, &view);
+    }
+}
+
+#[gpui::test]
 fn explorer_folder_click_preserves_sources_and_keyboard_paste_uses_focused_folder(
     cx: &mut gpui::TestAppContext,
 ) {

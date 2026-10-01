@@ -757,6 +757,11 @@ impl SidebarPaneView {
         }
     }
 
+    #[cfg(test)]
+    pub(in crate::view) fn explorer_has_focus_for_test(&self, window: &Window) -> bool {
+        self.explorer_focus.is_focused(window)
+    }
+
     /// Whether an inline name edit holds the keyboard, so a closing menu must
     /// not hand focus back to its invoker.
     pub(in crate::view) fn explorer_inline_edit_owns_focus(

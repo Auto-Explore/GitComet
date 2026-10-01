@@ -2594,7 +2594,9 @@ impl SidebarPaneView {
                                 .any(|p| r.spec.workdir.join(entry.path.as_ref()).starts_with(p))
                         })
                     });
-                    let row_text_color = if cut && !selected {
+                    // A cut row dims even when selected: the selection is usually
+                    // what was just cut, and that is the feedback the user needs.
+                    let row_text_color = if cut {
                         theme.colors.foreground.disabled
                     } else {
                         file_browser_row_label_color(theme, selected || is_open_file)
@@ -2856,7 +2858,12 @@ impl SidebarPaneView {
                             icon_slot(file_or_folder_icon_path(entry, is_expanded))
                         })
                         .when(cut, |row| {
-                            row.child(div().text_size(theme.ui_text(12.0)).child("✂"))
+                            row.child(
+                                div()
+                                    .debug_selector(move || format!("explorer_cut_marker_{ix}"))
+                                    .text_size(theme.ui_text(12.0))
+                                    .child("✂"),
+                            )
                         })
                         .child({
                             let highlight_ranges =
