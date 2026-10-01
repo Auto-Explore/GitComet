@@ -548,6 +548,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::CommitFileMenu { .. }
             | PopoverKind::FileBrowserFileMenu { .. }
             | PopoverKind::FileBrowserFolderMenu { .. }
+            | PopoverKind::ExplorerSettingsMenu { .. }
             | PopoverKind::BranchGroupMenu { .. }
             | PopoverKind::SidebarPinnedOverflow { .. }
             | PopoverKind::SidebarAncestorMenu { .. }
@@ -874,6 +875,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::PreviousCommitMessagesMenu { .. }
         | PopoverKind::RepoTabMenu { .. }
         | PopoverKind::DiffActionMenu
+        | PopoverKind::ExplorerSettingsMenu { .. }
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::HistoryAuthorFilter { .. }
@@ -991,7 +993,8 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::TerminalMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::WebLinkMenu { .. }
         | PopoverKind::LocalFileLinkMenu { .. }
-        | PopoverKind::DiffActionMenu => Some(DIFF_ACTION_MENU_WIDTH),
+        | PopoverKind::DiffActionMenu
+        | PopoverKind::ExplorerSettingsMenu { .. } => Some(DIFF_ACTION_MENU_WIDTH),
         // SHA-link and commit menus share their width to keep navigation
         // and file-browsing actions consistent.
         PopoverKind::CommitShaLinkMenu { .. } => Some(PopoverWidthSpec::range(300.0, 220.0, 400.0)),

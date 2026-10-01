@@ -250,7 +250,10 @@ impl CollapsedSidebarSection {
                 format!("stash_section_menu_{}", repo_id.0),
                 PopoverKind::StashPrompt,
             ),
-            Self::Files => return None,
+            Self::Files => (
+                format!("explorer_settings_menu_{}", repo_id.0),
+                PopoverKind::ExplorerSettingsMenu { repo_id },
+            ),
         };
         Some((invoker.into(), kind))
     }
@@ -1216,11 +1219,11 @@ impl SidebarPaneView {
         let ui_scale = ui_scale::UiScale::current(cx);
         let scaled_px = ui_scale::scaler(ui_scale_percent);
 
-        // Every section but Files has the same header menu the expanded sidebar
-        // hangs off its section row (add a worktree, stash, submodule, ...). The
-        // rail popover shows only the section's rows, so without this button —
-        // and the right-click on the panel behind it — those actions would be
-        // out of reach while the sidebar is collapsed.
+        // Every section has the same header menu the expanded sidebar hangs off
+        // its section row or tab strip (add a worktree, stash, Files settings,
+        // ...). The rail popover shows only the section's rows, so without this
+        // button — and the right-click on the panel behind it — those actions
+        // would be out of reach while the sidebar is collapsed.
         let section_menu = self
             .active_repo_id()
             .and_then(|repo_id| section.section_menu(repo_id));
@@ -1444,6 +1447,12 @@ impl SidebarPaneView {
             .active_repo()
             .and_then(|repo| repo.open_file_path())
             .is_some();
+        let explorer_settings = self
+            .active_repo_id()
+            .and_then(|repo_id| CollapsedSidebarSection::Files.section_menu(repo_id));
+        let explorer_settings_open = explorer_settings
+            .as_ref()
+            .is_some_and(|(invoker, _)| self.active_context_menu_invoker.as_ref() == Some(invoker));
 
         div()
             .flex()
@@ -1461,6 +1470,46 @@ impl SidebarPaneView {
                 "sidebar_search_toggle",
                 cx,
             )))
+            // Between search and locate: both flank it as per-tab tools, and the
+            // locate slot keeps its far-edge position across tabs.
+            .when(mode == SidebarMode::Files, |strip| {
+                strip.child(
+                    components::Button::new("sidebar_explorer_settings", "")
+                        .borderless()
+                        .style(components::ButtonStyle::Subtle)
+                        .open(explorer_settings_open)
+                        .disabled(explorer_settings.is_none())
+                        .selected_bg(with_alpha(
+                            theme.colors.accent.foreground,
+                            if theme.is_dark { 0.34 } else { 0.24 },
+                        ))
+                        .start_slot(crate::view::icons::svg_icon(
+                            "icons/cog.svg",
+                            if explorer_settings_open {
+                                theme.colors.accent.foreground
+                            } else if explorer_settings.is_some() {
+                                theme.colors.foreground.secondary
+                            } else {
+                                with_alpha(theme.colors.foreground.secondary, 0.45)
+                            },
+                            scaled_px(13.0),
+                        ))
+                        .on_click(theme, cx, move |this, e, window, cx| {
+                            if let Some((invoker, kind)) = explorer_settings.clone() {
+                                this.open_popover_at(
+                                    kind.invoked_by(invoker),
+                                    e.position(),
+                                    window,
+                                    cx,
+                                );
+                            }
+                        })
+                        .w(components::control_height(ui_scale))
+                        .h(components::control_height(ui_scale))
+                        .gitcomet_tooltip(theme, "Files settings".into())
+                        .debug_selector(|| "sidebar_explorer_settings".to_string()),
+                )
+            })
             .when(mode == SidebarMode::Branches, |strip| {
                 let tooltip = active_local_branch_name.map_or_else(
                     || SharedString::from("No active local branch to show"),
@@ -1940,13 +1989,6 @@ impl SidebarPaneView {
         let accepts_drops = self.active_repo().is_some_and(|repo| {
             repo.file_browser.source == gitcomet_core::domain::FileSource::WorkingDirectory
         });
-        let toggles = self.active_repo().map(|repo| {
-            (
-                repo.id,
-                repo.file_browser.show_hidden,
-                repo.file_browser.show_ignored,
-            )
-        });
         div()
             .id("explorer_focus_scope")
             .on_activate(
@@ -2037,36 +2079,6 @@ impl SidebarPaneView {
                 ))
             })
             .children(search_bar)
-            .when_some(toggles, |d, (repo_id, hidden, ignored)| {
-                d.child(
-                    div()
-                        .flex()
-                        .px_2()
-                        .gap_2()
-                        .child(
-                            components::Button::new("explorer_hidden", "Hidden")
-                                .selected(hidden)
-                                .on_click(theme, cx, move |this, _, _, _| {
-                                    this.store.dispatch(Msg::SetExplorerVisibility {
-                                        repo_id,
-                                        hidden: !hidden,
-                                        ignored,
-                                    });
-                                }),
-                        )
-                        .child(
-                            components::Button::new("explorer_ignored", "Ignored")
-                                .selected(ignored)
-                                .on_click(theme, cx, move |this, _, _, _| {
-                                    this.store.dispatch(Msg::SetExplorerVisibility {
-                                        repo_id,
-                                        hidden,
-                                        ignored: !ignored,
-                                    });
-                                }),
-                        ),
-                )
-            })
             .child(body)
             .into_any()
     }
@@ -3815,3 +3827,6 @@ pub use sticky_benchmark::SidebarStickyFrameFixture;
 
 #[cfg(test)]
 mod explorer_drag_tests;
+
+#[cfg(test)]
+mod explorer_settings_tests;

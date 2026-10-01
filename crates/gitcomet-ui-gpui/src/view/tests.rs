@@ -3776,6 +3776,48 @@ fn collapsed_worktrees_popover_offers_its_section_menu(cx: &mut gpui::TestAppCon
 }
 
 #[gpui::test]
+fn collapsed_files_popover_offers_the_files_settings_menu(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    store.replace_snapshot_for_test(Arc::new(view_state_with_active_ready_repo(RepoId(1))));
+    sync_view_snapshot(cx, &view);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_sidebar_collapsed(true, cx);
+            this.open_sidebar_collapsed_popover(CollapsedSidebarSection::Files, cx);
+        });
+    });
+    pump_for(
+        cx,
+        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
+    );
+
+    let button = cx
+        .debug_bounds("collapsed_popover_section_menu")
+        .expect("the Files popover header must expose its settings menu");
+    cx.simulate_click(button.center(), gpui::Modifiers::default());
+    test_support::redraw(cx);
+
+    cx.update(|_window, app| {
+        assert_eq!(
+            test_support::popover_kind(view.read(app), app),
+            Some(PopoverKind::ExplorerSettingsMenu {
+                repo_id: RepoId(1)
+            }),
+        );
+        assert_eq!(
+            view.read(app).sidebar_collapsed_popover,
+            Some(CollapsedSidebarSection::Files),
+            "the rail popover must stay open behind its menu"
+        );
+    });
+}
+
+#[gpui::test]
 fn details_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));

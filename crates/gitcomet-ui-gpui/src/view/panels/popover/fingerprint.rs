@@ -210,6 +210,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::CommitFileMenu { repo_id, .. }
         | PopoverKind::FileBrowserFileMenu { repo_id, .. }
         | PopoverKind::FileBrowserFolderMenu { repo_id, .. }
+        | PopoverKind::ExplorerSettingsMenu { repo_id }
         | PopoverKind::BrowseHistoryMenu { repo_id }
         | PopoverKind::SubmoduleInnerDiffMenu { repo_id, .. }
         | PopoverKind::TagMenu { repo_id, .. }
@@ -259,6 +260,12 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         // rewrites both without any click on the tree, so the menu has to
         // repaint when it lands rather than keep a label that is now a lie.
         PopoverKind::FileBrowserFolderMenu { .. } => {
+            repo.file_browser.file_browser_rev.hash(hasher);
+        }
+
+        // Its check marks read `show_hidden` / `show_ignored`; the menu stays
+        // open while they toggle.
+        PopoverKind::ExplorerSettingsMenu { .. } => {
             repo.file_browser.file_browser_rev.hash(hasher);
         }
 
@@ -884,6 +891,10 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             repo_id.hash(hasher);
             path.hash(hasher);
         }
+        PopoverKind::ExplorerSettingsMenu { repo_id } => {
+            111u8.hash(hasher);
+            repo_id.hash(hasher);
+        }
         PopoverKind::BranchGroupMenu {
             repo_id,
             section,
@@ -1292,6 +1303,34 @@ mod tests {
         let after = notify_fingerprint(&state, &PopoverKind::PullPicker);
 
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn explorer_settings_menu_fingerprint_changes_when_file_browser_rev_changes() {
+        let repo_id = RepoId(9);
+        let repo = RepoState::new_opening(
+            repo_id,
+            gitcomet_core::domain::RepoSpec {
+                workdir: std::env::temp_dir().join("gitcomet_explorer_settings_fingerprint"),
+            },
+        );
+        let mut state = AppState {
+            active_repo: Some(repo_id),
+            ..AppState::test_default()
+        };
+        state.repos.push(repo);
+
+        let kind = PopoverKind::ExplorerSettingsMenu { repo_id };
+        let before = notify_fingerprint(&state, &kind);
+        state.repos[0].file_browser.show_ignored = true;
+        state.repos[0].file_browser.bump_rev();
+        let after = notify_fingerprint(&state, &kind);
+
+        assert_ne!(before, after, "the check marks read the visibility flags");
+        assert_ne!(
+            hash_kind(kind),
+            hash_kind(PopoverKind::BrowseHistoryMenu { repo_id }),
+        );
     }
 
     #[test]

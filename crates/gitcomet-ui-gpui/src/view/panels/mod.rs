@@ -332,6 +332,11 @@ pub(in crate::view) enum ContextMenuAction {
     SetDiffShowLineNumbers {
         enabled: bool,
     },
+    SetExplorerVisibility {
+        repo_id: RepoId,
+        hidden: bool,
+        ignored: bool,
+    },
     SetChangeTrackingView {
         view: ChangeTrackingView,
     },

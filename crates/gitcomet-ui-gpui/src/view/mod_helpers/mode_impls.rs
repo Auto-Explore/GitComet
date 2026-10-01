@@ -435,6 +435,10 @@ pub(crate) enum PopoverKind {
         repo_id: RepoId,
         path: std::path::PathBuf,
     },
+    /// The Files tab's cog: which rows the explorer lists.
+    ExplorerSettingsMenu {
+        repo_id: RepoId,
+    },
     BrowseHistoryMenu {
         repo_id: RepoId,
     },

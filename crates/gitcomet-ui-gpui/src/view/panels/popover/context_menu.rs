@@ -19,6 +19,7 @@ mod diff_content_mode_settings;
 mod diff_editor;
 mod diff_hunk;
 mod explorer_operations;
+mod explorer_settings;
 mod file_browser_file;
 mod file_browser_folder;
 pub(super) mod file_history_commit;
@@ -778,6 +779,9 @@ impl PopoverHost {
                 Some(history_branch_filter::model(self, *repo_id))
             }
             PopoverKind::DiffActionMenu => Some(diff_actions::model(self)),
+            PopoverKind::ExplorerSettingsMenu { repo_id } => {
+                Some(explorer_settings::model(self, *repo_id))
+            }
             PopoverKind::MergetoolSettingsMenu => Some(mergetool_settings::model(self, cx)),
             PopoverKind::DiffContentModeSettings => Some(diff_content_mode_settings::model(self)),
             PopoverKind::TextFormatMenu { section } => {
@@ -1399,6 +1403,18 @@ impl PopoverHost {
                     main_pane.update(cx, |pane, cx| {
                         pane.set_diff_show_line_numbers_and_persist(enabled, cx);
                     });
+                });
+            }
+            ContextMenuAction::SetExplorerVisibility {
+                repo_id,
+                hidden,
+                ignored,
+            } => {
+                close_after_action = false;
+                self.store.dispatch(Msg::SetExplorerVisibility {
+                    repo_id,
+                    hidden,
+                    ignored,
                 });
             }
             ContextMenuAction::SetChangeTrackingView { view } => {

@@ -481,6 +481,9 @@ impl PopoverHost {
             PopoverKind::FileBrowserFolderMenu { repo_id, path } => {
                 self.context_menu_view(PopoverKind::FileBrowserFolderMenu { repo_id, path }, cx)
             }
+            PopoverKind::ExplorerSettingsMenu { repo_id } => {
+                self.context_menu_view(PopoverKind::ExplorerSettingsMenu { repo_id }, cx)
+            }
             PopoverKind::BranchGroupMenu {
                 repo_id,
                 section,
