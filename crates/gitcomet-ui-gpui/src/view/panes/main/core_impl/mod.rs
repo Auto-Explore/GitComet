@@ -32,9 +32,7 @@ fn blame_path_rev_for_target(
             Some((path.clone(), BlameSource::WorkingTree(*area)))
         }
         DiffTarget::Commit {
-            commit_id,
-            path: Some(path),
-            ..
+            commit_id, path, ..
         } => Some((
             path.clone(),
             BlameSource::Revision(Some(commit_id.0.to_string())),
@@ -242,15 +240,15 @@ impl MainPaneView {
                 _ => 0,
             };
             line_stats_rev.hash(&mut hasher);
-            let commit_details_rev = if matches!(
-                repo.diff_state.diff_target,
-                Some(DiffTarget::Commit { path: Some(_), .. })
-            ) {
-                repo.history_state.commit_details_rev
-            } else {
-                0
+            // The file list a commit or comparison diff navigates through.
+            let file_list_rev = match repo.diff_state.diff_target {
+                Some(DiffTarget::Commit { .. }) => repo.history_state.commit_details_rev,
+                Some(DiffTarget::CommitRange { path: Some(_), .. }) => {
+                    repo.history_state.range_files_rev
+                }
+                _ => 0,
             };
-            commit_details_rev.hash(&mut hasher);
+            file_list_rev.hash(&mut hasher);
             // The historical-browse tint keys off the file browser source. Not
             // `file_browser_rev`: that moves on every sidebar search keystroke.
             repo.file_browser.active.hash(&mut hasher);
@@ -2214,6 +2212,23 @@ impl MainPaneView {
                         .reveal_commit_file_row(position, cx)
                         .unwrap_or(position);
                     pane.commit_files_scroll
+                        .scroll_to_item_strict(row, gpui::ScrollStrategy::Center);
+                    cx.notify();
+                });
+        });
+    }
+
+    /// [`Self::scroll_commit_details_file_to_ix`] for the comparison view.
+    pub(in crate::view) fn scroll_range_file_to_ix(
+        &mut self,
+        position: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.details_pane
+                .update(cx, |pane: &mut DetailsPaneView, cx| {
+                    let row = pane.reveal_range_file_row(position, cx).unwrap_or(position);
+                    pane.range_files_scroll
                         .scroll_to_item_strict(row, gpui::ScrollStrategy::Center);
                     cx.notify();
                 });

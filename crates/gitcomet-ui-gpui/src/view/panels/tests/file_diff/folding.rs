@@ -18,7 +18,7 @@ fn push_collapsed_diff_loading_fixture_state(
     let path = PathBuf::from("src/lib.rs");
     let target = gitcomet_core::domain::DiffTarget::commit(
         gitcomet_core::domain::CommitId("deadbeef".into()),
-        Some(path.clone()),
+        path.clone(),
     );
     let (unified, old_text, new_text) = build_collapsed_diff_fixture_texts();
     let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), &unified);

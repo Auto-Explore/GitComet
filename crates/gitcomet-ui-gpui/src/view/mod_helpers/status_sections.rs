@@ -301,14 +301,6 @@ impl StatusMultiSelection {
         }
     }
 
-    pub(crate) fn selected_count_for_area(&self, area: DiffArea) -> usize {
-        self.selected_paths_for_area(area).len()
-    }
-
-    pub(crate) fn first_selected_for_area(&self, area: DiffArea) -> Option<&std::path::PathBuf> {
-        self.selected_paths_for_area(area).first()
-    }
-
     pub(crate) fn take_selected_paths_for_area(self, area: DiffArea) -> Vec<std::path::PathBuf> {
         match area {
             DiffArea::Unstaged => {

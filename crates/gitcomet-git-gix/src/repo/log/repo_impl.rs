@@ -140,13 +140,18 @@ impl GixRepo {
         tips: &[gix::ObjectId],
         shallow: &super::ShallowSnapshot,
         author: Option<&AuthorFilter>,
+        generation: u64,
     ) -> Option<super::LogPagedWalkState> {
         let mut cache = self
             .log_paged_walk_cache
             .lock()
             .expect("log paged walk cache");
+        // A walk from a replaced store would keep that store's packs mapped.
+        let current = self.store_generation();
+        cache.entries.retain(|entry| entry.generation == current);
         let index = cache.entries.iter().position(|entry| {
-            entry.token.as_ref() == token
+            entry.generation == generation
+                && entry.token.as_ref() == token
                 && entry.mode == mode
                 && entry.tips.as_ref() == tips
                 && &entry.shallow == shallow
@@ -162,13 +167,21 @@ impl GixRepo {
         shallow: &super::ShallowSnapshot,
         author: Option<&AuthorFilter>,
         state: super::LogPagedWalkState,
+        generation: u64,
     ) -> Arc<str> {
         let mut cache = self
             .log_paged_walk_cache
             .lock()
             .expect("log paged walk cache");
+        let current = self.store_generation();
+        cache.entries.retain(|entry| entry.generation == current);
         let token: Arc<str> = Arc::from(cache.next_id.to_string());
         cache.next_id = cache.next_id.wrapping_add(1);
+        if generation != current {
+            // Built on a store that was replaced mid-page; its token misses
+            // and the next page rebuilds the walk.
+            return token;
+        }
         if cache.entries.len() >= super::LOG_PAGED_WALK_CACHE_LIMIT {
             cache.entries.remove(0);
         }
@@ -198,6 +211,7 @@ impl GixRepo {
             shallow: shallow.clone(),
             author: author.cloned(),
             state,
+            generation,
         });
         token
     }
@@ -255,7 +269,7 @@ impl GixRepo {
 
         let target = commit.as_ref();
         for record in output.split('\u{1e}') {
-            let mut lines = record.lines().map(str::trim).filter(|l| !l.is_empty());
+            let mut lines = record.lines().filter(|line| !line.is_empty());
             let Some(hash) = lines.next() else {
                 continue;
             };
@@ -283,7 +297,14 @@ impl GixRepo {
         let status = fields.next().unwrap_or_default();
         let first = fields.next();
         let second = fields.next();
-        let to_path = |s: &str| path_buf_from_git_bytes(s.as_bytes(), "git name-status path");
+        let to_path = |s: &str| {
+            let (bytes, _) = gix::quote::ansi_c::undo(s.as_bytes().into()).map_err(|e| {
+                Error::new(ErrorKind::Backend(format!(
+                    "invalid git name-status path: {e}"
+                )))
+            })?;
+            path_buf_from_git_bytes(&bytes, "git name-status path")
+        };
         match status.chars().next() {
             // Rename/copy: the destination is the name in this commit's tree.
             Some('R') | Some('C') => second.map(to_path).transpose(),
@@ -473,9 +494,12 @@ impl GixRepo {
             return Ok(empty_log_page());
         }
 
+        let (store, generation) = self.thread_safe_repo();
         let cached_walk_state = cursor
             .and_then(|cursor| cursor.resume_token.as_deref())
-            .and_then(|token| self.take_log_paged_walk(token, mode, &tips, shallow, author));
+            .and_then(|token| {
+                self.take_log_paged_walk(token, mode, &tips, shallow, author, generation)
+            });
 
         // Tokens go stale on cache eviction or a change of tips, and then the
         // walk has to be rebuilt. A first-parent cursor carries `resume_from`,
@@ -492,7 +516,7 @@ impl GixRepo {
             (Some(walk_state), _) => (walk_state, None),
             (None, Some(resume_tip)) => (
                 new_log_paged_walk(
-                    &self._repo,
+                    &store,
                     [resume_tip],
                     mode,
                     shallow,
@@ -503,7 +527,7 @@ impl GixRepo {
             ),
             (None, None) => (
                 new_log_paged_walk(
-                    &self._repo,
+                    &store,
                     tips.iter().copied(),
                     mode,
                     shallow,
@@ -519,7 +543,7 @@ impl GixRepo {
         walk_state.cancellation.replace(cancellation);
 
         let (commits, has_more) = log_page_from_paged_walk_state(
-            &self._repo,
+            &store,
             &mut walk_state,
             limit,
             cursor_gate.as_mut(),
@@ -536,7 +560,7 @@ impl GixRepo {
                 last_seen: commit.id.clone(),
                 resume_from: None,
                 resume_token: Some(
-                    self.store_log_paged_walk(mode, &tips, shallow, author, walk_state),
+                    self.store_log_paged_walk(mode, &tips, shallow, author, walk_state, generation),
                 ),
             });
         let mut page = LogPage {
@@ -640,7 +664,7 @@ impl GixRepo {
 
         let refs = repo
             .references()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
+            .map_err(|e| crate::repo::object_store::gix_error("gix references", &e))?;
 
         // Refs the product leaves out of History. Every all-branches reader
         // (pages, authors, the index, snapshots) starts from these tips, so
@@ -659,13 +683,13 @@ impl GixRepo {
         let mut ref_count = 0usize;
         let iter = refs
             .all()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references(all): {e}"))))?;
+            .map_err(|e| crate::repo::object_store::gix_error("gix references(all)", &e))?;
         for reference in iter {
             if let Some(cancellation) = cancellation {
                 cancellation.check_cancelled()?;
             }
-            let mut reference = reference
-                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
+            let mut reference =
+                reference.map_err(|e| crate::repo::object_store::gix_error("gix ref iter", &e))?;
             if matches!(
                 reference.name().category(),
                 Some(gix::reference::Category::Tag)
@@ -706,13 +730,13 @@ impl GixRepo {
 
         let iter = refs
             .all()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references(all): {e}"))))?;
+            .map_err(|e| crate::repo::object_store::gix_error("gix references(all)", &e))?;
         for reference in iter {
             if let Some(cancellation) = cancellation {
                 cancellation.check_cancelled()?;
             }
-            let reference = reference
-                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
+            let reference =
+                reference.map_err(|e| crate::repo::object_store::gix_error("gix ref iter", &e))?;
             if matches!(
                 reference.name().category(),
                 Some(gix::reference::Category::Tag)

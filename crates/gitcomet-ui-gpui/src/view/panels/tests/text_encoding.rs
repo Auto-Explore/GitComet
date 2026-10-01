@@ -620,8 +620,9 @@ fn tab_width_changes_refresh_patch_search_with_unchanged_rows(cx: &mut gpui::Tes
     let (view, cx) = open_window(cx);
     let workdir = tempfile::tempdir().unwrap();
     let repo_id = gitcomet_state::model::RepoId(9513);
-    let target = gitcomet_core::domain::DiffTarget::commit(
-        gitcomet_core::domain::CommitId("feedface".into()),
+    let target = gitcomet_core::domain::DiffTarget::commit_range(
+        gitcomet_core::domain::CommitId("parent".into()),
+        Some(gitcomet_core::domain::CommitId("feedface".into())),
         None,
     );
     let diff = gitcomet_core::domain::Diff::from_unified(

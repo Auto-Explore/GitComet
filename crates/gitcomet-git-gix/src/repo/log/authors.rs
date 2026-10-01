@@ -13,7 +13,8 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<Arc<[Arc<str>]>> {
         cancellation.check_cancelled()?;
-        let repo = self._repo.to_thread_local();
+        let (store, _) = self.thread_safe_repo();
+        let repo = store.to_thread_local();
         let shallow = shallow_snapshot(&repo)?;
         let tips = if mode == HistoryMode::AllBranches {
             self.all_branches_tips(&repo, Some(cancellation))?
@@ -31,7 +32,7 @@ impl GixRepo {
             return Ok(cached.names.clone());
         }
         let mut walk = new_log_paged_walk(
-            &self._repo,
+            &store,
             tips.iter().copied(),
             mode,
             &shallow,
@@ -44,7 +45,7 @@ impl GixRepo {
         for info in &mut walk.walk {
             cancellation.check_cancelled()?;
             let info = info.map_err(|error| {
-                Error::new(ErrorKind::Backend(format!("gix history authors: {error}")))
+                crate::repo::object_store::gix_error("gix history authors", &*error)
             })?;
             if !mode_includes(mode, info.parent_ids.len()) {
                 continue;
@@ -53,7 +54,10 @@ impl GixRepo {
                 .objects
                 .find_commit(info.id.as_ref(), &mut buffer)
                 .map_err(|error| {
-                    Error::new(ErrorKind::Backend(format!("gix history author: {error}")))
+                    crate::repo::object_store::gix_error(
+                        "gix history author",
+                        &gix::Error::from(error),
+                    )
                 })?;
             let name = commit
                 .author()

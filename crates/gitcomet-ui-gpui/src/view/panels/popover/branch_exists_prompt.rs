@@ -4,7 +4,7 @@ fn display_target(target: &str) -> SharedString {
     let is_full_object_id =
         matches!(target.len(), 40 | 64) && target.bytes().all(|byte| byte.is_ascii_hexdigit());
     if is_full_object_id {
-        format!("{}…", &target[..7]).into()
+        format!("{}…", gitcomet_core::domain::short_commit_id(target)).into()
     } else {
         target.to_owned().into()
     }

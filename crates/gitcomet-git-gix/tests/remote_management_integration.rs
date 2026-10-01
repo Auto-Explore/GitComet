@@ -2367,3 +2367,73 @@ fn delete_remote_branch_succeeds_when_the_upstream_cleanup_cannot_write_config()
         "the remote branch deletion itself must still take effect"
     );
 }
+
+#[test]
+fn fetch_streams_progress_but_returns_output_without_meters() {
+    use gitcomet_core::git_operation::{self, GitOperationContext, GitOperationEvent};
+    use std::sync::Arc;
+
+    let _guard = remote_management_test_lock();
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+    let remote_repo = root.join("remote.git");
+    let work_repo = root.join("work");
+    let writer_repo = root.join("writer");
+    fs::create_dir_all(&remote_repo).expect("create remote repo dir");
+    fs::create_dir_all(&work_repo).expect("create work repo dir");
+    run_git(&remote_repo, &["init", "--bare"]);
+    init_repo_with_user(&work_repo);
+    let remote_str = git_remote_url(&remote_repo);
+    run_git(&work_repo, &["remote", "add", "origin", &remote_str]);
+    fs::write(work_repo.join("file.txt"), "base\n").expect("write base file");
+    run_git(&work_repo, &["add", "file.txt"]);
+    run_git(
+        &work_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+    run_git(&work_repo, &["push", "-u", "origin", "HEAD"]);
+
+    run_git(root, &["clone", "--quiet", &remote_str, "writer"]);
+    configure_repo_with_user(&writer_repo);
+    for index in 0..3 {
+        fs::write(
+            writer_repo.join(format!("new-{index}.txt")),
+            format!("{index}\n"),
+        )
+        .expect("write new file");
+    }
+    run_git(&writer_repo, &["add", "."]);
+    run_git(
+        &writer_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "new"],
+    );
+    run_git(&writer_repo, &["push", "origin", "HEAD"]);
+
+    let streamed = Arc::new(Mutex::new(String::new()));
+    let sink = Arc::clone(&streamed);
+    let context = GitOperationContext::new("fetch", move |_, event| {
+        if let GitOperationEvent::Output { chunks } = event {
+            let mut streamed = sink.lock().unwrap();
+            for chunk in chunks {
+                streamed.push_str(&chunk.text);
+            }
+        }
+    });
+    let opened = GixBackend.open(&work_repo).expect("open work repo");
+    let output = {
+        let _scope = git_operation::attach(&context);
+        opened
+            .fetch_all_with_output_prune(false)
+            .expect("fetch all")
+    };
+
+    let streamed = streamed.lock().unwrap().clone();
+    assert!(
+        gitcomet_core::git_progress::latest_progress(&streamed).is_some(),
+        "the live output carries git's meters: {streamed:?}"
+    );
+    assert!(!output.stderr.contains('\r'), "{:?}", output.stderr);
+    assert!(!output.stderr.contains("objects:"), "{:?}", output.stderr);
+    assert!(!output.stderr.contains("Total "), "{:?}", output.stderr);
+    assert!(output.stderr.contains("origin/"), "{:?}", output.stderr);
+}

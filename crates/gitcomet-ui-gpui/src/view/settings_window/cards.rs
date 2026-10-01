@@ -25,6 +25,7 @@ impl SettingsWindowView {
             SettingsCategory::GitLog => self.git_log_card(theme, cx),
             SettingsCategory::Remotes => self.remotes_card(theme, cx),
             SettingsCategory::Tags => self.tags_card(theme, cx),
+            SettingsCategory::Maintenance => self.maintenance_card(theme, cx),
             SettingsCategory::GitExecutable => self.git_executable_card(theme, cx),
             SettingsCategory::Environment => self.environment_card(theme, cx),
             SettingsCategory::Links => self.links_card(theme, cx),
@@ -1699,6 +1700,43 @@ impl SettingsWindowView {
                     .child(
                         "Also applies to the fetch performed by Pull and Pull into current. Local branches whose fetched upstream was deleted are unlinked, but local branches and tags are never deleted.",
                     ),
+            )
+    }
+
+    fn maintenance_card(
+        &self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> Stateful<gpui::Div> {
+        let no_separator = gpui::rgba(0x00000000);
+        self.card("settings_window_maintenance_card", "Maintenance", theme)
+            .child(
+                self.toggle_row(
+                    "settings_window_recommend_maintenance",
+                    "Recommend repository maintenance",
+                    self.recommend_repo_maintenance,
+                    theme,
+                )
+                .border_color(no_separator)
+                .on_activate(false, controls::ControlActivation::Action, cx.listener(
+                    |this, _e: &ClickEvent, _window, cx| {
+                        this.set_recommend_repo_maintenance(
+                            !this.recommend_repo_maintenance,
+                            cx,
+                        );
+                    },
+                )),
+            )
+            .child(
+                div()
+                    .px_2()
+                    .pb_2()
+                    .text_size(theme.ui_text(12.0))
+                    .text_color(theme.colors.foreground.secondary)
+                    .child(format!(
+                        "Once a day {name} asks Git whether a repository has collected enough loose objects or packs to slow it down (gc.auto, gc.autoPackLimit) and, if so, offers to run git maintenance. {name} never starts maintenance on its own. To skip one repository, set maintenance.auto to false in its Git config.",
+                        name = crate::view::product_name()
+                    )),
             )
     }
 

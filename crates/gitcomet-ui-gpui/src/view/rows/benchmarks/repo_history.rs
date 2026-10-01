@@ -57,7 +57,11 @@ struct HistoryShortShaVm(SharedString);
 
 impl HistoryShortShaVm {
     fn new(commit_id: &str) -> Self {
-        Self(commit_id.chars().take(7).collect::<String>().into())
+        Self(
+            gitcomet_core::domain::short_commit_id(commit_id)
+                .to_owned()
+                .into(),
+        )
     }
 
     fn as_str(&self) -> &str {

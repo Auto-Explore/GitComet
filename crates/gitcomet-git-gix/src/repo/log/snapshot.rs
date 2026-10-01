@@ -13,7 +13,7 @@ impl GixRepo {
         on_chunk: &mut dyn FnMut(LogChunk),
     ) -> Result<HistoryReadResult> {
         cancellation.check_cancelled()?;
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let shallow = shallow_snapshot(&repo)?;
         let tips = if mode == HistoryMode::AllBranches {
             self.all_branches_tips(&repo, Some(cancellation))?

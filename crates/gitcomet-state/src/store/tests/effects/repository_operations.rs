@@ -77,7 +77,7 @@ fn attribute_refresh_redecodes_staged_and_commit_diffs() {
             "Привет!!\n",
         ),
         (
-            DiffTarget::commit(head.clone(), Some("menu.txt".into())),
+            DiffTarget::commit(head.clone(), "menu.txt".into()),
             "Привет!\n",
         ),
         (
@@ -2453,6 +2453,210 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
     assert_eq!(*calls.lock().unwrap(), vec!["drop 4".to_string()]);
 }
 
+/// A repo on `main` whose `feature` commit edits `a.txt`; returns that commit.
+fn apply_file_change_fixture(repo: &Path) -> String {
+    run_git(repo, &["init", "-q", "-b", "main"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, &["config", "user.name", "Test User"]);
+    run_git(repo, &["config", "user.email", "test@example.com"]);
+    fs::write(repo.join("a.txt"), "one\ntwo\n").expect("write base");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(repo, &["commit", "-q", "-m", "base"]);
+    run_git(repo, &["checkout", "-q", "-b", "feature"]);
+    fs::write(repo.join("a.txt"), "one\nTWO\n").expect("write feature");
+    run_git(repo, &["commit", "-q", "-am", "feature subject\n\nbody"]);
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .expect("rev-parse");
+    run_git(repo, &["checkout", "-q", "main"]);
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+/// Runs one `ApplyFileChange` effect and returns every message it sent, in
+/// order, ending with its `RepoCommandFinished` unwrapped from the operation.
+fn run_apply_file_change_effect(
+    repo: &Path,
+    target: gitcomet_core::domain::ApplyChangeTarget,
+    commit: bool,
+) -> Vec<Msg> {
+    run_apply_file_change_effect_with_retry(repo, target, commit, None)
+}
+
+fn run_apply_file_change_effect_with_retry(
+    repo: &Path,
+    target: gitcomet_core::domain::ApplyChangeTarget,
+    commit: bool,
+    commit_retry: Option<gitcomet_core::domain::ApplyFileChangeRetry>,
+) -> Vec<Msg> {
+    struct Backend;
+    impl GitBackend for Backend {
+        fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            panic!("open should not be called in this test")
+        }
+    }
+    let repo_id = RepoId(9);
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    repos.insert(
+        repo_id,
+        gitcomet_git_gix::GixBackend
+            .open(repo)
+            .expect("open repository through backend"),
+    );
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend);
+    let executor = super::super::executor::TaskExecutor::new(1);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::ApplyFileChange {
+            commit_retry,
+            repo_id,
+            target,
+            commit,
+            auth: None,
+        },
+    );
+    let mut msgs = Vec::new();
+    loop {
+        match recv_effect_message(&msg_rx, Duration::from_secs(20)) {
+            Ok(msg) => msgs.push(msg),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return msgs,
+            Err(error) => panic!("apply file change did not finish: {error}"),
+        }
+    }
+}
+
+fn suggested_messages(msgs: &[Msg]) -> Vec<&str> {
+    msgs.iter()
+        .filter_map(|msg| match msg {
+            Msg::Internal(crate::msg::InternalMsg::CommitMessageSuggested { message, .. }) => {
+                Some(message.as_str())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn apply_file_change_offers_the_source_message_only_while_uncommitted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let picked = apply_file_change_fixture(dir.path());
+    let target = gitcomet_core::domain::ApplyChangeTarget::commit(
+        CommitId(picked.as_str().into()),
+        PathBuf::from("a.txt"),
+    );
+
+    let staged = run_apply_file_change_effect(dir.path(), target.clone(), false);
+    assert_eq!(suggested_messages(&staged), ["feature subject\n\nbody"]);
+    assert!(matches!(
+        staged.last(),
+        Some(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished { result: Ok(_), .. }
+        ))
+    ));
+
+    // Committing needs no message from the user.
+    run_git(dir.path(), &["reset", "--hard", "HEAD"]);
+    let committed = run_apply_file_change_effect(dir.path(), target, true);
+    assert!(suggested_messages(&committed).is_empty(), "{committed:?}");
+    assert!(matches!(
+        committed.last(),
+        Some(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished { result: Ok(_), .. }
+        ))
+    ));
+}
+
+#[test]
+fn a_conflicted_apply_file_change_still_offers_the_message() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let picked = apply_file_change_fixture(dir.path());
+    fs::write(dir.path().join("a.txt"), "one\nMAIN\n").expect("write main edit");
+    run_git(dir.path(), &["commit", "-q", "-am", "main edit"]);
+    let target = gitcomet_core::domain::ApplyChangeTarget::commit(
+        CommitId(picked.as_str().into()),
+        PathBuf::from("a.txt"),
+    );
+
+    let msgs = run_apply_file_change_effect(dir.path(), target, true);
+
+    assert_eq!(suggested_messages(&msgs), ["feature subject\n\nbody"]);
+    assert!(matches!(
+        msgs.last(),
+        Some(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished { result: Err(_), .. }
+        ))
+    ));
+}
+
+#[test]
+fn an_already_applied_change_offers_no_message() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let picked = apply_file_change_fixture(dir.path());
+    fs::write(dir.path().join("a.txt"), "one\nTWO\n").expect("write same edit");
+    run_git(dir.path(), &["commit", "-q", "-am", "same edit"]);
+    let target = gitcomet_core::domain::ApplyChangeTarget::commit(
+        CommitId(picked.as_str().into()),
+        PathBuf::from("a.txt"),
+    );
+
+    let msgs = run_apply_file_change_effect(dir.path(), target, false);
+
+    assert!(suggested_messages(&msgs).is_empty(), "{msgs:?}");
+}
+
+/// The change stays staged when committing it fails, so the commit box gets
+/// the message the user now has to commit with.
+#[cfg(unix)]
+#[test]
+fn a_failed_commit_step_offers_the_message() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let picked = apply_file_change_fixture(dir.path());
+    run_git(dir.path(), &["config", "commit.gpgsign", "true"]);
+    run_git(dir.path(), &["config", "gpg.program", "false"]);
+    let target = gitcomet_core::domain::ApplyChangeTarget::commit(
+        CommitId(picked.as_str().into()),
+        PathBuf::from("a.txt"),
+    );
+
+    let msgs = run_apply_file_change_effect(dir.path(), target.clone(), true);
+
+    assert_eq!(suggested_messages(&msgs), ["feature subject\n\nbody"]);
+    let Some(Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+        command:
+            RepoCommandKind::ApplyFileChange {
+                commit_retry: Some(retry),
+                ..
+            },
+        result: Err(_),
+        ..
+    })) = msgs.last()
+    else {
+        panic!("failed commit must carry its checkpoint: {msgs:?}")
+    };
+
+    run_git(dir.path(), &["config", "commit.gpgsign", "false"]);
+    let committed =
+        run_apply_file_change_effect_with_retry(dir.path(), target, true, Some(retry.clone()));
+    assert!(suggested_messages(&committed).is_empty());
+    assert!(committed.iter().any(|msg| matches!(msg,
+        Msg::Internal(crate::msg::InternalMsg::CommitMessageSuggestionConsumed { message, .. })
+            if message == "feature subject\n\nbody"
+    )));
+    assert!(matches!(
+        committed.last(),
+        Some(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished { result: Ok(_), .. }
+        ))
+    ));
+}
+
 #[test]
 fn push_lifecycle_uses_cached_tracking_branch_context() {
     let repo_id = RepoId(340);
@@ -3168,4 +3372,152 @@ fn rename_branch_force_effect_runs_in_other_worktree() {
         *fixture.worktree_calls.lock().unwrap(),
         vec!["rename-force old feature".to_string()]
     );
+}
+
+#[test]
+fn pull_releases_the_object_store_before_its_refresh() {
+    use std::sync::Mutex;
+
+    struct RecordingRepo {
+        spec: RepoSpec,
+        calls: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl GitRepository for RecordingRepo {
+        fn spec(&self) -> &RepoSpec {
+            &self.spec
+        }
+        fn release_object_store(&self) {
+            self.calls.lock().unwrap().push("release");
+        }
+        fn log_head_page(
+            &self,
+            _limit: usize,
+            _cursor: Option<&LogCursor>,
+        ) -> Result<std::sync::Arc<LogPage>> {
+            unimplemented!()
+        }
+        fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
+            unimplemented!()
+        }
+        fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
+            unimplemented!()
+        }
+        fn current_branch(&self) -> Result<String> {
+            unimplemented!()
+        }
+        fn list_branches(&self) -> Result<Vec<Branch>> {
+            unimplemented!()
+        }
+        fn list_remotes(&self) -> Result<Vec<Remote>> {
+            unimplemented!()
+        }
+        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+            unimplemented!()
+        }
+        fn status(&self) -> Result<RepoStatus> {
+            unimplemented!()
+        }
+        fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
+            unimplemented!()
+        }
+        fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn delete_branch(&self, _name: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn checkout_branch(&self, _name: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+            unimplemented!()
+        }
+        fn stash_apply(&self, _index: usize) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_drop(&self, _index: usize) -> Result<()> {
+            unimplemented!()
+        }
+        fn stage(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+        fn unstage(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+        fn commit(&self, _message: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn fetch_all(&self) -> Result<()> {
+            unimplemented!()
+        }
+        fn pull(&self, _mode: PullMode) -> Result<()> {
+            self.calls.lock().unwrap().push("pull");
+            Ok(())
+        }
+        fn push(&self) -> Result<()> {
+            unimplemented!()
+        }
+        fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+    }
+
+    struct Backend;
+    impl GitBackend for Backend {
+        fn open(&self, _workdir: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            Err(Error::new(ErrorKind::Unsupported("test backend")))
+        }
+    }
+
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let executor = super::super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend);
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    repos.insert(
+        RepoId(1),
+        Arc::new(RecordingRepo {
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            calls: Arc::clone(&calls),
+        }),
+    );
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::Pull {
+            repo_id: RepoId(1),
+            mode: PullMode::Default,
+            prune: false,
+            auth: None,
+        },
+    );
+
+    let finished = loop {
+        match recv_effect_message(&msg_rx, Duration::from_secs(5)).expect("pull finishes") {
+            Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished { result, .. }) => {
+                break result;
+            }
+            _ => continue,
+        }
+    };
+    assert!(finished.is_ok(), "{finished:?}");
+    // Released before the finish message, so the refresh it triggers reads
+    // through a fresh store.
+    assert_eq!(*calls.lock().unwrap(), vec!["pull", "release"]);
 }

@@ -209,7 +209,7 @@ fn available_git_runtime_state() -> GitRuntimeState {
     GitRuntimeState {
         preference: GitExecutablePreference::SystemPath,
         availability: GitExecutableAvailability::Available {
-            version_output: "git version 2.51.0".to_string(),
+            version_output: "git version 2.55.0".to_string(),
         },
     }
 }

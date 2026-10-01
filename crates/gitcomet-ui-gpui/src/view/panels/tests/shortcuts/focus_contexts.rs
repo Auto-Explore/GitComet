@@ -33,10 +33,7 @@ fn another_surface_taking_the_selection_clears_the_diff_text_selection(
         "gitcomet_ui_test_{}_diff_selection_ownership",
         std::process::id()
     ));
-    let target = DiffTarget::commit(
-        commit_id.clone(),
-        Some(std::path::PathBuf::from("src/only.rs")),
-    );
+    let target = DiffTarget::commit(commit_id.clone(), std::path::PathBuf::from("src/only.rs"));
 
     let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     repo.diff_state.diff_target = Some(target.clone());
@@ -82,8 +79,8 @@ fn commit_diff_target_change_clears_text_selection_and_ctrl_c_copies_new_selecti
     ));
     let first_path = std::path::PathBuf::from("src/commit_details/first.rs");
     let second_path = std::path::PathBuf::from("src/commit_details/second.rs");
-    let first_target = DiffTarget::commit(commit_id.clone(), Some(first_path));
-    let second_target = DiffTarget::commit(commit_id.clone(), Some(second_path));
+    let first_target = DiffTarget::commit(commit_id.clone(), first_path);
+    let second_target = DiffTarget::commit(commit_id.clone(), second_path);
 
     let mut first_repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     first_repo.diff_state.diff_target = Some(first_target.clone());

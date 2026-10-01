@@ -39,11 +39,25 @@ impl std::fmt::Display for CommitId {
 }
 
 impl CommitId {
+    /// A fixed seven-character prefix for compact labels.
+    pub fn short(&self) -> &str {
+        short_commit_id(&self.0)
+    }
+
     /// Whether this id is git's "not committed yet" marker rather than a real
     /// commit. See [`is_uncommitted_commit_id`].
     pub fn is_uncommitted(&self) -> bool {
         is_uncommitted_commit_id(&self.0)
     }
+}
+
+/// A fixed seven-character prefix for labels that do not require a unique
+/// abbreviation. Accepts a borrowed string to avoid allocating a `CommitId`.
+pub fn short_commit_id(id: &str) -> &str {
+    &id[..id
+        .char_indices()
+        .nth(7)
+        .map_or(id.len(), |(index, _)| index)]
 }
 
 /// Whether `id` is git's all-zero "not committed yet" object id, emitted by
@@ -736,10 +750,11 @@ pub const EMPTY_TREE_ID: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 pub enum DiffTarget {
     #[non_exhaustive]
     WorkingTree { path: PathBuf, area: DiffArea },
+    /// One file's change in a commit, against its first parent.
     #[non_exhaustive]
     Commit {
         commit_id: CommitId,
-        path: Option<PathBuf>,
+        path: PathBuf,
         /// Where `path` was renamed or copied from in this commit, so the old
         /// side loads from there.
         old_path: Option<PathBuf>,
@@ -804,13 +819,18 @@ impl DiffTarget {
         Self::WorkingTree { path, area }
     }
 
-    /// What `commit_id` changed, in one file or all of them.
-    pub fn commit(commit_id: CommitId, path: Option<PathBuf>) -> Self {
+    /// What `commit_id` changed in one file.
+    pub fn commit(commit_id: CommitId, path: PathBuf) -> Self {
         Self::Commit {
             commit_id,
             path,
             old_path: None,
         }
+    }
+
+    /// One file of a commit's change list, carrying its rename source.
+    pub fn commit_change(commit_id: CommitId, change: &CommitFileChange) -> Self {
+        Self::commit(commit_id, change.path.clone()).with_old_path(change.old_path.clone())
     }
 
     /// `from` to `to`, or to the working tree when `to` is `None`.
@@ -831,7 +851,10 @@ impl DiffTarget {
     /// same path is not a rename. Working-tree targets are unchanged.
     pub fn with_old_path(mut self, source: Option<PathBuf>) -> Self {
         match &mut self {
-            Self::Commit { path, old_path, .. } | Self::CommitRange { path, old_path, .. } => {
+            Self::Commit { path, old_path, .. } => {
+                *old_path = source.filter(|source| source != path);
+            }
+            Self::CommitRange { path, old_path, .. } => {
                 *old_path = source.filter(|source| Some(source) != path.as_ref());
             }
             Self::WorkingTree { .. } => {}
@@ -843,7 +866,7 @@ impl DiffTarget {
     /// carrying its rename source.
     pub fn for_change(self, change: &CommitFileChange) -> Self {
         match self {
-            Self::Commit { commit_id, .. } => Self::commit(commit_id, Some(change.path.clone())),
+            Self::Commit { commit_id, .. } => Self::commit(commit_id, change.path.clone()),
             Self::CommitRange {
                 from_commit_id,
                 to_commit_id,
@@ -867,10 +890,81 @@ impl DiffTarget {
     /// The single file this target shows, if it shows one.
     pub fn file_path(&self) -> Option<&std::path::Path> {
         match self {
-            Self::WorkingTree { path, .. } => Some(path),
-            Self::Commit { path, .. } | Self::CommitRange { path, .. } => path.as_deref(),
+            Self::WorkingTree { path, .. } | Self::Commit { path, .. } => Some(path),
+            Self::CommitRange { path, .. } => path.as_deref(),
         }
     }
+}
+
+/// Where the change "Apply change" applies comes from.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum ApplyChangeSource {
+    /// A commit's change against its first parent.
+    Commit(CommitId),
+    /// The difference between two commits.
+    Range { from: CommitId, to: CommitId },
+}
+
+/// Files whose change "Apply change" takes from one source, named as they
+/// are in the checkout.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct ApplyChangeTarget {
+    pub source: ApplyChangeSource,
+    pub paths: Vec<PathBuf>,
+}
+
+impl ApplyChangeTarget {
+    pub fn commit(commit_id: CommitId, path: PathBuf) -> Self {
+        Self {
+            source: ApplyChangeSource::Commit(commit_id),
+            paths: vec![path],
+        }
+    }
+
+    pub fn range(from: CommitId, to: CommitId, paths: Vec<PathBuf>) -> Self {
+        Self {
+            source: ApplyChangeSource::Range { from, to },
+            paths,
+        }
+    }
+
+    /// The target for one file diff; `None` for a working-tree diff or a
+    /// comparison to the working tree, which have no change to apply.
+    pub fn from_diff_target(target: &DiffTarget) -> Option<Self> {
+        match target {
+            DiffTarget::Commit {
+                commit_id, path, ..
+            } => Some(Self::commit(commit_id.clone(), path.clone())),
+            DiffTarget::CommitRange {
+                from_commit_id,
+                to_commit_id: Some(to_commit_id),
+                path: Some(path),
+                ..
+            } => Some(Self::range(
+                from_commit_id.clone(),
+                to_commit_id.clone(),
+                vec![path.clone()],
+            )),
+            _ => None,
+        }
+    }
+}
+
+/// The exact result of an apply whose commit step failed. Carried by the
+/// retried command so reopening a repository neither loses it nor leaves
+/// hidden state that can make a later, independent apply commit staged work.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ApplyFileChangeRetry {
+    pub target: ApplyChangeTarget,
+    pub head: Option<CommitId>,
+    pub index: Vec<ApplyFileChangeIndexEntry>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ApplyFileChangeIndexEntry {
+    pub path: PathBuf,
+    /// Git tree mode and object id, or `None` for a deleted path.
+    pub version: Option<(u16, CommitId)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -39,7 +39,7 @@ fn stage_gutter_repo(
 ) -> gitcomet_state::model::RepoState {
     let path = match &target {
         DiffTarget::WorkingTree { path, .. } => path.clone(),
-        DiffTarget::Commit { path, .. } => path.clone().unwrap_or_default(),
+        DiffTarget::Commit { path, .. } => path.clone(),
         DiffTarget::CommitRange { path, .. } => path.clone().unwrap_or_default(),
     };
     let unified = stage_gutter_unified(&path.to_string_lossy());
@@ -346,7 +346,7 @@ fn stage_gutter_is_disabled_for_commit_diffs(cx: &mut gpui::TestAppContext) {
         cx,
         DiffTarget::commit(
             CommitId("abcdef00112233bb".into()),
-            Some(std::path::PathBuf::from("src/lib.rs")),
+            std::path::PathBuf::from("src/lib.rs"),
         ),
         DiffViewMode::Inline,
     );
