@@ -1874,14 +1874,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     });
     assert_declared_shortcuts(
         &conflicted_status_model,
-        &[
-            &sec("H"),
-            &sec("O"),
-            &sec("T"),
-            &sec("M"),
-            &sec("D"),
-            &sec("Shift+C"),
-        ],
+        &[&sec("H"), &sec("O"), &sec("T"), &sec("D"), &sec("Shift+C")],
     );
     assert_shortcut_action!(
         conflicted_status_model,
@@ -1924,14 +1917,6 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         conflicted_status_model,
-        &sec("M"),
-        ContextMenuAction::SelectConflictDiff {
-            repo_id: rid,
-            path
-        } if *rid == repo_id && path == &conflicted_path
-    );
-    assert_shortcut_action!(
-        conflicted_status_model,
         &sec("D"),
         ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
             repo_id: rid,
@@ -1943,6 +1928,42 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
         conflicted_status_model,
         &sec("Shift+C"),
         ContextMenuAction::CopyText { text } if copied_path_ends_with(text, &conflicted_path)
+    );
+    // Discarding a conflict keeps ours, so the entry is live.
+    assert!(!context_menu_entry_disabled_by_label(
+        &conflicted_status_model,
+        "Discard changes"
+    ));
+
+    let conflict_menu_model = cx.update(|_window, app| {
+        context_menu_model_for(
+            &view,
+            app,
+            PopoverKind::StatusConflictMenu {
+                repo_id,
+                area: DiffArea::Unstaged,
+                path: conflicted_path.clone(),
+            },
+        )
+    });
+    assert_declared_shortcuts(&conflict_menu_model, &[&sec("O"), &sec("T"), &sec("D")]);
+    assert_shortcut_action!(
+        conflict_menu_model,
+        &sec("O"),
+        ContextMenuAction::CheckoutConflictSideSelectionOrPath { side, path, .. }
+            if *side == gitcomet_core::services::ConflictSide::Ours && path == &conflicted_path
+    );
+    assert_shortcut_action!(
+        conflict_menu_model,
+        &sec("T"),
+        ContextMenuAction::CheckoutConflictSideSelectionOrPath { side, path, .. }
+            if *side == gitcomet_core::services::ConflictSide::Theirs && path == &conflicted_path
+    );
+    assert_shortcut_action!(
+        conflict_menu_model,
+        &sec("D"),
+        ContextMenuAction::DiscardWorktreeChangesSelectionOrPath { area, path, .. }
+            if *area == DiffArea::Unstaged && path == &conflicted_path
     );
 
     let diff_editor_unstaged_model = cx.update(|_window, app| {

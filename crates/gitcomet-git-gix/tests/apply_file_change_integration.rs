@@ -1046,6 +1046,55 @@ fn multi_file_apply_conflict_marks_only_the_conflicted_file() {
     assert_eq!(status(&repo), "UU a.txt\nM  b.txt");
 }
 
+#[test]
+fn discarding_an_apply_conflict_restores_head() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let picked = setup_two_file_commit(&repo);
+    write(&repo, "a.txt", "one\nMAIN\nthree\n");
+    commit_all(&repo, "main edit");
+    let head_before = git_stdout(&repo, &["rev-parse", "HEAD"]);
+    let backend = open_backend(&repo);
+    backend
+        .apply_file_change_with_output(&commit_target(&picked, "a.txt"), false)
+        .expect_err("conflicting apply should fail");
+    assert_eq!(status(&repo), "UU a.txt");
+
+    backend
+        .discard_worktree_changes(&[Path::new("a.txt")])
+        .expect("discard resolves the conflict as ours");
+
+    assert_eq!(status(&repo), "");
+    assert_eq!(
+        fs::read_to_string(repo.join("a.txt")).unwrap(),
+        "one\nMAIN\nthree\n"
+    );
+    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), head_before);
+}
+
+#[test]
+fn discarding_one_conflict_keeps_the_cleanly_applied_files() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let picked = setup_two_file_commit(&repo);
+    write(&repo, "a.txt", "one\nZWEI\nthree\n");
+    commit_all(&repo, "conflicting a");
+    let backend = open_backend(&repo);
+    backend
+        .apply_file_change_with_output(&commit_paths_target(&picked, &["a.txt", "b.txt"]), false)
+        .expect_err("a.txt conflicts");
+
+    backend
+        .discard_worktree_changes(&[Path::new("a.txt")])
+        .expect("discard resolves the conflict as ours");
+
+    assert_eq!(status(&repo), "M  b.txt");
+    assert_eq!(
+        fs::read_to_string(repo.join("a.txt")).unwrap(),
+        "one\nZWEI\nthree\n"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn multi_file_commit_retry_commits_every_file() {

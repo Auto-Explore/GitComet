@@ -566,6 +566,11 @@ impl PopoverHost {
                 area,
                 path,
             } => Some(status_file::model(self, *repo_id, *area, path, cx)),
+            PopoverKind::StatusConflictMenu {
+                repo_id,
+                area,
+                path,
+            } => Some(status_file::conflict_model(self, *repo_id, *area, path, cx)),
             PopoverKind::BranchMenu { repo_id, target } => {
                 Some(branch::model(self, *repo_id, target))
             }

@@ -414,6 +414,12 @@ pub(crate) enum PopoverKind {
         area: DiffArea,
         path: std::path::PathBuf,
     },
+    /// Opened by a conflicted row's "Resolve…" button: only the resolve actions.
+    StatusConflictMenu {
+        repo_id: RepoId,
+        area: DiffArea,
+        path: std::path::PathBuf,
+    },
     BranchMenu {
         repo_id: RepoId,
         target: BranchMenuTarget,

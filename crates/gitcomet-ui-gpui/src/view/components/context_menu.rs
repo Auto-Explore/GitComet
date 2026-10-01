@@ -572,9 +572,6 @@ fn context_menu_icon_path(icon: &str, label: &str) -> Option<&'static str> {
     if label.contains("Edit") {
         return Some("icons/pencil.svg");
     }
-    if label.contains("Resolve manually") {
-        return Some("icons/pencil.svg");
-    }
     if label.contains("Reset") {
         return Some("icons/refresh.svg");
     }

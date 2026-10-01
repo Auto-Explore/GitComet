@@ -205,6 +205,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::DiffEditorMenu { repo_id, .. }
         | PopoverKind::CommitMenu { repo_id, .. }
         | PopoverKind::StatusFileMenu { repo_id, .. }
+        | PopoverKind::StatusConflictMenu { repo_id, .. }
         | PopoverKind::BranchMenu { repo_id, .. }
         | PopoverKind::BranchSectionMenu { repo_id, .. }
         | PopoverKind::BranchGroupMenu { repo_id, .. }
@@ -488,6 +489,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::BrowseHistoryMenu { .. }
         | PopoverKind::SubmoduleInnerDiffMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
+        | PopoverKind::StatusConflictMenu { .. }
         | PopoverKind::StageConflictMarkersConfirm { .. }
         // Its contents are computed once when it opens and then owned by the
         // text input. Re-hashing status would rebuild the dialog under the
@@ -920,6 +922,16 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             path,
         } => {
             43u8.hash(hasher);
+            repo_id.hash(hasher);
+            hash_diff_area(*area, hasher);
+            path.hash(hasher);
+        }
+        PopoverKind::StatusConflictMenu {
+            repo_id,
+            area,
+            path,
+        } => {
+            116u8.hash(hasher);
             repo_id.hash(hasher);
             hash_diff_area(*area, hasher);
             path.hash(hasher);

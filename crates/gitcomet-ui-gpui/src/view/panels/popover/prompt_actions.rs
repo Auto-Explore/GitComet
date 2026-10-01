@@ -456,6 +456,18 @@ impl PopoverHost {
                 },
                 cx,
             ),
+            PopoverKind::StatusConflictMenu {
+                repo_id,
+                area,
+                path,
+            } => self.context_menu_view(
+                PopoverKind::StatusConflictMenu {
+                    repo_id,
+                    area,
+                    path,
+                },
+                cx,
+            ),
             PopoverKind::BranchMenu { repo_id, target } => {
                 self.context_menu_view(PopoverKind::BranchMenu { repo_id, target }, cx)
             }

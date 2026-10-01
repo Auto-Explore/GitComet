@@ -525,6 +525,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::ReflogEntryMenu { .. }
             | PopoverKind::TagMenu { .. }
             | PopoverKind::StatusFileMenu { .. }
+            | PopoverKind::StatusConflictMenu { .. }
             | PopoverKind::BranchMenu { .. }
             | PopoverKind::BranchSectionMenu { .. }
             | PopoverKind::SubmoduleInnerDiffMenu { .. }
@@ -1019,6 +1020,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::PreviousCommitMessagesMenu { .. }
         | PopoverKind::TagMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
+        | PopoverKind::StatusConflictMenu { .. }
         | PopoverKind::BranchMenu { .. }
         | PopoverKind::BranchSectionMenu { .. }
         | PopoverKind::SubmoduleInnerDiffMenu { .. }

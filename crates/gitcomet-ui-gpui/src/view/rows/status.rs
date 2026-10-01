@@ -811,7 +811,7 @@ fn status_row(
     let stage_tooltip: SharedString = match stage_label {
         "Stage" => "Stage file".into(),
         "Unstage" => "Unstage file".into(),
-        "Resolve…" => "Resolve… file".into(),
+        "Resolve…" => "Resolve conflict".into(),
         _ => format!("{stage_label} file").into(),
     };
     // The invoker string is only needed when a menu is open (to mark its row)
@@ -831,7 +831,7 @@ fn status_row(
 
             if is_conflicted {
                 this.open_popover_at(
-                    (PopoverKind::StatusFileMenu {
+                    (PopoverKind::StatusConflictMenu {
                         repo_id,
                         area,
                         path: (*path_for_stage).clone(),
