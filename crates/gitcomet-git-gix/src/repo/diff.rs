@@ -106,16 +106,9 @@ impl GixRepo {
                     .arg("--no-ext-diff")
                     .arg("-m")
                     .arg("--first-parent")
-                    .arg("--pretty=format:");
-                // A rename source joins the pathspec so Git pairs the two
-                // paths instead of showing an addition.
-                if old_path.is_some() {
-                    cmd.arg("--find-renames");
-                }
-                cmd.arg(commit_id.as_ref());
-                if let Some(path) = path {
-                    cmd.arg("--").args(old_path).arg(path);
-                }
+                    .arg("--pretty=format:")
+                    .arg(commit_id.as_ref());
+                Self::pathspec_with_source(&mut cmd, path.as_deref(), old_path.as_deref());
             }
             DiffTarget::CommitRange {
                 from_commit_id,
@@ -124,22 +117,32 @@ impl GixRepo {
                 old_path,
                 ..
             } => {
-                cmd.arg("diff").arg("--no-ext-diff");
-                if old_path.is_some() {
-                    cmd.arg("--find-renames");
-                }
-                cmd.arg(from_commit_id.as_ref());
+                cmd.arg("diff")
+                    .arg("--no-ext-diff")
+                    .arg(from_commit_id.as_ref());
                 // `None` tip: `git diff <from>` compares against the working tree.
                 if let Some(to_commit_id) = to_commit_id {
                     cmd.arg(to_commit_id.as_ref());
                 }
-                if let Some(path) = path {
-                    cmd.arg("--").args(old_path).arg(path);
-                }
+                Self::pathspec_with_source(&mut cmd, path.as_deref(), old_path.as_deref());
             }
         }
 
         cmd
+    }
+
+    /// The file text view diffs `path` against `old_path`, so the patch must
+    /// pair them too. `--find-renames` pairs renames only and `-C` only
+    /// copies from a source modified alongside; with a two-path pathspec the
+    /// harder copy search inspects nothing else.
+    fn pathspec_with_source(cmd: &mut Command, path: Option<&Path>, old_path: Option<&Path>) {
+        let Some(path) = path else {
+            return;
+        };
+        if old_path.is_some() {
+            cmd.arg("--find-copies-harder");
+        }
+        cmd.arg("--").args(old_path).arg(path);
     }
 
     pub(super) fn diff_unified_impl(&self, target: &DiffTarget) -> Result<String> {
@@ -2262,7 +2265,7 @@ mod tests {
         assert_eq!(reader.1, 1);
         assert!(output.is_empty());
     }
-    use gitcomet_core::domain::{DiffArea, DiffTarget};
+    use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget};
     use gitcomet_core::error::ErrorKind;
     use std::process::Command;
 
@@ -2330,6 +2333,38 @@ mod tests {
             before,
             "read-only diff refreshed index stat metadata"
         );
+    }
+
+    /// A copied file's old side is its source, which `--find-renames` never
+    /// pairs: the patch printed the whole file as added while the text view
+    /// showed the edit against the source.
+    #[test]
+    fn commit_diff_pairs_a_copied_file_with_its_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        init_test_repo(root);
+        let body: String = (1..=40).map(|n| format!("line {n}\n")).collect();
+        std::fs::write(root.join("a.rs"), &body).unwrap();
+        run_git(root, &["add", "a.rs"]);
+        run_git(root, &["commit", "-m", "seed"]);
+        std::fs::write(
+            root.join("b.rs"),
+            body.replace("line 20\n", "line twenty\n"),
+        )
+        .unwrap();
+        run_git(root, &["add", "b.rs"]);
+        run_git(root, &["commit", "-m", "copy"]);
+
+        let repo = open_repo(root);
+        let head = super::super::history::gix_head_id_or_none(&repo.repo())
+            .unwrap()
+            .unwrap();
+        let target = DiffTarget::commit(CommitId(head.to_string().into()), Some("b.rs".into()))
+            .with_old_path(Some("a.rs".into()));
+        let patch = repo.diff_unified_impl(&target).unwrap();
+        assert!(patch.contains("copy from a.rs\n"), "{patch}");
+        assert!(patch.contains("-line 20\n+line twenty\n"), "{patch}");
+        assert!(!patch.contains("new file mode"), "{patch}");
     }
 
     #[test]
