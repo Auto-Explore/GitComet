@@ -115,6 +115,7 @@ actions!(
         TextInputDiffPrevChange,
         TextInputDiffNextChange,
         OpenActiveViewSearch,
+        HistoryFindPrevious,
         PopoverPromptDismiss,
         PopoverPromptTabNext,
         PopoverPromptTabPrev,

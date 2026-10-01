@@ -1,5 +1,6 @@
 mod clone;
 mod history_authors;
+mod history_find;
 mod indexed_history;
 mod open_repo;
 mod repo_actions;
@@ -128,6 +129,9 @@ pub(super) struct EffectExecutors<'a> {
     pub(super) session_persist_executor: &'a TaskExecutor,
     pub(super) metadata_executor: &'a TaskExecutor,
     pub(super) signature_executor: &'a TaskExecutor,
+    /// Whole-history find scans, one worker per store: one window's scan
+    /// must not hold up another's.
+    pub(super) history_find_executor: &'a std::sync::LazyLock<TaskExecutor>,
 }
 
 fn selected_diff_target(
@@ -417,6 +421,9 @@ fn send_unavailable_git_effect_result(
             work.failed(git_unavailable_error(runtime)),
         )),
         Effect::HistoryAuthors(work) => send(Msg::HistoryAuthors(
+            work.failed(git_unavailable_error(runtime)),
+        )),
+        Effect::HistoryFind(work) => send(Msg::HistoryFind(
             work.failed(git_unavailable_error(runtime)),
         )),
         Effect::LoadLog {
@@ -1557,6 +1564,7 @@ pub(super) fn schedule_effect(
         session_persist_executor,
         metadata_executor,
         signature_executor,
+        history_find_executor,
     } = executors;
 
     if effect_requires_available_git(&effect) {
@@ -1858,6 +1866,13 @@ pub(super) fn schedule_effect(
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, work.repo_id)
             {
                 history_authors::schedule(repos, msg_tx, work, cancellation);
+            }
+        }
+        Effect::HistoryFind(work) => {
+            if let Some((msg_tx, cancellation)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, work.repo_id)
+            {
+                history_find::schedule(history_find_executor, repos, msg_tx, work, cancellation);
             }
         }
         Effect::IndexedHistory(work) => {
@@ -3256,6 +3271,7 @@ mod tests {
             repo_load_executor: &executor,
             metadata_executor: &executor,
             signature_executor: &executor,
+            history_find_executor: &std::sync::LazyLock::new(|| TaskExecutor::new(1)),
             session_persist_executor: &executor,
             backend: &backend,
             publication: &std::sync::atomic::AtomicU64::new(0),

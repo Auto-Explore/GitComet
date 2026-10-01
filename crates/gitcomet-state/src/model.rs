@@ -1078,6 +1078,7 @@ pub struct PendingCommitRetry {
 pub struct HistoryState {
     pub indexed: crate::indexed_history::IndexedHistoryState,
     pub authors: crate::history_authors::HistoryAuthorsState,
+    pub find: crate::history_find::HistoryFindState,
     pub history_scope: LogScope,
     /// Case-insensitive author filter for the history, or `None` for all
     /// authors. Matches the author name shown in the UI.
@@ -1101,6 +1102,9 @@ pub struct HistoryState {
     pub retained_blame_while_loading: Option<Shared<Vec<BlameLine>>>,
     pub selected_commit: Option<CommitId>,
     pub selected_commit_rev: u64,
+    /// Last processed UI selection request, even when it did not change focus.
+    /// Automatic store reconciliation leaves this acknowledgment unchanged.
+    pub selection_ack: Option<u64>,
     /// The commit a "reveal in history" is currently walking toward.
     ///
     /// It is selected the moment the reveal starts, before the log has paged far
@@ -1235,6 +1239,7 @@ impl Default for HistoryState {
         Self {
             indexed: Default::default(),
             authors: Default::default(),
+            find: Default::default(),
             history_scope: LogScope::default(),
             history_author_filter: None,
             log: Loadable::NotLoaded,
@@ -1251,6 +1256,7 @@ impl Default for HistoryState {
             retained_blame_while_loading: None,
             selected_commit: None,
             selected_commit_rev: 0,
+            selection_ack: None,
             reveal_target: None,
             commit_details: Loadable::NotLoaded,
             commit_details_rev: 0,
@@ -1305,6 +1311,126 @@ impl CommitMultiSelection {
     pub fn contains(&self, id: &CommitId) -> bool {
         self.commits.iter().any(|c| c == id)
     }
+}
+
+impl CommitMultiSelection {
+    /// Predicts focus and membership for a history input without scheduling loads.
+    /// Shared by the reducer and the UI while selection replies are in flight.
+    pub fn select(
+        &self,
+        commit_id: CommitId,
+        mode: crate::msg::CommitSelectMode,
+        clicked_index: Option<usize>,
+        mut visible_order: Option<Vec<CommitId>>,
+        log_rev: u64,
+    ) -> (Self, Option<CommitId>) {
+        let mut sel = self.clone();
+        let focus = match mode {
+            crate::msg::CommitSelectMode::Single => {
+                collapse_multi_selection_to(&mut sel, commit_id.clone(), clicked_index, log_rev);
+                commit_id
+            }
+            crate::msg::CommitSelectMode::Toggle => {
+                if let Some(ix) = sel.commits.iter().position(|c| *c == commit_id) {
+                    Arc::make_mut(&mut sel.commits).remove(ix);
+                    let Some(focus) = sel.commits.last().cloned() else {
+                        // Toggled the last commit away: clear the selection
+                        // entirely (also dissolves the multi-selection).
+                        return (Self::default(), None);
+                    };
+                    focus
+                } else {
+                    Arc::make_mut(&mut sel.commits).push(commit_id.clone());
+                    sel.anchor = Some(commit_id.clone());
+                    sel.anchor_index = clicked_index;
+                    sel.anchor_log_rev = Some(log_rev);
+                    commit_id
+                }
+            }
+            crate::msg::CommitSelectMode::Range => {
+                let entries = visible_order.as_deref().unwrap_or(&[]);
+                let clicked_ix = commit_selection_entry_index(entries, &commit_id, clicked_index);
+                match clicked_ix {
+                    None => {
+                        collapse_multi_selection_to(
+                            &mut sel,
+                            commit_id.clone(),
+                            clicked_index,
+                            log_rev,
+                        );
+                    }
+                    Some(clicked_ix) => {
+                        let anchor_ix = sel
+                            .anchor
+                            .as_ref()
+                            .and_then(|anchor| {
+                                let trusted_hint = sel
+                                    .anchor_index
+                                    .filter(|_| sel.anchor_log_rev == Some(log_rev));
+                                commit_selection_entry_index(entries, anchor, trusted_hint)
+                            })
+                            .unwrap_or(clicked_ix);
+                        let (a, b) = if anchor_ix <= clicked_ix {
+                            (anchor_ix, clicked_ix)
+                        } else {
+                            (clicked_ix, anchor_ix)
+                        };
+                        sel.commits = Arc::new(if a == 0 && b + 1 == entries.len() {
+                            visible_order.take().unwrap()
+                        } else {
+                            entries[a..=b].to_vec()
+                        });
+                        if sel.anchor.is_none() {
+                            sel.anchor = Some(commit_id.clone());
+                        }
+                        sel.anchor_index = Some(anchor_ix);
+                        sel.anchor_log_rev = Some(log_rev);
+                    }
+                }
+                commit_id
+            }
+            crate::msg::CommitSelectMode::PreserveIfSelected => {
+                // Keep an existing multi-selection intact when the clicked commit
+                // is already part of it — only the focus moves. Otherwise collapse
+                // to the clicked commit like a plain click.
+                if !sel.commits.contains(&commit_id) {
+                    collapse_multi_selection_to(
+                        &mut sel,
+                        commit_id.clone(),
+                        clicked_index,
+                        log_rev,
+                    );
+                }
+                commit_id
+            }
+        };
+
+        (sel, Some(focus))
+    }
+}
+
+fn collapse_multi_selection_to(
+    sel: &mut crate::model::CommitMultiSelection,
+    commit_id: CommitId,
+    clicked_index: Option<usize>,
+    log_rev: u64,
+) {
+    sel.commits = Arc::new(vec![commit_id.clone()]);
+    sel.anchor = Some(commit_id);
+    sel.anchor_index = clicked_index;
+    sel.anchor_log_rev = Some(log_rev);
+}
+
+/// Resolves `target`'s index in `entries`, preferring the index hint when it
+/// still points at the target.
+fn commit_selection_entry_index(
+    entries: &[CommitId],
+    target: &CommitId,
+    index_hint: Option<usize>,
+) -> Option<usize> {
+    index_hint
+        .filter(|&ix| entries.get(ix) == Some(target))
+        .or_else(|| entries.iter().position(|id| id == target))
 }
 
 /// A "compare two points" selection. `from` is the base/older side and `to`
@@ -3183,6 +3309,7 @@ impl RepoState {
         self.load_epoch = self.load_epoch.wrapping_add(1);
         self.history_state.indexed.cancel();
         self.history_state.authors.cancellation.cancel();
+        self.history_state.find.interrupt();
         previous
     }
 }

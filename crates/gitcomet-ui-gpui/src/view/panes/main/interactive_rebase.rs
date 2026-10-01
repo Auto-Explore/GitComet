@@ -1030,6 +1030,7 @@ impl MainPaneView {
                 controls::ControlActivation::Composite,
                 cx.listener(move |this, _e: &gpui::ClickEvent, _w, cx| {
                     this.store.dispatch(Msg::SelectCommit {
+                        request_id: None,
                         repo_id,
                         commit_id: commit_id_val.clone(),
                     });

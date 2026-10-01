@@ -219,6 +219,7 @@ pub enum RepoWatchDegradedReason {
 pub enum Msg {
     IndexedHistory(crate::indexed_history::IndexedHistoryMsg),
     HistoryAuthors(crate::history_authors::HistoryAuthorsMsg),
+    HistoryFind(crate::history_find::HistoryFindMsg),
     OpenRepo(PathBuf),
     /// Opens a repository candidate supplied by an external file-system drop.
     /// The candidate is not persisted until the backend has opened it
@@ -320,12 +321,14 @@ pub enum Msg {
         repo_id: RepoId,
     },
     SelectCommit {
+        request_id: Option<u64>,
         repo_id: RepoId,
         commit_id: CommitId,
     },
     /// Modifier-aware history selection. `visible_order` (the visible commit
     /// ids in log order) is only provided for `Range` clicks.
     SelectCommitMulti {
+        request_id: Option<u64>,
         repo_id: RepoId,
         commit_id: CommitId,
         mode: CommitSelectMode,
@@ -333,6 +336,7 @@ pub enum Msg {
         visible_order: Option<Vec<CommitId>>,
     },
     ClearCommitSelection {
+        request_id: Option<u64>,
         repo_id: RepoId,
     },
     /// Compare two points (commits, or branch/tag tips resolved to commit ids).
@@ -453,6 +457,7 @@ pub enum Msg {
     /// Select the history row for a linked worktree's uncommitted changes, so
     /// the details pane shows that worktree's files instead of a commit.
     SelectWorktreeUncommitted {
+        request_id: Option<u64>,
         repo_id: RepoId,
         path: PathBuf,
     },

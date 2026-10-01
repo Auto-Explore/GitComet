@@ -207,6 +207,100 @@ pub(crate) fn hash_highlight_style<H: Hasher>(style: &HighlightStyle, state: &mu
     });
 }
 
+/// Wash `overlays` over `highlights`, keeping whatever colour, weight or
+/// underline each run has and replacing only its background (and its colour
+/// when `style` sets one).
+///
+/// `highlights` and `overlays` must be sorted and disjoint. The file editor
+/// washes its search matches and delimiter pair through here, search first,
+/// so the pair affordance stays readable inside a washed match.
+pub(crate) fn overlay_highlights(
+    mut highlights: Vec<(Range<usize>, HighlightStyle)>,
+    overlays: &[Range<usize>],
+    style: HighlightStyle,
+) -> Vec<(Range<usize>, HighlightStyle)> {
+    if overlays.is_empty() {
+        return highlights;
+    }
+
+    let mut out: Vec<(Range<usize>, HighlightStyle)> =
+        Vec::with_capacity(highlights.len() + overlays.len() * 2);
+    let mut overlay_ix = 0usize;
+    for (range, run_style) in highlights.drain(..) {
+        let mut cursor = range.start;
+        while overlay_ix < overlays.len() && overlays[overlay_ix].end <= cursor {
+            overlay_ix += 1;
+        }
+        let mut probe = overlay_ix;
+        while cursor < range.end {
+            let Some(overlay) = overlays.get(probe).filter(|o| o.start < range.end) else {
+                break;
+            };
+            if overlay.start > cursor {
+                out.push((cursor..overlay.start, run_style));
+                cursor = overlay.start;
+            }
+            let end = overlay.end.min(range.end);
+            let mut merged = run_style;
+            merged.background_color = style.background_color;
+            // Only when the overlay asks for one: the pair wash leaves the
+            // grammar's colour alone, while the search wash pins one on light
+            // themes, where its background would drown a syntax colour.
+            if style.color.is_some() {
+                merged.color = style.color;
+            }
+            out.push((cursor..end, merged));
+            cursor = end;
+            if overlay.end <= end {
+                probe += 1;
+            }
+        }
+        if cursor < range.end {
+            out.push((cursor..range.end, run_style));
+        }
+    }
+
+    // An overlay landing in a stretch the grammar produced no run for (plain
+    // punctuation in some grammars, or anything at all in a plain-text buffer)
+    // still has to be painted. Coverage can be the union of several syntax
+    // runs -- whole tags ordinarily cross punctuation, name and attribute
+    // runs -- so add only the gaps instead of appending the whole overlay on
+    // top of those already-composed pieces.
+    let mut gaps: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
+    let mut out_ix = 0usize;
+    for overlay in overlays {
+        let mut cursor = overlay.start;
+        while out_ix < out.len() && out[out_ix].0.end <= cursor {
+            out_ix += 1;
+        }
+        let mut probe = out_ix;
+        while let Some((range, _)) = out.get(probe) {
+            if range.end <= cursor {
+                probe += 1;
+                continue;
+            }
+            if range.start >= overlay.end {
+                break;
+            }
+            if range.start > cursor {
+                gaps.push((cursor..range.start.min(overlay.end), style));
+            }
+            cursor = cursor.max(range.end.min(overlay.end));
+            if cursor >= overlay.end {
+                break;
+            }
+            probe += 1;
+        }
+        out_ix = probe;
+        if cursor < overlay.end {
+            gaps.push((cursor..overlay.end, style));
+        }
+    }
+    out.extend(gaps);
+    out.sort_by_key(|(range, _)| range.start);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,6 +345,38 @@ mod tests {
             assert!(text.is_char_boundary(range.start));
             assert!(text.is_char_boundary(range.end));
         }
+    }
+
+    /// A wash keeps what it lands on, underline included, and paints the
+    /// stretches nothing styled.
+    #[test]
+    fn overlay_washes_runs_and_fills_the_gaps() {
+        let link = HighlightStyle {
+            color: Some(gpui::red()),
+            underline: Some(UnderlineStyle::default()),
+            ..HighlightStyle::default()
+        };
+        let wash = HighlightStyle {
+            background_color: Some(gpui::yellow()),
+            ..HighlightStyle::default()
+        };
+        let washed_link = HighlightStyle {
+            background_color: wash.background_color,
+            ..link
+        };
+        assert_eq!(
+            overlay_highlights(vec![(4..10, link)], &[0..2, 6..12], wash),
+            vec![
+                (0..2, wash),
+                (4..6, link),
+                (6..10, washed_link),
+                (10..12, wash)
+            ]
+        );
+        assert_eq!(
+            overlay_highlights(vec![(4..10, link)], &[], wash),
+            vec![(4..10, link)]
+        );
     }
 
     #[test]

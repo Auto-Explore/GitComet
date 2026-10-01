@@ -219,6 +219,21 @@ impl TaskExecutor {
         }
     }
 
+    /// Closes the queue and waits for the workers, so a test process never
+    /// exits with store workers still running.
+    #[cfg(test)]
+    pub(super) fn join(self) {
+        let Self {
+            tx,
+            _threads: threads,
+            ..
+        } = self;
+        drop(tx);
+        for thread in threads {
+            thread.join().expect("store executor worker panicked");
+        }
+    }
+
     pub(super) fn spawn(&self, task: impl FnOnce() + Send + 'static) {
         self.try_spawn(task);
     }
@@ -248,6 +263,28 @@ impl TaskExecutor {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    #[ignore = "manual find worker startup measurement"]
+    fn history_find_worker_startup_measurement() {
+        let start = std::time::Instant::now();
+        let workers: Vec<_> = (0..32)
+            .map(|_| {
+                std::sync::LazyLock::new(|| {
+                    TaskExecutor::named(crate::history_find::HISTORY_FIND_THREAD, 1)
+                })
+            })
+            .collect();
+        eprintln!(
+            "32 find executors: {:?}, started threads={}",
+            start.elapsed(),
+            workers
+                .iter()
+                .filter_map(std::sync::LazyLock::get)
+                .map(|worker| worker._threads.len())
+                .sum::<usize>()
+        );
+    }
 
     #[test]
     fn latest_slot_replaces_pending_work_without_blocking_other_slots() {

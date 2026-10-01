@@ -14,6 +14,7 @@ pub mod git_ops_trace;
 pub mod gitattributes;
 pub mod gitignore;
 pub mod hex;
+pub mod history_find;
 pub mod history_index;
 pub mod large_file_tools;
 pub mod large_files;

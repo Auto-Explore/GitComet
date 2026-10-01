@@ -1203,7 +1203,7 @@ pub(in crate::view) use diff_text::{
     prepared_diff_syntax_line_for_one_based_line,
     prepared_diff_syntax_occurrences_at_display_offset,
     prepared_diff_syntax_pair_at_display_offset, prepared_diff_syntax_reparse_seed,
-    query_highlight_colors, request_syntax_highlights_for_prepared_document_byte_range,
+    query_highlight_style, request_syntax_highlights_for_prepared_document_byte_range,
     resolved_output_line_text, shared_byte_affix_bounds, syntax_highlights_for_line,
     whitespace_visible_line_text,
 };
