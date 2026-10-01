@@ -3,7 +3,9 @@
 //! second, read-only one. Retargeting either leaves the other and History
 //! as they were. Clicking the current pane's gutter flags a line, and a
 //! selection can be given a note shown under it. The current pane can pop
-//! out into a window of its own and comes back when that window closes.
+//! out into a window of its own and comes back when that window closes. Its
+//! action-bar context names the comparison and marks the repository
+//! reviewed.
 
 use gitcomet_core::domain::{CommitId, DiffTarget};
 use gitcomet_extension_api::{
@@ -14,7 +16,8 @@ use gitcomet_extension_api::{
 use gitcomet_ui_kit::components::Button;
 use gitcomet_ui_kit::gpui::prelude::*;
 use gitcomet_ui_kit::gpui::{
-    AnyElement, App, Context, SharedString, WeakEntity, Window, div, px, rgb_to_hsla,
+    AnyElement, App, Context, Entity, SharedString, Subscription, WeakEntity, Window, div, px,
+    rgb_to_hsla,
 };
 use std::collections::BTreeSet;
 use std::rc::Rc;
@@ -262,5 +265,55 @@ impl Render for ChangesView {
                     })
                     .child(slot(self.previous.as_ref(), "The previous pick shows here")),
             )
+    }
+}
+
+/// The Changes view's action-bar context: what it compares, a button marking
+/// the repository reviewed, and how often it was.
+pub struct ChangesActions {
+    context: RepositoryViewContext,
+    reviews: Entity<crate::review::Reviews>,
+    _observe: Subscription,
+}
+
+impl ChangesActions {
+    pub fn new(context: RepositoryViewContext, cx: &mut Context<Self>) -> Self {
+        let reviews = crate::review::reviews(cx);
+        let observe = cx.observe(&reviews, |_, _, cx| cx.notify());
+        Self {
+            context,
+            reviews,
+            _observe: observe,
+        }
+    }
+}
+
+impl Render for ChangesActions {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.context.window.theme(cx);
+        let count = self
+            .reviews
+            .read(cx)
+            .count(self.context.window.id(), self.context.repository.workdir());
+        div()
+            .id("example_changes_actions")
+            .debug_selector(|| "example_changes_actions".to_string())
+            .flex()
+            .items_center()
+            .gap_2()
+            .text_size(theme.ui_text(12.0))
+            .text_color(theme.colors.foreground.secondary)
+            .child("Working tree against HEAD")
+            .child(
+                Button::new("example_changes_mark_reviewed", "Mark reviewed").on_click(
+                    theme,
+                    cx,
+                    |this, _, _, cx| {
+                        let workdir = this.context.repository.workdir().to_path_buf();
+                        crate::review::mark_reviewed(&this.context.window, &workdir, cx);
+                    },
+                ),
+            )
+            .child(format!("Reviewed {count} times"))
     }
 }

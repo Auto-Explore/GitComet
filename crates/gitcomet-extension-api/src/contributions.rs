@@ -38,6 +38,10 @@ pub struct RepositoryViewDescriptor {
     pub build: ViewBuilder<RepositoryViewContext>,
     /// Navigation belongs to the selected view, including mouse side buttons.
     pub navigation: Option<ViewNavigation>,
+    /// The action bar's context while the view is selected: shown after
+    /// Back/Forward in place of History's branch, tracking and merge
+    /// controls, which a selected view always hides. Built with the view.
+    pub action_bar: Option<ViewBuilder<RepositoryViewContext>>,
 }
 
 impl RepositoryViewDescriptor {
@@ -51,11 +55,20 @@ impl RepositoryViewDescriptor {
             icon: icon.into(),
             build: Rc::new(build),
             navigation: None,
+            action_bar: None,
         }
     }
 
     pub fn with_navigation(mut self, navigation: ViewNavigation) -> Self {
         self.navigation = Some(navigation);
+        self
+    }
+
+    pub fn with_action_bar(
+        mut self,
+        build: impl Fn(RepositoryViewContext, &mut Window, &mut App) -> AnyView + 'static,
+    ) -> Self {
+        self.action_bar = Some(Rc::new(build));
         self
     }
 }

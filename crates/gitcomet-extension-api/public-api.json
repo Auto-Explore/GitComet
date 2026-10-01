@@ -22508,6 +22508,50 @@
                 },
                 "deprecation": null,
                 "name": "navigation"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": {
+                                    "angle_bracketed": {
+                                      "args": [
+                                        {
+                                          "type": {
+                                            "resolved_path": {
+                                              "args": null,
+                                              "path": "RepositoryViewContext",
+                                              "type_path": "gitcomet_extension_api::RepositoryViewContext"
+                                            }
+                                          }
+                                        }
+                                      ],
+                                      "constraints": []
+                                    }
+                                  },
+                                  "path": "ViewBuilder",
+                                  "type_path": "gitcomet_extension_api::ViewBuilder"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "action_bar"
               }
             ],
             "has_stripped_fields": false
@@ -22903,6 +22947,176 @@
             },
             "deprecation": null,
             "name": "with_navigation"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [
+                    {
+                      "kind": {
+                        "type": {
+                          "bounds": [
+                            {
+                              "trait_bound": {
+                                "generic_params": [],
+                                "modifier": "none",
+                                "trait": {
+                                  "args": {
+                                    "parenthesized": {
+                                      "inputs": [
+                                        {
+                                          "resolved_path": {
+                                            "args": null,
+                                            "path": "RepositoryViewContext",
+                                            "type_path": "gitcomet_extension_api::RepositoryViewContext"
+                                          }
+                                        },
+                                        {
+                                          "borrowed_ref": {
+                                            "is_mutable": true,
+                                            "lifetime": null,
+                                            "type": {
+                                              "resolved_path": {
+                                                "args": null,
+                                                "path": "Window",
+                                                "type_path": "gpui::window::Window"
+                                              }
+                                            }
+                                          }
+                                        },
+                                        {
+                                          "borrowed_ref": {
+                                            "is_mutable": true,
+                                            "lifetime": null,
+                                            "type": {
+                                              "resolved_path": {
+                                                "args": null,
+                                                "path": "App",
+                                                "type_path": "gpui::app::App"
+                                              }
+                                            }
+                                          }
+                                        }
+                                      ],
+                                      "output": {
+                                        "resolved_path": {
+                                          "args": null,
+                                          "path": "AnyView",
+                                          "type_path": "gpui::view::AnyView"
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "path": "Fn",
+                                  "type_path": "core::ops::function::Fn"
+                                }
+                              }
+                            },
+                            {
+                              "outlives": "'static"
+                            }
+                          ],
+                          "default": null,
+                          "is_synthetic": true
+                        }
+                      },
+                      "name": "impl Fn(RepositoryViewContext, &mut Window, &mut App) -> AnyView + 'static"
+                    }
+                  ],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "generic": "Self"
+                      }
+                    ],
+                    [
+                      "build",
+                      {
+                        "impl_trait": [
+                          {
+                            "trait_bound": {
+                              "generic_params": [],
+                              "modifier": "none",
+                              "trait": {
+                                "args": {
+                                  "parenthesized": {
+                                    "inputs": [
+                                      {
+                                        "resolved_path": {
+                                          "args": null,
+                                          "path": "RepositoryViewContext",
+                                          "type_path": "gitcomet_extension_api::RepositoryViewContext"
+                                        }
+                                      },
+                                      {
+                                        "borrowed_ref": {
+                                          "is_mutable": true,
+                                          "lifetime": null,
+                                          "type": {
+                                            "resolved_path": {
+                                              "args": null,
+                                              "path": "Window",
+                                              "type_path": "gpui::window::Window"
+                                            }
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "borrowed_ref": {
+                                          "is_mutable": true,
+                                          "lifetime": null,
+                                          "type": {
+                                            "resolved_path": {
+                                              "args": null,
+                                              "path": "App",
+                                              "type_path": "gpui::app::App"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    ],
+                                    "output": {
+                                      "resolved_path": {
+                                        "args": null,
+                                        "path": "AnyView",
+                                        "type_path": "gpui::view::AnyView"
+                                      }
+                                    }
+                                  }
+                                },
+                                "path": "Fn",
+                                "type_path": "core::ops::function::Fn"
+                              }
+                            }
+                          },
+                          {
+                            "outlives": "'static"
+                          }
+                        ]
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "with_action_bar"
           }
         ],
         "trait": null

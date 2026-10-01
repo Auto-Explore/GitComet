@@ -453,6 +453,15 @@ Since then:
   `NavTab` tints its icon like its label and names its parts (`{id}_icon`,
   `{id}_badge`); tab ids are unchanged, and without extensions there is
   still no strip.
+- A repository view can bring an action-bar context
+  (`RepositoryViewDescriptor::with_action_bar`), built with the view and
+  dropped with its repository. While an extension view is selected, the
+  action bar's left group is Back/Forward plus that context; History's
+  worktree and branch badges, tracking actions, historical badge, and merge
+  and sequencer controls stay with History, which renders as before. The
+  right group (terminal, branch, stash) is unchanged. `ViewNavigation` now
+  has tests: the action bar's Back/Forward and the mouse side buttons
+  route to the selected view, and to History again once it is back.
 
 ## History find (#532)
 

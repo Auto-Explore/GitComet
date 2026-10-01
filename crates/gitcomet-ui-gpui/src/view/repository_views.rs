@@ -54,6 +54,8 @@ pub(in crate::view) struct ViewRouter<D> {
     views: Rc<[(ContributionId, D)]>,
     selected: FxHashMap<std::path::PathBuf, usize>,
     built: FxHashMap<(RepoKey, usize), gpui::AnyView>,
+    /// Repository views' action-bar contexts, built with their views.
+    action_bars: FxHashMap<(RepoKey, usize), gpui::AnyView>,
 }
 
 pub(in crate::view) type RepositoryViewRouter = ViewRouter<RepositoryViewDescriptor>;
@@ -68,6 +70,7 @@ impl<D: RoutedContribution + Clone> ViewRouter<D> {
             views: views.to_vec().into(),
             selected: FxHashMap::default(),
             built: FxHashMap::default(),
+            action_bars: FxHashMap::default(),
         })
     }
 
@@ -102,9 +105,15 @@ impl<D: RoutedContribution + Clone> ViewRouter<D> {
         self.built.get(&(repo_key(repo), index)).cloned()
     }
 
+    /// The selected view's action-bar context, if it has one.
+    fn active_action_bar(&self, repo: &RepoState) -> Option<gpui::AnyView> {
+        let index = *self.selected.get(&repo.spec.workdir)?;
+        self.action_bars.get(&(repo_key(repo), index)).cloned()
+    }
+
     /// Forgets views and selections of repositories no longer open.
     pub(in crate::view) fn retain_open(&mut self, state: &AppState) {
-        if self.selected.is_empty() && self.built.is_empty() {
+        if self.selected.is_empty() && self.built.is_empty() && self.action_bars.is_empty() {
             return;
         }
         let open = |key: &RepoKey| {
@@ -116,6 +125,7 @@ impl<D: RoutedContribution + Clone> ViewRouter<D> {
         self.selected
             .retain(|path, _| state.repos.iter().any(|repo| &repo.spec.workdir == path));
         self.built.retain(|(key, _), _| open(key));
+        self.action_bars.retain(|(key, _), _| open(key));
     }
 }
 
@@ -172,8 +182,13 @@ impl GitCometView {
         self.bottom_status_bar
             .update(cx, |bar, cx| bar.set_active_view(active_view, cx));
         let enabled = !self.window_gated && navigation.is_none();
-        self.action_bar
-            .update(cx, |bar, cx| bar.set_extension_navigation(navigation, cx));
+        let slot = navigation.as_ref().and_then(|_| {
+            let repo = self.active_repo()?;
+            self.repository_views.as_ref()?.active_action_bar(repo)
+        });
+        self.action_bar.update(cx, |bar, cx| {
+            bar.set_extension_navigation(navigation, slot, cx)
+        });
         crate::app::set_diff_fallback_enabled(self.window_handle.window_id(), enabled, cx);
     }
 
@@ -309,16 +324,21 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) {
         let key = repo_key(&repo);
-        let (count, current, build) = match area {
+        let (count, current, build, bar_build) = match area {
             RoutedArea::Main => {
                 let Some(router) = self.repository_views.as_ref() else {
                     return;
                 };
-                let build = index
+                let unbuilt = index
                     .filter(|index| router.built(&repo, *index).is_none())
                     .and_then(|index| router.views.get(index))
-                    .map(|(_, view)| view.builder());
-                (router.len(), router.selected(&repo), build)
+                    .map(|(_, view)| view);
+                (
+                    router.len(),
+                    router.selected(&repo),
+                    unbuilt.map(|view| view.builder()),
+                    unbuilt.and_then(|view| view.action_bar.clone()),
+                )
             }
             RoutedArea::Details => {
                 let Some(router) = self.details_tabs.as_ref() else {
@@ -328,7 +348,7 @@ impl GitCometView {
                     .filter(|index| router.built(&repo, *index).is_none())
                     .and_then(|index| router.views.get(index))
                     .map(|(_, view)| view.builder());
-                (router.len(), router.selected(&repo), build)
+                (router.len(), router.selected(&repo), build, None)
             }
         };
         let index = index.filter(|index| *index < count);
@@ -338,13 +358,21 @@ impl GitCometView {
         // Built before the router is borrowed again: the builder may reach
         // the router through the host.
         let built = build.and_then(|build| self.build_routed(build, &repo, window, cx));
-        let (selected, views) = match area {
+        let bar = built
+            .as_ref()
+            .and(bar_build)
+            .and_then(|build| self.build_routed(build, &repo, window, cx));
+        let (selected, views, action_bars) = match area {
             RoutedArea::Main => match self.repository_views.as_mut() {
-                Some(router) => (&mut router.selected, &mut router.built),
+                Some(router) => (
+                    &mut router.selected,
+                    &mut router.built,
+                    Some(&mut router.action_bars),
+                ),
                 None => return,
             },
             RoutedArea::Details => match self.details_tabs.as_mut() {
-                Some(router) => (&mut router.selected, &mut router.built),
+                Some(router) => (&mut router.selected, &mut router.built, None),
                 None => return,
             },
         };
@@ -352,6 +380,9 @@ impl GitCometView {
             Some(index) => {
                 if let Some(view) = built {
                     views.insert((key, index), view);
+                }
+                if let (Some(bar), Some(action_bars)) = (bar, action_bars) {
+                    action_bars.insert((key, index), bar);
                 }
                 if !views.contains_key(&(key, index)) {
                     return;

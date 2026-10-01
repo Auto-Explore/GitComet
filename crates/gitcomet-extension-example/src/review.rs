@@ -666,6 +666,10 @@ impl Extension for ReviewExtension {
                 RepositoryViewDescriptor::new("Changes", ICON_PATH, |context, _window, cx| {
                     cx.new(|cx| crate::changes::ChangesView::new(context, cx))
                         .into()
+                })
+                .with_action_bar(|context, _window, cx| {
+                    cx.new(|cx| crate::changes::ChangesActions::new(context, cx))
+                        .into()
                 }),
             )
             .bottom_panel(
