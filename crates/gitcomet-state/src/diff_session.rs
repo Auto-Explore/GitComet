@@ -149,8 +149,10 @@ pub(crate) struct DiffSessionLoads {
 
 /// Where a hosted file list's changes come from.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum ChangeSource {
     /// Changes in this repository's index or working directory.
+    #[non_exhaustive]
     Worktree {
         area: DiffArea,
         include_untracked: bool,
@@ -158,6 +160,7 @@ pub enum ChangeSource {
     /// What a commit changed, against its first parent.
     Commit(CommitId),
     /// `from` to `to` (the working tree when `None`).
+    #[non_exhaustive]
     Comparison {
         from: CommitId,
         to: Option<CommitId>,
@@ -166,6 +169,17 @@ pub enum ChangeSource {
 }
 
 impl ChangeSource {
+    pub fn worktree(area: DiffArea, include_untracked: bool) -> Self {
+        Self::Worktree {
+            area,
+            include_untracked,
+        }
+    }
+
+    pub fn comparison(from: CommitId, to: Option<CommitId>, options: ComparisonOptions) -> Self {
+        Self::Comparison { from, to, options }
+    }
+
     /// The diff target for one listed change, carrying its rename source.
     pub fn target_for(&self, change: &CommitFileChange, base: Option<&CommitId>) -> DiffTarget {
         match self {

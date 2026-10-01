@@ -2148,8 +2148,19 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         let _ = self.root_view.update(cx, move |root, cx| {
-            root.submodule_diff_bootstrap =
-                Some(SubmoduleDiffBootstrap::new(submodule_repo_path, target));
+            let bootstrap = SubmoduleDiffBootstrap::new(submodule_repo_path, target);
+            // A submodule's own tab is a repository entry like any other.
+            if let gitcomet_extension_api::GateDecision::Deny { reason } =
+                crate::view::extension_host::entry_decision(
+                    &bootstrap.repo_path,
+                    gitcomet_extension_api::EntryOrigin::Chooser,
+                    cx,
+                )
+            {
+                root.show_repository_entry_denial(reason, cx);
+                return;
+            }
+            root.submodule_diff_bootstrap = Some(bootstrap);
             root.drive_submodule_diff_bootstrap();
             cx.notify();
         });

@@ -38,11 +38,7 @@ impl ChangesView {
             .window
             .create_file_list(
                 &context.repository,
-                ChangeSource::Comparison {
-                    from: CommitId("HEAD".into()),
-                    to: None,
-                    options: Default::default(),
-                },
+                ChangeSource::comparison(CommitId("HEAD".into()), None, Default::default()),
                 move |_, target, cx| {
                     let _ = view.update(cx, |this, cx| this.show(target, cx));
                 },

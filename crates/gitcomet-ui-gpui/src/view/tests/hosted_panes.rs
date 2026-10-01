@@ -153,10 +153,7 @@ fn worktree_lists_respect_the_index_and_untracked_option(cx: &mut gpui::TestAppC
         .map(|(area, include_untracked)| {
             host.create_file_list(
                 &repository,
-                ChangeSource::Worktree {
-                    area,
-                    include_untracked,
-                },
+                ChangeSource::worktree(area, include_untracked),
                 |_, _, _| {},
                 app,
             )
@@ -226,11 +223,11 @@ fn two_panes_and_a_list_change_cancel_and_drop_independently(cx: &mut gpui::Test
         let list = host
             .create_file_list(
                 &repository,
-                ChangeSource::Comparison {
-                    from: gitcomet_core::domain::CommitId("HEAD".into()),
-                    to: None,
-                    options: Default::default(),
-                },
+                ChangeSource::comparison(
+                    gitcomet_core::domain::CommitId("HEAD".into()),
+                    None,
+                    Default::default(),
+                ),
                 move |change, target, _| {
                     *seen.borrow_mut() = Some((change.path.clone(), target));
                 },
@@ -323,11 +320,7 @@ fn retargeting_ignores_old_notifications_and_clears_files_before_loading(
         (host, repository)
     });
     let target = |path: &str| DiffTarget::working_tree(path.into(), DiffArea::Unstaged);
-    let source = ChangeSource::Comparison {
-        from: CommitId("HEAD".into()),
-        to: None,
-        options: Default::default(),
-    };
+    let source = ChangeSource::comparison(CommitId("HEAD".into()), None, Default::default());
     let (seed_pane, seed_list) = cx.update(|_, app| {
         (
             host.create_diff_pane(&repository, target("a.rs"), DiffPaneOptions::default(), app)

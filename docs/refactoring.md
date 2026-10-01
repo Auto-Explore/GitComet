@@ -383,6 +383,27 @@ Since then:
   `reducer/util.rs` to `reducer/auth.rs`.
 - The theme and live-syntax inline tests moved to child test files.
 - UI repository tests share one `test_support::git` runner.
+- Extension API hygiene before a downstream product pins a revision:
+  descriptors, history annotations, sidebar rows and file sets,
+  `FileListMarks`, and the identity's links and branding are
+  `#[non_exhaustive]` with `new`/`with_*` builders (`const` for identity
+  values); the enums an extension matches (`HostError`, `EntryOrigin`,
+  `CloseScope`, `DiffPaneEvent`, `Slot`, ...) and `ChangeSource`, `FetchMsg`,
+  `ChangedPaths`, `RepoExternalChange`, and `AppMode` are non-exhaustive, with
+  constructors for the struct variants extensions build. Host-only
+  constructors and the `*Impl` traits are `#[doc(hidden)]` and off the crate
+  root, so the snapshot no longer moves when the host grows.
+  `Extension::window_opened` is the one window hook (`Registrar::
+  on_window_opened` and `WindowExtensionFactory` are gone), and
+  `ProductIdentityBuilder::hidden_ref_prefixes` matches the const builder.
+- The kit's clipboard diagnostics follow the runtime policy
+  (`UiRuntime::uses_clipboard_diagnostics`) rather than `cfg(test)`, so a
+  dependent's tests neither probe the desktop nor write to the crash
+  directory.
+- Opening a submodule's diff in its own tab passes the entry gates, and a
+  running submodule clone asks before its repository or window closes.
+- `file_list/decor_update_no_replan` reports the plan cache's real build
+  count instead of a constant.
 
 ## History find (#532)
 

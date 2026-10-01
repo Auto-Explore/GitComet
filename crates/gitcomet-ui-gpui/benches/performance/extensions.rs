@@ -36,10 +36,12 @@ fn bench_extension_frames(c: &mut Criterion) {
         bench_frame(c, name, |b| {
             b.iter(|| std::hint::black_box(fixture.file_window(decor)))
         });
+        let plans_before = fixture.file_plan_builds();
         let rows = measure_sidecar_allocations(|| fixture.file_window(decor));
+        let replans = fixture.file_plan_builds() - plans_before;
         emit_sidecar_metrics(
             name,
-            json!({"rows_rendered":rows,"total_files":100000,"replans":0})
+            json!({"rows_rendered":rows,"total_files":100000,"replans":replans})
                 .as_object()
                 .unwrap()
                 .clone(),

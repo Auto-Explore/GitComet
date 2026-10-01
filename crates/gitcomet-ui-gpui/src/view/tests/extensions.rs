@@ -678,6 +678,49 @@ fn entry_gates_refuse_marked_repositories_with_a_notice(cx: &mut gpui::TestAppCo
     });
 }
 
+/// Opening a submodule's diff in its own tab is an entry like any other: a
+/// gate that refuses the submodule stops it before a tab opens.
+#[gpui::test]
+fn opening_a_submodule_tab_passes_the_entry_gates(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    cx.update(install_example);
+    let parent = tempfile::tempdir().unwrap();
+    let submodule = parent.path().join("vendored");
+    std::fs::create_dir_all(&submodule).unwrap();
+    std::fs::write(submodule.join(review::DENY_MARKER), "").unwrap();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            test_support::push_test_state(this, state_with_repo(RepoId(1), parent.path()), cx);
+        });
+    });
+    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    cx.update(|_window, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.open_submodule_inner_diff(
+                submodule.clone(),
+                DiffTarget::working_tree("a.rs".into(), DiffArea::Unstaged),
+                cx,
+            )
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        let view = view.read(app);
+        assert!(view.submodule_diff_bootstrap.is_none());
+        let toasts = view.toast_host.read(app).toasts_for_tests(app);
+        assert!(
+            toasts
+                .iter()
+                .any(|(kind, text)| *kind == components::ToastKind::Warning
+                    && text.contains(review::DENY_MARKER)),
+            "{toasts:?}"
+        );
+    });
+}
+
 #[gpui::test]
 fn close_guards_ask_once_after_the_host_guards(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
@@ -754,6 +797,40 @@ fn running_git_operations_ask_before_the_window_closes(cx: &mut gpui::TestAppCon
             assert_eq!(
                 prompt.reasons,
                 vec![SharedString::from("pushing-repo is still running a push.")]
+            );
+        });
+    });
+}
+
+/// Adding a submodule clones it; closing its repository mid-clone would kill
+/// that clone, so it asks like a push does.
+#[gpui::test]
+fn a_running_submodule_clone_asks_before_its_repository_closes(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = (*state_with_repo(RepoId(1), Path::new("/tmp/parent-repo"))).clone();
+    state.repos[0].submodule_add_in_flight =
+        Some(gitcomet_state::model::SubmoduleAddProgressState {
+            url: "https://example.com/lib.git".into(),
+            path: "vendor/lib".into(),
+        });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            test_support::push_test_state(this, Arc::new(state), cx);
+        });
+    });
+    test_support::redraw(cx);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.request_close_repos(vec![RepoId(1)], None, cx);
+            let prompt = this.pending_close_guard_prompt.clone().unwrap();
+            assert_eq!(
+                prompt.reasons,
+                vec![SharedString::from(
+                    "parent-repo is still running a submodule clone."
+                )]
             );
         });
     });

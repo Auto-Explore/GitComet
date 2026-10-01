@@ -10,7 +10,7 @@ use super::*;
 use gitcomet_extension_api::{
     CommandContext, DialogContent, DialogHandle, EntryOrigin, ExtensionId, GateDecision, HostError,
     MenuLocation, Registry, RepositoryEntryRequest, RepositoryHandle, StateObserver, WindowHost,
-    WindowHostImpl, storage::StorageError,
+    host::WindowHostImpl, storage::StorageError,
 };
 use gitcomet_extension_api::{HostNotifier, ShellEvent, Slot, WindowExtension};
 use gitcomet_state::msg::Msg;
@@ -386,6 +386,7 @@ impl WindowHostImpl for HostWindow {
                             };
                             Some(index)
                         }
+                        _ => return,
                     };
                     root.select_repository_view(&repository, index, window, cx);
                 });
@@ -811,7 +812,7 @@ impl ExtensionWindow {
                 let slots = pending.take_pending();
                 if view
                     .update(cx, |view, cx| {
-                        for slot in Slot::ALL {
+                        for slot in Slot::ALL.iter().copied() {
                             if slots & slot.mask() != 0 {
                                 view.invalidate_extension_slot(slot, cx);
                             }
@@ -1034,10 +1035,6 @@ pub(crate) fn window_opened(view: &Entity<GitCometView>, cx: &mut App) {
                         .update(cx, |bar, cx| bar.set_brand(brand, cx));
                 });
             });
-        }
-        for (_, callback) in registry.window_opened() {
-            crate::view::perf::extension_dispatch();
-            callback(host.clone(), cx);
         }
     });
 }

@@ -9,8 +9,8 @@ use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::view::rows::{CommitFileFilter, CommitFileSort, FileListRow, RowIx};
 use gitcomet_core::domain::{CommitFileChange, CommitId};
 use gitcomet_extension_api::{
-    ChangeSource, FileListImpl, FileListMode, FileSelected, RepositoryHandle, StateSubscription,
-    WindowHost,
+    ChangeSource, FileListMode, FileSelected, RepositoryHandle, StateSubscription, WindowHost,
+    panes::FileListImpl,
 };
 use gitcomet_state::diff_session::{DiffSessionMsg, DiffViewId};
 use std::path::Path;
@@ -70,6 +70,10 @@ impl FileListView {
             controller.set_files(files, revision);
         }
         self.controller.borrow_mut().plan().row_len()
+    }
+    #[cfg(feature = "benchmarks")]
+    pub(in crate::view) fn benchmark_plan_builds(&self) -> u64 {
+        self.controller.borrow().plan_cache.builds()
     }
     #[cfg(feature = "benchmarks")]
     pub(in crate::view) fn benchmark_window(
@@ -630,6 +634,7 @@ impl FileListImpl for HostedFileList {
             gitcomet_extension_api::FileListSort::EditSizeDescending => {
                 CommitFileSort::EditSizeDescending
             }
+            _ => CommitFileSort::PathAscending,
         };
         self.entity.update(cx, |list, cx| {
             list.controller.borrow_mut().set_sort(sort);
@@ -643,6 +648,7 @@ impl FileListImpl for HostedFileList {
             gitcomet_extension_api::FileListFilter::Removed => CommitFileFilter::Removed,
             gitcomet_extension_api::FileListFilter::Added => CommitFileFilter::Added,
             gitcomet_extension_api::FileListFilter::Renamed => CommitFileFilter::Renamed,
+            _ => CommitFileFilter::All,
         };
         self.entity.update(cx, |list, cx| {
             list.controller.borrow_mut().kind_filter = filter;

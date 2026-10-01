@@ -1,5 +1,6 @@
 //! Settings has its own weak host and lifecycle, even without a repository.
 use super::*;
+use gitcomet_extension_api::host::WindowHostImpl;
 use gitcomet_extension_api::*;
 use std::{
     cell::{Cell, RefCell},
@@ -414,6 +415,7 @@ impl Render for SettingsMenu {
                         })
                         .into_any_element()
                     }
+                    _ => gpui::Empty.into_any_element(),
                 }
             }))
     }

@@ -282,6 +282,7 @@ impl DiffInset {
 
 /// The presentation of the two sides; changing it preserves file-line anchors.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DiffLayout {
     #[default]
     Inline,
@@ -295,6 +296,7 @@ pub struct DiffScrollAnchor {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DiffPaneEvent {
     SelectionChanged(Option<DiffLineRange>),
     TargetChanged(Option<DiffTarget>),
@@ -365,6 +367,7 @@ impl DiffSnapshot {
 ///
 /// A pane keeps the kind of source it was created with: a repository pane
 /// ignores snapshots and a snapshot pane ignores targets and encodings.
+#[doc(hidden)]
 pub trait DiffPaneImpl {
     fn view(&self) -> AnyView;
     /// The repository target shown; `None` for a snapshot pane.
@@ -404,6 +407,7 @@ pub trait DiffPaneImpl {
 pub struct DiffPane(Rc<dyn DiffPaneImpl>);
 
 impl DiffPane {
+    #[doc(hidden)]
     pub fn new(pane: Rc<dyn DiffPaneImpl>) -> Self {
         Self(pane)
     }
@@ -504,6 +508,7 @@ pub enum FileListMode {
 pub type FileSelected = Rc<dyn Fn(&CommitFileChange, DiffTarget, &mut App)>;
 
 /// What the host implements behind a [`FileList`].
+#[doc(hidden)]
 pub trait FileListImpl {
     fn view(&self) -> AnyView;
     fn set_source(&self, source: ChangeSource, cx: &mut App);
@@ -544,6 +549,7 @@ impl FileList {
     pub fn ordered_paths(&self, cx: &App) -> Vec<PathBuf> {
         self.0.files(cx).into_iter().map(|file| file.path).collect()
     }
+    #[doc(hidden)]
     pub fn new(list: Rc<dyn FileListImpl>) -> Self {
         Self(list)
     }

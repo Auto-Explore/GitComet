@@ -303,8 +303,9 @@ impl GitCometView {
 }
 
 /// A Git operation still running in `repo` that a close would interrupt:
-/// fetches, pulls, pushes, and commits. Editor writes are the unsaved-edits
-/// guard's, so they are not counted twice.
+/// fetches, pulls (worktree pulls included), pushes, commits, and submodule
+/// clones. A window's repository clone is checked by the caller. Editor
+/// writes are the unsaved-edits guard's, so they are not counted twice.
 fn running_git_operation(repo: &RepoState) -> Option<&'static str> {
     if repo.push_in_flight > 0 {
         Some("a push")
@@ -312,6 +313,8 @@ fn running_git_operation(repo: &RepoState) -> Option<&'static str> {
         Some("a fetch or pull")
     } else if repo.commit_in_flight > 0 {
         Some("a commit")
+    } else if repo.submodule_add_in_flight.is_some() {
+        Some("a submodule clone")
     } else {
         None
     }
@@ -503,7 +506,8 @@ impl GitCometView {
                     repository: Some(super::extension_host::repository_handle(window_id, repo)),
                 })
                 .collect(),
-            CloseScope::Window | CloseScope::Application => vec![CloseRequest {
+            // Window and Application: one request for the whole window.
+            _ => vec![CloseRequest {
                 scope,
                 window: host.clone(),
                 repository: None,

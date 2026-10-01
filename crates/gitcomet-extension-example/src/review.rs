@@ -8,12 +8,13 @@
 //! that window's workspace, so they survive a restart.
 
 use crate::review_counter::ReviewCounter;
+use gitcomet_core::identity::WindowKind;
 use gitcomet_extension_api::{
     BottomPanelDescriptor, CloseDecision, CloseRequest, CloseScope, CommandContext,
     CommandDescriptor, DetailsTabDescriptor, EntryOrigin, Extension, ExtensionId, GateDecision,
     MenuLocation, Registrar, RepositoryEntryRequest, RepositoryViewContext,
-    RepositoryViewDescriptor, SettingsPageDescriptor, SidebarSectionDescriptor,
-    StatusItemDescriptor, WindowHost,
+    RepositoryViewDescriptor, SettingsPageDescriptor, ShellEvent, SidebarSectionDescriptor,
+    StatusItemDescriptor, WindowExtension, WindowHost,
 };
 use gitcomet_ui_kit::components::{Button, ButtonStyle};
 use gitcomet_ui_kit::gpui::prelude::*;
@@ -384,6 +385,23 @@ fn show_summary(context: CommandContext, _window: &mut Window, cx: &mut App) {
     );
 }
 
+/// One main window's share of the model: its counts leave with the window.
+struct ReviewWindow {
+    reviews: Entity<Reviews>,
+}
+
+impl WindowExtension for ReviewWindow {
+    fn on_event(&mut self, event: &ShellEvent, host: &WindowHost, cx: &mut App) {
+        if matches!(event, ShellEvent::WindowClosed) {
+            let window_id = host.id();
+            self.reviews.update(cx, |reviews, cx| {
+                reviews.counts.remove(&window_id);
+                cx.notify();
+            });
+        }
+    }
+}
+
 pub struct ReviewExtension;
 
 impl Extension for ReviewExtension {
@@ -395,144 +413,109 @@ impl Extension for ReviewExtension {
         registrar
             .repository_view(
                 "review",
-                RepositoryViewDescriptor {
-                    navigation: None,
-                    title: "Review".into(),
-                    icon: ICON_PATH.into(),
-                    build: Rc::new(|context, _window, cx| {
-                        cx.new(|cx| ReviewView::new(context, cx)).into()
-                    }),
-                },
+                RepositoryViewDescriptor::new("Review", ICON_PATH, |context, _window, cx| {
+                    cx.new(|cx| ReviewView::new(context, cx)).into()
+                }),
             )
             .repository_view(
                 "changes",
-                RepositoryViewDescriptor {
-                    navigation: None,
-                    title: "Changes".into(),
-                    icon: ICON_PATH.into(),
-                    build: Rc::new(|context, _window, cx| {
-                        cx.new(|cx| crate::changes::ChangesView::new(context, cx))
-                            .into()
-                    }),
-                },
+                RepositoryViewDescriptor::new("Changes", ICON_PATH, |context, _window, cx| {
+                    cx.new(|cx| crate::changes::ChangesView::new(context, cx))
+                        .into()
+                }),
             )
             .bottom_panel(
                 REVIEW_LOG_PANEL,
-                BottomPanelDescriptor {
-                    title: "Review Log".into(),
-                    icon: ICON_PATH.into(),
-                    build: Rc::new(|context, _window, cx| {
-                        cx.new(|cx| ReviewLog::new(context, cx)).into()
-                    }),
-                },
+                BottomPanelDescriptor::new("Review Log", ICON_PATH, |context, _window, cx| {
+                    cx.new(|cx| ReviewLog::new(context, cx)).into()
+                }),
             )
             .details_tab(
                 "review-details",
-                DetailsTabDescriptor {
-                    title: "Review".into(),
-                    build: Rc::new(|context, _window, cx| {
-                        cx.new(|cx| ReviewCount::new(context, "example_review_details", cx))
-                            .into()
-                    }),
-                },
+                DetailsTabDescriptor::new("Review", |context, _window, cx| {
+                    cx.new(|cx| ReviewCount::new(context, "example_review_details", cx))
+                        .into()
+                }),
             )
             .sidebar_section(
                 "review-sidebar",
-                SidebarSectionDescriptor {
-                    title: "Review".into(),
-                    build: Rc::new(|context, _window, cx| {
-                        cx.new(|cx| ReviewCount::new(context, "example_review_sidebar", cx))
-                            .into()
-                    }),
-                },
+                SidebarSectionDescriptor::new("Review", |context, _window, cx| {
+                    cx.new(|cx| ReviewCount::new(context, "example_review_sidebar", cx))
+                        .into()
+                }),
             )
             .status_item(
                 "review-status",
-                StatusItemDescriptor {
-                    view: None,
-                    build: Rc::new(|window, _, cx| {
-                        cx.new(|cx| ReviewStatus::new(window, cx)).into()
-                    }),
-                },
+                StatusItemDescriptor::new(|window, _, cx| {
+                    cx.new(|cx| ReviewStatus::new(window, cx)).into()
+                }),
             )
             .settings_page(
                 "review-settings",
-                SettingsPageDescriptor {
-                    title: "Review".into(),
-                    icon: ICON_PATH.into(),
-                    keywords: "review unreviewed close confirm".into(),
-                    build: Rc::new(|theme, _, cx| {
-                        let reviews = reviews(cx);
-                        cx.new(|_| ReviewSettings { theme, reviews }).into()
-                    }),
-                },
+                SettingsPageDescriptor::new("Review", ICON_PATH, |theme, _, cx| {
+                    let reviews = reviews(cx);
+                    cx.new(|_| ReviewSettings { theme, reviews }).into()
+                })
+                .with_keywords("review unreviewed close confirm"),
             )
             .command(
                 "mark-reviewed",
-                CommandDescriptor {
-                    label: "Mark Repository Reviewed".into(),
-                    category: "Review".into(),
-                    keywords: "review approve".into(),
-                    requires_repository: true,
-                    run: Rc::new(|context, _window, cx| {
+                CommandDescriptor::new(
+                    "Mark Repository Reviewed",
+                    "Review",
+                    |context, _window, cx| {
                         if let Some(repository) = &context.repository {
                             mark_reviewed(&context.window, repository.workdir(), cx);
                         }
-                    }),
-                },
+                    },
+                )
+                .with_keywords("review approve")
+                .requiring_repository(),
             )
             .command(
                 "show-summary",
-                CommandDescriptor {
-                    label: "Show Review Summary".into(),
-                    category: "Review".into(),
-                    keywords: "review count".into(),
-                    requires_repository: false,
-                    run: Rc::new(show_summary),
-                },
+                CommandDescriptor::new("Show Review Summary", "Review", show_summary)
+                    .with_keywords("review count"),
             )
             .command(
                 "toggle-review-log",
-                CommandDescriptor {
-                    label: "Toggle Review Log".into(),
-                    category: "Review".into(),
-                    keywords: "review log panel".into(),
-                    requires_repository: true,
-                    run: Rc::new(toggle_review_log),
-                },
+                CommandDescriptor::new("Toggle Review Log", "Review", toggle_review_log)
+                    .with_keywords("review log panel")
+                    .requiring_repository(),
             )
             .key_binding("secondary-alt-r", "mark-reviewed", None)
             .menu_item(MenuLocation::Application, "show-summary")
             .menu_item(MenuLocation::RepositoryTab, "mark-reviewed")
             .asset("icons/review.svg", ICON_SVG)
             .repository_entry_gate("deny-marker", Rc::new(gate))
-            .close_guard("unreviewed", Rc::new(close_guard))
-            .on_window_opened(|window, cx| {
-                // Restore this window's saved counts; drop them when it closes.
-                let counts = saved_counts(&window, cx);
-                let window_id = window.id();
-                let model = reviews(cx);
-                model.update(cx, |reviews, cx| {
-                    reviews.counts.insert(window_id, counts);
-                    cx.notify();
-                });
-                if let Some(value) = gitcomet_extension_api::storage::load(&extension_id())
-                    && let Some(enabled) = value
-                        .get("confirm_close_unreviewed")
-                        .and_then(|value| value.as_bool())
-                {
-                    model.update(cx, |reviews, _| reviews.confirm_close_unreviewed = enabled);
-                }
-                cx.on_window_closed(move |cx, closed| {
-                    if closed == window_id {
-                        model.update(cx, |reviews, cx| {
-                            reviews.counts.remove(&window_id);
-                            cx.notify();
-                        });
-                    }
-                })
-                .detach();
-            });
+            .close_guard("unreviewed", Rc::new(close_guard));
+    }
+
+    /// Restores a main window's saved counts; they leave with the window.
+    fn window_opened(
+        &self,
+        host: WindowHost,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> Option<Box<dyn WindowExtension>> {
+        if host.kind() != WindowKind::Main {
+            return None;
+        }
+        let counts = saved_counts(&host, cx);
+        let window_id = host.id();
+        let model = reviews(cx);
+        model.update(cx, |reviews, cx| {
+            reviews.counts.insert(window_id, counts);
+            cx.notify();
+        });
+        if let Some(value) = gitcomet_extension_api::storage::load(&extension_id())
+            && let Some(enabled) = value
+                .get("confirm_close_unreviewed")
+                .and_then(|value| value.as_bool())
+        {
+            model.update(cx, |reviews, _| reviews.confirm_close_unreviewed = enabled);
+        }
+        Some(Box::new(ReviewWindow { reviews: model }))
     }
 }
 
@@ -558,7 +541,6 @@ mod tests {
         assert_eq!(registry.asset(ICON_PATH), Some(ICON_SVG));
         assert_eq!(registry.entry_gates().len(), 1);
         assert_eq!(registry.close_guards().len(), 1);
-        assert_eq!(registry.window_opened().len(), 1);
     }
 
     #[test]

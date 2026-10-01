@@ -12,8 +12,8 @@ use gitcomet_core::domain::{DiffRowProvider as _, DiffTarget};
 use gitcomet_core::text_format::TextEncoding;
 use gitcomet_extension_api::{
     DiffAnnotations, DiffInset, DiffLayout, DiffLegendItem, DiffLineRange, DiffLineSide,
-    DiffPaneEvent, DiffPaneImpl, DiffPaneOptions, DiffPanePolicy, DiffScrollAnchor, DiffSnapshot,
-    RepositoryHandle, StateSubscription, WindowHost,
+    DiffPaneEvent, DiffPaneOptions, DiffPanePolicy, DiffScrollAnchor, DiffSnapshot,
+    RepositoryHandle, StateSubscription, WindowHost, panes::DiffPaneImpl,
 };
 use gitcomet_state::diff_session::{DiffSession, DiffSessionMsg, DiffViewId};
 use palette::IntoColor;
@@ -249,10 +249,7 @@ impl DiffPaneView {
             );
             pane.hosted_decor.as_mut().unwrap().file_cache = self.file_cache.clone();
             pane.annotate_enabled = self.options.policy.blame;
-            pane.diff_view = match self.options.layout {
-                DiffLayout::Inline => DiffViewMode::Inline,
-                DiffLayout::Split => DiffViewMode::Split,
-            };
+            pane.diff_view = diff_view_mode(self.options.layout);
             pane.hosted_content_width = Some(
                 self.options
                     .content_width
@@ -1232,6 +1229,13 @@ impl Drop for DiffPaneView {
     }
 }
 
+fn diff_view_mode(layout: DiffLayout) -> DiffViewMode {
+    match layout {
+        DiffLayout::Split => DiffViewMode::Split,
+        _ => DiffViewMode::Inline,
+    }
+}
+
 /// The extension-facing handle; it owns the pane.
 pub(crate) struct HostedDiffPane {
     pub(crate) entity: Entity<DiffPaneView>,
@@ -1361,13 +1365,7 @@ impl DiffPaneImpl for HostedDiffPane {
             pane.options.layout = layout;
             if let Some(renderer) = &pane.renderer {
                 renderer.update(cx, |pane, cx| {
-                    pane.set_diff_view_mode(
-                        match layout {
-                            DiffLayout::Inline => DiffViewMode::Inline,
-                            DiffLayout::Split => DiffViewMode::Split,
-                        },
-                        cx,
-                    )
+                    pane.set_diff_view_mode(diff_view_mode(layout), cx)
                 });
             }
             cx.notify();

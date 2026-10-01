@@ -13,6 +13,7 @@ pub const MAX_CHANGED_PATHS: usize = 256;
 /// (a window activation). Callers must refresh broadly then; a list is never
 /// silently truncated.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum ChangedPaths {
     #[default]
     Unknown,
@@ -76,6 +77,7 @@ impl ChangedPaths {
 /// Equality compares `paths` only when `worktree` is set: they describe the
 /// worktree part of a change and mean nothing without it.
 #[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct RepoExternalChange {
     pub worktree: bool,
     pub index: bool,

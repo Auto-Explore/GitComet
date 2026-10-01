@@ -285,9 +285,17 @@ type DirLookup = FxHashMap<Arc<std::ffi::OsStr>, usize>;
 pub(in crate::view) struct FileListPlanCache {
     tree: Option<(u64, FileTree)>,
     plan: Option<(u64, FileListLayout, u64, Arc<FileListPlan>)>,
+    /// Plans built rather than reused; budgets and tests read it.
+    #[cfg(any(test, feature = "benchmarks"))]
+    builds: u64,
 }
 
 impl FileListPlanCache {
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub(in crate::view) fn builds(&self) -> u64 {
+        self.builds
+    }
+
     pub(in crate::view) fn plan_for(
         &mut self,
         projection_key: u64,
@@ -316,6 +324,10 @@ impl FileListPlanCache {
             }
         };
         self.plan = Some((projection_key, layout, collapsed_rev, Arc::clone(&plan)));
+        #[cfg(any(test, feature = "benchmarks"))]
+        {
+            self.builds += 1;
+        }
         plan
     }
 }

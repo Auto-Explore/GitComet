@@ -15,12 +15,9 @@ impl Extension for BenchExtension {
     fn register(&self, r: &mut Registrar) {
         r.repository_view(
             "second",
-            RepositoryViewDescriptor {
-                title: "Second".into(),
-                icon: "icons/diff.svg".into(),
-                navigation: None,
-                build: Rc::new(|_, _, cx| cx.new(|_| gpui::Empty).into()),
-            },
+            RepositoryViewDescriptor::new("Second", "icons/diff.svg", |_, _, cx| {
+                cx.new(|_| gpui::Empty).into()
+            }),
         );
     }
 }
@@ -248,6 +245,11 @@ impl ExtensionFrameFixture {
         self.cx
             .update(|cx| self.files.update(cx, |files, _| files.benchmark_plan(true)))
     }
+    /// File-list plans built so far; a window draw that replans moves it.
+    pub fn file_plan_builds(&mut self) -> u64 {
+        self.cx
+            .update(|cx| self.files.read(cx).benchmark_plan_builds())
+    }
     pub fn file_window(&mut self, decor_update: bool) -> usize {
         self.probe_rows(RowProbe::Files(self.files.clone(), decor_update))
     }
@@ -395,26 +397,19 @@ impl Extension for AnnotationExtension {
     fn register(&self, r: &mut Registrar) {
         r.history_annotator(
             "marks",
-            HistoryAnnotator {
-                signal: SlotSignal::default(),
-                scope_header: None,
-                annotate: Rc::new(|_, _, _| HistoryRowAnnotation {
-                    opacity: 0.75,
-                    leading: Some(RowMark {
+            HistoryAnnotator::new(SlotSignal::default(), |_, _, _| {
+                HistoryRowAnnotation::default()
+                    .with_opacity(0.75)
+                    .with_leading(RowMark {
                         label: "●".into(),
                         color: gpui::red(),
-                    }),
-                    trailing: Some(RowMark {
+                    })
+                    .with_trailing(RowMark {
                         label: "Checked".into(),
                         color: gpui::green(),
-                    }),
-                    range: Some(HistoryRangeMark {
-                        color: gpui::blue(),
-                        starts: false,
-                        ends: false,
-                    }),
-                }),
-            },
+                    })
+                    .with_range(HistoryRangeMark::new(gpui::blue(), false, false))
+            }),
         );
     }
 }

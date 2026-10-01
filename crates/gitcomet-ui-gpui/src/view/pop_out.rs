@@ -4,7 +4,7 @@
 
 use super::*;
 use gitcomet_extension_api::{
-    HostError, OnWindowClosed, PopOutImpl, PopOutWindow, WindowContent, WindowHost,
+    HostError, OnWindowClosed, PopOutWindow, WindowContent, WindowHost, host::PopOutImpl,
 };
 use gpui::{TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions};
 use std::rc::Rc;

@@ -4186,15 +4186,15 @@ fn settings_extensions_have_a_host_revisioned_gates_and_window_lifetime(
             let calls = self.calls.clone();
             r.window_gate(
                 "gate",
-                WindowGateDescriptor {
-                    signal: self.signal.clone(),
-                    active: Rc::new(move |host, _| {
+                WindowGateDescriptor::new(
+                    self.signal.clone(),
+                    move |host, _| {
                         assert_eq!(host.kind(), gitcomet_core::identity::WindowKind::Settings);
                         calls.set(calls.get() + 1);
                         active.get()
-                    }),
-                    build: Rc::new(|_, _, cx| cx.new(|_| gpui::Empty).into()),
-                },
+                    },
+                    |_, _, cx| cx.new(|_| gpui::Empty).into(),
+                ),
             );
         }
         fn window_opened(

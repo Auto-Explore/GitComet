@@ -504,3 +504,22 @@ fn perf_display_position_per_visible_row() {
         elapsed / FRAMES as u32
     );
 }
+
+#[test]
+fn the_plan_cache_counts_only_the_plans_it_builds() {
+    let paths: Vec<PathBuf> = ["src/a.rs", "src/b.rs"].iter().map(PathBuf::from).collect();
+    let build = || {
+        FileTree::build(
+            paths.iter().map(|p| FileTreeItem::new(p.as_path())),
+            CommitFileSort::PathAscending,
+        )
+    };
+    let collapsed = CollapsedDirs::default();
+    let mut cache = FileListPlanCache::default();
+    let first = cache.plan_for(1, FileListLayout::Tree, &collapsed, 2, build);
+    let again = cache.plan_for(1, FileListLayout::Tree, &collapsed, 2, build);
+    assert!(Arc::ptr_eq(&first, &again));
+    assert_eq!(cache.builds(), 1);
+    cache.plan_for(2, FileListLayout::Tree, &collapsed, 2, build);
+    assert_eq!(cache.builds(), 2);
+}

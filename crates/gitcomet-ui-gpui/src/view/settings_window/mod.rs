@@ -781,6 +781,7 @@ pub(in crate::view) fn open_settings_at(
                 };
                 view.select_category(page, cx);
             }
+            _ => return,
         }
         cx.notify();
     });
