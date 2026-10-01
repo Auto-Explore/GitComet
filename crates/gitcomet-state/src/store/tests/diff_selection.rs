@@ -4143,6 +4143,7 @@ fn selecting_another_worktree_retires_the_previous_worktrees_inline_diff() {
         &id_alloc,
         &mut state,
         Msg::SelectWorktreeUncommitted {
+            request_id: None,
             repo_id: RepoId(1),
             path: worktree_a.clone(),
         },
@@ -4157,6 +4158,7 @@ fn selecting_another_worktree_retires_the_previous_worktrees_inline_diff() {
         &id_alloc,
         &mut state,
         Msg::SelectWorktreeUncommitted {
+            request_id: None,
             repo_id: RepoId(1),
             path: worktree_b.clone(),
         },
@@ -4242,6 +4244,7 @@ fn retiring_a_worktrees_inline_diff_leaves_the_commit_diff_behind_it_intact() {
         &id_alloc,
         &mut state,
         Msg::SelectCommit {
+            request_id: None,
             repo_id: RepoId(1),
             commit_id: CommitId("c1".into()),
         },
@@ -4865,6 +4868,7 @@ fn reselecting_the_same_worktree_row_is_a_no_op() {
     state.active_repo = Some(RepoId(1));
 
     let select = || Msg::SelectWorktreeUncommitted {
+        request_id: None,
         repo_id: RepoId(1),
         path: path.clone(),
     };
@@ -4942,13 +4946,17 @@ fn every_way_out_of_a_worktree_selection_retires_its_inline_diff() {
         (
             "selecting a commit",
             Msg::SelectCommit {
+                request_id: None,
                 repo_id: RepoId(1),
                 commit_id: CommitId("tip".into()),
             },
         ),
         (
             "clearing the commit selection",
-            Msg::ClearCommitSelection { repo_id: RepoId(1) },
+            Msg::ClearCommitSelection {
+                request_id: None,
+                repo_id: RepoId(1),
+            },
         ),
         (
             "a scan that no longer lists the worktree",
@@ -4960,6 +4968,7 @@ fn every_way_out_of_a_worktree_selection_retires_its_inline_diff() {
         (
             "switching to another worktree",
             Msg::SelectWorktreeUncommitted {
+                request_id: None,
                 repo_id: RepoId(1),
                 path: PathBuf::from("/tmp/wt/b"),
             },
@@ -4989,6 +4998,7 @@ fn every_way_out_of_a_worktree_selection_retires_its_inline_diff() {
         &id_alloc,
         &mut state,
         Msg::SelectWorktreeUncommitted {
+            request_id: None,
             repo_id: RepoId(1),
             path: worktree.clone(),
         },
@@ -5038,7 +5048,10 @@ fn a_submodule_inline_diff_survives_the_worktree_invariant() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ClearCommitSelection { repo_id: RepoId(1) },
+        Msg::ClearCommitSelection {
+            request_id: None,
+            repo_id: RepoId(1),
+        },
     );
 
     assert!(
@@ -5071,6 +5084,7 @@ fn selecting_a_worktree_requests_a_scan_for_its_own_files() {
         &id_alloc,
         &mut state,
         Msg::SelectWorktreeUncommitted {
+            request_id: None,
             repo_id: RepoId(1),
             path: selected.clone(),
         },

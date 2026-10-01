@@ -406,6 +406,13 @@ impl MainPaneView {
             self.diff_search_prev_match();
             return true;
         }
+        if self.history_is_active_surface()
+            && self.history_view.update(cx, |history, cx| {
+                history.history_find_is_open() && history.history_find_step(false, cx)
+            })
+        {
+            return true;
+        }
         self.navigate_prev_diff_change(cx)
     }
 
@@ -415,6 +422,13 @@ impl MainPaneView {
     ) -> bool {
         if self.diff_search_active {
             self.diff_search_next_match();
+            return true;
+        }
+        if self.history_is_active_surface()
+            && self.history_view.update(cx, |history, cx| {
+                history.history_find_is_open() && history.history_find_step(true, cx)
+            })
+        {
             return true;
         }
         self.navigate_next_diff_change(cx)

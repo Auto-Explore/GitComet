@@ -87,6 +87,7 @@ pub enum IndexedHistoryMsg {
         index: HistoryIndexHandle,
     },
     Select {
+        request_id: Option<u64>,
         repo_id: RepoId,
         commit_id: gitcomet_core::domain::CommitId,
         mode: crate::msg::CommitSelectMode,

@@ -5378,8 +5378,11 @@ fn commit_message_text_input_secondary_f_activates_diff_search(cx: &mut gpui::Te
     });
 }
 
+/// With no diff visible the main pane shows the history list, so Cmd-F from
+/// the commit-message input opens the history find bar instead of the diff
+/// search.
 #[gpui::test]
-fn commit_message_text_input_secondary_f_without_visible_diff_is_noop(
+fn commit_message_text_input_secondary_f_without_visible_diff_opens_history_find(
     cx: &mut gpui::TestAppContext,
 ) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -5406,9 +5409,16 @@ fn commit_message_text_input_secondary_f_without_visible_diff_is_noop(
     apply_state(cx, &view, app_state_with_active_repo(repo));
     focus_commit_message_input(cx, &view);
     cx.update(|window, app| {
+        window.activate_window();
         crate::app::bind_app_keys_for_test(app);
         let _ = window.draw(app);
     });
+    let history_view =
+        cx.update(|_window, app| view.read(app).main_pane.read(app).history_view.clone());
+    assert!(
+        !cx.update(|_window, app| history_view.read(app).history_find_is_open()),
+        "the history find bar starts closed"
+    );
 
     cx.simulate_keystrokes("secondary-f");
     draw_and_drain_test_window(cx);
@@ -5418,8 +5428,40 @@ fn commit_message_text_input_secondary_f_without_visible_diff_is_noop(
         "expected secondary-f to avoid activating diff search when no diff is visible"
     );
     assert!(
-        commit_message_input_is_focused(cx, &view),
-        "expected secondary-f with no visible diff to leave focus unchanged"
+        cx.update(|_window, app| history_view.read(app).history_find_is_open()),
+        "expected secondary-f with no visible diff to open the history find bar"
+    );
+    assert!(
+        cx.debug_bounds("history_find_input_slot").is_some(),
+        "expected the history find bar to be rendered"
+    );
+    assert!(
+        !commit_message_input_is_focused(cx, &view),
+        "expected secondary-f to move focus out of the commit-message input"
+    );
+    cx.update(|window, app| {
+        let focus = &history_view.read(app).history_panel_focus_handle;
+        assert!(
+            focus.contains_focused(window, app) && !focus.is_focused(window),
+            "expected focus inside the history find bar, not on the list itself"
+        );
+    });
+
+    // Typing lands in the find input: the query matches the fixture's only
+    // commit ("Initial commit" by Alice).
+    cx.simulate_input("initial");
+    wait_until(cx, "the history find query to match the commit", |cx| {
+        cx.update(|_window, app| {
+            history_view.update(app, |history, _cx| {
+                history
+                    .history_find_matches()
+                    .is_some_and(|matches| matches.visible == [0])
+            })
+        })
+    });
+    assert!(
+        !diff_search_active(cx, &view),
+        "typing in the history find bar must not open the diff search"
     );
 }
 

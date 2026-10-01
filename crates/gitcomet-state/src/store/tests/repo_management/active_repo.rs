@@ -1542,6 +1542,7 @@ fn set_active_repo_inline_realigns_a_mid_stack_reset_before_new_navigation() {
         &id_alloc,
         &mut state,
         Msg::SelectCommit {
+            request_id: None,
             repo_id: target_repo,
             commit_id: new_commit,
         },
