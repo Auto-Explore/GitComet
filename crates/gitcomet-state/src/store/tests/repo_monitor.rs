@@ -280,6 +280,28 @@ fn repo_monitor_thread_has_its_own_name() {
 }
 
 #[test]
+fn linked_worktree_monitor_threads_have_the_same_name() {
+    let mut monitors = monitor_impl::RepoMonitorManager::new();
+    let workdir = tempfile::tempdir().unwrap();
+    let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
+    let msg_tx = super::super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
+    let key = (RepoId(1), 1, workdir.path().to_path_buf());
+
+    monitors.reconcile_worktrees(
+        vec![key.clone()],
+        msg_tx,
+        std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1)),
+        std::sync::Arc::new(FailingBackend),
+    );
+
+    assert_eq!(
+        monitors.worktree_thread_name_for_test(&key).as_deref(),
+        Some("gitcomet-watch")
+    );
+    monitors.stop_all();
+}
+
+#[test]
 fn repo_monitor_manager_reports_running_enabled_monitors() {
     let mut monitors = monitor_impl::RepoMonitorManager::new();
     let (release_tx, release_rx) = std::sync::mpsc::channel();

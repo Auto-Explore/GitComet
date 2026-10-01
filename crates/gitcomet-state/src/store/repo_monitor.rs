@@ -366,36 +366,14 @@ impl RepoMonitorManager {
         let std::collections::hash_map::Entry::Vacant(entry) = self.handles.entry(repo_id) else {
             return;
         };
-        let (monitor_tx, monitor_rx) = mpsc::channel::<MonitorMsg>();
-        let monitor_tx_for_notify = monitor_tx.clone();
-        let monitor_enabled = Arc::new(AtomicBool::new(true));
-        let monitor_enabled_for_thread = Arc::clone(&monitor_enabled);
-        let config = MonitorConfig::default();
-        let leased = Arc::clone(&config.leased);
-        // Named, or it shows under its creator's name (the store worker) in
-        // profiles and per-thread CPU samples.
-        let join = thread::Builder::new()
-            .name("gitcomet-watch".into())
-            .spawn(move || {
-                repo_monitor_thread(
-                    repo_id,
-                    workdir,
-                    msg_tx,
-                    monitor_rx,
-                    monitor_tx_for_notify,
-                    active_repo_id,
-                    monitor_enabled_for_thread,
-                    backend,
-                    config,
-                )
-            })
-            .expect("spawn repo monitor thread");
-        entry.insert(RepoMonitorHandle {
-            msg_tx: monitor_tx,
-            join,
-            monitor_enabled,
-            leased,
-        });
+        entry.insert(spawn_monitor(
+            repo_id,
+            workdir,
+            msg_tx,
+            active_repo_id,
+            backend,
+            MonitorConfig::default(),
+        ));
     }
 
     pub(super) fn reconcile_worktrees(
@@ -423,38 +401,19 @@ impl RepoMonitorManager {
                 continue;
             };
             let (repo_id, lifetime, workdir) = key;
-            let (monitor_tx, monitor_rx) = mpsc::channel();
-            let enabled = Arc::new(AtomicBool::new(true));
             let config = MonitorConfig {
                 leased: Arc::new(AtomicBool::new(true)),
                 worktree_owner: Some((lifetime, workdir.clone())),
                 ..Default::default()
             };
-            let leased = config.leased.clone();
-            let thread_enabled = enabled.clone();
-            let thread_tx = monitor_tx.clone();
-            let msg_tx = msg_tx.clone();
-            let active = active_repo_id.clone();
-            let backend = backend.clone();
-            let join = thread::spawn(move || {
-                repo_monitor_thread(
-                    repo_id,
-                    workdir,
-                    msg_tx,
-                    monitor_rx,
-                    thread_tx,
-                    active,
-                    thread_enabled,
-                    backend,
-                    config,
-                )
-            });
-            entry.insert(RepoMonitorHandle {
-                msg_tx: monitor_tx,
-                join,
-                monitor_enabled: enabled,
-                leased,
-            });
+            entry.insert(spawn_monitor(
+                repo_id,
+                workdir,
+                msg_tx.clone(),
+                active_repo_id.clone(),
+                backend.clone(),
+                config,
+            ));
         }
     }
 
@@ -469,6 +428,15 @@ impl RepoMonitorManager {
     #[cfg(test)]
     pub(super) fn thread_name_for_test(&self, repo_id: RepoId) -> Option<String> {
         let handle = self.handles.get(&repo_id)?;
+        handle.join.thread().name().map(str::to_owned)
+    }
+
+    #[cfg(test)]
+    pub(super) fn worktree_thread_name_for_test(
+        &self,
+        key: &(RepoId, u64, PathBuf),
+    ) -> Option<String> {
+        let handle = self.worktree_handles.get(key)?;
         handle.join.thread().name().map(str::to_owned)
     }
 
@@ -504,6 +472,47 @@ struct RepoMonitorHandle {
     join: thread::JoinHandle<()>,
     monitor_enabled: Arc<AtomicBool>,
     leased: Arc<AtomicBool>,
+}
+
+/// Named, or the thread shows under its creator's name (the store worker)
+/// in profiles and per-thread CPU samples.
+fn spawn_monitor(
+    repo_id: RepoId,
+    workdir: PathBuf,
+    msg_tx: StoreWorkerSender,
+    active_repo_id: Arc<AtomicU64>,
+    backend: Arc<dyn GitBackend>,
+    config: MonitorConfig,
+) -> RepoMonitorHandle {
+    let (monitor_tx, monitor_rx) = mpsc::channel::<MonitorMsg>();
+    let monitor_enabled = Arc::new(AtomicBool::new(true));
+    let leased = Arc::clone(&config.leased);
+    let join = {
+        let monitor_tx = monitor_tx.clone();
+        let monitor_enabled = Arc::clone(&monitor_enabled);
+        thread::Builder::new()
+            .name("gitcomet-watch".into())
+            .spawn(move || {
+                repo_monitor_thread(
+                    repo_id,
+                    workdir,
+                    msg_tx,
+                    monitor_rx,
+                    monitor_tx,
+                    active_repo_id,
+                    monitor_enabled,
+                    backend,
+                    config,
+                )
+            })
+            .expect("spawn repo monitor thread")
+    };
+    RepoMonitorHandle {
+        msg_tx: monitor_tx,
+        join,
+        monitor_enabled,
+        leased,
+    }
 }
 
 fn stop_monitor_handle(repo_id: RepoId, handle: RepoMonitorHandle, context: &'static str) {
