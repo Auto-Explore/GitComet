@@ -476,6 +476,9 @@ fn local_branch_name(name: &gix::refs::FullNameRef) -> String {
 }
 
 fn branch_target_id(reference: &mut crate::refs::Reference<'_>) -> Result<gix::ObjectId> {
+    if let Some(id) = reference.try_id() {
+        return Ok(id.detach());
+    }
     reference
         .peel_to_id()
         .map(|id| id.detach())

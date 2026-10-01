@@ -18,7 +18,9 @@ use std::path::Path;
 /// The raw [`gix::Error`] is returned so callers can map it to their own
 /// error type or treat "not a repository" as absence.
 pub(crate) fn open_worktree_repo(workdir: &Path) -> gix::Result<gix::Repository> {
-    gix::open(git_dir_for_workdir(workdir))
+    let mut repo = gix::open(git_dir_for_workdir(workdir))?;
+    crate::refs::reload_conditional_includes(&mut repo)?;
+    Ok(repo)
 }
 
 /// Translate a failed [`open_worktree_repo`] into the crate's error type.

@@ -116,8 +116,8 @@ impl RefsView<'_> {
             Some(gix::ObjectId::from_hex(base.as_bytes()).map_err(failure)?)
         } else if base == "HEAD" {
             self.head_oid()?
-        } else if let Some(reference) = self.find(base)? {
-            reference.try_id().map(|id| id.detach())
+        } else if let Some(mut reference) = self.find(base)? {
+            Some(reference.follow_to_object().map_err(failure)?.detach())
         } else if base.len() > digest && is_hex(base) {
             return Err(failure(
                 "revision object id is longer than the repository's object format",
@@ -135,6 +135,11 @@ impl RefsView<'_> {
                 Some(Ok(id)) => Some(id),
                 // `rev-parse --quiet` would hide git's message, so name it here.
                 Some(Err(())) => {
+                    // Git applies suffix/path type hints while disambiguating.
+                    // Keep the original expression so it can select the object.
+                    if !suffix.is_empty() || path.is_some() {
+                        return self.resolve_cli(spec);
+                    }
                     return Err(failure(format!("short object id {base} is ambiguous")));
                 }
                 None => None,

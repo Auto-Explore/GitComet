@@ -1,10 +1,12 @@
 //! Storage-aware reference reads. Object access remains in gix; Git owns reftable writes.
 mod capabilities;
+mod config;
 pub(crate) mod files;
 mod reftable;
 mod revision;
 mod state;
 mod write;
+pub(crate) use config::reload_conditional_includes;
 pub(crate) use revision::{resolve, resolve_required};
 pub(crate) use state::{
     RootRef, diff_tree_to_tree, has_modules, head_tree_id_or_empty,
@@ -242,7 +244,9 @@ impl<'r> RefsView<'r> {
                 .repo
                 .try_find_reference(name.as_bstr())
                 .map(|r| {
-                    r.map(|r| {
+                    // gix's lookup expands short names; root refs must not
+                    // resolve to ordinary branches such as refs/heads/REVERT_HEAD.
+                    r.filter(|r| r.name().as_bstr() == name).map(|r| {
                         let r = r.detach();
                         reftable::Record {
                             target: r.target,
