@@ -857,10 +857,10 @@ impl KeyboardStageUnstageToggleFixture {
         let mut repo = build_synthetic_repo_state(20, 40, 2, 0, 0, 0, &commits);
         seed_repo_status_entries(&mut repo, entries.clone(), entries);
         repo.open = Loadable::Ready(());
-        repo.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-            path: paths[0].clone(),
-            area: DiffArea::Unstaged,
-        });
+        repo.diff_state.diff_target = Some(DiffTarget::working_tree(
+            paths[0].clone(),
+            DiffArea::Unstaged,
+        ));
         repo.diff_state.diff_state_rev = 1;
 
         Self {
@@ -1017,10 +1017,7 @@ impl KeyboardStageUnstageToggleFixture {
         with_select_diff_sync(
             state,
             repo_id,
-            DiffTarget::WorkingTree {
-                path: path.to_path_buf(),
-                area: next_area,
-            },
+            DiffTarget::working_tree(path.to_path_buf(), next_area),
             |_state, effects| {
                 record_keyboard_stage_unstage_select_effects(
                     effects,

@@ -91,10 +91,8 @@ mod tests {
 
     #[test]
     fn unstaged_target_uses_stage_shortcut_and_action() {
-        let target = DiffTarget::WorkingTree {
-            path: std::path::PathBuf::from("src/lib.rs"),
-            area: DiffArea::Unstaged,
-        };
+        let target =
+            DiffTarget::working_tree(std::path::PathBuf::from("src/lib.rs"), DiffArea::Unstaged);
 
         let (disabled, label, icon, shortcut) = diff_hunk_primary_metadata(Some(&target));
         assert!(!disabled);
@@ -112,10 +110,8 @@ mod tests {
 
     #[test]
     fn staged_target_uses_unstage_shortcut_and_action() {
-        let target = DiffTarget::WorkingTree {
-            path: std::path::PathBuf::from("src/lib.rs"),
-            area: DiffArea::Staged,
-        };
+        let target =
+            DiffTarget::working_tree(std::path::PathBuf::from("src/lib.rs"), DiffArea::Staged);
 
         let (disabled, label, icon, shortcut) = diff_hunk_primary_metadata(Some(&target));
         assert!(!disabled);

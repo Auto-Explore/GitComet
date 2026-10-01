@@ -249,41 +249,7 @@ fn validate_external_url(url: &str) -> Result<&str, io::Error> {
 /// `javascript:`/`data:`/`vbscript:` are script payloads, and `file:` would let
 /// text we did not author — a commit message in a cloned repository, say — open
 /// an arbitrary local file with its default application.
-const DENIED_URL_SCHEMES: [&str; 4] = ["javascript", "data", "vbscript", "file"];
-
-/// Whether a URL is something the app is willing to linkify and open.
-///
-/// Anything with a hierarchical `scheme://` part qualifies (`ssh://`, `git://`,
-/// `vscode://`, …) plus the flat `mailto:`. Requiring `://` is what keeps the
-/// script schemes out structurally — they are written `javascript:…`, never with
-/// an authority — and [`DENIED_URL_SCHEMES`] covers the rest.
-pub(crate) fn is_supported_link_url(url: &str) -> bool {
-    let Some((scheme, rest)) = url.split_once(':') else {
-        return false;
-    };
-    if !is_url_scheme(scheme) {
-        return false;
-    }
-    if DENIED_URL_SCHEMES
-        .iter()
-        .any(|denied| scheme.eq_ignore_ascii_case(denied))
-    {
-        return false;
-    }
-
-    if scheme.eq_ignore_ascii_case("mailto") {
-        !rest.is_empty()
-    } else {
-        rest.strip_prefix("//").is_some_and(|body| !body.is_empty())
-    }
-}
-
-/// The RFC 3986 scheme grammar: `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`.
-fn is_url_scheme(scheme: &str) -> bool {
-    let mut bytes = scheme.bytes();
-    bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic())
-        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
-}
+pub(crate) use gitcomet_ui_kit::text_selection::is_supported_link_url;
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn linux_open_helpers(is_wsl: bool) -> &'static [LinuxOpenHelper] {

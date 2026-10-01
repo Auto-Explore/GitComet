@@ -152,6 +152,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::ChangeTrackingSettings
+        | PopoverKind::Hosted { .. }
         | PopoverKind::ErrorDetails { .. } => None,
 
         // Popovers that implicitly use the currently active repo.
@@ -165,6 +166,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::InteractiveRebaseActionMenu { .. }
         | PopoverKind::InteractiveRebaseAutosquashMenu
         | PopoverKind::TerminalShutdownConfirm(_)
+        | PopoverKind::CloseGuardConfirm(_)
         | PopoverKind::UnsavedFileEditsConfirm(_)
         | PopoverKind::ConflictResolverInputRowMenu { .. }
         | PopoverKind::ConflictResolverChunkMenu { .. }
@@ -492,12 +494,14 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::AppMenu
         | PopoverKind::AddRepoMenu
         | PopoverKind::TerminalShutdownConfirm(_)
+        | PopoverKind::CloseGuardConfirm(_)
         | PopoverKind::UnsavedFileEditsConfirm(_)
         | PopoverKind::TerminalMenu { .. }
         | PopoverKind::RepoPicker { .. }
         | PopoverKind::CloneRepo
         | PopoverKind::ReflogEntryMenu { .. }
         | PopoverKind::ErrorDetails { .. }
+        | PopoverKind::Hosted { .. }
         | PopoverKind::CommitPrompt { .. } => {}
     }
 }
@@ -586,6 +590,10 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             message.hash(hasher);
         }
         PopoverKind::CloneRepo => 4u8.hash(hasher),
+        PopoverKind::Hosted { id, .. } => {
+            111u8.hash(hasher);
+            id.hash(hasher);
+        }
         PopoverKind::ChangeTrackingSettings => 66u8.hash(hasher),
         PopoverKind::DiffContentModeSettings => 67u8.hash(hasher),
         PopoverKind::TextFormatMenu { section } => {
@@ -772,6 +780,11 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             prompt.summary.terminal_count.hash(hasher);
             prompt.summary.running_command_count.hash(hasher);
             prompt.summary.repo_names.hash(hasher);
+        }
+        PopoverKind::CloseGuardConfirm(prompt) => {
+            112u8.hash(hasher);
+            prompt.action.hash(hasher);
+            prompt.reasons.hash(hasher);
         }
         PopoverKind::UnsavedFileEditsConfirm(prompt) => {
             68u8.hash(hasher);

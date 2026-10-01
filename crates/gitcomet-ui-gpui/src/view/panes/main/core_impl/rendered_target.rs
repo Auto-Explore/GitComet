@@ -23,7 +23,8 @@ impl MainPaneView {
         if let Some(inline) = self.active_inline_submodule_diff() {
             Some(&inline.diff_file)
         } else {
-            self.active_repo().map(|repo| &repo.diff_state.diff_file)
+            self.active_repo()
+                .map(|repo| &self.bound_diff_state(repo).diff_file)
         }
     }
 
@@ -36,7 +37,7 @@ impl MainPaneView {
             Some(&inline.diff_file_image)
         } else {
             self.active_repo()
-                .map(|repo| &repo.diff_state.diff_file_image)
+                .map(|repo| &self.bound_diff_state(repo).diff_file_image)
         }
     }
 
@@ -48,7 +49,10 @@ impl MainPaneView {
     pub(in crate::view) fn rendered_file_diff_rev(&self) -> u64 {
         self.active_inline_submodule_diff()
             .map(|inline| inline.diff_file_rev)
-            .or_else(|| self.active_repo().map(|repo| repo.diff_state.diff_file_rev))
+            .or_else(|| {
+                self.active_repo()
+                    .map(|repo| self.bound_diff_state(repo).diff_file_rev)
+            })
             .unwrap_or(0)
     }
 

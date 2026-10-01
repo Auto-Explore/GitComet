@@ -3,12 +3,12 @@
 This file documents the keyboard shortcuts currently wired in the GPUI application.
 
 Source of truth:
-- `crates/gitcomet-ui-gpui/src/app.rs`
-- `crates/gitcomet-ui-gpui/src/focused_diff.rs`
+- `crates/gitcomet-ui-gpui/src/app/bindings.rs`
+- `crates/gitcomet-ui-gpui/src/view/gitcomet_view_render.rs`
 - `crates/gitcomet-ui-gpui/src/view/terminal_panel.rs`
 - `crates/gitcomet-ui-gpui/src/view/panels/main/diff_view.rs`
 - `crates/gitcomet-ui-gpui/src/view/panes/history/find.rs`
-- `crates/gitcomet-ui-gpui/src/view/conflict_resolver.rs`
+- `crates/gitcomet-ui-gpui/src/view/panes/main/conflict_actions/`
 
 Notes:
 - `Cmd` and `Option` are the macOS names. `Ctrl` and `Alt` are the Windows/Linux equivalents.

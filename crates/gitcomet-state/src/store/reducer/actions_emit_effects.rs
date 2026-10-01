@@ -396,10 +396,7 @@ pub(super) fn start_queued_large_file_commands(
     repo_id: RepoId,
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
-    loop {
-        let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
-            break;
-        };
+    while let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
         let Some(next) = repo.pending.large_file_commands.front() else {
             break;
         };
@@ -432,6 +429,22 @@ pub(super) fn fetch_all(
     vec![Effect::FetchAll {
         repo_id,
         prune,
+        auth: None,
+    }]
+}
+
+pub(super) fn fetch_refspecs(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    remote: String,
+    refspecs: Vec<String>,
+) -> Vec<Effect> {
+    bump_in_flight(repos, state, repo_id, InFlightKind::Pull);
+    vec![Effect::FetchRefspecs {
+        repo_id,
+        remote,
+        refspecs,
         auth: None,
     }]
 }
@@ -937,12 +950,12 @@ pub(super) fn drop_stash(repo_id: RepoId, index: usize) -> Vec<Effect> {
 /// and `blame_source` are intentionally preserved so the view reloads the same
 /// target's blame against the new content.
 pub(super) fn invalidate_loaded_blame(repo_state: &mut RepoState) {
-    if !matches!(repo_state.history_state.blame, Loadable::NotLoaded) {
+    if !matches!(repo_state.diff_state.blame, Loadable::NotLoaded) {
         // Keep the outgoing annotations available to the view so the column
         // stays painted across the reload; the target is unchanged, so they
         // still describe the right file.
         repo_state.retain_blame_while_loading();
-        repo_state.history_state.blame = Loadable::NotLoaded;
+        repo_state.diff_state.blame = Loadable::NotLoaded;
     }
 }
 
@@ -1138,6 +1151,7 @@ fn command_may_change_large_file_support(command: &RepoCommandKind) -> bool {
         | RepoCommandKind::RemoveRemote { .. }
         | RepoCommandKind::SetRemoteUrl { .. } => true,
         RepoCommandKind::FetchAll
+        | RepoCommandKind::FetchRefspecs { .. }
         | RepoCommandKind::PruneMergedBranches
         | RepoCommandKind::PruneLocalTags
         | RepoCommandKind::Push
@@ -1314,6 +1328,7 @@ pub(super) fn repo_command_finished(
     let fetch_like_command = matches!(
         &command,
         RepoCommandKind::FetchAll
+            | RepoCommandKind::FetchRefspecs { .. }
             | RepoCommandKind::PruneMergedBranches
             | RepoCommandKind::Pull { .. }
             | RepoCommandKind::PullBranch { .. }
@@ -1366,6 +1381,7 @@ pub(super) fn repo_command_finished(
     }
     match &command {
         RepoCommandKind::FetchAll
+        | RepoCommandKind::FetchRefspecs { .. }
         | RepoCommandKind::PruneMergedBranches
         | RepoCommandKind::PruneLocalTags => {
             repo_state.pull_in_flight = repo_state.pull_in_flight.saturating_sub(1);

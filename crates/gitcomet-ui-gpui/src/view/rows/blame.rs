@@ -2,7 +2,7 @@
 //! recency normalization, and author-initial derivation.
 //!
 //! The blame data itself (`Vec<BlameLine>`) is produced by the existing
-//! `LoadBlame` pipeline and stored in `history_state.blame`. These helpers only
+//! `LoadBlame` pipeline and stored in `diff_state.blame`. These helpers only
 //! shape it for rendering in the diff/file-content canvas.
 
 use gitcomet_core::services::BlameLine;

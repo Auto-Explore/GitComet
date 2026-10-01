@@ -16,7 +16,8 @@ pub(super) fn panel(
     };
     let description: SharedString = match branch.as_ref() {
         Some(branch) => format!(
-            "This worktree has modified or untracked files. GitComet will force-remove it, then delete the local branch '{branch}'."
+            "This worktree has modified or untracked files. {} will force-remove it, then delete the local branch '{branch}'.",
+            crate::view::product_name()
         )
         .into(),
         None => "This worktree has modified or untracked files.".into(),

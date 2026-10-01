@@ -218,7 +218,7 @@ fn clear_cancelled_repo_loading(repo_state: &mut RepoState) {
         repo_state.set_submodules(Loadable::NotLoaded);
     }
     clear_loading(&mut repo_state.history_state.file_history);
-    clear_loading(&mut repo_state.history_state.blame);
+    clear_loading(&mut repo_state.diff_state.blame);
     if repo_state.history_state.commit_details.is_loading() {
         repo_state.set_commit_details(Loadable::NotLoaded);
     }
@@ -329,9 +329,9 @@ pub(in crate::store::reducer) fn selected_history_reloads_for_activation(
         reloads.push(SelectedHistoryReload::FileHistory(path));
     }
 
-    if matches!(repo_state.history_state.blame, Loadable::NotLoaded)
-        && let Some(path) = repo_state.history_state.blame_path.clone()
-        && let Some(source) = repo_state.history_state.blame_source.clone()
+    if matches!(repo_state.diff_state.blame, Loadable::NotLoaded)
+        && let Some(path) = repo_state.diff_state.blame_path.clone()
+        && let Some(source) = repo_state.diff_state.blame_source.clone()
     {
         reloads.push(SelectedHistoryReload::Blame { path, source });
     }
@@ -363,7 +363,7 @@ pub(in crate::store::reducer) fn append_selected_history_reload_effects(
                 });
             }
             SelectedHistoryReload::Blame { path, source } => {
-                repo_state.history_state.blame = Loadable::Loading;
+                repo_state.diff_state.blame = Loadable::Loading;
                 effects.push_effect(Effect::LoadBlame {
                     repo_id,
                     path,
@@ -1011,6 +1011,11 @@ fn fill_set_active_repo_inline_impl(
         }
     }
     append_selected_history_reload_effects(repo_id, repo_state, selected_history_reloads, effects);
+    if changed {
+        // Hosted panes whose loads the deactivation cancelled; unbounded, so
+        // not in the inline capacity above.
+        super::diff_session::resume_queued_loads(repo_state, effects);
+    }
     if let Some(effect) = persist_effect {
         effects.push(effect);
     }
@@ -1271,9 +1276,9 @@ pub(super) fn repo_opened_ok(
             repo_state.set_merge_commit_message(Loadable::Loading);
             repo_state.history_state.file_history_path = None;
             repo_state.history_state.file_history = Loadable::NotLoaded;
-            repo_state.history_state.blame_path = None;
-            repo_state.history_state.blame_source = None;
-            repo_state.history_state.blame = Loadable::NotLoaded;
+            repo_state.diff_state.blame_path = None;
+            repo_state.diff_state.blame_source = None;
+            repo_state.diff_state.blame = Loadable::NotLoaded;
             repo_state.clear_retained_blame();
             repo_state.set_worktrees(Loadable::NotLoaded);
             repo_state.set_submodules(Loadable::NotLoaded);

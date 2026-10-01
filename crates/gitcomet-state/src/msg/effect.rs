@@ -15,6 +15,7 @@ use super::RepoPathList;
 #[derive(Clone, Debug, strum::IntoStaticStr)]
 pub enum Effect {
     IndexedHistory(crate::indexed_history::IndexedHistoryEffect),
+    DiffSession(crate::diff_session::DiffSessionEffect),
     HistoryAuthors(crate::history_authors::HistoryAuthorsEffect),
     HistoryFind(crate::history_find::HistoryFindEffect),
     PersistSession {
@@ -215,6 +216,7 @@ pub enum Effect {
         from: CommitId,
         /// `None` lists files between `from` and the working tree.
         to: Option<CommitId>,
+        options: gitcomet_core::services::ComparisonOptions,
         /// Echoed back on the reply so a completion that lost a race against a
         /// newer load can be dropped. See `HistoryState::range_files_request`.
         request: u64,
@@ -518,6 +520,12 @@ pub enum Effect {
     FetchAll {
         repo_id: RepoId,
         prune: bool,
+        auth: Option<StagedGitAuth>,
+    },
+    FetchRefspecs {
+        repo_id: RepoId,
+        remote: String,
+        refspecs: Vec<String>,
         auth: Option<StagedGitAuth>,
     },
     PruneMergedBranches {

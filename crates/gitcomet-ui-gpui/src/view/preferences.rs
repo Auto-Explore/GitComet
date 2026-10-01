@@ -287,7 +287,7 @@ impl UiPreferences {
                 sidebar_collapsed: session.sidebar_collapsed.unwrap_or(false),
             },
             appearance: AppearancePreferences {
-                metrics: crate::appearance::Appearance::from_session(session),
+                metrics: crate::session_ui::appearance(session),
                 theme_mode: session
                     .theme_mode
                     .as_deref()

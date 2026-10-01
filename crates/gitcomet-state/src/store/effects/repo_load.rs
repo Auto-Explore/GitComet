@@ -118,10 +118,7 @@ mod selected_diff_guard_tests {
     use gitcomet_core::domain::RepoSpec;
 
     fn target(path: &str) -> DiffTarget {
-        DiffTarget::WorkingTree {
-            path: PathBuf::from(path),
-            area: DiffArea::Unstaged,
-        }
+        DiffTarget::working_tree(PathBuf::from(path), DiffArea::Unstaged)
     }
 
     fn thread_state_with_target(
@@ -882,10 +879,7 @@ pub(super) fn schedule_load_conflict_file(
             match repo.conflict_file_stages(&path) {
                 Ok(v) => Ok(v),
                 Err(e) if matches!(e.kind(), ErrorKind::Unsupported(_)) => repo
-                    .diff_file_text(&DiffTarget::WorkingTree {
-                        path: path.clone(),
-                        area: DiffArea::Unstaged,
-                    })
+                    .diff_file_text(&DiffTarget::working_tree(path.clone(), DiffArea::Unstaged))
                     .map(|opt| {
                         opt.map(|d| {
                             let ours_bytes = d
@@ -1056,6 +1050,19 @@ pub(super) fn schedule_load_file_history(
     });
 }
 
+/// Blame for `path` at `source`: History's and diff sessions' shared reader.
+pub(super) fn load_blame(
+    repo: &dyn GitRepository,
+    path: &Path,
+    source: &gitcomet_core::domain::BlameSource,
+) -> gitcomet_core::services::Result<Vec<gitcomet_core::services::BlameLine>> {
+    use gitcomet_core::domain::BlameSource;
+    match source {
+        BlameSource::Revision(rev) => repo.blame_file(path, rev.as_deref()),
+        BlameSource::WorkingTree(area) => repo.blame_worktree_file(path, *area),
+    }
+}
+
 pub(super) fn schedule_load_blame(
     executor: &TaskExecutor,
     repos: &RepoMap,
@@ -1064,12 +1071,8 @@ pub(super) fn schedule_load_blame(
     path: PathBuf,
     source: gitcomet_core::domain::BlameSource,
 ) {
-    use gitcomet_core::domain::BlameSource;
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = match &source {
-            BlameSource::Revision(rev) => repo.blame_file(&path, rev.as_deref()),
-            BlameSource::WorkingTree(area) => repo.blame_worktree_file(&path, *area),
-        };
+        let result = load_blame(repo.as_ref(), &path, &source);
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::BlameLoaded {
@@ -2004,6 +2007,7 @@ pub(super) fn schedule_resolve_commit_lookup(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn schedule_load_range_files(
     executor: &TaskExecutor,
     repos: &RepoMap,
@@ -2011,10 +2015,12 @@ pub(super) fn schedule_load_range_files(
     repo_id: RepoId,
     from: gitcomet_core::domain::CommitId,
     to: Option<gitcomet_core::domain::CommitId>,
+    options: gitcomet_core::services::ComparisonOptions,
     request: u64,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.diff_range_files(&from, to.as_ref());
+        // History and hosted views share this comparison service.
+        let result = repo.compare_files(&from, to.as_ref(), &options, &CancellationToken::new());
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
@@ -2122,10 +2128,7 @@ pub(super) fn schedule_open_file_at_commit(
         } else {
             Msg::SelectDiff {
                 repo_id,
-                target: gitcomet_core::domain::DiffTarget::Commit {
-                    commit_id,
-                    path: Some(resolved),
-                },
+                target: gitcomet_core::domain::DiffTarget::commit(commit_id, Some(resolved)),
             }
         };
         send_or_log(&msg_tx, message);

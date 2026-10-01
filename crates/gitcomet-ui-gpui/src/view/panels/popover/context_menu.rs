@@ -1,5 +1,4 @@
 use super::*;
-use crate::kit::interaction::ControlInteractionExt as _;
 use gitcomet_core::domain::Upstream;
 
 mod annex;
@@ -534,6 +533,11 @@ impl PopoverHost {
         cx: &gpui::Context<Self>,
     ) -> Option<ContextMenuModel> {
         match kind {
+            PopoverKind::Hosted { id, menu: true } => self
+                .extension_dialog
+                .as_ref()
+                .filter(|dialog| dialog.id == *id)
+                .and_then(|dialog| dialog.menu.clone()),
             PopoverKind::AppMenu => Some(app_menu::model(self)),
             PopoverKind::AddRepoMenu => Some(add_repo_menu::model()),
             PopoverKind::PullPicker => Some(pull::model(self)),
@@ -819,6 +823,7 @@ impl PopoverHost {
         let mut close_after_action = true;
         let mut restore_diff_panel_focus_after_action = false;
         match action {
+            ContextMenuAction::Hosted(action) => action.invoke(cx),
             ContextMenuAction::ToggleHistoryRefGroup { target } => {
                 self.expanded_history_ref = if self.expanded_history_ref.as_ref() == Some(&target) {
                     None
@@ -836,6 +841,13 @@ impl PopoverHost {
             }
             ContextMenuAction::AppMenu(action) => {
                 app_menu::activate(self, action, window, cx);
+                return;
+            }
+            ContextMenuAction::RunExtensionCommand { id, repo_id } => {
+                self.close_popover_and_restore_focus(window, cx);
+                let _ = self.root_view.update(cx, |root, cx| {
+                    root.run_extension_command_for(&id, Some(repo_id), cx);
+                });
                 return;
             }
             ContextMenuAction::AddRepoMenu(action) => {
@@ -1080,7 +1092,13 @@ impl PopoverHost {
                 if let Some(workdir) = self.workdir_for_repo(repo_id) {
                     session::promote_recent_repo(&mut self.cached_recent_repos, &workdir);
                 }
-                self.store.dispatch(Msg::CloseRepo { repo_id });
+                // Deferred: the guards may open a prompt in this host.
+                let root_view = self.root_view.clone();
+                cx.defer(move |cx| {
+                    let _ = root_view.update(cx, |root, cx| {
+                        root.request_close_repos(vec![repo_id], None, cx);
+                    });
+                });
             }
             ContextMenuAction::MoveRepoToWorkspace {
                 repo_id,
@@ -1139,9 +1157,11 @@ impl PopoverHost {
                 repo_ids,
                 activate_after,
             } => {
-                self.store.dispatch(Msg::CloseRepos {
-                    repo_ids,
-                    activate_after,
+                let root_view = self.root_view.clone();
+                cx.defer(move |cx| {
+                    let _ = root_view.update(cx, |root, cx| {
+                        root.request_close_repos(repo_ids, activate_after, cx);
+                    });
                 });
             }
             ContextMenuAction::OpenSubmoduleDiffInTab { path, target } => {
@@ -1210,6 +1230,28 @@ impl PopoverHost {
                     commit_id,
                     label,
                 });
+            }
+            ContextMenuAction::CompareWithMergeBase {
+                repo_id,
+                commit_id,
+                label,
+            } => {
+                if let Some(mark) = self
+                    .state
+                    .repos
+                    .iter()
+                    .find(|repo| repo.id == repo_id)
+                    .and_then(|repo| repo.navigation.comparison_mark.as_ref())
+                {
+                    self.store.dispatch(Msg::CompareWithOptions {
+                        repo_id,
+                        from: mark.commit_id.clone(),
+                        to: Some(commit_id),
+                        options: gitcomet_core::services::ComparisonOptions::merge_base(),
+                        from_label: mark.label.clone(),
+                        to_label: label,
+                    });
+                }
             }
             ContextMenuAction::CompareWithWorkingTree {
                 repo_id,
@@ -1524,7 +1566,8 @@ impl PopoverHost {
                 self.store.dispatch(Msg::LoadLfsLocks { repo_id });
             }
             ContextMenuAction::FetchAll { repo_id } => {
-                self.store.dispatch(Msg::FetchAll { repo_id });
+                self.store
+                    .dispatch(Msg::Fetch(gitcomet_state::msg::FetchMsg::All { repo_id }));
             }
             ContextMenuAction::PruneMergedBranches { repo_id } => {
                 self.store.dispatch(Msg::PruneMergedBranches { repo_id });

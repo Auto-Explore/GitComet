@@ -222,7 +222,11 @@ fn remember_items(state: &TextEncodingMenuState, chosen: TextEncoding) -> Vec<Co
         ContextMenuItem::Separator,
         ContextMenuItem::Header("Save to .gitattributes".into()),
         ContextMenuItem::Description(
-            "encoding= only changes how GitComet and git-gui show the file.".into(),
+            format!(
+                "encoding= only changes how {} and git-gui show the file.",
+                crate::view::product_name()
+            )
+            .into(),
         ),
         entry(
             format!("This file: encoding={display_label}"),

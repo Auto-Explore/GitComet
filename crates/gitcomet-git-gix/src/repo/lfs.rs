@@ -138,7 +138,7 @@ impl super::GixRepo {
     fn lfs_fetch_for_diff(&self, target: &DiffTarget) -> Result<CommandOutput> {
         let mut local_trees = Vec::new();
         let (path, mut revisions) = match target {
-            DiffTarget::WorkingTree { path, area } => {
+            DiffTarget::WorkingTree { path, area, .. } => {
                 // The index side need not be in HEAD (after `reset --soft`, or
                 // theirs in a merge), and git-lfs fetches by commit or tree.
                 // An unstaged worktree pointer can also differ from both.
@@ -150,6 +150,7 @@ impl super::GixRepo {
             DiffTarget::Commit {
                 commit_id,
                 path: Some(path),
+                ..
             } => {
                 let mut revisions = vec![commit_id.as_ref().to_string()];
                 if let Some(parent) =
@@ -163,6 +164,7 @@ impl super::GixRepo {
                 from_commit_id,
                 to_commit_id,
                 path: Some(path),
+                ..
             } => {
                 let mut revisions = vec![from_commit_id.as_ref().to_string()];
                 if let Some(to) = to_commit_id {
@@ -191,7 +193,15 @@ impl super::GixRepo {
                 "Git LFS cannot select this path with an include pattern".to_string(),
             ))
         })?;
-        self.lfs_fetch_revisions(&[include], revisions)
+        let mut patterns = vec![include];
+        // A rename's old side lives at the source path in the older revision.
+        if let Some(old_path) = target.old_file_path() {
+            let relative = old_path
+                .strip_prefix(&self.spec.workdir)
+                .unwrap_or(old_path);
+            patterns.extend(lfs_include_pattern(relative));
+        }
+        self.lfs_fetch_revisions(&patterns, revisions)
     }
 
     fn lfs_fetch_revisions(

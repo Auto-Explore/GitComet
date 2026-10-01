@@ -26,16 +26,47 @@ const SETTINGS_DROPDOWN_COMPACT_LIST_EXTRA_HEIGHT_PX: f32 = 20.0;
 const SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX: f32 = 42.0;
 const SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX: f32 = 24.0;
 const SETTINGS_DROPDOWN_DENSE_DETAIL_ROW_HEIGHT_PX: f32 = 28.0;
-const SETTINGS_WINDOW_TITLE: &str = "Settings: GitComet";
 
 const MIN_GIT_MAJOR: u32 = 2;
 const MIN_GIT_MINOR: u32 = 50;
-const GITHUB_URL: &str = "https://github.com/Auto-Explore/GitComet";
-const THEMES_GUIDE_URL: &str = "https://github.com/Auto-Explore/GitComet/blob/main/docs/themes.md";
-const SIGNATURE_GUIDE_URL: &str =
-    "https://github.com/Auto-Explore/GitComet/blob/main/docs/commit-signatures.md";
-const LICENSE_URL: &str = "https://github.com/Auto-Explore/GitComet/blob/main/LICENSE-AGPL-3.0";
-const LICENSE_NAME: &str = "AGPL-3.0";
+
+fn settings_window_title() -> String {
+    format!("Settings: {}", crate::view::product_name())
+}
+
+fn repository_url() -> Option<&'static str> {
+    gitcomet_core::identity::current()
+        .links()
+        .repository
+        .as_deref()
+}
+
+fn themes_guide_url() -> Option<String> {
+    gitcomet_core::identity::current()
+        .links()
+        .documentation_page("themes")
+}
+
+fn signature_guide_url() -> Option<String> {
+    gitcomet_core::identity::current()
+        .links()
+        .documentation_page("commit-signatures")
+}
+
+fn license_link() -> Option<&'static gitcomet_core::identity::NamedLink> {
+    gitcomet_core::identity::current().links().license.as_ref()
+}
+
+/// A link's address without its scheme, e.g. `github.com/owner/repo`.
+fn url_label(url: &str) -> SharedString {
+    let without_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
+    without_scheme
+        .strip_prefix("github.com/")
+        .unwrap_or(without_scheme)
+        .trim_end_matches('/')
+        .to_string()
+        .into()
+}
 
 #[derive(Clone, Default)]
 struct ExternalEditorPreferencePersistQueue {
@@ -539,6 +570,10 @@ enum ExternalEditorOptionsState {
 }
 
 pub(crate) struct SettingsWindowView {
+    extension_window: Option<extension_host::SettingsExtensions>,
+    window_gates: Option<super::window_gates::WindowGates>,
+    extension_dialog: Option<extension_host::SettingsDialog>,
+    extension_notice: Option<(SharedString, Vec<gitcomet_extension_api::HostedAction>)>,
     theme_mode: ThemeMode,
     theme: AppTheme,
     ui_scale_percent: u32,
@@ -607,6 +642,10 @@ pub(crate) struct SettingsWindowView {
     large_file_settings: gitcomet_state::model::LargeFileSettings,
     current_view: SettingsView,
     selected_category: SettingsCategory,
+    /// Extension pages, fixed when the window opens; empty without extensions.
+    extension_pages: extension_pages::ExtensionPages,
+    /// The selected extension page and its view, replacing the category page.
+    extension_page: Option<(usize, gpui::AnyView)>,
     search_query: String,
     search_input: Entity<components::TextInput>,
     nav_scroll: ScrollHandle,
@@ -663,7 +702,7 @@ pub(crate) fn open_settings_window(cx: &mut App) {
     }
 
     let ui_session = session::load();
-    let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
+    let ui_scale = crate::session_ui::ui_scale(&ui_session, cx);
     let bounds = Bounds::centered(
         None,
         crate::app::fit_default_window_size(
@@ -679,8 +718,7 @@ pub(crate) fn open_settings_window(cx: &mut App) {
         move |window, cx| {
             ui_scale::apply_to_window(window, ui_scale_percent);
             window.on_window_should_close(cx, |window, cx| {
-                crate::app::mark_clean_shutdown_if_last_window(cx);
-                window.remove_window();
+                close_guards::request_native_close(window, cx);
                 false
             });
             cx.new(|cx| SettingsWindowView::new(window, cx))
@@ -708,6 +746,54 @@ pub(crate) fn open_settings_window_to_workspace(
         view.current_view = SettingsView::Root;
         view.select_category(SettingsCategory::Workspaces, cx);
         view.select_workspace(workspace_id, cx);
+        cx.notify();
+    });
+}
+
+pub(in crate::view) fn open_settings_at(
+    target: gitcomet_extension_api::SettingsTarget,
+    cx: &mut App,
+) {
+    open_settings_window(cx);
+    let Some(handle) = cx
+        .windows()
+        .into_iter()
+        .find_map(|window| window.downcast::<SettingsWindowView>())
+    else {
+        return;
+    };
+    let _ = handle.update(cx, |view, window, cx| {
+        view.current_view = SettingsView::Root;
+        match target {
+            gitcomet_extension_api::SettingsTarget::Extension(id) => {
+                if let Some(index) = view
+                    .extension_pages
+                    .iter()
+                    .position(|(candidate, _)| *candidate == id)
+                {
+                    view.select_extension_page(index, window, cx);
+                }
+            }
+            gitcomet_extension_api::SettingsTarget::Builtin(name) => {
+                let page = match name.as_ref() {
+                    "general" => SettingsCategory::General,
+                    "workspaces" => SettingsCategory::Workspaces,
+                    "security-privacy" => SettingsCategory::SecurityPrivacy,
+                    "terminal" => SettingsCategory::Terminal,
+                    "change-tracking" => SettingsCategory::ChangeTracking,
+                    "diff" => SettingsCategory::Diff,
+                    "file-editing" => SettingsCategory::FileEditing,
+                    "git-log" => SettingsCategory::GitLog,
+                    "remotes" => SettingsCategory::Remotes,
+                    "tags" => SettingsCategory::Tags,
+                    "executables" => SettingsCategory::GitExecutable,
+                    "environment" => SettingsCategory::Environment,
+                    "links" => SettingsCategory::Links,
+                    _ => return,
+                };
+                view.select_category(page, cx);
+            }
+        }
         cx.notify();
     });
 }
@@ -741,7 +827,10 @@ fn settings_window_options_for_scale(
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         window_min_size: Some(settings_window_min_size_for_percent(ui_scale_percent)),
         titlebar: Some(settings_window_titlebar_options()),
-        app_id: Some("gitcomet-settings".into()),
+        app_id: Some(
+            gitcomet_core::identity::current()
+                .window_app_id(gitcomet_core::identity::WindowKind::Settings),
+        ),
         window_decorations: Some(WindowDecorations::Client),
         window_background: crate::app::main_window_background_appearance(),
         is_movable: true,
@@ -752,7 +841,7 @@ fn settings_window_options_for_scale(
 
 fn settings_window_titlebar_options() -> TitlebarOptions {
     TitlebarOptions {
-        title: Some(SETTINGS_WINDOW_TITLE.into()),
+        title: Some(settings_window_title().into()),
         // Windows needs a transparent native titlebar to avoid rendering its own
         // caption on top of the custom settings header.
         appears_transparent: cfg!(any(target_os = "macos", target_os = "windows")),
@@ -843,47 +932,9 @@ fn uniform_list_should_stop_scroll_propagation(
     }
 }
 
-fn mix_color(a: gpui::Rgba, b: gpui::Rgba, t: f32) -> gpui::Rgba {
-    let t = t.clamp(0.0, 1.0);
-    gpui::Rgba::new(
-        a.red + (b.red - a.red) * t,
-        a.green + (b.green - a.green) * t,
-        a.blue + (b.blue - a.blue) * t,
-        a.alpha + (b.alpha - a.alpha) * t,
-    )
-}
-
-fn settings_row_separator_color(theme: AppTheme) -> gpui::Rgba {
-    mix_color(
-        theme.colors.surface.canvas,
-        theme.colors.stroke.subtle,
-        if theme.is_dark { 0.14 } else { 0.10 },
-    )
-}
-
-fn settings_dropdown_background(theme: AppTheme) -> gpui::Rgba {
-    if theme.is_dark {
-        mix_color(
-            theme.colors.surface.raised,
-            theme.colors.surface.canvas,
-            0.58,
-        )
-    } else {
-        mix_color(
-            theme.colors.surface.raised,
-            theme.colors.stroke.default,
-            0.55,
-        )
-    }
-}
-
-fn settings_dropdown_border_color(theme: AppTheme) -> gpui::Rgba {
-    if theme.is_dark {
-        with_alpha(theme.colors.stroke.default, 0.98)
-    } else {
-        theme.colors.stroke.default
-    }
-}
+use crate::view::components::{
+    settings_dropdown_background, settings_dropdown_border_color, settings_row_separator_color,
+};
 
 fn settings_dropdown_height(
     item_count: usize,
@@ -969,8 +1020,11 @@ fn applied_git_executable_path(runtime: &GitRuntimeState) -> Option<PathBuf> {
     }
 }
 
-fn git_executable_scope_note() -> &'static str {
-    "Applies to the main GitComet browser window. Git-invoked command modes keep using git from System PATH. Helper tools such as gpg are resolved by Git from the app environment unless configured in Git."
+fn git_executable_scope_note() -> String {
+    format!(
+        "Applies to the main {} browser window. Git-invoked command modes keep using git from System PATH. Helper tools such as gpg are resolved by Git from the app environment unless configured in Git.",
+        crate::view::product_name()
+    )
 }
 
 fn initial_external_editor_setting(
@@ -981,7 +1035,7 @@ fn initial_external_editor_setting(
 }
 
 impl SettingsWindowView {
-    fn new(window: &mut Window, cx: &mut gpui::Context<Self>) -> Self {
+    pub(in crate::view) fn new(window: &mut Window, cx: &mut gpui::Context<Self>) -> Self {
         crate::environment::track_window(window, cx);
         cx.observe_global::<crate::environment::Environment>(|this, cx| {
             this.runtime_info.environment =
@@ -989,12 +1043,12 @@ impl SettingsWindowView {
             cx.notify();
         })
         .detach();
-        window.set_window_title(SETTINGS_WINDOW_TITLE);
+        window.set_window_title(&settings_window_title());
 
         let ui_session = session::load();
         let ui_preferences = UiPreferences::from_session(&ui_session);
-        crate::appearance::initialize(&ui_session, cx);
-        let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
+        crate::session_ui::initialize_appearance(&ui_session, cx);
+        let ui_scale = crate::session_ui::ui_scale(&ui_session, cx);
         let window_controls =
             crate::window_controls::current_or_initialize_from_session(&ui_session, cx);
         let browser_open_target = ui_session
@@ -1002,8 +1056,7 @@ impl SettingsWindowView {
             .as_deref()
             .and_then(crate::app::BrowserOpenTarget::from_key)
             .unwrap_or_default();
-        let font_preferences =
-            crate::font_preferences::current_or_initialize_from_session(window, &ui_session, cx);
+        let font_preferences = crate::session_ui::font_preferences(window, &ui_session, cx);
         let theme_mode = ui_preferences.appearance.theme_mode.clone();
         let date_time_format = ui_preferences.appearance.date_time_format;
         let timezone = ui_preferences.appearance.timezone;
@@ -1240,9 +1293,18 @@ impl SettingsWindowView {
                 return;
             }
             this.search_query = next;
+            if let Some((index, _)) = &this.extension_page
+                && !extension_pages::page_matches_query(
+                    &this.extension_pages[*index].1,
+                    &this.search_query,
+                )
+            {
+                this.extension_page = None;
+            }
             // Keep the visible page in the filtered set: if the current
             // category no longer matches, jump to the first one that does.
-            if !this.selected_category.matches_query(&this.search_query)
+            if this.extension_page.is_none()
+                && !this.selected_category.matches_query(&this.search_query)
                 && let Some(first) = SettingsCategory::ALL
                     .iter()
                     .copied()
@@ -1309,6 +1371,10 @@ impl SettingsWindowView {
             input.set_text(workspace_name_draft.clone(), cx);
         });
         Self {
+            extension_window: extension_host::SettingsExtensions::new(window, theme, cx),
+            window_gates: super::window_gates::WindowGates::new(cx),
+            extension_dialog: None,
+            extension_notice: None,
             theme_mode,
             appearance_metrics,
             font_size_inputs,
@@ -1377,6 +1443,8 @@ impl SettingsWindowView {
             large_file_settings,
             current_view: SettingsView::Root,
             selected_category: SettingsCategory::General,
+            extension_pages: extension_pages::extension_pages(cx),
+            extension_page: None,
             search_query: String::new(),
             search_input,
             nav_scroll: ScrollHandle::default(),
@@ -1423,9 +1491,10 @@ impl SettingsWindowView {
         if category == SettingsCategory::Environment {
             crate::environment::request_refresh(cx);
         }
-        if self.selected_category == category {
+        if self.selected_category == category && self.extension_page.is_none() {
             return;
         }
+        self.extension_page = None;
         self.selected_category = category;
         if category == SettingsCategory::GitExecutable {
             super::runtime_probe::request(cx, true);
@@ -1514,6 +1583,9 @@ impl SettingsWindowView {
 }
 
 mod cards;
+pub(crate) mod close_guards;
+mod extension_host;
+mod extension_pages;
 mod prefs;
 mod render;
 mod rows;

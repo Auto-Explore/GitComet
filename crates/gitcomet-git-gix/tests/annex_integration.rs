@@ -301,10 +301,10 @@ fn unlocked_commit_diff_reads_content_from_the_annex() {
     let head = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
 
     let diff = open(&repo)
-        .diff_file_text(&DiffTarget::Commit {
-            commit_id: CommitId(head.into()),
-            path: Some(PathBuf::from("notes.txt")),
-        })
+        .diff_file_text(&DiffTarget::commit(
+            CommitId(head.into()),
+            Some(PathBuf::from("notes.txt")),
+        ))
         .unwrap()
         .unwrap();
     let old = diff.old_large.clone().expect("old side is annexed");
@@ -550,10 +550,7 @@ fn moved_locked_annex_content_is_found_by_key_regression() {
     assert!(!repo.join("moved/sub/pic.png").is_file());
     let opened = open(&repo);
     let head = CommitId(git(&repo, &["rev-parse", "HEAD"]).trim().into());
-    let target = DiffTarget::Commit {
-        commit_id: head.clone(),
-        path: Some("moved/sub/pic.png".into()),
-    };
+    let target = DiffTarget::commit(head.clone(), Some("moved/sub/pic.png".into()));
     let rows = opened.commit_details(&head).unwrap().files;
     let state = rows
         .iter()
@@ -1659,10 +1656,10 @@ fn sha3_annex_backends_resolve_staged_content_when_locked_and_unlocked() {
             assert_eq!(&*key.backend, backend);
             assert_eq!(state.in_local_store, Some(true));
             let diff = opened
-                .diff_file_text(&DiffTarget::WorkingTree {
-                    path: name.clone().into(),
-                    area: DiffArea::Staged,
-                })
+                .diff_file_text(&DiffTarget::working_tree(
+                    name.clone().into(),
+                    DiffArea::Staged,
+                ))
                 .unwrap()
                 .unwrap();
             assert_eq!(diff.new_large.unwrap().content, LargeFileContent::Available);
@@ -1711,10 +1708,10 @@ fn escaped_annex_keys_resolve_unlocked_content_and_download_by_key() {
             raw
         );
         git(&repo, &["commit", "-qm", "escaped key"]);
-        let target = DiffTarget::Commit {
-            commit_id: CommitId(git(&repo, &["rev-parse", "HEAD"]).trim().into()),
-            path: Some(name.into()),
-        };
+        let target = DiffTarget::commit(
+            CommitId(git(&repo, &["rev-parse", "HEAD"]).trim().into()),
+            Some(name.into()),
+        );
         let diff = opened.diff_file_text(&target).unwrap().unwrap();
         assert_eq!(diff.new_large.unwrap().content, LargeFileContent::Available);
         assert_eq!(

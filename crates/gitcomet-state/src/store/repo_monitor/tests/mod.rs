@@ -218,6 +218,14 @@ fn cache_key(rel: impl Into<PathBuf>, is_dir_hint: Option<bool>) -> IgnoreCacheK
 
 /// Test helper: classify an event and return just the coalesced change (dropping the
 /// `gitignore_changed` signal), matching the pre-`ClassifiedEvent` return shape these tests use.
+/// A worktree change the watcher attributes to exactly `paths`.
+fn worktree_change(paths: &[&str]) -> RepoExternalChange {
+    RepoExternalChange {
+        paths: crate::msg::ChangedPaths::known(paths.iter().map(PathBuf::from).collect()),
+        ..RepoExternalChange::worktree()
+    }
+}
+
 fn classify_change(
     workdir: &Path,
     git_dir: Option<&Path>,
@@ -298,6 +306,7 @@ fn merge_change_coalesces_to_both() {
             verification_context: false,
             large_file_support: false,
             text_attributes: false,
+            paths: crate::msg::ChangedPaths::Unknown,
         }
     );
     assert_eq!(
@@ -310,6 +319,7 @@ fn merge_change_coalesces_to_both() {
             verification_context: false,
             large_file_support: false,
             text_attributes: false,
+            paths: crate::msg::ChangedPaths::Unknown,
         }
     );
     assert_eq!(
@@ -355,7 +365,7 @@ fn classify_repo_change_distinguishes_gitdir_from_worktree() {
             &mut TestRules::default(),
             &event
         ),
-        Some(RepoExternalChange::Worktree)
+        Some(worktree_change(&["file.txt"]))
     );
 
     let event = notify::Event {
@@ -378,6 +388,7 @@ fn classify_repo_change_distinguishes_gitdir_from_worktree() {
             verification_context: false,
             large_file_support: false,
             text_attributes: false,
+            paths: crate::msg::ChangedPaths::known(vec!["file.txt".into()]),
         })
     );
 }
@@ -440,7 +451,7 @@ fn classify_repo_change_ignoring_index_lock_does_not_drop_real_worktree_events()
     };
     assert_eq!(
         classify_change(&workdir, Some(&workdir.join(".git")), &mut rules, &event),
-        Some(RepoExternalChange::Worktree),
+        Some(worktree_change(&["file.txt"])),
         "ignoring index.lock should still classify real worktree changes"
     );
 }
@@ -533,7 +544,7 @@ fn access_events_do_not_trigger_refresh_loops() {
             &mut TestRules::default(),
             &event
         ),
-        Some(RepoExternalChange::Worktree)
+        Some(worktree_change(&["file.txt"]))
     );
 }
 
@@ -621,7 +632,7 @@ fn tracked_paths_are_not_treated_as_ignored() {
     };
     assert_eq!(
         classify_change(&workdir, git_dir.as_deref(), &mut rules, &tracked_event),
-        Some(RepoExternalChange::Worktree)
+        Some(worktree_change(&["tracked.tracked-ignore"]))
     );
 
     let ignored_event = notify::Event {
@@ -1287,7 +1298,7 @@ fn attribute_events_request_support_without_scanning_on_ordinary_edits() {
             assert!(change.worktree);
             assert_eq!(change.large_file_support, path.ends_with(".gitattributes"));
             assert_eq!(
-                merge_change(change, RepoExternalChange::Worktree).large_file_support,
+                merge_change(change.clone(), RepoExternalChange::Worktree).large_file_support,
                 change.large_file_support
             );
         }
@@ -1345,5 +1356,47 @@ fn annex_ref_and_local_attributes_changes_refresh_support_selectively() {
         )
         .unwrap();
         assert_eq!(change.large_file_support, expected, "{path}");
+    }
+}
+/// Cost of the monitor's index-only reload, which every index write (stage,
+/// unstage, commit, an external `git add`) triggers, on real repositories:
+/// `GITCOMET_PROBE_REPOS=/a:/b`.
+#[test]
+#[ignore = "timing probe"]
+fn timing_monitor_index_reload_real_repos() {
+    let Ok(repos) = std::env::var("GITCOMET_PROBE_REPOS") else {
+        eprintln!("GITCOMET_PROBE_REPOS not set");
+        return;
+    };
+    let backend = gitcomet_git_gix::GixBackend;
+    let best = |mut run: Box<dyn FnMut() + '_>| {
+        run();
+        (0..5)
+            .map(|_| {
+                let start = Instant::now();
+                run();
+                start.elapsed().as_secs_f64() * 1e3
+            })
+            .fold(f64::MAX, f64::min)
+    };
+    for path in repos.split(':') {
+        let workdir = Path::new(path);
+        let name = workdir.file_name().unwrap().to_string_lossy();
+        let mut state = MonitorState::default();
+        assert!(state.reload(workdir, &backend, false));
+        let reload = best(Box::new(|| {
+            state.reload(workdir, &backend, true);
+        }));
+        let inputs = best(Box::new(|| {
+            WatchInputs::load(workdir, &backend).unwrap();
+        }));
+        let info = WatchInputs::load(workdir, &backend).unwrap().info;
+        let mut rules = IgnoreRules::default();
+        let rules_ms = best(Box::new(|| {
+            rules.reload(workdir, &backend, &info);
+        }));
+        println!(
+            "timing monitor_index_reload {name} reload={reload:.2}ms watch_inputs={inputs:.2}ms ignore_rules={rules_ms:.2}ms"
+        );
     }
 }

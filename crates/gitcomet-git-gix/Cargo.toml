@@ -33,6 +33,7 @@ doc = false
 [dependencies]
 fnv = { workspace = true }
 gitcomet-core = { workspace = true }
+filetime = { workspace = true }
 gix = { workspace = true }
 lru = { workspace = true }
 memchr = { workspace = true }

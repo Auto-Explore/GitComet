@@ -239,6 +239,18 @@ pub(super) fn remote_group_storage_key(remote: &str, path: &str) -> String {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum BranchSidebarRow {
+    ContributionHeader {
+        section: usize,
+        title: SharedString,
+        collapsed: bool,
+        collapse_key: SharedString,
+    },
+    ContributionItem {
+        section: usize,
+        row: usize,
+        label: SharedString,
+        key: SharedString,
+    },
     SectionHeader {
         section: BranchSection,
         top_border: bool,
@@ -996,18 +1008,19 @@ pub(super) fn expanded_sidebar_rows(
 }
 
 pub(super) fn is_top_level_collapse_key(key: &str) -> bool {
-    matches!(
-        key.strip_prefix(EXPANDED_DEFAULT_SECTION_PREFIX)
-            .unwrap_or(key),
-        PINNED_LOCAL_SECTION_KEY
-            | PINNED_REMOTE_SECTION_KEY
-            | LOCAL_SECTION_KEY
-            | REMOTE_SECTION_KEY
-            | WORKTREES_SECTION_KEY
-            | SUBMODULES_SECTION_KEY
-            | ANNEX_SECTION_KEY
-            | STASH_SECTION_KEY
-    )
+    key.starts_with("section:extension:")
+        || matches!(
+            key.strip_prefix(EXPANDED_DEFAULT_SECTION_PREFIX)
+                .unwrap_or(key),
+            PINNED_LOCAL_SECTION_KEY
+                | PINNED_REMOTE_SECTION_KEY
+                | LOCAL_SECTION_KEY
+                | REMOTE_SECTION_KEY
+                | WORKTREES_SECTION_KEY
+                | SUBMODULES_SECTION_KEY
+                | ANNEX_SECTION_KEY
+                | STASH_SECTION_KEY
+        )
 }
 
 fn sidebar_rows(

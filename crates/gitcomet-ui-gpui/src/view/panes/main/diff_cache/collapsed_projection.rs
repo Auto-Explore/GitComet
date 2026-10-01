@@ -549,7 +549,7 @@ impl MainPaneView {
         gap_len.saturating_sub(visible.min(gap_len))
     }
 
-    pub(super) fn collapsed_diff_file_row_line_numbers(
+    pub(in crate::view::panes::main) fn collapsed_diff_file_row_line_numbers(
         &self,
         row_ix: usize,
     ) -> Option<(Option<u32>, Option<u32>)> {

@@ -1923,7 +1923,7 @@ fn build_file_diff_plan_from_patch(
     file_diff_plan_from_runs(runs)
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(in crate::view) struct FileDiffCacheRebuild {
     pub(in crate::view) file_path: Option<std::path::PathBuf>,
     pub(in crate::view) language: Option<rows::DiffSyntaxLanguage>,
@@ -2437,10 +2437,10 @@ mod tests {
     fn a_patch_without_hunks_diffs_the_decoded_sides_itself() {
         // What git prints for UTF-16 text without working-tree-encoding.
         let binary_patch = gitcomet_core::domain::Diff::from_unified(
-            gitcomet_core::domain::DiffTarget::WorkingTree {
-                path: PathBuf::from("notes.txt"),
-                area: gitcomet_core::domain::DiffArea::Unstaged,
-            },
+            gitcomet_core::domain::DiffTarget::working_tree(
+                PathBuf::from("notes.txt"),
+                gitcomet_core::domain::DiffArea::Unstaged,
+            ),
             "diff --git a/notes.txt b/notes.txt\nBinary files a/notes.txt and b/notes.txt differ\n",
         );
         let file = gitcomet_core::domain::FileDiffText::new(
@@ -2524,10 +2524,7 @@ mod tests {
             }),
             content: LargeFileContent::Available,
         };
-        let target = DiffTarget::WorkingTree {
-            path: "data.bin".into(),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree("data.bin".into(), DiffArea::Unstaged);
         let patch = Diff::from_unified(
             target,
             &format!(

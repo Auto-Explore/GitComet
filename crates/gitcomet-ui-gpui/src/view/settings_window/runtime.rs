@@ -244,8 +244,10 @@ impl SettingsRuntimeInfo {
 }
 
 pub(super) fn git_runtime_info_from_state(runtime: GitRuntimeState) -> GitRuntimeInfo {
-    let compatibility_message =
-        format!("GitComet has been tested only with Git {MIN_GIT_MAJOR}.{MIN_GIT_MINOR} or newer.");
+    let compatibility_message = format!(
+        "{} has been tested only with Git {MIN_GIT_MAJOR}.{MIN_GIT_MINOR} or newer.",
+        crate::view::product_name()
+    );
     let compatibility = if matches!(
         runtime.availability,
         gitcomet_core::process::GitExecutableAvailability::Checking
@@ -378,7 +380,13 @@ fn large_file_tool_info(
         SigningToolAvailability::Unknown => SigningToolInfo {
             status: SigningToolStatus::Unknown,
             version_display: program.to_string().into(),
-            detail: Some(format!("GitComet could not tell whether Git can run {program}.").into()),
+            detail: Some(
+                format!(
+                    "{} could not tell whether Git can run {program}.",
+                    crate::view::product_name()
+                )
+                .into(),
+            ),
         },
     }
 }

@@ -662,9 +662,14 @@ impl<K: Eq + Clone> CommitFileRowPresentationCache<K> {
         key: &K,
         files: &[gitcomet_core::domain::CommitFileChange],
     ) -> Arc<[CommitFileRowPresentation]> {
+        if let Some(entry) = &self.cached
+            && entry.key == *key
+        {
+            return Arc::clone(&entry.rows);
+        }
         let signature = commit_file_row_presentation_signature(files);
         if let Some(reused_rows) = self.cached.as_ref().and_then(|entry| {
-            if entry.key == *key || entry.signature == signature {
+            if entry.signature == signature {
                 Some(entry.rows.clone())
             } else {
                 None
@@ -1125,8 +1130,9 @@ impl CommitCard {
 mod diff_canvas;
 mod file_list;
 pub(in crate::view) use file_list::{
-    CollapsedDirs, DirectoryRowDetail, DirectoryRowProps, FileListId, FileListPlan,
-    FileListPlanCache, FileListRow, FileOrdinal, FileTree, FileTreeItem, RowIx, directory_row,
+    ChangedFileRow, CollapsedDirs, DirectoryRowDetail, DirectoryRowProps, DirectoryToggle,
+    FileListId, FileListPlan, FileListPlanCache, FileListRow, FileOrdinal, FileTree, FileTreeItem,
+    RowIx, changed_file_directory_row, changed_file_row, directory_row,
     directory_row_detail_for_width, file_list_projection_key, file_list_projection_key_scoped,
     file_row_indent_px,
 };
@@ -1613,35 +1619,17 @@ mod tests {
         let mut cache: CommitFileRowPresentationCache<u64> =
             CommitFileRowPresentationCache::default();
         let files = vec![
-            CommitFileChange {
-                path: PathBuf::from("src/lib.rs"),
-                kind: FileStatusKind::Modified,
-                is_submodule: false,
-                additions: None,
-                deletions: None,
-                large_file: None,
-            },
-            CommitFileChange {
-                path: PathBuf::from("README.md"),
-                kind: FileStatusKind::Added,
-                is_submodule: false,
-                additions: None,
-                deletions: None,
-                large_file: None,
-            },
+            CommitFileChange::new(PathBuf::from("src/lib.rs"), FileStatusKind::Modified),
+            CommitFileChange::new(PathBuf::from("README.md"), FileStatusKind::Added),
         ];
 
         let first = cache.rows_for(&7, &files);
         let reused = cache.rows_for(
             &7,
-            &[CommitFileChange {
-                path: PathBuf::from("should/not/appear.rs"),
-                kind: FileStatusKind::Deleted,
-                is_submodule: false,
-                additions: None,
-                deletions: None,
-                large_file: None,
-            }],
+            &[CommitFileChange::new(
+                PathBuf::from("should/not/appear.rs"),
+                FileStatusKind::Deleted,
+            )],
         );
 
         assert!(Arc::ptr_eq(&first, &reused));
@@ -1663,14 +1651,10 @@ mod tests {
 
         let replacement = cache.rows_for(
             &8,
-            &[CommitFileChange {
-                path: PathBuf::from("docs/guide.md"),
-                kind: FileStatusKind::Renamed,
-                is_submodule: false,
-                additions: None,
-                deletions: None,
-                large_file: None,
-            }],
+            &[CommitFileChange::new(
+                PathBuf::from("docs/guide.md"),
+                FileStatusKind::Renamed,
+            )],
         );
 
         assert!(!Arc::ptr_eq(&first, &replacement));
@@ -1715,14 +1699,7 @@ mod tests {
         additions: Option<u32>,
         deletions: Option<u32>,
     ) -> CommitFileChange {
-        CommitFileChange {
-            path: PathBuf::from(path),
-            kind,
-            is_submodule: false,
-            additions,
-            deletions,
-            large_file: None,
-        }
+        CommitFileChange::new(PathBuf::from(path), kind).with_line_counts(additions, deletions)
     }
 
     #[test]
@@ -1973,14 +1950,10 @@ mod tests {
 
         let first = cache.rows_for(
             &(1, PathBuf::from("/wt/a")),
-            &[CommitFileChange {
-                path: PathBuf::from("a.rs"),
-                kind: FileStatusKind::Modified,
-                is_submodule: false,
-                additions: None,
-                deletions: None,
-                large_file: None,
-            }],
+            &[CommitFileChange::new(
+                PathBuf::from("a.rs"),
+                FileStatusKind::Modified,
+            )],
         );
         assert_eq!(first[0].label.as_ref(), "a.rs");
 
@@ -1988,14 +1961,10 @@ mod tests {
         // these apart.
         let second = cache.rows_for(
             &(1, PathBuf::from("/wt/b")),
-            &[CommitFileChange {
-                path: PathBuf::from("b.rs"),
-                kind: FileStatusKind::Modified,
-                is_submodule: false,
-                additions: None,
-                deletions: None,
-                large_file: None,
-            }],
+            &[CommitFileChange::new(
+                PathBuf::from("b.rs"),
+                FileStatusKind::Modified,
+            )],
         );
         assert_eq!(
             second[0].label.as_ref(),
@@ -2009,22 +1978,8 @@ mod tests {
         let mut cache: CommitFileRowPresentationCache<u64> =
             CommitFileRowPresentationCache::default();
         let files = vec![
-            CommitFileChange {
-                path: PathBuf::from("src/lib.rs"),
-                kind: FileStatusKind::Modified,
-                is_submodule: false,
-                additions: None,
-                deletions: None,
-                large_file: None,
-            },
-            CommitFileChange {
-                path: PathBuf::from("README.md"),
-                kind: FileStatusKind::Added,
-                is_submodule: false,
-                additions: None,
-                deletions: None,
-                large_file: None,
-            },
+            CommitFileChange::new(PathBuf::from("src/lib.rs"), FileStatusKind::Modified),
+            CommitFileChange::new(PathBuf::from("README.md"), FileStatusKind::Added),
         ];
 
         let first = cache.rows_for(&7, &files);

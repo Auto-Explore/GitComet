@@ -1,5 +1,5 @@
 use super::*;
-use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
+use crate::kit::interaction as controls;
 use crate::view::terminal_alacritty::{terminal_default_background, terminal_default_foreground};
 
 #[derive(Clone, Copy, PartialEq)]

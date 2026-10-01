@@ -192,10 +192,10 @@ fn plain_pointer_text_diff_regression() {
     git(repo, &["add", "."]);
     git(repo, &["commit", "-qm", "pointer example"]);
     let opened = GixBackend.open(repo).unwrap();
-    let target = DiffTarget::Commit {
-        commit_id: CommitId(git(repo, &["rev-parse", "HEAD"]).trim().into()),
-        path: Some("example.png".into()),
-    };
+    let target = DiffTarget::commit(
+        CommitId(git(repo, &["rev-parse", "HEAD"]).trim().into()),
+        Some("example.png".into()),
+    );
     let text = opened.diff_file_text(&target).unwrap().unwrap();
     assert!(
         text.new_large.is_none(),
@@ -350,10 +350,7 @@ fn source_text(source: Option<&gitcomet_core::domain::FileDiffTextSource>) -> Op
 }
 
 fn unstaged(path: &str) -> DiffTarget {
-    DiffTarget::WorkingTree {
-        path: PathBuf::from(path),
-        area: DiffArea::Unstaged,
-    }
+    DiffTarget::working_tree(PathBuf::from(path), DiffArea::Unstaged)
 }
 
 #[test]
@@ -649,10 +646,10 @@ fn lfs_image_diff_decodes_both_sides_from_the_store() {
 
     let opened = GixBackend.open(&repo).unwrap();
     let image = opened
-        .diff_file_image(&DiffTarget::WorkingTree {
-            path: PathBuf::from("pic.png"),
-            area: DiffArea::Staged,
-        })
+        .diff_file_image(&DiffTarget::working_tree(
+            PathBuf::from("pic.png"),
+            DiffArea::Staged,
+        ))
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -1034,10 +1031,10 @@ fn lfs_positional_fetch_preserves_default_remote_selection() {
             git(&repo, &["config", "branch.main.remote", "upstream"]);
         }
         let opened = GixBackend.open(&repo).unwrap();
-        let target = DiffTarget::Commit {
-            commit_id: gitcomet_core::domain::CommitId(middle.into()),
-            path: Some("a.bin".into()),
-        };
+        let target = DiffTarget::commit(
+            gitcomet_core::domain::CommitId(middle.into()),
+            Some("a.bin".into()),
+        );
         opened
             .run_large_file_command(&LargeFileCommand::LfsFetchForDiff {
                 target: target.clone(),
@@ -1061,10 +1058,10 @@ fn lfs_diff_download_fetches_both_historical_sides_without_checkout() {
     let (repo, middle) = clone_lfs_history(dir.path());
     git(&repo, &["config", "lfs.fetchexclude", "*.bin"]);
     let before = fs::read(repo.join("a.bin")).unwrap();
-    let target = DiffTarget::Commit {
-        commit_id: gitcomet_core::domain::CommitId(middle.into()),
-        path: Some("a.bin".into()),
-    };
+    let target = DiffTarget::commit(
+        gitcomet_core::domain::CommitId(middle.into()),
+        Some("a.bin".into()),
+    );
     let opened = GixBackend.open(&repo).unwrap();
     let diff = opened.diff_file_text(&target).unwrap().unwrap();
     assert_eq!(
@@ -1114,10 +1111,7 @@ fn lfs_added_and_deleted_previews_show_payloads() {
         ("new.bin", DiffPreviewTextSide::New, "new content\n"),
         ("a.bin", DiffPreviewTextSide::Old, "large file contents\n"),
     ] {
-        let target = DiffTarget::WorkingTree {
-            path: path.into(),
-            area: DiffArea::Staged,
-        };
+        let target = DiffTarget::working_tree(path.into(), DiffArea::Staged);
         let preview = opened
             .diff_preview_text_file(&target, side)
             .unwrap()
@@ -1151,10 +1145,10 @@ fn lfs_missing_images_do_not_send_pointer_text_to_the_decoder() {
     git(repo, &["add", "."]);
     git(repo, &["commit", "-qm", "image"]);
     fs::remove_dir_all(repo.join(".git/lfs/objects")).unwrap();
-    let target = DiffTarget::Commit {
-        commit_id: gitcomet_core::domain::CommitId(git(repo, &["rev-parse", "HEAD"]).trim().into()),
-        path: Some("pic.png".into()),
-    };
+    let target = DiffTarget::commit(
+        gitcomet_core::domain::CommitId(git(repo, &["rev-parse", "HEAD"]).trim().into()),
+        Some("pic.png".into()),
+    );
     let opened = GixBackend.open(repo).unwrap();
     let image = opened.diff_file_image(&target).unwrap().unwrap();
     assert_eq!(
@@ -1178,10 +1172,7 @@ fn lfs_diff_download_handles_root_commits_and_revision_ranges() {
     let head = gitcomet_core::domain::CommitId(git(&repo, &["rev-parse", "HEAD"]).trim().into());
     let before = fs::read(repo.join("a.bin")).unwrap();
     let opened = GixBackend.open(&repo).unwrap();
-    let root_target = DiffTarget::Commit {
-        commit_id: root.clone(),
-        path: Some("a.bin".into()),
-    };
+    let root_target = DiffTarget::commit(root.clone(), Some("a.bin".into()));
     run_lfs(
         &repo,
         gitcomet_core::large_files::LargeFileCommand::LfsFetchForDiff {
@@ -1199,11 +1190,7 @@ fn lfs_diff_download_handles_root_commits_and_revision_ranges() {
         fs::read_to_string(preview.path).unwrap(),
         "large file contents\n"
     );
-    let range = DiffTarget::CommitRange {
-        from_commit_id: root,
-        to_commit_id: Some(head),
-        path: Some("a.bin".into()),
-    };
+    let range = DiffTarget::commit_range(root, Some(head), Some("a.bin".into()));
     run_lfs(
         &repo,
         gitcomet_core::large_files::LargeFileCommand::LfsFetchForDiff {
@@ -1240,10 +1227,7 @@ fn lfs_images_use_the_image_size_limit_instead_of_the_text_limit() {
     fs::write(repo.join("large.png"), &bytes).unwrap();
     git(repo, &["add", "."]);
     let opened = GixBackend.open(repo).unwrap();
-    let target = DiffTarget::WorkingTree {
-        path: "large.png".into(),
-        area: DiffArea::Staged,
-    };
+    let target = DiffTarget::working_tree("large.png".into(), DiffArea::Staged);
     let text = opened.diff_file_text(&target).unwrap().unwrap();
     assert!(matches!(
         text.new_large.unwrap().content,
@@ -1384,10 +1368,7 @@ fn lfs_diff_download_fetches_the_index_side_of_a_staged_diff() {
         "0".repeat(64)
     );
     fs::write(repo.join("a.bin"), &worktree).unwrap();
-    let target = DiffTarget::WorkingTree {
-        path: PathBuf::from("a.bin"),
-        area: DiffArea::Staged,
-    };
+    let target = DiffTarget::working_tree(PathBuf::from("a.bin"), DiffArea::Staged);
     let opened = GixBackend.open(&repo).unwrap();
     let diff = opened.diff_file_text(&target).unwrap().unwrap();
     assert_eq!(
@@ -1444,20 +1425,16 @@ fn lfs_diff_download_fetches_a_worktree_pointer_absent_from_head_and_index() {
         fs::write(repo.join(path), &pointer).unwrap();
         let index_before = git(&repo, &["ls-files", "--stage"]);
         let target = if range {
-            DiffTarget::CommitRange {
-                from_commit_id: CommitId(middle.into()),
-                to_commit_id: None,
-                path: Some(path.into()),
-            }
+            DiffTarget::commit_range(CommitId(middle.into()), None, Some(path.into()))
         } else {
-            DiffTarget::WorkingTree {
-                path: if path == "a.bin" {
+            DiffTarget::working_tree(
+                if path == "a.bin" {
                     path.into()
                 } else {
                     repo.join(path)
                 },
-                area: DiffArea::Unstaged,
-            }
+                DiffArea::Unstaged,
+            )
         };
         let opened = GixBackend.open(&repo).unwrap();
         let diff = opened.diff_file_text(&target).unwrap().unwrap();
@@ -1935,11 +1912,11 @@ fn lfs_worktree_range_download_fetches_the_displayed_index_pointer() {
     git(&repo, &["reset", "-q", "--soft", "HEAD~1"]);
     let before = git(&repo, &["ls-files", "--stage"]);
     let pointer = fs::read(repo.join("a.bin")).unwrap();
-    let target = DiffTarget::CommitRange {
-        from_commit_id: gitcomet_core::domain::CommitId(middle.into()),
-        to_commit_id: None,
-        path: Some("a.bin".into()),
-    };
+    let target = DiffTarget::commit_range(
+        gitcomet_core::domain::CommitId(middle.into()),
+        None,
+        Some("a.bin".into()),
+    );
     let opened = GixBackend.open(&repo).unwrap();
     assert_eq!(
         opened
@@ -1995,14 +1972,8 @@ fn storage_changes_refresh_rows_and_all_diff_resolvers_on_the_same_handle() {
     let head = CommitId(git(&repo, &["rev-parse", "HEAD"]).trim().into());
     let parent = CommitId(git(&repo, &["rev-parse", "HEAD^"]).trim().into());
     let opened = GixBackend.open(&repo).unwrap();
-    let text_target = DiffTarget::Commit {
-        commit_id: head.clone(),
-        path: Some("a.bin".into()),
-    };
-    let image_target = DiffTarget::Commit {
-        commit_id: head.clone(),
-        path: Some("pic.png".into()),
-    };
+    let text_target = DiffTarget::commit(head.clone(), Some("a.bin".into()));
+    let image_target = DiffTarget::commit(head.clone(), Some("pic.png".into()));
     let status = RepoStatus {
         staged: vec![row("a.bin", FileStatusKind::Modified)].into(),
         unstaged: Default::default(),

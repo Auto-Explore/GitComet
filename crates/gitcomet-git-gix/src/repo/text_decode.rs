@@ -250,9 +250,9 @@ impl GixRepo {
                 Some((path, identity, Some(stamp)))
                     if DiskFileStamp::read(&path) == Some(stamp) =>
                 {
-                    return Ok(
-                        FileDiffTextSource::with_identity(path, identity).with_format(entry.format)
-                    );
+                    return Ok(FileDiffTextSource::with_identity(path, identity)
+                        .with_format(entry.format)
+                        .with_raw_path(source.path.clone()));
                 }
                 Some(_) => {}
             }
@@ -307,7 +307,9 @@ impl GixRepo {
                 transcoded: Some((cache_path.clone(), Arc::clone(&identity), stamp)),
             },
         );
-        Ok(FileDiffTextSource::with_identity(cache_path, identity).with_format(format))
+        Ok(FileDiffTextSource::with_identity(cache_path, identity)
+            .with_format(format)
+            .with_raw_path(source.path.clone()))
     }
 
     fn text_format_memo_get(&self, key: u64) -> Option<TextFormatMemoEntry> {

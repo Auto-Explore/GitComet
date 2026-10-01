@@ -11,6 +11,9 @@ impl MainPaneView {
     /// commit-range diffs have no index to move lines to, and the preview,
     /// conflict and submodule modes render something other than a patch.
     pub(in crate::view) fn diff_stage_gutter_area(&self) -> Option<DiffArea> {
+        if !self.store.policy.allow_stage || !self.store.policy.line_action {
+            return None;
+        }
         // Cheap check first: this runs once per rendered frame, and the preview
         // probes below stat the filesystem.
         let area = match self.rendered_diff_target()? {
@@ -96,7 +99,7 @@ impl MainPaneView {
         // `local_actions_in_flight`, and the reload it asks for only starts
         // there, so between them the rows are at their most stale.
         if self.active_repo().is_some_and(|repo| {
-            repo.local_actions_in_flight > 0 || repo.diff_state.diff_reload_in_flight
+            repo.local_actions_in_flight > 0 || self.bound_diff_state(repo).diff_reload_in_flight
         }) {
             return;
         }

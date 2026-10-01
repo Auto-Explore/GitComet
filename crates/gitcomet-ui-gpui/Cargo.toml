@@ -14,6 +14,7 @@ workspace = true
 [features]
 default = []
 benchmarks = [
+    "gitcomet-ui-kit/benchmarks",
     "gitcomet-core/benchmarks",
     "gitcomet-state/benchmarks",
     "gitcomet-state/test-support",
@@ -28,9 +29,11 @@ dekobon-tree-sitter-groovy = { workspace = true }
 fontdb = { workspace = true }
 futures = { workspace = true }
 gitcomet-core = { workspace = true }
+gitcomet-extension-api = { workspace = true }
 gitcomet-git-gix = { workspace = true, optional = true }
 gitcomet-state = { workspace = true }
 gitcomet-tree-sitter-alloc = { workspace = true }
+gitcomet-ui-kit = { workspace = true }
 # `ui_probe` uses GPUI's opt-in frame event collector in normal app builds.
 gpui = { workspace = true, features = ["profiler"] }
 gpui_platform = { workspace = true }
@@ -47,6 +50,8 @@ rustc-hash = { workspace = true }
 rustfs-mimalloc = { workspace = true }
 resvg = { workspace = true }
 semver = { workspace = true }
+# Actions with data (extension commands, macOS menus) derive `JsonSchema`.
+schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 shlex = "2"
@@ -147,9 +152,6 @@ x11-clipboard = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 metal = "0.33"
-# Only the macOS menu types derive `JsonSchema`; gpui pulls schemars in on every
-# platform regardless, so this gate documents the use rather than saving a build.
-schemars = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 gitcomet-win32-window-utils = { path = "../win32-window-utils" }
@@ -160,7 +162,10 @@ gitcomet-git-gix = { workspace = true }
 # Only entries that add features over `[dependencies]` belong here — a plain
 # restatement is dead weight, since tests already see every regular dependency.
 gitcomet-core = { workspace = true, features = ["test-support", "benchmarks"] }
+# The example product's extension, run against the real host.
+gitcomet-extension-example = { path = "../gitcomet-extension-example" }
 gitcomet-state = { workspace = true, features = ["test-support"] }
+gitcomet-ui-kit = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }
 criterion = { workspace = true }
 

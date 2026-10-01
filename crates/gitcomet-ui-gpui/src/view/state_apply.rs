@@ -199,9 +199,15 @@ impl GitCometView {
         let title = crate::workspaces::with_workspace_for_window(
             cx,
             self.window_handle.window_id(),
-            |workspace| format!("{} — GitComet", workspace.display_name()),
+            |workspace| {
+                format!(
+                    "{} — {}",
+                    workspace.display_name(),
+                    crate::view::product_name()
+                )
+            },
         )
-        .unwrap_or_else(|| "GitComet".to_string());
+        .unwrap_or_else(|| crate::view::product_name().to_string());
         if self.native_window_title != title {
             self.native_window_title.clone_from(&title);
             let window_handle = self.window_handle;
@@ -549,6 +555,13 @@ impl GitCometView {
             .iter()
             .any(|repo| !next.repos.iter().any(|next_repo| next_repo.id == repo.id));
         self.state = next;
+        if let Some(extension_window) = self.extension_window.as_ref() {
+            extension_window.set_state(&self.state, cx);
+        }
+        self.retain_open_repository_views();
+        if self.repository_views.is_some() {
+            self.sync_extension_navigation(cx);
+        }
         if repos_closed {
             // A closed repo's errors name what no longer exists.
             let repos = Arc::clone(&self.state);

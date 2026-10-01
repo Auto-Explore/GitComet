@@ -243,25 +243,6 @@ fn run_git_command_with_optional_output(
     )
 }
 
-fn combine_command_outputs(command: impl Into<String>, outputs: &[CommandOutput]) -> CommandOutput {
-    CommandOutput {
-        command: command.into(),
-        stdout: outputs
-            .iter()
-            .map(|output| output.stdout.trim_end())
-            .filter(|text| !text.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        stderr: outputs
-            .iter()
-            .map(|output| output.stderr.trim_end())
-            .filter(|text| !text.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        exit_code: Some(0),
-    }
-}
-
 /// A remote's configured fetch refspecs, grouped by destination namespace.
 #[derive(Debug, Default)]
 struct RemoteFetchRefspecs {
@@ -1097,8 +1078,8 @@ impl GixRepo {
                 )?,
             );
         }
-        Ok(combine_command_outputs(
-            &format!("{} && git fetch --prune per remote", outputs[0].command),
+        Ok(CommandOutput::combine(
+            format!("{} && git fetch --prune per remote", outputs[0].command),
             &outputs,
         ))
     }
@@ -1136,6 +1117,33 @@ impl GixRepo {
         let unlinked =
             self.unlink_missing_remote_upstreams(UpstreamCleanupScope::Remotes(&remotes.names));
         Ok(append_unlinked_upstreams(output, &unlinked))
+    }
+
+    /// `git fetch <remote> <refspec>...`: exactly the refspecs asked for, with
+    /// pruning off whatever the configuration says.
+    pub(super) fn fetch_refspecs_with_output_impl(
+        &self,
+        remote: &str,
+        refspecs: &[String],
+    ) -> Result<CommandOutput> {
+        validate_ref_like_arg(remote, "remote name")?;
+        if refspecs.is_empty() {
+            return Err(Error::new(ErrorKind::Backend(
+                "a refspec fetch needs at least one refspec".to_string(),
+            )));
+        }
+        for refspec in refspecs {
+            validate_ref_like_arg(refspec, "refspec")?;
+        }
+        let label = format!("git fetch {remote} {}", refspecs.join(" "));
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("fetch")
+            .arg("--no-prune")
+            .arg("--no-prune-tags")
+            .arg("--")
+            .arg(remote)
+            .args(refspecs);
+        run_git_command_with_optional_output(cmd, &label, true)
     }
 
     fn prune_remote_tracking_refs_command_with_optional_output_impl(
@@ -1377,7 +1385,7 @@ impl GixRepo {
             None => Ok(output),
             Some(remote) => {
                 outputs.push(output);
-                Ok(combine_command_outputs(
+                Ok(CommandOutput::combine(
                     format!("git fetch {remote} --prune --no-prune-tags && {label}"),
                     &outputs,
                 ))
@@ -1432,7 +1440,7 @@ impl GixRepo {
             return Ok(output);
         }
         outputs.push(output);
-        Ok(combine_command_outputs(
+        Ok(CommandOutput::combine(
             format!("git fetch {remote} --prune --no-prune-tags && {pull_label}"),
             &outputs,
         ))
@@ -2004,7 +2012,7 @@ impl GixRepo {
                     return Err(remote_branch_gone_after_fetch_error(remote, branch));
                 }
                 let merge_output = self.merge_ref_with_output_impl(&tracking_ref)?;
-                return Ok(combine_command_outputs(
+                return Ok(CommandOutput::combine(
                     format!("git fetch {remote} --prune && git merge {tracking_ref}"),
                     &[prune_output, merge_output],
                 ));
@@ -2025,7 +2033,7 @@ impl GixRepo {
                 return Err(remote_branch_gone_after_fetch_error(remote, branch));
             };
             let merge_output = self.merge_ref_with_output_impl(tip.as_ref())?;
-            return Ok(combine_command_outputs(
+            return Ok(CommandOutput::combine(
                 format!(
                     "git fetch {remote} --prune && git fetch {remote} refs/heads/{branch} && git merge {tip}"
                 ),

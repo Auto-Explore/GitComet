@@ -1,14 +1,9 @@
 use crate::model::{
-    AppNotification, AppNotificationKind, AppState, AuthPromptKind, CommandLogEntry,
-    ConflictFileLoadMode, DiagnosticEntry, DiagnosticKind, GitLogSettings, Loadable, RepoId,
-    RepoLoadsInFlight, RepoState,
+    AppNotification, AppNotificationKind, AppState, CommandLogEntry, ConflictFileLoadMode,
+    DiagnosticEntry, DiagnosticKind, GitLogSettings, Loadable, RepoId, RepoLoadsInFlight,
+    RepoState,
 };
 use crate::msg::{ConflictAutosolveMode, ConflictAutosolveStats, Effect, RepoCommandKind};
-#[cfg(test)]
-use gitcomet_core::auth::stage_git_auth;
-use gitcomet_core::auth::{
-    GitAuthKind, SSH_PASSPHRASE_PROMPT_MARKER, StagedGitAuth, clear_staged_git_auth,
-};
 #[cfg(test)]
 use gitcomet_core::domain::Upstream;
 use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, FileStatusKind, SignatureFormats};
@@ -253,7 +248,7 @@ pub(super) fn diff_target_is_svg(target: &DiffTarget) -> bool {
 
 fn diff_target_is_preview_only(repo_state: &RepoState, target: &DiffTarget) -> bool {
     match target {
-        DiffTarget::WorkingTree { path, area } => {
+        DiffTarget::WorkingTree { path, area, .. } => {
             let Some(entries) = repo_state.status_entries_for_area(*area) else {
                 return false;
             };
@@ -269,6 +264,7 @@ fn diff_target_is_preview_only(repo_state: &RepoState, target: &DiffTarget) -> b
         DiffTarget::Commit {
             commit_id,
             path: Some(path),
+            ..
         } => {
             let Loadable::Ready(details) = &repo_state.history_state.commit_details else {
                 return false;
@@ -292,7 +288,7 @@ fn diff_target_preview_text_side(
     target: &DiffTarget,
 ) -> Option<gitcomet_core::domain::DiffPreviewTextSide> {
     match target {
-        DiffTarget::WorkingTree { path, area } => {
+        DiffTarget::WorkingTree { path, area, .. } => {
             let entries = repo_state.status_entries_for_area(*area)?;
 
             entries.iter().find_map(|entry| {
@@ -312,6 +308,7 @@ fn diff_target_preview_text_side(
         DiffTarget::Commit {
             commit_id,
             path: Some(path),
+            ..
         } => {
             let Loadable::Ready(details) = &repo_state.history_state.commit_details else {
                 return None;
@@ -527,7 +524,7 @@ pub(super) fn apply_selected_diff_load_plan_state_with_reload_mode(
 
 fn diff_target_is_submodule(repo_state: &RepoState, target: &DiffTarget) -> bool {
     match target {
-        DiffTarget::WorkingTree { path, area } => {
+        DiffTarget::WorkingTree { path, area, .. } => {
             let Some(entry) = repo_state.status_entry_for_path(*area, path) else {
                 return false;
             };
@@ -552,6 +549,7 @@ fn diff_target_is_submodule(repo_state: &RepoState, target: &DiffTarget) -> bool
         DiffTarget::Commit {
             commit_id,
             path: Some(path),
+            ..
         } => {
             let Loadable::Ready(details) = &repo_state.history_state.commit_details else {
                 return false;
@@ -573,7 +571,7 @@ pub(super) fn selected_conflict_target<'a>(
     repo_state: &RepoState,
     target: &'a DiffTarget,
 ) -> Option<SelectedConflictTarget<'a>> {
-    let DiffTarget::WorkingTree { path, area } = target else {
+    let DiffTarget::WorkingTree { path, area, .. } = target else {
         return None;
     };
     if *area != DiffArea::Unstaged {
@@ -1336,7 +1334,7 @@ fn summarize_command(
 
     if !ok {
         let label = match command {
-            RepoCommandKind::FetchAll => "Fetch",
+            RepoCommandKind::FetchAll | RepoCommandKind::FetchRefspecs { .. } => "Fetch",
             RepoCommandKind::PruneMergedBranches => "Prune merged branches",
             RepoCommandKind::PruneLocalTags => "Prune local tags",
             RepoCommandKind::Pull { .. } => "Pull",
@@ -1421,7 +1419,7 @@ fn summarize_command(
     }
 
     let summary = match command {
-        RepoCommandKind::FetchAll => {
+        RepoCommandKind::FetchAll | RepoCommandKind::FetchRefspecs { .. } => {
             if output.stderr.trim().is_empty() && output.stdout.trim().is_empty() {
                 "Fetch: Already up to date".to_string()
             } else {
@@ -1781,111 +1779,6 @@ pub(super) fn format_failure_summary(label: &str, error: &Error) -> String {
     format!("{label} failed:\n\n{}", format_error_for_user(error))
 }
 
-pub(super) fn detect_auth_prompt_kind(error: &Error) -> Option<AuthPromptKind> {
-    match error.kind() {
-        ErrorKind::Git(failure) => detect_auth_prompt_kind_from_git_failure(failure),
-        ErrorKind::Backend(message) => detect_auth_prompt_kind_from_message(message),
-        _ => None,
-    }
-}
-
-pub(super) fn detect_auth_prompt_kind_from_message(message: &str) -> Option<AuthPromptKind> {
-    let lower = message.to_ascii_lowercase();
-
-    let host_verification = lower.contains("host key verification failed")
-        || lower.contains("the authenticity of host")
-        || lower.contains("this key is not known by any other names")
-        || (lower.contains("are you sure you want to continue connecting")
-            && lower.contains("yes/no"));
-    if host_verification {
-        return Some(AuthPromptKind::HostVerification);
-    }
-
-    let passphrase = lower.contains("could not read passphrase")
-        // OpenSSH uses "for key '<path>'", while ssh-keygen signing uses
-        // "for \"<path>\"".
-        || lower.contains("enter passphrase for")
-        || lower.contains("read_passphrase")
-        || lower.contains("passphrase for key")
-        || lower.contains("incorrect passphrase supplied to decrypt private key")
-        || lower.contains(&SSH_PASSPHRASE_PROMPT_MARKER.to_ascii_lowercase())
-        || (lower.contains("passphrase") && lower.contains("terminal prompts disabled"));
-    let ssh_publickey = lower.contains("permission denied (publickey")
-        || (lower.contains("could not read from remote repository") && lower.contains("publickey"));
-    if passphrase || ssh_publickey {
-        return Some(AuthPromptKind::Passphrase);
-    }
-
-    let user_password = lower.contains("could not read username")
-        || lower.contains("could not read password")
-        || lower.contains("authentication failed")
-        || lower.contains("invalid username or password")
-        || lower.contains("http basic: access denied")
-        || (lower.contains("terminal prompts disabled")
-            && (lower.contains("https://")
-                || lower.contains("http://")
-                || lower.contains("username")
-                || lower.contains("password")));
-    if user_password {
-        return Some(AuthPromptKind::UsernamePassword);
-    }
-
-    None
-}
-
-pub(super) fn clear_staged_git_auth_env() {
-    clear_staged_git_auth();
-}
-
-pub(super) fn prepare_staged_git_auth(
-    kind: AuthPromptKind,
-    username: Option<&str>,
-    secret: &str,
-) -> Result<StagedGitAuth, Error> {
-    let normalized_secret = match kind {
-        AuthPromptKind::HostVerification => {
-            let trimmed = secret.trim();
-            if trimmed.eq_ignore_ascii_case("yes") {
-                "yes".to_string()
-            } else {
-                trimmed.to_string()
-            }
-        }
-        AuthPromptKind::UsernamePassword | AuthPromptKind::Passphrase => secret.to_string(),
-    };
-
-    if normalized_secret.trim().is_empty() {
-        return Err(Error::new(ErrorKind::Backend(
-            "credential/passphrase/confirmation cannot be empty".to_string(),
-        )));
-    }
-    if kind.requires_username() && username.unwrap_or_default().trim().is_empty() {
-        return Err(Error::new(ErrorKind::Backend(
-            "username cannot be empty".to_string(),
-        )));
-    }
-
-    Ok(StagedGitAuth {
-        kind: match kind {
-            AuthPromptKind::UsernamePassword => GitAuthKind::UsernamePassword,
-            AuthPromptKind::Passphrase => GitAuthKind::Passphrase,
-            AuthPromptKind::HostVerification => GitAuthKind::HostVerification,
-        },
-        username: username.map(ToOwned::to_owned),
-        secret: normalized_secret,
-    })
-}
-
-#[cfg(test)]
-pub(super) fn stage_git_auth_env(
-    kind: AuthPromptKind,
-    username: Option<&str>,
-    secret: &str,
-) -> Result<(), Error> {
-    stage_git_auth(prepare_staged_git_auth(kind, username, secret)?);
-    Ok(())
-}
-
 fn try_format_git_backend_error(error: &Error) -> Option<(String, String)> {
     match error.kind() {
         ErrorKind::Git(failure) => try_format_structured_git_failure(failure),
@@ -1901,15 +1794,6 @@ fn try_format_structured_git_failure(failure: &GitFailure) -> Option<(String, St
     }
     let rendered = render_command_and_output(&command, failure.detail());
     Some((command, rendered))
-}
-
-fn detect_auth_prompt_kind_from_git_failure(failure: &GitFailure) -> Option<AuthPromptKind> {
-    let stderr = String::from_utf8_lossy(failure.stderr());
-    detect_auth_prompt_kind_from_message(&stderr)
-        .or_else(|| {
-            detect_auth_prompt_kind_from_message(&String::from_utf8_lossy(failure.stdout()))
-        })
-        .or_else(|| detect_auth_prompt_kind_from_message(&failure.to_string()))
 }
 
 fn try_format_git_backend_error_message(message: &str) -> Option<(String, String)> {
@@ -1982,9 +1866,14 @@ impl IfEmptyElse for String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::auth::{
+        clear_staged_git_auth_env, detect_auth_prompt_kind, detect_auth_prompt_kind_from_message,
+        stage_git_auth_env,
+    };
     use super::*;
     use crate::model::{AppNotificationKind, DiagnosticKind};
     use crate::msg::RepoCommandKind;
+    use gitcomet_core::auth::SSH_PASSPHRASE_PROMPT_MARKER;
     use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, RepoSpec};
     use gitcomet_core::error::{GitFailure, GitFailureId};
     use gitcomet_core::services::{PullMode, RemoteUrlKind, ResetMode};
@@ -2025,10 +1914,7 @@ mod tests {
     fn diff_reload_effects_cover_image_svg_and_non_file_targets() {
         let repo_id = RepoId(7);
         let repo_state = repo_state(repo_id.0);
-        let png = DiffTarget::WorkingTree {
-            path: PathBuf::from("img.PNG"),
-            area: DiffArea::Unstaged,
-        };
+        let png = DiffTarget::working_tree(PathBuf::from("img.PNG"), DiffArea::Unstaged);
         let png_effects = diff_reload_effects(&repo_state, repo_id, png.clone());
         assert!(diff_target_wants_image_preview(&png));
         assert!(!diff_target_is_svg(&png));
@@ -2036,30 +1922,21 @@ mod tests {
         assert!(matches!(png_effects[0], Effect::LoadDiff { .. }));
         assert!(matches!(png_effects[1], Effect::LoadDiffFileImage { .. }));
 
-        let svg = DiffTarget::WorkingTree {
-            path: PathBuf::from("diagram.svg"),
-            area: DiffArea::Unstaged,
-        };
+        let svg = DiffTarget::working_tree(PathBuf::from("diagram.svg"), DiffArea::Unstaged);
         let svg_effects = diff_reload_effects(&repo_state, repo_id, svg.clone());
         assert!(diff_target_wants_image_preview(&svg));
         assert!(diff_target_is_svg(&svg));
         assert_eq!(svg_effects.len(), 3);
         assert!(matches!(svg_effects[2], Effect::LoadDiffFile { .. }));
 
-        let text_no_ext = DiffTarget::WorkingTree {
-            path: PathBuf::from("README"),
-            area: DiffArea::Unstaged,
-        };
+        let text_no_ext = DiffTarget::working_tree(PathBuf::from("README"), DiffArea::Unstaged);
         assert!(!diff_target_wants_image_preview(&text_no_ext));
         assert_eq!(
             diff_reload_effects(&repo_state, repo_id, text_no_ext).len(),
             2
         );
 
-        let commit_without_path = DiffTarget::Commit {
-            commit_id: CommitId("abc123".into()),
-            path: None,
-        };
+        let commit_without_path = DiffTarget::commit(CommitId("abc123".into()), None);
         assert!(!diff_target_wants_image_preview(&commit_without_path));
         assert!(!diff_target_is_svg(&commit_without_path));
         assert_eq!(
@@ -2075,10 +1952,7 @@ mod tests {
 
         // Working-tree content is read from disk: no patch diff, no file text, no
         // preview-text-file load.
-        let worktree = DiffTarget::WorkingTree {
-            path: PathBuf::from("src/lib.rs"),
-            area: DiffArea::Unstaged,
-        };
+        let worktree = DiffTarget::working_tree(PathBuf::from("src/lib.rs"), DiffArea::Unstaged);
         let plan = selected_diff_load_plan(&repo, &worktree);
         assert!(!plan.load_patch_diff);
         assert!(!plan.load_file_text);
@@ -2086,10 +1960,8 @@ mod tests {
         assert!(!plan.load_file_image);
 
         // Commit content reads the New-side blob via a preview text file.
-        let commit = DiffTarget::Commit {
-            commit_id: CommitId("abc123".into()),
-            path: Some(PathBuf::from("src/lib.rs")),
-        };
+        let commit =
+            DiffTarget::commit(CommitId("abc123".into()), Some(PathBuf::from("src/lib.rs")));
         let plan = selected_diff_load_plan(&repo, &commit);
         assert!(!plan.load_patch_diff);
         assert_eq!(
@@ -2098,10 +1970,7 @@ mod tests {
         );
 
         // An image is still loaded as an image, not as text.
-        let image = DiffTarget::Commit {
-            commit_id: CommitId("abc123".into()),
-            path: Some(PathBuf::from("logo.png")),
-        };
+        let image = DiffTarget::commit(CommitId("abc123".into()), Some(PathBuf::from("logo.png")));
         let plan = selected_diff_load_plan(&repo, &image);
         assert!(plan.load_file_image);
         assert_eq!(plan.preview_text_side, None);
@@ -2137,10 +2006,7 @@ mod tests {
 
         // An untracked SVG has no patch, but its source still has to load: the
         // Code view is the only place an SVG's text is ever shown.
-        let svg = DiffTarget::WorkingTree {
-            path: svg_path,
-            area: DiffArea::Unstaged,
-        };
+        let svg = DiffTarget::working_tree(svg_path, DiffArea::Unstaged);
         let plan = selected_diff_load_plan(&repo, &svg);
         assert!(!plan.load_patch_diff);
         assert!(plan.load_file_text);
@@ -2151,10 +2017,7 @@ mod tests {
         assert_eq!(diff_reload_effect_count(&repo, &svg), 3);
 
         // A non-SVG image has no text view at all.
-        let png = DiffTarget::WorkingTree {
-            path: png_path,
-            area: DiffArea::Unstaged,
-        };
+        let png = DiffTarget::working_tree(png_path, DiffArea::Unstaged);
         let plan = selected_diff_load_plan(&repo, &png);
         assert!(!plan.load_patch_diff);
         assert!(!plan.load_file_text);

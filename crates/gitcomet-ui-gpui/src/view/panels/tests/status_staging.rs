@@ -39,22 +39,11 @@ enum Viewed {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    git_output(dir, args);
+    crate::test_support::git(dir, args);
 }
 
 fn git_output(dir: &Path, args: &[&str]) -> Vec<u8> {
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    output.stdout
+    crate::test_support::git(dir, args)
 }
 
 fn commit(dir: &Path, message: &str) {
@@ -256,13 +245,13 @@ fn exercise_with_failure(
             }
         });
     });
-    let target = DiffTarget::WorkingTree {
-        path: path.into(),
-        area: match viewed {
+    let target = DiffTarget::working_tree(
+        path.into(),
+        match viewed {
             Viewed::Diff(area) => area,
             _ => DiffArea::Unstaged,
         },
-    };
+    );
     store.dispatch(match viewed {
         Viewed::Diff(_) => Msg::SelectDiff {
             repo_id: REPO,
@@ -915,10 +904,7 @@ fn checking_out_a_conflict_side_preserves_an_unrelated_diff(cx: &mut gpui::TestA
     crate::view::test_support::drain_store_worker(&view, cx);
     store.insert_repo_for_test(REPO, backend);
     super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo, REPO));
-    let target = DiffTarget::WorkingTree {
-        path: "b.txt".into(),
-        area: DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree("b.txt".into(), DiffArea::Unstaged);
     store.dispatch(Msg::SelectDiff {
         repo_id: REPO,
         target: target.clone(),

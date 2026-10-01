@@ -18,11 +18,12 @@ pub(crate) enum ToastBody {
         is_code_message: bool,
     },
     /// An error, shown until closed; the details dialog has the rest.
-    Error(Arc<ErrorNotice>),
+    Error(std::rc::Rc<ErrorNotice>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ToastAction {
+    Hosted(gitcomet_extension_api::HostedAction),
     OpenUrl {
         url: String,
         label: String,

@@ -73,8 +73,9 @@ impl MainPaneView {
         let min_width = this.diff_horizontal_content_width();
         let query = this.diff_search_query_or_empty();
         let query_options = this.diff_search_options_or_default();
-        let query_matcher = (!query.as_ref().is_empty())
-            .then(|| Arc::new(DiffSearchMatcher::new(query.as_ref(), query_options)));
+        // Shared with the diff rows and rebuilt only when the query changes: a
+        // regex query compiles on construction.
+        let query_matcher = this.diff_search_query_matcher_shared();
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 
         let theme = this.theme;
@@ -101,7 +102,9 @@ impl MainPaneView {
         let prepared_syntax_source = match syntax_document {
             Some(document) if !this.worktree_preview_text.is_empty() => {
                 Some(WorktreePreviewPreparedSyntaxSource {
-                    document_text: Arc::from(this.worktree_preview_text.as_ref()),
+                    // The string's own allocation; `Arc::from(&str)` copied the
+                    // whole file on every render.
+                    document_text: Arc::<str>::from(this.worktree_preview_text.clone()),
                     line_starts: Arc::clone(&this.worktree_preview_line_starts),
                     document,
                 })

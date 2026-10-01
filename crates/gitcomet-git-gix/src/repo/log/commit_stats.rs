@@ -1,5 +1,6 @@
 use super::super::large_files::CommittedPointerScan;
 use super::*;
+use gitcomet_core::domain::{FileMode, ObjectHash};
 
 pub(crate) const COMMIT_STATS_MAX_FILES: usize = 400;
 /// Large-file badges cost ~1-2.5 us per file (measured on 20k-file commits),
@@ -94,6 +95,17 @@ pub(crate) fn line_stats_from_bytes(old: &[u8], new: &[u8]) -> (Option<u32>, Opt
     (Some(diff.count_additions()), Some(diff.count_removals()))
 }
 
+fn file_mode_from_entry(mode: gix::object::tree::EntryMode) -> Option<FileMode> {
+    use gix::object::tree::EntryKind;
+    match mode.kind() {
+        EntryKind::Blob => Some(FileMode::Regular),
+        EntryKind::BlobExecutable => Some(FileMode::Executable),
+        EntryKind::Link => Some(FileMode::Symlink),
+        EntryKind::Commit => Some(FileMode::Gitlink),
+        EntryKind::Tree => None,
+    }
+}
+
 pub(crate) fn commit_file_change_from_diff(
     repo: &gix::Repository,
     change: gix::object::tree::diff::ChangeDetached,
@@ -105,72 +117,86 @@ pub(crate) fn commit_file_change_from_diff(
     use gix::object::tree::diff::ChangeDetached;
 
     // `link`: the current (or deleted) entry is a symlink, as git-annex locks files.
-    let (location, is_tree, is_submodule, kind, old_id, new_id, link) = match change {
-        ChangeDetached::Addition {
-            entry_mode,
-            location,
-            id,
-            ..
-        } => (
-            location,
-            entry_mode.is_tree(),
-            entry_mode.is_commit(),
-            FileStatusKind::Added,
-            None,
-            Some(id),
-            entry_mode.is_link(),
-        ),
-        ChangeDetached::Deletion {
-            entry_mode,
-            location,
-            id,
-            ..
-        } => (
-            location,
-            entry_mode.is_tree(),
-            entry_mode.is_commit(),
-            FileStatusKind::Deleted,
-            Some(id),
-            None,
-            entry_mode.is_link(),
-        ),
-        ChangeDetached::Modification {
-            previous_entry_mode,
-            entry_mode,
-            location,
-            previous_id,
-            id,
-        } => (
-            location,
-            previous_entry_mode.is_tree() || entry_mode.is_tree(),
-            previous_entry_mode.is_commit() || entry_mode.is_commit(),
-            FileStatusKind::Modified,
-            Some(previous_id),
-            Some(id),
-            entry_mode.is_link(),
-        ),
-        ChangeDetached::Rewrite {
-            source_entry_mode,
-            entry_mode,
-            location,
-            copy,
-            source_id,
-            id,
-            ..
-        } => (
-            location,
-            source_entry_mode.is_tree() || entry_mode.is_tree(),
-            source_entry_mode.is_commit() || entry_mode.is_commit(),
-            if copy {
-                FileStatusKind::Added
-            } else {
-                FileStatusKind::Renamed
-            },
-            Some(source_id),
-            Some(id),
-            entry_mode.is_link(),
-        ),
-    };
+    let (location, source, is_tree, is_submodule, kind, old_id, new_id, old_mode, new_mode, link) =
+        match change {
+            ChangeDetached::Addition {
+                entry_mode,
+                location,
+                id,
+                ..
+            } => (
+                location,
+                None,
+                entry_mode.is_tree(),
+                entry_mode.is_commit(),
+                FileStatusKind::Added,
+                None,
+                Some(id),
+                None,
+                Some(entry_mode),
+                entry_mode.is_link(),
+            ),
+            ChangeDetached::Deletion {
+                entry_mode,
+                location,
+                id,
+                ..
+            } => (
+                location,
+                None,
+                entry_mode.is_tree(),
+                entry_mode.is_commit(),
+                FileStatusKind::Deleted,
+                Some(id),
+                None,
+                Some(entry_mode),
+                None,
+                entry_mode.is_link(),
+            ),
+            ChangeDetached::Modification {
+                previous_entry_mode,
+                entry_mode,
+                location,
+                previous_id,
+                id,
+            } => (
+                location,
+                None,
+                previous_entry_mode.is_tree() || entry_mode.is_tree(),
+                previous_entry_mode.is_commit() || entry_mode.is_commit(),
+                FileStatusKind::Modified,
+                Some(previous_id),
+                Some(id),
+                Some(previous_entry_mode),
+                Some(entry_mode),
+                entry_mode.is_link(),
+            ),
+            ChangeDetached::Rewrite {
+                source_location,
+                source_entry_mode,
+                entry_mode,
+                location,
+                copy,
+                source_id,
+                id,
+                ..
+            } => (
+                location,
+                Some(source_location),
+                source_entry_mode.is_tree() || entry_mode.is_tree(),
+                source_entry_mode.is_commit() || entry_mode.is_commit(),
+                if copy {
+                    FileStatusKind::Added
+                } else {
+                    FileStatusKind::Renamed
+                },
+                Some(source_id),
+                Some(id),
+                Some(source_entry_mode),
+                Some(entry_mode),
+                entry_mode.is_link(),
+            ),
+        };
 
     if is_tree {
         return Ok(None);
@@ -182,19 +208,29 @@ pub(crate) fn commit_file_change_from_diff(
         (None, None)
     };
 
-    let path = path_buf_from_git_bytes(location.as_ref(), "gix commit details diff path")?;
+    let old_path = source
+        .map(|source| path_buf_from_git_bytes(source.as_ref(), "gix rename source path"))
+        .transpose()?;
     let large_file = pointers
         .filter(|_| !is_submodule)
         .zip(new_id.or(old_id))
         .and_then(|(pointers, id)| pointers.state(repo, id, link));
-    Ok(Some(CommitFileChange {
-        path,
-        kind,
-        is_submodule,
-        additions,
-        deletions,
-        large_file,
-    }))
+    let hash = |id: gix::ObjectId| ObjectHash(id.to_string().into());
+    Ok(Some(
+        CommitFileChange::new(
+            path_buf_from_git_bytes(location.as_ref(), "gix commit details diff path")?,
+            kind,
+        )
+        .with_submodule(is_submodule)
+        .with_line_counts(additions, deletions)
+        .with_old_path(old_path)
+        .with_ids(old_id.map(hash), new_id.map(hash))
+        .with_modes(
+            old_mode.and_then(file_mode_from_entry),
+            new_mode.and_then(file_mode_from_entry),
+        )
+        .with_large_file(large_file),
+    ))
 }
 
 /// Diff two trees (an absent `old_tree` means an empty tree, i.e. every path in

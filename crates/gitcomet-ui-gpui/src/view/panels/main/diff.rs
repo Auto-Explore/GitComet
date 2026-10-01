@@ -449,7 +449,7 @@ impl MainPaneView {
                         // A/B header and no empty "before" half to explain away.
                         let is_content_view = self
                             .active_repo()
-                            .is_some_and(|repo| repo.diff_state.content_preview);
+                            .is_some_and(|repo| self.bound_diff_state(repo).content_preview);
                         if is_content_view {
                             return div()
                                 .id("diff_image_container")
@@ -667,8 +667,8 @@ impl MainPaneView {
                                         );
                                     let list = uniform_list(
                                         "diff",
-                                        self.diff_visible_len(),
-                                        cx.processor(Self::render_diff_rows),
+                                        self.diff_list_len(),
+                                        cx.processor(Self::render_projected_inline),
                                     )
                                     .h_full()
                                     .min_h(px(0.0))
@@ -738,7 +738,7 @@ impl MainPaneView {
                                     self.sync_diff_split_scroll();
                                     let vertical_sync_enabled =
                                         self.diff_scroll_sync.includes_vertical();
-                                    let count = self.diff_visible_len();
+                                    let count = self.diff_list_len();
                                     let horizontal_scrollbar_gutter = components::Scrollbar::gutter(
                                         components::ScrollbarAxis::Horizontal,
                                     );
@@ -767,7 +767,7 @@ impl MainPaneView {
                                     let left = uniform_list(
                                         "diff_split_left",
                                         count,
-                                        cx.processor(Self::render_diff_split_left_rows),
+                                        cx.processor(Self::render_projected_left),
                                     )
                                     .h_full()
                                     .min_h(px(0.0))
@@ -792,7 +792,7 @@ impl MainPaneView {
                                     let right = uniform_list(
                                         "diff_split_right",
                                         count,
-                                        cx.processor(Self::render_diff_split_right_rows),
+                                        cx.processor(Self::render_projected_right),
                                     )
                                     .h_full()
                                     .min_h(px(0.0))

@@ -381,7 +381,40 @@ fn metadata_noise_in_a_mixed_event_preserves_real_changes() {
             verification_context: false,
             large_file_support: false,
             text_attributes: false,
+            paths: crate::msg::ChangedPaths::known(vec!["source.txt".into()]),
         })
+    );
+}
+
+#[test]
+fn edits_report_their_paths_and_ignore_rule_changes_report_unknown() {
+    let (_temp, root) = repository();
+    let mut rules = load_gitignore_rules(&root);
+    let snapshot = rules.state.snapshot();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "edit").unwrap();
+    fs::write(root.join("README.md"), "edit").unwrap();
+    let edit = notify::Event::new(EventKind::Modify(ModifyKind::Any))
+        .add_path(root.join("src/lib.rs"))
+        .add_path(root.join("README.md"));
+    let effect = summarize(&snapshot, &mut rules.state.rules, &edit);
+    assert_eq!(
+        effect.change.map(|change| change.paths),
+        Some(crate::msg::ChangedPaths::known(vec![
+            "README.md".into(),
+            "src/lib.rs".into()
+        ]))
+    );
+
+    fs::write(root.join(".gitignore"), "*.log\n").unwrap();
+    let rules_changed = notify::Event::new(EventKind::Modify(ModifyKind::Any))
+        .add_path(root.join(".gitignore"))
+        .add_path(root.join("README.md"));
+    let effect = summarize(&snapshot, &mut rules.state.rules, &rules_changed);
+    assert_eq!(
+        effect.change.map(|change| change.paths),
+        Some(crate::msg::ChangedPaths::Unknown),
+        "new ignore rules can reveal or hide any path"
     );
 }
 

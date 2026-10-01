@@ -92,9 +92,7 @@ macro_rules! apply_setting {
 }
 
 pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Result<()> {
-    with_session_file_persist_lock(|| {
-        let mut file = load_file(path).unwrap_or_default();
-        file.version = CURRENT_SESSION_FILE_VERSION;
+    update_session_file(path, |file| {
         if settings.window_width.is_some() && settings.window_height.is_some() {
             file.window_width = settings.window_width;
             file.window_height = settings.window_height;
@@ -190,7 +188,7 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
             file.external_code_editor = editor.map(external_code_editor_to_file);
         }
 
-        persist_to_path(path, &file)
+        SessionUpdate::Write
     })
 }
 
@@ -208,11 +206,9 @@ pub fn persist_mergetool_window_size_to_path(
     height: u32,
     path: &Path,
 ) -> io::Result<()> {
-    with_session_file_persist_lock(|| {
-        let mut file = load_file(path).unwrap_or_default();
-        file.version = CURRENT_SESSION_FILE_VERSION;
+    update_session_file(path, |file| {
         file.mergetool_window_width = Some(width);
         file.mergetool_window_height = Some(height);
-        persist_to_path(path, &file)
+        SessionUpdate::Write
     })
 }

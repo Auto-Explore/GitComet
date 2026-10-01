@@ -134,23 +134,21 @@ pub fn persist_repo_history_mode_to_path(
     mode: HistoryMode,
     session_file_path: &Path,
 ) -> io::Result<()> {
-    with_session_file_persist_lock(|| {
-        let mut file = load_file(session_file_path).unwrap_or_default();
+    update_session_file(session_file_path, |file| {
         let mode = HistoryModeSetting::from(mode);
 
-        if repo_history_mode_setting_from_file(&file, workdir)
+        if repo_history_mode_setting_from_file(file, workdir)
             .is_some_and(|existing| existing == mode)
         {
-            return Ok(());
+            return SessionUpdate::Unchanged;
         }
 
-        file.version = CURRENT_SESSION_FILE_VERSION;
         let workdir_key = path_storage_key(workdir);
         file.repo_history_modes
             .get_or_insert_with(BTreeMap::new)
             .insert(workdir_key, mode);
 
-        persist_to_path(session_file_path, &file)
+        SessionUpdate::Write
     })
 }
 
@@ -162,13 +160,12 @@ pub(crate) fn persist_repo_history_modes_batch_to_path(
         return Ok(());
     }
 
-    with_session_file_persist_lock(|| {
-        let mut file = load_file(session_file_path).unwrap_or_default();
+    update_session_file(session_file_path, |file| {
         let mut changed = false;
 
         for (workdir, mode) in updates {
             let mode = HistoryModeSetting::from(*mode);
-            if repo_history_mode_setting_from_file(&file, workdir)
+            if repo_history_mode_setting_from_file(file, workdir)
                 .is_some_and(|existing| existing == mode)
             {
                 continue;
@@ -182,11 +179,10 @@ pub(crate) fn persist_repo_history_modes_batch_to_path(
         }
 
         if !changed {
-            return Ok(());
+            return SessionUpdate::Unchanged;
         }
 
-        file.version = CURRENT_SESSION_FILE_VERSION;
-        persist_to_path(session_file_path, &file)
+        SessionUpdate::Write
     })
 }
 
@@ -235,8 +231,7 @@ pub fn persist_repo_history_scope_to_path(
     scope: LogScope,
     session_file_path: &Path,
 ) -> io::Result<()> {
-    with_session_file_persist_lock(|| {
-        let mut file = load_file(session_file_path).unwrap_or_default();
+    update_session_file(session_file_path, |file| {
         let scope = HistoryScopeSetting::from(scope);
 
         if let Some(existing_scope) = file.repo_history_scopes.as_ref().and_then(|scopes| {
@@ -249,16 +244,15 @@ pub fn persist_repo_history_scope_to_path(
                 })
         }) && existing_scope == scope
         {
-            return Ok(());
+            return SessionUpdate::Unchanged;
         }
 
-        file.version = CURRENT_SESSION_FILE_VERSION;
         let workdir_key = path_storage_key(workdir);
         file.repo_history_scopes
             .get_or_insert_with(BTreeMap::new)
             .insert(workdir_key, scope);
 
-        persist_to_path(session_file_path, &file)
+        SessionUpdate::Write
     })
 }
 
@@ -269,22 +263,20 @@ pub fn persist_repo_history_author_filter_to_path(
     author: Option<&str>,
     session_file_path: &Path,
 ) -> io::Result<()> {
-    with_session_file_persist_lock(|| {
-        let mut file = load_file(session_file_path).unwrap_or_default();
+    update_session_file(session_file_path, |file| {
         let stored = file
             .repo_history_author_filters
             .get_or_insert_with(BTreeMap::new);
         let workdir_key = path_storage_key(workdir);
         let existing = stored.get(&workdir_key).cloned().flatten();
         if existing == author.map(ToOwned::to_owned) {
-            return Ok(());
+            return SessionUpdate::Unchanged;
         }
         if let Some(author) = author {
             stored.insert(workdir_key, Some(author.to_owned()));
         } else {
             stored.remove(&workdir_key);
         }
-        file.version = CURRENT_SESSION_FILE_VERSION;
-        persist_to_path(session_file_path, &file)
+        SessionUpdate::Write
     })
 }

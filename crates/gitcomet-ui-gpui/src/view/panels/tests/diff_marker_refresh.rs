@@ -5,17 +5,7 @@ use super::*;
 use gitcomet_core::services::GitBackend;
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    crate::test_support::git(dir, args);
 }
 
 fn lines(edits: &[(usize, &str)]) -> String {
@@ -144,10 +134,10 @@ fn markers_follow_an_in_place_external_edit(
         });
     });
 
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: "a.rs".into(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        "a.rs".into(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
     store.dispatch(Msg::SelectDiff {
         repo_id,
         target: target.clone(),
@@ -255,10 +245,10 @@ fn markers_are_current_after_editing_reloading_and_reopening_the_diff(
         });
     });
 
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: "a.rs".into(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        "a.rs".into(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
     let open_diff = |cx: &mut gpui::VisualTestContext| {
         store.dispatch(Msg::SelectDiff {
             repo_id,

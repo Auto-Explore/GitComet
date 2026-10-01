@@ -171,6 +171,7 @@ pub(super) struct SidebarStructure {
 pub(super) fn header_key(row: &BranchSidebarRow) -> Option<&SharedString> {
     match row {
         BranchSidebarRow::SectionHeader { collapse_key, .. }
+        | BranchSidebarRow::ContributionHeader { collapse_key, .. }
         | BranchSidebarRow::WorktreesHeader { collapse_key, .. }
         | BranchSidebarRow::SubmodulesHeader { collapse_key, .. }
         | BranchSidebarRow::AnnexHeader { collapse_key, .. }
@@ -183,6 +184,7 @@ pub(super) fn header_key(row: &BranchSidebarRow) -> Option<&SharedString> {
 
 pub(super) fn row_key(row: &BranchSidebarRow) -> SharedString {
     match row {
+        BranchSidebarRow::ContributionItem { key, .. } => key.clone(),
         BranchSidebarRow::Branch { target, .. } => format!("branch:{target:?}").into(),
         BranchSidebarRow::WorktreeItem { path, .. } => {
             format!("worktree:{}", path.display()).into()
