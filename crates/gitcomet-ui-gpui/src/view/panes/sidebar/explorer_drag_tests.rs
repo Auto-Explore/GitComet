@@ -980,3 +980,268 @@ fn explorer_empty_repository_accepts_root_focus_and_external_highlight(
         Some(PathBuf::new())
     );
 }
+
+/// `explorer_state()` over a real directory, so inline edits reach the disk.
+fn explorer_state_in(workdir: &std::path::Path) -> Arc<AppState> {
+    for (path, contents) in [
+        ("alpha/one.rs", "fn one() {}\n"),
+        ("zulu/two.rs", "fn two() {}\n"),
+    ] {
+        let path = workdir.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+    }
+    let mut state = (*explorer_state()).clone();
+    state.repos[0].spec.workdir = workdir.to_path_buf();
+    Arc::new(state)
+}
+
+/// Mounts `state` in an active window with the app's text-input keymap, so
+/// Enter reaches the name field the way it does in the real app.
+fn explorer_window(
+    cx: &mut gpui::TestAppContext,
+    state: Arc<AppState>,
+) -> (
+    gpui::Entity<GitCometView>,
+    gpui::Entity<SidebarPaneView>,
+    &mut gpui::VisualTestContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate_window();
+        GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|_, app| {
+        crate::app::bind_text_input_keys_for_test(app);
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(Arc::clone(&state));
+            test_support::push_test_state(view, state, cx);
+            view.set_sidebar_collapsed(false, cx);
+        })
+    });
+    test_support::redraw(cx);
+    let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
+    (view, pane, cx)
+}
+
+fn start_inline_edit(
+    cx: &mut gpui::VisualTestContext,
+    pane: &gpui::Entity<SidebarPaneView>,
+    action: ExplorerAction,
+    path: &str,
+) {
+    cx.update(|window, app| {
+        pane.update(app, |pane, cx| {
+            pane.explorer_action(action, Some(PathBuf::from(path)), window, cx)
+        })
+    });
+    test_support::redraw(cx);
+}
+
+fn set_inline_name(cx: &mut gpui::VisualTestContext, pane: &gpui::Entity<SidebarPaneView>, name: &str) {
+    cx.update(|_, app| {
+        let input = pane.read(app).explorer_name_input.clone();
+        input.update(app, |input, cx| input.set_text(name.to_string(), cx));
+    });
+}
+
+fn inline_edit_focused(cx: &mut gpui::VisualTestContext, pane: &gpui::Entity<SidebarPaneView>) -> bool {
+    cx.update(|window, app| pane.read(app).explorer_inline_edit_owns_focus(window, app))
+}
+
+/// Focus something outside the explorer, as a click elsewhere would.
+fn move_focus_elsewhere(cx: &mut gpui::VisualTestContext) -> gpui::FocusHandle {
+    let other = cx.update(|window, app| {
+        let other = app.focus_handle();
+        window.focus(&other, app);
+        other
+    });
+    // Blur listeners run during the next draw.
+    test_support::redraw(cx);
+    other
+}
+
+/// The filesystem worker runs on its own thread; poll the disk.
+fn wait_for_path(cx: &mut gpui::VisualTestContext, path: &std::path::Path, exists: bool) {
+    for _ in 0..300 {
+        if path.exists() == exists {
+            return;
+        }
+        cx.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("{} never became exists={exists}", path.display());
+}
+
+#[gpui::test]
+fn explorer_inline_edit_enter_creates_the_file_and_returns_focus_to_the_tree(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let (_view, pane, cx) = explorer_window(cx, explorer_state_in(&root));
+
+    start_inline_edit(cx, &pane, ExplorerAction::NewFile, "");
+    assert!(inline_edit_focused(cx, &pane), "the name field must take the caret");
+    set_inline_name(cx, &pane, "new.txt");
+    cx.simulate_keystrokes("enter");
+    wait_for_path(cx, &root.join("new.txt"), true);
+    cx.update(|window, app| {
+        let pane = pane.read(app);
+        assert!(pane.explorer_name_edit.is_none());
+        assert!(pane.explorer_focus.is_focused(window), "Enter hands focus back to the tree");
+    });
+
+    start_inline_edit(cx, &pane, ExplorerAction::NewFolder, "zulu");
+    assert!(inline_edit_focused(cx, &pane));
+    set_inline_name(cx, &pane, "nested");
+    cx.simulate_keystrokes("enter");
+    wait_for_path(cx, &root.join("zulu/nested"), true);
+    assert!(root.join("zulu/nested").is_dir());
+
+    start_inline_edit(cx, &pane, ExplorerAction::Rename, "alpha/one.rs");
+    assert!(inline_edit_focused(cx, &pane));
+    set_inline_name(cx, &pane, "renamed.rs");
+    cx.simulate_keystrokes("enter");
+    wait_for_path(cx, &root.join("alpha/renamed.rs"), true);
+    assert!(!root.join("alpha/one.rs").exists());
+}
+
+#[gpui::test]
+fn explorer_inline_edit_commits_on_focus_out_and_cancels_empty_or_unchanged_names(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let (view, pane, cx) = explorer_window(cx, explorer_state_in(&root));
+
+    // A typed name is applied when focus leaves the field, and focus stays put.
+    start_inline_edit(cx, &pane, ExplorerAction::Rename, "alpha/one.rs");
+    set_inline_name(cx, &pane, "moved.rs");
+    let other = move_focus_elsewhere(cx);
+    wait_for_path(cx, &root.join("alpha/moved.rs"), true);
+    cx.update(|window, app| {
+        assert!(pane.read(app).explorer_name_edit.is_none());
+        assert!(other.is_focused(window), "focus-out must not pull focus back");
+    });
+
+    // Empty New folder and unchanged Rename end silently.
+    start_inline_edit(cx, &pane, ExplorerAction::NewFolder, "");
+    move_focus_elsewhere(cx);
+    start_inline_edit(cx, &pane, ExplorerAction::Rename, "zulu/two.rs");
+    move_focus_elsewhere(cx);
+    cx.update(|_, app| assert!(pane.read(app).explorer_name_edit.is_none()));
+    let store = cx.update(|_, app| view.read(app).store.clone());
+    let entries = std::fs::read_dir(&root).unwrap().count();
+    assert_eq!(entries, 2, "nothing new may appear in the root");
+    assert!(root.join("zulu/two.rs").exists());
+
+    // An invalid name on Enter is reported and the edit stays open to fix it.
+    start_inline_edit(cx, &pane, ExplorerAction::NewFile, "");
+    set_inline_name(cx, &pane, "a/b");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(inline_edit_focused(cx, &pane), "the field keeps the caret");
+    let mut reported = false;
+    for _ in 0..200 {
+        reported = store.snapshot().repos[0]
+            .feedback
+            .diagnostics
+            .iter()
+            .any(|entry| entry.message.contains("file name"));
+        if reported {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(reported, "an invalid name must be reported");
+
+    // Escape cancels without creating anything.
+    cx.simulate_keystrokes("escape");
+    test_support::redraw(cx);
+    cx.update(|window, app| {
+        let pane = pane.read(app);
+        assert!(pane.explorer_name_edit.is_none());
+        assert!(pane.explorer_focus.is_focused(window));
+    });
+    assert!(!root.join("a").exists());
+}
+
+#[gpui::test]
+fn explorer_inline_edit_survives_window_deactivation(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let (_view, pane, cx) = explorer_window(cx, explorer_state_in(&root));
+
+    start_inline_edit(cx, &pane, ExplorerAction::Rename, "alpha/one.rs");
+    set_inline_name(cx, &pane, "kept.rs");
+    cx.deactivate_window();
+    test_support::redraw(cx);
+    cx.update(|_, app| assert!(pane.read(app).explorer_name_edit.is_some()));
+    assert!(root.join("alpha/one.rs").exists(), "switching windows is not a commit");
+
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    test_support::redraw(cx);
+    assert!(inline_edit_focused(cx, &pane), "the caret returns with the window");
+    cx.simulate_keystrokes("escape");
+    test_support::redraw(cx);
+    cx.update(|_, app| assert!(pane.read(app).explorer_name_edit.is_none()));
+    assert!(root.join("alpha/one.rs").exists());
+}
+
+#[gpui::test]
+fn explorer_menu_rename_keeps_focus_in_the_name_field(cx: &mut gpui::TestAppContext) {
+    use crate::view::panels::ContextMenuAction;
+
+    let _guard = crate::test_support::lock_visual_test();
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let (view, pane, cx) = explorer_window(cx, explorer_state_in(&root));
+    let host = cx.update(|_, app| view.read(app).popover_host.clone());
+    for (action, editing) in [(ExplorerAction::Rename, true), (ExplorerAction::Copy, false)] {
+        // A real right-click, so the menu records the tree as its invoker.
+        let row = cx.debug_bounds("file_browser_row_1").expect("alpha/one.rs row");
+        cx.simulate_mouse_down(row.center(), gpui::MouseButton::Right, Default::default());
+        cx.simulate_mouse_up(row.center(), gpui::MouseButton::Right, Default::default());
+        test_support::redraw(cx);
+        assert!(
+            cx.update(|_, app| host.read(app).popover_kind_for_tests().is_some()),
+            "the row menu opens"
+        );
+        cx.update(|window, app| {
+            host.update(app, |host, cx| {
+                host.context_menu_activate_action(
+                    ContextMenuAction::Explorer {
+                        repo_id: RepoId(7),
+                        path: PathBuf::from("alpha/one.rs"),
+                        action,
+                    },
+                    window,
+                    cx,
+                )
+            })
+        });
+        test_support::redraw(cx);
+        cx.update(|window, app| {
+            assert!(host.read(app).popover_kind_for_tests().is_none());
+            let pane = pane.read(app);
+            assert_eq!(
+                pane.explorer_inline_edit_owns_focus(window, app),
+                editing,
+                "{action:?}: closing the menu must leave an inline edit focused"
+            );
+            if !editing {
+                assert!(
+                    pane.explorer_focus.is_focused(window),
+                    "other actions hand focus back to the tree"
+                );
+            }
+        });
+        cx.simulate_keystrokes("escape");
+        test_support::redraw(cx);
+    }
+}

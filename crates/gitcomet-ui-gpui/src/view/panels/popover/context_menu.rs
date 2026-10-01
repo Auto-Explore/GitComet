@@ -815,6 +815,7 @@ impl PopoverHost {
     ) {
         let mut close_after_action = true;
         let mut restore_diff_panel_focus_after_action = false;
+        let mut restore_invoker_focus_after_action = true;
         match action {
             ContextMenuAction::Explorer {
                 repo_id,
@@ -822,9 +823,11 @@ impl PopoverHost {
                 action,
             } => {
                 if self.state.active_repo == Some(repo_id) {
-                    self.sidebar_pane.update(cx, |pane, cx| {
-                        pane.explorer_action(action, Some(path), window, cx)
+                    let editing = self.sidebar_pane.update(cx, |pane, cx| {
+                        pane.explorer_action(action, Some(path), window, cx);
+                        pane.explorer_inline_edit_owns_focus(window, cx)
                     });
+                    restore_invoker_focus_after_action = !editing;
                 }
             }
             ContextMenuAction::ToggleHistoryRefGroup { target } => {
@@ -1993,7 +1996,12 @@ impl PopoverHost {
         // the way in, and whether the picker underneath survives is the picker's
         // call, not the action's.
         if close_after_action && !self.suppress_popover_close_after_action {
-            self.close_popover_and_restore_focus(window, cx);
+            if restore_invoker_focus_after_action {
+                self.close_popover_and_restore_focus(window, cx);
+            } else {
+                // The action put focus in an inline editor; restoring the invoker would take it.
+                self.close_popover(cx);
+            }
         } else {
             if restore_diff_panel_focus_after_action {
                 let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();

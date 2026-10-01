@@ -2477,12 +2477,7 @@ impl SidebarPaneView {
                     // The pinned section shares the list with the tree but not
                     // its shape, so both rows are built here and return early.
                     FileBrowserVisibleRow::NameEntry { depth } => {
-                        let edit = this.explorer_name_edit.as_ref()?;
-                        let icon = if edit.is_directory {
-                            file_icons::folder_icon(false)
-                        } else {
-                            file_icons::file_icon_for_path(&edit.path)
-                        };
+                        let icon = this.explorer_name_edit.as_ref()?.icon;
                         return this.explorer_name_entry(cx).map(|entry| {
                             div()
                                 .debug_selector(|| "explorer_inline_row".into())

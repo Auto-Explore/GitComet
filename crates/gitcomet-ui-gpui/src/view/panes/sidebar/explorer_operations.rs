@@ -38,6 +38,19 @@ pub(super) struct NameEdit {
     pub action: ExplorerAction,
     pub is_directory: bool,
     pub reveal: bool,
+    /// Row icon; a new file's follows the typed name.
+    pub icon: &'static str,
+    /// Enter, focus-out and window-activation hooks. They die with the edit, so
+    /// a commit's own refocus cannot re-enter it.
+    pub _subscriptions: Vec<gpui::Subscription>,
+}
+
+/// What ended an inline name edit: Enter keeps editing on a bad name, focus-out
+/// gives up instead of pulling focus back.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum NameEditTrigger {
+    Enter,
+    Blur,
 }
 
 /// Holding the rows keeps pointer identity safe as a cache key across tree revisions.
@@ -368,31 +381,29 @@ impl SidebarPaneView {
                         && matches!(&repo.file_browser.entries,
                         Loadable::Ready(entries) if entries.iter().any(|entry|
                             entry.kind == FileEntryKind::Directory && root.join(entry.path.as_ref()) == path)));
-                self.explorer_name_input.update(cx, |input, cx| {
-                    input.set_text(initial, cx);
-                });
-                if action != ExplorerAction::Rename
-                    && let Ok(relative) = path.strip_prefix(&root)
-                    && !relative.as_os_str().is_empty()
-                    && !repo
-                        .file_browser
-                        .expanded_dirs
-                        .contains(&relative.to_path_buf())
-                {
-                    self.store.dispatch(Msg::ToggleFileBrowserDir {
-                        repo_id,
-                        path: relative.to_path_buf(),
+                let expand = (action != ExplorerAction::Rename)
+                    .then(|| path.strip_prefix(&root).ok().map(Path::to_path_buf))
+                    .flatten()
+                    .filter(|relative| {
+                        !relative.as_os_str().is_empty()
+                            && !repo.file_browser.expanded_dirs.contains(relative)
                     });
+                // A second edit settles the first rather than discarding it.
+                if self.explorer_name_edit.is_some() {
+                    self.commit_explorer_name_edit(NameEditTrigger::Blur, window, cx);
                 }
-                self.explorer_name_edit = Some(NameEdit {
+                self.start_explorer_name_edit(
                     repo_id,
                     path,
                     action,
                     is_directory,
-                    reveal: true,
-                });
-                window.focus(&self.explorer_name_input.read(cx).focus_handle(), cx);
-                cx.notify();
+                    initial,
+                    window,
+                    cx,
+                );
+                if let Some(relative) = expand {
+                    self.toggle_explorer_dir(relative);
+                }
                 return;
             }
             ExplorerAction::Duplicate => Operation::Duplicate { sources },
@@ -418,44 +429,14 @@ impl SidebarPaneView {
         if self.explorer_name_edit.is_some() {
             match event.keystroke.key.as_str() {
                 "escape" => {
-                    self.explorer_name_edit = None;
-                    window.focus(&self.explorer_focus, cx);
                     cx.stop_propagation();
-                    cx.notify();
+                    self.cancel_explorer_name_edit(true, window, cx);
                 }
+                // Enter normally arrives as the input's Enter action (see the
+                // observer in `start_explorer_name_edit`); this covers unbound keys.
                 "enter" => {
                     cx.stop_propagation();
-                    let name = self.explorer_name_input.read(cx).text().to_string();
-                    if let Err(error) =
-                        gitcomet_core::filesystem::validate_name(std::ffi::OsStr::new(&name))
-                    {
-                        self.store.dispatch(Msg::ReportError {
-                            repo_id: self.active_repo_id(),
-                            message: error.to_string(),
-                        });
-                        return;
-                    }
-                    let edit = self.explorer_name_edit.take().unwrap();
-                    if self.active_repo_id() != Some(edit.repo_id) {
-                        return;
-                    }
-                    let operation = match edit.action {
-                        ExplorerAction::Rename => Operation::Rename {
-                            source: edit.path,
-                            name: name.into(),
-                        },
-                        ExplorerAction::NewFolder => Operation::CreateDirectory {
-                            path: edit.path.join(name),
-                        },
-                        _ => Operation::CreateFile {
-                            path: edit.path.join(name),
-                        },
-                    };
-                    window.focus(&self.explorer_focus, cx);
-                    let _ = self.root_view.update(cx, |root, cx| {
-                        root.submit_filesystem_operation(Request::new(operation), None, window, cx)
-                    });
-                    cx.notify();
+                    self.commit_explorer_name_edit(NameEditTrigger::Enter, window, cx);
                 }
                 _ => {}
             }
@@ -607,6 +588,188 @@ impl SidebarPaneView {
             .flatten();
             self.explorer_action(action, target, window, cx);
         }
+    }
+
+    fn toggle_explorer_dir(&self, path: PathBuf) {
+        if let Some(repo_id) = self.active_repo_id() {
+            // The reducer keeps a filtered tree's forced expansion.
+            self.store
+                .dispatch(Msg::ToggleFileBrowserDir { repo_id, path });
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_explorer_name_edit(
+        &mut self,
+        repo_id: RepoId,
+        path: PathBuf,
+        action: ExplorerAction,
+        is_directory: bool,
+        initial: String,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let input = self.explorer_name_input.clone();
+        let icon = if is_directory {
+            file_icons::folder_icon(false)
+        } else {
+            file_icons::file_icon_for_path(Path::new(&initial))
+        };
+        // Renaming a file preselects its stem so typing keeps the extension.
+        let selected = if is_directory {
+            initial.len()
+        } else {
+            Path::new(&initial)
+                .file_stem()
+                .map_or(initial.len(), |stem| stem.len())
+        };
+        input.update(cx, |input, cx| {
+            input.set_text(initial, cx);
+            input.clear_transient_key_presses();
+            if selected > 0 {
+                input.set_selected_range(0..selected, false, window, cx);
+            }
+        });
+        let focus = input.read(cx).focus_handle();
+        let subscriptions = vec![
+            cx.observe_in(&input, window, |this, input, window, cx| {
+                let (enter, escape) = input.update(cx, |input, _| {
+                    (input.take_enter_pressed(), input.take_escape_pressed())
+                });
+                if enter {
+                    this.commit_explorer_name_edit(NameEditTrigger::Enter, window, cx);
+                } else if escape {
+                    this.cancel_explorer_name_edit(true, window, cx);
+                } else {
+                    this.refresh_explorer_name_icon(cx);
+                }
+            }),
+            cx.on_blur(&focus, window, |this, window, cx| {
+                // Deactivation blurs too; keep the edit for when the window returns.
+                if this.explorer_name_edit.is_some() && window.is_window_active() {
+                    this.commit_explorer_name_edit(NameEditTrigger::Blur, window, cx);
+                }
+            }),
+            // Deactivation leaves nothing focused, so hand the caret back on return.
+            cx.observe_window_activation(window, |this, window, cx| {
+                if window.is_window_active() && this.explorer_name_edit.is_some() {
+                    let focus = this.explorer_name_input.read(cx).focus_handle();
+                    window.focus(&focus, cx);
+                }
+            }),
+        ];
+        self.explorer_name_edit = Some(NameEdit {
+            repo_id,
+            path,
+            action,
+            is_directory,
+            reveal: true,
+            icon,
+            _subscriptions: subscriptions,
+        });
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    /// Applies the inline edit: create the file or folder, or rename.
+    pub(super) fn commit_explorer_name_edit(
+        &mut self,
+        trigger: NameEditTrigger,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(edit) = self.explorer_name_edit.as_ref() else {
+            return;
+        };
+        let name = self.explorer_name_input.read(cx).text().trim().to_string();
+        let unchanged = edit.action == ExplorerAction::Rename
+            && edit
+                .path
+                .file_name()
+                .is_some_and(|current| current == std::ffi::OsStr::new(&name));
+        if name.is_empty() || unchanged {
+            self.cancel_explorer_name_edit(trigger == NameEditTrigger::Enter, window, cx);
+            return;
+        }
+        if let Err(error) = gitcomet_core::filesystem::validate_name(std::ffi::OsStr::new(&name)) {
+            self.store.dispatch(Msg::ReportError {
+                repo_id: self.active_repo_id(),
+                message: error.to_string(),
+            });
+            // Enter keeps the edit open to fix the name; focus-out already moved on.
+            if trigger == NameEditTrigger::Blur {
+                self.cancel_explorer_name_edit(false, window, cx);
+            }
+            return;
+        }
+        let Some(edit) = self.explorer_name_edit.take() else {
+            return;
+        };
+        cx.notify();
+        if self.active_repo_id() != Some(edit.repo_id) {
+            return;
+        }
+        let operation = match edit.action {
+            ExplorerAction::Rename => Operation::Rename {
+                source: edit.path,
+                name: name.into(),
+            },
+            ExplorerAction::NewFolder => Operation::CreateDirectory {
+                path: edit.path.join(name),
+            },
+            _ => Operation::CreateFile {
+                path: edit.path.join(name),
+            },
+        };
+        // Focus-out never takes focus back from what the user moved to.
+        if trigger == NameEditTrigger::Enter {
+            window.focus(&self.explorer_focus, cx);
+        }
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.submit_filesystem_operation(Request::new(operation), None, window, cx)
+        });
+    }
+
+    pub(super) fn cancel_explorer_name_edit(
+        &mut self,
+        refocus: bool,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.explorer_name_edit.take().is_none() {
+            return;
+        }
+        if refocus {
+            window.focus(&self.explorer_focus, cx);
+        }
+        cx.notify();
+    }
+
+    fn refresh_explorer_name_icon(&mut self, cx: &mut gpui::Context<Self>) {
+        let icon = file_icons::file_icon_for_path(Path::new(self.explorer_name_input.read(cx).text()));
+        if let Some(edit) = self
+            .explorer_name_edit
+            .as_mut()
+            .filter(|edit| !edit.is_directory && edit.icon != icon)
+        {
+            edit.icon = icon;
+            cx.notify();
+        }
+    }
+
+    /// Whether an inline name edit holds the keyboard, so a closing menu must
+    /// not hand focus back to its invoker.
+    pub(in crate::view) fn explorer_inline_edit_owns_focus(
+        &self,
+        window: &Window,
+        cx: &gpui::App,
+    ) -> bool {
+        self.explorer_name_edit.is_some()
+            && self
+                .explorer_name_input
+                .read(cx)
+                .focus_handle()
+                .is_focused(window)
     }
 
     pub(super) fn explorer_name_entry(&self, cx: &mut gpui::Context<Self>) -> Option<AnyElement> {
