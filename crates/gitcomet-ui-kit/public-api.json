@@ -42654,6 +42654,289 @@
     "deprecation": null,
     "name": "interstitial"
   },
+  "gitcomet_ui_kit::components::interstitial_cta_button": {
+    "attrs": [],
+    "definition": {
+      "function": {
+        "generics": {
+          "params": [
+            {
+              "kind": {
+                "type": {
+                  "bounds": [
+                    {
+                      "trait_bound": {
+                        "generic_params": [],
+                        "modifier": "none",
+                        "trait": {
+                          "args": {
+                            "angle_bracketed": {
+                              "args": [
+                                {
+                                  "type": {
+                                    "resolved_path": {
+                                      "args": null,
+                                      "path": "gpui::SharedString",
+                                      "type_path": "gpui_ce_shared_string::SharedString"
+                                    }
+                                  }
+                                }
+                              ],
+                              "constraints": []
+                            }
+                          },
+                          "path": "Into",
+                          "type_path": "core::convert::Into"
+                        }
+                      }
+                    }
+                  ],
+                  "default": null,
+                  "is_synthetic": true
+                }
+              },
+              "name": "impl Into<SharedString>"
+            },
+            {
+              "kind": {
+                "type": {
+                  "bounds": [
+                    {
+                      "trait_bound": {
+                        "generic_params": [],
+                        "modifier": "none",
+                        "trait": {
+                          "args": {
+                            "angle_bracketed": {
+                              "args": [
+                                {
+                                  "type": {
+                                    "resolved_path": {
+                                      "args": null,
+                                      "path": "gpui::SharedString",
+                                      "type_path": "gpui_ce_shared_string::SharedString"
+                                    }
+                                  }
+                                }
+                              ],
+                              "constraints": []
+                            }
+                          },
+                          "path": "Into",
+                          "type_path": "core::convert::Into"
+                        }
+                      }
+                    }
+                  ],
+                  "default": null,
+                  "is_synthetic": true
+                }
+              },
+              "name": "impl Into<SharedString>"
+            },
+            {
+              "kind": {
+                "type": {
+                  "bounds": [
+                    {
+                      "trait_bound": {
+                        "generic_params": [],
+                        "modifier": "none",
+                        "trait": {
+                          "args": {
+                            "angle_bracketed": {
+                              "args": [
+                                {
+                                  "type": {
+                                    "resolved_path": {
+                                      "args": null,
+                                      "path": "gpui::SharedString",
+                                      "type_path": "gpui_ce_shared_string::SharedString"
+                                    }
+                                  }
+                                }
+                              ],
+                              "constraints": []
+                            }
+                          },
+                          "path": "Into",
+                          "type_path": "core::convert::Into"
+                        }
+                      }
+                    }
+                  ],
+                  "default": null,
+                  "is_synthetic": true
+                }
+              },
+              "name": "impl Into<SharedString>"
+            }
+          ],
+          "where_predicates": []
+        },
+        "header": {
+          "abi": "Rust",
+          "is_async": false,
+          "is_const": false,
+          "is_unsafe": false
+        },
+        "sig": {
+          "inputs": [
+            [
+              "id",
+              {
+                "impl_trait": [
+                  {
+                    "trait_bound": {
+                      "generic_params": [],
+                      "modifier": "none",
+                      "trait": {
+                        "args": {
+                          "angle_bracketed": {
+                            "args": [
+                              {
+                                "type": {
+                                  "resolved_path": {
+                                    "args": null,
+                                    "path": "gpui::SharedString",
+                                    "type_path": "gpui_ce_shared_string::SharedString"
+                                  }
+                                }
+                              }
+                            ],
+                            "constraints": []
+                          }
+                        },
+                        "path": "Into",
+                        "type_path": "core::convert::Into"
+                      }
+                    }
+                  }
+                ]
+              }
+            ],
+            [
+              "label",
+              {
+                "impl_trait": [
+                  {
+                    "trait_bound": {
+                      "generic_params": [],
+                      "modifier": "none",
+                      "trait": {
+                        "args": {
+                          "angle_bracketed": {
+                            "args": [
+                              {
+                                "type": {
+                                  "resolved_path": {
+                                    "args": null,
+                                    "path": "gpui::SharedString",
+                                    "type_path": "gpui_ce_shared_string::SharedString"
+                                  }
+                                }
+                              }
+                            ],
+                            "constraints": []
+                          }
+                        },
+                        "path": "Into",
+                        "type_path": "core::convert::Into"
+                      }
+                    }
+                  }
+                ]
+              }
+            ],
+            [
+              "icon",
+              {
+                "impl_trait": [
+                  {
+                    "trait_bound": {
+                      "generic_params": [],
+                      "modifier": "none",
+                      "trait": {
+                        "args": {
+                          "angle_bracketed": {
+                            "args": [
+                              {
+                                "type": {
+                                  "resolved_path": {
+                                    "args": null,
+                                    "path": "gpui::SharedString",
+                                    "type_path": "gpui_ce_shared_string::SharedString"
+                                  }
+                                }
+                              }
+                            ],
+                            "constraints": []
+                          }
+                        },
+                        "path": "Into",
+                        "type_path": "core::convert::Into"
+                      }
+                    }
+                  }
+                ]
+              }
+            ],
+            [
+              "primary",
+              {
+                "primitive": "bool"
+              }
+            ],
+            [
+              "theme",
+              {
+                "resolved_path": {
+                  "args": null,
+                  "path": "crate::theme::AppTheme",
+                  "type_path": "gitcomet_ui_kit::theme::AppTheme"
+                }
+              }
+            ],
+            [
+              "ui_scale",
+              {
+                "resolved_path": {
+                  "args": null,
+                  "path": "crate::ui_scale::UiScale",
+                  "type_path": "gitcomet_ui_kit::ui_scale::UiScale"
+                }
+              }
+            ]
+          ],
+          "is_c_variadic": false,
+          "output": {
+            "resolved_path": {
+              "args": {
+                "angle_bracketed": {
+                  "args": [
+                    {
+                      "type": {
+                        "resolved_path": {
+                          "args": null,
+                          "path": "gpui::Div",
+                          "type_path": "gpui::elements::div::Div"
+                        }
+                      }
+                    }
+                  ],
+                  "constraints": []
+                }
+              },
+              "path": "gpui::Stateful",
+              "type_path": "gpui::elements::div::Stateful"
+            }
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "name": "interstitial_cta_button"
+  },
   "gitcomet_ui_kit::components::modal_scrim": {
     "attrs": [],
     "definition": {
@@ -44413,6 +44696,216 @@
     },
     "deprecation": null,
     "name": "popover_surface"
+  },
+  "gitcomet_ui_kit::components::progress_bar": {
+    "attrs": [],
+    "definition": {
+      "function": {
+        "generics": {
+          "params": [
+            {
+              "kind": {
+                "type": {
+                  "bounds": [
+                    {
+                      "trait_bound": {
+                        "generic_params": [],
+                        "modifier": "none",
+                        "trait": {
+                          "args": {
+                            "angle_bracketed": {
+                              "args": [
+                                {
+                                  "type": {
+                                    "resolved_path": {
+                                      "args": null,
+                                      "path": "crate::ui_scale::UiScale",
+                                      "type_path": "gitcomet_ui_kit::ui_scale::UiScale"
+                                    }
+                                  }
+                                }
+                              ],
+                              "constraints": []
+                            }
+                          },
+                          "path": "Into",
+                          "type_path": "core::convert::Into"
+                        }
+                      }
+                    }
+                  ],
+                  "default": null,
+                  "is_synthetic": true
+                }
+              },
+              "name": "impl Into<crate::ui_scale::UiScale>"
+            }
+          ],
+          "where_predicates": []
+        },
+        "header": {
+          "abi": "Rust",
+          "is_async": false,
+          "is_const": false,
+          "is_unsafe": false
+        },
+        "sig": {
+          "inputs": [
+            [
+              "theme",
+              {
+                "resolved_path": {
+                  "args": null,
+                  "path": "crate::theme::AppTheme",
+                  "type_path": "gitcomet_ui_kit::theme::AppTheme"
+                }
+              }
+            ],
+            [
+              "ui_scale",
+              {
+                "impl_trait": [
+                  {
+                    "trait_bound": {
+                      "generic_params": [],
+                      "modifier": "none",
+                      "trait": {
+                        "args": {
+                          "angle_bracketed": {
+                            "args": [
+                              {
+                                "type": {
+                                  "resolved_path": {
+                                    "args": null,
+                                    "path": "crate::ui_scale::UiScale",
+                                    "type_path": "gitcomet_ui_kit::ui_scale::UiScale"
+                                  }
+                                }
+                              }
+                            ],
+                            "constraints": []
+                          }
+                        },
+                        "path": "Into",
+                        "type_path": "core::convert::Into"
+                      }
+                    }
+                  }
+                ]
+              }
+            ],
+            [
+              "fraction",
+              {
+                "primitive": "f32"
+              }
+            ],
+            [
+              "fill",
+              {
+                "resolved_path": {
+                  "args": null,
+                  "path": "gpui::Rgba",
+                  "type_path": "palette::rgb::rgb::Rgba"
+                }
+              }
+            ]
+          ],
+          "is_c_variadic": false,
+          "output": {
+            "resolved_path": {
+              "args": null,
+              "path": "gpui::Div",
+              "type_path": "gpui::elements::div::Div"
+            }
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "name": "progress_bar"
+  },
+  "gitcomet_ui_kit::components::progress_bar_border_color": {
+    "attrs": [],
+    "definition": {
+      "function": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "header": {
+          "abi": "Rust",
+          "is_async": false,
+          "is_const": false,
+          "is_unsafe": false
+        },
+        "sig": {
+          "inputs": [
+            [
+              "theme",
+              {
+                "resolved_path": {
+                  "args": null,
+                  "path": "crate::theme::AppTheme",
+                  "type_path": "gitcomet_ui_kit::theme::AppTheme"
+                }
+              }
+            ]
+          ],
+          "is_c_variadic": false,
+          "output": {
+            "resolved_path": {
+              "args": null,
+              "path": "gpui::Rgba",
+              "type_path": "palette::rgb::rgb::Rgba"
+            }
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "name": "progress_bar_border_color"
+  },
+  "gitcomet_ui_kit::components::progress_bar_track_color": {
+    "attrs": [],
+    "definition": {
+      "function": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "header": {
+          "abi": "Rust",
+          "is_async": false,
+          "is_const": false,
+          "is_unsafe": false
+        },
+        "sig": {
+          "inputs": [
+            [
+              "theme",
+              {
+                "resolved_path": {
+                  "args": null,
+                  "path": "crate::theme::AppTheme",
+                  "type_path": "gitcomet_ui_kit::theme::AppTheme"
+                }
+              }
+            ]
+          ],
+          "is_c_variadic": false,
+          "output": {
+            "resolved_path": {
+              "args": null,
+              "path": "gpui::Rgba",
+              "type_path": "palette::rgb::rgb::Rgba"
+            }
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "name": "progress_bar_track_color"
   },
   "gitcomet_ui_kit::components::remove_row_button": {
     "attrs": [
@@ -46718,6 +47211,304 @@
     },
     "deprecation": null,
     "name": "settings_nav_item"
+  },
+  "gitcomet_ui_kit::components::settings_option_row": {
+    "attrs": [],
+    "definition": {
+      "function": {
+        "generics": {
+          "params": [
+            {
+              "kind": {
+                "type": {
+                  "bounds": [
+                    {
+                      "trait_bound": {
+                        "generic_params": [],
+                        "modifier": "none",
+                        "trait": {
+                          "args": {
+                            "angle_bracketed": {
+                              "args": [
+                                {
+                                  "type": {
+                                    "resolved_path": {
+                                      "args": null,
+                                      "path": "gpui::SharedString",
+                                      "type_path": "gpui_ce_shared_string::SharedString"
+                                    }
+                                  }
+                                }
+                              ],
+                              "constraints": []
+                            }
+                          },
+                          "path": "Into",
+                          "type_path": "core::convert::Into"
+                        }
+                      }
+                    }
+                  ],
+                  "default": null,
+                  "is_synthetic": true
+                }
+              },
+              "name": "impl Into<SharedString>"
+            },
+            {
+              "kind": {
+                "type": {
+                  "bounds": [
+                    {
+                      "trait_bound": {
+                        "generic_params": [],
+                        "modifier": "none",
+                        "trait": {
+                          "args": {
+                            "angle_bracketed": {
+                              "args": [
+                                {
+                                  "type": {
+                                    "resolved_path": {
+                                      "args": null,
+                                      "path": "gpui::SharedString",
+                                      "type_path": "gpui_ce_shared_string::SharedString"
+                                    }
+                                  }
+                                }
+                              ],
+                              "constraints": []
+                            }
+                          },
+                          "path": "Into",
+                          "type_path": "core::convert::Into"
+                        }
+                      }
+                    }
+                  ],
+                  "default": null,
+                  "is_synthetic": true
+                }
+              },
+              "name": "impl Into<SharedString>"
+            },
+            {
+              "kind": {
+                "type": {
+                  "bounds": [
+                    {
+                      "trait_bound": {
+                        "generic_params": [],
+                        "modifier": "none",
+                        "trait": {
+                          "args": {
+                            "angle_bracketed": {
+                              "args": [
+                                {
+                                  "type": {
+                                    "resolved_path": {
+                                      "args": null,
+                                      "path": "crate::ui_scale::UiScale",
+                                      "type_path": "gitcomet_ui_kit::ui_scale::UiScale"
+                                    }
+                                  }
+                                }
+                              ],
+                              "constraints": []
+                            }
+                          },
+                          "path": "Into",
+                          "type_path": "core::convert::Into"
+                        }
+                      }
+                    }
+                  ],
+                  "default": null,
+                  "is_synthetic": true
+                }
+              },
+              "name": "impl Into<UiScale>"
+            }
+          ],
+          "where_predicates": []
+        },
+        "header": {
+          "abi": "Rust",
+          "is_async": false,
+          "is_const": false,
+          "is_unsafe": false
+        },
+        "sig": {
+          "inputs": [
+            [
+              "id",
+              {
+                "impl_trait": [
+                  {
+                    "trait_bound": {
+                      "generic_params": [],
+                      "modifier": "none",
+                      "trait": {
+                        "args": {
+                          "angle_bracketed": {
+                            "args": [
+                              {
+                                "type": {
+                                  "resolved_path": {
+                                    "args": null,
+                                    "path": "gpui::SharedString",
+                                    "type_path": "gpui_ce_shared_string::SharedString"
+                                  }
+                                }
+                              }
+                            ],
+                            "constraints": []
+                          }
+                        },
+                        "path": "Into",
+                        "type_path": "core::convert::Into"
+                      }
+                    }
+                  }
+                ]
+              }
+            ],
+            [
+              "label",
+              {
+                "impl_trait": [
+                  {
+                    "trait_bound": {
+                      "generic_params": [],
+                      "modifier": "none",
+                      "trait": {
+                        "args": {
+                          "angle_bracketed": {
+                            "args": [
+                              {
+                                "type": {
+                                  "resolved_path": {
+                                    "args": null,
+                                    "path": "gpui::SharedString",
+                                    "type_path": "gpui_ce_shared_string::SharedString"
+                                  }
+                                }
+                              }
+                            ],
+                            "constraints": []
+                          }
+                        },
+                        "path": "Into",
+                        "type_path": "core::convert::Into"
+                      }
+                    }
+                  }
+                ]
+              }
+            ],
+            [
+              "detail",
+              {
+                "resolved_path": {
+                  "args": {
+                    "angle_bracketed": {
+                      "args": [
+                        {
+                          "type": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "gpui::SharedString",
+                              "type_path": "gpui_ce_shared_string::SharedString"
+                            }
+                          }
+                        }
+                      ],
+                      "constraints": []
+                    }
+                  },
+                  "path": "Option",
+                  "type_path": "core::option::Option"
+                }
+              }
+            ],
+            [
+              "selected",
+              {
+                "primitive": "bool"
+              }
+            ],
+            [
+              "theme",
+              {
+                "resolved_path": {
+                  "args": null,
+                  "path": "crate::theme::AppTheme",
+                  "type_path": "gitcomet_ui_kit::theme::AppTheme"
+                }
+              }
+            ],
+            [
+              "ui_scale",
+              {
+                "impl_trait": [
+                  {
+                    "trait_bound": {
+                      "generic_params": [],
+                      "modifier": "none",
+                      "trait": {
+                        "args": {
+                          "angle_bracketed": {
+                            "args": [
+                              {
+                                "type": {
+                                  "resolved_path": {
+                                    "args": null,
+                                    "path": "crate::ui_scale::UiScale",
+                                    "type_path": "gitcomet_ui_kit::ui_scale::UiScale"
+                                  }
+                                }
+                              }
+                            ],
+                            "constraints": []
+                          }
+                        },
+                        "path": "Into",
+                        "type_path": "core::convert::Into"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          ],
+          "is_c_variadic": false,
+          "output": {
+            "resolved_path": {
+              "args": {
+                "angle_bracketed": {
+                  "args": [
+                    {
+                      "type": {
+                        "resolved_path": {
+                          "args": null,
+                          "path": "gpui::Div",
+                          "type_path": "gpui::elements::div::Div"
+                        }
+                      }
+                    }
+                  ],
+                  "constraints": []
+                }
+              },
+              "path": "gpui::Stateful",
+              "type_path": "gpui::elements::div::Stateful"
+            }
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "name": "settings_option_row"
   },
   "gitcomet_ui_kit::components::settings_row_separator_color": {
     "attrs": [],
@@ -61910,6 +62701,241 @@
     ],
     "name": "AppTheme"
   },
+  "gitcomet_ui_kit::theme::CallToActionColors": {
+    "attrs": [],
+    "definition": {
+      "struct": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "kind": {
+          "plain": {
+            "fields": [
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "gpui::Rgba",
+                      "type_path": "palette::rgb::rgb::Rgba"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "text"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "gpui::Rgba",
+                      "type_path": "palette::rgb::rgb::Rgba"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "background"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "gpui::Rgba",
+                      "type_path": "palette::rgb::rgb::Rgba"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "background_hover"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "gpui::Rgba",
+                      "type_path": "palette::rgb::rgb::Rgba"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "background_active"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "gpui::Rgba",
+                      "type_path": "palette::rgb::rgb::Rgba"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "border"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "gpui::Rgba",
+                      "type_path": "palette::rgb::rgb::Rgba"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "border_hover"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "gpui::Rgba",
+                      "type_path": "palette::rgb::rgb::Rgba"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "border_active"
+              }
+            ],
+            "has_stripped_fields": false
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "impls": [
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "CallToActionColors",
+            "type_path": "gitcomet_ui_kit::theme::CallToActionColors"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Clone",
+          "type_path": "core::clone::Clone"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "CallToActionColors",
+            "type_path": "gitcomet_ui_kit::theme::CallToActionColors"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Copy",
+          "type_path": "core::marker::Copy"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "CallToActionColors",
+            "type_path": "gitcomet_ui_kit::theme::CallToActionColors"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Debug",
+          "type_path": "core::fmt::Debug"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "CallToActionColors",
+            "type_path": "gitcomet_ui_kit::theme::CallToActionColors"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "PartialEq",
+          "type_path": "core::cmp::PartialEq"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "CallToActionColors",
+            "type_path": "gitcomet_ui_kit::theme::CallToActionColors"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "StructuralPartialEq",
+          "type_path": "core::marker::StructuralPartialEq"
+        }
+      }
+    ],
+    "name": "CallToActionColors"
+  },
   "gitcomet_ui_kit::theme::Colors": {
     "attrs": [],
     "definition": {
@@ -62074,6 +63100,26 @@
                 },
                 "deprecation": null,
                 "name": "notice"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "borrowed_ref": {
+                      "is_mutable": false,
+                      "lifetime": "'static",
+                      "type": {
+                        "resolved_path": {
+                          "args": null,
+                          "path": "InterstitialColors",
+                          "type_path": "gitcomet_ui_kit::theme::InterstitialColors"
+                        }
+                      }
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "interstitial"
               },
               {
                 "attrs": [],
@@ -63949,6 +64995,199 @@
       }
     ],
     "name": "InteractionColors"
+  },
+  "gitcomet_ui_kit::theme::InterstitialColors": {
+    "attrs": [],
+    "definition": {
+      "struct": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "kind": {
+          "plain": {
+            "fields": [
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "gpui::Rgba",
+                      "type_path": "palette::rgb::rgb::Rgba"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "text"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "gpui::Rgba",
+                      "type_path": "palette::rgb::rgb::Rgba"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "muted"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "CallToActionColors",
+                      "type_path": "gitcomet_ui_kit::theme::CallToActionColors"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "primary"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "CallToActionColors",
+                      "type_path": "gitcomet_ui_kit::theme::CallToActionColors"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "secondary"
+              }
+            ],
+            "has_stripped_fields": false
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "impls": [
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "InterstitialColors",
+            "type_path": "gitcomet_ui_kit::theme::InterstitialColors"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Clone",
+          "type_path": "core::clone::Clone"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "InterstitialColors",
+            "type_path": "gitcomet_ui_kit::theme::InterstitialColors"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Copy",
+          "type_path": "core::marker::Copy"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "InterstitialColors",
+            "type_path": "gitcomet_ui_kit::theme::InterstitialColors"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Debug",
+          "type_path": "core::fmt::Debug"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "InterstitialColors",
+            "type_path": "gitcomet_ui_kit::theme::InterstitialColors"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "PartialEq",
+          "type_path": "core::cmp::PartialEq"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "InterstitialColors",
+            "type_path": "gitcomet_ui_kit::theme::InterstitialColors"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "StructuralPartialEq",
+          "type_path": "core::marker::StructuralPartialEq"
+        }
+      }
+    ],
+    "name": "InterstitialColors"
   },
   "gitcomet_ui_kit::theme::NoticeColors": {
     "attrs": [],

@@ -788,27 +788,9 @@ impl ToastHost {
         let spinner_color = crate::view::clone_progress::clone_progress_color(theme, &op);
         let percent = op.progress.percent.min(100);
         let bar_fill_color = crate::view::clone_progress::clone_progress_bar_fill_color(theme, &op);
-        let bar_track = crate::view::clone_progress::clone_progress_bar_track_color(theme);
-        let bar_border = crate::view::clone_progress::clone_progress_bar_border_color(theme);
-        let (bar_fill_weight, bar_remainder_weight) =
-            crate::view::clone_progress::clone_progress_segment_weights(percent);
         let aborting = matches!(op.status, CloneOpStatus::Cancelling);
         let dest = op.dest.as_ref().clone();
         let root_view = self.root_view.clone();
-
-        let mut bar_fill = div()
-            .h_full()
-            .bg(bar_fill_color)
-            .rounded(px(999.0))
-            .when(percent > 0, |this| this.min_w(px(2.0)));
-        bar_fill.style().flex_grow = Some(bar_fill_weight);
-        bar_fill.style().flex_shrink = Some(0.0);
-        bar_fill.style().flex_basis = Some(relative(0.0).into());
-
-        let mut bar_remainder = div().h_full();
-        bar_remainder.style().flex_grow = Some(bar_remainder_weight);
-        bar_remainder.style().flex_shrink = Some(0.0);
-        bar_remainder.style().flex_basis = Some(relative(0.0).into());
 
         let mut abort_button = components::Button::new(
             "clone_progress_abort",
@@ -886,19 +868,12 @@ impl ToastHost {
                             .child(format!("{percent}%")),
                     ),
             )
-            .child(
-                div()
-                    .w_full()
-                    .h(ui_scale.px(8.0))
-                    .flex()
-                    .rounded(px(999.0))
-                    .overflow_hidden()
-                    .bg(bar_track)
-                    .border_1()
-                    .border_color(bar_border)
-                    .child(bar_fill)
-                    .child(bar_remainder),
-            )
+            .child(components::progress_bar(
+                theme,
+                ui_scale,
+                crate::view::clone_progress::clone_progress_fill_ratio(percent),
+                bar_fill_color,
+            ))
             .child(div().pt_1().child(abort_button));
 
         self.render_progress_shell(ui_scale, content)

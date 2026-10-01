@@ -431,6 +431,14 @@ Since then:
   menus on the kit's modal and popover surfaces (menu icons included) and
   notices as kit toasts of their kind; `WindowHost` documents which calls a
   repository-less Settings window answers with `Unsupported`.
+- The kit completes its settings and interstitial set:
+  `settings_option_row` (the Settings window's option rows delegate to it),
+  `interstitial_cta_button`, and `progress_bar` (the clone toast's bar). CTA
+  colours are a theme group, `interstitial`, seeded from the splash's
+  former hard-coded palette, so GitComet looks the same and a product's
+  interstitial matches the host's; the Git-unavailable "Open Settings"
+  button now takes the light palette in light themes. The group is interned
+  like the lane palette, keeping `AppTheme` small enough to copy per row.
 
 ## History find (#532)
 

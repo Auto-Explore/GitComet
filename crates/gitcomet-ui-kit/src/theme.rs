@@ -60,6 +60,8 @@ pub struct Colors {
     pub tooltip: TooltipColors,
     pub scrollbar: ScrollbarColors,
     pub notice: NoticeColors,
+    /// Interned like the lane palette: `AppTheme` is copied per painted row.
+    pub interstitial: &'static InterstitialColors,
     pub shadow: Rgba,
 }
 
@@ -214,6 +216,28 @@ pub struct NoticeColors {
     pub foreground: Rgba,
     /// The explanation beside the title.
     pub secondary: Rgba,
+}
+
+/// Content over an interstitial's backdrop artwork (loading, Home, a gate):
+/// its text and call-to-action buttons, tuned to the artwork, not the canvas.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InterstitialColors {
+    pub text: Rgba,
+    pub muted: Rgba,
+    pub primary: CallToActionColors,
+    pub secondary: CallToActionColors,
+}
+
+/// One call-to-action button; `text` also tints its icon.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CallToActionColors {
+    pub text: Rgba,
+    pub background: Rgba,
+    pub background_hover: Rgba,
+    pub background_active: Rgba,
+    pub border: Rgba,
+    pub border_hover: Rgba,
+    pub border_active: Rgba,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -665,6 +689,7 @@ struct ThemeFileColors {
     tooltip: ThemeFileTooltipColors,
     scrollbar: ThemeFileScrollbarColors,
     notice: ThemeFileNoticeColors,
+    interstitial: ThemeFileInterstitialColors,
     shadow: ThemeColor,
     #[serde(default)]
     graph_lane_palette: Option<Vec<ThemeColor>>,
@@ -798,6 +823,41 @@ struct ThemeFileNoticeColors {
     border: ThemeColor,
     foreground: ThemeColor,
     secondary: ThemeColor,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThemeFileInterstitialColors {
+    text: ThemeColor,
+    muted: ThemeColor,
+    primary: ThemeFileCallToActionColors,
+    secondary: ThemeFileCallToActionColors,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThemeFileCallToActionColors {
+    text: ThemeColor,
+    background: ThemeColor,
+    background_hover: ThemeColor,
+    background_active: ThemeColor,
+    border: ThemeColor,
+    border_hover: ThemeColor,
+    border_active: ThemeColor,
+}
+
+impl ThemeFileCallToActionColors {
+    fn into_colors(self) -> CallToActionColors {
+        CallToActionColors {
+            text: self.text.into_rgba(),
+            background: self.background.into_rgba(),
+            background_hover: self.background_hover.into_rgba(),
+            background_active: self.background_active.into_rgba(),
+            border: self.border.into_rgba(),
+            border_hover: self.border_hover.into_rgba(),
+            border_active: self.border_active.into_rgba(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Default, Deserialize)]
@@ -985,6 +1045,7 @@ impl From<ThemeFile> for AppTheme {
             tooltip,
             scrollbar,
             notice,
+            interstitial,
             shadow,
             graph_lane_palette,
             graph_lane_hues,
@@ -1081,6 +1142,12 @@ impl From<ThemeFile> for AppTheme {
                 foreground: notice.foreground.into_rgba(),
                 secondary: notice.secondary.into_rgba(),
             },
+            interstitial: intern_interstitial(InterstitialColors {
+                text: interstitial.text.into_rgba(),
+                muted: interstitial.muted.into_rgba(),
+                primary: interstitial.primary.into_colors(),
+                secondary: interstitial.secondary.into_colors(),
+            }),
             shadow: shadow.into_rgba(),
         };
         let syntax = resolve_syntax_colors(is_dark, &colors, syntax.as_ref());
@@ -1106,6 +1173,42 @@ static INTERNED_LANE_PALETTES: OnceLock<Mutex<Vec<&'static GraphLanePalette>>> =
 /// per-row paint closure of every frame. Trading a one-time leak per *distinct*
 /// palette for a pointer-sized field in `AppTheme` is the right side of that
 /// exchange; reloading the same theme file interns nothing new.
+/// One allocation per distinct interstitial palette, compared bit for bit
+/// like [`lane_palettes_are_identical`].
+fn intern_interstitial(colors: InterstitialColors) -> &'static InterstitialColors {
+    static INTERNED: OnceLock<Mutex<Vec<&'static InterstitialColors>>> = OnceLock::new();
+    fn bits(colors: &InterstitialColors) -> Vec<u32> {
+        let cta = |c: &CallToActionColors| {
+            [
+                c.text,
+                c.background,
+                c.background_hover,
+                c.background_active,
+                c.border,
+                c.border_hover,
+                c.border_active,
+            ]
+        };
+        [colors.text, colors.muted]
+            .into_iter()
+            .chain(cta(&colors.primary))
+            .chain(cta(&colors.secondary))
+            .flat_map(|c| [c.red, c.green, c.blue, c.alpha].map(f32::to_bits))
+            .collect()
+    }
+    let mut interned = INTERNED
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let key = bits(&colors);
+    if let Some(existing) = interned.iter().find(|existing| bits(existing) == key) {
+        return existing;
+    }
+    let leaked: &'static InterstitialColors = Box::leak(Box::new(colors));
+    interned.push(leaked);
+    leaked
+}
+
 fn intern_lane_palette(palette: GraphLanePalette) -> &'static GraphLanePalette {
     let interned = INTERNED_LANE_PALETTES.get_or_init(|| Mutex::new(Vec::new()));
     let mut interned = interned

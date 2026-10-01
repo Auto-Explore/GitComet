@@ -23,78 +23,7 @@ impl SettingsWindowView {
         selected: bool,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
-        let ui_scale = self.row_scale(theme);
-        let id: SharedString = id.into();
-        let debug_id = id.clone();
-        let text_color = if selected {
-            theme.colors.foreground.primary
-        } else {
-            theme.colors.foreground.secondary
-        };
-        let selected_bg = with_alpha(
-            theme.colors.accent.foreground,
-            if theme.is_dark { 0.16 } else { 0.10 },
-        );
-
-        div()
-            .id(id)
-            .debug_selector(move || debug_id.to_string())
-            .w_full()
-            .px_2()
-            .py_1()
-            .flex()
-            .items_start()
-            .gap_2()
-            .rounded(px(theme.radii.row))
-            .cursor(CursorStyle::PointingHand)
-            .control_interaction(
-                InteractionStyle::new(theme),
-                InteractionState::default().selected(selected, selected_bg),
-            )
-            .child(
-                div()
-                    .w(ui_scale.px(16.0))
-                    // Match the label's line box so the check mark centers on
-                    // the first text line instead of hugging the row's top.
-                    .h(ui_scale.px(20.0))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .when(selected, |d| {
-                        d.child(svg_icon(
-                            "icons/check.svg",
-                            theme.colors.accent.foreground,
-                            ui_scale.px(12.0),
-                        ))
-                    }),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .flex()
-                    .flex_col()
-                    .gap_0p5()
-                    .child(
-                        div()
-                            .text_size(theme.ui_text(14.0))
-                            .line_height(theme.ui_text(20.0))
-                            .text_color(text_color)
-                            .child(label.into()),
-                    )
-                    .when_some(detail, |this, detail| {
-                        this.child(
-                            div()
-                                .text_size(theme.ui_text(12.0))
-                                .text_color(theme.colors.foreground.secondary)
-                                .line_clamp(1)
-                                .whitespace_nowrap()
-                                .overflow_hidden()
-                                .child(detail),
-                        )
-                    }),
-            )
+        components::settings_option_row(id, label, detail, selected, theme, self.row_scale(theme))
     }
 
     pub(super) fn setting_option_row(
