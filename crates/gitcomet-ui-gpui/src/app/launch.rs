@@ -571,9 +571,12 @@ pub(super) fn run_windowed_app(
             .detach();
         }
 
+        // Every window kind runs extension gates, guards, and window hooks;
+        // only main windows offer extension commands.
+        crate::view::extension_host::install_registry(extensions, cx);
         if launch.view_config.view_mode == GitCometViewMode::Normal {
             // Before the host's keys, so a chord both claim stays the host's.
-            crate::view::extension_host::install(extensions, cx);
+            crate::view::extension_host::install_bindings(cx);
             bind_app_keys(cx);
             install_app_actions(cx, Arc::clone(&backend));
             if let Some(browser_requests) = browser_requests {

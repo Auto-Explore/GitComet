@@ -66,31 +66,88 @@ fn open_window_with_repo(
     handle
 }
 
+/// A view config for each window kind the host opens.
+fn config_for(mode: GitCometViewMode) -> GitCometViewConfig {
+    match mode {
+        GitCometViewMode::FocusedDiff => GitCometViewConfig {
+            view_mode: mode,
+            focused_diff: Some(crate::FocusedDiffConfig {
+                label_left: "before".into(),
+                label_right: "after".into(),
+                display_path: Some("example.rs".into()),
+                diff_text: "diff --git a/example.rs b/example.rs\n--- a/example.rs\n+++ b/example.rs\n@@ -1 +1 @@\n-old\n+new\n".into(),
+            }),
+            workspace: WorkspaceBootstrap::Empty,
+            ..Default::default()
+        },
+        GitCometViewMode::FocusedMergetool => GitCometViewConfig {
+            view_mode: mode,
+            focused_mergetool: Some(FocusedMergetoolViewConfig {
+                repo_path: PathBuf::from("/tmp/without-extensions-mergetool"),
+                conflicted_file_path: PathBuf::from("conflicted.txt"),
+                labels: FocusedMergetoolLabels {
+                    local: "LOCAL".into(),
+                    remote: "REMOTE".into(),
+                    base: "BASE".into(),
+                },
+            }),
+            ..Default::default()
+        },
+        GitCometViewMode::Normal => GitCometViewConfig::default(),
+    }
+}
+
 #[gpui::test]
 fn without_extensions_the_host_adds_nothing(cx: &mut gpui::TestAppContext) {
-    crate::view::perf::take_extension_dispatch_calls();
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
-    let (view, cx) =
-        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            test_support::push_test_state(this, state_with_repo(RepoId(1), Path::new("/tmp/x")), cx)
+    for mode in [
+        GitCometViewMode::Normal,
+        GitCometViewMode::FocusedDiff,
+        GitCometViewMode::FocusedMergetool,
+    ] {
+        crate::view::perf::take_extension_dispatch_calls();
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            GitCometView::new_with_config(store, events, config_for(mode), window, cx)
         });
-    });
-    test_support::redraw(cx);
-    assert!(cx.debug_bounds("repository_view_strip").is_none());
-    cx.update(|_window, app| {
-        let view = view.read(app);
-        assert_eq!(crate::view::perf::take_extension_dispatch_calls(), 0);
-        assert!(extension_host::registry(app).is_none());
-        assert!(view.extension_window.is_none());
-        assert!(view.repository_views.is_none());
-        assert!(view.details_tabs.is_none());
-        assert!(view.sidebar_sections.is_none());
-        assert!(extension_host::palette_entries(app).is_empty());
-        assert_eq!(view.bottom_status_bar.read(app).extension_item_count(), 0);
-    });
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                test_support::push_test_state(
+                    this,
+                    state_with_repo(RepoId(1), Path::new("/tmp/x")),
+                    cx,
+                )
+            });
+            extension_host::window_opened(&view, app);
+        });
+        cx.run_until_parked();
+        test_support::redraw(cx);
+        assert!(
+            cx.debug_bounds("repository_view_strip").is_none(),
+            "{mode:?}"
+        );
+        cx.update(|_window, app| {
+            let view = view.read(app);
+            assert_eq!(
+                crate::view::perf::take_extension_dispatch_calls(),
+                0,
+                "{mode:?}"
+            );
+            assert!(extension_host::registry(app).is_none());
+            // Only the focused difftool has a host: it builds its own pane.
+            assert_eq!(
+                view.extension_window.is_some(),
+                mode == GitCometViewMode::FocusedDiff,
+                "{mode:?}"
+            );
+            assert!(view.repository_views.is_none());
+            assert!(view.details_tabs.is_none());
+            assert!(view.sidebar_sections.is_none());
+            assert!(view.window_gates.is_none());
+            assert!(extension_host::palette_entries(app).is_empty());
+            assert_eq!(view.bottom_status_bar.read(app).extension_item_count(), 0);
+        });
+    }
 }
 
 /// The example's chrome and rows come from the registry: its edition strip

@@ -415,6 +415,16 @@ Since then:
   annotator, and sidebar rows), so it exercises every contribution kind.
   Sidebar contribution icons take the text colour; as `svg()` masks they
   painted nothing before.
+- Extensions reach the windows Git itself launches: the registry is
+  installed in every mode (`extension_host::install_registry`), so window
+  gates, close guards, chrome, and `Extension::window_opened` run in the
+  focused difftool and mergetool; commands (key bindings, palette rows, menu
+  entries) stay with main windows (`install_bindings`). Only the focused
+  difftool keeps a host without extensions, for its own pane. Cancelling the
+  focused mergetool (Escape, the diff's close button) runs the window-close
+  guards instead of quitting outright, and closing a focused tool quits it
+  even if a Settings window is open, so `git mergetool`/`difftool` never
+  waits on a leftover window.
 
 ## History find (#532)
 

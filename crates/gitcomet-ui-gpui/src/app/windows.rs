@@ -391,7 +391,11 @@ pub(super) fn close_active_window(cx: &mut App) {
 
 pub(crate) fn close_window_or_warn(window: &mut Window, cx: &mut App) {
     let window_id = window.window_handle().window_id();
-    let handled = gitcomet_window_by_id(cx, window_id)
+    let entry = gitcomet_window_by_id(cx, window_id);
+    let focused_tool = entry
+        .as_ref()
+        .is_some_and(|entry| entry.view_mode != GitCometViewMode::Normal);
+    let handled = entry
         .and_then(|entry| {
             entry
                 .view
@@ -405,6 +409,11 @@ pub(crate) fn close_window_or_warn(window: &mut Window, cx: &mut App) {
         flush_workspace_environment_for(cx, window_id);
         mark_window_closing(cx, window_id);
         window.remove_window();
+        if focused_tool {
+            // The window is the tool: a Settings window left open must not
+            // keep `git difftool`/`mergetool` waiting.
+            cx.quit();
+        }
     }
 }
 
