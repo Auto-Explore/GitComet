@@ -83,12 +83,15 @@ pub enum ViewNavDir {
     Forward,
 }
 
-/// One opened file-content view, enough to replay it: the source revision and
-/// the path. (Working-tree previews use [`FileSource::WorkingDirectory`].)
+/// One opened file-content view, enough to replay it: the source revision,
+/// the path, and where the commit renamed or copied it from, so the replayed
+/// diff pairs the two sides again. (Working-tree previews use
+/// [`FileSource::WorkingDirectory`].)
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ViewHistoryEntry {
     pub source: FileSource,
     pub path: PathBuf,
+    pub old_path: Option<PathBuf>,
 }
 
 /// A snapshot of the main content view for the broad, global navigation history

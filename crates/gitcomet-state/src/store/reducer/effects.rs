@@ -2290,8 +2290,11 @@ fn reopen_after_retarget(
                 && entry.path.as_path() == reopen.path.as_path()
         }) {
             ReopenDecision::Close
-        } else if super::diff_selection::content_view_target(source.clone(), reopen.path.clone())
-            == repo.diff_state.diff_target
+        } else if super::diff_selection::content_view_target(
+            source.clone(),
+            reopen.path.clone(),
+            None,
+        ) == repo.diff_state.diff_target
         {
             // Already showing this file at this point (retarget bounced back).
             ReopenDecision::Skip

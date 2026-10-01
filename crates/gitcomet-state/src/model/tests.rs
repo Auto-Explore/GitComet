@@ -97,6 +97,7 @@ fn entry(name: &str) -> ViewHistoryEntry {
     ViewHistoryEntry {
         source: FileSource::Commit(CommitId(name.into())),
         path: PathBuf::from("src/lib.rs"),
+        old_path: None,
     }
 }
 

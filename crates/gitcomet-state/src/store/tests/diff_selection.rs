@@ -3553,6 +3553,80 @@ fn global_nav_reloads_commit_details_when_a_stale_load_is_in_flight() {
     );
 }
 
+/// A renamed or copied file's target carries where the commit took it from,
+/// so the viewer's history must carry it too: replaying the entry without it
+/// loads the old side from the new path and shows a whole-file addition.
+#[test]
+fn viewer_history_replays_a_renamed_file_with_its_source() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+
+    let commit = CommitId("cccccccccccccccccccccccccccccccccccccccc".into());
+    let renamed = DiffTarget::commit(commit.clone(), Some(PathBuf::from("new.rs")))
+        .with_old_path(Some(PathBuf::from("old.rs")));
+    let snap = |target: Option<DiffTarget>| crate::model::MainViewSnapshot {
+        diff_target: target,
+        edit_mode: false,
+        content_preview: true,
+        selected_commit: Some(commit.clone()),
+        range_selection: None,
+        worktree_selection: None,
+    };
+    // The file was previewed, then the log shown.
+    state.repos[0]
+        .navigation
+        .main_history
+        .record(snap(Some(renamed.clone())));
+    state.repos[0].navigation.main_history.record(snap(None));
+    state.repos[0].set_selected_commit(Some(commit.clone()));
+
+    // Global back lands on the preview and aligns the viewer's history to it.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::GlobalNavBack { repo_id },
+    );
+    assert_eq!(state.repos[0].navigation.view_history.entries.len(), 1);
+    // Another file is opened, then the viewer steps back to the renamed one.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenFileContent {
+            repo_id,
+            source: FileSource::WorkingDirectory,
+            path: PathBuf::from("x.rs"),
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ViewerNavBack { repo_id },
+    );
+    let target = state.repos[0]
+        .diff_state
+        .diff_target
+        .as_ref()
+        .expect("the renamed file is shown again");
+    assert_eq!(target.file_path(), Some(std::path::Path::new("new.rs")));
+    assert_eq!(
+        target.old_file_path(),
+        Some(std::path::Path::new("old.rs")),
+        "the replayed diff must pair the file with its source"
+    );
+}
+
 /// The comparison view takes precedence over both commit-detail views, so a
 /// back/forward step that doesn't carry the comparison would restore a target
 /// and selection the pane never gets around to showing. Stepping back out of a

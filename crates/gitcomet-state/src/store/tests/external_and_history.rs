@@ -1398,6 +1398,7 @@ fn reload_repo_clears_stale_navigation_history() {
         .record(crate::model::ViewHistoryEntry {
             source: gitcomet_core::domain::FileSource::Commit(commit_a.clone()),
             path: PathBuf::from("src/lib.rs"),
+            old_path: None,
         });
     // Make the live view match the nav tail so the reduce-wrapper's reconcile is
     // a no-op and the stack survives intact up to the point ReloadRepo runs.

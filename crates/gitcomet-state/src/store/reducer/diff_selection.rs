@@ -166,14 +166,15 @@ pub(super) fn open_file_content(
     source: gitcomet_core::domain::FileSource,
     path: std::path::PathBuf,
 ) -> Vec<Effect> {
-    let Some(target) = content_view_target(source.clone(), path.clone()) else {
+    let Some(target) = content_view_target(source.clone(), path.clone(), None) else {
         return Vec::new();
     };
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        repo_state
-            .navigation
-            .view_history
-            .record(ViewHistoryEntry { source, path });
+        repo_state.navigation.view_history.record(ViewHistoryEntry {
+            source,
+            path,
+            old_path: None,
+        });
     }
     let mut effects = SelectDiffEffects::new();
     fill_select_diff_inline(
@@ -220,6 +221,7 @@ pub(super) fn open_file_editor(
         repo_state.navigation.view_history.record(ViewHistoryEntry {
             source: gitcomet_core::domain::FileSource::WorkingDirectory,
             path,
+            old_path: None,
         });
     }
     let mut effects = SelectDiffEffects::new();
@@ -289,18 +291,20 @@ pub(super) fn exit_diff_edit_mode(
     effects.into_vec()
 }
 
-/// Map a `(source, path)` content view to its `DiffTarget`. Returns `None` for
+/// Map a `(source, path)` content view to its `DiffTarget`, with the rename
+/// or copy source the commit's diff pairs `path` with. Returns `None` for
 /// the unwired `Branch` source.
 pub(super) fn content_view_target(
     source: gitcomet_core::domain::FileSource,
     path: std::path::PathBuf,
+    old_path: Option<std::path::PathBuf>,
 ) -> Option<DiffTarget> {
     match source {
         gitcomet_core::domain::FileSource::WorkingDirectory => {
             Some(DiffTarget::working_tree(path, DiffArea::Unstaged))
         }
         gitcomet_core::domain::FileSource::Commit(commit_id) => {
-            Some(DiffTarget::commit(commit_id, Some(path)))
+            Some(DiffTarget::commit(commit_id, Some(path)).with_old_path(old_path))
         }
         // Branch file listing is not wired, so this is unreachable from the UI.
         gitcomet_core::domain::FileSource::Branch(_) => None,
@@ -316,10 +320,12 @@ fn view_history_entry_for_target(target: &DiffTarget) -> Option<ViewHistoryEntry
         DiffTarget::Commit {
             commit_id,
             path: Some(path),
+            old_path,
             ..
         } => Some(ViewHistoryEntry {
             source: gitcomet_core::domain::FileSource::Commit(commit_id.clone()),
             path: path.clone(),
+            old_path: old_path.clone(),
         }),
         DiffTarget::WorkingTree {
             path,
@@ -328,6 +334,7 @@ fn view_history_entry_for_target(target: &DiffTarget) -> Option<ViewHistoryEntry
         } => Some(ViewHistoryEntry {
             source: gitcomet_core::domain::FileSource::WorkingDirectory,
             path: path.clone(),
+            old_path: None,
         }),
         _ => None,
     }
@@ -348,7 +355,7 @@ pub(super) fn viewer_nav(
         let Some(entry) = repo_state.navigation.view_history.step(dir) else {
             return Vec::new();
         };
-        content_view_target(entry.source, entry.path)
+        content_view_target(entry.source, entry.path, entry.old_path)
     };
     let Some(target) = target else {
         return Vec::new();
