@@ -1245,3 +1245,93 @@ fn explorer_menu_rename_keeps_focus_in_the_name_field(cx: &mut gpui::TestAppCont
         test_support::redraw(cx);
     }
 }
+
+#[gpui::test]
+fn dragging_a_folder_over_itself_or_its_descendants_offers_no_target(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (_view, pane, cx) = explorer_window(cx, explorer_state());
+    let alpha = cx.debug_bounds("file_browser_row_0").expect("alpha row");
+    start_file_drag(cx, alpha.center());
+    for (selector, expected) in [
+        ("file_browser_row_0", None),
+        ("file_browser_row_1", None),
+        ("file_browser_row_2", Some(PathBuf::from("zulu"))),
+        ("file_browser_row_3", Some(PathBuf::from("zulu"))),
+    ] {
+        let row = cx.debug_bounds(selector).unwrap();
+        cx.simulate_mouse_move(
+            row.center(),
+            Some(gpui::MouseButton::Left),
+            gpui::Modifiers::default(),
+        );
+        test_support::redraw(cx);
+        cx.update(|window, app| {
+            pane.update(app, |pane, cx| {
+                assert_eq!(
+                    pane.explorer_drop_target, expected,
+                    "{selector}: dragged alpha may only highlight elsewhere"
+                );
+                assert_eq!(pane.explorer_pointer_target(window, cx), expected);
+            })
+        });
+    }
+}
+
+#[gpui::test]
+fn hovering_a_dragged_collapsed_folder_does_not_expand_it(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (view, _pane, cx) = explorer_window(cx, collapsed_folder_state());
+    let store = cx.update(|_, app| view.read(app).store.clone());
+    let alpha = cx.debug_bounds("file_browser_row_0").expect("collapsed alpha row");
+    start_file_drag(cx, alpha.center());
+    cx.simulate_mouse_move(
+        alpha.center(),
+        Some(gpui::MouseButton::Left),
+        gpui::Modifiers::default(),
+    );
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(900));
+    cx.run_until_parked();
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(
+        !store.snapshot().repos[0]
+            .file_browser
+            .expanded_dirs
+            .contains(&PathBuf::from("alpha")),
+        "a folder cannot open under its own drag"
+    );
+}
+
+#[gpui::test]
+fn dropping_a_folder_onto_itself_or_its_parent_is_a_silent_no_op(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let (view, pane, cx) = explorer_window(cx, explorer_state_in(&root));
+    for target in ["alpha", ""] {
+        cx.update(|window, app| {
+            pane.update(app, |pane, cx| {
+                pane.explorer_drop(vec![root.join("alpha")], Some(PathBuf::from(target)), false, window, cx)
+            });
+            assert!(
+                !view.read(app).file_operations.has_pending(),
+                "dropping alpha onto {target:?} must not start an operation"
+            );
+        });
+        cx.run_until_parked();
+        cx.update(|_, app| {
+            assert!(view.read(app).toast_host.read(app).error_notices().is_empty());
+        });
+        assert!(root.join("alpha/one.rs").exists());
+    }
+    // A real destination still moves.
+    cx.update(|window, app| {
+        pane.update(app, |pane, cx| {
+            pane.explorer_drop(vec![root.join("alpha")], Some(PathBuf::from("zulu")), false, window, cx)
+        });
+        assert!(view.read(app).file_operations.has_pending());
+    });
+    wait_for_path(cx, &root.join("zulu/alpha/one.rs"), true);
+}

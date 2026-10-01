@@ -920,7 +920,25 @@ impl SidebarPaneView {
             .spec
             .workdir
             .join(self.explorer_target(target.as_deref()));
+        // Onto itself, into its own subtree, or a move back where it already is:
+        // nothing to do, and nothing to report.
+        let paths: Vec<PathBuf> = paths
+            .into_iter()
+            .filter(|source| {
+                !destination.starts_with(source)
+                    && !(intent == TransferIntent::Move
+                        && source.parent() == Some(destination.as_path()))
+            })
+            .collect();
         self.clear_explorer_drag_state(cx);
+        if paths.is_empty() {
+            if let Some(native) = native {
+                native.completion.complete(None);
+            }
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         let _ = self.root_view.update(cx, |root, cx| {
             let mut request = Request::new(Operation::Transfer {
                 sources: paths,
@@ -1045,6 +1063,28 @@ impl SidebarPaneView {
     ) -> Option<PathBuf> {
         self.explorer_hit_at(window.mouse_position(), cx)
             .map(|(target, _)| target)
+            .filter(|target| !self.explorer_target_blocked_by_drag(target, cx))
+    }
+
+    /// Repo-relative sources of the internal drag in flight, if any.
+    fn explorer_dragged_paths(&self, cx: &gpui::App) -> Option<Vec<PathBuf>> {
+        let drag = cx.active_drag()?.value.downcast_ref::<ExplorerDrag>()?;
+        let root = &self.active_repo()?.spec.workdir;
+        Some(
+            drag.paths
+                .iter()
+                .filter_map(|path| path.strip_prefix(root).ok().map(Path::to_path_buf))
+                .collect(),
+        )
+    }
+
+    /// A dragged folder, or anything inside it, is no place to drop it. The
+    /// root never is: a move back to its own parent is a quiet no-op instead.
+    fn explorer_target_blocked_by_drag(&self, target: &Path, cx: &gpui::App) -> bool {
+        !target.as_os_str().is_empty()
+            && self
+                .explorer_dragged_paths(cx)
+                .is_some_and(|dragged| dragged.iter().any(|source| target.starts_with(source)))
     }
 
     /// Scan only when the destination or visible tree changes, never per move
@@ -1089,7 +1129,9 @@ impl SidebarPaneView {
         window: &Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let hit = self.explorer_hit_at(position, cx);
+        let hit = self
+            .explorer_hit_at(position, cx)
+            .filter(|(target, _)| !self.explorer_target_blocked_by_drag(target, cx));
         let target = hit.as_ref().map(|(target, _)| target.clone());
         let row = hit.and_then(|(_, row)| row);
         if self.explorer_drop_target == target
