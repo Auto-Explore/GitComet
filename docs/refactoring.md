@@ -404,6 +404,17 @@ Since then:
   running submodule clone asks before its repository or window closes.
 - `file_list/decor_update_no_replan` reports the plan cache's real build
   count instead of a constant.
+- The public-API snapshot covers every crate a downstream product builds on:
+  the extension API, the UI kit, the app library, and the core and state
+  modules the API exposes (`identity`, `services`, `domain`, `msg`,
+  `diff_session`), each beside its crate (`public_api.py --crate` checks
+  one). One `RUSTC_BOOTSTRAP` value for every crate keeps the proc macros
+  built once.
+- The example registers the contributions it lacked (a window gate behind
+  `COMET_EXAMPLE_GATE=1`, the edition strip, a title-bar brand, a history
+  annotator, and sidebar rows), so it exercises every contribution kind.
+  Sidebar contribution icons take the text colour; as `svg()` masks they
+  painted nothing before.
 
 ## History find (#532)
 

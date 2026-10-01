@@ -196,10 +196,11 @@ impl SidebarPaneView {
             return div().into_any_element();
         };
         let action = data.action.clone();
+        let id = format!("sidebar_contribution_{section}_{row}");
+        let selector = id.clone();
         div()
-            .id(SharedString::from(format!(
-                "sidebar_contribution_{section}_{row}"
-            )))
+            .id(SharedString::from(id))
+            .debug_selector(move || selector.clone())
             .h(crate::view::rows::sidebar::sidebar_list_row_height(
                 self.theme,
                 crate::ui_scale::current(cx).percent,
@@ -209,7 +210,13 @@ impl SidebarPaneView {
             .items_center()
             .gap_2()
             .when_some(data.icon.clone(), |row, icon| {
-                row.child(gpui::svg().path(icon).size_4())
+                // `svg()` is a mask in the text colour; without one it paints nothing.
+                row.child(
+                    gpui::svg()
+                        .path(icon)
+                        .size_4()
+                        .text_color(self.theme.colors.foreground.secondary),
+                )
             })
             .child(div().flex_1().overflow_hidden().child(data.label.clone()))
             .when_some(data.mark.clone(), |row, mark| {

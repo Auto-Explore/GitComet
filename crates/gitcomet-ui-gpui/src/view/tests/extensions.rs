@@ -93,6 +93,44 @@ fn without_extensions_the_host_adds_nothing(cx: &mut gpui::TestAppContext) {
     });
 }
 
+/// The example's chrome and rows come from the registry: its edition strip
+/// replaces the default product row, its brand sits in the title bar, its
+/// sidebar rows render, and its window gate covers the window until lifted.
+#[gpui::test]
+fn the_examples_chrome_rows_and_gate_reach_a_main_window(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    cx.update(install_example);
+    let workdir = tempfile::tempdir().unwrap();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            test_support::push_test_state(this, state_with_repo(RepoId(1), workdir.path()), cx)
+        });
+        extension_host::window_opened(&view, app);
+    });
+    cx.run_until_parked();
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("example_edition_strip").is_some());
+    assert!(cx.debug_bounds("bottom_status_bar_brand").is_none());
+    assert!(cx.debug_bounds("bottom_status_bar_version").is_none());
+    assert!(cx.debug_bounds("example_title_brand").is_some());
+    assert!(cx.debug_bounds("sidebar_contribution_0_0").is_some());
+    assert!(cx.debug_bounds("example_gate").is_none());
+
+    cx.update(|_window, app| review::set_gated(true, app));
+    cx.run_until_parked();
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("example_gate").is_some());
+    cx.update(|_window, app| assert!(view.read(app).window_gated));
+
+    cx.update(|_window, app| review::set_gated(false, app));
+    cx.run_until_parked();
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("example_gate").is_none());
+}
+
 #[gpui::test]
 fn contributions_run_per_window_persist_and_forget_closed_windows(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
