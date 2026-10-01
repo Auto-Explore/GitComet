@@ -58,8 +58,10 @@ impl Selection {
     /// (empty path) that a background click focuses always stays.
     pub fn retain(&mut self, keep: impl Fn(&Path) -> bool) {
         self.paths.retain(|path| keep(path));
-        let dropped =
-            |path: &Option<PathBuf>| path.as_deref().is_some_and(|p| !p.as_os_str().is_empty() && !keep(p));
+        let dropped = |path: &Option<PathBuf>| {
+            path.as_deref()
+                .is_some_and(|p| !p.as_os_str().is_empty() && !keep(p))
+        };
         if dropped(&self.focused) {
             self.focused = None;
         }
@@ -97,7 +99,10 @@ mod tests {
         selection.focused = Some(visible[0].clone());
         selection.anchor = Some(visible[0].clone());
         selection.retain(|path| !is_hidden_path(path));
-        assert_eq!(selection.paths, [PathBuf::from("src")].into_iter().collect());
+        assert_eq!(
+            selection.paths,
+            [PathBuf::from("src")].into_iter().collect()
+        );
         assert_eq!(selection.focused, None);
         assert_eq!(selection.anchor, None);
 

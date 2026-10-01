@@ -1422,8 +1422,7 @@ impl MainPaneView {
                 {
                     // Navigation may have tried to flush newer edits while
                     // this write was pending. Save them against its new baseline.
-                    let _ =
-                        self.enqueue_file_editor_save(key.clone(), &stashed, false, false, cx);
+                    let _ = self.enqueue_file_editor_save(key.clone(), &stashed, false, false, cx);
                 }
                 if let Some(relative) = self
                     .active_repo()

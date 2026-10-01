@@ -4,10 +4,10 @@ use super::panes::main::file_editor::{
 use super::panes::main::{
     TextDecodeRequest, preflight_worktree_file_for_editing, read_worktree_file_version_for_editing,
 };
-use gitcomet_core::text_format::{SideKind, SideTextFormat};
 use super::*;
 use crate::kit::{TextInput, TextInputOptions};
 use gitcomet_core::filesystem::{DiskVersion, DocumentIdentity, Operation, OperationId, Request};
+use gitcomet_core::text_format::{SideKind, SideTextFormat};
 use gitcomet_state::model::SidebarMode;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

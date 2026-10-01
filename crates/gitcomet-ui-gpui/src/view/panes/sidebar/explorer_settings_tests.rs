@@ -94,7 +94,10 @@ fn files_settings_menu_toggles_ignored_files_and_stays_open(cx: &mut gpui::TestA
     click(cx, "sidebar_explorer_settings");
     let menu = PopoverKind::ExplorerSettingsMenu { repo_id: REPO };
     cx.update(|_window, app| {
-        assert_eq!(test_support::popover_kind(view.read(app), app), Some(menu.clone()));
+        assert_eq!(
+            test_support::popover_kind(view.read(app), app),
+            Some(menu.clone())
+        );
     });
     assert!(
         cx.debug_bounds("context_menu_entry_icon_Show hidden files")

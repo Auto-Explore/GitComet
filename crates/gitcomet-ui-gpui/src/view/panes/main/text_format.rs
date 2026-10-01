@@ -643,7 +643,9 @@ impl MainPaneView {
                         .file_editor_key
                         .as_ref()
                         .and_then(|key| self.document_repo_path(key))
-                        .is_some_and(|(key_repo, key_path)| key_repo == *repo_id && key_path == *path)
+                        .is_some_and(|(key_repo, key_path)| {
+                            key_repo == *repo_id && key_path == *path
+                        })
             }
             ErrorAction::OpenUrl { .. } => true,
         }

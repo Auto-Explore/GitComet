@@ -2847,9 +2847,15 @@ impl SidebarPaneView {
                                     d.on_activate(
                                         false,
                                         controls::ControlActivation::Composite,
-                                        cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
-                                            this.explorer_chevron_click(path.clone(), window, cx);
-                                        }),
+                                        cx.listener(
+                                            move |this, _: &gpui::ClickEvent, window, cx| {
+                                                this.explorer_chevron_click(
+                                                    path.clone(),
+                                                    window,
+                                                    cx,
+                                                );
+                                            },
+                                        ),
                                     )
                                 })
                         })

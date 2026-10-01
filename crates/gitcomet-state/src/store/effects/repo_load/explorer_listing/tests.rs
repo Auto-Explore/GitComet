@@ -226,7 +226,11 @@ fn augment_flags_only_entries_missing_from_the_backend_listing() {
         std::fs::write(root.join(path), "contents").unwrap();
     }
     let entry = |path: &str, kind, depth| FileEntry {
-        name: Path::new(path).file_name().unwrap().to_string_lossy().into_owned(),
+        name: Path::new(path)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
         path: Arc::new(path.into()),
         kind,
         depth,

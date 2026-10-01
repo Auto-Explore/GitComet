@@ -63,7 +63,6 @@ fn unique_workdir(label: &str) -> std::path::PathBuf {
     dir
 }
 
-
 #[gpui::test]
 fn navigation_during_filesystem_pauses_hides_the_outgoing_buffer(cx: &mut gpui::TestAppContext) {
     navigate_during_filesystem_pause(cx, "original B");
@@ -3031,11 +3030,7 @@ fn check_move_waits_for_existing_saves(
     });
     cx.run_until_parked();
     cx.cx.update(|app| {
-        assert_eq!(
-            app.windows().len(),
-            1,
-            "queued saves must block the move"
-        );
+        assert_eq!(app.windows().len(), 1, "queued saves must block the move");
     });
 
     finish_editor_saves(&view, cx);
@@ -3236,7 +3231,9 @@ fn check_discard_after_save_timeout(
                 _ => None,
             };
             assert!(
-                queued.or(shown).is_some_and(|prompt| prompt.waiting_for_writes),
+                queued
+                    .or(shown)
+                    .is_some_and(|prompt| prompt.waiting_for_writes),
                 "a discarded write that still blocks a move must show a timeout prompt"
             );
         });
@@ -3298,18 +3295,14 @@ fn check_discard_after_save_timeout(
 }
 
 #[gpui::test]
-fn review_regression_discard_after_save_timeout_closes_once_written(
-    cx: &mut gpui::TestAppContext,
-) {
+fn review_regression_discard_after_save_timeout_closes_once_written(cx: &mut gpui::TestAppContext) {
     check_discard_after_save_timeout(cx, |window_id, _, _, _| {
         UnsavedFileEditsAction::CloseWindow(window_id)
     });
 }
 
 #[gpui::test]
-fn review_regression_discard_after_save_timeout_quits_once_written(
-    cx: &mut gpui::TestAppContext,
-) {
+fn review_regression_discard_after_save_timeout_quits_once_written(cx: &mut gpui::TestAppContext) {
     check_discard_after_save_timeout(cx, |_, _, _, _| UnsavedFileEditsAction::QuitApp);
 }
 

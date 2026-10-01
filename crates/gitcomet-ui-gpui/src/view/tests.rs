@@ -3805,9 +3805,7 @@ fn collapsed_files_popover_offers_the_files_settings_menu(cx: &mut gpui::TestApp
     cx.update(|_window, app| {
         assert_eq!(
             test_support::popover_kind(view.read(app), app),
-            Some(PopoverKind::ExplorerSettingsMenu {
-                repo_id: RepoId(1)
-            }),
+            Some(PopoverKind::ExplorerSettingsMenu { repo_id: RepoId(1) }),
         );
         assert_eq!(
             view.read(app).sidebar_collapsed_popover,
@@ -6770,8 +6768,12 @@ fn explorer_ctrl_x_after_a_plain_click_cuts_the_clicked_file(cx: &mut gpui::Test
         eprintln!("TEMPDEBUG after ctrl-x");
         cx.update(|_, app| {
             view.update(app, |_, cx| {
-                let files = crate::clipboard::read_files(cx).expect("the cut reached the clipboard");
-                assert_eq!(files.intent, gitcomet_core::filesystem::TransferIntent::Move);
+                let files =
+                    crate::clipboard::read_files(cx).expect("the cut reached the clipboard");
+                assert_eq!(
+                    files.intent,
+                    gitcomet_core::filesystem::TransferIntent::Move
+                );
                 assert_eq!(files.paths, vec![directory.path().join("a.txt")]);
             })
         });
@@ -7011,7 +7013,8 @@ fn explorer_folder_row_click_selects_focuses_and_toggles(cx: &mut gpui::TestAppC
             .expanded_dirs
             .contains(&PathBuf::from("destination"))
     };
-    let only_destination: std::collections::BTreeSet<PathBuf> = [PathBuf::from("destination")].into_iter().collect();
+    let only_destination: std::collections::BTreeSet<PathBuf> =
+        [PathBuf::from("destination")].into_iter().collect();
 
     click(cx, "file_browser_row_1", primary);
     pump_until(cx, "file selected", |_| {
@@ -7022,7 +7025,10 @@ fn explorer_folder_row_click_selects_focuses_and_toggles(cx: &mut gpui::TestAppC
     click(cx, "file_browser_row_0", Default::default());
     pump_until(cx, "folder expanded", |_| expanded(&store));
     let snapshot = store.snapshot();
-    assert_eq!(snapshot.repos[0].file_browser.selection.paths, only_destination);
+    assert_eq!(
+        snapshot.repos[0].file_browser.selection.paths,
+        only_destination
+    );
     assert_eq!(
         snapshot.repos[0].file_browser.selection.focused.as_deref(),
         Some(Path::new("destination"))
@@ -7041,13 +7047,18 @@ fn explorer_folder_row_click_selects_focuses_and_toggles(cx: &mut gpui::TestAppC
     pump_until(cx, "selection extended", |_| {
         store.snapshot().repos[0].file_browser.selection.paths.len() == 2
     });
-    assert!(!expanded(&store), "a modified click must not toggle the folder");
+    assert!(
+        !expanded(&store),
+        "a modified click must not toggle the folder"
+    );
     sync_view_snapshot(cx, &view);
     // The clipboard is independent of the selection the click replaced.
     click(cx, "file_browser_row_1", Default::default());
     pump_until(cx, "file selected alone", |_| {
         store.snapshot().repos[0].file_browser.selection.paths
-            == [PathBuf::from("source.txt")].into_iter().collect::<std::collections::BTreeSet<_>>()
+            == [PathBuf::from("source.txt")]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>()
     });
     sync_view_snapshot(cx, &view);
     cx.simulate_keystrokes(if cfg!(target_os = "macos") {

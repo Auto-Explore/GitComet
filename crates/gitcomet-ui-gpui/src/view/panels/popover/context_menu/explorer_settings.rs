@@ -7,7 +7,10 @@ pub(super) fn model(host: &PopoverHost, repo_id: RepoId) -> ContextMenuModel {
         .iter()
         .find(|repo| repo.id == repo_id)
         .map_or((true, false), |repo| {
-            (repo.file_browser.show_hidden, repo.file_browser.show_ignored)
+            (
+                repo.file_browser.show_hidden,
+                repo.file_browser.show_ignored,
+            )
         });
     model_for_visibility(repo_id, hidden, ignored)
 }

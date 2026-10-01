@@ -1040,14 +1040,21 @@ fn start_inline_edit(
     test_support::redraw(cx);
 }
 
-fn set_inline_name(cx: &mut gpui::VisualTestContext, pane: &gpui::Entity<SidebarPaneView>, name: &str) {
+fn set_inline_name(
+    cx: &mut gpui::VisualTestContext,
+    pane: &gpui::Entity<SidebarPaneView>,
+    name: &str,
+) {
     cx.update(|_, app| {
         let input = pane.read(app).explorer_name_input.clone();
         input.update(app, |input, cx| input.set_text(name.to_string(), cx));
     });
 }
 
-fn inline_edit_focused(cx: &mut gpui::VisualTestContext, pane: &gpui::Entity<SidebarPaneView>) -> bool {
+fn inline_edit_focused(
+    cx: &mut gpui::VisualTestContext,
+    pane: &gpui::Entity<SidebarPaneView>,
+) -> bool {
     cx.update(|window, app| pane.read(app).explorer_inline_edit_owns_focus(window, app))
 }
 
@@ -1085,14 +1092,20 @@ fn explorer_inline_edit_enter_creates_the_file_and_returns_focus_to_the_tree(
     let (_view, pane, cx) = explorer_window(cx, explorer_state_in(&root));
 
     start_inline_edit(cx, &pane, ExplorerAction::NewFile, "");
-    assert!(inline_edit_focused(cx, &pane), "the name field must take the caret");
+    assert!(
+        inline_edit_focused(cx, &pane),
+        "the name field must take the caret"
+    );
     set_inline_name(cx, &pane, "new.txt");
     cx.simulate_keystrokes("enter");
     wait_for_path(cx, &root.join("new.txt"), true);
     cx.update(|window, app| {
         let pane = pane.read(app);
         assert!(pane.explorer_name_edit.is_none());
-        assert!(pane.explorer_focus.is_focused(window), "Enter hands focus back to the tree");
+        assert!(
+            pane.explorer_focus.is_focused(window),
+            "Enter hands focus back to the tree"
+        );
     });
 
     start_inline_edit(cx, &pane, ExplorerAction::NewFolder, "zulu");
@@ -1126,7 +1139,10 @@ fn explorer_inline_edit_commits_on_focus_out_and_cancels_empty_or_unchanged_name
     wait_for_path(cx, &root.join("alpha/moved.rs"), true);
     cx.update(|window, app| {
         assert!(pane.read(app).explorer_name_edit.is_none());
-        assert!(other.is_focused(window), "focus-out must not pull focus back");
+        assert!(
+            other.is_focused(window),
+            "focus-out must not pull focus back"
+        );
     });
 
     // Empty New folder and unchanged Rename end silently.
@@ -1183,12 +1199,18 @@ fn explorer_inline_edit_survives_window_deactivation(cx: &mut gpui::TestAppConte
     cx.deactivate_window();
     test_support::redraw(cx);
     cx.update(|_, app| assert!(pane.read(app).explorer_name_edit.is_some()));
-    assert!(root.join("alpha/one.rs").exists(), "switching windows is not a commit");
+    assert!(
+        root.join("alpha/one.rs").exists(),
+        "switching windows is not a commit"
+    );
 
     cx.update(|window, _| window.activate_window());
     cx.run_until_parked();
     test_support::redraw(cx);
-    assert!(inline_edit_focused(cx, &pane), "the caret returns with the window");
+    assert!(
+        inline_edit_focused(cx, &pane),
+        "the caret returns with the window"
+    );
     cx.simulate_keystrokes("escape");
     test_support::redraw(cx);
     cx.update(|_, app| assert!(pane.read(app).explorer_name_edit.is_none()));
@@ -1204,9 +1226,14 @@ fn explorer_menu_rename_keeps_focus_in_the_name_field(cx: &mut gpui::TestAppCont
     let root = directory.path().canonicalize().unwrap();
     let (view, pane, cx) = explorer_window(cx, explorer_state_in(&root));
     let host = cx.update(|_, app| view.read(app).popover_host.clone());
-    for (action, editing) in [(ExplorerAction::Rename, true), (ExplorerAction::Copy, false)] {
+    for (action, editing) in [
+        (ExplorerAction::Rename, true),
+        (ExplorerAction::Copy, false),
+    ] {
         // A real right-click, so the menu records the tree as its invoker.
-        let row = cx.debug_bounds("file_browser_row_1").expect("alpha/one.rs row");
+        let row = cx
+            .debug_bounds("file_browser_row_1")
+            .expect("alpha/one.rs row");
         cx.simulate_mouse_down(row.center(), gpui::MouseButton::Right, Default::default());
         cx.simulate_mouse_up(row.center(), gpui::MouseButton::Right, Default::default());
         test_support::redraw(cx);
@@ -1286,7 +1313,9 @@ fn hovering_a_dragged_collapsed_folder_does_not_expand_it(cx: &mut gpui::TestApp
     let _guard = crate::test_support::lock_visual_test();
     let (view, _pane, cx) = explorer_window(cx, collapsed_folder_state());
     let store = cx.update(|_, app| view.read(app).store.clone());
-    let alpha = cx.debug_bounds("file_browser_row_0").expect("collapsed alpha row");
+    let alpha = cx
+        .debug_bounds("file_browser_row_0")
+        .expect("collapsed alpha row");
     start_file_drag(cx, alpha.center());
     cx.simulate_mouse_move(
         alpha.center(),
@@ -1315,7 +1344,13 @@ fn dropping_a_folder_onto_itself_or_its_parent_is_a_silent_no_op(cx: &mut gpui::
     for target in ["alpha", ""] {
         cx.update(|window, app| {
             pane.update(app, |pane, cx| {
-                pane.explorer_drop(vec![root.join("alpha")], Some(PathBuf::from(target)), false, window, cx)
+                pane.explorer_drop(
+                    vec![root.join("alpha")],
+                    Some(PathBuf::from(target)),
+                    false,
+                    window,
+                    cx,
+                )
             });
             assert!(
                 !view.read(app).file_operations.has_pending(),
@@ -1324,14 +1359,26 @@ fn dropping_a_folder_onto_itself_or_its_parent_is_a_silent_no_op(cx: &mut gpui::
         });
         cx.run_until_parked();
         cx.update(|_, app| {
-            assert!(view.read(app).toast_host.read(app).error_notices().is_empty());
+            assert!(
+                view.read(app)
+                    .toast_host
+                    .read(app)
+                    .error_notices()
+                    .is_empty()
+            );
         });
         assert!(root.join("alpha/one.rs").exists());
     }
     // A real destination still moves.
     cx.update(|window, app| {
         pane.update(app, |pane, cx| {
-            pane.explorer_drop(vec![root.join("alpha")], Some(PathBuf::from("zulu")), false, window, cx)
+            pane.explorer_drop(
+                vec![root.join("alpha")],
+                Some(PathBuf::from("zulu")),
+                false,
+                window,
+                cx,
+            )
         });
         assert!(view.read(app).file_operations.has_pending());
     });

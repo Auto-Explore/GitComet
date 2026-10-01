@@ -754,7 +754,8 @@ impl SidebarPaneView {
     }
 
     fn refresh_explorer_name_icon(&mut self, cx: &mut gpui::Context<Self>) {
-        let icon = file_icons::file_icon_for_path(Path::new(self.explorer_name_input.read(cx).text()));
+        let icon =
+            file_icons::file_icon_for_path(Path::new(self.explorer_name_input.read(cx).text()));
         if let Some(edit) = self
             .explorer_name_edit
             .as_mut()
