@@ -9,9 +9,7 @@ impl TextInput {
         self.interaction.cursor_blink_visible = true;
         self.interaction.cursor_blink_task.take();
         self.interaction.context_menu = None;
-        self.interaction.is_selecting = false;
-        self.interaction.mouse_selection_anchor = None;
-        self.interaction.pending_mouse_selection_anchor = None;
+        self.end_mouse_drag();
         self.interaction.took_press = false;
         self.interaction.pending_cursor_autoscroll = false;
         self.interaction.cursor_autoscroll_retries_remaining = 0;
