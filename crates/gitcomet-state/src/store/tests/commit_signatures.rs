@@ -219,6 +219,7 @@ fn scrolling_replaces_pending_work_and_selected_commit_goes_first() {
     assert!(f.targets((100..140).map(id)).is_none());
     assert!(
         f.send(Msg::SelectCommit {
+            request_id: None,
             repo_id: RepoId(1),
             commit_id: id(999)
         })
@@ -241,6 +242,7 @@ fn selection_verifies_immediately_without_waiting_for_details_or_viewport() {
     let mut f = Fixture::new();
     let running = f
         .send(Msg::SelectCommit {
+            request_id: None,
             repo_id: RepoId(1),
             commit_id: id(999),
         })
@@ -249,6 +251,7 @@ fn selection_verifies_immediately_without_waiting_for_details_or_viewport() {
     assert!(f.finish(&running, true).is_none());
     assert!(
         f.send(Msg::SelectCommit {
+            request_id: None,
             repo_id: RepoId(1),
             commit_id: id(999)
         })

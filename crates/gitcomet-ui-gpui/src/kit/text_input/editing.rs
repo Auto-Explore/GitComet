@@ -431,6 +431,11 @@ impl TextInput {
             .clone()
     }
 
+    #[cfg(test)]
+    pub(crate) fn theme_for_test(&self) -> AppTheme {
+        self.style.menu_theme
+    }
+
     pub fn set_theme(&mut self, theme: AppTheme, cx: &mut Context<Self>) {
         let style = TextInputStyle::from_theme(theme);
         if self.style == style {

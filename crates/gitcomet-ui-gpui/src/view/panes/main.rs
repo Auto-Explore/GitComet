@@ -85,6 +85,28 @@ pub(in crate::view) fn pane_content_width_for_layout(
     )
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::view) enum MainPaneSurface {
+    History,
+    Diff,
+    InteractiveRebase,
+}
+
+impl MainPaneView {
+    pub(in crate::view) fn active_surface(&self) -> MainPaneSurface {
+        match self.active_repo() {
+            Some(repo) if repo.diff_state.diff_target.is_some() => MainPaneSurface::Diff,
+            Some(repo)
+                if repo.interactive_rebase_setup.is_some()
+                    || repo.interactive_cherry_pick_setup.is_some() =>
+            {
+                MainPaneSurface::InteractiveRebase
+            }
+            _ => MainPaneSurface::History,
+        }
+    }
+}
+
 impl Render for MainPaneView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         // A new frame re-reads from disk what the surface depends on.
@@ -105,26 +127,20 @@ impl Render for MainPaneView {
             v.set_history_content_width(history_content_width);
         });
 
-        let show_diff = self
-            .active_repo()
-            .and_then(|r| r.diff_state.diff_target.as_ref())
-            .is_some();
-        let in_rebase = self.active_repo().is_some_and(|r| {
-            r.interactive_rebase_setup.is_some() || r.interactive_cherry_pick_setup.is_some()
-        });
+        let surface = self.active_surface();
         self.release_stale_submodule_summary_cache();
         // Keep blame in sync with the displayed file/revision while annotate is
         // on; the request is a no-op when the target is unchanged. Render must not
         // force a retry — a persistent error would re-dispatch every frame.
-        if self.annotate_enabled && show_diff {
+        if self.annotate_enabled && surface == MainPaneSurface::Diff {
             self.request_blame_for_current_target(false, cx);
         }
-        let inner = if show_diff {
-            self.diff_view(window, cx).into_any_element()
-        } else if in_rebase {
-            self.interactive_rebase_view(window, cx).into_any_element()
-        } else {
-            self.history_view.clone().into_any_element()
+        let inner = match surface {
+            MainPaneSurface::Diff => self.diff_view(window, cx).into_any_element(),
+            MainPaneSurface::InteractiveRebase => {
+                self.interactive_rebase_view(window, cx).into_any_element()
+            }
+            MainPaneSurface::History => self.history_view.clone().into_any_element(),
         };
         let search_action = std::mem::take(&mut self.diff_search_probe_render);
         crate::ui_probe::action_phase(search_action, "rendered", || {
