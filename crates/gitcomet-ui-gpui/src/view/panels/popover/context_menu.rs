@@ -108,6 +108,10 @@ pub(super) fn push_copy_path_entries(
             }),
         });
     }
+    // The root's relative path is empty text.
+    if path.as_os_str().is_empty() {
+        return;
+    }
     items.push(ContextMenuItem::Entry {
         label: "Copy relative path".into(),
         icon: Some("icons/copy.svg".into()),

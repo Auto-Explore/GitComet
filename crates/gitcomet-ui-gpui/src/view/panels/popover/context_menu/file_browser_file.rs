@@ -1,3 +1,4 @@
+use super::explorer_operations::push_group;
 use super::*;
 use gitcomet_core::domain::{DiffArea, FileSource};
 
@@ -17,104 +18,6 @@ pub(super) fn model(
         .find(|repo| repo.id == repo_id)
         .map(|repo| repo.file_browser.source.clone())
         .unwrap_or_default();
-
-    let mut items = Vec::new();
-    super::explorer_operations::append(this, &mut items, repo_id, path, &source);
-
-    items.push(ContextMenuItem::Entry {
-        label: "Open".into(),
-        icon: Some("icons/file.svg".into()),
-        shortcut: None,
-        disabled: false,
-        action: Box::new(ContextMenuAction::OpenFileContent {
-            repo_id,
-            source: source.clone(),
-            path: path.to_path_buf(),
-        }),
-    });
-
-    if let Some(target) = diff_target_for_source(&source, path) {
-        items.push(ContextMenuItem::Entry {
-            label: "Open diff".into(),
-            icon: Some("icons/open_external.svg".into()),
-            shortcut: None,
-            disabled: false,
-            action: Box::new(ContextMenuAction::SelectDiff { repo_id, target }),
-        });
-    }
-
-    items.push(ContextMenuItem::Entry {
-        label: "Edit file".into(),
-        icon: Some("icons/pencil.svg".into()),
-        shortcut: None,
-        // The editor always opens the workspace copy, so browsing a commit is
-        // no obstacle — but a branch listing has no path on disk at all, and a
-        // picture has no text to edit.
-        disabled: matches!(source, FileSource::Branch(_))
-            || crate::view::should_bypass_text_file_preview_for_path(path),
-        action: Box::new(ContextMenuAction::EditFile {
-            repo_id,
-            path: path.to_path_buf(),
-        }),
-    });
-
-    // Only offered for a file the editor is actually holding unsaved text for —
-    // an always-present "Discard changes" would read as "revert the file", which
-    // is what the status list's discard does and is a different, far more
-    // destructive thing.
-    if this
-        .main_pane
-        .read(cx)
-        .file_edits_are_unsaved_for(repo_id, path)
-    {
-        items.push(ContextMenuItem::Entry {
-            label: "Discard unsaved edits".into(),
-            icon: Some("icons/undo.svg".into()),
-            shortcut: None,
-            disabled: false,
-            action: Box::new(ContextMenuAction::DiscardFileEdits {
-                repo_id,
-                path: path.to_path_buf(),
-            }),
-        });
-    }
-
-    // The working-tree file is on disk, so these OS actions only apply there.
-    if matches!(source, FileSource::WorkingDirectory) {
-        items.push(ContextMenuItem::Entry {
-            label: "Open file".into(),
-            icon: Some("icons/open_external.svg".into()),
-            shortcut: None,
-            disabled: false,
-            action: Box::new(ContextMenuAction::OpenFile {
-                repo_id,
-                path: path.to_path_buf(),
-            }),
-        });
-        items.push(ContextMenuItem::Entry {
-            label: "Open file location".into(),
-            icon: Some("icons/folder.svg".into()),
-            shortcut: None,
-            disabled: false,
-            action: Box::new(ContextMenuAction::OpenFileLocation {
-                repo_id,
-                path: path.to_path_buf(),
-            }),
-        });
-    }
-
-    items.push(ContextMenuItem::Entry {
-        label: "File history".into(),
-        icon: Some("icons/refresh.svg".into()),
-        shortcut: None,
-        disabled: false,
-        action: Box::new(ContextMenuAction::OpenPopover {
-            kind: PopoverKind::FileHistory {
-                repo_id,
-                path: path.to_path_buf(),
-            },
-        }),
-    });
 
     let file_permalink = this
         .state
@@ -155,18 +58,126 @@ pub(super) fn model(
             }
             crate::view::permalink::file_permalink(remotes, &reference, &path.display().to_string())
         });
-    if let Some(permalink) = file_permalink {
+    let ops = super::explorer_operations::ExplorerOps::new(this, repo_id, path, &source);
+    let mut items = Vec::new();
+    push_group(&mut items, |items| {
         items.push(ContextMenuItem::Entry {
-            label: "Copy file permalink".into(),
-            icon: Some("icons/copy.svg".into()),
+            label: "Open".into(),
+            icon: Some("icons/file.svg".into()),
             shortcut: None,
             disabled: false,
-            action: Box::new(ContextMenuAction::CopyText { text: permalink }),
+            action: Box::new(ContextMenuAction::OpenFileContent {
+                repo_id,
+                source: source.clone(),
+                path: path.to_path_buf(),
+            }),
         });
-    }
 
-    items.push(ContextMenuItem::Separator);
-    push_copy_path_entries(&mut items, this, repo_id, path, None);
+        if let Some(target) = diff_target_for_source(&source, path) {
+            items.push(ContextMenuItem::Entry {
+                label: "Open diff".into(),
+                icon: Some("icons/open_external.svg".into()),
+                shortcut: None,
+                disabled: false,
+                action: Box::new(ContextMenuAction::SelectDiff { repo_id, target }),
+            });
+        }
+
+        items.push(ContextMenuItem::Entry {
+            label: "Edit file".into(),
+            icon: Some("icons/pencil.svg".into()),
+            shortcut: None,
+            // The editor always opens the workspace copy, so browsing a commit is
+            // no obstacle — but a branch listing has no path on disk at all, and a
+            // picture has no text to edit.
+            disabled: matches!(source, FileSource::Branch(_))
+                || crate::view::should_bypass_text_file_preview_for_path(path),
+            action: Box::new(ContextMenuAction::EditFile {
+                repo_id,
+                path: path.to_path_buf(),
+            }),
+        });
+
+        // Only offered for a file the editor is actually holding unsaved text for —
+        // an always-present "Discard changes" would read as "revert the file", which
+        // is what the status list's discard does and is a different, far more
+        // destructive thing.
+        if this
+            .main_pane
+            .read(cx)
+            .file_edits_are_unsaved_for(repo_id, path)
+        {
+            items.push(ContextMenuItem::Entry {
+                label: "Discard unsaved edits".into(),
+                icon: Some("icons/undo.svg".into()),
+                shortcut: None,
+                disabled: false,
+                action: Box::new(ContextMenuAction::DiscardFileEdits {
+                    repo_id,
+                    path: path.to_path_buf(),
+                }),
+            });
+        }
+    });
+    if let Some(ops) = &ops {
+        push_group(&mut items, |items| ops.push_create(items));
+        push_group(&mut items, |items| ops.push_clipboard(items));
+        push_group(&mut items, |items| ops.push_rename_ignore(items));
+    }
+    // The file elsewhere: on disk, in history, or as text to paste.
+    push_group(&mut items, |items| {
+        // The working-tree file is on disk, so these OS actions only apply there.
+        if matches!(source, FileSource::WorkingDirectory) {
+            items.push(ContextMenuItem::Entry {
+                label: "Open file".into(),
+                icon: Some("icons/open_external.svg".into()),
+                shortcut: None,
+                disabled: false,
+                action: Box::new(ContextMenuAction::OpenFile {
+                    repo_id,
+                    path: path.to_path_buf(),
+                }),
+            });
+            items.push(ContextMenuItem::Entry {
+                label: "Open file location".into(),
+                icon: Some("icons/folder.svg".into()),
+                shortcut: None,
+                disabled: false,
+                action: Box::new(ContextMenuAction::OpenFileLocation {
+                    repo_id,
+                    path: path.to_path_buf(),
+                }),
+            });
+        }
+
+        items.push(ContextMenuItem::Entry {
+            label: "File history".into(),
+            icon: Some("icons/refresh.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::OpenPopover {
+                kind: PopoverKind::FileHistory {
+                    repo_id,
+                    path: path.to_path_buf(),
+                },
+            }),
+        });
+
+        push_copy_path_entries(items, this, repo_id, path, None);
+        if let Some(permalink) = file_permalink {
+            items.push(ContextMenuItem::Entry {
+                label: "Copy file permalink".into(),
+                icon: Some("icons/copy.svg".into()),
+                shortcut: None,
+                disabled: false,
+                action: Box::new(ContextMenuAction::CopyText { text: permalink }),
+            });
+        }
+    });
+    if let Some(ops) = &ops {
+        push_group(&mut items, |items| ops.push_destroy(items));
+        push_group(&mut items, |items| ops.push_undo_redo(items));
+    }
 
     ContextMenuModel::new(items)
 }
