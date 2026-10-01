@@ -1,4 +1,4 @@
-use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, HistoryMode};
+use gitcomet_core::domain::{CommitId, DiffArea, DiffLineKind, DiffTarget, HistoryMode};
 use gitcomet_core::services::{CancellationToken, GitBackend};
 use gitcomet_git_gix::GixBackend;
 use std::fs;
@@ -222,4 +222,166 @@ pub fn submodules_and_unconfigured_gitlinks(hash: &str, refs: &str) {
     );
     let repo = GixBackend.open(unconfigured.path()).unwrap();
     assert_eq!(repo.status().unwrap().staged.len(), 1);
+}
+
+fn has_added_line(diff: &gitcomet_core::domain::Diff, text: &str) -> bool {
+    diff.lines
+        .iter()
+        .any(|line| line.kind == DiffLineKind::Add && line.text.as_ref() == text)
+}
+
+/// Status, parsed diffs, a backend commit git can read, indexed history, reflog
+/// and file history all carry ids of the repository's width.
+pub fn status_diff_commit_reflog_and_file_history(hash: &str, refs: &str) {
+    let dir = fixture(hash, refs);
+    let width = if hash == "sha256" { 64 } else { 40 };
+    fs::write(dir.path().join("notes.txt"), "one\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "first"]);
+    let first = git(dir.path(), &["rev-parse", "HEAD"]);
+    let repo = GixBackend.open(dir.path()).unwrap();
+    assert!(repo.status().unwrap().unstaged.is_empty());
+
+    fs::write(dir.path().join("notes.txt"), "one\ntwo\n").unwrap();
+    let worktree = DiffTarget::WorkingTree {
+        path: "notes.txt".into(),
+        area: DiffArea::Unstaged,
+    };
+    assert!(has_added_line(
+        &repo.diff_parsed(&worktree).unwrap(),
+        "+two"
+    ));
+    repo.stage(&[Path::new("notes.txt")]).unwrap();
+    repo.commit("second").unwrap();
+    let second = repo.head_commit_id().unwrap().unwrap();
+    assert_eq!(second.as_ref().len(), width);
+    assert_eq!(second.as_ref(), git(dir.path(), &["rev-parse", "HEAD"]));
+    assert_eq!(
+        git(dir.path(), &["cat-file", "-t", second.as_ref()]),
+        "commit"
+    );
+    let status = repo.status().unwrap();
+    assert!(status.staged.is_empty() && status.unstaged.is_empty());
+    let commit = DiffTarget::Commit {
+        commit_id: second.clone(),
+        path: None,
+    };
+    assert!(has_added_line(&repo.diff_parsed(&commit).unwrap(), "+two"));
+
+    let cancellation = CancellationToken::new();
+    let index = repo
+        .build_history_index(HistoryMode::FullReachable, None, &cancellation, &mut |_| {})
+        .unwrap()
+        .unwrap();
+    let range = repo
+        .read_history_range(&index, 0..2, &cancellation)
+        .unwrap();
+    assert_eq!(range.commits[0].id, second);
+    assert_eq!(range.commits[0].parent_ids[0].as_ref(), first);
+    assert!(range.commits[1].parent_ids.is_empty());
+
+    let details = repo.commit_details(&second).unwrap();
+    assert_eq!(details.parent_ids[0].as_ref(), first);
+    let reflog = repo.reflog_head(10).unwrap();
+    assert_eq!(reflog[0].new_id, second);
+    assert!(
+        reflog
+            .iter()
+            .all(|entry| entry.new_id.as_ref().len() == width)
+    );
+    let file = repo
+        .log_file_page(Path::new("notes.txt"), 10, None)
+        .unwrap();
+    let ids: Vec<_> = file.commits.iter().map(|c| c.id.as_ref()).collect();
+    assert_eq!(ids, [second.as_ref(), first.as_str()]);
+}
+
+/// gix infers a hex name's hash kind from its length, so every abbreviation
+/// form must resolve against the repository's own format, loose and packed.
+pub fn revision_lookups(hash: &str, refs: &str) {
+    let dir = fixture(hash, refs);
+    fs::write(dir.path().join("file.txt"), "one\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "first"]);
+    git(dir.path(), &["tag", "-a", "v1", "-m", "v1"]);
+    let first = git(dir.path(), &["rev-parse", "HEAD"]);
+    git(dir.path(), &["commit", "--allow-empty", "-m", "second"]);
+    let second = git(dir.path(), &["rev-parse", "HEAD"]);
+    let described = git(dir.path(), &["describe", "--long"]);
+    let resolve = |repo: &dyn gitcomet_core::services::GitRepository, spec: &str| {
+        repo.resolve_commit(&CommitId(spec.into()))
+            .map(|commit| commit.id.as_ref().to_owned())
+    };
+    for packed in [false, true] {
+        if packed {
+            git(dir.path(), &["gc", "-q"]);
+        }
+        let repo = GixBackend.open(dir.path()).unwrap();
+        let repo = repo.as_ref();
+        for spec in [
+            second.clone(),
+            second[..12].to_owned(),
+            second[..13].to_owned(),
+            second[..40].to_owned(),
+            second[..12].to_uppercase(),
+            second.to_uppercase(),
+            described.clone(),
+            format!("{}^{{commit}}", &second[..12]),
+        ] {
+            let resolved = resolve(repo, &spec);
+            assert_eq!(
+                resolved.as_deref().ok(),
+                Some(second.as_str()),
+                "{hash}/{refs} packed={packed} {spec}"
+            );
+        }
+        assert_eq!(
+            resolve(repo, &format!("{}~1", &second[..12])).unwrap(),
+            first,
+            "{hash}/{refs} packed={packed}"
+        );
+        assert!(resolve(repo, &"f".repeat(12)).is_err());
+    }
+
+    // Enough blobs that two share a four-digit prefix; ambiguity must be named.
+    let blobs = tempfile::tempdir().unwrap();
+    let paths: String = (0..1500)
+        .map(|i| {
+            let path = blobs.path().join(i.to_string());
+            fs::write(&path, format!("blob {i}\n")).unwrap();
+            format!("{}\n", path.display())
+        })
+        .collect();
+    let mut cmd = Command::new("git");
+    test_git_env::apply(&mut cmd);
+    let mut child = cmd
+        .arg("-C")
+        .arg(dir.path())
+        .args(["hash-object", "-w", "--stdin-paths"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::Write as _;
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(paths.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let mut prefixes = std::collections::HashSet::new();
+    let ambiguous = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|id| id[..4].to_owned())
+        .find(|prefix| !prefixes.insert(prefix.clone()))
+        .expect("1500 ids share a four-digit prefix");
+    let repo = GixBackend.open(dir.path()).unwrap();
+    let error = resolve(repo.as_ref(), &ambiguous).unwrap_err().to_string();
+    assert!(
+        error.to_lowercase().contains("ambiguous"),
+        "{hash}/{refs} {error}"
+    );
 }

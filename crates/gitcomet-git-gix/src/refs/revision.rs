@@ -4,22 +4,44 @@ use gix::bstr::ByteSlice as _;
 use gix::prelude::ObjectIdExt as _;
 
 pub(crate) fn resolve(repo: &gix::Repository, spec: &str) -> Result<Option<gix::ObjectId>> {
-    let leading = spec.split(['~', '^', '@', ':']).next().unwrap_or_default();
-    if leading.len() > repo.object_hash().len_in_hex()
-        && leading.bytes().all(|b| b.is_ascii_hexdigit())
-    {
-        return Err(failure(
-            "revision object id is longer than the repository's object format",
-        ));
-    }
-    if backend(repo)? == RefBackend::Files && repo.object_hash() == gix::hash::Kind::Sha1 {
-        return match repo.rev_parse_single(spec) {
-            Ok(id) => Ok(Some(id.detach())),
-            Err(e) if e.is_not_found() => Ok(None),
-            Err(e) => Err(failure(e)),
-        };
+    if backend(repo)? == RefBackend::Files && gix_parses_verbatim(repo, spec) {
+        return rev_parse(repo, spec);
     }
     view(repo)?.resolve(spec)
+}
+
+/// gix picks a hex name's hash kind from its digit count (<= 40 is SHA-1): a wider
+/// run panics against packed SHA-1 ids, a shorter one misses loose SHA-256 objects.
+/// Remove once gix takes the kind from the repository.
+fn gix_parses_verbatim(repo: &gix::Repository, spec: &str) -> bool {
+    repo.object_hash() == gix::hash::Kind::Sha1
+        && !contains_hex_run_longer_than(spec, repo.object_hash().len_in_hex())
+}
+
+fn rev_parse(repo: &gix::Repository, spec: &str) -> Result<Option<gix::ObjectId>> {
+    match repo.rev_parse_single(spec) {
+        Ok(id) => Ok(Some(id.detach())),
+        Err(e) if e.is_not_found() => Ok(None),
+        Err(e) => Err(failure(e)),
+    }
+}
+
+fn contains_hex_run_longer_than(spec: &str, max: usize) -> bool {
+    let mut run = 0;
+    spec.bytes().any(|b| {
+        run = if b.is_ascii_hexdigit() { run + 1 } else { 0 };
+        run > max
+    })
+}
+
+fn is_hex(s: &str) -> bool {
+    s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// `git describe` output, `<anything>-g<abbreviated id>`.
+fn is_describe_name(name: &str, max_hex: usize) -> bool {
+    name.rsplit_once("-g")
+        .is_some_and(|(_, hex)| (4..=max_hex).contains(&hex.len()) && is_hex(hex))
 }
 
 pub(crate) fn resolve_required<'r>(repo: &'r gix::Repository, spec: &str) -> Result<gix::Id<'r>> {
@@ -30,9 +52,10 @@ pub(crate) fn resolve_required<'r>(repo: &'r gix::Repository, spec: &str) -> Res
 
 impl RefsView<'_> {
     pub fn resolve(&self, spec: &str) -> Result<Option<gix::ObjectId>> {
-        if self.common.is_none() && self.repo.object_hash() == gix::hash::Kind::Sha1 {
-            return resolve(self.repo, spec);
+        if self.common.is_none() && gix_parses_verbatim(self.repo, spec) {
+            return rev_parse(self.repo, spec);
         }
+        let digest = self.repo.object_hash().len_in_hex();
         // Translate only syntax whose reference semantics are fully known here.
         // Git handles date selectors, upstream/push, checkout history and searches.
         if spec.is_empty()
@@ -89,22 +112,18 @@ impl RefsView<'_> {
             self.reflog(&name, n.checked_add(1))?
                 .get(n)
                 .map(|line| line.new_oid)
-        } else if base.len() == self.repo.object_hash().len_in_hex()
-            && base.bytes().all(|b| b.is_ascii_hexdigit())
-        {
+        } else if base.len() == digest && is_hex(base) {
             Some(gix::ObjectId::from_hex(base.as_bytes()).map_err(failure)?)
         } else if base == "HEAD" {
             self.head_oid()?
         } else if let Some(reference) = self.find(base)? {
             reference.try_id().map(|id| id.detach())
-        } else if base.len() >= 4
-            && base.len() < self.repo.object_hash().len_in_hex()
-            && base.bytes().all(|b| b.is_ascii_hexdigit())
-        {
-            let padded = format!(
-                "{base:0<width$}",
-                width = self.repo.object_hash().len_in_hex()
-            );
+        } else if base.len() > digest && is_hex(base) {
+            return Err(failure(
+                "revision object id is longer than the repository's object format",
+            ));
+        } else if base.len() >= 4 && is_hex(base) {
+            let padded = format!("{base:0<digest$}");
             let full = gix::ObjectId::from_hex(padded.as_bytes()).map_err(failure)?;
             let prefix = gix::hash::Prefix::new(&full, base.len()).map_err(failure)?;
             match self
@@ -114,9 +133,14 @@ impl RefsView<'_> {
                 .map_err(failure)?
             {
                 Some(Ok(id)) => Some(id),
-                Some(Err(())) => return self.resolve_cli(spec),
+                // `rev-parse --quiet` would hide git's message, so name it here.
+                Some(Err(())) => {
+                    return Err(failure(format!("short object id {base} is ambiguous")));
+                }
                 None => None,
             }
+        } else if is_describe_name(base, digest) {
+            return self.resolve_cli(spec);
         } else {
             None
         };
@@ -130,6 +154,9 @@ impl RefsView<'_> {
                 "{oid}{suffix}{}",
                 path.map_or(String::new(), |p| format!(":{p}"))
             );
+            if contains_hex_run_longer_than(&translated, digest) {
+                return self.resolve_cli(spec);
+            }
             id = Some(
                 self.repo
                     .rev_parse_single(translated.as_str())

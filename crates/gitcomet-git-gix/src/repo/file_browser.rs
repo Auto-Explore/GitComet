@@ -49,13 +49,13 @@ impl GixRepo {
         commit_id: &CommitId,
     ) -> Result<Vec<FileEntry>> {
         let repo = self.repo();
-        let oid = gix::ObjectId::from_hex(commit_id.0.as_bytes())
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("invalid commit id: {e}"))))?;
-        if oid.kind() != repo.object_hash() {
-            return Err(Error::new(ErrorKind::Backend(
-                "commit id does not match the repository's object format".into(),
-            )));
-        }
+        let oid =
+            super::object_id_from_commit_id(commit_id, repo.object_hash()).ok_or_else(|| {
+                Error::new(ErrorKind::Backend(format!(
+                    "invalid commit id for this repository: {}",
+                    commit_id.as_ref()
+                )))
+            })?;
         let commit = repo
             .find_commit(oid)
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix find_commit: {e}"))))?;

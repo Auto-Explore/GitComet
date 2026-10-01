@@ -1,5 +1,5 @@
 use super::history::gix_head_id_or_none;
-use super::{GixRepo, oid_to_arc_str};
+use super::{GixRepo, object_id_from_commit_id, oid_to_arc_str};
 use crate::util::{
     bytes_to_text_preserving_utf8, fnv1a_64, git_workdir_cmd_for, path_buf_from_git_bytes,
     run_git_capture_bytes_cancellable, run_git_simple, run_git_with_output, stable_path_bytes,
@@ -1091,8 +1091,7 @@ fn submodule_range_unavailable_reason(
 }
 
 fn submodule_commit_available(repo: &gix::Repository, commit_id: &CommitId) -> bool {
-    object_id_from_commit_id(commit_id)
-        .filter(|oid| oid.kind() == repo.object_hash())
+    object_id_from_commit_id(commit_id, repo.object_hash())
         .and_then(|object_id| repo.find_commit(object_id).ok())
         .is_some()
 }
@@ -1380,9 +1379,7 @@ fn first_parent_commit_id(
     repo: &gix::Repository,
     commit_id: &CommitId,
 ) -> Result<Option<CommitId>> {
-    let Some(object_id) =
-        object_id_from_commit_id(commit_id).filter(|oid| oid.kind() == repo.object_hash())
-    else {
+    let Some(object_id) = object_id_from_commit_id(commit_id, repo.object_hash()) else {
         return Err(Error::new(ErrorKind::Backend(format!(
             "invalid commit id '{}'",
             commit_id.as_ref()
@@ -2086,10 +2083,6 @@ fn pathbuf_from_gix_path(path: &gix::bstr::BStr) -> Result<PathBuf> {
     gix::path::try_from_bstr(path)
         .map(|path| path.into_owned())
         .map_err(|_| Error::new(ErrorKind::Unsupported("path is not valid UTF-8")))
-}
-
-fn object_id_from_commit_id(id: &CommitId) -> Option<gix::ObjectId> {
-    gix::ObjectId::from_hex(id.as_ref().as_bytes()).ok()
 }
 
 fn object_id_to_commit_id(id: gix::ObjectId) -> CommitId {

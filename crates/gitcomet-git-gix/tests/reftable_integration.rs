@@ -26,6 +26,17 @@ fn reftable_history_loose_commit_graph_and_packs() {
     }
 }
 
+#[test]
+fn reftable_status_diff_commit_reflog_and_revision_lookups() {
+    if !formats::reftable_available() {
+        return;
+    }
+    for hash in ["sha1", "sha256"] {
+        formats::status_diff_commit_reflog_and_file_history(hash, "reftable");
+        formats::revision_lookups(hash, "reftable");
+    }
+}
+
 fn commit_file(path: &Path, text: &str, message: &str) -> CommitId {
     fs::write(path.join("file.txt"), text).unwrap();
     git(path, &["add", "."]);

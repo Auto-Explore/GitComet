@@ -380,17 +380,12 @@ fn encode_path(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn full_object_ids_accept_both_hash_formats() {
-        for len in [40, 64] {
-            assert!(super::is_full_sha(&"a".repeat(len)));
-            assert!(!super::is_full_sha(&"g".repeat(len)));
-        }
-        for len in [0, 7, 39, 41, 63, 65] {
-            assert!(!super::is_full_sha(&"a".repeat(len)));
-        }
-    }
     use super::*;
+
+    /// Full-length ids of both object formats, so width-sensitive tests share
+    /// one recognizable pattern.
+    const SHA1_ID: &str = "0123456789abcdef0123456789abcdef01234567";
+    const SHA256_ID: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     fn remote(name: &str, url: &str) -> Remote {
         Remote {
@@ -685,13 +680,32 @@ mod tests {
             "origin",
             "https://dev.azure.com/org/project/_git/repo",
         )];
-        let sha = "0123456789abcdef0123456789abcdef01234567";
-        assert_eq!(
-            file_permalink(&remotes, sha, "src/main.rs").as_deref(),
-            Some(
-                "https://dev.azure.com/org/project/_git/repo?path=/src/main.rs&version=GC0123456789abcdef0123456789abcdef01234567&_a=contents"
-            )
-        );
+        // Both object formats are commits (`GC…`), not branches (`GB…`).
+        for sha in [SHA1_ID, SHA256_ID] {
+            assert_eq!(
+                file_permalink(&remotes, sha, "src/main.rs"),
+                Some(format!(
+                    "https://dev.azure.com/org/project/_git/repo?path=/src/main.rs&version=GC{sha}&_a=contents"
+                )),
+                "{sha}"
+            );
+        }
+    }
+
+    #[test]
+    fn is_full_sha_accepts_40_and_64_hex_digits() {
+        for (reference, expected) in [
+            (SHA1_ID.to_string(), true),
+            (SHA256_ID.to_string(), true),
+            (SHA256_ID.to_uppercase(), true),
+            (SHA1_ID[..39].to_string(), false),
+            (SHA256_ID[..41].to_string(), false),
+            (SHA256_ID[..63].to_string(), false),
+            (format!("{SHA256_ID}a"), false),
+            ("g".repeat(64), false),
+        ] {
+            assert_eq!(is_full_sha(&reference), expected, "{reference}");
+        }
     }
 
     #[test]
@@ -739,13 +753,16 @@ mod tests {
             file_permalink(&remotes, "main", "src/lib.rs").as_deref(),
             Some("https://codeberg.org/org/repo/src/branch/main/src/lib.rs")
         );
-        let sha = "0123456789abcdef0123456789abcdef01234567";
-        assert_eq!(
-            file_permalink(&remotes, sha, "src/lib.rs").as_deref(),
-            Some(
-                "https://codeberg.org/org/repo/src/commit/0123456789abcdef0123456789abcdef01234567/src/lib.rs"
-            )
-        );
+        // Both object formats are commits (`src/commit`), not branches.
+        for sha in [SHA1_ID, SHA256_ID] {
+            assert_eq!(
+                file_permalink(&remotes, sha, "src/lib.rs"),
+                Some(format!(
+                    "https://codeberg.org/org/repo/src/commit/{sha}/src/lib.rs"
+                )),
+                "{sha}"
+            );
+        }
     }
 
     #[test]
@@ -774,7 +791,7 @@ mod tests {
                 "https://us-east-1.console.aws.amazon.com/codesuite/codecommit/repositories/my-repo/browse/refs/heads/main/--/src/lib.rs"
             )
         );
-        let sha = "0123456789abcdef0123456789abcdef01234567";
+        let sha = SHA1_ID;
         assert_eq!(
             file_permalink(&remotes, sha, "src/lib.rs").as_deref(),
             Some(

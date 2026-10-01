@@ -73,7 +73,12 @@ fn cursor_gate_skips_until_after_last_seen() {
 
 #[test]
 fn object_id_from_commit_id_rejects_invalid_hex() {
-    assert!(object_id_from_commit_id(&CommitId("not-a-sha".into())).is_none());
+    assert!(
+        object_id_from_commit_id(&CommitId("not-a-sha".into()), gix::hash::Kind::Sha1).is_none()
+    );
+    let sha1 = CommitId("a".repeat(40).into());
+    assert!(object_id_from_commit_id(&sha1, gix::hash::Kind::Sha1).is_some());
+    assert!(object_id_from_commit_id(&sha1, gix::hash::Kind::Sha256).is_none());
 }
 
 #[test]
