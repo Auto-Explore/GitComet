@@ -67,7 +67,10 @@ fn bottom_status_bar_free_badge_opens_editions_page_and_updates_tooltip_on_hover
     cx.simulate_click(badge_center, Modifiers::default());
     draw_and_drain_test_window(cx);
 
-    assert_eq!(cx.opened_url(), Some(crate::view::EDITIONS_URL.to_string()));
+    assert_eq!(
+        cx.opened_url(),
+        Some(crate::view::editions_url().unwrap().to_string())
+    );
     assert!(
         !popover_is_open(cx, &view),
         "expected the free badge click to leave popovers closed"
@@ -95,7 +98,10 @@ fn bottom_status_bar_pro_link_renders_and_opens_editions_page(cx: &mut gpui::Tes
 
     cx.simulate_click(link_bounds.center(), Modifiers::default());
     draw_and_drain_test_window(cx);
-    assert_eq!(cx.opened_url(), Some(crate::view::EDITIONS_URL.to_string()));
+    assert_eq!(
+        cx.opened_url(),
+        Some(crate::view::editions_url().unwrap().to_string())
+    );
 }
 
 #[gpui::test]
@@ -135,14 +141,20 @@ fn bottom_status_bar_branding_opens_discord_and_release_notes(cx: &mut gpui::Tes
         .expect("expected bottom status bar discord badge bounds");
     cx.simulate_click(discord_bounds.center(), Modifiers::default());
     draw_and_drain_test_window(cx);
-    assert_eq!(cx.opened_url(), Some(crate::view::DISCORD_URL.to_string()));
+    assert_eq!(
+        cx.opened_url(),
+        Some(crate::view::community_url().unwrap().to_string())
+    );
 
     let version_bounds = cx
         .debug_bounds("bottom_status_bar_version")
         .expect("expected bottom status bar version bounds");
     cx.simulate_click(version_bounds.center(), Modifiers::default());
     draw_and_drain_test_window(cx);
-    assert_eq!(cx.opened_url(), Some(crate::view::RELEASES_URL.to_string()));
+    assert_eq!(
+        cx.opened_url(),
+        Some(crate::view::releases_url().unwrap().to_string())
+    );
 
     let brand_bounds = cx
         .debug_bounds("bottom_status_bar_brand")
@@ -177,7 +189,10 @@ fn bottom_status_bar_brand_opens_the_website_and_shows_a_tooltip(cx: &mut gpui::
     cx.simulate_click(brand_center, Modifiers::default());
     draw_and_drain_test_window(cx);
 
-    assert_eq!(cx.opened_url(), Some(crate::view::WEBSITE_URL.to_string()));
+    assert_eq!(
+        cx.opened_url(),
+        Some(crate::view::website_url().unwrap().to_string())
+    );
     assert!(
         !popover_is_open(cx, &view),
         "expected the wordmark click to leave popovers closed"
@@ -693,10 +708,7 @@ fn ctrl_h_opens_file_history_for_a_file_at_a_commit(cx: &mut gpui::TestAppContex
         &path,
     );
 
-    repo.diff_state.diff_target = Some(DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: Some(path.clone()),
-    });
+    repo.diff_state.diff_target = Some(DiffTarget::commit(commit_id.clone(), Some(path.clone())));
     apply_state(cx, &view, app_state_with_active_repo(repo));
     bind_app_keys_and_global_diff_fallback_for_test(cx);
     focus_diff_panel(cx, &view);
@@ -885,10 +897,7 @@ fn ctrl_u_unstages_current_file_and_advances_diff(cx: &mut gpui::TestAppContext)
         }
         .into(),
     );
-    let target = DiffTarget::WorkingTree {
-        path: first.clone(),
-        area: DiffArea::Staged,
-    };
+    let target = DiffTarget::working_tree(first.clone(), DiffArea::Staged);
     repo.diff_state.diff_target = Some(target.clone());
     repo.diff_state.diff = Loadable::Ready(simple_hunk_diff(target).into());
     repo.diff_state.diff_rev = 1;

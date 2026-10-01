@@ -54,17 +54,11 @@ fn open(repo: &Path) -> Arc<dyn GitRepository> {
 }
 
 fn unstaged(path: &str) -> DiffTarget {
-    DiffTarget::WorkingTree {
-        path: PathBuf::from(path),
-        area: DiffArea::Unstaged,
-    }
+    DiffTarget::working_tree(PathBuf::from(path), DiffArea::Unstaged)
 }
 
 fn staged(path: &str) -> DiffTarget {
-    DiffTarget::WorkingTree {
-        path: PathBuf::from(path),
-        area: DiffArea::Staged,
-    }
+    DiffTarget::working_tree(PathBuf::from(path), DiffArea::Staged)
 }
 
 fn file_text(
@@ -234,10 +228,7 @@ fn config_changes_refresh_attributes_and_decoding_without_reopening() {
     fs::write(workdir.join("ru.txt"), b"\xf0\xd2\xc9\xd7\xc5\xd4!\n").unwrap();
     let commit = commit_all(workdir, "change");
     let repo = open(workdir);
-    let target = DiffTarget::Commit {
-        commit_id: commit,
-        path: Some("ru.txt".into()),
-    };
+    let target = DiffTarget::commit(commit, Some("ru.txt".into()));
     let original = file_text(&*repo, &target, None);
     assert_eq!(
         original
@@ -503,6 +494,20 @@ fn utf16_without_attributes_is_binary_to_git_but_text_to_the_file_view() {
     let text = file_text(&*repo, &target, None);
     assert_eq!(read_side(text.old_source.as_ref()), "hello\r\n");
     assert_eq!(read_side(text.new_source.as_ref()), "hello\r\nworld\r\n");
+    for (source, original) in [
+        (text.old_source.as_ref().unwrap(), "hello\r\n"),
+        (text.new_source.as_ref().unwrap(), "hello\r\nworld\r\n"),
+    ] {
+        assert_eq!(
+            fs::read(source.raw_path.as_ref().expect("original UTF-16 source")).unwrap(),
+            utf16(original)
+        );
+    }
+    let cached = file_text(&*repo, &target, None);
+    assert_eq!(
+        cached.new_source.as_ref().unwrap().raw_path,
+        text.new_source.as_ref().unwrap().raw_path
+    );
     let new = text.new_source.unwrap().format.unwrap();
     assert_eq!(new.format.encoding, TextEncoding::UTF_16LE);
     assert!(new.format.bom);
@@ -528,10 +533,7 @@ fn commit_converting_latin1_to_utf8_decodes_each_side_in_its_own_encoding() {
     let converted = commit_all(repo_dir, "convert to utf-8");
 
     let repo = open(repo_dir);
-    let target = DiffTarget::Commit {
-        commit_id: converted,
-        path: Some(PathBuf::from("readme.txt")),
-    };
+    let target = DiffTarget::commit(converted, Some(PathBuf::from("readme.txt")));
     assert_eq!(
         changed_lines(&patch(&*repo, &target, None)),
         vec![
@@ -979,4 +981,48 @@ fn review_conflict_stages_share_legacy_detection_evidence() {
         session.current_format.unwrap().format.encoding,
         TextEncoding::WINDOWS_1252
     );
+}
+
+/// A renamed file's old side reads from its source path, decoded by that
+/// path's attributes; before rename-aware loading it had no old side at all.
+#[test]
+fn a_renamed_files_old_side_decodes_with_its_source_paths_encoding() {
+    test_git_env::ensure_initialized();
+    let dir = init_repo();
+    let repo_dir = dir.path();
+    fs::write(
+        repo_dir.join(".gitattributes"),
+        "*.sjis encoding=shift_jis\n",
+    )
+    .unwrap();
+    // 日本 on each of enough lines that the edit keeps it a rename.
+    let lines = b"\x93\xfa\x96\x7b\n".repeat(12);
+    fs::write(repo_dir.join("old.sjis"), &lines).unwrap();
+    commit_all(repo_dir, "base");
+    git(repo_dir, &["mv", "old.sjis", "new.sjis"]);
+    let mut edited = lines.clone();
+    edited.extend_from_slice(b"\x93\xfa\n");
+    fs::write(repo_dir.join("new.sjis"), &edited).unwrap();
+    let renamed = commit_all(repo_dir, "rename");
+
+    let repo = open(repo_dir);
+    let details = repo.commit_details(&renamed).unwrap();
+    let file = details
+        .files
+        .iter()
+        .find(|file| file.path == Path::new("new.sjis"))
+        .expect("the renamed file is listed");
+    assert_eq!(file.old_path.as_deref(), Some(Path::new("old.sjis")));
+    let target = DiffTarget::commit(renamed, None).for_change(file);
+    let text = file_text(&*repo, &target, None);
+    assert_eq!(read_side(text.old_source.as_ref()), "日本\n".repeat(12));
+    assert_eq!(
+        read_side(text.new_source.as_ref()),
+        format!("{}日\n", "日本\n".repeat(12))
+    );
+    let format = text
+        .old_source
+        .and_then(|side| side.format)
+        .expect("old format");
+    assert_eq!(format.format.encoding.name(), "Shift_JIS");
 }

@@ -136,9 +136,13 @@ pub fn unified_diff_file_path<'a>(
             }
         } else if line.starts_with("--- ") {
             old_path = old_path.or_else(|| parse_unified_path_header(line));
-        } else if let Some(rest) = line.strip_prefix("rename to ") {
-            // A rename with no content change has no `---`/`+++` pair at all.
-            // Unlike those, this name is written bare, with no `a/` or `b/`.
+        } else if let Some(rest) = line
+            .strip_prefix("rename to ")
+            .or_else(|| line.strip_prefix("copy to "))
+        {
+            // A rename or copy with no content change has no `---`/`+++` pair
+            // at all. Unlike those, this name is written bare, with no `a/` or
+            // `b/`.
             rename_to = rename_to.or_else(|| Some(unquote_git_path(rest)));
         }
     }
@@ -452,6 +456,23 @@ index 1e0101a..313043d 100644
 ",
             ),
             Some("src/rules - Copy.rs".to_string())
+        );
+    }
+
+    /// Copy detection (`-C`) writes `copy from`/`copy to` where a rename
+    /// writes `rename from`/`rename to`.
+    #[test]
+    fn file_path_reads_a_pure_copy() {
+        assert_eq!(
+            file_path_of(
+                "\
+diff --git a/old name.txt b/new name.txt
+similarity index 100%
+copy from old name.txt
+copy to new name.txt
+",
+            ),
+            Some("new name.txt".to_string())
         );
     }
 

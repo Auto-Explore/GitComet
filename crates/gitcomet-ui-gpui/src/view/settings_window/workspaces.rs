@@ -224,7 +224,7 @@ impl SettingsWindowView {
             .p(ui_scale.px(4.0));
         for workspace in &workspaces {
             let id = workspace.id;
-            let item = components::workspace_picker_item(workspace);
+            let item = crate::view::workspace_picker::workspace_picker_item(workspace);
             let row_selector: SharedString = format!("settings_window_workspace_{id}").into();
             list = list.child(
                 components::picker_row(

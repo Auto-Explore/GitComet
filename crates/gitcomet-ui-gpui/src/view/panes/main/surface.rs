@@ -93,9 +93,12 @@ impl MainPaneView {
         SURFACE_RESOLUTIONS.with(|checks| checks.set(checks.get() + 1));
         let file_preview_target = self.file_preview_target();
         let inline_submodule_diff = self.is_inline_submodule_diff_active();
-        let submodule_summary = self
-            .active_repo()
-            .is_some_and(|repo| !matches!(repo.diff_state.submodule_summary, Loadable::NotLoaded));
+        let submodule_summary = self.active_repo().is_some_and(|repo| {
+            !matches!(
+                self.bound_diff_state(repo).submodule_summary,
+                Loadable::NotLoaded
+            )
+        });
         let directory_notice = !submodule_summary
             && !inline_submodule_diff
             && self.untracked_directory_notice().is_some();
@@ -169,7 +172,7 @@ impl MainPaneView {
     fn file_preview_target(&self) -> bool {
         let preview_text_file_available = self.active_repo().is_some_and(|repo| {
             matches!(
-                repo.diff_state.diff_preview_text_file,
+                self.bound_diff_state(repo).diff_preview_text_file,
                 Loadable::Loading | Loadable::Error(_) | Loadable::Ready(Some(_))
             )
         });
@@ -203,7 +206,9 @@ impl MainPaneView {
         Option<gitcomet_core::domain::FileConflictKind>,
     )> {
         let repo = self.active_repo()?;
-        let DiffTarget::WorkingTree { path, area } = repo.diff_state.diff_target.as_ref()? else {
+        let DiffTarget::WorkingTree { path, area, .. } =
+            self.bound_diff_state(repo).diff_target.as_ref()?
+        else {
             return None;
         };
         if *area != DiffArea::Unstaged {

@@ -331,7 +331,8 @@ impl MainPaneView {
             return None;
         }
         let repo = self.active_repo()?;
-        let Some(DiffTarget::WorkingTree { path, .. }) = repo.diff_state.diff_target.as_ref()
+        let Some(DiffTarget::WorkingTree { path, .. }) =
+            self.bound_diff_state(repo).diff_target.as_ref()
         else {
             return None;
         };

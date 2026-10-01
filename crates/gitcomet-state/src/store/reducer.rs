@@ -1,31 +1,34 @@
 mod actions_emit_effects;
+mod auth;
+mod branch_exists_prompt;
+#[cfg(test)]
+mod comparison_tests;
 mod conflict_interactions;
 mod diff_selection;
+mod diff_session;
 mod effects;
 mod external_and_history;
 mod git_hook_activity;
+mod git_operations;
 mod history_authors;
 mod history_find;
+#[cfg(test)]
+mod history_selection_ack_tests;
 mod indexed_history;
 #[cfg(test)]
 mod line_stats_tests;
+mod loads;
+#[cfg(test)]
+mod nav_history_tests;
 mod repo_management;
+mod repo_watch;
+mod settings;
+mod submodule_trust;
 mod util;
 
-use crate::model::{
-    AppState, AuthPromptState, AuthRetryOperation, BranchExistsPromptOperation, Loadable,
-    PendingCommitRetry, RepoId, SubmoduleAddProgressState, SubmoduleTrustCheckOperation,
-    SubmoduleTrustCheckState, SubmoduleTrustPromptOperation, SubmoduleTrustPromptState,
-};
-use crate::msg::{
-    BranchExistsChoice, ConflictRegionChoice, Effect, Msg, RepoActionKind, RepoCommandKind,
-    RepoPath, RepoPathList,
-};
-use crate::store::repo_load_trace;
-use gitcomet_core::auth::StagedGitAuth;
-use gitcomet_core::services::{
-    CheckoutRemoteBranchMode, GitRepository, SafePushAfterCommitContext,
-};
+use crate::model::{AppState, Loadable, RepoId};
+use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoPath, RepoPathList};
+use gitcomet_core::services::GitRepository;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use std::sync::Arc;
@@ -64,7 +67,7 @@ fn cache_selected_deleted_gitlink(
     repo_id: RepoId,
     target: &gitcomet_core::domain::DiffTarget,
 ) {
-    let gitcomet_core::domain::DiffTarget::WorkingTree { path, area } = target else {
+    let gitcomet_core::domain::DiffTarget::WorkingTree { path, area, .. } = target else {
         return;
     };
     if !head_gitlink_lookup_is_worth_it(state, repo_id, *area, path) {
@@ -217,20 +220,6 @@ fn begin_head_changing_local_action(state: &mut AppState, repo_id: RepoId) {
     }
 }
 
-fn start_submodule_add_progress(
-    state: &mut AppState,
-    repo_id: RepoId,
-    url: &str,
-    path: &std::path::Path,
-) {
-    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        repo_state.submodule_add_in_flight = Some(SubmoduleAddProgressState {
-            url: url.to_string(),
-            path: path.to_path_buf(),
-        });
-    }
-}
-
 pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
     matches!(
         msg,
@@ -245,6 +234,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::LoadMoreHistory { .. }
             | Msg::SelectCommit { .. }
             | Msg::CompareCommitRange { .. }
+            | Msg::CompareWithOptions { .. }
             | Msg::CompareWithMarked { .. }
             | Msg::CompareWithWorkingTree { .. }
             | Msg::SelectDiff { .. }
@@ -317,7 +307,8 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::Commit { .. }
             | Msg::CommitAmend { .. }
             | Msg::SafePushAfterCommit { .. }
-            | Msg::FetchAll { .. }
+            | Msg::Fetch(crate::msg::FetchMsg::All { .. })
+            | Msg::Fetch(crate::msg::FetchMsg::Refspecs { .. })
             | Msg::PruneMergedBranches { .. }
             | Msg::PruneLocalTags { .. }
             | Msg::Pull { .. }
@@ -380,102 +371,6 @@ pub(super) fn handle_session_persist_result(
     util::handle_session_persist_result(state, repo_id, action, result)
 }
 
-fn auth_prompt_for_repo_command(
-    repo_id: RepoId,
-    command: &RepoCommandKind,
-    error: &gitcomet_core::error::Error,
-) -> Option<AuthPromptState> {
-    let kind = util::detect_auth_prompt_kind(error)?;
-    let operation = AuthRetryOperation::RepoCommand {
-        repo_id,
-        command: command.clone(),
-    };
-    retry_msg_for_auth_operation(operation.clone())?;
-    Some(AuthPromptState {
-        kind,
-        reason: util::format_error_for_user(error),
-        operation,
-    })
-}
-
-fn auth_prompt_for_safe_push_after_commit(
-    repo_id: RepoId,
-    context: SafePushAfterCommitContext,
-    error: &gitcomet_core::error::Error,
-) -> Option<AuthPromptState> {
-    let kind = util::detect_auth_prompt_kind(error)?;
-    Some(AuthPromptState {
-        kind,
-        reason: util::format_error_for_user(error),
-        operation: AuthRetryOperation::SafePushAfterCommit { repo_id, context },
-    })
-}
-
-fn auth_prompt_for_commit(
-    repo_id: RepoId,
-    pending: Option<PendingCommitRetry>,
-    error: &gitcomet_core::error::Error,
-) -> Option<AuthPromptState> {
-    let kind = util::detect_auth_prompt_kind(error)?;
-    let pending = pending?;
-    Some(AuthPromptState {
-        kind,
-        reason: util::format_error_for_user(error),
-        operation: AuthRetryOperation::Commit {
-            repo_id,
-            message: pending.message,
-            amend: pending.amend,
-            push_after_commit: pending.push_after_commit,
-        },
-    })
-}
-
-fn auth_prompt_for_clone(
-    url: &str,
-    dest: &std::path::Path,
-    error: &gitcomet_core::error::Error,
-) -> Option<AuthPromptState> {
-    let kind = util::detect_auth_prompt_kind(error)?;
-    Some(AuthPromptState {
-        kind,
-        reason: util::format_error_for_user(error),
-        operation: AuthRetryOperation::Clone {
-            url: url.to_string(),
-            dest: dest.to_path_buf(),
-        },
-    })
-}
-
-fn retry_msg_for_auth_operation(operation: AuthRetryOperation) -> Option<Msg> {
-    match operation {
-        AuthRetryOperation::RepoCommand { repo_id, command } => {
-            retry_msg_for_repo_command(repo_id, command)
-        }
-        AuthRetryOperation::SafePushAfterCommit { repo_id, context } => {
-            Some(Msg::SafePushAfterCommit { repo_id, context })
-        }
-        AuthRetryOperation::Commit {
-            repo_id,
-            message,
-            amend,
-            push_after_commit,
-        } => Some(if amend {
-            Msg::CommitAmend {
-                repo_id,
-                message,
-                push_after_commit,
-            }
-        } else {
-            Msg::Commit {
-                repo_id,
-                message,
-                push_after_commit,
-            }
-        }),
-        AuthRetryOperation::Clone { url, dest } => Some(Msg::CloneRepo { url, dest }),
-    }
-}
-
 /// Record an error for the UI to show: on its repo when there is one still
 /// open, else as an app notification.
 fn report_error(state: &mut AppState, repo_id: Option<RepoId>, message: String) {
@@ -488,262 +383,6 @@ fn report_error(state: &mut AppState, repo_id: Option<RepoId>, message: String) 
         }
         None => util::push_notification(state, crate::model::AppNotificationKind::Error, message),
     }
-}
-
-fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Option<Msg> {
-    Some(match command {
-        RepoCommandKind::FetchAll => Msg::FetchAll { repo_id },
-        RepoCommandKind::PruneMergedBranches => Msg::PruneMergedBranches { repo_id },
-        RepoCommandKind::PruneLocalTags => Msg::PruneLocalTags { repo_id },
-        RepoCommandKind::Pull { mode } => Msg::Pull { repo_id, mode },
-        RepoCommandKind::PullBranch { remote, branch } => Msg::PullBranch {
-            repo_id,
-            remote,
-            branch,
-        },
-        RepoCommandKind::MergeRef { reference } => Msg::MergeRef { repo_id, reference },
-        RepoCommandKind::SquashRef { reference } => Msg::SquashRef { repo_id, reference },
-        RepoCommandKind::Push => Msg::Push { repo_id },
-        RepoCommandKind::PushWithTags { request } => Msg::PushWithTags { repo_id, request },
-        RepoCommandKind::PushAfterCommit {
-            target,
-            set_upstream,
-        } => Msg::PushAfterCommit {
-            repo_id,
-            target,
-            set_upstream,
-        },
-        RepoCommandKind::ForcePush => Msg::ForcePush { repo_id },
-        RepoCommandKind::ForcePushWithLease { lease } => Msg::ForcePushWithLease { repo_id, lease },
-        RepoCommandKind::PushSetUpstream { remote, branch } => Msg::PushSetUpstream {
-            repo_id,
-            remote,
-            branch,
-        },
-        RepoCommandKind::SetUpstreamBranch { branch, upstream } => Msg::SetUpstreamBranch {
-            repo_id,
-            branch,
-            upstream,
-        },
-        RepoCommandKind::UnsetUpstreamBranch { branch } => {
-            Msg::UnsetUpstreamBranch { repo_id, branch }
-        }
-        RepoCommandKind::DeleteRemoteBranch { remote, branch } => Msg::DeleteRemoteBranch {
-            repo_id,
-            remote,
-            branch,
-        },
-        RepoCommandKind::DeleteRemoteBranches { remote, branches } => Msg::DeleteRemoteBranches {
-            repo_id,
-            remote,
-            branches,
-        },
-        RepoCommandKind::Reset { mode, target } => Msg::Reset {
-            repo_id,
-            target,
-            mode,
-        },
-        RepoCommandKind::SquashCommits {
-            oldest,
-            expected_head,
-            message,
-            count,
-        } => Msg::SquashCommits {
-            repo_id,
-            oldest,
-            expected_head,
-            message,
-            count,
-        },
-        RepoCommandKind::Rebase { onto } => Msg::Rebase { repo_id, onto },
-        RepoCommandKind::RebaseContinue => Msg::RebaseContinue { repo_id },
-        RepoCommandKind::RebaseAbort => Msg::RebaseAbort { repo_id },
-        // Sequencer commands only reach an auth prompt through a signing
-        // passphrase failure, and by then git has already left cherry-pick
-        // or rebase state on disk: replaying the original plan would be
-        // rejected as already in progress (and its effect has no auth slot).
-        // Continue the paused sequencer with the staged auth instead.
-        RepoCommandKind::InteractiveCherryPick { .. } => Msg::RebaseContinue { repo_id },
-        RepoCommandKind::CherryPick {
-            commit_id,
-            commit,
-            mainline,
-            summary,
-        } => {
-            if commit {
-                Msg::RebaseContinue { repo_id }
-            } else {
-                // `--no-commit` picks never sign, so an auth prompt here is
-                // not a paused sequencer; replay the command itself.
-                Msg::CherryPickCommit {
-                    repo_id,
-                    commit_id,
-                    commit,
-                    mainline,
-                    summary,
-                }
-            }
-        }
-        // Replayed whole: the auth may be for the `--no-commit` step (a
-        // promisor fetch), and a revert stopped at its commit step resumes
-        // there with the same hooks skipped, which `revert --continue` would not.
-        RepoCommandKind::Revert {
-            commit_id,
-            commit,
-            mainline,
-            summary,
-        } => Msg::RevertCommit {
-            repo_id,
-            commit_id,
-            commit,
-            mainline,
-            summary,
-        },
-        RepoCommandKind::MergeAbort => Msg::MergeAbort { repo_id },
-        RepoCommandKind::CreateTag {
-            name,
-            target,
-            message,
-            annotated,
-        } => Msg::CreateTag {
-            repo_id,
-            name,
-            target,
-            message,
-            annotated,
-        },
-        RepoCommandKind::DeleteTag { name } => Msg::DeleteTag { repo_id, name },
-        RepoCommandKind::PushTag { remote, name } => Msg::PushTag {
-            repo_id,
-            remote,
-            name,
-        },
-        RepoCommandKind::DeleteRemoteTag { remote, name } => Msg::DeleteRemoteTag {
-            repo_id,
-            remote,
-            name,
-        },
-        RepoCommandKind::AddRemote { name, url } => Msg::AddRemote { repo_id, name, url },
-        RepoCommandKind::RemoveRemote { name } => Msg::RemoveRemote { repo_id, name },
-        RepoCommandKind::SetRemoteUrl { name, url, kind } => Msg::SetRemoteUrl {
-            repo_id,
-            name,
-            url,
-            kind,
-        },
-        RepoCommandKind::CheckoutConflict { path, side } => Msg::CheckoutConflictSide {
-            repo_id,
-            path,
-            side,
-        },
-        RepoCommandKind::AcceptConflictDeletion { path } => {
-            Msg::AcceptConflictDeletion { repo_id, path }
-        }
-        RepoCommandKind::CheckoutConflictBase { path } => {
-            Msg::CheckoutConflictBase { repo_id, path }
-        }
-        RepoCommandKind::LaunchMergetool { path } => Msg::LaunchMergetool { repo_id, path },
-        RepoCommandKind::ExportPatch { commit_id, dest } => Msg::ExportPatch {
-            repo_id,
-            commit_id,
-            dest,
-        },
-        RepoCommandKind::ApplyPatch { patch } => Msg::ApplyPatch { repo_id, patch },
-        RepoCommandKind::AddWorktree { path, reference } => Msg::AddWorktree {
-            repo_id,
-            path,
-            reference,
-        },
-        RepoCommandKind::RemoveWorktree { path } => Msg::RemoveWorktree { repo_id, path },
-        RepoCommandKind::ForceRemoveWorktree { path } => Msg::ForceRemoveWorktree { repo_id, path },
-        RepoCommandKind::AddSubmodule {
-            url,
-            path,
-            branch,
-            name,
-            force,
-            approved_sources,
-        } => Msg::AddSubmoduleTrusted {
-            repo_id,
-            url,
-            path,
-            branch,
-            name,
-            force,
-            approved_sources,
-        },
-        RepoCommandKind::UpdateSubmodules { approved_sources } => Msg::UpdateSubmodulesTrusted {
-            repo_id,
-            approved_sources,
-        },
-        RepoCommandKind::LoadSubmodule {
-            path,
-            approved_sources,
-        } => Msg::LoadSubmoduleTrusted {
-            repo_id,
-            path,
-            approved_sources,
-        },
-        RepoCommandKind::ChangeSubmodulePointer { path, reference } => {
-            Msg::ChangeSubmodulePointer {
-                repo_id,
-                path,
-                reference,
-            }
-        }
-        RepoCommandKind::RemoveSubmodule { path } => Msg::RemoveSubmodule { repo_id, path },
-        // A signing failure mid-rebase leaves git's state (and GitComet's
-        // persisted reword messages) on disk; continue it with the staged
-        // auth like the cherry-pick commands above.
-        RepoCommandKind::InteractiveRebase { .. } => Msg::RebaseContinue { repo_id },
-        // Writes `.gitignore` on the local filesystem, so it never fails for
-        // want of credentials — and this replay path exists only to re-run a
-        // command after an auth prompt. Retaining `patterns` would make a replay
-        // possible; there is just nothing here that an auth prompt could fix.
-        RepoCommandKind::AppendGitignorePatterns { .. }
-        | RepoCommandKind::AppendGitattributesRule { .. } => return None,
-        // Not replayable because command metadata does not retain original content.
-        RepoCommandKind::SaveWorktreeFile { .. }
-        | RepoCommandKind::StageHunk
-        | RepoCommandKind::UnstageHunk
-        | RepoCommandKind::ApplyWorktreePatch { .. } => return None,
-    })
-}
-
-fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> Vec<Effect> {
-    let Some(first) = effects.first_mut() else {
-        return effects;
-    };
-
-    match first {
-        Effect::CloneRepo { auth: slot, .. }
-        | Effect::AddSubmodule { auth: slot, .. }
-        | Effect::UpdateSubmodules { auth: slot, .. }
-        | Effect::LoadSubmodule { auth: slot, .. }
-        | Effect::Commit { auth: slot, .. }
-        | Effect::CommitAmend { auth: slot, .. }
-        | Effect::SafePushAfterCommit { auth: slot, .. }
-        | Effect::FetchAll { auth: slot, .. }
-        | Effect::Pull { auth: slot, .. }
-        | Effect::PullBranch { auth: slot, .. }
-        | Effect::PushWithTags { auth: slot, .. }
-        | Effect::Push { auth: slot, .. }
-        | Effect::PushAfterCommit { auth: slot, .. }
-        | Effect::ForcePush { auth: slot, .. }
-        | Effect::ForcePushWithLease { auth: slot, .. }
-        | Effect::PushSetUpstream { auth: slot, .. }
-        | Effect::DeleteRemoteBranch { auth: slot, .. }
-        | Effect::DeleteRemoteBranches { auth: slot, .. }
-        | Effect::PushTag { auth: slot, .. }
-        | Effect::DeleteRemoteTag { auth: slot, .. }
-        | Effect::RebaseContinue { auth: slot, .. }
-        | Effect::RevertCommit { auth: slot, .. } => {
-            *slot = Some(auth);
-        }
-        _ => {}
-    }
-
-    effects
 }
 
 pub(crate) fn fill_set_active_repo_inline(
@@ -855,46 +494,6 @@ pub(crate) fn reset_conflict_resolutions_inline(
     conflict_interactions::reset_resolutions_inline(state, repo_id, path);
 }
 
-fn submit_auth_prompt(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
-    id_alloc: &AtomicU64,
-    state: &mut AppState,
-    username: Option<String>,
-    secret: String,
-) -> Vec<Effect> {
-    let Some(prompt) = state.auth_prompt.take() else {
-        return Vec::new();
-    };
-
-    let username = username
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty());
-    let auth = match util::prepare_staged_git_auth(prompt.kind, username.as_deref(), &secret) {
-        Ok(auth) => auth,
-        Err(err) => {
-            state.auth_prompt = Some(prompt);
-            return if let Some(repo_state) = state
-                .active_repo
-                .and_then(|repo_id| state.repos.iter_mut().find(|r| r.id == repo_id))
-            {
-                util::push_diagnostic(
-                    repo_state,
-                    crate::model::DiagnosticKind::Error,
-                    util::format_error_for_user(&err),
-                );
-                Vec::new()
-            } else {
-                Vec::new()
-            };
-        }
-    };
-
-    match retry_msg_for_auth_operation(prompt.operation) {
-        Some(msg) => attach_git_auth_to_effects(reduce(repos, id_alloc, state, msg), auth),
-        None => Vec::new(),
-    }
-}
-
 pub(super) fn reduce(
     repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
     id_alloc: &AtomicU64,
@@ -967,6 +566,31 @@ fn finalize_reduced_state(state: &mut AppState, nav_push: Option<bool>) {
     for repo in &mut state.repos {
         repo.prepare_history_squash_plan();
     }
+    // A closed repository's leases go with it; releasing them later is a
+    // no-op. Free when nothing is leased.
+    if state
+        .watch_leases
+        .keys()
+        .any(|repo_id| !state.repos.iter().any(|repo| repo.id == *repo_id))
+    {
+        let open: Vec<RepoId> = state.repos.iter().map(|repo| repo.id).collect();
+        Arc::make_mut(&mut state.watch_leases).retain(|repo_id, _| open.contains(repo_id));
+    }
+
+    if state.worktree_watch_leases.keys().any(|(id, lifetime, _)| {
+        !state
+            .repos
+            .iter()
+            .any(|repo| repo.id == *id && repo.lifetime() == *lifetime)
+    }) {
+        let open: Vec<_> = state
+            .repos
+            .iter()
+            .map(|repo| (repo.id, repo.lifetime()))
+            .collect();
+        Arc::make_mut(&mut state.worktree_watch_leases)
+            .retain(|(id, lifetime, _), _| open.contains(&(*id, *lifetime)));
+    }
 
     if let Some(push) = nav_push {
         reconcile_active_nav_history(state, push);
@@ -987,6 +611,7 @@ fn is_view_navigation(msg: &Msg) -> bool {
             // history selection; it just is not a commit.
             | Msg::SelectWorktreeUncommitted { .. }
             | Msg::CompareCommitRange { .. }
+            | Msg::CompareWithOptions { .. }
             | Msg::CompareWithMarked { .. }
             | Msg::CompareWithWorkingTree { .. }
             | Msg::OpenFileContent { .. }
@@ -1059,6 +684,12 @@ fn reduce_inner(
             open_repos,
             active_repo,
         } => repo_management::restore_session(repos, id_alloc, state, open_repos, active_repo),
+        Msg::AcquireWatchLease { repo_id, lifetime } => {
+            repo_watch::acquire_lease(state, repo_id, lifetime)
+        }
+        Msg::ReleaseWatchLease { repo_id, lifetime } => {
+            repo_watch::release_lease(state, repo_id, lifetime)
+        }
         Msg::CloseRepo { repo_id } => repo_management::close_repo(repos, state, repo_id),
         Msg::MoveRepoOut { repo_id } => repo_management::move_repo_out(repos, state, repo_id),
         Msg::CloseRepos {
@@ -1078,88 +709,34 @@ fn reduce_inner(
         Msg::CancelGitOperation {
             repo_id,
             operation_id,
-        } => {
-            let requested = state
-                .repos
-                .iter_mut()
-                .find(|repo| repo.id == repo_id)
-                .is_some_and(|repo| git_hook_activity::request_cancel(repo, operation_id));
-            requested
-                .then_some(Effect::CancelGitOperation {
-                    repo_id,
-                    operation_id,
-                })
-                .into_iter()
-                .collect()
-        }
+        } => git_operations::cancel_git_operation(state, repo_id, operation_id),
         Msg::SubmitAuthPrompt { username, secret } => {
-            submit_auth_prompt(repos, id_alloc, state, username, secret)
+            auth::submit_auth_prompt(repos, id_alloc, state, username, secret)
         }
-        Msg::CancelAuthPrompt => {
-            state.auth_prompt = None;
-            util::clear_staged_git_auth_env();
-            Vec::new()
-        }
-        Msg::SetGitRuntimeState(runtime) => {
-            if state.git_runtime == runtime {
-                return Vec::new();
-            }
-            state.git_runtime = runtime;
-            state.signing_tools = Default::default();
-            if state.git_log_settings.verify_commit_signatures {
-                util::reverify_all_commit_signatures_effects(state)
-            } else {
-                Vec::new()
-            }
-        }
+        Msg::CancelAuthPrompt => auth::cancel_auth_prompt(state),
+        Msg::SetGitRuntimeState(runtime) => settings::set_git_runtime_state(state, runtime),
         Msg::SetCommitSignatureTargets {
             repo_id,
             epoch,
             commit_ids,
         } => util::set_commit_signature_targets(state, repo_id, epoch, commit_ids),
-        Msg::SetSigningToolsState(tools) => {
-            if state.signing_tools == tools {
-                return Vec::new();
-            }
-            state.signing_tools = tools;
-            if !state.git_log_settings.verify_commit_signatures {
-                return Vec::new();
-            }
-            // A verifier was installed or went missing: badges must follow it.
-            util::reverify_all_commit_signatures_effects(state)
-        }
-        Msg::SetRemoteUrlPolicy(policy) => {
-            state.remote_url_policy = policy;
-            Vec::new()
-        }
+        Msg::SetSigningToolsState(tools) => settings::set_signing_tools_state(state, tools),
+        Msg::SetRemoteUrlPolicy(policy) => settings::set_remote_url_policy(state, policy),
         Msg::SetGitLogSettings {
             show_history_tags,
             tag_fetch_mode,
             verify_commit_signatures,
-        } => {
-            state.git_log_settings.show_history_tags = show_history_tags;
-            state.git_log_settings.tag_fetch_mode = tag_fetch_mode;
-            let verification_toggled =
-                state.git_log_settings.verify_commit_signatures != verify_commit_signatures;
-            state.git_log_settings.verify_commit_signatures = verify_commit_signatures;
-            if !verification_toggled {
-                return Vec::new();
-            }
-            // A fresh opt-in waits for discovery before starting any verifier.
-            state.signing_tools = Default::default();
-            util::reverify_all_commit_signatures_effects(state)
-        }
-        Msg::SetRemoteSettings(settings) => {
-            state.remote_settings = settings;
-            Vec::new()
-        }
+        } => settings::set_git_log_settings(
+            state,
+            show_history_tags,
+            tag_fetch_mode,
+            verify_commit_signatures,
+        ),
+        Msg::SetRemoteSettings(settings) => settings::set_remote_settings(state, settings),
         Msg::SetFileBrowserSettings(settings) => {
             effects::set_file_browser_settings(state, settings)
         }
-        Msg::SetDefaultTagType(tag_type) => {
-            state.default_tag_type = tag_type;
-            Vec::new()
-        }
+        Msg::SetDefaultTagType(tag_type) => settings::set_default_tag_type(state, tag_type),
         Msg::SetActiveRepo { repo_id } => repo_management::set_active_repo(repos, state, repo_id),
         Msg::ReorderRepoTabs {
             repo_id,
@@ -1171,101 +748,35 @@ fn reduce_inner(
             label,
             context,
             time,
-        }) => {
-            if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
-                git_hook_activity::started(repo, operation_id, label, context, time);
-            }
-            Vec::new()
-        }
+        }) => git_operations::git_operation_started(
+            state,
+            repo_id,
+            operation_id,
+            label,
+            context,
+            time,
+        ),
         Msg::Internal(crate::msg::InternalMsg::GitOperationEvent {
             repo_id,
             operation_id,
             event,
-        }) => {
-            if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
-                git_hook_activity::apply_event(repo, operation_id, event);
-            }
-            Vec::new()
-        }
+        }) => git_operations::git_operation_event(state, repo_id, operation_id, event),
         Msg::Internal(crate::msg::InternalMsg::GitOperationFinished {
             repo_id,
             operation_id,
             outer_outcome,
             duration,
             message,
-        }) => {
-            let (has_hooks, all_hooks_succeeded) = state
-                .repos
-                .iter()
-                .find(|repo| repo.id == repo_id)
-                .and_then(|repo| {
-                    repo.feedback
-                        .hook_activity
-                        .iter()
-                        .find(|operation| operation.id == operation_id)
-                })
-                .map(|operation| {
-                    (
-                        operation.has_hooks(),
-                        operation.has_hooks()
-                            && operation.hooks.iter().all(|hook| {
-                                hook.status == crate::model::GitHookRunStatus::Succeeded
-                            }),
-                    )
-                })
-                .unwrap_or_default();
-            let outer_failure_after_successful_hooks = outer_outcome
-                == crate::model::GitOperationOuterOutcome::Failed
-                && all_hooks_succeeded;
-            let suppress_nested_diagnostics = has_hooks
-                && !outer_failure_after_successful_hooks
-                && matches!(
-                    message.as_ref(),
-                    crate::msg::InternalMsg::RepoActionFinished { .. }
-                        | crate::msg::InternalMsg::RepoPathsActionFinished { .. }
-                        | crate::msg::InternalMsg::RepoActionFinishedInWorktree { .. }
-                );
-            let previous_diagnostics = suppress_nested_diagnostics
-                .then(|| {
-                    state
-                        .repos
-                        .iter()
-                        .find(|repo| repo.id == repo_id)
-                        .map(|repo| {
-                            (
-                                repo.feedback.diagnostics.clone(),
-                                repo.feedback.diagnostics_seq,
-                            )
-                        })
-                })
-                .flatten();
-            if has_hooks && let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id)
-            {
-                repo.feedback.command_log_operation_id = Some(operation_id);
-            }
-
-            let mut effects = reduce(repos, id_alloc, state, Msg::Internal(*message));
-
-            if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
-                repo.feedback.command_log_operation_id = None;
-                if let Some((entries, seq)) = previous_diagnostics {
-                    repo.feedback.diagnostics = entries;
-                    repo.feedback.diagnostics_seq = seq;
-                }
-                git_hook_activity::finished(repo, operation_id, outer_outcome, duration);
-            }
-            if outer_outcome == crate::model::GitOperationOuterOutcome::Cancelled
-                && !effects.iter().any(|effect| matches!(effect, Effect::LoadLog { repo_id: id, .. } if *id == repo_id))
-            {
-                // Cancellation may leave partial Git changes, so refresh the
-                // retained panes. Explicit Reload would discard history and
-                // selection after the nested action already refreshed them.
-                effects.extend(external_and_history::repo_externally_changed(
-                    repos, state, repo_id, crate::msg::RepoExternalChange::all(),
-                ));
-            }
-            effects
-        }
+        }) => git_operations::git_operation_finished(
+            repos,
+            id_alloc,
+            state,
+            repo_id,
+            operation_id,
+            outer_outcome,
+            duration,
+            message,
+        ),
         Msg::Internal(crate::msg::InternalMsg::SessionPersistFailed {
             repo_id,
             action,
@@ -1281,29 +792,22 @@ fn reduce_inner(
         }
         Msg::ReloadRepo { repo_id } => external_and_history::reload_repo(repos, state, repo_id),
         Msg::RepoActivated { .. } => Vec::new(),
+        Msg::WatchWorktree {
+            repo_id,
+            lifetime,
+            path,
+            watch,
+        } => repo_watch::watch_worktree(state, repo_id, lifetime, path, watch),
+        Msg::WorktreeExternallyChanged {
+            repo_id,
+            lifetime,
+            path,
+            change,
+        } => repo_watch::worktree_changed(state, repo_id, lifetime, path, change),
         Msg::RepoExternallyChanged { repo_id, change } => {
             external_and_history::repo_externally_changed(repos, state, repo_id, change)
         }
-        Msg::RepoWatchDegraded { repo_id: _, reason } => {
-            let message = match reason {
-                crate::msg::RepoWatchDegradedReason::IgnorePolicyFailed =>
-                    "Live file watching is limited because repository ignore rules could not be read. Changes refresh when the window regains focus; watching will retry automatically.".into(),
-                crate::msg::RepoWatchDegradedReason::TooManyFolders { dir_count } => format!(
-                    "This repository has at least {dir_count} folders outside its ignore rules. \
-                     Live watching of subfolders is limited. Add generated folders to .gitignore \
-                     to reduce coverage. Changes also refresh when the window regains focus."
-                ),
-                crate::msg::RepoWatchDegradedReason::WatchLimitReached { unwatched_dirs } => {
-                    format!(
-                        "Live file watching is partial: {unwatched_dirs} locations could not be watched \
-                     because a native watch could not be registered. Changes in them refresh when the window \
-                     regains focus. Watching will retry automatically."
-                    )
-                }
-            };
-            util::push_notification(state, crate::model::AppNotificationKind::Warning, message);
-            Vec::new()
-        }
+        Msg::RepoWatchDegraded { repo_id: _, reason } => repo_watch::watch_degraded(state, reason),
         Msg::SetHistoryScope { repo_id, scope } => {
             external_and_history::set_history_scope(state, repo_id, scope)
         }
@@ -1358,6 +862,23 @@ fn reduce_inner(
             None,
             from_label,
             "Working tree".to_string(),
+            effects::ComparisonSource::Explicit,
+        ),
+        Msg::CompareWithOptions {
+            repo_id,
+            from,
+            to,
+            options,
+            from_label,
+            to_label,
+        } => effects::compare_range_with_options(
+            state,
+            repo_id,
+            from,
+            to,
+            from_label,
+            to_label,
+            options,
             effects::ComparisonSource::Explicit,
         ),
         Msg::ClearComparison { repo_id } => effects::clear_comparison(state, repo_id),
@@ -1619,69 +1140,9 @@ fn reduce_inner(
             actions_emit_effects::create_branch_and_checkout(repo_id, name, target, force)
         }
         Msg::ResolveBranchExistsPrompt { prompt, choice } => {
-            if state.branch_exists_prompt.as_ref() != Some(&prompt) {
-                return Vec::new();
-            }
-            state.branch_exists_prompt = None;
-
-            match choice {
-                BranchExistsChoice::Cancel => Vec::new(),
-                BranchExistsChoice::CheckoutExisting => {
-                    if let Some(repo_state) = state
-                        .repos
-                        .iter_mut()
-                        .find(|repo| repo.id == prompt.repo_id)
-                    {
-                        repo_state.set_detached_head_commit(None);
-                    }
-                    begin_head_changing_local_action(state, prompt.repo_id);
-                    actions_emit_effects::checkout_branch(prompt.repo_id, prompt.name)
-                }
-                BranchExistsChoice::OverwriteAndCheckout => {
-                    if let Some(repo_state) = state
-                        .repos
-                        .iter_mut()
-                        .find(|repo| repo.id == prompt.repo_id)
-                    {
-                        repo_state.set_detached_head_commit(None);
-                    }
-                    begin_head_changing_local_action(state, prompt.repo_id);
-                    match prompt.operation {
-                        BranchExistsPromptOperation::CreateBranch => {
-                            actions_emit_effects::create_branch_and_checkout(
-                                prompt.repo_id,
-                                prompt.name,
-                                prompt.target,
-                                true,
-                            )
-                        }
-                        BranchExistsPromptOperation::CheckoutRemoteBranch { remote, branch } => {
-                            actions_emit_effects::checkout_remote_branch(
-                                prompt.repo_id,
-                                remote,
-                                branch,
-                                prompt.name,
-                                CheckoutRemoteBranchMode::Overwrite,
-                            )
-                        }
-                        BranchExistsPromptOperation::RenameBranch { old_name } => {
-                            actions_emit_effects::rename_branch(
-                                prompt.repo_id,
-                                old_name,
-                                prompt.name,
-                                true,
-                            )
-                        }
-                    }
-                }
-            }
+            branch_exists_prompt::resolve(state, prompt, choice)
         }
-        Msg::ShowBranchExistsPrompt { prompt } => {
-            if state.repos.iter().any(|repo| repo.id == prompt.repo_id) {
-                state.branch_exists_prompt = Some(prompt);
-            }
-            Vec::new()
-        }
+        Msg::ShowBranchExistsPrompt { prompt } => branch_exists_prompt::show(state, prompt),
         Msg::RenameBranch {
             repo_id,
             old_name,
@@ -1724,16 +1185,7 @@ fn reduce_inner(
             repo_management::clone_repo_progress(state, dest, line)
         }
         Msg::Internal(crate::msg::InternalMsg::CloneRepoFinished { url, dest, result }) => {
-            let auth_prompt = result
-                .as_ref()
-                .err()
-                .and_then(|error| auth_prompt_for_clone(&url, &dest, error));
-            let effects = repo_management::clone_repo_finished(state, url, dest, result);
-            if let Some(prompt) = auth_prompt {
-                util::clear_staged_git_auth_env();
-                state.auth_prompt = Some(prompt);
-            }
-            effects
+            auth::clone_repo_finished(state, url, dest, result)
         }
         Msg::ExportPatch {
             repo_id,
@@ -1786,22 +1238,7 @@ fn reduce_inner(
             branch,
             name,
             force,
-        } => {
-            state.submodule_trust_prompt = None;
-            state.submodule_trust_check_pending = Some(SubmoduleTrustCheckState {
-                repo_id,
-                operation: SubmoduleTrustCheckOperation::Add,
-            });
-            vec![Effect::CheckSubmoduleAddTrust {
-                repo_id,
-                url,
-                path,
-                branch,
-                name,
-                force,
-                remote_url_policy: state.remote_url_policy,
-            }]
-        }
+        } => submodule_trust::add_submodule(state, repo_id, url, path, branch, name, force),
         Msg::AddSubmoduleTrusted {
             repo_id,
             url,
@@ -1810,115 +1247,31 @@ fn reduce_inner(
             name,
             force,
             approved_sources,
-        } => {
-            begin_local_action(state, repo_id);
-            start_submodule_add_progress(state, repo_id, &url, &path);
-            actions_emit_effects::add_submodule(
-                repo_id,
-                url,
-                path,
-                branch,
-                name,
-                force,
-                approved_sources,
-                state.remote_url_policy,
-            )
-        }
-        Msg::UpdateSubmodules { repo_id } => {
-            state.submodule_trust_prompt = None;
-            state.submodule_trust_check_pending = Some(SubmoduleTrustCheckState {
-                repo_id,
-                operation: SubmoduleTrustCheckOperation::Update,
-            });
-            vec![Effect::CheckSubmoduleUpdateTrust {
-                repo_id,
-                remote_url_policy: state.remote_url_policy,
-            }]
-        }
+        } => submodule_trust::add_submodule_approved(
+            state,
+            repo_id,
+            url,
+            path,
+            branch,
+            name,
+            force,
+            approved_sources,
+        ),
+        Msg::UpdateSubmodules { repo_id } => submodule_trust::update_submodules(state, repo_id),
         Msg::UpdateSubmodulesTrusted {
             repo_id,
             approved_sources,
-        } => {
-            begin_local_action(state, repo_id);
-            actions_emit_effects::update_submodules(
-                repo_id,
-                approved_sources,
-                state.remote_url_policy,
-            )
-        }
+        } => submodule_trust::update_submodules_approved(state, repo_id, approved_sources),
         Msg::LoadSubmodule { repo_id, path } => {
-            state.submodule_trust_prompt = None;
-            state.submodule_trust_check_pending = Some(SubmoduleTrustCheckState {
-                repo_id,
-                operation: SubmoduleTrustCheckOperation::Load,
-            });
-            vec![Effect::CheckSubmoduleLoadTrust {
-                repo_id,
-                path,
-                remote_url_policy: state.remote_url_policy,
-            }]
+            submodule_trust::load_submodule(state, repo_id, path)
         }
         Msg::LoadSubmoduleTrusted {
             repo_id,
             path,
             approved_sources,
-        } => {
-            begin_local_action(state, repo_id);
-            actions_emit_effects::load_submodule(
-                repo_id,
-                path,
-                approved_sources,
-                state.remote_url_policy,
-            )
-        }
-        Msg::ConfirmSubmoduleTrustPrompt => {
-            let Some(prompt) = state.submodule_trust_prompt.take() else {
-                return Vec::new();
-            };
-            match prompt.operation {
-                SubmoduleTrustPromptOperation::Add {
-                    url,
-                    path,
-                    branch,
-                    name,
-                    force,
-                } => {
-                    begin_local_action(state, prompt.repo_id);
-                    start_submodule_add_progress(state, prompt.repo_id, &url, &path);
-                    actions_emit_effects::add_submodule(
-                        prompt.repo_id,
-                        url,
-                        path,
-                        branch,
-                        name,
-                        force,
-                        prompt.sources,
-                        state.remote_url_policy,
-                    )
-                }
-                SubmoduleTrustPromptOperation::Update => {
-                    begin_local_action(state, prompt.repo_id);
-                    actions_emit_effects::update_submodules(
-                        prompt.repo_id,
-                        prompt.sources,
-                        state.remote_url_policy,
-                    )
-                }
-                SubmoduleTrustPromptOperation::Load { path } => {
-                    begin_local_action(state, prompt.repo_id);
-                    actions_emit_effects::load_submodule(
-                        prompt.repo_id,
-                        path,
-                        prompt.sources,
-                        state.remote_url_policy,
-                    )
-                }
-            }
-        }
-        Msg::CancelSubmoduleTrustPrompt => {
-            state.submodule_trust_prompt = None;
-            Vec::new()
-        }
+        } => submodule_trust::load_submodule_approved(state, repo_id, path, approved_sources),
+        Msg::ConfirmSubmoduleTrustPrompt => submodule_trust::confirm_prompt(state),
+        Msg::CancelSubmoduleTrustPrompt => submodule_trust::cancel_prompt(state),
         Msg::ChangeSubmodulePointer {
             repo_id,
             path,
@@ -1977,36 +1330,23 @@ fn reduce_inner(
             repo_id,
             message,
             push_after_commit,
-        } => {
-            begin_commit_action(state, repo_id);
-            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.pending.commit_retry = Some(PendingCommitRetry {
-                    message: message.clone(),
-                    amend: false,
-                    push_after_commit,
-                });
-            }
-            actions_emit_effects::commit(repo_id, message)
-        }
+        } => auth::commit(state, repo_id, message, push_after_commit),
         Msg::CommitAmend {
             repo_id,
             message,
             push_after_commit,
-        } => {
-            begin_commit_action(state, repo_id);
-            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.pending.commit_retry = Some(PendingCommitRetry {
-                    message: message.clone(),
-                    amend: true,
-                    push_after_commit,
-                });
-            }
-            actions_emit_effects::commit_amend(repo_id, message)
-        }
+        } => auth::commit_amend(state, repo_id, message, push_after_commit),
         Msg::SafePushAfterCommit { repo_id, context } => {
             actions_emit_effects::safe_push_after_commit(repo_id, context)
         }
-        Msg::FetchAll { repo_id } => actions_emit_effects::fetch_all(repos, state, repo_id),
+        Msg::Fetch(crate::msg::FetchMsg::All { repo_id }) => {
+            actions_emit_effects::fetch_all(repos, state, repo_id)
+        }
+        Msg::Fetch(crate::msg::FetchMsg::Refspecs {
+            repo_id,
+            remote,
+            refspecs,
+        }) => actions_emit_effects::fetch_refspecs(repos, state, repo_id, remote, refspecs),
         Msg::PruneMergedBranches { repo_id } => {
             actions_emit_effects::prune_merged_branches(repos, state, repo_id)
         }
@@ -2034,49 +1374,13 @@ fn reduce_inner(
             repo_id,
             request,
             cancellation,
-        } => {
-            let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
-                return vec![];
-            };
-            let slot = &mut repo.tag_push_previews[request.mode.index()];
-            let generation = slot.as_ref().map_or(1, |previous| {
-                previous.cancellation.cancel();
-                previous.generation.wrapping_add(1)
-            });
-            *slot = Some(crate::model::TagPushPreviewState {
-                request: request.clone(),
-                generation,
-                cancellation: cancellation.clone(),
-                result: Loadable::Loading,
-            });
-            vec![Effect::PreviewTagPush {
-                repo_id,
-                request,
-                generation,
-                cancellation,
-            }]
-        }
+        } => loads::preview_tag_push(state, repo_id, request, cancellation),
         Msg::Internal(crate::msg::InternalMsg::TagPushPreviewLoaded {
             repo_id,
             mode,
             generation,
             result,
-        }) => {
-            if let Some(slot) = state
-                .repos
-                .iter_mut()
-                .find(|repo| repo.id == repo_id)
-                .and_then(|repo| repo.tag_push_previews[mode.index()].as_mut())
-                && slot.generation == generation
-                && !slot.cancellation.is_cancelled()
-            {
-                slot.result = match result {
-                    Ok(preview) => Loadable::Ready(Arc::new(preview)),
-                    Err(error) => Loadable::Error(error.to_string()),
-                };
-            }
-            vec![]
-        }
+        }) => loads::tag_push_preview_loaded(state, repo_id, mode, generation, result),
         Msg::Push { repo_id } => actions_emit_effects::push(repos, state, repo_id),
         Msg::PushAfterCommit {
             repo_id,
@@ -2270,26 +1574,17 @@ fn reduce_inner(
             unresolved_before,
             unresolved_after,
             stats,
-        } => {
-            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                util::push_action_log(
-                    repo_state,
-                    true,
-                    util::conflict_autosolve_telemetry_command(mode, path.as_deref()),
-                    util::conflict_autosolve_telemetry_summary(
-                        mode,
-                        path.as_deref(),
-                        total_conflicts_before,
-                        total_conflicts_after,
-                        unresolved_before,
-                        unresolved_after,
-                        stats,
-                    ),
-                    None,
-                );
-            }
-            Vec::new()
-        }
+        } => conflict_interactions::record_autosolve_telemetry(
+            state,
+            repo_id,
+            path,
+            mode,
+            total_conflicts_before,
+            total_conflicts_after,
+            unresolved_before,
+            unresolved_after,
+            stats,
+        ),
         Msg::ConflictSetHideResolved {
             repo_id,
             path,
@@ -2448,31 +1743,7 @@ fn reduce_inner(
             repo_id,
             load_epoch,
             message,
-        }) => {
-            let current_load_epoch = state
-                .repos
-                .iter()
-                .find(|repo| repo.id == repo_id)
-                .map(|repo| repo.load_epoch);
-            if current_load_epoch == Some(load_epoch) {
-                repo_load_trace::trace!(
-                    "apply_repo_load_finished repo_id={:?} load_epoch={} inner={}",
-                    repo_id,
-                    load_epoch,
-                    repo_load_trace::internal_msg_name(&message)
-                );
-                reduce(repos, id_alloc, state, Msg::Internal(*message))
-            } else {
-                repo_load_trace::trace!(
-                    "drop_stale_repo_load_finished repo_id={:?} load_epoch={} current_load_epoch={:?} inner={}",
-                    repo_id,
-                    load_epoch,
-                    current_load_epoch,
-                    repo_load_trace::internal_msg_name(&message)
-                );
-                Vec::new()
-            }
-        }
+        }) => loads::repo_load_finished(repos, id_alloc, state, repo_id, load_epoch, message),
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
             repo_id,
             spec,
@@ -2508,6 +1779,7 @@ fn reduce_inner(
             effects::upstream_divergence_loaded(state, repo_id, result)
         }
         Msg::IndexedHistory(event) => indexed_history::reduce(state, event),
+        Msg::DiffSession(event) => diff_session::reduce(state, event),
         Msg::HistoryAuthors(event) => history_authors::reduce(state, event),
         Msg::HistoryFind(event) => history_find::reduce(state, event),
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
@@ -2616,110 +1888,17 @@ fn reduce_inner(
             name,
             force,
             result,
-        }) => {
-            state.submodule_trust_check_pending = None;
-            match result {
-                Ok(gitcomet_core::services::SubmoduleTrustDecision::Proceed) => {
-                    begin_local_action(state, repo_id);
-                    start_submodule_add_progress(state, repo_id, &url, &path);
-                    actions_emit_effects::add_submodule(
-                        repo_id,
-                        url,
-                        path,
-                        branch,
-                        name,
-                        force,
-                        Vec::new(),
-                        state.remote_url_policy,
-                    )
-                }
-                Ok(gitcomet_core::services::SubmoduleTrustDecision::Prompt { sources }) => {
-                    state.submodule_trust_prompt = Some(SubmoduleTrustPromptState {
-                        repo_id,
-                        operation: SubmoduleTrustPromptOperation::Add {
-                            url,
-                            path,
-                            branch,
-                            name,
-                            force,
-                        },
-                        sources,
-                    });
-                    Vec::new()
-                }
-                Err(error) => {
-                    report_error(
-                        state,
-                        Some(repo_id),
-                        util::format_failure_summary("Submodule trust check", &error),
-                    );
-                    Vec::new()
-                }
-            }
-        }
+        }) => submodule_trust::add_trust_checked(
+            state, repo_id, url, path, branch, name, force, result,
+        ),
         Msg::Internal(crate::msg::InternalMsg::SubmoduleUpdateTrustChecked { repo_id, result }) => {
-            state.submodule_trust_check_pending = None;
-            match result {
-                Ok(gitcomet_core::services::SubmoduleTrustDecision::Proceed) => {
-                    begin_local_action(state, repo_id);
-                    actions_emit_effects::update_submodules(
-                        repo_id,
-                        Vec::new(),
-                        state.remote_url_policy,
-                    )
-                }
-                Ok(gitcomet_core::services::SubmoduleTrustDecision::Prompt { sources }) => {
-                    state.submodule_trust_prompt = Some(SubmoduleTrustPromptState {
-                        repo_id,
-                        operation: SubmoduleTrustPromptOperation::Update,
-                        sources,
-                    });
-                    Vec::new()
-                }
-                Err(error) => {
-                    report_error(
-                        state,
-                        Some(repo_id),
-                        util::format_failure_summary("Submodule trust check", &error),
-                    );
-                    Vec::new()
-                }
-            }
+            submodule_trust::update_trust_checked(state, repo_id, result)
         }
         Msg::Internal(crate::msg::InternalMsg::SubmoduleLoadTrustChecked {
             repo_id,
             path,
             result,
-        }) => {
-            state.submodule_trust_check_pending = None;
-            match result {
-                Ok(gitcomet_core::services::SubmoduleTrustDecision::Proceed) => {
-                    begin_local_action(state, repo_id);
-                    actions_emit_effects::load_submodule(
-                        repo_id,
-                        path,
-                        Vec::new(),
-                        state.remote_url_policy,
-                    )
-                }
-                Ok(gitcomet_core::services::SubmoduleTrustDecision::Prompt { sources }) => {
-                    state.submodule_trust_prompt = Some(SubmoduleTrustPromptState {
-                        repo_id,
-                        operation: SubmoduleTrustPromptOperation::Load { path },
-                        sources,
-                    });
-                    Vec::new()
-                }
-                Err(error) => {
-                    report_error(
-                        state,
-                        Some(repo_id),
-                        util::format_failure_summary("Submodule trust check", &error),
-                    );
-                    Vec::new()
-                }
-            }
-        }
+        }) => submodule_trust::load_trust_checked(state, repo_id, path, result),
         Msg::Internal(crate::msg::InternalMsg::CommitDetailsLoaded {
             repo_id,
             commit_id,
@@ -2846,29 +2025,9 @@ fn reduce_inner(
             action,
             paths,
             result,
-        }) => {
-            if result.is_ok() {
-                if matches!(
-                    action,
-                    RepoActionKind::DiscardWorktreeChangesPath
-                        | RepoActionKind::DiscardWorktreeChangesPaths
-                ) {
-                    diff_selection::clear_diff_selection_after_discard(
-                        state,
-                        repo_id,
-                        paths.as_slice(),
-                    );
-                } else if let Some(area) = action.status_diff_area() {
-                    diff_selection::clear_diff_selection_for_status_action(
-                        state,
-                        repo_id,
-                        area,
-                        paths.as_slice(),
-                    );
-                }
-            }
-            external_and_history::repo_action_finished(repos, state, repo_id, action, result)
-        }
+        }) => external_and_history::repo_paths_action_finished(
+            repos, state, repo_id, action, paths, result,
+        ),
         Msg::Internal(crate::msg::InternalMsg::BranchAlreadyExists { action, prompt }) => {
             external_and_history::branch_already_exists(repos, state, action, prompt)
         }
@@ -2877,1371 +2036,31 @@ fn reduce_inner(
             action,
             worktree_path,
             result,
-        }) => {
-            // Open first so the origin tab is inactive when its action finishes and
-            // only refreshes its primary state instead of reloading everything.
-            let mut effects = if result.is_ok() {
-                repo_management::open_repo(repos, id_alloc, state, worktree_path)
-            } else {
-                Vec::new()
-            };
-            effects.extend(external_and_history::repo_action_finished(
-                repos, state, repo_id, action, result,
-            ));
-            effects
-        }
+        }) => external_and_history::repo_action_finished_in_worktree(
+            repos,
+            id_alloc,
+            state,
+            repo_id,
+            action,
+            worktree_path,
+            result,
+        ),
         Msg::Internal(crate::msg::InternalMsg::CommitFinished { repo_id, result }) => {
-            let pending_commit = state
-                .repos
-                .iter()
-                .find(|r| r.id == repo_id)
-                .and_then(|r| r.pending.commit_retry.clone());
-            let outcome = result.as_ref().ok().cloned();
-            let push_after_commit = outcome.is_some()
-                && pending_commit
-                    .as_ref()
-                    .is_some_and(|pending| pending.push_after_commit);
-            let auth_prompt = result
-                .as_ref()
-                .err()
-                .and_then(|error| auth_prompt_for_commit(repo_id, pending_commit.clone(), error));
-            let commit_result = result.map(|_| ());
-            let mut effects = actions_emit_effects::commit_finished(state, repo_id, commit_result);
-            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.pending.commit_retry = None;
-            }
-            if let Some(prompt) = auth_prompt {
-                util::clear_staged_git_auth_env();
-                state.auth_prompt = Some(prompt);
-            }
-            if push_after_commit
-                && let (Some(outcome), Some(pending_commit)) = (outcome, pending_commit)
-            {
-                effects.extend(actions_emit_effects::safe_push_after_commit(
-                    repo_id,
-                    SafePushAfterCommitContext {
-                        amend: pending_commit.amend,
-                        local_branch: outcome.local_branch,
-                        pre_head: outcome.pre_head,
-                        post_head: outcome.post_head,
-                    },
-                ));
-            }
-            effects
+            auth::commit_finished(state, repo_id, result)
         }
         Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished { repo_id, result }) => {
-            let pending_commit = state
-                .repos
-                .iter()
-                .find(|r| r.id == repo_id)
-                .and_then(|r| r.pending.commit_retry.clone());
-            let outcome = result.as_ref().ok().cloned();
-            let push_after_commit = outcome.is_some()
-                && pending_commit
-                    .as_ref()
-                    .is_some_and(|pending| pending.push_after_commit);
-            let auth_prompt = result
-                .as_ref()
-                .err()
-                .and_then(|error| auth_prompt_for_commit(repo_id, pending_commit.clone(), error));
-            let commit_result = result.map(|_| ());
-            let mut effects =
-                actions_emit_effects::commit_amend_finished(state, repo_id, commit_result);
-            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.pending.commit_retry = None;
-            }
-            if let Some(prompt) = auth_prompt {
-                util::clear_staged_git_auth_env();
-                state.auth_prompt = Some(prompt);
-            }
-            if push_after_commit
-                && let (Some(outcome), Some(pending_commit)) = (outcome, pending_commit)
-            {
-                effects.extend(actions_emit_effects::safe_push_after_commit(
-                    repo_id,
-                    SafePushAfterCommitContext {
-                        amend: pending_commit.amend,
-                        local_branch: outcome.local_branch,
-                        pre_head: outcome.pre_head,
-                        post_head: outcome.post_head,
-                    },
-                ));
-            }
-            effects
+            auth::commit_amend_finished(state, repo_id, result)
         }
         Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
             repo_id,
             context,
             auth,
             result,
-        }) => {
-            let auth_prompt = result.as_ref().err().and_then(|error| {
-                auth_prompt_for_safe_push_after_commit(repo_id, context.clone(), error)
-            });
-            let effects = actions_emit_effects::safe_push_after_commit_finished(
-                repos, state, repo_id, auth, result,
-            );
-            if let Some(prompt) = auth_prompt {
-                util::clear_staged_git_auth_env();
-                state.auth_prompt = Some(prompt);
-            }
-            effects
-        }
+        }) => auth::safe_push_after_commit_finished(repos, state, repo_id, context, auth, result),
         Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command,
             result,
-        }) => {
-            let auth_prompt = result
-                .as_ref()
-                .err()
-                .and_then(|error| auth_prompt_for_repo_command(repo_id, &command, error));
-            let removed_worktree_path = match (&command, &result) {
-                (RepoCommandKind::RemoveWorktree { path }, Ok(_)) => Some(path.clone()),
-                (RepoCommandKind::ForceRemoveWorktree { path }, Ok(_)) => Some(path.clone()),
-                _ => None,
-            };
-            // Their start cleared the HEAD gitlink cache; reclassify the
-            // retained selection before the completion reloads it.
-            if matches!(
-                &command,
-                RepoCommandKind::CherryPick { .. }
-                    | RepoCommandKind::InteractiveCherryPick { .. }
-                    | RepoCommandKind::Revert { .. }
-            ) {
-                refresh_selected_head_gitlink(repos, state, repo_id);
-            }
-
-            let effects =
-                actions_emit_effects::repo_command_finished(state, repo_id, command, result);
-
-            if let Some(path) = removed_worktree_path {
-                let repo_ids_to_close = state
-                    .repos
-                    .iter()
-                    .filter(|repo| repo.spec.workdir == path)
-                    .map(|repo| repo.id)
-                    .collect::<Vec<_>>();
-                for repo_id in repo_ids_to_close {
-                    let _ = repo_management::close_repo(repos, state, repo_id);
-                }
-            }
-
-            if let Some(prompt) = auth_prompt {
-                util::clear_staged_git_auth_env();
-                state.auth_prompt = Some(prompt);
-            }
-
-            effects
-        }
-    }
-}
-
-#[cfg(test)]
-mod nav_history_tests {
-    use super::*;
-    use crate::model::{AppState, RepoState};
-    use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, RepoSpec};
-    use gitcomet_core::process::{
-        GitExecutableAvailability, GitExecutablePreference, GitRuntimeState,
-    };
-    use std::sync::atomic::AtomicU64;
-
-    fn available_state_with_repo(repo_id: RepoId) -> AppState {
-        let mut state = AppState {
-            git_runtime: GitRuntimeState {
-                preference: GitExecutablePreference::SystemPath,
-                availability: GitExecutableAvailability::Available {
-                    version_output: "git version 2.0.0".to_string(),
-                },
-            },
-            ..Default::default()
-        };
-        state.repos.push(RepoState::new_opening(
-            repo_id,
-            RepoSpec {
-                workdir: std::path::PathBuf::from("/tmp/repo"),
-            },
-        ));
-        state.active_repo = Some(repo_id);
-        state
-    }
-
-    fn dispatch(state: &mut AppState, msg: Msg) {
-        let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-        let id_alloc = AtomicU64::new(99);
-        let _ = reduce(&mut repos, &id_alloc, state, msg);
-    }
-
-    fn repo(state: &AppState, repo_id: RepoId) -> &RepoState {
-        state.repos.iter().find(|r| r.id == repo_id).unwrap()
-    }
-
-    #[test]
-    fn repo_watch_degraded_pushes_warning_notification() {
-        let mut state = AppState::default();
-        dispatch(
-            &mut state,
-            Msg::RepoWatchDegraded {
-                repo_id: RepoId(1),
-                reason: crate::msg::RepoWatchDegradedReason::TooManyFolders { dir_count: 9000 },
-            },
-        );
-        assert_eq!(state.notifications.len(), 1);
-        let note = &state.notifications[0];
-        assert_eq!(note.kind, crate::model::AppNotificationKind::Warning);
-        assert!(
-            note.message.contains("9000"),
-            "warning should mention the folder count: {}",
-            note.message
-        );
-
-        // A partial watch failure surfaces a (distinct) warning too — not just the stderr log.
-        dispatch(
-            &mut state,
-            Msg::RepoWatchDegraded {
-                repo_id: RepoId(1),
-                reason: crate::msg::RepoWatchDegradedReason::WatchLimitReached {
-                    unwatched_dirs: 42,
-                },
-            },
-        );
-        assert_eq!(state.notifications.len(), 2);
-        let note = &state.notifications[1];
-        assert_eq!(note.kind, crate::model::AppNotificationKind::Warning);
-        assert!(
-            note.message.contains("42"),
-            "partial-watch warning should mention the unwatched count: {}",
-            note.message
-        );
-    }
-
-    /// A linked-worktree row is a third kind of history selection, and selecting
-    /// one clears the commit selection. Left out of the navigation machinery it
-    /// read as "the view went back to the log": the entry for the commit the user
-    /// came from was overwritten in place, so Back skipped it, and no snapshot
-    /// could reproduce the worktree row on the way forward.
-    #[test]
-    fn selecting_a_worktree_row_is_a_navigation_step_of_its_own() {
-        let repo_id = RepoId(1);
-        let mut state = available_state_with_repo(repo_id);
-        let commit = CommitId("abc".into());
-        let worktree = std::path::PathBuf::from("/tmp/wt/a");
-
-        dispatch(
-            &mut state,
-            Msg::SelectCommit {
-                request_id: None,
-                repo_id,
-                commit_id: commit.clone(),
-            },
-        );
-        dispatch(
-            &mut state,
-            Msg::SelectWorktreeUncommitted {
-                request_id: None,
-                repo_id,
-                path: worktree.clone(),
-            },
-        );
-        assert_eq!(
-            repo(&state, repo_id).history_state.selected_commit,
-            None,
-            "the worktree row displaces the commit selection"
-        );
-
-        dispatch(&mut state, Msg::GlobalNavBack { repo_id });
-        assert_eq!(
-            repo(&state, repo_id).history_state.selected_commit.as_ref(),
-            Some(&commit),
-            "back must return to the commit the worktree row was selected from"
-        );
-        assert_eq!(repo(&state, repo_id).history_state.worktree_selection, None);
-
-        dispatch(&mut state, Msg::GlobalNavForward { repo_id });
-        assert_eq!(
-            repo(&state, repo_id)
-                .history_state
-                .worktree_selection
-                .as_ref(),
-            Some(&worktree),
-            "forward must reproduce the worktree row, not just clear the commit"
-        );
-        assert_eq!(repo(&state, repo_id).history_state.selected_commit, None);
-    }
-
-    #[test]
-    fn opening_a_file_diff_is_recorded_and_back_restores_the_log() {
-        let repo_id = RepoId(1);
-        let mut state = available_state_with_repo(repo_id);
-        let target = DiffTarget::WorkingTree {
-            path: std::path::PathBuf::from("a.txt"),
-            area: DiffArea::Unstaged,
-        };
-
-        dispatch(
-            &mut state,
-            Msg::SelectDiff {
-                repo_id,
-                target: target.clone(),
-            },
-        );
-        assert_eq!(repo(&state, repo_id).diff_state.diff_target, Some(target));
-        // Origin (history log) seeded + the diff.
-        assert_eq!(
-            repo(&state, repo_id).navigation.main_history.entries.len(),
-            2
-        );
-
-        dispatch(&mut state, Msg::GlobalNavBack { repo_id });
-        assert_eq!(
-            repo(&state, repo_id).diff_state.diff_target,
-            None,
-            "back closes the file diff and shows the history log"
-        );
-
-        dispatch(&mut state, Msg::GlobalNavForward { repo_id });
-        assert!(
-            repo(&state, repo_id).diff_state.diff_target.is_some(),
-            "forward reopens the file diff"
-        );
-    }
-
-    #[test]
-    fn commit_then_file_diffs_are_all_remembered() {
-        let repo_id = RepoId(1);
-        let mut state = available_state_with_repo(repo_id);
-        let commit_a = CommitId("aaa".into());
-        let file1 = DiffTarget::Commit {
-            commit_id: commit_a.clone(),
-            path: Some(std::path::PathBuf::from("file1.rs")),
-        };
-        let file2 = DiffTarget::Commit {
-            commit_id: commit_a.clone(),
-            path: Some(std::path::PathBuf::from("file2.rs")),
-        };
-
-        dispatch(
-            &mut state,
-            Msg::SelectCommit {
-                request_id: None,
-                repo_id,
-                commit_id: commit_a.clone(),
-            },
-        );
-        dispatch(
-            &mut state,
-            Msg::SelectDiff {
-                repo_id,
-                target: file1.clone(),
-            },
-        );
-        dispatch(
-            &mut state,
-            Msg::SelectDiff {
-                repo_id,
-                target: file2.clone(),
-            },
-        );
-
-        let entries = &repo(&state, repo_id).navigation.main_history.entries;
-        assert!(entries.iter().any(|e| e.diff_target == Some(file1.clone())));
-        assert!(entries.iter().any(|e| e.diff_target == Some(file2.clone())));
-
-        // Back must step one-by-one: file2 diff -> file1 diff -> commit details
-        // (commit selected, no diff) -> history log.
-        dispatch(&mut state, Msg::GlobalNavBack { repo_id });
-        assert_eq!(
-            repo(&state, repo_id).diff_state.diff_target,
-            Some(file1.clone())
-        );
-
-        dispatch(&mut state, Msg::GlobalNavBack { repo_id });
-        let r = repo(&state, repo_id);
-        assert_eq!(r.diff_state.diff_target, None, "should show commit details");
-        assert_eq!(
-            r.history_state.selected_commit.as_ref(),
-            Some(&commit_a),
-            "commit should still be selected at the details step"
-        );
-
-        dispatch(&mut state, Msg::GlobalNavBack { repo_id });
-        assert_eq!(
-            repo(&state, repo_id).history_state.selected_commit,
-            None,
-            "final back returns to the history log with no commit selected"
-        );
-    }
-
-    #[test]
-    fn view_navigation_messages_push_others_fold_in_place() {
-        // User navigations create a new global back/forward step.
-        assert!(is_view_navigation(&Msg::SelectDiff {
-            repo_id: RepoId(1),
-            target: DiffTarget::WorkingTree {
-                path: std::path::PathBuf::from("a.txt"),
-                area: DiffArea::Unstaged,
-            },
-        }));
-        assert!(is_view_navigation(&Msg::SelectCommit {
-            request_id: None,
-            repo_id: RepoId(1),
-            commit_id: CommitId("a".into()),
-        }));
-        // The file-content viewer's own back/forward does NOT land a global
-        // step — it operates on a separate viewer-level stack so it does not
-        // pollute the global back/forward history.
-        assert!(!is_view_navigation(&Msg::ViewerNavBack {
-            repo_id: RepoId(1)
-        }));
-        // Background / non-navigation messages do not push a step (they are
-        // folded into the current entry in place, so they can't pollute history).
-        assert!(!is_view_navigation(&Msg::ReportError {
-            repo_id: None,
-            message: String::new(),
-        }));
-    }
-
-    #[test]
-    fn closure_and_replay_messages_are_not_view_navigations() {
-        assert!(!is_view_navigation(&Msg::ClearDiffSelection {
-            repo_id: RepoId(1),
-        }));
-        assert!(!is_view_navigation(&Msg::ClearCommitSelection {
-            request_id: None,
-            repo_id: RepoId(1),
-        }));
-        assert!(!is_view_navigation(&Msg::ViewerNavBack {
-            repo_id: RepoId(1),
-        }));
-        assert!(!is_view_navigation(&Msg::ViewerNavForward {
-            repo_id: RepoId(1),
-        }));
-        assert!(!is_view_navigation(&Msg::CloseInlineSubmoduleDiff {
-            repo_id: RepoId(1),
-        }));
-        assert!(is_view_navigation(&Msg::OpenInlineSubmoduleDiff {
-            origin: crate::model::ForeignDiffOrigin::Submodule,
-            repo_id: RepoId(1),
-            submodule_repo_path: std::path::PathBuf::from("/tmp/sub"),
-            parent_submodule_path: std::path::PathBuf::from("sub"),
-            entries: vec![].into(),
-            selected_ix: 0,
-        }));
-    }
-
-    #[test]
-    fn close_inline_submodule_diff_folds_in_place_and_does_not_bloat_nav_history() {
-        // Closing a sub-view must fold in-place: if the snapshot after
-        // closing matches a previous entry, it should collapse back to that
-        // entry rather than pushing a duplicate.
-        let repo_id = RepoId(1);
-        let mut state = available_state_with_repo(repo_id);
-
-        // Seed: select a working tree diff (entries: [origin, diff], cursor=1).
-        let target = DiffTarget::WorkingTree {
-            path: std::path::PathBuf::from("a.txt"),
-            area: DiffArea::Unstaged,
-        };
-        dispatch(
-            &mut state,
-            Msg::SelectDiff {
-                repo_id,
-                target: target.clone(),
-            },
-        );
-        assert_eq!(
-            repo(&state, repo_id).navigation.main_history.entries.len(),
-            2
-        );
-        assert_eq!(repo(&state, repo_id).navigation.main_history.cursor, 1);
-
-        // Open inline submodule diff.
-        dispatch(
-            &mut state,
-            Msg::OpenInlineSubmoduleDiff {
-                origin: crate::model::ForeignDiffOrigin::Submodule,
-                repo_id,
-                submodule_repo_path: std::path::PathBuf::from("/tmp/repo/vendor/first"),
-                parent_submodule_path: std::path::PathBuf::from("vendor/first"),
-                entries: vec![].into(),
-                selected_ix: 0,
-            },
-        );
-
-        // Close inline submodule diff — must fold, not push.
-        dispatch(&mut state, Msg::CloseInlineSubmoduleDiff { repo_id });
-        assert_eq!(
-            repo(&state, repo_id).navigation.main_history.entries.len(),
-            2,
-            "close must not add a new nav entry"
-        );
-        assert_eq!(
-            repo(&state, repo_id).navigation.main_history.cursor,
-            1,
-            "cursor must not advance past the parent diff"
-        );
-    }
-
-    #[test]
-    fn clearing_diff_folds_in_place_and_single_back_goes_to_commit_details() {
-        let repo_id = RepoId(1);
-        let mut state = available_state_with_repo(repo_id);
-        let commit_a = CommitId("aaa".into());
-        let file = DiffTarget::Commit {
-            commit_id: commit_a.clone(),
-            path: Some(std::path::PathBuf::from("file1.rs")),
-        };
-
-        dispatch(
-            &mut state,
-            Msg::SelectCommit {
-                request_id: None,
-                repo_id,
-                commit_id: commit_a.clone(),
-            },
-        );
-        dispatch(
-            &mut state,
-            Msg::SelectDiff {
-                repo_id,
-                target: file.clone(),
-            },
-        );
-        // User clicks the same committed file again, which dispatches
-        // ClearDiffSelection to close the diff view.
-        dispatch(&mut state, Msg::ClearDiffSelection { repo_id });
-
-        let entries = &repo(&state, repo_id).navigation.main_history.entries;
-        // After folding in-place, no duplicate entry remains—the file
-        // diff entry is collapsed back into the commit-details entry.
-        assert_eq!(
-            entries.len(),
-            2,
-            "fold-and-collapse must not create a new entry"
-        );
-        assert_eq!(
-            repo(&state, repo_id).navigation.main_history.cursor,
-            1,
-            "cursor should be back at the commit-details step"
-        );
-
-        // One GlobalNavBack from the commit-details view goes to the
-        // history log (origin), confirming the stack did not bloat.
-        dispatch(&mut state, Msg::GlobalNavBack { repo_id });
-        let r = repo(&state, repo_id);
-        assert_eq!(r.diff_state.diff_target, None);
-        assert_eq!(r.history_state.selected_commit, None);
-        assert!(!r.navigation.main_history.can_back());
-    }
-
-    #[test]
-    fn clearing_diff_without_folding_previous_allows_correct_back() {
-        let repo_id = RepoId(1);
-        let mut state = available_state_with_repo(repo_id);
-        let commit_a = CommitId("aaa".into());
-        let commit_b = CommitId("bbb".into());
-        let file = DiffTarget::Commit {
-            commit_id: commit_a.clone(),
-            path: Some(std::path::PathBuf::from("file1.rs")),
-        };
-
-        dispatch(
-            &mut state,
-            Msg::SelectCommit {
-                request_id: None,
-                repo_id,
-                commit_id: commit_a.clone(),
-            },
-        );
-        dispatch(
-            &mut state,
-            Msg::SelectDiff {
-                repo_id,
-                target: file.clone(),
-            },
-        );
-        // Switch to a different commit (no fold-collapse because the
-        // new state differs from the previous entry).
-        dispatch(
-            &mut state,
-            Msg::SelectCommit {
-                request_id: None,
-                repo_id,
-                commit_id: commit_b.clone(),
-            },
-        );
-
-        let r = repo(&state, repo_id);
-        assert_eq!(
-            r.navigation.main_history.entries.len(),
-            4,
-            "select-commit pushes a new entry when the commit changes"
-        );
-        assert_eq!(r.navigation.main_history.cursor, 3);
-        assert_eq!(r.history_state.selected_commit.as_ref(), Some(&commit_b));
-
-        dispatch(&mut state, Msg::GlobalNavBack { repo_id });
-        let r = repo(&state, repo_id);
-        assert_eq!(
-            r.diff_state.diff_target,
-            Some(file),
-            "back should reopen the file diff"
-        );
-        assert_eq!(r.history_state.selected_commit.as_ref(), Some(&commit_a));
-    }
-
-    #[test]
-    fn browsing_committed_files_within_a_commit_keeps_commit_selected_on_back() {
-        let repo_id = RepoId(1);
-        let mut state = available_state_with_repo(repo_id);
-        let commit_a = CommitId("aaa".into());
-        let file_a = DiffTarget::Commit {
-            commit_id: commit_a.clone(),
-            path: Some(std::path::PathBuf::from("src/a.rs")),
-        };
-        let file_b = DiffTarget::Commit {
-            commit_id: commit_a.clone(),
-            path: Some(std::path::PathBuf::from("src/b.rs")),
-        };
-        let file_c = DiffTarget::Commit {
-            commit_id: commit_a.clone(),
-            path: Some(std::path::PathBuf::from("src/c.rs")),
-        };
-
-        dispatch(
-            &mut state,
-            Msg::SelectCommit {
-                request_id: None,
-                repo_id,
-                commit_id: commit_a.clone(),
-            },
-        );
-        dispatch(
-            &mut state,
-            Msg::SelectDiff {
-                repo_id,
-                target: file_a.clone(),
-            },
-        );
-        dispatch(
-            &mut state,
-            Msg::SelectDiff {
-                repo_id,
-                target: file_b.clone(),
-            },
-        );
-        dispatch(
-            &mut state,
-            Msg::SelectDiff {
-                repo_id,
-                target: file_c.clone(),
-            },
-        );
-
-        let r = repo(&state, repo_id);
-        // Origin + commit details + three file diffs = 5 entries.
-        assert_eq!(
-            r.navigation.main_history.entries.len(),
-            5,
-            "each file selection must push a distinct history entry"
-        );
-        assert_eq!(r.navigation.main_history.cursor, 4);
-        assert_eq!(r.diff_state.diff_target, Some(file_c.clone()));
-
-        // ── Back 1: file_c → file_b ──
-        dispatch(&mut state, Msg::GlobalNavBack { repo_id });
-        let r = repo(&state, repo_id);
-        assert_eq!(
-            r.diff_state.diff_target,
-            Some(file_b.clone()),
-            "first back must return to the previously viewed file (b)"
-        );
-        assert_eq!(
-            r.history_state.selected_commit.as_ref(),
-            Some(&commit_a),
-            "commit must remain selected while browsing files"
-        );
-        assert_eq!(r.navigation.main_history.cursor, 3);
-
-        // ── Back 2: file_b → file_a ──
-        dispatch(&mut state, Msg::GlobalNavBack { repo_id });
-        let r = repo(&state, repo_id);
-        assert_eq!(
-            r.diff_state.diff_target,
-            Some(file_a.clone()),
-            "second back must return to the first opened file (a)"
-        );
-        assert_eq!(r.history_state.selected_commit.as_ref(), Some(&commit_a));
-        assert_eq!(r.navigation.main_history.cursor, 2);
-
-        // ── Back 3: file_a → commit details (no diff, commit still selected) ──
-        dispatch(&mut state, Msg::GlobalNavBack { repo_id });
-        let r = repo(&state, repo_id);
-        assert_eq!(
-            r.diff_state.diff_target, None,
-            "third back closes the last file diff and shows commit details"
-        );
-        assert_eq!(
-            r.history_state.selected_commit.as_ref(),
-            Some(&commit_a),
-            "commit must still be selected — back must not deselect the commit"
-        );
-        assert_eq!(r.navigation.main_history.cursor, 1);
-
-        // ── Back 4: commit details → history log ──
-        dispatch(&mut state, Msg::GlobalNavBack { repo_id });
-        let r = repo(&state, repo_id);
-        assert_eq!(r.diff_state.diff_target, None);
-        assert_eq!(
-            r.history_state.selected_commit, None,
-            "only the fourth back returns to the history log"
-        );
-        assert_eq!(r.navigation.main_history.cursor, 0);
-        assert!(!r.navigation.main_history.can_back());
-    }
-}
-
-#[cfg(test)]
-mod comparison_tests {
-    use super::*;
-    use crate::model::{AppState, Loadable, RepoState};
-    use crate::msg::{CommitSelectMode, Effect};
-    use gitcomet_core::domain::{
-        Commit, CommitFileChange, CommitId, FileStatusKind, LogPage, RepoSpec,
-    };
-    use gitcomet_core::process::{
-        GitExecutableAvailability, GitExecutablePreference, GitRuntimeState,
-    };
-    use std::sync::atomic::AtomicU64;
-
-    fn commit(id: &str, parent: &str) -> Commit {
-        Commit {
-            id: CommitId(id.into()),
-            parent_ids: smallvec::smallvec![CommitId(parent.into())],
-            summary: id.into(),
-            author: "Tester".into(),
-            time: std::time::SystemTime::UNIX_EPOCH,
-        }
-    }
-
-    /// A repo whose loaded log is newest-first `c3, c2, c1` (so `c1` is oldest).
-    /// Every commit has a parent — including the oldest, whose parent `c0` is
-    /// simply older than the loaded page — so the merged-diff base is a real
-    /// parent rather than the root-commit fallback.
-    fn state_with_log(repo_id: RepoId) -> AppState {
-        let mut state = AppState {
-            git_runtime: GitRuntimeState {
-                preference: GitExecutablePreference::SystemPath,
-                availability: GitExecutableAvailability::Available {
-                    version_output: "git version 2.0.0".to_string(),
-                },
-            },
-            ..Default::default()
-        };
-        let mut repo_state = RepoState::new_opening(
-            repo_id,
-            RepoSpec {
-                workdir: std::path::PathBuf::from("/tmp/repo"),
-            },
-        );
-        repo_state.history_state.log = Loadable::Ready(Arc::new(LogPage {
-            commits: vec![commit("c3", "c2"), commit("c2", "c1"), commit("c1", "c0")],
-            next_cursor: None,
-        }));
-        state.repos.push(repo_state);
-        state.active_repo = Some(repo_id);
-        state
-    }
-
-    fn dispatch_effects(state: &mut AppState, msg: Msg) -> Vec<Effect> {
-        let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-        let id_alloc = AtomicU64::new(99);
-        reduce(&mut repos, &id_alloc, state, msg)
-    }
-
-    fn repo(state: &AppState, repo_id: RepoId) -> &RepoState {
-        state.repos.iter().find(|r| r.id == repo_id).unwrap()
-    }
-
-    fn select(
-        state: &mut AppState,
-        repo_id: RepoId,
-        id: &str,
-        mode: CommitSelectMode,
-    ) -> Vec<Effect> {
-        dispatch_effects(
-            state,
-            Msg::SelectCommitMulti {
-                request_id: None,
-                repo_id,
-                commit_id: CommitId(id.into()),
-                mode,
-                clicked_index: None,
-                visible_order: None,
-            },
-        )
-    }
-
-    #[test]
-    fn selecting_two_commits_enters_ordered_range_comparison() {
-        let repo_id = RepoId(1);
-        let mut state = state_with_log(repo_id);
-        let c0 = CommitId("c0".into());
-        let c3 = CommitId("c3".into());
-
-        select(&mut state, repo_id, "c3", CommitSelectMode::Single);
-        let effects = select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
-
-        let range = repo(&state, repo_id)
-            .history_state
-            .range_selection
-            .clone()
-            .expect("two selected commits should start a comparison");
-        // The base is the *parent* of the oldest selected commit, regardless of
-        // click order, so the merged diff includes that commit's own changes.
-        assert_eq!(range.from, c0);
-        assert_eq!(range.to, Some(c3.clone()));
-
-        // The diff pane stays empty: the comparison presents the file
-        // side-selection first, and the user opens a file to view its diff.
-        assert_eq!(repo(&state, repo_id).diff_state.diff_target, None);
-        assert!(matches!(
-            repo(&state, repo_id).history_state.range_files,
-            Loadable::Loading
-        ));
-        assert!(
-            effects.iter().any(|e| matches!(
-                e,
-                Effect::LoadRangeFiles { from, to, .. } if *from == c0 && *to == Some(c3.clone())
-            )),
-            "a LoadRangeFiles effect for c0->c3 should be issued"
-        );
-    }
-
-    #[test]
-    fn range_files_loaded_populates_only_the_current_comparison() {
-        let repo_id = RepoId(1);
-        let mut state = state_with_log(repo_id);
-        select(&mut state, repo_id, "c3", CommitSelectMode::Single);
-        let effects = select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
-        let request = effects
-            .iter()
-            .find_map(|e| match e {
-                Effect::LoadRangeFiles { request, .. } => Some(*request),
-                _ => None,
-            })
-            .expect("a range-file load should be issued");
-
-        let files = vec![CommitFileChange {
-            path: std::path::PathBuf::from("a.rs"),
-            kind: FileStatusKind::Modified,
-            is_submodule: false,
-            additions: Some(1),
-            deletions: Some(0),
-        }];
-
-        // A stale result (wrong `from`) is dropped.
-        dispatch_effects(
-            &mut state,
-            Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
-                repo_id,
-                from: CommitId("c9".into()),
-                to: Some(CommitId("c3".into())),
-                request,
-                result: Ok(files.clone()),
-            }),
-        );
-        assert!(matches!(
-            repo(&state, repo_id).history_state.range_files,
-            Loadable::Loading
-        ));
-
-        // A reply from an *overtaken* load for the very same endpoints is
-        // dropped too. This is the case `(from, to)` cannot catch: a
-        // commit↔working-tree comparison keeps its pair across every refresh, so
-        // only the request id distinguishes a current reply from a late one.
-        dispatch_effects(
-            &mut state,
-            Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
-                repo_id,
-                from: CommitId("c0".into()),
-                to: Some(CommitId("c3".into())),
-                request: request.wrapping_sub(1),
-                result: Ok(files.clone()),
-            }),
-        );
-        assert!(matches!(
-            repo(&state, repo_id).history_state.range_files,
-            Loadable::Loading
-        ));
-
-        // The matching result populates the list.
-        dispatch_effects(
-            &mut state,
-            Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
-                repo_id,
-                from: CommitId("c0".into()),
-                to: Some(CommitId("c3".into())),
-                request,
-                result: Ok(files.clone()),
-            }),
-        );
-        match &repo(&state, repo_id).history_state.range_files {
-            Loadable::Ready(loaded) => assert_eq!(loaded.as_ref(), &files),
-            other => panic!("expected loaded range files, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn single_selection_clears_an_active_comparison() {
-        let repo_id = RepoId(1);
-        let mut state = state_with_log(repo_id);
-        select(&mut state, repo_id, "c3", CommitSelectMode::Single);
-        select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
-        assert!(
-            repo(&state, repo_id)
-                .history_state
-                .range_selection
-                .is_some()
-        );
-
-        select(&mut state, repo_id, "c2", CommitSelectMode::Single);
-        assert!(
-            repo(&state, repo_id)
-                .history_state
-                .range_selection
-                .is_none(),
-            "collapsing to a single commit ends the comparison"
-        );
-    }
-
-    fn loaded_details(id: &str) -> gitcomet_core::domain::CommitDetails {
-        gitcomet_core::domain::CommitDetails {
-            id: CommitId(id.into()),
-            message: format!("{id} message"),
-            author_name: "Tester".into(),
-            author_email: "t@example.com".into(),
-            authored_at_unix: 0,
-            committed_at: String::new(),
-            committed_at_unix: 0,
-            parent_ids: Vec::new(),
-            files: Vec::new(),
-        }
-    }
-
-    /// Entering a comparison moves `selected_commit` to the focused commit
-    /// without loading its details — the comparison view owns the pane, so that
-    /// load would be wasted. Leaving the comparison is therefore the moment the
-    /// details pane has to be put back in sync, or it keeps rendering whichever
-    /// commit's details were loaded last under a different commit's selection.
-    #[test]
-    fn closing_a_comparison_reloads_the_focused_commits_details() {
-        let repo_id = RepoId(1);
-        let mut state = state_with_log(repo_id);
-
-        // c3 selected, its details loaded.
-        select(&mut state, repo_id, "c3", CommitSelectMode::Single);
-        state.repos[0].history_state.commit_details =
-            Loadable::Ready(Arc::new(loaded_details("c3")));
-
-        // Ctrl-click c1: comparison mode, focus moves to c1, details stay c3's.
-        select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
-        assert!(
-            repo(&state, repo_id)
-                .history_state
-                .range_selection
-                .is_some()
-        );
-        assert_eq!(
-            repo(&state, repo_id).history_state.selected_commit,
-            Some(CommitId("c1".into()))
-        );
-
-        let effects = dispatch_effects(&mut state, Msg::ClearComparison { repo_id });
-
-        let r = repo(&state, repo_id);
-        assert!(
-            !matches!(&r.history_state.commit_details, Loadable::Ready(d) if d.id == CommitId("c3".into())),
-            "c3's details must not stay on screen under c1's selection"
-        );
-        assert!(
-            effects.iter().any(|e| matches!(
-                e,
-                Effect::LoadCommitDetails { commit_id, .. } if *commit_id == CommitId("c1".into())
-            )),
-            "closing the comparison should load the still-selected commit's details"
-        );
-    }
-
-    /// Every plain history click leaves a commit in `multi_selection`, so a
-    /// comparison started from a context menu finds a stale one sitting there.
-    /// It describes a different comparison, so it must not survive to name this
-    /// one or supply its preview cards.
-    #[test]
-    fn an_explicit_comparison_drops_a_stale_multi_selection() {
-        let repo_id = RepoId(1);
-        let mut state = state_with_log(repo_id);
-        select(&mut state, repo_id, "c3", CommitSelectMode::Single);
-        select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
-        assert!(
-            repo(&state, repo_id)
-                .history_state
-                .multi_selection
-                .is_multi(),
-            "precondition: a multi-selection comparison is active"
-        );
-
-        dispatch_effects(
-            &mut state,
-            Msg::CompareWithWorkingTree {
-                repo_id,
-                from: CommitId("c2".into()),
-                from_label: "main".into(),
-            },
-        );
-
-        let r = repo(&state, repo_id);
-        assert!(
-            r.history_state.multi_selection.commits.is_empty(),
-            "the previous selection is not part of this comparison"
-        );
-        let range = r
-            .history_state
-            .range_selection
-            .clone()
-            .expect("the explicit comparison replaces the previous one");
-        assert_eq!(range.from, CommitId("c2".into()));
-        assert_eq!(range.to, None);
-    }
-
-    /// A multi-selection comparison keeps its selection: there, the selection
-    /// *is* what is being compared, and the UI names the comparison after it.
-    #[test]
-    fn a_multi_selection_comparison_keeps_its_selection() {
-        let repo_id = RepoId(1);
-        let mut state = state_with_log(repo_id);
-        select(&mut state, repo_id, "c3", CommitSelectMode::Single);
-        select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
-
-        let r = repo(&state, repo_id);
-        assert!(r.history_state.range_selection.is_some());
-        assert!(r.history_state.multi_selection.is_multi());
-    }
-
-    #[test]
-    fn clear_comparison_dismisses_selection_and_diff() {
-        let repo_id = RepoId(1);
-        let mut state = state_with_log(repo_id);
-        select(&mut state, repo_id, "c3", CommitSelectMode::Single);
-        select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
-        assert!(
-            repo(&state, repo_id)
-                .history_state
-                .range_selection
-                .is_some()
-        );
-
-        dispatch_effects(&mut state, Msg::ClearComparison { repo_id });
-        let r = repo(&state, repo_id);
-        assert!(r.history_state.range_selection.is_none());
-        assert!(!r.history_state.multi_selection.is_multi());
-        assert_eq!(r.diff_state.diff_target, None);
-    }
-
-    #[test]
-    fn mark_then_compare_with_marked_builds_the_range() {
-        let repo_id = RepoId(1);
-        let mut state = state_with_log(repo_id);
-        let c1 = CommitId("c1".into());
-        let c3 = CommitId("c3".into());
-
-        // Nothing marked yet: comparing is a no-op.
-        let effects = dispatch_effects(
-            &mut state,
-            Msg::CompareWithMarked {
-                repo_id,
-                commit_id: c3.clone(),
-                label: "c3".into(),
-            },
-        );
-        assert!(effects.is_empty());
-        assert!(
-            repo(&state, repo_id)
-                .history_state
-                .range_selection
-                .is_none()
-        );
-
-        // Mark c1 (base), then compare c3 against it.
-        dispatch_effects(
-            &mut state,
-            Msg::MarkForComparison {
-                repo_id,
-                commit_id: c1.clone(),
-                label: "main".into(),
-            },
-        );
-        dispatch_effects(
-            &mut state,
-            Msg::CompareWithMarked {
-                repo_id,
-                commit_id: c3.clone(),
-                label: "feature".into(),
-            },
-        );
-        let range = repo(&state, repo_id)
-            .history_state
-            .range_selection
-            .clone()
-            .expect("compare with marked should start a comparison");
-        assert_eq!(range.from, c1);
-        assert_eq!(range.to, Some(c3.clone()));
-        assert_eq!(range.from_label, "main");
-        assert_eq!(range.to_label, "feature");
-    }
-
-    #[test]
-    fn compare_commit_range_message_orders_via_labels() {
-        let repo_id = RepoId(1);
-        let mut state = state_with_log(repo_id);
-        let effects = dispatch_effects(
-            &mut state,
-            Msg::CompareCommitRange {
-                repo_id,
-                from: CommitId("c1".into()),
-                to: CommitId("c3".into()),
-                from_label: "main".into(),
-                to_label: "feature".into(),
-            },
-        );
-        let range = repo(&state, repo_id)
-            .history_state
-            .range_selection
-            .clone()
-            .expect("explicit compare should set a comparison");
-        assert_eq!(range.from_label, "main");
-        assert_eq!(range.to_label, "feature");
-        assert!(
-            effects
-                .iter()
-                .any(|e| matches!(e, Effect::LoadRangeFiles { .. }))
-        );
-    }
-
-    #[test]
-    fn compare_with_working_tree_starts_a_worktree_comparison() {
-        let repo_id = RepoId(1);
-        let mut state = state_with_log(repo_id);
-        let from = CommitId("c2".into());
-
-        let effects = dispatch_effects(
-            &mut state,
-            Msg::CompareWithWorkingTree {
-                repo_id,
-                from: from.clone(),
-                from_label: "main".into(),
-            },
-        );
-
-        let range = repo(&state, repo_id)
-            .history_state
-            .range_selection
-            .clone()
-            .expect("compare with working tree should start a comparison");
-        assert_eq!(range.from, from);
-        // The tip is the working tree, not a commit.
-        assert_eq!(range.to, None);
-        assert_eq!(range.to_label, "Working tree");
-        // A worktree-tip file list load is issued, and the diff pane is cleared.
-        assert!(effects.iter().any(|e| matches!(
-            e,
-            Effect::LoadRangeFiles { from: f, to: None, .. } if *f == from
-        )));
-        assert_eq!(repo(&state, repo_id).diff_state.diff_target, None);
-    }
-
-    /// A refresh means two full-tree `git diff` calls, so changes arriving while
-    /// one is running must fold into it rather than each starting their own —
-    /// and the fold must still end with a run that sees the final state.
-    #[test]
-    fn external_worktree_changes_refresh_a_worktree_comparison_one_at_a_time() {
-        let repo_id = RepoId(1);
-        let mut state = state_with_log(repo_id);
-        let from = CommitId("c2".into());
-        let effects = dispatch_effects(
-            &mut state,
-            Msg::CompareWithWorkingTree {
-                repo_id,
-                from: from.clone(),
-                from_label: "main".into(),
-            },
-        );
-        let load_request = |effects: &[Effect]| {
-            effects.iter().find_map(|e| match e {
-                Effect::LoadRangeFiles {
-                    from: f,
-                    to: None,
-                    request,
-                    ..
-                } if *f == from => Some(*request),
-                _ => None,
-            })
-        };
-        let first = load_request(&effects).expect("the comparison issues a file-list load");
-
-        // Two changes land while that load is still running: neither starts its
-        // own, they collapse into the one already in flight.
-        for _ in 0..2 {
-            let effects = dispatch_effects(
-                &mut state,
-                Msg::RepoExternallyChanged {
-                    repo_id,
-                    change: crate::msg::RepoExternalChange::Worktree,
-                },
-            );
-            assert!(
-                load_request(&effects).is_none(),
-                "a refresh must not stack on top of one already in flight"
-            );
-        }
-
-        // When it lands, the folded changes are honoured by exactly one re-run,
-        // so the list ends up describing the worktree as it is now.
-        let effects = dispatch_effects(
-            &mut state,
-            Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
-                repo_id,
-                from: from.clone(),
-                to: None,
-                request: first,
-                result: Ok(Vec::new()),
-            }),
-        );
-        let second = load_request(&effects).expect("the folded refresh runs once the load lands");
-        assert_ne!(first, second, "the re-run is a new request, not a replay");
-
-        // Nothing further is queued, so a quiet worktree stops the chain.
-        let effects = dispatch_effects(
-            &mut state,
-            Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
-                repo_id,
-                from: from.clone(),
-                to: None,
-                request: second,
-                result: Ok(Vec::new()),
-            }),
-        );
-        assert!(load_request(&effects).is_none());
-
-        // And with nothing in flight, the next change refreshes immediately.
-        let effects = dispatch_effects(
-            &mut state,
-            Msg::RepoExternallyChanged {
-                repo_id,
-                change: crate::msg::RepoExternalChange::Worktree,
-            },
-        );
-        assert!(
-            load_request(&effects).is_some(),
-            "expected the worktree comparison file list to refresh"
-        );
-    }
-
-    #[test]
-    fn external_change_does_not_refresh_a_commit_comparison() {
-        let repo_id = RepoId(1);
-        let mut state = state_with_log(repo_id);
-        // Two-commit (immutable) comparison.
-        select(&mut state, repo_id, "c3", CommitSelectMode::Single);
-        select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
-        assert!(
-            repo(&state, repo_id)
-                .history_state
-                .range_selection
-                .is_some()
-        );
-
-        let effects = dispatch_effects(
-            &mut state,
-            Msg::RepoExternallyChanged {
-                repo_id,
-                change: crate::msg::RepoExternalChange::Worktree,
-            },
-        );
-        assert!(
-            !effects
-                .iter()
-                .any(|e| matches!(e, Effect::LoadRangeFiles { .. })),
-            "a commit↔commit comparison is immutable and must not refresh"
-        );
-    }
-}
-
-#[cfg(test)]
-mod history_selection_ack_tests {
-    use super::*;
-    use crate::model::RepoState;
-    use gitcomet_core::domain::{CommitId, LogScope, RepoSpec};
-
-    #[test]
-    fn history_selection_acknowledges_noops_and_rejected_requests_by_id() {
-        let repo_id = RepoId(1);
-        let mut state = AppState::test_default();
-        state.repos.push(RepoState::new_opening(
-            repo_id,
-            RepoSpec {
-                workdir: "/tmp/history-selection-ack".into(),
-            },
-        ));
-        let mut repos = FxHashMap::default();
-        let ids = AtomicU64::new(2);
-        for request_id in [11, 12] {
-            reduce(
-                &mut repos,
-                &ids,
-                &mut state,
-                Msg::SelectCommit {
-                    repo_id,
-                    request_id: Some(request_id),
-                    commit_id: CommitId("1111111".into()),
-                },
-            );
-            assert_eq!(state.repos[0].history_state.selection_ack, Some(request_id));
-        }
-        let revision = state.repos[0].history_state.selected_commit_rev;
-        let index = gitcomet_core::history_index::HistoryIndexBuilder::new(
-            gitcomet_core::services::HistorySnapshot("stale".into()),
-            LogScope::AllBranches,
-            20,
-        )
-        .unwrap()
-        .finish(&gitcomet_core::services::CancellationToken::new())
-        .unwrap();
-        reduce(
-            &mut repos,
-            &ids,
-            &mut state,
-            Msg::IndexedHistory(crate::indexed_history::IndexedHistoryMsg::Select {
-                request_id: Some(13),
-                repo_id,
-                commit_id: CommitId("2222222".into()),
-                mode: crate::msg::CommitSelectMode::Single,
-                projection: gitcomet_core::history_index::HistoryProjection::new(index, Vec::new()),
-            }),
-        );
-        assert_eq!(state.repos[0].history_state.selection_ack, Some(13));
-        assert_eq!(state.repos[0].history_state.selected_commit_rev, revision);
-        reduce(
-            &mut repos,
-            &ids,
-            &mut state,
-            Msg::SelectCommit {
-                repo_id,
-                request_id: None,
-                commit_id: CommitId("3333333".into()),
-            },
-        );
-        assert_eq!(state.repos[0].history_state.selection_ack, Some(13));
+        }) => auth::repo_command_finished(repos, state, repo_id, command, result),
     }
 }

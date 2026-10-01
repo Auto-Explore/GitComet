@@ -778,7 +778,10 @@ fn enforce_child_ram_limit(
 
 fn run_child() -> Result<(), String> {
     install_benchmark_process_ram_guard();
-    gitcomet_ui_gpui::run(build_backend()).map_err(|err| format!("child launch failed: {err}"))
+    gitcomet_ui_gpui::UiLaunch::new(build_backend())
+        .run()
+        .map(|_| ())
+        .map_err(|err| format!("child launch failed: {err}"))
 }
 
 fn build_backend() -> Arc<dyn GitBackend> {

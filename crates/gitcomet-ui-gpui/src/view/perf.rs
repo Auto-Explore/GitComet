@@ -744,3 +744,44 @@ mod tests {
         assert_eq!(percentile_nearest_rank(&[10, 20], 100), 20);
     }
 }
+
+#[cfg(any(test, feature = "benchmarks"))]
+thread_local! {
+    static EXTENSION_DISPATCH_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static SETTINGS_PAGES_RENDERED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static SETTINGS_RENDERS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Count calls into extension code; compiled away in normal builds.
+#[inline]
+pub(in crate::view) fn extension_dispatch() {
+    #[cfg(any(test, feature = "benchmarks"))]
+    EXTENSION_DISPATCH_CALLS.with(|calls| calls.set(calls.get() + 1));
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+pub(in crate::view) fn take_extension_dispatch_calls() -> u64 {
+    EXTENSION_DISPATCH_CALLS.with(|calls| calls.replace(0))
+}
+
+#[inline]
+pub(in crate::view) fn settings_page_rendered() {
+    #[cfg(any(test, feature = "benchmarks"))]
+    SETTINGS_PAGES_RENDERED.with(|calls| calls.set(calls.get() + 1));
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+pub(in crate::view) fn take_settings_pages_rendered() -> u64 {
+    SETTINGS_PAGES_RENDERED.with(|calls| calls.replace(0))
+}
+
+#[inline]
+pub(in crate::view) fn settings_rendered() {
+    #[cfg(any(test, feature = "benchmarks"))]
+    SETTINGS_RENDERS.with(|calls| calls.set(calls.get() + 1));
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+pub(in crate::view) fn take_settings_renders() -> u64 {
+    SETTINGS_RENDERS.with(|calls| calls.replace(0))
+}

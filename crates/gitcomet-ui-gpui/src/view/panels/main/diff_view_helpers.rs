@@ -74,7 +74,7 @@ impl MainPaneView {
             .map(|t| {
                 let (icon, color, text): (Option<&'static str>, gpui::Rgba, SharedString) = match t
                 {
-                    DiffTarget::WorkingTree { path, area } => {
+                    DiffTarget::WorkingTree { path, area, .. } => {
                         let kind = if self.is_inline_submodule_diff_active() {
                             self.selected_inline_submodule_diff_entry()
                                 .map(|entry| entry.kind)
@@ -104,7 +104,9 @@ impl MainPaneView {
                         };
                         (Some(icon), color, self.cached_path_display(path))
                     }
-                    DiffTarget::Commit { commit_id: _, path } => match path {
+                    DiffTarget::Commit {
+                        commit_id: _, path, ..
+                    } => match path {
                         Some(path) => (
                             Some("icons/pencil.svg"),
                             theme.colors.foreground.secondary,
@@ -120,6 +122,7 @@ impl MainPaneView {
                         from_commit_id: _,
                         to_commit_id: _,
                         path,
+                        ..
                     } => match path {
                         Some(path) => (
                             Some("icons/swap.svg"),
@@ -201,6 +204,7 @@ impl MainPaneView {
                 DiffTarget::Commit {
                     commit_id,
                     path: Some(path),
+                    ..
                 } => (
                     commit_id
                         .as_ref()
@@ -386,8 +390,33 @@ impl MainPaneView {
         let scaled_px = crate::ui_scale::scaler(crate::ui_scale::current(cx).percent);
 
         let inline_neighbors = self.inline_diff_file_neighbors(repo_id, cx);
-        let (has_prev, has_next) = if let Some((prev_ix, next_ix)) = inline_neighbors {
+        let (has_prev, has_next) = if let Some(decor) = &self.hosted_decor {
+            (
+                self.store.policy.file_navigation
+                    && decor.options.file_navigation.previous.is_some(),
+                self.store.policy.file_navigation && decor.options.file_navigation.next.is_some(),
+            )
+        } else if let Some((prev_ix, next_ix)) = inline_neighbors {
             (prev_ix.is_some(), next_ix.is_some())
+        } else if self.active_repo().is_some_and(|repo| {
+            matches!(
+                self.bound_diff_state(repo).diff_target,
+                Some(DiffTarget::WorkingTree { .. })
+            )
+        }) {
+            let change_tracking_view = self.active_change_tracking_view(cx);
+            let status_section_order =
+                self.active_status_section_order(repo_id, change_tracking_view, cx);
+            self.active_repo()
+                .and_then(|repo| {
+                    status_nav::status_navigation_neighbors(
+                        repo,
+                        self.bound_diff_state(repo).diff_target.as_ref()?,
+                        change_tracking_view,
+                        status_section_order.as_deref(),
+                    )
+                })
+                .unwrap_or((false, false))
         } else {
             let commit_file_source_indices = self
                 .root_view
@@ -399,12 +428,10 @@ impl MainPaneView {
                 .ok()
                 .flatten();
             let change_tracking_view = self.active_change_tracking_view(cx);
-            let status_section_order =
-                self.active_status_section_order(repo_id, change_tracking_view, cx);
             let Some(repo) = self.active_repo() else {
                 return (None, None);
             };
-            let Some(diff_target) = repo.diff_state.diff_target.as_ref() else {
+            let Some(diff_target) = self.bound_diff_state(repo).diff_target.as_ref() else {
                 return (None, None);
             };
             (
@@ -414,7 +441,7 @@ impl MainPaneView {
                     change_tracking_view,
                     -1,
                     commit_file_source_indices.as_deref(),
-                    status_section_order.as_deref(),
+                    None,
                 )
                 .is_some(),
                 status_nav::adjacent_diff_file_target_for_repo(
@@ -423,7 +450,7 @@ impl MainPaneView {
                     change_tracking_view,
                     1,
                     commit_file_source_indices.as_deref(),
-                    status_section_order.as_deref(),
+                    None,
                 )
                 .is_some(),
             )

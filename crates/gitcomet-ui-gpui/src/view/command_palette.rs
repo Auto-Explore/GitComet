@@ -17,6 +17,7 @@ use gitcomet_core::tag_push::TagPushMode;
 
 pub(crate) struct CommandEntry {
     pub(crate) id: &'static str,
+    /// Read through [`CommandEntry::label`], which names the product for `{app}`.
     pub(crate) label: &'static str,
     pub(crate) shortcut: Shortcut,
     pub(crate) category: &'static str,
@@ -27,6 +28,17 @@ pub(crate) struct CommandEntry {
     /// What the command needs beyond a repository. Unlike `requires_repo`,
     /// which hides the command, an unmet need leaves it listed but disabled.
     pub(crate) needs: Needs,
+}
+
+impl CommandEntry {
+    /// The label as shown and matched, naming the product for `{app}`.
+    pub(crate) fn label(&self) -> std::borrow::Cow<'static, str> {
+        if self.label.contains("{app}") {
+            std::borrow::Cow::Owned(self.label.replace("{app}", crate::view::product_name()))
+        } else {
+            std::borrow::Cow::Borrowed(self.label)
+        }
+    }
 }
 
 /// A precondition a command can be listed without. The palette shows such a
@@ -353,6 +365,15 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         needs: Needs::Nothing,
     },
     CommandEntry {
+        id: "fetch-ref",
+        label: "Fetch ref…",
+        shortcut: Shortcut::None,
+        category: "Repository",
+        keywords: "fetch refspec branch tag change",
+        requires_repo: true,
+        needs: Needs::Nothing,
+    },
+    CommandEntry {
         id: "fetch-all",
         label: "Fetch All",
         shortcut: Shortcut::None,
@@ -568,7 +589,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     },
     CommandEntry {
         id: "quit",
-        label: "Quit GitComet",
+        label: "Quit {app}",
         shortcut: Shortcut::Secondary("Q"),
         category: "Window",
         keywords: "",
@@ -586,7 +607,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     },
     CommandEntry {
         id: "hide",
-        label: "Hide GitComet",
+        label: "Hide {app}",
         shortcut: Shortcut::MacOs("Cmd+H"),
         category: "Window",
         keywords: "hide application",
@@ -777,9 +798,20 @@ impl std::ops::Deref for CommandMatch {
 /// two raw scores are.
 const KEYWORD_MATCH_PENALTY: i32 = 100_000;
 
+#[cfg(test)]
 pub(crate) fn filtered_commands(has_active_repo: bool, query: &str) -> Vec<CommandMatch> {
+    filtered_commands_with(&[], has_active_repo, query)
+}
+
+/// The built-in commands followed by `extensions`, filtered and ranked.
+pub(crate) fn filtered_commands_with(
+    extensions: &'static [CommandEntry],
+    has_active_repo: bool,
+    query: &str,
+) -> Vec<CommandMatch> {
     let available = COMMANDS
         .iter()
+        .chain(extensions)
         .filter(|cmd| !cmd.requires_repo || has_active_repo);
 
     if query.is_empty() {
@@ -794,7 +826,7 @@ pub(crate) fn filtered_commands(has_active_repo: bool, query: &str) -> Vec<Comma
     let mut out: Vec<(i32, usize, CommandMatch)> = available
         .enumerate()
         .filter_map(|(order, entry)| {
-            fuzzy_subsequence_match(entry.label, query)
+            fuzzy_subsequence_match(&entry.label(), query)
                 .map(|(score, positions)| (score, order, CommandMatch { entry, positions }))
                 .or_else(|| {
                     // Keyword hits carry no highlight positions and sort behind
@@ -815,7 +847,7 @@ pub(crate) fn filtered_commands(has_active_repo: bool, query: &str) -> Vec<Comma
 
     out.sort_by(|a, b| {
         a.0.cmp(&b.0)
-            .then_with(|| a.2.label.len().cmp(&b.2.label.len()))
+            .then_with(|| a.2.label().len().cmp(&b.2.label().len()))
             .then_with(|| a.1.cmp(&b.1))
     });
     out.into_iter().map(|(_, _, m)| m).collect()
@@ -856,6 +888,8 @@ pub(crate) struct CommandPaletteView {
     pub(crate) restore_focus: Option<FocusHandle>,
     fallback_focus: Option<FocusHandle>,
     root_view: WeakEntity<GitCometView>,
+    /// Extension commands, fixed when the window is built.
+    extension_commands: &'static [CommandEntry],
     theme: AppTheme,
     context: PaletteContext,
     open: bool,
@@ -898,6 +932,7 @@ impl CommandPaletteView {
             restore_focus: None,
             fallback_focus: None,
             root_view,
+            extension_commands: super::extension_host::palette_entries(cx),
             theme,
             context: PaletteContext {
                 has_active_repo,
@@ -991,7 +1026,11 @@ impl CommandPaletteView {
     }
 
     fn rebuild_cached_results(&mut self) {
-        self.matches = filtered_commands(self.context.has_active_repo, self.query.as_ref());
+        self.matches = filtered_commands_with(
+            self.extension_commands,
+            self.context.has_active_repo,
+            self.query.as_ref(),
+        );
         self.rows.clear();
         self.command_row_indices.clear();
 
@@ -1257,7 +1296,7 @@ impl CommandPaletteView {
                             .flex_1()
                             .min_w(px(0.0))
                             .child(self.render_label(
-                                command.label,
+                                &command.label(),
                                 &command.positions,
                                 label_color,
                                 cx,

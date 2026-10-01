@@ -1,0 +1,49 @@
+# Product literals allowed in production code: <path> <kind> <count> <reason>.
+# Checked by scripts/ci/identity_literals.py. User-visible names, identifiers,
+# and links read gitcomet_core::identity; the entries below are stable formats,
+# internal names, or GitComet's own identity. Never raise a count to admit new
+# product text: read it from the identity instead.
+crates/gitcomet-app/src/cli/compat.rs identifier 3 argv encoding markers and scratch directory shared with git tool shims
+crates/gitcomet-app/src/crashlog.rs display-name 8 crash log section headers are a parsed file format
+crates/gitcomet-app/src/crashlog.rs identifier 4 crash report path encoding markers, issue template file name, and thread name
+crates/gitcomet-app/src/difftool_mode.rs identifier 1 temporary file prefix
+crates/gitcomet-app/src/launch.rs identifier 1 GitComet's default app icon, used unless the identity supplies one
+crates/gitcomet-core/src/auth/askpass.rs identifier 7 askpass helper script and prompt file names
+crates/gitcomet-core/src/conflict_session.rs identifier 1 in-memory merge block sentinel
+crates/gitcomet-core/src/fs_utils.rs identifier 1 temporary file prefix
+crates/gitcomet-core/src/identity.rs display-name 8 GitComet's own identity (definition site)
+crates/gitcomet-core/src/identity.rs identifier 7 GitComet's own identity (definition site)
+crates/gitcomet-core/src/identity.rs package-metadata 1 GitComet's own identity (definition site)
+crates/gitcomet-core/src/identity.rs vendor 7 GitComet's own identity (definition site)
+crates/gitcomet-core/src/signing_tools.rs identifier 1 temporary directory prefix
+crates/gitcomet-extension-example-app/src/main.rs display-name 1 the example product describes itself as built on GitComet crates
+crates/gitcomet-extension-example/src/lib.rs package-metadata 1 the example product's own identity (definition site)
+crates/gitcomet-fs-watch/src/macos.rs identifier 1 FSEvents dispatch queue label
+crates/gitcomet-git-gix/examples/status-refresh-bench.rs identifier 2 benchmark example scratch names
+crates/gitcomet-git-gix/src/repo/diff.rs identifier 2 temporary file prefixes
+crates/gitcomet-git-gix/src/repo/history.rs identifier 6 rebase state files in .git, shared by every product for resumable rebases
+crates/gitcomet-git-gix/src/repo/mergetool.rs identifier 3 temporary prefixes and the shared per-repo trust config key
+crates/gitcomet-git-gix/src/repo/submodules.rs identifier 1 shared per-repo submodule trust config key
+crates/gitcomet-git-gix/src/repo/text_decode.rs identifier 1 temporary file prefix
+crates/gitcomet-git-gix/src/util/trace2.rs identifier 1 Git trace2 temporary file prefix
+crates/gitcomet-state/src/history_find.rs identifier 1 worker thread name (profiler attribution)
+crates/gitcomet-state/src/session/mod.rs identifier 2 session path encoding markers (file format)
+crates/gitcomet-state/src/store/effects/history_authors.rs identifier 1 worker thread name (profiler attribution)
+crates/gitcomet-state/src/store/effects/indexed_history.rs identifier 1 worker thread name (profiler attribution)
+crates/gitcomet-state/src/store/executor.rs identifier 6 worker thread names and diagnostic prefix
+crates/gitcomet-state/src/store/mod.rs identifier 2 store and repo-load worker thread names (profiler attribution)
+crates/gitcomet-state/src/store/repo_load_trace.rs identifier 1 diagnostic prefix
+crates/gitcomet-state/src/store/repo_monitor.rs identifier 3 diagnostic prefix and thread names
+crates/gitcomet-state/src/store/send_diagnostics.rs identifier 2 diagnostic prefixes
+crates/gitcomet-ui-gpui/src/assets.rs identifier 8 asset keys of the branding artwork, which the identity may replace
+crates/gitcomet-ui-gpui/src/bin/perf_budget_report/cli.rs identifier 1 benchmark tool name
+crates/gitcomet-ui-gpui/src/view/panes/main/diff_cache/image_cache.rs identifier 2 temporary directory and file prefix
+crates/gitcomet-ui-gpui/src/view/rows/diff_text/syntax/language.rs identifier 1 thread name
+crates/gitcomet-ui-gpui/src/view/rows/diff_text/syntax/prepared/drop_queue.rs identifier 2 thread names
+crates/gitcomet-ui-gpui/src/view/settings_window/mod.rs identifier 1 settings search keyword for the upstream command name
+crates/gitcomet-ui-gpui/src/view/settings_window/rows.rs display-name 1 layout-overflow fixture row
+crates/gitcomet-ui-gpui/src/view/settings_window/rows.rs vendor 1 layout-overflow fixture row
+crates/gitcomet-ui-gpui/src/workspaces.rs identifier 1 thread name
+crates/gitcomet-ui-kit/src/click.rs identifier 1 internal element id
+crates/gitcomet/build.rs identifier 3 GitComet executable's Windows resources
+crates/gitcomet/src/bin/perf_app_launch.rs identifier 1 benchmark launches GitComet's own executable

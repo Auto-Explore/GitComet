@@ -480,10 +480,7 @@ fn file_diff_cache_rebuilds_when_patch_arrives_after_same_file_refresh(
         std::process::id()
     ));
     let path = std::path::PathBuf::from("src/refresh_highlights.rs");
-    let target = DiffTarget::WorkingTree {
-        path: path.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = DiffTarget::working_tree(path.clone(), gitcomet_core::domain::DiffArea::Unstaged);
     let old_text = "fn main() {\n    let value = 1;\n    let stable = 10;\n}\n";
     let new_text = "fn main() {\n    let value = 2;\n    let stable = 10;\n    let added = value + stable;\n}\n";
     let unified = "\
@@ -990,10 +987,10 @@ fn untracked_svg_keeps_the_code_view_and_toggle_in_collapsed_mode(cx: &mut gpui:
     let path = PathBuf::from("assets/diagram.svg");
     let source = String::from_utf8(image_diff_svg_fixture(64, 64, "#22cc66"))
         .expect("svg fixture should be utf-8");
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: path.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        path.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
@@ -4241,10 +4238,7 @@ fn yaml_commit_file_diff_transition_from_patch_clears_stale_split_cache(
     let commit_id =
         gitcomet_core::domain::CommitId("bd8b4a04b4d7a04caf97392d6a66cbeebd665606".into());
     let patch_text = COMMIT_PATCH.to_owned();
-    let patch_target = DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: None,
-    };
+    let patch_target = DiffTarget::commit(commit_id.clone(), None);
     let patch_diff = gitcomet_core::domain::Diff::from_unified(patch_target.clone(), &patch_text);
 
     cx.update(|_window, app| {
@@ -4295,10 +4289,7 @@ fn yaml_commit_file_diff_transition_from_patch_clears_stale_split_cache(
     let old_text = DEPLOYMENT_CI.old_text.to_owned();
     let new_text = DEPLOYMENT_CI.new_text.to_owned();
     let unified = DEPLOYMENT_CI.unified_diff().to_owned();
-    let file_target = DiffTarget::Commit {
-        commit_id,
-        path: Some(path.clone()),
-    };
+    let file_target = DiffTarget::commit(commit_id, Some(path.clone()));
     let file_diff = gitcomet_core::domain::Diff::from_unified(file_target.clone(), &unified);
 
     cx.update(|_window, app| {
@@ -4977,10 +4968,10 @@ fn push_unstaged_text_diff_for_blame_toggle(
         std::process::id()
     ));
     let path = PathBuf::from("src/lib.rs");
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: path.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        path.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {

@@ -13,6 +13,7 @@ mod diff_text;
 mod file_disk;
 mod file_editor;
 mod helpers;
+mod hosted_binding;
 mod interactive_rebase;
 mod markdown_state;
 mod preview;
@@ -85,25 +86,38 @@ pub(in crate::view) fn pane_content_width_for_layout(
     )
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(in crate::view) enum MainPaneSurface {
+/// Which view fills the main pane. What the diff view draws inside it is the
+/// separate [`surface::MainPaneSurface`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::view) enum MainPaneContent {
     History,
     Diff,
     InteractiveRebase,
+    /// A hosted pane whose diff session has no target yet; it never shows
+    /// the window's history.
+    UnboundDiff,
 }
 
 impl MainPaneView {
-    pub(in crate::view) fn active_surface(&self) -> MainPaneSurface {
-        match self.active_repo() {
-            Some(repo) if repo.diff_state.diff_target.is_some() => MainPaneSurface::Diff,
-            Some(repo)
-                if repo.interactive_rebase_setup.is_some()
-                    || repo.interactive_cherry_pick_setup.is_some() =>
-            {
-                MainPaneSurface::InteractiveRebase
-            }
-            _ => MainPaneSurface::History,
+    pub(in crate::view) fn active_content(&self) -> MainPaneContent {
+        let repo = self.active_repo();
+        if repo.is_some_and(|repo| self.bound_diff_state(repo).diff_target.is_some()) {
+            MainPaneContent::Diff
+        } else if self.store.binding.is_some() {
+            MainPaneContent::UnboundDiff
+        } else if repo.is_some_and(|repo| {
+            repo.interactive_rebase_setup.is_some() || repo.interactive_cherry_pick_setup.is_some()
+        }) {
+            MainPaneContent::InteractiveRebase
+        } else {
+            MainPaneContent::History
         }
+    }
+
+    /// Whether the main pane shows the history list, rather than a diff or
+    /// an interactive rebase or cherry-pick setup.
+    pub(in crate::view) fn history_is_active_surface(&self) -> bool {
+        self.active_repo().is_some() && self.active_content() == MainPaneContent::History
     }
 }
 
@@ -113,34 +127,39 @@ impl Render for MainPaneView {
         self.main_pane_surface_frame = self.main_pane_surface_frame.wrapping_add(1);
         debug_assert!(matches!(
             self.view_mode,
-            GitCometViewMode::Normal | GitCometViewMode::FocusedMergetool
+            GitCometViewMode::Normal
+                | GitCometViewMode::FocusedMergetool
+                | GitCometViewMode::FocusedDiff
         ));
         self.last_window_size = window.viewport_size();
         self.sync_root_layout_snapshot(cx);
         // The file explorer marks and pins files with unsaved buffers, and those
         // buffers live here rather than in the store, so nothing else can notice
         // them changing.
-        self.sync_unsaved_file_edits_rev(cx);
+        if self.store.binding.is_none() {
+            self.sync_unsaved_file_edits_rev(cx);
+        }
         let history_content_width = self.main_pane_content_width(cx);
         self.history_view.update(cx, |v, _| {
             v.set_last_window_size(self.last_window_size);
             v.set_history_content_width(history_content_width);
         });
 
-        let surface = self.active_surface();
+        let content = self.active_content();
         self.release_stale_submodule_summary_cache();
         // Keep blame in sync with the displayed file/revision while annotate is
         // on; the request is a no-op when the target is unchanged. Render must not
         // force a retry — a persistent error would re-dispatch every frame.
-        if self.annotate_enabled && surface == MainPaneSurface::Diff {
+        if self.annotate_enabled && content == MainPaneContent::Diff {
             self.request_blame_for_current_target(false, cx);
         }
-        let inner = match surface {
-            MainPaneSurface::Diff => self.diff_view(window, cx).into_any_element(),
-            MainPaneSurface::InteractiveRebase => {
+        let inner = match content {
+            MainPaneContent::Diff => self.diff_view(window, cx).into_any_element(),
+            MainPaneContent::UnboundDiff => div().into_any_element(),
+            MainPaneContent::InteractiveRebase => {
                 self.interactive_rebase_view(window, cx).into_any_element()
             }
-            MainPaneSurface::History => self.history_view.clone().into_any_element(),
+            MainPaneContent::History => self.history_view.clone().into_any_element(),
         };
         let search_action = std::mem::take(&mut self.diff_search_probe_render);
         crate::ui_probe::action_phase(search_action, "rendered", || {

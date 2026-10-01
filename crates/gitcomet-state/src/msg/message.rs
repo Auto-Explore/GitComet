@@ -218,6 +218,7 @@ pub enum RepoWatchDegradedReason {
 #[derive(Debug, strum::IntoStaticStr)]
 pub enum Msg {
     IndexedHistory(crate::indexed_history::IndexedHistoryMsg),
+    DiffSession(crate::diff_session::DiffSessionMsg),
     HistoryAuthors(crate::history_authors::HistoryAuthorsMsg),
     HistoryFind(crate::history_find::HistoryFindMsg),
     OpenRepo(PathBuf),
@@ -294,6 +295,29 @@ pub enum Msg {
     RepoActivated {
         repo_id: RepoId,
     },
+    /// A [`WatchLease`](crate::store::WatchLease) was taken or dropped. Sent
+    /// by the lease itself; not meant for dispatch by hand.
+    AcquireWatchLease {
+        repo_id: RepoId,
+        lifetime: u64,
+    },
+    ReleaseWatchLease {
+        repo_id: RepoId,
+        lifetime: u64,
+    },
+    /// Keep a linked worktree watched independently of the active repository.
+    WatchWorktree {
+        repo_id: RepoId,
+        lifetime: u64,
+        path: PathBuf,
+        watch: bool,
+    },
+    WorktreeExternallyChanged {
+        repo_id: RepoId,
+        lifetime: u64,
+        path: PathBuf,
+        change: RepoExternalChange,
+    },
     RepoExternallyChanged {
         repo_id: RepoId,
         change: RepoExternalChange,
@@ -353,6 +377,16 @@ pub enum Msg {
         repo_id: RepoId,
         from: CommitId,
         from_label: String,
+    },
+    /// A comparison with explicit options (a merge-base comparison, or one
+    /// that lists untracked files). `to: None` is the working tree.
+    CompareWithOptions {
+        repo_id: RepoId,
+        from: CommitId,
+        to: Option<CommitId>,
+        options: gitcomet_core::services::ComparisonOptions,
+        from_label: String,
+        to_label: String,
     },
     /// Clear an active range comparison, returning to single/empty selection.
     ClearComparison {
@@ -822,9 +856,7 @@ pub enum Msg {
         repo_id: RepoId,
         context: SafePushAfterCommitContext,
     },
-    FetchAll {
-        repo_id: RepoId,
-    },
+    Fetch(super::FetchMsg),
     PruneMergedBranches {
         repo_id: RepoId,
     },
@@ -1395,7 +1427,7 @@ pub enum InternalMsg {
         to: Option<CommitId>,
         /// The `Effect::LoadRangeFiles` request this answers.
         request: u64,
-        result: Result<Vec<CommitFileChange>, Error>,
+        result: Result<gitcomet_core::services::Comparison, Error>,
     },
     SquashMessagePreviewLoaded {
         repo_id: RepoId,

@@ -13,44 +13,27 @@ workspace = true
 [features]
 default = ["ui-gpui", "gix"]
 ui = ["ui-gpui"]
-ui-gpui-runtime = [
-    "dep:gitcomet-ui-gpui",
-    "dep:gitcomet-win32-window-utils",
-    "dep:sysinfo",
-]
+ui-gpui-runtime = ["gitcomet-app/ui-gpui-runtime", "dep:gitcomet-ui-gpui"]
 ui-gpui = ["ui-gpui-runtime"]
-gix = ["dep:gitcomet-git-gix"]
+gix = ["gitcomet-app/gix", "dep:gitcomet-git-gix"]
 
 [dependencies]
-clap = { workspace = true }
-fs2 = { workspace = true }
+gitcomet-app = { workspace = true }
+rustfs-mimalloc = { workspace = true }
+# `perf-app-launch` only.
 gitcomet-core = { workspace = true }
 gitcomet-git-gix = { workspace = true, optional = true }
-gitcomet-state = { workspace = true }
 gitcomet-ui-gpui = { workspace = true, optional = true }
-log = { workspace = true }
 process-wrap = { workspace = true }
-rustc-hash = { workspace = true }
-rustfs-mimalloc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-smol = { workspace = true }
-sysinfo = { workspace = true, optional = true }
 tempfile = { workspace = true }
-uuid = { workspace = true }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-wayland-client = { workspace = true }
-
-[dev-dependencies]
-gitcomet-core = { workspace = true, features = ["test-support"] }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true }
-signal-hook = { workspace = true }
 
-[target.'cfg(target_os = "windows")'.dependencies]
-gitcomet-win32-window-utils = { path = "../win32-window-utils", optional = true }
+[dev-dependencies]
+gitcomet-core = { workspace = true, features = ["test-support"] }
 
 [target.'cfg(target_os = "windows")'.build-dependencies]
 embed-resource = "3"

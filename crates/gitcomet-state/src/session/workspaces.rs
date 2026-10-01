@@ -122,6 +122,9 @@ pub struct Workspace {
     pub created_at: Option<u64>,
     /// Unix seconds; bumped whenever the workspace's window gains focus.
     pub last_opened_at: Option<u64>,
+    /// Extensions' per-workspace state, carried through every rebuild.
+    #[serde(default)]
+    pub extensions: super::ExtensionNamespaces,
 }
 
 pub fn unix_time_now() -> u64 {
@@ -156,6 +159,7 @@ impl Workspace {
             theme_mode: None,
             created_at: Some(unix_time_now()),
             last_opened_at: None,
+            extensions: super::ExtensionNamespaces::default(),
         }
     }
 
@@ -226,6 +230,8 @@ pub(super) struct WorkspaceFile {
     pub(super) created_at: Option<u64>,
     #[serde(default)]
     pub(super) last_opened_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "super::ExtensionNamespaces::is_absent")]
+    pub(super) extensions: super::ExtensionNamespaces,
 }
 
 const fn restore_on_launch_default() -> bool {
@@ -278,9 +284,7 @@ pub fn persist_workspaces(workspaces: &[Workspace]) -> io::Result<()> {
 }
 
 pub fn persist_workspaces_to_path(workspaces: &[Workspace], path: &Path) -> io::Result<()> {
-    with_session_file_persist_lock(|| {
-        let mut file = load_file(path).unwrap_or_default();
-        file.version = CURRENT_SESSION_FILE_VERSION;
+    update_session_file(path, |file| {
         let stored_workspaces = workspaces_to_file(workspaces);
 
         // Keep the legacy projection coherent while the UI transition is in
@@ -310,7 +314,7 @@ pub fn persist_workspaces_to_path(workspaces: &[Workspace], path: &Path) -> io::
         }
         file.workspaces = Some(stored_workspaces);
 
-        persist_to_path(path, &file)
+        SessionUpdate::Write
     })
 }
 
@@ -346,6 +350,7 @@ pub(super) fn parse_workspaces(workspaces: Vec<WorkspaceFile>) -> Vec<Workspace>
             theme_mode: workspace.theme_mode.and_then(non_empty_string),
             created_at: workspace.created_at,
             last_opened_at: workspace.last_opened_at,
+            extensions: workspace.extensions,
         });
     }
     parsed
@@ -389,6 +394,7 @@ pub(super) fn workspaces_to_file(workspaces: &[Workspace]) -> Vec<WorkspaceFile>
             theme_mode: workspace.theme_mode.clone().and_then(non_empty_string),
             created_at: workspace.created_at,
             last_opened_at: workspace.last_opened_at,
+            extensions: workspace.extensions.clone(),
         });
     }
     stored
@@ -420,6 +426,7 @@ pub(super) fn legacy_workspace_from_projection(file: &UiSessionFile) -> Option<W
         theme_mode: None,
         created_at: None,
         last_opened_at: None,
+        extensions: super::ExtensionNamespaces::default(),
     })
 }
 

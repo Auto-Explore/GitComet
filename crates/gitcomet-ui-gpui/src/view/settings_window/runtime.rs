@@ -197,8 +197,10 @@ impl SettingsRuntimeInfo {
 }
 
 pub(super) fn git_runtime_info_from_state(runtime: GitRuntimeState) -> GitRuntimeInfo {
-    let compatibility_message =
-        format!("GitComet has been tested only with Git {MIN_GIT_MAJOR}.{MIN_GIT_MINOR} or newer.");
+    let compatibility_message = format!(
+        "{} has been tested only with Git {MIN_GIT_MAJOR}.{MIN_GIT_MINOR} or newer.",
+        crate::view::product_name()
+    );
     let compatibility = if matches!(
         runtime.availability,
         gitcomet_core::process::GitExecutableAvailability::Checking

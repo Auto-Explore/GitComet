@@ -1,0 +1,24 @@
+[package]
+name = "gitcomet-extension-api"
+description = "The contract between the GitComet host and compiled-in extensions."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+# Extensions see the kit, the core domain, and the revision-pinned state API;
+# never the UI host (scripts/ci/boundaries.py).
+[dependencies]
+gitcomet-core = { workspace = true }
+gitcomet-state = { workspace = true }
+gitcomet-ui-kit = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+gitcomet-ui-kit = { workspace = true, features = ["test-support"] }
+gpui = { workspace = true, features = ["test-support"] }

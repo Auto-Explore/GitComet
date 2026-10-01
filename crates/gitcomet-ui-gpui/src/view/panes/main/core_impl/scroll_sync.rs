@@ -492,6 +492,9 @@ impl MainPaneView {
 
     pub(in crate::view) fn main_pane_content_width(&self, cx: &mut gpui::Context<Self>) -> Pixels {
         let _ = cx;
+        if let Some(width) = self.hosted_content_width {
+            return width;
+        }
 
         super::pane_content_width_for_layout(
             self.last_window_size.width,
