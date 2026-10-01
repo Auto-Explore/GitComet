@@ -34,7 +34,7 @@ impl<'a> ExplorerOps<'a> {
         path: &'a std::path::Path,
         source: &gitcomet_core::domain::FileSource,
     ) -> Option<Self> {
-        (*source == gitcomet_core::domain::FileSource::WorkingDirectory).then(|| Self {
+        (*source == gitcomet_core::domain::FileSource::WorkingDirectory).then_some(Self {
             host,
             repo_id,
             path,
