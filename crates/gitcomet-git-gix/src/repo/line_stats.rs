@@ -11,7 +11,20 @@ use rustc_hash::FxHashMap;
 use std::path::PathBuf;
 
 /// Mirrors the blob-side cap in `commit_stats`.
-const WORKTREE_MAX_BYTES: u64 = 4 * 1024 * 1024;
+pub(super) const WORKTREE_MAX_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Whether a worktree entry is a regular file the lanes read whole.
+fn within_worktree_cap(metadata: &std::fs::Metadata) -> bool {
+    metadata.is_file() && metadata.len() <= WORKTREE_MAX_BYTES
+}
+
+/// A worktree file's raw bytes; `None` past the cap or unreadable.
+pub(super) fn read_worktree_file_capped(full: &std::path::Path) -> Option<Vec<u8>> {
+    std::fs::metadata(full)
+        .ok()
+        .filter(within_worktree_cap)
+        .and_then(|_| std::fs::read(full).ok())
+}
 
 /// Counts keyed by both sides' content ids (`None` is no content), kept from
 /// the last scan so a refresh re-diffs only files whose content moved.
@@ -357,7 +370,7 @@ fn read_worktree_git_bytes(
         out.extend_from_slice(gix::path::into_bstr(target).as_ref());
         return true;
     }
-    if !metadata.is_file() || metadata.len() > WORKTREE_MAX_BYTES {
+    if !within_worktree_cap(&metadata) {
         return false;
     }
     let Some((pipeline, index)) = pipeline else {
@@ -752,6 +765,54 @@ mod tests {
             !staged
                 .unstaged
                 .contains_key(std::path::Path::new("big.txt"))
+        );
+    }
+
+    /// A save between two staged walks reuses the first (a cache hit) and
+    /// re-seeds the memo as that walk left it: counted pairs stay, unknown
+    /// ones (a binary) are never kept, so the next walk sniffs the binary
+    /// again and diffs only the newly staged file, save or no save.
+    #[test]
+    fn a_staged_walk_reuse_keeps_the_memo_as_the_walk_left_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        for name in ["a.txt", "b.txt", "c.txt"] {
+            write_file(dir, name, &lines("base", 10));
+        }
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "seed"]);
+        write_file(dir, "a.txt", &lines("base", 12));
+        std::fs::write(dir.join("blob.bin"), b"\0staged").unwrap();
+        git_success(dir, &["add", "a.txt", "blob.bin"]);
+
+        let token = CancellationToken::new();
+        let scan = |repo: &super::super::GixRepo| {
+            let entries = repo.worktree_status_cancellable_impl(&token).unwrap();
+            repo.line_stats_for_entries_impl(&entries, &token).unwrap()
+        };
+        let repo = open_repo(dir);
+        take_line_stats_diffs_for_tests();
+        scan(&repo);
+        assert_eq!(
+            take_line_stats_diffs_for_tests(),
+            2,
+            "a.txt and the binary sniff"
+        );
+
+        write_file(dir, "b.txt", &lines("edited", 10));
+        scan(&repo);
+        assert_eq!(take_line_stats_diffs_for_tests(), 1, "the save: only b.txt");
+
+        // Distinct content: the memo is keyed by blob ids, not paths, and
+        // would serve c.txt from b.txt's pair otherwise.
+        write_file(dir, "c.txt", &lines("changed", 10));
+        git_success(dir, &["add", "c.txt"]);
+        scan(&repo);
+        assert_eq!(
+            take_line_stats_diffs_for_tests(),
+            2,
+            "c.txt and the binary sniffed again; a.txt and b.txt from the memo"
         );
     }
 

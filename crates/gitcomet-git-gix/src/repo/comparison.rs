@@ -52,6 +52,32 @@ where
     fields.find(|field| !field.is_empty())
 }
 
+/// `git diff <from> [<to>]` in one of git's machine formats. Omitting `to`
+/// compares `from` against the working tree, where git would write refreshed
+/// stats back to the index even without optional locks; the watcher would
+/// report that as an index change and reload every worktree view.
+fn range_diff_command(
+    workdir: &Path,
+    format: &[&str],
+    from: &CommitId,
+    to: Option<&CommitId>,
+) -> std::process::Command {
+    let mut command = git_workdir_cmd_for(workdir);
+    command
+        .arg("--no-optional-locks")
+        .arg("-c")
+        .arg("diff.autoRefreshIndex=false")
+        .arg("diff")
+        .args(format)
+        .arg("-z")
+        .arg("--find-renames")
+        .arg(from.as_ref());
+    if let Some(to) = to {
+        command.arg(to.as_ref());
+    }
+    command
+}
+
 /// `--raw` rather than `--name-status` because the entry modes are the only
 /// thing in a CLI diff that identifies a submodule pointer, and callers that
 /// build `CommitFileChange` have to flag those the same way the gix tree-diff
@@ -62,19 +88,7 @@ pub(super) fn git_range_status_changes(
     to: Option<&CommitId>,
     cancellation: &CancellationToken,
 ) -> Result<Vec<RangeStatusChange>> {
-    let mut command = git_workdir_cmd_for(workdir);
-    command
-        .arg("--no-optional-locks")
-        .arg("diff")
-        .arg("--raw")
-        .arg("-z")
-        .arg("--no-abbrev")
-        .arg("--find-renames")
-        .arg(from.as_ref());
-    // Omitting `to` makes git compare `from` against the working tree.
-    if let Some(to) = to {
-        command.arg(to.as_ref());
-    }
+    let command = range_diff_command(workdir, &["--raw", "--no-abbrev"], from, to);
     let label = "git diff --raw -z --find-renames";
     let output = run_git_capture_bytes_cancellable(command, label, cancellation)?;
     parse_raw_changes(&output, cancellation)
@@ -152,18 +166,7 @@ pub(super) fn git_range_numstat_counts(
     to: Option<&CommitId>,
     cancellation: &CancellationToken,
 ) -> Result<NumstatCounts> {
-    let mut command = git_workdir_cmd_for(workdir);
-    command
-        .arg("--no-optional-locks")
-        .arg("diff")
-        .arg("--numstat")
-        .arg("-z")
-        .arg("--find-renames")
-        .arg(from.as_ref());
-    // Omitting `to` makes git compare `from` against the working tree.
-    if let Some(to) = to {
-        command.arg(to.as_ref());
-    }
+    let command = range_diff_command(workdir, &["--numstat"], from, to);
     let label = "git diff --numstat -z --find-renames";
     let output = run_git_capture_bytes_cancellable(command, label, cancellation)?;
 
@@ -226,6 +229,14 @@ pub(super) fn commit_to_worktree_files(
     let counts = git_range_numstat_counts(workdir, from, None, cancellation)?;
     let mut files: Vec<CommitFileChange> = status_changes
         .into_iter()
+        // Without the index refresh `--raw` also lists a file whose stat
+        // moved but not its content; numstat reads the content and leaves
+        // it out, while every real change (mode-only, binary) is in it.
+        .filter(|change| {
+            change.kind != FileStatusKind::Modified
+                || change.is_submodule
+                || counts.contains_key(&change.path)
+        })
         .map(|change| {
             let (additions, deletions) = counts.get(&change.path).cloned().unwrap_or((None, None));
             CommitFileChange::new(change.path, change.kind)
@@ -238,10 +249,9 @@ pub(super) fn commit_to_worktree_files(
         .collect();
     if include_untracked {
         for path in untracked_paths(workdir, cancellation)? {
-            let additions = std::fs::read(workdir.join(&path)).ok().and_then(|bytes| {
-                let (additions, _) = super::log::line_stats_from_bytes(&[], &bytes);
-                additions
-            });
+            // Counted from disk, under the tracked lanes' size cap.
+            let additions = super::line_stats::read_worktree_file_capped(&workdir.join(&path))
+                .and_then(|bytes| super::log::line_stats_from_bytes(&[], &bytes).0);
             files.push(
                 CommitFileChange::new(path, FileStatusKind::Untracked)
                     .with_line_counts(additions, additions.map(|_| 0)),
@@ -345,6 +355,109 @@ fn resolve_commit(repo: &gix::Repository, id: &CommitId) -> Result<gix::ObjectId
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A comparison against the working tree is a read: git must not write
+    /// refreshed stats back to the index (the watcher would report an index
+    /// change and reload every worktree view), and a file whose stat moved
+    /// without its content is not a change.
+    #[test]
+    fn comparison_against_the_worktree_does_not_write_the_index() {
+        use crate::repo::status::tests::{git_success, init_test_repo, open_repo, write_file};
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        write_file(dir, "touched.txt", "unchanged content\n");
+        write_file(dir, "edited.txt", "one\ntwo\n");
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "seed"]);
+        // Stale stats: git would re-hash both and record the new stats.
+        let stale =
+            filetime::FileTime::from_unix_time(filetime::FileTime::now().unix_seconds() - 120, 0);
+        write_file(dir, "edited.txt", "one\n2\n");
+        for name in ["touched.txt", "edited.txt"] {
+            filetime::set_file_mtime(dir.join(name), stale).unwrap();
+        }
+        let index = dir.join(".git/index");
+        let before = std::fs::read(&index).unwrap();
+
+        let repo = open_repo(dir);
+        let head = super::super::history::gix_head_id_or_none(&repo.repo())
+            .unwrap()
+            .unwrap();
+        let files = commit_to_worktree_files(
+            dir,
+            &CommitId(head.to_string().into()),
+            false,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        let listed: Vec<_> = files
+            .iter()
+            .map(|file| {
+                (
+                    file.path.as_path(),
+                    file.kind,
+                    file.additions,
+                    file.deletions,
+                )
+            })
+            .collect();
+        assert_eq!(
+            listed,
+            vec![(
+                Path::new("edited.txt"),
+                FileStatusKind::Modified,
+                Some(1),
+                Some(1)
+            )]
+        );
+        assert_eq!(
+            std::fs::read(&index).unwrap(),
+            before,
+            "the comparison refreshed index stat metadata"
+        );
+    }
+
+    /// Untracked files are counted from disk under the cap the tracked lanes
+    /// use; past it they report no counts instead of being read whole.
+    #[test]
+    fn untracked_counts_stop_at_the_worktree_size_cap() {
+        use crate::repo::status::tests::{git_success, init_test_repo, open_repo, write_file};
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        write_file(dir, "tracked.txt", "one\n");
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "seed"]);
+        write_file(dir, "small.txt", "a\nb\n");
+        let oversized =
+            "line\n".repeat(super::super::line_stats::WORKTREE_MAX_BYTES as usize / 5 + 1);
+        std::fs::write(dir.join("big.txt"), oversized).unwrap();
+
+        let repo = open_repo(dir);
+        let head = super::super::history::gix_head_id_or_none(&repo.repo())
+            .unwrap()
+            .unwrap();
+        let files = commit_to_worktree_files(
+            dir,
+            &CommitId(head.to_string().into()),
+            true,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        let counts = |name: &str| {
+            let file = files
+                .iter()
+                .find(|file| file.path == Path::new(name))
+                .unwrap();
+            (file.kind, file.additions, file.deletions)
+        };
+        assert_eq!(
+            counts("small.txt"),
+            (FileStatusKind::Untracked, Some(2), Some(0))
+        );
+        assert_eq!(counts("big.txt"), (FileStatusKind::Untracked, None, None));
+    }
 
     #[test]
     fn raw_records_keep_rename_sources_ids_and_modes() {
