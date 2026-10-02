@@ -79,12 +79,10 @@ pub(crate) fn stable_path_bytes(path: &Path) -> Vec<u8> {
 }
 
 pub(crate) fn fnv1a_64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
+    use std::hash::Hasher as _;
+    let mut hash = fnv::FnvHasher::default();
+    hash.write(bytes);
+    hash.finish()
 }
 
 // Test helper: constructs a git stage:path blob spec for index stage testing.

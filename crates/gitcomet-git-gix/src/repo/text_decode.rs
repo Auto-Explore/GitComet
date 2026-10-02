@@ -230,7 +230,8 @@ impl GixRepo {
         };
         let old = decode(text.old_source)?;
         let new = decode(text.new_source)?;
-        Ok(FileDiffText::new_sources(path, old, new))
+        Ok(FileDiffText::new_sources(path, old, new)
+            .with_large_sides(text.old_large, text.new_large))
     }
 
     fn decode_file_diff_source(

@@ -56,6 +56,111 @@ fn open_repo(workdir: &Path) -> GixRepo {
     GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
 }
 
+/// Classification costs a header lookup and a small read per file (~2 us), so
+/// it runs far past the line-stat limit: asset imports are the commits whose
+/// badges matter. Only enormous commits skip it.
+#[test]
+fn commit_pointer_classification_outlasts_the_stats_limit() {
+    for (count, classified) in [
+        (COMMIT_STATS_MAX_FILES + 1, true),
+        (COMMIT_POINTER_MAX_FILES + 1, false),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let workdir = dir.path();
+        init_test_repo(workdir);
+        // Local attributes activate LFS without adding a file to the commit.
+        write_file(workdir, ".git/info/attributes", "*.bin filter=lfs\n");
+        let pointer = format!(
+            "version https://git-lfs.github.com/spec/v1\noid sha256:{}\nsize 1\n",
+            "1".repeat(64)
+        );
+        let mut stream = format!(
+            "blob\nmark :1\ndata {}\n{pointer}\ncommit refs/heads/pointers\n\
+             committer T <t@t> 1700000000 +0000\ndata 8\npointers\n",
+            pointer.len()
+        );
+        for n in 0..count {
+            stream.push_str(&format!("M 100644 :1 {n}.bin\n"));
+        }
+        let mut child = crate::util::git_workdir_cmd_for(workdir)
+            .args(["fast-import", "--quiet"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        {
+            use std::io::Write as _;
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(stream.as_bytes())
+                .unwrap();
+        }
+        assert!(child.wait().unwrap().success());
+        let id = CommitId(git_stdout(workdir, &["rev-parse", "pointers"]).into());
+        let details = open_repo(workdir).commit_details_impl(&id).unwrap();
+        assert_eq!(details.files.len(), count);
+        assert!(
+            details
+                .files
+                .iter()
+                .all(|file| file.large_file.is_some() == classified),
+            "{count} files"
+        );
+    }
+}
+
+#[test]
+fn pointer_support_scan_is_lazy_reused_and_refreshed_with_support() {
+    let dir = tempfile::tempdir().unwrap();
+    let workdir = dir.path();
+    init_test_repo(workdir);
+    git_success(workdir, &["commit", "--allow-empty", "-m", "empty"]);
+    let repo = open_repo(workdir);
+    let head = || CommitId(git_stdout(workdir, &["rev-parse", "HEAD"]).into());
+    assert!(repo.commit_details_impl(&head()).unwrap().files.is_empty());
+    assert!(
+        repo.large_file_scan.lock().unwrap().is_none(),
+        "empty changes must not scan attributes, refs or the index"
+    );
+    commit_file(
+        workdir,
+        "example.bin",
+        &format!(
+            "version https://git-lfs.github.com/spec/v1\noid sha256:{}\nsize 12\n",
+            "1".repeat(64)
+        ),
+        "example",
+    );
+    assert!(
+        repo.commit_details_impl(&head()).unwrap().files[0]
+            .large_file
+            .is_none()
+    );
+    let cached = repo.large_file_scan.lock().unwrap().clone().unwrap();
+    assert!(
+        repo.commit_details_impl(&head()).unwrap().files[0]
+            .large_file
+            .is_none()
+    );
+    assert!(Arc::ptr_eq(
+        &cached,
+        repo.large_file_scan.lock().unwrap().as_ref().unwrap()
+    ));
+    write_file(workdir, ".gitattributes", "*.bin filter=lfs\n");
+    repo.large_file_support_impl(&CancellationToken::new())
+        .unwrap();
+    assert!(
+        repo.commit_details_impl(&head()).unwrap().files[0]
+            .large_file
+            .is_some()
+    );
+    assert!(!Arc::ptr_eq(
+        &cached,
+        repo.large_file_scan.lock().unwrap().as_ref().unwrap()
+    ));
+}
+
 #[test]
 fn cursor_gate_skips_until_after_last_seen() {
     let cursor = LogCursor {

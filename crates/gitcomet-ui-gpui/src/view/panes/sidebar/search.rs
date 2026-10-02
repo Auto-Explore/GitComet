@@ -219,6 +219,10 @@ impl SidebarPaneView {
                         Some(CollapsedSidebarSection::Stashes) => {
                             matches!(repo.stashes, Loadable::Ready(_) | Loadable::Error(_))
                         }
+                        Some(CollapsedSidebarSection::Annex) => matches!(
+                            repo.large_file_support,
+                            Loadable::Ready(_) | Loadable::Error(_)
+                        ),
                         _ => {
                             (matches!(repo.branches, Loadable::Ready(_) | Loadable::Error(_))
                                 && matches!(
@@ -432,7 +436,7 @@ impl SidebarPaneView {
                     sticky::NavigationTarget::RowKey(format!("tree:stash:{}", selected.0).into())
                 })
             }
-            CollapsedSidebarSection::Files => None,
+            CollapsedSidebarSection::Annex | CollapsedSidebarSection::Files => None,
         }
     }
 

@@ -1,6 +1,6 @@
 use crate::msg::{InternalMsg, Msg, RepoCommandKind};
 use gitcomet_core::auth::{ScopedStagedGitAuth, StagedGitAuth};
-use gitcomet_core::domain::Upstream;
+use gitcomet_core::domain::{DiffTarget, Upstream};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::{
@@ -26,6 +26,67 @@ fn pull_mode_suffix(mode: PullMode) -> Option<&'static str> {
         PullMode::FastForwardIfPossible => Some("fast-forward if possible"),
         PullMode::FastForwardOnly => Some("fast-forward only"),
         PullMode::Rebase => Some("rebase"),
+    }
+}
+
+/// One-line subject for an activity row: the paths, patterns or remote.
+fn large_file_command_context(command: &gitcomet_core::large_files::LargeFileCommand) -> String {
+    use gitcomet_core::large_files::LargeFileCommand as C;
+    let paths = |paths: &[PathBuf]| match paths {
+        [] => "all files".to_string(),
+        [path] => path.display().to_string(),
+        many => format!("{} files", many.len()),
+    };
+    match command {
+        C::LfsPull { paths: p } | C::LfsLock { paths: p } => paths(p),
+        C::LfsFetchForDiff { target } => match target {
+            DiffTarget::WorkingTree { path, .. }
+            | DiffTarget::Commit { path, .. }
+            | DiffTarget::CommitRange {
+                path: Some(path), ..
+            } => path.display().to_string(),
+            _ => "selected revisions".to_string(),
+        },
+        C::LfsUnlock { paths: p, force } => {
+            format!("{}{}", paths(p), if *force { " · force" } else { "" })
+        }
+        C::LfsPushAll { remote } => remote.clone(),
+        C::LfsTrack { patterns, .. } => patterns.join(", "),
+        C::LfsFetchAll => "all refs".to_string(),
+        C::LfsPrune | C::LfsFsck | C::LfsInstall => "this repository".to_string(),
+        C::AnnexGet { paths: p, from } | C::AnnexDrop { paths: p, from, .. } => match from {
+            Some(from) => format!("{} · {from}", paths(p)),
+            None => paths(p),
+        },
+        C::AnnexGetKeys { keys } => match keys.as_slice() {
+            [key] => key.clone(),
+            many => format!("{} versions", many.len()),
+        },
+        C::AnnexCopy { paths: p, to } | C::AnnexMove { paths: p, to } => {
+            format!("{} · to {to}", paths(p))
+        }
+        C::AnnexUnlock { paths: p } | C::AnnexLock { paths: p } | C::AnnexAdd { paths: p } => {
+            paths(p)
+        }
+        C::AnnexPull { content } | C::AnnexPush { content } | C::AnnexSync { content } => {
+            if *content {
+                "with content".to_string()
+            } else {
+                "branches only".to_string()
+            }
+        }
+        C::AnnexAdjust { mode } => mode.label().to_string(),
+        C::AnnexLeaveAdjusted { base } => base.clone(),
+        C::AnnexEnableRemote { name, .. } | C::AnnexInitRemote { name, .. } => name.clone(),
+        C::AnnexTrust { repository, trust } => format!("{repository} · {}", trust.label()),
+        C::AnnexDescribe { repository, .. } => repository.clone(),
+        C::AnnexNumcopies { copies } => copies.to_string(),
+        C::AnnexDropUnused { force, .. } => {
+            format!("unused content{}", if *force { " · force" } else { "" })
+        }
+        C::AnnexInit | C::AnnexFsck | C::AnnexRestage | C::AnnexWebapp | C::AnnexStopAssistant => {
+            "this repository".to_string()
+        }
     }
 }
 
@@ -144,6 +205,7 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
             path.display(),
             if *stage { " · stage after saving" } else { "" }
         ),
+        RepoCommandKind::LargeFile { command } => large_file_command_context(command),
         RepoCommandKind::AppendGitattributesRule { rule } => rule.clone(),
         RepoCommandKind::AppendGitignorePatterns { patterns } => match patterns.as_slice() {
             [] => GITIGNORE_FILE_NAME.to_string(),
@@ -893,6 +955,22 @@ pub(super) fn schedule_apply_worktree_patch(
         RepoCommandKind::ApplyWorktreePatch { reverse },
         move |repo| repo.apply_unified_patch_to_worktree_with_output(patch.as_bytes(), reverse),
     );
+}
+
+pub(super) fn schedule_large_file_command(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    command: gitcomet_core::large_files::LargeFileCommand,
+    auth: Option<StagedGitAuth>,
+) {
+    let kind = RepoCommandKind::LargeFile {
+        command: command.clone(),
+    };
+    schedule_repo_command(executor, repos, msg_tx, repo_id, kind, move |repo| {
+        run_with_git_auth(auth, || repo.run_large_file_command(&command))
+    });
 }
 
 pub(super) fn schedule_fetch_all(

@@ -40,6 +40,8 @@ pub(super) fn started(
         output_bytes: 0,
         output_truncated: false,
         latest_line: String::new(),
+        command_started: false,
+        transfer: None,
         progress_lane,
         progress: None,
     });
@@ -62,6 +64,7 @@ pub(super) fn apply_event(
 
     let mut started_first_hook = false;
     match event {
+        GitOperationEvent::CommandStarted => operation.command_started = true,
         GitOperationEvent::Output { chunks } => {
             for chunk in chunks {
                 let text = sanitize_activity_text(&chunk.text);
@@ -104,6 +107,10 @@ pub(super) fn apply_event(
                 exit_code: None,
                 duration: None,
             });
+        }
+        GitOperationEvent::TransferProgress(progress) => {
+            operation.latest_line = progress.summary();
+            operation.transfer = Some(progress);
         }
         GitOperationEvent::HookFinished {
             id,
@@ -178,7 +185,7 @@ pub(super) fn finished(
         return;
     };
 
-    if !repo.feedback.hook_activity[index].has_hooks() {
+    if !repo.feedback.hook_activity[index].is_reportable() {
         repo.feedback.hook_activity.remove(index);
         repo.feedback.hook_activity_rev = repo.feedback.hook_activity_rev.wrapping_add(1);
         return;
@@ -230,7 +237,7 @@ fn trim_metadata(repo: &mut RepoState) {
         .feedback
         .hook_activity
         .iter()
-        .filter(|operation| operation.has_hooks())
+        .filter(|operation| operation.is_reportable())
         .count()
         > MAX_ACTIVITY_ENTRIES
     {
@@ -238,7 +245,7 @@ fn trim_metadata(repo: &mut RepoState) {
             .feedback
             .hook_activity
             .iter()
-            .position(|operation| operation.has_hooks() && !operation.status.is_active())
+            .position(|operation| operation.is_reportable() && !operation.status.is_active())
         else {
             break;
         };
@@ -278,7 +285,7 @@ fn enforce_repo_output_budget(repo: &mut RepoState) {
         .feedback
         .hook_activity
         .iter()
-        .filter(|operation| operation.has_hooks())
+        .filter(|operation| operation.is_reportable())
         .map(|operation| operation.output_bytes)
         .sum::<usize>();
     if total <= MAX_REPO_OUTPUT_BYTES {
@@ -288,7 +295,8 @@ fn enforce_repo_output_budget(repo: &mut RepoState) {
         if total <= MAX_REPO_OUTPUT_BYTES {
             break;
         }
-        if !operation.has_hooks() || operation.status.is_active() || operation.output_bytes == 0 {
+        if !operation.is_reportable() || operation.status.is_active() || operation.output_bytes == 0
+        {
             continue;
         }
         total = total.saturating_sub(operation.output_bytes);
@@ -303,7 +311,7 @@ fn enforce_repo_output_budget(repo: &mut RepoState) {
         if total <= MAX_REPO_OUTPUT_BYTES {
             break;
         }
-        if !operation.has_hooks() {
+        if !operation.is_reportable() {
             continue;
         }
         let previous = operation.output_bytes;
@@ -380,6 +388,34 @@ mod tests {
         )
     }
 
+    #[test]
+    fn silent_annex_command_is_reportable_and_cancellable_from_startup() {
+        let mut repo = repo_state();
+        let id = GitOperationId(1);
+        started(
+            &mut repo,
+            id,
+            "git annex sync".into(),
+            None,
+            SystemTime::UNIX_EPOCH,
+            false,
+        );
+        apply_event(&mut repo, id, GitOperationEvent::CommandStarted);
+        assert!(repo.feedback.hook_activity[0].is_reportable());
+        assert!(repo.feedback.hook_activity[0].transfer.is_none());
+        assert!(request_cancel(&mut repo, id));
+        finished(
+            &mut repo,
+            id,
+            GitOperationOuterOutcome::Cancelled,
+            Duration::from_millis(1),
+        );
+        assert_eq!(
+            repo.feedback.hook_activity[0].status,
+            GitHookOperationStatus::Cancelled
+        );
+    }
+
     fn hook_id(child_id: u64) -> HookExecutionId {
         HookExecutionId {
             sid: Arc::from("test-session"),
@@ -435,6 +471,47 @@ mod tests {
         );
 
         assert!(repo.feedback.hook_activity.is_empty());
+    }
+
+    /// An explicit `git lfs fetch` runs no hook; its progress alone must keep
+    /// the entry visible, or a long download would vanish from the panel.
+    #[test]
+    fn transfer_progress_is_shown_and_kept_without_hooks() {
+        let mut repo = repo_state();
+        let operation_id = GitOperationId(12);
+        started(
+            &mut repo,
+            operation_id,
+            "LFS fetch".to_string(),
+            Some("all refs".to_string()),
+            SystemTime::UNIX_EPOCH,
+            false,
+        );
+        apply_event(
+            &mut repo,
+            operation_id,
+            GitOperationEvent::TransferProgress(gitcomet_core::git_operation::TransferProgress {
+                direction: "download".into(),
+                files_done: 2,
+                files_total: 4,
+                bytes_done: 1_000_000,
+                bytes_total: 8_000_000,
+                name: "a.bin".into(),
+            }),
+        );
+        assert_eq!(
+            repo.feedback.hook_activity[0].latest_line,
+            "LFS download 2/4 files · 1 MB of 8 MB"
+        );
+
+        finished(
+            &mut repo,
+            operation_id,
+            GitOperationOuterOutcome::Succeeded,
+            Duration::from_millis(10),
+        );
+        assert_eq!(repo.feedback.hook_activity.len(), 1);
+        assert!(repo.feedback.hook_activity[0].transfer.is_some());
     }
 
     #[test]
@@ -697,7 +774,7 @@ mod tests {
             .feedback
             .hook_activity
             .iter()
-            .filter(|operation| operation.has_hooks())
+            .filter(|operation| operation.is_reportable())
             .map(|operation| operation.output_bytes)
             .sum::<usize>();
         assert_eq!(

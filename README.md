@@ -126,6 +126,8 @@ GitComet started from frustration with existing tools on huge codebases like Chr
   - Multi-repository browsing
   - Inline and side-by-side diffs
   - 2-way and 3-way merge tools
+  - Git LFS: file status, content downloads, locks and tracking ([docs](docs/git-lfs.md))
+  - git-annex: content get/drop/copy/move, special remotes, adjusted branches ([docs](docs/git-annex.md))
 
 #### Professional
 

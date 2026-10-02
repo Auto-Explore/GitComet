@@ -135,6 +135,10 @@ pub struct GitHookOperation {
     pub output_bytes: usize,
     pub output_truncated: bool,
     pub latest_line: String,
+    /// An explicit command requested activity before producing any output.
+    pub command_started: bool,
+    /// Latest large-file transfer progress, when the operation moved content.
+    pub transfer: Option<gitcomet_core::git_operation::TransferProgress>,
     /// Shown as a progress card while it runs (fetch, pull, maintenance).
     pub progress_lane: bool,
     /// The newest meter git printed, or one GitComet measured itself.
@@ -144,6 +148,11 @@ pub struct GitHookOperation {
 impl GitHookOperation {
     pub fn has_hooks(&self) -> bool {
         !self.hooks.is_empty()
+    }
+
+    /// Explicit commands must expose cancellation even while silent.
+    pub fn is_reportable(&self) -> bool {
+        self.command_started || self.has_hooks() || self.transfer.is_some()
     }
 
     pub fn active_hook_name(&self) -> Option<&str> {
@@ -197,12 +206,20 @@ pub struct InteractiveCherryPickSetup {
     pub full_messages: Loadable<()>,
 }
 
-/// Deferred operation context retained between an initial failure and the
-/// user's follow-up action (authentication retry or confirmed force-push).
+/// Deferred context for authentication retries, confirmed force pushes and
+/// queued large-file commands.
 #[derive(Clone, Debug, Default)]
 pub struct RepoPendingState {
     pub commit_retry: Option<PendingCommitRetry>,
     pub force_push_lease: Option<ForcePushLease>,
+    /// Annex operations waiting for a conflicting pull or push to finish.
+    pub(crate) large_file_commands: std::collections::VecDeque<PendingLargeFileCommand>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PendingLargeFileCommand {
+    pub command: gitcomet_core::large_files::LargeFileCommand,
+    pub auth: Option<gitcomet_core::auth::StagedGitAuth>,
 }
 
 #[derive(Clone, Debug)]

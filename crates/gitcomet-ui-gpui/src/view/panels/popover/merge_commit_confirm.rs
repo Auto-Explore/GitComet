@@ -12,6 +12,14 @@ pub(super) fn merge_commit_repo_is_ready(repo: Option<&RepoState>) -> bool {
     repo.is_some_and(|repo| !repo.history_rewrite_busy())
 }
 
+pub(super) fn merge_commit_is_allowed(
+    repo: Option<&RepoState>,
+    settings: &gitcomet_state::model::LargeFileSettings,
+) -> bool {
+    merge_commit_repo_is_ready(repo)
+        && !repo.is_some_and(|repo| repo.annex_takes_over_pull_push(settings))
+}
+
 pub(super) fn panel(
     this: &mut PopoverHost,
     repo_id: RepoId,
@@ -32,13 +40,13 @@ pub(super) fn panel(
         })
         .unwrap_or_default();
     let destination = merge_commit_destination_label(repo);
-    let merge_ready = merge_commit_repo_is_ready(repo);
+    let merge_ready = merge_commit_is_allowed(repo, &this.state.large_file_settings);
 
     let dispatch = move |this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>| {
         // The dialog can stay open while another command starts. Recheck the
         // live repository instead of relying only on the render-time button.
         let repo = this.state.repos.iter().find(|repo| repo.id == repo_id);
-        if !merge_commit_repo_is_ready(repo) {
+        if !merge_commit_is_allowed(repo, &this.state.large_file_settings) {
             cx.notify();
             return;
         }

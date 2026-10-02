@@ -1,6 +1,17 @@
 use super::*;
 
 #[test]
+fn fnv_preserves_existing_cache_hashes() {
+    for (bytes, expected) in [
+        (&b""[..], 0xcbf2_9ce4_8422_2325),
+        (&b"hello"[..], 0xa430_d846_80aa_bd0b),
+        (&b"/tmp/repo\0\xff"[..], 0xa2a3_b27f_0667_4725),
+    ] {
+        assert_eq!(fnv1a_64(bytes), expected);
+    }
+}
+
+#[test]
 fn activity_progress_deadline_survives_continuous_small_chunks() {
     let start = Instant::now();
     let mut buffer = ActivityOutputBuffer::default();
@@ -287,7 +298,7 @@ fn hook_free_commands_do_not_enable_trace2() {
     ] {
         let mut cmd = Command::new("git");
         cmd.args(args);
-        assert!(Trace2Monitor::start(&mut cmd, Some(&operation)).is_none());
+        assert!(Trace2Monitor::start(&mut cmd, Some(&operation), &LivenessClock::new()).is_none());
         assert!(!cmd.get_envs().any(|(key, _)| key == "GIT_TRACE2_EVENT"));
     }
     for args in [
@@ -303,7 +314,7 @@ fn hook_free_commands_do_not_enable_trace2() {
         let mut cmd = Command::new("git");
         cmd.args(args);
         assert!(!command_is_known_hook_free(&cmd));
-        assert!(Trace2Monitor::start(&mut cmd, Some(&operation)).is_some());
+        assert!(Trace2Monitor::start(&mut cmd, Some(&operation), &LivenessClock::new()).is_some());
     }
     let mut wrapper = Command::new("custom-git-wrapper");
     wrapper.args(["remote", "set-url", "origin", "url"]);
@@ -359,7 +370,8 @@ fn trace2_monitor_finish_and_drop_drain_the_final_unterminated_event() {
             sender.send(event).unwrap();
         });
         let mut cmd = Command::new("git");
-        let monitor = Trace2Monitor::start(&mut cmd, Some(&context)).unwrap();
+        let monitor =
+            Trace2Monitor::start(&mut cmd, Some(&context), &LivenessClock::new()).unwrap();
         std::fs::write(
             &monitor._path,
             concat!(
@@ -552,6 +564,79 @@ fn run_git_failure_adds_gpg_signing_hint_for_missing_gpg_program_path() {
 }
 
 #[test]
+fn classifies_git_lfs_failures_from_stderr() {
+    let cases = [
+        (
+            "git-lfs filter-process: line 1: git-lfs: command not found\nfatal: a.bin: smudge filter lfs failed",
+            GitFailureId::LfsNotInstalled,
+        ),
+        (
+            "git: 'lfs' is not a git command. See 'git --help'.",
+            GitFailureId::LfsNotInstalled,
+        ),
+        (
+            "Error downloading object: a.bin (6667b2d): Smudge error: Error downloading a.bin",
+            GitFailureId::LfsObjectMissing,
+        ),
+        (
+            "fatal: a.bin: smudge filter lfs failed",
+            GitFailureId::LfsObjectMissing,
+        ),
+        (
+            "Unable to push locked files:\n* art/hero.psd - alice\nerror: failed to push",
+            GitFailureId::LfsLocked,
+        ),
+        (
+            "LFS upload failed:\n  (missing) a.bin",
+            GitFailureId::LfsUploadFailed,
+        ),
+        ("fatal: not a git repository", GitFailureId::CommandFailed),
+        (
+            "error: cannot run gpg: No such file or directory",
+            GitFailureId::CommandFailed,
+        ),
+    ];
+    for (stderr, expected) in cases {
+        assert_eq!(classify_git_failure(stderr), expected, "{stderr}");
+    }
+    let detail = add_lfs_failure_hint("boom".to_string(), GitFailureId::LfsNotInstalled);
+    assert!(detail.starts_with("boom\n\nHint: Git LFS is not installed"));
+    assert_eq!(
+        add_lfs_failure_hint("boom".to_string(), GitFailureId::CommandFailed),
+        "boom"
+    );
+}
+
+/// Real stderr: the LFS hooks' own message, dash's (Debian/Ubuntu `sh`)
+/// missing-command form, and a present git-lfs reporting a missing object,
+/// whose "no such file or directory" is about the object, not the binary.
+#[test]
+fn missing_git_lfs_is_told_apart_from_missing_lfs_objects() {
+    for stderr in [
+        "\nThis repository is configured for Git LFS but 'git-lfs' was not found on your path. If you no longer wish to use Git LFS, remove this hook by deleting the 'pre-push' file in the hooks directory (set by 'core.hookspath'; usually '.git/hooks').\n\nerror: failed to push some refs to '../r2.git'",
+        "git-lfs filter-process: 1: git-lfs: not found\nerror: could not read greeting from subprocess 'git-lfs filter-process'\nfatal: a.bin: clean filter 'lfs' failed",
+        "'git-lfs' is not recognized as an internal or external command,\noperable program or batch file.",
+    ] {
+        assert_eq!(
+            classify_git_failure(stderr),
+            GitFailureId::LfsNotInstalled,
+            "{stderr}"
+        );
+    }
+    let missing_object = "Error downloading object: a.bin (6667b2d): Smudge error: Error reading from media file: open /r/.git/lfs/objects/66/67/6667b2d: no such file or directory\n\nerror: external filter 'git-lfs filter-process' failed\nfatal: a.bin: smudge filter lfs failed";
+    assert_eq!(
+        classify_git_failure(missing_object),
+        GitFailureId::LfsObjectMissing
+    );
+    assert_ne!(
+        classify_git_failure(
+            "git-lfs: open .git/lfs/objects/66/67/6667b2d: no such file or directory"
+        ),
+        GitFailureId::LfsNotInstalled
+    );
+}
+
+#[test]
 fn run_command_with_timeout_returns_structured_timeout_failure() {
     let err = run_command_with_timeout(
         sleep_command(2),
@@ -593,13 +678,169 @@ fn git_command_wait_poll_is_short_for_fast_commands_and_capped_for_slow_ones() {
         Some(Duration::from_millis(5))
     );
     assert_eq!(
-        git_command_wait_poll(Duration::from_millis(50), Duration::from_millis(52)),
+        git_command_wait_poll(Duration::from_millis(50), Duration::from_millis(2)),
         Some(Duration::from_millis(2))
     );
     assert_eq!(
-        git_command_wait_poll(Duration::from_millis(50), Duration::from_millis(50)),
+        git_command_wait_poll(Duration::from_millis(50), Duration::ZERO),
         None
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn chatty_command_outlives_a_silence_deadline_shorter_than_its_runtime() {
+    let output = run_command_with_timeout(
+        shell_command("for i in 1 2 3 4 5 6; do echo tick; sleep 0.25; done"),
+        "git synthetic",
+        Duration::from_millis(600),
+        None,
+    )
+    .expect("regular output keeps the command alive");
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .matches("tick")
+            .count(),
+        6
+    );
+}
+
+/// git-lfs prints nothing without a TTY, so its progress file is the only
+/// sign of life. A checkout (or a new worktree's) can bring LFS into a
+/// repository whose current commit has none, so it is monitored all the same.
+#[cfg(unix)]
+#[test]
+fn checkout_that_brings_in_lfs_stays_alive_through_its_progress_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let workdir = dir.path();
+    let git = |args: &[&str]| {
+        let mut cmd = Command::new("git");
+        cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-C"])
+            .arg(workdir)
+            .args(args);
+        assert!(cmd.status().unwrap().success(), "{args:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "no lfs"]);
+    git(&["switch", "-q", "-c", "assets"]);
+    std::fs::write(workdir.join(".gitattributes"), "*.bin filter=lfs\n").unwrap();
+    std::fs::write(workdir.join("a.bin"), "content\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "lfs"]);
+    git(&["switch", "-q", "main"]);
+    git(&[
+        "config",
+        "filter.lfs.smudge",
+        "for i in 1 2 3 4 5 6; do if [ -n \"$GIT_LFS_PROGRESS\" ]; then \
+         echo \"download $i/6 1/1 a.bin\" >> \"$GIT_LFS_PROGRESS\"; fi; sleep 0.25; done; cat",
+    ]);
+    git(&["config", "filter.lfs.required", "true"]);
+    let repo = crate::repo::GixRepo::new(
+        workdir.to_path_buf(),
+        gix::open(workdir).unwrap().into_sync(),
+    );
+    let worktree = dir.path().join("wt");
+    let worktree_arg = worktree.to_str().unwrap();
+    for (label, args, checked_out) in [
+        (
+            "git worktree add",
+            vec!["worktree", "add", "-q", "--detach", worktree_arg, "assets"],
+            worktree.as_path(),
+        ),
+        ("git checkout", vec!["checkout", "-q", "assets"], workdir),
+    ] {
+        let mut cmd = repo.git_workdir_cmd();
+        cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .args(&args);
+        run_command_with_timeout(cmd, label, Duration::from_millis(600), None)
+            .unwrap_or_else(|e| panic!("progress lines keep `{label}` alive: {e}"));
+        assert_eq!(
+            std::fs::read_to_string(checked_out.join("a.bin")).unwrap(),
+            "content\n"
+        );
+    }
+}
+
+#[test]
+fn submodule_and_worktree_checkouts_may_transfer_lfs_content() {
+    for args in [["submodule", "update"], ["worktree", "add"]] {
+        let mut cmd = Command::new("git");
+        cmd.args(args);
+        assert!(may_transfer_lfs_content(&cmd), "{args:?}");
+    }
+}
+
+#[test]
+fn lfs_progress_drains_a_line_written_during_the_last_emit() {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(file.path(), "download 1/2 500/1000 a.bin\n").unwrap();
+    let done = Arc::new(AtomicBool::new(false));
+    let writer_done = Arc::clone(&done);
+    let path = file.path().to_path_buf();
+    let (sender, receiver) = mpsc::channel();
+    let context = GitOperationContext::new("lfs progress", move |_, event| {
+        if !writer_done.load(Ordering::Acquire) {
+            use std::io::Write;
+            let mut writer = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap();
+            writeln!(writer, "download 2/2 1000/1000 a.bin").unwrap();
+            writer_done.store(true, Ordering::Release);
+        }
+        sender.send(event).unwrap();
+    });
+    lfs_progress_tail_loop(file.path(), Some(&context), &done, &LivenessClock::new());
+    let events: Vec<_> = receiver.try_iter().collect();
+    assert!(
+        matches!(events.last(), Some(GitOperationEvent::TransferProgress(p)) if p.bytes_done == 1000),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn lfs_progress_monitor_reports_lines_and_keeps_the_command_alive() {
+    let (sender, receiver) = mpsc::channel();
+    let context = GitOperationContext::new("lfs progress", move |_, event| {
+        sender.send(event).unwrap();
+    });
+    let liveness = LivenessClock::new();
+    let mut cmd = Command::new("git");
+    cmd.args(["lfs", "pull"]);
+    let mut monitor = LfsProgressMonitor::start(&mut cmd, Some(&context), &liveness)
+        .expect("lfs commands are monitored");
+    thread::sleep(Duration::from_millis(40));
+    std::fs::write(&monitor._path, "download 1/2 500/1000 a.bin\n").unwrap();
+    monitor.stop();
+    assert!(
+        liveness.idle() < Duration::from_millis(40),
+        "a line counts as activity"
+    );
+    let events: Vec<_> = receiver.try_iter().collect();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            GitOperationEvent::TransferProgress(progress) if progress.files_done == 1 && progress.bytes_total == 1000
+        )),
+        "{events:?}"
+    );
+
+    let mut status = Command::new("git");
+    status.arg("status");
+    assert!(LfsProgressMonitor::start(&mut status, None, &liveness).is_none());
+}
+
+#[test]
+fn liveness_clock_measures_time_since_last_touch() {
+    let clock = LivenessClock::new();
+    thread::sleep(Duration::from_millis(30));
+    assert!(clock.idle() >= Duration::from_millis(30));
+    clock.touch();
+    assert!(clock.idle() < Duration::from_millis(30));
 }
 
 fn gitpython_rev_list_fixture_to_pretty_record(fixture: &str) -> String {

@@ -126,6 +126,9 @@ pub(super) fn reload_repo(
     super::refresh_selected_head_gitlink(repos, state, repo_id);
     let repo_state = &mut state.repos[repo_ix];
     effects.extend(refresh_full_effects(repo_state, git_log_settings));
+    effects.extend(super::effects::request_large_file_support_effect(
+        repo_state,
+    ));
     effects.extend(super::util::reload_selected_text_attributes(repo_state));
     append_auto_background_metadata_effects(repo_state, git_log_settings, &mut effects);
     // The view re-requests sidebar data only when its request changes, so
@@ -258,6 +261,13 @@ pub(super) fn repo_externally_changed(
     });
 
     effects.extend(file_browser_effect);
+    // The watcher identifies attributes/config/annex-ref changes explicitly.
+    // Ordinary index and HEAD updates do not change large-file capabilities.
+    if change.large_file_support || change.verification_context {
+        effects.extend(super::effects::request_large_file_support_effect(
+            repo_state,
+        ));
+    }
     if change.text_attributes || change.verification_context {
         effects.extend(super::util::reload_selected_text_attributes(repo_state));
     }

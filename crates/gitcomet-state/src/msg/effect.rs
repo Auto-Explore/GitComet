@@ -12,6 +12,56 @@ use std::path::PathBuf;
 
 use super::RepoPathList;
 
+/// Matches every effect that runs a command with staged credentials,
+/// binding its `auth` slot, so both accessors list them once.
+macro_rules! match_git_auth {
+    ($effect:expr, $auth:ident => $then:expr) => {
+        match $effect {
+            Effect::RunLargeFileCommand { auth: $auth, .. }
+            | Effect::RevertCommit { auth: $auth, .. }
+            | Effect::CherryPickCommit { auth: $auth, .. }
+            | Effect::ApplyFileChange { auth: $auth, .. }
+            | Effect::CloneRepo { auth: $auth, .. }
+            | Effect::AddSubmodule { auth: $auth, .. }
+            | Effect::UpdateSubmodules { auth: $auth, .. }
+            | Effect::LoadSubmodule { auth: $auth, .. }
+            | Effect::Commit { auth: $auth, .. }
+            | Effect::CommitAmend { auth: $auth, .. }
+            | Effect::SafePushAfterCommit { auth: $auth, .. }
+            | Effect::FetchAll { auth: $auth, .. }
+            | Effect::FetchRefspecs { auth: $auth, .. }
+            | Effect::Pull { auth: $auth, .. }
+            | Effect::PullBranch { auth: $auth, .. }
+            | Effect::PushWithTags { auth: $auth, .. }
+            | Effect::Push { auth: $auth, .. }
+            | Effect::PushAfterCommit { auth: $auth, .. }
+            | Effect::ForcePush { auth: $auth, .. }
+            | Effect::ForcePushWithLease { auth: $auth, .. }
+            | Effect::PushSetUpstream { auth: $auth, .. }
+            | Effect::DeleteRemoteBranch { auth: $auth, .. }
+            | Effect::DeleteRemoteBranches { auth: $auth, .. }
+            | Effect::RebaseContinue { auth: $auth, .. }
+            | Effect::PushTag { auth: $auth, .. }
+            | Effect::DeleteRemoteTag { auth: $auth, .. } => $then,
+            _ => None,
+        }
+    };
+}
+
+impl Effect {
+    /// Credentials an auth-prompt retry attached to this command.
+    #[cfg(test)]
+    pub(crate) fn git_auth(&self) -> Option<&StagedGitAuth> {
+        match_git_auth!(self, auth => auth.as_ref())
+    }
+
+    /// Where an auth-prompt retry attaches credentials; `None` for effects
+    /// that never need them.
+    pub(crate) fn git_auth_slot(&mut self) -> Option<&mut Option<StagedGitAuth>> {
+        match_git_auth!(self, auth => Some(auth))
+    }
+}
+
 #[derive(Clone, Debug, strum::IntoStaticStr)]
 pub enum Effect {
     IndexedHistory(crate::indexed_history::IndexedHistoryEffect),
@@ -75,6 +125,8 @@ pub enum Effect {
         repo_id: RepoId,
         generation: crate::model::LineStatsGeneration,
         status: std::sync::Arc<RepoStatus>,
+        /// Also classify rows for Git LFS / git-annex in the same pass.
+        large_files: bool,
     },
     LoadStatus {
         repo_id: RepoId,
@@ -144,6 +196,19 @@ pub enum Effect {
         repo_id: RepoId,
     },
     LoadSubmodules {
+        repo_id: RepoId,
+    },
+    LoadLargeFileSupport {
+        repo_id: RepoId,
+    },
+    LoadLfsLocks {
+        repo_id: RepoId,
+    },
+    LoadAnnexWhereis {
+        repo_id: RepoId,
+        key: String,
+    },
+    LoadAnnexUnused {
         repo_id: RepoId,
     },
     LoadFileBrowser {
@@ -294,6 +359,11 @@ pub enum Effect {
     AppendGitignorePatterns {
         repo_id: RepoId,
         patterns: Vec<String>,
+    },
+    RunLargeFileCommand {
+        repo_id: RepoId,
+        command: gitcomet_core::large_files::LargeFileCommand,
+        auth: Option<StagedGitAuth>,
     },
     AppendGitattributesRule {
         repo_id: RepoId,

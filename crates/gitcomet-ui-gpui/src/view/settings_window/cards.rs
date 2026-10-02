@@ -23,6 +23,7 @@ impl SettingsWindowView {
             SettingsCategory::FileEditing => self.file_editing_card(theme, cx),
             SettingsCategory::GitLog => self.git_log_card(theme, cx),
             SettingsCategory::Remotes => self.remotes_card(theme, cx),
+            SettingsCategory::LargeFiles => self.large_files_card(theme, cx),
             SettingsCategory::Tags => self.tags_card(theme, cx),
             SettingsCategory::Maintenance => self.maintenance_card(theme, cx),
             SettingsCategory::GitExecutable => self.git_executable_card(theme, cx),
@@ -2054,6 +2055,62 @@ impl SettingsWindowView {
             )
     }
 
+    fn large_files_card(
+        &self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> Stateful<gpui::Div> {
+        let large_files = self.large_file_settings;
+        let large_file_toggle =
+            |id: &'static str,
+             label: &'static str,
+             enabled: bool,
+             update: fn(&mut gitcomet_state::model::LargeFileSettings)| {
+                self.toggle_row(id, label, enabled, theme).on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                        let mut next = this.large_file_settings;
+                        update(&mut next);
+                        this.set_large_file_settings(next, cx);
+                    }),
+                )
+            };
+        let large_file_note = |text: &'static str| {
+            div()
+                .px_2()
+                .pb_2()
+                .text_size(theme.ui_text(12.0))
+                .text_color(theme.colors.foreground.secondary)
+                .child(text)
+        };
+        self.card("settings_window_large_files_card", "Large files", theme)
+            .child(large_file_toggle(
+                "settings_window_annex_hide_refs",
+                "Hide git-annex bookkeeping branches",
+                large_files.hide_annex_refs,
+                |s| s.hide_annex_refs = !s.hide_annex_refs,
+            ))
+            .child(large_file_note(
+                "The git-annex branch and synced/* branches are managed by git-annex itself.",
+            ))
+            .child(large_file_toggle(
+                "settings_window_annex_pull_push",
+                "Use git-annex pull and push on adjusted branches",
+                large_files.annex_pull_push,
+                |s| s.annex_pull_push = !s.annex_pull_push,
+            ))
+            .child(large_file_note(
+                "A plain merge into an adjusted branch commits the adjusted files to the wrong branch; git-annex propagates changes to the base branch instead.",
+            ))
+            .child(large_file_toggle(
+                "settings_window_annex_sync_content",
+                "git-annex pull, push and sync also move file content",
+                large_files.annex_sync_content,
+                |s| s.annex_sync_content = !s.annex_sync_content,
+            ))
+    }
+
     fn maintenance_card(
         &self,
         theme: AppTheme,
@@ -2288,6 +2345,7 @@ impl SettingsWindowView {
         }
 
         let signing_tools = self.runtime_info.signing_tools.as_ref();
+        let large_file_tools = self.runtime_info.large_file_tools.as_ref();
         for (row_id, detail_id, label, description, info) in [
             (
                 "settings_window_gpg_runtime",
@@ -2302,6 +2360,20 @@ impl SettingsWindowView {
                 "ssh-keygen",
                 SSH_KEYGEN_DESCRIPTION,
                 ssh_keygen_info(signing_tools),
+            ),
+            (
+                "settings_window_git_lfs_runtime",
+                "settings_window_git_lfs_runtime_detail",
+                "Git LFS",
+                GIT_LFS_DESCRIPTION,
+                git_lfs_info(large_file_tools),
+            ),
+            (
+                "settings_window_git_annex_runtime",
+                "settings_window_git_annex_runtime_detail",
+                "git-annex",
+                GIT_ANNEX_DESCRIPTION,
+                git_annex_info(large_file_tools),
             ),
         ] {
             git_executable_card = git_executable_card.child(self.signing_tool_row(
