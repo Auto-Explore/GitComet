@@ -17,6 +17,21 @@ use std::time::SystemTime;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct RepoId(pub u64);
 
+/// GitComet's side of a repository's maintenance: git's recommendation and a
+/// run the user started. Git never runs it by itself for GitComet's commands.
+#[derive(Clone, Debug, Default)]
+pub struct RepoMaintenanceState {
+    /// When a check was last requested; focus and tab switches ask at most
+    /// hourly, and the effect enforces the daily limit.
+    pub check_requested_at: Option<SystemTime>,
+    /// Git recommends maintenance and the user has not answered yet.
+    pub recommended: bool,
+    /// A maintenance run is in flight.
+    pub running: bool,
+    /// Watcher changes held back while maintenance rewrites these objects.
+    pub deferred_change: Option<crate::msg::RepoExternalChange>,
+}
+
 #[derive(Clone, Debug)]
 pub struct RepoState {
     pub id: RepoId,
@@ -45,6 +60,10 @@ pub struct RepoState {
     /// wait for these alone, so a merge tool cannot lock them out.
     pub sequencer_actions_in_flight: u32,
     pub commit_in_flight: u32,
+    /// The shared git directory (the main `.git` of a linked worktree), set
+    /// once the repository opens; tabs of one repository share maintenance.
+    pub common_dir: Option<Arc<std::path::Path>>,
+    pub maintenance: RepoMaintenanceState,
 
     pub open: Loadable<()>,
     pub history_state: HistoryState,
@@ -219,6 +238,8 @@ impl RepoState {
             local_actions_in_flight: 0,
             sequencer_actions_in_flight: 0,
             commit_in_flight: 0,
+            common_dir: None,
+            maintenance: RepoMaintenanceState::default(),
             open: Loadable::Loading,
             history_state: HistoryState::default(),
             head_branch: Loadable::NotLoaded,
@@ -704,10 +725,10 @@ impl RepoState {
     /// a diff of a file still means that file is the one open.
     pub fn open_file_path(&self) -> Option<&std::path::Path> {
         match self.diff_state.diff_target.as_ref()? {
-            DiffTarget::WorkingTree { path, .. } => Some(path.as_path()),
-            DiffTarget::Commit { path, .. } | DiffTarget::CommitRange { path, .. } => {
-                path.as_deref()
+            DiffTarget::WorkingTree { path, .. } | DiffTarget::Commit { path, .. } => {
+                Some(path.as_path())
             }
+            DiffTarget::CommitRange { path, .. } => path.as_deref(),
         }
     }
 

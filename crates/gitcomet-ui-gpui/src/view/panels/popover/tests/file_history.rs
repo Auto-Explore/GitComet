@@ -270,7 +270,7 @@ fn file_history_rows_are_reused_until_their_data_changes(cx: &mut gpui::TestAppC
             let mut state = (*host.state).clone();
             state.repos[0].diff_state.diff_target = Some(DiffTarget::commit(
                 commit(1).id,
-                Some(std::path::PathBuf::from("src/main.rs")),
+                std::path::PathBuf::from("src/main.rs"),
             ));
             host.state = Arc::new(state);
         }),
@@ -419,6 +419,26 @@ fn right_click_history_row(cx: &mut gpui::VisualTestContext) {
 }
 
 #[gpui::test]
+fn file_history_row_menu_hides_apply_change_for_a_submodule(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    file_history_picker!(cx, host);
+    cx.update(|_, app| {
+        host.update(app, |host, _cx| {
+            let path = std::path::PathBuf::from("src/main.rs");
+            let mut state = host.state.as_ref().clone();
+            state.repos[0].head_gitlink_paths.insert(path.clone());
+            host.state = Arc::new(state);
+            let model =
+                context_menu::file_history_commit::model(host, RepoId(1), &commit(0).id, &path);
+            assert!(!model.items.iter().any(|item| matches!(item,
+                ContextMenuItem::Entry { action, .. }
+                if matches!(action.as_ref(), ContextMenuAction::ApplyFileChange { .. })
+            )));
+        });
+    });
+}
+
+#[gpui::test]
 fn file_history_row_menu_offers_file_and_commit_actions_and_routes_keyboard(
     cx: &mut gpui::TestAppContext,
 ) {
@@ -445,6 +465,7 @@ fn file_history_row_menu_offers_file_and_commit_actions_and_routes_keyboard(
                 "Open file at this commit",
                 "Open file at parent",
                 "Show changes to this file",
+                "Apply change",
                 "Reveal in history",
                 "Copy SHA",
                 "Checkout (detached)",
@@ -452,6 +473,7 @@ fn file_history_row_menu_offers_file_and_commit_actions_and_routes_keyboard(
             ] {
                 assert!(labels.contains(&expected), "missing {expected}");
             }
+            assert!(!labels.contains(&"Open diff"), "{labels:?}");
         })
     });
     cx.simulate_keystrokes("down");
@@ -541,7 +563,7 @@ fn file_history_enter_activates_row_and_closes_picker(cx: &mut gpui::TestAppCont
     let state = store.snapshot();
     assert_eq!(
         state.repos[0].diff_state.diff_target,
-        Some(DiffTarget::commit(commit(0).id, Some("src/main.rs".into())))
+        Some(DiffTarget::commit(commit(0).id, "src/main.rs".into()))
     );
     assert_eq!(state.repos[0].navigation.view_history.entries.len(), 1);
 }
@@ -574,7 +596,7 @@ fn file_history_show_changes_opens_a_file_diff_and_closes_picker(cx: &mut gpui::
             assert!(!host.is_open());
         })
     });
-    let expected = DiffTarget::commit(commit(1).id, Some("src/main.rs".into()));
+    let expected = DiffTarget::commit(commit(1).id, "src/main.rs".into());
     super::branch::wait_until("file changes", || {
         store.snapshot().repos[0].diff_state.diff_target.as_ref() == Some(&expected)
     });

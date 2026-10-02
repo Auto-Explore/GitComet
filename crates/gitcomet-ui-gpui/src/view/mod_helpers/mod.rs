@@ -542,9 +542,7 @@ pub(super) fn diff_target_rendered_preview_kind(
 ) -> Option<RenderedPreviewKind> {
     let path = match target? {
         DiffTarget::WorkingTree { path, .. } => path.as_path(),
-        DiffTarget::Commit {
-            path: Some(path), ..
-        } => path.as_path(),
+        DiffTarget::Commit { path, .. } => path.as_path(),
         _ => return None,
     };
     preview_path_rendered_kind(path)

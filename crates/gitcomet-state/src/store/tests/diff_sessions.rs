@@ -215,7 +215,7 @@ fn encoding_blame_and_worktree_edits_reload_the_right_sessions() {
             repo_id,
             lifetime,
             view: pinned,
-            target: DiffTarget::commit(CommitId("abc".into()), Some(PathBuf::from("a.rs"))),
+            target: DiffTarget::commit(CommitId("abc".into()), PathBuf::from("a.rs")),
         }),
     );
 
@@ -901,7 +901,7 @@ fn known_worktree_paths_include_rename_sources_and_leave_staged_and_pinned_targe
         ),
         (
             pinned,
-            DiffTarget::commit(CommitId("head".into()), Some("old.rs".into())),
+            DiffTarget::commit(CommitId("head".into()), "old.rs".into()),
         ),
         (other, worktree("other.rs")),
     ] {
@@ -1071,7 +1071,7 @@ fn session_editor_restores_its_previous_commit_without_changing_history() {
     let (mut repos, ids, mut state, repo_id) = setup();
     let lifetime = state.repos[0].lifetime();
     let view = DiffViewId::next();
-    let original = DiffTarget::commit(CommitId("abc123".into()), Some("a.rs".into()));
+    let original = DiffTarget::commit(CommitId("abc123".into()), "a.rs".into());
     reduce(
         &mut repos,
         &ids,

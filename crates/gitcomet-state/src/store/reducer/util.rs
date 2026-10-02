@@ -226,9 +226,7 @@ fn path_preview_flags(path: &Path) -> DiffTargetPreviewFlags {
 pub(super) fn diff_target_preview_flags(target: &DiffTarget) -> DiffTargetPreviewFlags {
     match target {
         DiffTarget::WorkingTree { path, .. } => path_preview_flags(path),
-        DiffTarget::Commit {
-            path: Some(path), ..
-        }
+        DiffTarget::Commit { path, .. }
         | DiffTarget::CommitRange {
             path: Some(path), ..
         } => path_preview_flags(path),
@@ -262,9 +260,7 @@ fn diff_target_is_preview_only(repo_state: &RepoState, target: &DiffTarget) -> b
             })
         }
         DiffTarget::Commit {
-            commit_id,
-            path: Some(path),
-            ..
+            commit_id, path, ..
         } => {
             let Loadable::Ready(details) = &repo_state.history_state.commit_details else {
                 return false;
@@ -279,7 +275,7 @@ fn diff_target_is_preview_only(repo_state: &RepoState, target: &DiffTarget) -> b
                     && matches!(file.kind, FileStatusKind::Added | FileStatusKind::Deleted)
             })
         }
-        DiffTarget::Commit { path: None, .. } | DiffTarget::CommitRange { .. } => false,
+        DiffTarget::CommitRange { .. } => false,
     }
 }
 
@@ -306,9 +302,7 @@ fn diff_target_preview_text_side(
             })
         }
         DiffTarget::Commit {
-            commit_id,
-            path: Some(path),
-            ..
+            commit_id, path, ..
         } => {
             let Loadable::Ready(details) = &repo_state.history_state.commit_details else {
                 return None;
@@ -330,7 +324,7 @@ fn diff_target_preview_text_side(
                 })?
             })
         }
-        DiffTarget::Commit { path: None, .. } | DiffTarget::CommitRange { .. } => None,
+        DiffTarget::CommitRange { .. } => None,
     }
 }
 
@@ -351,7 +345,7 @@ pub(super) fn selected_diff_load_plan(
     let supports_file = matches!(
         target,
         DiffTarget::WorkingTree { .. }
-            | DiffTarget::Commit { path: Some(_), .. }
+            | DiffTarget::Commit { .. }
             | DiffTarget::CommitRange { path: Some(_), .. }
     );
     let preview = diff_target_preview_flags(target);
@@ -372,7 +366,7 @@ pub(super) fn selected_diff_load_plan(
     };
 
     SelectedDiffLoadPlan {
-        load_patch_diff: !preview_only,
+        load_patch_diff: supports_file && !preview_only,
         // An SVG counts as an image, so it never reaches the text-file preview
         // path and the diff pane's Code view is the only place its source is
         // ever shown. That view reads the loaded file text, so it has to load
@@ -547,9 +541,7 @@ fn diff_target_is_submodule(repo_state: &RepoState, target: &DiffTarget) -> bool
             std::fs::metadata(&dot_git).is_ok_and(|meta| meta.is_file() || meta.is_dir())
         }
         DiffTarget::Commit {
-            commit_id,
-            path: Some(path),
-            ..
+            commit_id, path, ..
         } => {
             let Loadable::Ready(details) = &repo_state.history_state.commit_details else {
                 return false;
@@ -563,7 +555,7 @@ fn diff_target_is_submodule(repo_state: &RepoState, target: &DiffTarget) -> bool
                 .iter()
                 .any(|file| file.path == *path && file.is_submodule)
         }
-        DiffTarget::Commit { path: None, .. } | DiffTarget::CommitRange { .. } => false,
+        DiffTarget::CommitRange { .. } => false,
     }
 }
 
@@ -1335,6 +1327,7 @@ fn summarize_command(
             RepoCommandKind::FetchAll | RepoCommandKind::FetchRefspecs { .. } => "Fetch",
             RepoCommandKind::PruneMergedBranches => "Prune merged branches",
             RepoCommandKind::PruneLocalTags => "Prune local tags",
+            RepoCommandKind::RunMaintenance => "Maintenance",
             RepoCommandKind::Pull { .. } => "Pull",
             RepoCommandKind::PullBranch { .. } => "Pull",
             RepoCommandKind::MergeRef { .. } => "Merge",
@@ -1367,6 +1360,7 @@ fn summarize_command(
             RepoCommandKind::InteractiveCherryPick { .. } => "Cherry-pick",
             RepoCommandKind::CherryPick { .. } => "Cherry-pick",
             RepoCommandKind::Revert { .. } => "Revert",
+            RepoCommandKind::ApplyFileChange { .. } => "Apply change",
             RepoCommandKind::MergeAbort => "Merge",
             RepoCommandKind::CreateTag { .. } => "Tag",
             RepoCommandKind::DeleteTag { .. } => "Tag",
@@ -1425,6 +1419,15 @@ fn summarize_command(
         }
         RepoCommandKind::PruneMergedBranches => "Prune merged branches: Completed".to_string(),
         RepoCommandKind::PruneLocalTags => "Prune local tags: Completed".to_string(),
+        RepoCommandKind::RunMaintenance => {
+            // The run prints nothing over a pipe; the backend returns its
+            // check instead when git found nothing to do.
+            if output.command == gitcomet_core::services::MAINTENANCE_CHECK_COMMAND {
+                "Maintenance: Not needed, the repository is already optimized".to_string()
+            } else {
+                "Maintenance: Completed".to_string()
+            }
+        }
         RepoCommandKind::Pull { .. } => {
             if output.stdout.contains("Already up to date") {
                 "Pull: Already up to date".to_string()
@@ -1639,7 +1642,24 @@ fn summarize_command(
                 format!("Rebase onto {base}: {state}")
             }
         }
-        RepoCommandKind::InteractiveCherryPick { entries } => {
+        RepoCommandKind::InteractiveCherryPick {
+            entries,
+            commit: false,
+        } => {
+            if output
+                .stdout
+                .contains("GITCOMET_CHERRY_PICK_ALREADY_APPLIED")
+            {
+                "Current branch already has all the changes from the cherry-picked commits."
+                    .to_string()
+            } else {
+                format!("Cherry-picked {} commits without committing", entries.len())
+            }
+        }
+        RepoCommandKind::InteractiveCherryPick {
+            entries,
+            commit: true,
+        } => {
             let state = if sequencer_paused(output) {
                 "Paused at a conflict"
             } else {
@@ -1660,8 +1680,7 @@ fn summarize_command(
                 "Current branch already has all the changes from the cherry-picked commit."
                     .to_string()
             } else {
-                let sha = commit_id.as_ref();
-                let short = sha.get(0..7).unwrap_or(sha);
+                let short = commit_id.short();
                 let summary = summary.lines().next().unwrap_or("").trim();
                 if *commit {
                     format!("Cherry-picked {short}: {summary}")
@@ -1670,14 +1689,45 @@ fn summarize_command(
                 }
             }
         }
+        RepoCommandKind::ApplyFileChange { target, commit, .. } => {
+            let revision = gitcomet_core::services::apply_change_revision(&target.source);
+            let already_applied = output
+                .stdout
+                .contains(gitcomet_core::services::APPLY_FILE_CHANGE_ALREADY_APPLIED_SENTINEL);
+            match (target.paths.as_slice(), already_applied, *commit) {
+                ([path], true, _) => format!(
+                    "Current branch already has the change to {} from {revision}.",
+                    path.display()
+                ),
+                ([path], false, true) => format!(
+                    "Applied and committed the change to {} from {revision}",
+                    path.display()
+                ),
+                ([path], false, false) => format!(
+                    "Applied the change to {} from {revision} without committing",
+                    path.display()
+                ),
+                (paths, true, _) => format!(
+                    "Current branch already has the changes to these {} files from {revision}.",
+                    paths.len()
+                ),
+                (paths, false, true) => format!(
+                    "Applied and committed the changes to {} files from {revision}",
+                    paths.len()
+                ),
+                (paths, false, false) => format!(
+                    "Applied the changes to {} files from {revision} without committing",
+                    paths.len()
+                ),
+            }
+        }
         RepoCommandKind::Revert {
             commit_id,
             commit,
             summary,
             ..
         } => {
-            let sha = commit_id.as_ref();
-            let short = sha.get(0..7).unwrap_or(sha);
+            let short = commit_id.short();
             if output
                 .stdout
                 .contains(gitcomet_core::services::REVERT_NOTHING_TO_REVERT_SENTINEL)
@@ -1932,12 +1982,16 @@ mod tests {
             2
         );
 
-        let commit_without_path = DiffTarget::commit(CommitId("abc123".into()), None);
-        assert!(!diff_target_wants_image_preview(&commit_without_path));
-        assert!(!diff_target_is_svg(&commit_without_path));
+        let range_without_path = DiffTarget::commit_range(
+            CommitId("abc123".into()),
+            Some(CommitId("def456".into())),
+            None,
+        );
+        assert!(!diff_target_wants_image_preview(&range_without_path));
+        assert!(!diff_target_is_svg(&range_without_path));
         assert_eq!(
-            diff_reload_effects(&repo_state, repo_id, commit_without_path).len(),
-            1
+            diff_reload_effects(&repo_state, repo_id, range_without_path).len(),
+            0
         );
     }
 
@@ -1956,8 +2010,7 @@ mod tests {
         assert!(!plan.load_file_image);
 
         // Commit content reads the New-side blob via a preview text file.
-        let commit =
-            DiffTarget::commit(CommitId("abc123".into()), Some(PathBuf::from("src/lib.rs")));
+        let commit = DiffTarget::commit(CommitId("abc123".into()), PathBuf::from("src/lib.rs"));
         let plan = selected_diff_load_plan(&repo, &commit);
         assert!(!plan.load_patch_diff);
         assert_eq!(
@@ -1966,7 +2019,7 @@ mod tests {
         );
 
         // An image is still loaded as an image, not as text.
-        let image = DiffTarget::commit(CommitId("abc123".into()), Some(PathBuf::from("logo.png")));
+        let image = DiffTarget::commit(CommitId("abc123".into()), PathBuf::from("logo.png"));
         let plan = selected_diff_load_plan(&repo, &image);
         assert!(plan.load_file_image);
         assert_eq!(plan.preview_text_side, None);
@@ -2354,6 +2407,17 @@ mod tests {
             ),
             (RepoCommandKind::MergeAbort, "Merge"),
             (
+                RepoCommandKind::ApplyFileChange {
+                    commit_retry: None,
+                    target: gitcomet_core::domain::ApplyChangeTarget::commit(
+                        CommitId("abcdef1234567890".into()),
+                        PathBuf::from("a.txt"),
+                    ),
+                    commit: false,
+                },
+                "Apply change",
+            ),
+            (
                 RepoCommandKind::CreateTag {
                     name: "v2".into(),
                     target: "HEAD".into(),
@@ -2392,6 +2456,30 @@ mod tests {
             assert_eq!(rendered_command, label);
             assert_eq!(summary, format!("{label} failed"));
         }
+    }
+
+    #[test]
+    fn maintenance_summary_reports_what_the_run_did() {
+        // Since git 2.54 the default strategy prints nothing over a pipe, even
+        // after a full repack.
+        let (_, silent_run) = summarize_command(
+            &RepoCommandKind::RunMaintenance,
+            &command_output("git maintenance run --auto", "", ""),
+            true,
+            None,
+        );
+        assert_eq!(silent_run, "Maintenance: Completed");
+
+        let (_, skipped) = summarize_command(
+            &RepoCommandKind::RunMaintenance,
+            &command_output(gitcomet_core::services::MAINTENANCE_CHECK_COMMAND, "", ""),
+            true,
+            None,
+        );
+        assert_eq!(
+            skipped,
+            "Maintenance: Not needed, the repository is already optimized"
+        );
     }
 
     #[test]
@@ -2792,6 +2880,97 @@ mod tests {
             cherry_pick_already_applied_summary,
             "Current branch already has all the changes from the cherry-picked commit."
         );
+
+        let multi_pick = |commit: bool| RepoCommandKind::InteractiveCherryPick {
+            entries: vec![
+                gitcomet_core::services::InteractiveRebaseEntry {
+                    action: gitcomet_core::services::InteractiveRebaseAction::Pick,
+                    commit_id: "1111111".into(),
+                    summary: "one".into(),
+                    message: "one".into(),
+                    new_message: None,
+                };
+                2
+            ],
+            commit,
+        };
+        let multi_summary = |commit: bool, stdout: &str| {
+            summarize_command(
+                &multi_pick(commit),
+                &command_output("git cherry-pick 2 commits", stdout, ""),
+                true,
+                None,
+            )
+            .1
+        };
+        assert_eq!(multi_summary(true, ""), "Cherry-pick 2 commits: Completed");
+        assert_eq!(
+            multi_summary(false, ""),
+            "Cherry-picked 2 commits without committing"
+        );
+        assert_eq!(
+            multi_summary(false, "GITCOMET_CHERRY_PICK_ALREADY_APPLIED"),
+            "Current branch already has all the changes from the cherry-picked commits."
+        );
+
+        let apply_paths =
+            |commit: bool, to: Option<&str>, paths: &[&str]| RepoCommandKind::ApplyFileChange {
+                commit_retry: None,
+                target: gitcomet_core::domain::ApplyChangeTarget {
+                    source: match to {
+                        Some(to) => gitcomet_core::domain::ApplyChangeSource::Range {
+                            from: CommitId("abcdef1234567890".into()),
+                            to: CommitId(to.into()),
+                        },
+                        None => gitcomet_core::domain::ApplyChangeSource::Commit(CommitId(
+                            "abcdef1234567890".into(),
+                        )),
+                    },
+                    paths: paths.iter().map(PathBuf::from).collect(),
+                },
+                commit,
+            };
+        let apply = |commit: bool, to: Option<&str>| apply_paths(commit, to, &["src/a.rs"]);
+        for (kind, stdout, expected) in [
+            (
+                apply(false, None),
+                "",
+                "Applied the change to src/a.rs from abcdef1 without committing",
+            ),
+            (
+                apply(true, Some("1234567890abcdef")),
+                "",
+                "Applied and committed the change to src/a.rs from abcdef1..1234567",
+            ),
+            (
+                apply(true, None),
+                gitcomet_core::services::APPLY_FILE_CHANGE_ALREADY_APPLIED_SENTINEL,
+                "Current branch already has the change to src/a.rs from abcdef1.",
+            ),
+            (
+                apply_paths(false, None, &["src/a.rs", "src/b.rs"]),
+                "",
+                "Applied the changes to 2 files from abcdef1 without committing",
+            ),
+            (
+                apply_paths(true, Some("1234567890abcdef"), &["a", "b", "c"]),
+                "",
+                "Applied and committed the changes to 3 files from abcdef1..1234567",
+            ),
+            (
+                apply_paths(true, None, &["src/a.rs", "src/b.rs"]),
+                gitcomet_core::services::APPLY_FILE_CHANGE_ALREADY_APPLIED_SENTINEL,
+                "Current branch already has the changes to these 2 files from abcdef1.",
+            ),
+        ] {
+            let (_, summary) = summarize_command(
+                &kind,
+                &command_output("git apply --3way src/a.rs", stdout, ""),
+                true,
+                None,
+            );
+            assert_eq!(summary, expected);
+        }
 
         let revert = |commit: bool, summary: &str| RepoCommandKind::Revert {
             commit_id: CommitId("abcdef1234567890".into()),

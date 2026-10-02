@@ -164,8 +164,8 @@ fn commit_then_file_diffs_are_all_remembered() {
     let repo_id = RepoId(1);
     let mut state = available_state_with_repo(repo_id);
     let commit_a = CommitId("aaa".into());
-    let file1 = DiffTarget::commit(commit_a.clone(), Some(std::path::PathBuf::from("file1.rs")));
-    let file2 = DiffTarget::commit(commit_a.clone(), Some(std::path::PathBuf::from("file2.rs")));
+    let file1 = DiffTarget::commit(commit_a.clone(), std::path::PathBuf::from("file1.rs"));
+    let file2 = DiffTarget::commit(commit_a.clone(), std::path::PathBuf::from("file2.rs"));
 
     dispatch(
         &mut state,
@@ -328,7 +328,7 @@ fn clearing_diff_folds_in_place_and_single_back_goes_to_commit_details() {
     let repo_id = RepoId(1);
     let mut state = available_state_with_repo(repo_id);
     let commit_a = CommitId("aaa".into());
-    let file = DiffTarget::commit(commit_a.clone(), Some(std::path::PathBuf::from("file1.rs")));
+    let file = DiffTarget::commit(commit_a.clone(), std::path::PathBuf::from("file1.rs"));
 
     dispatch(
         &mut state,
@@ -378,7 +378,7 @@ fn clearing_diff_without_folding_previous_allows_correct_back() {
     let mut state = available_state_with_repo(repo_id);
     let commit_a = CommitId("aaa".into());
     let commit_b = CommitId("bbb".into());
-    let file = DiffTarget::commit(commit_a.clone(), Some(std::path::PathBuf::from("file1.rs")));
+    let file = DiffTarget::commit(commit_a.clone(), std::path::PathBuf::from("file1.rs"));
 
     dispatch(
         &mut state,
@@ -430,9 +430,9 @@ fn browsing_committed_files_within_a_commit_keeps_commit_selected_on_back() {
     let repo_id = RepoId(1);
     let mut state = available_state_with_repo(repo_id);
     let commit_a = CommitId("aaa".into());
-    let file_a = DiffTarget::commit(commit_a.clone(), Some(std::path::PathBuf::from("src/a.rs")));
-    let file_b = DiffTarget::commit(commit_a.clone(), Some(std::path::PathBuf::from("src/b.rs")));
-    let file_c = DiffTarget::commit(commit_a.clone(), Some(std::path::PathBuf::from("src/c.rs")));
+    let file_a = DiffTarget::commit(commit_a.clone(), std::path::PathBuf::from("src/a.rs"));
+    let file_b = DiffTarget::commit(commit_a.clone(), std::path::PathBuf::from("src/b.rs"));
+    let file_c = DiffTarget::commit(commit_a.clone(), std::path::PathBuf::from("src/c.rs"));
 
     dispatch(
         &mut state,

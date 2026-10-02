@@ -142,9 +142,7 @@ impl TextInput {
         let cursor = self.cursor_offset();
         self.selection.range = cursor..cursor;
         self.selection.reversed = false;
-        self.interaction.is_selecting = false;
-        self.interaction.mouse_selection_anchor = None;
-        self.interaction.pending_mouse_selection_anchor = None;
+        self.end_mouse_drag();
         cx.notify();
     }
 
@@ -522,9 +520,7 @@ impl TextInput {
         if !preserve_selection {
             self.selection.range = self.content.len()..self.content.len();
             self.selection.reversed = false;
-            self.interaction.is_selecting = false;
-            self.interaction.mouse_selection_anchor = None;
-            self.interaction.pending_mouse_selection_anchor = None;
+            self.end_mouse_drag();
             self.layout.scroll_x = px(0.0);
         }
         self.selection.undo_stack.clear();
@@ -925,6 +921,8 @@ impl TextInput {
 
     pub fn set_vertical_scroll_handle(&mut self, handle: Option<ScrollHandle>) {
         self.interaction.vertical_scroll_handle = handle;
+        // Offsets of another handle say nothing about this one.
+        self.layout.painted_scroll_offset = None;
     }
 
     /// Enable content-width layout: a multiline input lays out at its widest-line
@@ -1812,7 +1810,7 @@ impl TextInput {
     }
 
     pub(super) fn caret_point_for_hit_testing(&self, cursor: usize) -> Option<Point<Pixels>> {
-        let bounds = self.layout.bounds?;
+        let bounds = self.current_text_bounds()?;
         let layout = self.layout.last.as_ref()?;
         let starts = self.layout.line_starts.as_ref()?;
         let line_height = if self.layout.line_height.is_zero() {
@@ -1878,7 +1876,7 @@ impl TextInput {
         direction: f32,
         preferred_x: Option<Pixels>,
     ) -> Option<(usize, Pixels)> {
-        let bounds = self.layout.bounds?;
+        let bounds = self.current_text_bounds()?;
         let line_height = if self.layout.line_height.is_zero() {
             px(16.0)
         } else {
@@ -1956,7 +1954,7 @@ impl TextInput {
             self.interaction.pending_cursor_autoscroll = false;
             return;
         };
-        let Some(text_bounds) = self.layout.bounds else {
+        let Some(text_bounds) = self.current_text_bounds() else {
             return;
         };
         let viewport_height = handle.bounds().size.height.max(px(0.0));
@@ -2500,7 +2498,7 @@ impl TextInput {
         let start = self.hotspot_position(range.start)?;
         let end = self.hotspot_position(range.end)?;
         let end = if end.y > start.y {
-            point(self.layout.bounds?.right(), start.y)
+            point(self.current_text_bounds()?.right(), start.y)
         } else {
             end
         };
@@ -2636,9 +2634,7 @@ impl TextInput {
         }
         self.interaction.vertical_motion_x = None;
         self.interaction.cursor_blink_visible = true;
-        self.interaction.is_selecting = false;
-        self.interaction.mouse_selection_anchor = None;
-        self.interaction.pending_mouse_selection_anchor = None;
+        self.end_mouse_drag();
         self.invalidate_layout_caches_preserving_wrap_rows();
         if let Some(delta) = text_edit_delta {
             self.note_text_edit_for_highlights(&delta.0, &delta.1);
@@ -2779,7 +2775,7 @@ impl TextInput {
         position: Point<Pixels>,
     ) -> bool {
         let (Some(bounds), Some(layout), Some(starts)) = (
-            self.layout.bounds.as_ref(),
+            self.current_text_bounds(),
             self.layout.last.as_ref(),
             self.layout.line_starts.as_ref(),
         ) else {
@@ -2872,7 +2868,7 @@ impl TextInput {
     }
 
     fn hotspot_position(&self, offset: usize) -> Option<Point<Pixels>> {
-        let bounds = self.layout.bounds?;
+        let bounds = self.current_text_bounds()?;
         let layout = self.layout.last.as_ref()?;
         let starts = self.layout.line_starts.as_ref()?;
         let offset = self.clamp_to_char_boundary(offset.min(self.content.len()));
@@ -2941,6 +2937,9 @@ impl TextInput {
                 self.selection.range.start
             });
             self.interaction.pending_mouse_selection_anchor = None;
+            self.interaction.drag_pointer = Some(event.position);
+            self.interaction.drag_resolve_pending = index.is_none();
+            self.start_drag_autoscroll(cx);
             if let Some(index) = index {
                 self.select_mouse_to_index(index, cx);
             }
@@ -2948,9 +2947,7 @@ impl TextInput {
         }
 
         if event.click_count >= 2 {
-            self.interaction.is_selecting = false;
-            self.interaction.mouse_selection_anchor = None;
-            self.interaction.pending_mouse_selection_anchor = None;
+            self.end_mouse_drag();
             let index = index.unwrap_or_else(|| self.cursor_offset());
             let range = self.token_range_for_offset(index);
             if range.is_empty() {
@@ -2965,6 +2962,9 @@ impl TextInput {
             self.interaction.mouse_selection_anchor = index;
             self.interaction.pending_mouse_selection_anchor =
                 index.is_none().then_some(event.position);
+            self.interaction.drag_pointer = Some(event.position);
+            self.interaction.drag_resolve_pending = index.is_none();
+            self.start_drag_autoscroll(cx);
             match index {
                 Some(index) => self.move_to(index, cx),
                 // Clear any old highlight without inventing byte zero as the
@@ -2981,9 +2981,7 @@ impl TextInput {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) {
-        self.interaction.is_selecting = false;
-        self.interaction.mouse_selection_anchor = None;
-        self.interaction.pending_mouse_selection_anchor = None;
+        self.end_mouse_drag();
     }
 
     pub(super) fn on_mouse_move(
@@ -2992,9 +2990,7 @@ impl TextInput {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.interaction.is_selecting {
-            self.update_mouse_selection(event.position, cx);
-        }
+        self.drag_mouse_moved(event, cx);
     }
 
     pub(super) fn on_key_down(
@@ -3062,9 +3058,7 @@ impl TextInput {
         cx.stop_propagation();
         window.focus(&self.focus_handle, cx);
         self.interaction.cursor_blink_visible = true;
-        self.interaction.is_selecting = false;
-        self.interaction.mouse_selection_anchor = None;
-        self.interaction.pending_mouse_selection_anchor = None;
+        self.end_mouse_drag();
         self.interaction.vertical_motion_x = None;
 
         let index = self.index_for_mouse_position(event.position);
@@ -3266,13 +3260,23 @@ impl TextInput {
             .child(select_all_row)
     }
 
-    fn try_index_for_mouse_position(&self, position: Point<Pixels>) -> Option<usize> {
+    pub(super) fn try_index_for_mouse_position(&self, position: Point<Pixels>) -> Option<usize> {
+        self.index_for_mouse_position_in(position, false)
+    }
+
+    /// With `require_shaped`, a row the last frame did not shape answers `None`
+    /// instead of its start offset.
+    pub(super) fn index_for_mouse_position_in(
+        &self,
+        position: Point<Pixels>,
+        require_shaped: bool,
+    ) -> Option<usize> {
         if self.content.is_empty() {
             return Some(0);
         }
 
         let (Some(bounds), Some(layout), Some(starts)) = (
-            self.layout.bounds.as_ref(),
+            self.current_text_bounds(),
             self.layout.last.as_ref(),
             self.layout.line_starts.as_ref(),
         ) else {
@@ -3301,8 +3305,11 @@ impl TextInput {
                 let local_x = position.x - bounds.left() + self.layout.scroll_x;
                 // A row that was never shaped was never on screen to be hit;
                 // fall back to its start offset.
-                let local_ix = lines
-                    .get(line_ix)
+                let line = lines.get(line_ix);
+                if require_shaped && line.is_none() {
+                    return None;
+                }
+                let local_ix = line
                     .map(|line| line.closest_index_for_x(local_x))
                     .unwrap_or(0);
                 let doc_ix = starts.get(line_ix).copied().unwrap_or(0) + local_ix;
@@ -3320,6 +3327,9 @@ impl TextInput {
                 let local_y = position.y - bounds.top();
                 let line_ix = wrapped_line_index_for_y(y_offsets, row_counts, line_height, local_y);
                 let line_ix = line_ix.min(lines.len().saturating_sub(1));
+                if require_shaped && !self.layout.painted_line_range.contains(&line_ix) {
+                    return None;
+                }
                 let local_x = position.x - bounds.left();
                 let local_y_in_line =
                     local_y - y_offsets.get(line_ix).copied().unwrap_or(Pixels::ZERO);
@@ -3341,28 +3351,7 @@ impl TextInput {
             .unwrap_or_else(|| self.cursor_offset())
     }
 
-    pub(super) fn update_mouse_selection(
-        &mut self,
-        position: Point<Pixels>,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(index) = self.try_index_for_mouse_position(position) else {
-            return;
-        };
-        if self.interaction.mouse_selection_anchor.is_none() {
-            let Some(anchor_position) = self.interaction.pending_mouse_selection_anchor else {
-                return;
-            };
-            let Some(anchor) = self.try_index_for_mouse_position(anchor_position) else {
-                return;
-            };
-            self.interaction.mouse_selection_anchor = Some(anchor);
-            self.interaction.pending_mouse_selection_anchor = None;
-        }
-        self.select_mouse_to_index(index, cx);
-    }
-
-    fn select_mouse_to_index(&mut self, index: usize, cx: &mut Context<Self>) {
+    pub(super) fn select_mouse_to_index(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(anchor) = self.interaction.mouse_selection_anchor else {
             return;
         };
@@ -3386,7 +3375,7 @@ impl TextInput {
         }
 
         let (Some(bounds), Some(layout), Some(starts)) = (
-            self.layout.bounds.as_ref(),
+            self.current_text_bounds(),
             self.layout.last.as_ref(),
             self.layout.line_starts.as_ref(),
         ) else {
@@ -3677,7 +3666,7 @@ impl EntityInputHandler for TextInput {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
-        let local = self.layout.bounds?.localize(&p)?;
+        let local = self.current_text_bounds()?.localize(&p)?;
         let layout = self.layout.last.as_ref()?;
         let starts = self.layout.line_starts.as_ref()?;
         let line_height = self.effective_line_height(window);

@@ -22,6 +22,7 @@ pub mod bundled_fonts;
 pub mod click;
 pub mod clipboard;
 pub mod components;
+pub mod drag_autoscroll;
 pub mod file_icons;
 pub mod font_preferences;
 pub mod icons;

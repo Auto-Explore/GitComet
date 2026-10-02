@@ -23,9 +23,7 @@ fn active_commit_diff_target_path(
         let repo_id = root.state.active_repo?;
         let repo = root.state.repos.iter().find(|repo| repo.id == repo_id)?;
         match repo.diff_state.diff_target.clone()? {
-            DiffTarget::Commit {
-                path: Some(path), ..
-            } => Some(path),
+            DiffTarget::Commit { path, .. } => Some(path),
             _ => None,
         }
     })
@@ -235,7 +233,7 @@ fn commit_details_file_navigation_scrolls_selected_row_into_view(cx: &mut gpui::
     }));
     repo.diff_state.diff_target = Some(DiffTarget::commit(
         commit_id.clone(),
-        Some(files[start_ix].path.clone()),
+        files[start_ix].path.clone(),
     ));
 
     apply_state(cx, &view, app_state_with_active_repo(repo));
@@ -313,10 +311,8 @@ fn commit_details_text_input_f4_navigates_files_without_stealing_focus(
         parent_ids: vec![],
         files: files.clone(),
     }));
-    repo.diff_state.diff_target = Some(DiffTarget::commit(
-        commit_id.clone(),
-        Some(files[0].path.clone()),
-    ));
+    repo.diff_state.diff_target =
+        Some(DiffTarget::commit(commit_id.clone(), files[0].path.clone()));
 
     apply_state(cx, &view, app_state_with_active_repo(repo));
     cx.update(|window, app| {
@@ -354,6 +350,72 @@ fn commit_details_text_input_f4_navigates_files_without_stealing_focus(
             "expected commit-details SHA input to keep focus after F4 navigation"
         );
     });
+}
+
+/// The comparison view's file list navigates like commit details: the diff
+/// toolbar offers prev/next arrows, and F4/F1 step through the drawn rows.
+#[gpui::test]
+fn comparison_diff_steps_through_range_files_with_arrows_and_f1_f4(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70521);
+    let tip = CommitId("aabbccddeeff0011".into());
+    let base = CommitId("1100ffeeddccbbaa".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_comparison_file_nav",
+        std::process::id()
+    ));
+    let files: Vec<CommitFileChange> = ["src/range/a.rs", "src/range/b.rs", "src/range/c.rs"]
+        .into_iter()
+        .map(|path| CommitFileChange::new(std::path::PathBuf::from(path), FileStatusKind::Modified))
+        .collect();
+    let range_target = |path: &std::path::Path| {
+        DiffTarget::commit_range(base.clone(), Some(tip.clone()), Some(path.to_path_buf()))
+    };
+
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &tip);
+    repo.history_state.range_selection = Some(gitcomet_state::model::RangeSelection::new(
+        base.clone(),
+        Some(tip.clone()),
+        "base".into(),
+        "tip".into(),
+    ));
+    repo.history_state.range_files = Loadable::Ready(Arc::new(files.clone()));
+    repo.history_state.range_files_rev = 1;
+    repo.diff_state.diff_target = Some(range_target(&files[1].path));
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_for_test(cx);
+    // Where a row click leaves focus.
+    focus_diff_panel(cx, &view);
+
+    assert!(cx.debug_bounds("diff_prev_file").is_some());
+    assert!(cx.debug_bounds("diff_next_file").is_some());
+
+    cx.simulate_keystrokes("f4");
+    draw_and_drain_test_window(cx);
+    wait_until_store_diff_target_path(cx, &view, files[2].path.as_path());
+    sync_store_snapshot(cx, &view);
+    assert_eq!(
+        cx.update(|_window, app| {
+            let root = view.read(app);
+            root.state.repos[0].diff_state.diff_target.clone()
+        }),
+        Some(range_target(&files[2].path)),
+        "expected F4 to open the next comparison file"
+    );
+    assert!(
+        cx.debug_bounds("diff_next_file").is_none(),
+        "the last comparison file has no next file"
+    );
+
+    cx.simulate_keystrokes("f1");
+    draw_and_drain_test_window(cx);
+    wait_until_store_diff_target_path(cx, &view, files[1].path.as_path());
+    sync_store_snapshot(cx, &view);
+    assert!(cx.debug_bounds("diff_next_file").is_some());
 }
 
 #[gpui::test]

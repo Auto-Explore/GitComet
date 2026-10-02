@@ -128,6 +128,7 @@ impl MainPaneView {
                         .flex_1()
                         .min_h(px(0.0))
                         .overflow_y_scroll()
+                        .track_scroll(&self.diff_raw_scroll)
                         .child(self.diff_raw_input.clone())
                         .into_any_element()
                 }
@@ -349,6 +350,7 @@ impl MainPaneView {
                             .flex_1()
                             .min_h(px(0.0))
                             .overflow_y_scroll()
+                            .track_scroll(&self.diff_raw_scroll)
                             .child(self.diff_raw_input.clone())
                             .into_any_element()
                     }
@@ -398,6 +400,7 @@ impl MainPaneView {
                             .flex_1()
                             .min_h(px(0.0))
                             .overflow_y_scroll()
+                            .track_scroll(&self.diff_raw_scroll)
                             .child(self.diff_raw_input.clone())
                             .into_any_element()
                     } else if file_diff_ready_shows_processing(

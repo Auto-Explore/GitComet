@@ -2,7 +2,7 @@ use super::GixRepo;
 use crate::util::run_git_simple_with_paths;
 use gitcomet_core::domain::FileStatusKind;
 use gitcomet_core::error::{Error, ErrorKind};
-use gitcomet_core::services::Result;
+use gitcomet_core::services::{ConflictSide, Result};
 use rustc_hash::FxHashSet;
 use std::path::Path;
 
@@ -22,7 +22,8 @@ impl GixRepo {
         let mut clean_paths: Vec<&Path> = Vec::with_capacity(paths.len());
         let mut unstaged_selected: FxHashSet<&Path> =
             FxHashSet::with_capacity_and_hasher(paths.len(), Default::default());
-        let mut has_conflicts = false;
+        // Discarding a conflict keeps our side, as "Resolve using ours" does.
+        let mut conflicted_paths: Vec<&Path> = Vec::new();
         let submodule_paths: FxHashSet<std::path::PathBuf> = self
             .list_submodules_impl()?
             .into_iter()
@@ -37,7 +38,7 @@ impl GixRepo {
 
             unstaged_selected.insert(path);
             match entry.kind {
-                FileStatusKind::Conflicted => has_conflicts = true,
+                FileStatusKind::Conflicted => conflicted_paths.push(path),
                 FileStatusKind::Untracked => clean_paths.push(path),
                 _ if submodule_paths.contains(path) => submodule_update_paths.push(path),
                 _ => checkout_paths.push(path),
@@ -52,7 +53,9 @@ impl GixRepo {
             }
 
             match entry.kind {
-                FileStatusKind::Conflicted => has_conflicts = true,
+                FileStatusKind::Conflicted if !unstaged_selected.contains(path) => {
+                    conflicted_paths.push(path)
+                }
                 FileStatusKind::Added if !unstaged_selected.contains(path) => {
                     remove_paths.push(path)
                 }
@@ -60,10 +63,17 @@ impl GixRepo {
             }
         }
 
-        if has_conflicts {
+        if conflicted_paths
+            .iter()
+            .any(|path| submodule_paths.contains(*path))
+        {
             return Err(Error::new(ErrorKind::Backend(
-                "Cannot discard changes for conflicted files.".to_string(),
+                "Cannot discard changes for conflicted submodules.".to_string(),
             )));
+        }
+
+        for path in conflicted_paths {
+            self.checkout_conflict_side_impl(path, ConflictSide::Ours)?;
         }
 
         // Keep behavior deterministic for mixed selections.

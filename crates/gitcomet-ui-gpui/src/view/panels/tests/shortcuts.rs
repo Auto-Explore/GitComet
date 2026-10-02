@@ -125,9 +125,12 @@ fn wait_until_store_diff_target_path(
             };
             match repo.diff_state.diff_target.as_ref() {
                 Some(DiffTarget::WorkingTree { path, .. }) => path == expected,
-                Some(DiffTarget::Commit {
-                    path: Some(path), ..
-                }) => path == expected,
+                Some(
+                    DiffTarget::Commit { path, .. }
+                    | DiffTarget::CommitRange {
+                        path: Some(path), ..
+                    },
+                ) => path == expected,
                 _ => false,
             }
         })
