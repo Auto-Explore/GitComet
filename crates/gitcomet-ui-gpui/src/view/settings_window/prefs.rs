@@ -85,6 +85,7 @@ impl SettingsWindowView {
             annex_hide_bookkeeping_refs: Some(self.large_file_settings.hide_annex_refs),
             annex_pull_push_on_adjusted: Some(self.large_file_settings.annex_pull_push),
             annex_sync_content: Some(self.large_file_settings.annex_sync_content),
+            recommend_repo_maintenance: Some(self.recommend_repo_maintenance),
             commit_push_after_enabled: None,
             git_executable_path: Some(applied_git_executable_path(&self.runtime_info.git.runtime)),
             terminal_external_mode: None,
@@ -1125,6 +1126,23 @@ impl SettingsWindowView {
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
             view.set_remote_prune_preference(enabled, cx);
+        });
+        cx.notify();
+    }
+
+    pub(super) fn set_recommend_repo_maintenance(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.recommend_repo_maintenance == enabled {
+            return;
+        }
+
+        self.recommend_repo_maintenance = enabled;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_maintenance_recommendation_preference(enabled, cx);
         });
         cx.notify();
     }

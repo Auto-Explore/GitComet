@@ -498,6 +498,8 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) diff_panel_focus_handle: FocusHandle,
     pub(in crate::view) diff_autoscroll_pending: bool,
     pub(in crate::view) diff_raw_input: Entity<components::TextInput>,
+    /// The error-text containers' scroll, so a drag selection can scroll them.
+    pub(in crate::view) diff_raw_scroll: ScrollHandle,
     pub(in crate::view) submodule_summary_cache:
         Option<super::super::submodule_summary::SubmoduleSummaryCache>,
     pub(in crate::view) submodule_hash_inputs: Vec<Entity<components::TextInput>>,

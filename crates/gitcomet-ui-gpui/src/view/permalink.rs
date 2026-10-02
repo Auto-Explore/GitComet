@@ -350,11 +350,11 @@ fn code_commit_base(host: &str, path: &str) -> Option<ForgeWebBase> {
     })
 }
 
-/// Whether a reference is a full 40-hex-digit git commit id. Forges like
+/// Whether a reference is a full 40- or 64-hex-digit git commit id. Forges like
 /// Azure DevOps and Gitea need to distinguish branches from commits in the
 /// URL (`GB`/`GC`, `src/branch`/`src/commit`).
 fn is_full_sha(reference: &str) -> bool {
-    reference.len() == 40 && reference.bytes().all(|b| b.is_ascii_hexdigit())
+    matches!(reference.len(), 40 | 64) && reference.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Percent-encode every character outside the RFC 3986 unreserved set (plus
@@ -381,6 +381,11 @@ mod tests {
         );
         assert_eq!(encode_path("src/az-_.~09.rs"), "src/az-_.~09.rs");
     }
+
+    /// Full-length ids of both object formats, so width-sensitive tests share
+    /// one recognizable pattern.
+    const SHA1_ID: &str = "0123456789abcdef0123456789abcdef01234567";
+    const SHA256_ID: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     fn remote(name: &str, url: &str) -> Remote {
         Remote {
@@ -675,13 +680,32 @@ mod tests {
             "origin",
             "https://dev.azure.com/org/project/_git/repo",
         )];
-        let sha = "0123456789abcdef0123456789abcdef01234567";
-        assert_eq!(
-            file_permalink(&remotes, sha, "src/main.rs").as_deref(),
-            Some(
-                "https://dev.azure.com/org/project/_git/repo?path=/src/main.rs&version=GC0123456789abcdef0123456789abcdef01234567&_a=contents"
-            )
-        );
+        // Both object formats are commits (`GC…`), not branches (`GB…`).
+        for sha in [SHA1_ID, SHA256_ID] {
+            assert_eq!(
+                file_permalink(&remotes, sha, "src/main.rs"),
+                Some(format!(
+                    "https://dev.azure.com/org/project/_git/repo?path=/src/main.rs&version=GC{sha}&_a=contents"
+                )),
+                "{sha}"
+            );
+        }
+    }
+
+    #[test]
+    fn is_full_sha_accepts_40_and_64_hex_digits() {
+        for (reference, expected) in [
+            (SHA1_ID.to_string(), true),
+            (SHA256_ID.to_string(), true),
+            (SHA256_ID.to_uppercase(), true),
+            (SHA1_ID[..39].to_string(), false),
+            (SHA256_ID[..41].to_string(), false),
+            (SHA256_ID[..63].to_string(), false),
+            (format!("{SHA256_ID}a"), false),
+            ("g".repeat(64), false),
+        ] {
+            assert_eq!(is_full_sha(&reference), expected, "{reference}");
+        }
     }
 
     #[test]
@@ -729,13 +753,16 @@ mod tests {
             file_permalink(&remotes, "main", "src/lib.rs").as_deref(),
             Some("https://codeberg.org/org/repo/src/branch/main/src/lib.rs")
         );
-        let sha = "0123456789abcdef0123456789abcdef01234567";
-        assert_eq!(
-            file_permalink(&remotes, sha, "src/lib.rs").as_deref(),
-            Some(
-                "https://codeberg.org/org/repo/src/commit/0123456789abcdef0123456789abcdef01234567/src/lib.rs"
-            )
-        );
+        // Both object formats are commits (`src/commit`), not branches.
+        for sha in [SHA1_ID, SHA256_ID] {
+            assert_eq!(
+                file_permalink(&remotes, sha, "src/lib.rs"),
+                Some(format!(
+                    "https://codeberg.org/org/repo/src/commit/{sha}/src/lib.rs"
+                )),
+                "{sha}"
+            );
+        }
     }
 
     #[test]
@@ -764,7 +791,7 @@ mod tests {
                 "https://us-east-1.console.aws.amazon.com/codesuite/codecommit/repositories/my-repo/browse/refs/heads/main/--/src/lib.rs"
             )
         );
-        let sha = "0123456789abcdef0123456789abcdef01234567";
+        let sha = SHA1_ID;
         assert_eq!(
             file_permalink(&remotes, sha, "src/lib.rs").as_deref(),
             Some(

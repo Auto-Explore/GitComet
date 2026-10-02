@@ -843,6 +843,20 @@ impl GitCometView {
         }));
     }
 
+    pub(in crate::view) fn set_maintenance_recommendation_preference(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.maintenance.recommend = enabled;
+        });
+        self.store
+            .dispatch(Msg::SetMaintenanceSettings(MaintenanceSettings {
+                recommend: enabled,
+            }));
+    }
+
     pub(in crate::view) fn set_files_follow_selected_commit_preference(
         &mut self,
         enabled: bool,

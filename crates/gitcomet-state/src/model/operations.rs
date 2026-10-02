@@ -139,6 +139,10 @@ pub struct GitHookOperation {
     pub command_started: bool,
     /// Latest large-file transfer progress, when the operation moved content.
     pub transfer: Option<gitcomet_core::git_operation::TransferProgress>,
+    /// Shown as a progress card while it runs (fetch, pull, maintenance).
+    pub progress_lane: bool,
+    /// The newest meter git printed, or one GitComet measured itself.
+    pub progress: Option<gitcomet_core::git_progress::GitProgressMeter>,
 }
 
 impl GitHookOperation {

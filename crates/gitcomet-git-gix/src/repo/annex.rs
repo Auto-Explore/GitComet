@@ -337,10 +337,11 @@ fn parse_remote_log(text: &str) -> FxHashMap<String, SpecialRemote> {
 /// journals' uncommitted lines, which are newer. Fetched `git-annex` branches
 /// are not merged in; git-annex does that when a command runs.
 fn annex_log(repo: &gix::Repository, name: &str) -> String {
-    let mut text = repo
-        .find_reference("refs/heads/git-annex")
+    let mut text = crate::refs::find(repo, "refs/heads/git-annex")
         .ok()
-        .and_then(|mut reference| reference.peel_to_tree().ok())
+        .flatten()
+        .and_then(|mut reference| reference.peel_to_commit().ok())
+        .and_then(|commit| commit.tree().ok())
         .and_then(|tree| tree.lookup_entry_by_path(name).ok().flatten())
         .and_then(|entry| entry.object().ok())
         .map(|object| String::from_utf8_lossy(&object.data).into_owned())
@@ -961,21 +962,29 @@ impl super::GixRepo {
     /// change into the adjustment, which git-annex never propagates.
     pub(super) fn refuse_amending_annex_adjustment(&self) -> Result<()> {
         let repo = self.repo();
-        let Some(head) = repo.head_name().ok().flatten() else {
+        let Ok(refs) = crate::refs::view(&repo) else {
+            return Ok(());
+        };
+        // An unborn HEAD has no parent to compare with the basis.
+        let Ok(crate::refs::HeadState::Symbolic {
+            name: head,
+            id: Some(head_id),
+        }) = refs.head_state()
+        else {
             return Ok(());
         };
         let branch = head.shorten().to_string();
         if gitcomet_core::annex::adjusted_branch(&branch).is_none() {
             return Ok(());
         }
-        let basis = repo
-            .try_find_reference(format!("refs/basis/{branch}").as_str())
+        let basis = refs
+            .find(format!("refs/basis/{branch}"))
             .ok()
             .flatten()
             .and_then(|mut basis| basis.peel_to_id().ok())
             .map(|id| id.detach());
         let parent = repo
-            .head_commit()
+            .find_commit(head_id)
             .ok()
             .and_then(|commit| commit.parent_ids().next().map(|id| id.detach()));
         if basis.is_some() && basis == parent {

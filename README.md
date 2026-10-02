@@ -101,7 +101,7 @@ The RPM supports Fedora 42 and newer. It needs glibc 2.35 or newer, so RHEL 9 an
 
 ### Requirements
 
-GitComet requires a local Git installation of `2.50` or newer.
+GitComet requires a local Git installation of `2.53` or newer. With an older Git, GitComet shows a notice asking you to update, and features that need newer Git (such as repository maintenance) are turned off.
 
 ### GitComet User Survey
 

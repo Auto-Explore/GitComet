@@ -48,7 +48,7 @@ fn push_regular_diff_content_mode_state_with_rev(
     let _ = std::fs::create_dir_all(&workdir);
     let target = gitcomet_core::domain::DiffTarget::commit(
         gitcomet_core::domain::CommitId("deadbeef".into()),
-        Some(path.clone()),
+        path.clone(),
     );
     let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), &unified);
     let file_diff =
@@ -589,8 +589,8 @@ mod cache_and_blame;
 mod fixtures;
 mod scrolling;
 mod syntax;
-use fixtures::{BUILD_RELEASE_ARTIFACTS, COMMIT_PATCH, DEPLOYMENT_CI};
-use scrolling::push_raw_patch_diff_state_with_rev;
+use fixtures::{BUILD_RELEASE_ARTIFACTS, DEPLOYMENT_CI};
+use scrolling::push_file_patch_diff_state_with_rev;
 
 /// A binary side is a placeholder outcome: the pane must classify it instead
 /// of dumping the loader error, which names a temp file the user never chose.

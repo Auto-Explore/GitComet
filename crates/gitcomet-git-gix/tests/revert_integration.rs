@@ -88,7 +88,12 @@ fn sequencer_state(repo: &Path) -> SequencerState {
 
 fn assert_no_revert_state(repo: &Path) {
     assert_eq!(sequencer_state(repo), SequencerState::None);
-    assert!(!repo.join(".git/REVERT_HEAD").exists(), "REVERT_HEAD left");
+    assert!(
+        !git_output(repo, &["rev-parse", "-q", "--verify", "REVERT_HEAD"])
+            .status
+            .success(),
+        "REVERT_HEAD left"
+    );
     assert!(!repo.join(".git/MERGE_MSG").exists(), "MERGE_MSG left");
 }
 
@@ -169,7 +174,11 @@ fn revert_without_commit_only_stages_the_inverse() {
     // Like `cherry-pick -n`: no operation left in progress, but MERGE_MSG
     // stays as the next commit's template.
     assert_eq!(sequencer_state(&repo), SequencerState::None);
-    assert!(!repo.join(".git/REVERT_HEAD").exists());
+    assert!(
+        !git_output(&repo, &["rev-parse", "-q", "--verify", "REVERT_HEAD"])
+            .status
+            .success()
+    );
     run_git(
         &repo,
         &["-c", "commit.gpgsign=false", "commit", "--no-edit"],
@@ -474,7 +483,11 @@ fn revert_is_refused_while_a_cherry_pick_is_in_progress() {
         "unexpected error: {err}"
     );
     assert_eq!(sequencer_state(&repo), SequencerState::CherryPick);
-    assert!(!repo.join(".git/REVERT_HEAD").exists());
+    assert!(
+        !git_output(&repo, &["rev-parse", "-q", "--verify", "REVERT_HEAD"])
+            .status
+            .success()
+    );
 }
 
 #[test]
@@ -583,7 +596,11 @@ fn leftover_cherry_pick_sequence_blocks_revert_and_stays_reported() {
         &repo,
         &["-c", "commit.gpgsign=false", "commit", "--no-edit"],
     );
-    assert!(!repo.join(".git/CHERRY_PICK_HEAD").exists());
+    assert!(
+        !git_output(&repo, &["rev-parse", "-q", "--verify", "CHERRY_PICK_HEAD"])
+            .status
+            .success()
+    );
     assert!(repo.join(".git/sequencer/todo").exists());
 
     assert_eq!(sequencer_state(&repo), SequencerState::CherryPick);
@@ -617,7 +634,11 @@ fn leftover_revert_sequence_continues_its_remaining_steps() {
         &repo,
         &["-c", "commit.gpgsign=false", "commit", "--no-edit"],
     );
-    assert!(!repo.join(".git/REVERT_HEAD").exists());
+    assert!(
+        !git_output(&repo, &["rev-parse", "-q", "--verify", "REVERT_HEAD"])
+            .status
+            .success()
+    );
     assert_eq!(sequencer_state(&repo), SequencerState::Revert);
 
     let output = open_backend(&repo)
@@ -840,7 +861,11 @@ fn a_sequencer_directory_git_ignores_does_not_block_revert() {
         repo.join(".git/sequencer").exists(),
         "another operation's directory must survive"
     );
-    assert!(!repo.join(".git/REVERT_HEAD").exists());
+    assert!(
+        !git_output(&repo, &["rev-parse", "-q", "--verify", "REVERT_HEAD"])
+            .status
+            .success()
+    );
 }
 
 #[test]

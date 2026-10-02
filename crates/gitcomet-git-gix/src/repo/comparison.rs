@@ -343,7 +343,7 @@ fn merge_base_ids(
 
 fn resolve_commit(repo: &gix::Repository, id: &CommitId) -> Result<gix::ObjectId> {
     let spec = id.as_ref();
-    repo.rev_parse_single(spec)
+    crate::refs::resolve_required(repo, spec)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("rev-parse {spec}: {e}"))))?
         .object()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("object {spec}: {e}"))))?

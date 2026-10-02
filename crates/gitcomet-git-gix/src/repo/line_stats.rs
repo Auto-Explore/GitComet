@@ -240,7 +240,13 @@ fn staged_line_stats(
         &head_tree_id,
         &index,
         None,
-        gix::status::tree_index::TrackRenames::AsConfigured,
+        // Without an on-disk index there can be no staged rename. Avoid
+        // gix's diff-cache fallback to its files-only HEAD reader.
+        if repo.try_index().map_err(crate::refs::failure)?.is_none() {
+            gix::status::tree_index::TrackRenames::Disabled
+        } else {
+            gix::status::tree_index::TrackRenames::AsConfigured
+        },
         |change, _, _| {
             use gix::diff::index::ChangeRef;
             cancellation.check_cancelled().or_erased()?;

@@ -1160,7 +1160,7 @@ fn set_active_repo_plans_retained_commit_submodule_diff_before_clearing_details(
 
     let commit_id = CommitId("submodule-commit".into());
     let path = PathBuf::from("vendor/dependency");
-    let target = DiffTarget::commit(commit_id.clone(), Some(path.clone()));
+    let target = DiffTarget::commit(commit_id.clone(), path.clone());
     let repo1_state = state
         .repos
         .iter_mut()

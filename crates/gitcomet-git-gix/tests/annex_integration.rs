@@ -303,7 +303,7 @@ fn unlocked_commit_diff_reads_content_from_the_annex() {
     let diff = open(&repo)
         .diff_file_text(&DiffTarget::commit(
             CommitId(head.into()),
-            Some(PathBuf::from("notes.txt")),
+            PathBuf::from("notes.txt"),
         ))
         .unwrap()
         .unwrap();
@@ -705,7 +705,7 @@ fn moved_locked_annex_content_is_found_by_key_regression() {
     assert!(!repo.join("moved/sub/pic.png").is_file());
     let opened = open(&repo);
     let head = CommitId(git(&repo, &["rev-parse", "HEAD"]).trim().into());
-    let target = DiffTarget::commit(head.clone(), Some("moved/sub/pic.png".into()));
+    let target = DiffTarget::commit(head.clone(), "moved/sub/pic.png".into());
     let rows = opened.commit_details(&head).unwrap().files;
     let state = rows
         .iter()
@@ -1865,7 +1865,7 @@ fn escaped_annex_keys_resolve_unlocked_content_and_download_by_key() {
         git(&repo, &["commit", "-qm", "escaped key"]);
         let target = DiffTarget::commit(
             CommitId(git(&repo, &["rev-parse", "HEAD"]).trim().into()),
-            Some(name.into()),
+            name.into(),
         );
         let diff = opened.diff_file_text(&target).unwrap().unwrap();
         assert_eq!(diff.new_large.unwrap().content, LargeFileContent::Available);

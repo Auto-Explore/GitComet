@@ -298,6 +298,21 @@ impl GitRepository for TrackingRepo {
         Ok(())
     }
 
+    fn interactive_cherry_pick_with_output(
+        &self,
+        entries: &[gitcomet_core::services::InteractiveRebaseEntry],
+        commit: bool,
+    ) -> Result<CommandOutput> {
+        self.actions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(format!(
+                "interactive-cherry-pick:{}:commit={commit}",
+                entries.len()
+            ));
+        Ok(CommandOutput::empty_success("git cherry-pick"))
+    }
+
     fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()> {
         self.actions
             .lock()
@@ -1840,7 +1855,7 @@ mod checkout_picker {
     ) -> (gpui::Entity<GitCometView>, &mut gpui::VisualTestContext) {
         let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) = cx.add_window_view(|window, cx| {
-            window.activate_window();
+            window.activate();
             GitCometView::new(store, events, None, window, cx)
         });
 

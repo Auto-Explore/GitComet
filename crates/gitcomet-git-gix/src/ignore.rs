@@ -180,8 +180,7 @@ pub(crate) fn repository_watch_info(
         {
             info.ignore_inputs.push(path);
         }
-        if let Some(submodules) = repo
-            .submodules()
+        if let Some(submodules) = crate::refs::submodules(&repo)
             .map_err(|error| Error::new(ErrorKind::Backend(format!("watch submodules: {error}"))))?
         {
             for submodule in submodules {

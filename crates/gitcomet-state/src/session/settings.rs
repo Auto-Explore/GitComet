@@ -71,6 +71,7 @@ pub struct UiSettings {
     pub commit_push_after_enabled: Option<bool>,
     pub default_tag_type: Option<DefaultTagType>,
     pub fetch_prune_deleted_remote_branches: Option<bool>,
+    pub recommend_repo_maintenance: Option<bool>,
     pub git_executable_path: Option<Option<PathBuf>>,
     pub external_code_editor: Option<Option<ExternalCodeEditorSetting>>,
 }
@@ -181,6 +182,7 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         apply_setting!(settings, file, commit_push_after_enabled);
         apply_setting!(settings, file, default_tag_type);
         apply_setting!(settings, file, fetch_prune_deleted_remote_branches);
+        apply_setting!(settings, file, recommend_repo_maintenance);
         if let Some(path) = settings.git_executable_path {
             file.git_executable_path = path.map(|path| path_storage_key(&path));
         }

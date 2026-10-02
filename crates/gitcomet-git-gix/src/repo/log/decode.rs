@@ -1,7 +1,7 @@
 use super::*;
 
 pub(crate) fn reference_commit_id(
-    mut reference: gix::Reference<'_>,
+    mut reference: crate::refs::Reference<'_>,
 ) -> Result<Option<gix::ObjectId>> {
     match reference.peel_to_commit() {
         Ok(commit) => Ok(Some(commit.id().detach())),
@@ -9,9 +9,10 @@ pub(crate) fn reference_commit_id(
         Err(e) if e.is_validation() => Ok(None),
         Err(e) => {
             let ref_name = reference.name().as_bstr().to_str_lossy();
-            Err(Error::new(ErrorKind::Backend(format!(
-                "gix peel commit ref {ref_name}: {e}"
-            ))))
+            Err(crate::repo::object_store::gix_error(
+                &format!("gix peel commit ref {ref_name}"),
+                &e,
+            ))
         }
     }
 }
@@ -91,7 +92,9 @@ pub(crate) fn commit_from_walk_parts<F: gix::objs::Find + Clone>(
         Err(e) if e.is_not_found() => decode(&objects.clone()),
         result => result,
     };
-    result.map_err(|e| Error::new(ErrorKind::Backend(format!("gix commit object: {e}"))))?
+    result.map_err(|e| {
+        crate::repo::object_store::gix_error("gix commit object", &gix::Error::from(e))
+    })?
 }
 
 pub(crate) fn commit_from_decoded<'a>(

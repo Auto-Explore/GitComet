@@ -15,7 +15,7 @@ struct FocusFixture {
 
 impl FocusFixture {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        window.activate_window();
+        window.activate();
         Self {
             inputs: std::array::from_fn(|_| {
                 cx.new(|cx| TextInput::new(TextInputOptions::default(), window, cx))
@@ -58,7 +58,7 @@ fn tab_can_start_focus_after_window_blur(cx: &mut gpui::TestAppContext) {
     refresh_and_draw(cx);
     for (key, expected) in [("tab", 0), ("shift-tab", 1)] {
         cx.deactivate_window();
-        cx.update(|window, _| window.activate_window());
+        cx.update(|window, _| window.activate());
         cx.run_until_parked();
         refresh_and_draw(cx);
         cx.simulate_keystrokes(key);
@@ -105,7 +105,7 @@ fn switching_windows_resets_only_the_window_losing_focus(cx: &mut gpui::TestAppC
     });
     let (second, second_cx) = first_cx.add_window_view(FocusFixture::new);
     second_cx.update(|window, app| {
-        window.activate_window();
+        window.activate();
         window.focus(&second.read(app).inputs[0].read(app).focus_handle(), app);
         let _ = window.draw(app);
     });
@@ -114,7 +114,7 @@ fn switching_windows_resets_only_the_window_losing_focus(cx: &mut gpui::TestAppC
         .update(second_cx, |_, window, app| {
             assert!(!window.is_window_active());
             assert!(window.focused(app).is_none());
-            window.activate_window();
+            window.activate();
         })
         .unwrap();
     second_cx.run_until_parked();

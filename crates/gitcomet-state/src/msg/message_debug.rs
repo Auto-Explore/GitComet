@@ -88,6 +88,11 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("spec", spec)
                 .finish_non_exhaustive(),
+            InternalMsg::RepoMaintenanceChecked { repo_id, needed } => f
+                .debug_struct("RepoMaintenanceChecked")
+                .field("repo_id", repo_id)
+                .field("needed", needed)
+                .finish(),
             InternalMsg::RepoOpenedErr {
                 repo_id,
                 spec,
@@ -234,6 +239,11 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("requested_count", &requested_ids.len())
                 .field("ok", &result.is_ok())
+                .finish(),
+            InternalMsg::CommitMessageSuggestionConsumed { repo_id, message } => f
+                .debug_struct("CommitMessageSuggestionConsumed")
+                .field("repo_id", repo_id)
+                .field("message_len", &message.len())
                 .finish(),
             InternalMsg::CommitMessageSuggested { repo_id, message } => f
                 .debug_struct("CommitMessageSuggested")

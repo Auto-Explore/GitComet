@@ -190,25 +190,34 @@ impl LocalStores {
 }
 
 fn has_annex_branch(repo: &gix::Repository) -> bool {
-    repo.try_find_reference("refs/heads/git-annex")
-        .ok()
-        .flatten()
-        .is_some()
-        || repo.references().ok().is_some_and(|refs| {
-            refs.remote_branches().ok().is_some_and(|refs| {
-                refs.flatten().any(|reference| {
-                    let Some(prefix) = reference.name().shorten().strip_suffix(b"/git-annex")
-                    else {
-                        return false;
-                    };
-                    // Remote names can contain slashes too. A branch such as
-                    // origin/feature/git-annex is not the bookkeeping branch.
-                    reference
-                        .remote_name(gix::remote::Direction::Fetch)
-                        .is_some_and(|remote| remote.as_bstr().as_bytes() == prefix)
-                })
-            })
-        })
+    let Ok(refs) = crate::refs::view(repo) else {
+        return false;
+    };
+    if refs.find("refs/heads/git-annex").ok().flatten().is_some() {
+        return true;
+    }
+    let Ok(remote_branches) = refs.remote_branches() else {
+        return false;
+    };
+    let mut remotes = None;
+    remote_branches.flatten().any(|reference| {
+        let Some(prefix) = reference
+            .name()
+            .as_bstr()
+            .strip_prefix(b"refs/remotes/")
+            .and_then(|name| name.strip_suffix(b"/git-annex"))
+        else {
+            return false;
+        };
+        // gix's tracking-ref mapping: a single-level prefix is the remote.
+        // Remote names can contain slashes too, so a nested prefix must be a
+        // configured remote; origin/feature/git-annex is not the bookkeeping
+        // branch.
+        !prefix.contains(&b'/')
+            || remotes
+                .get_or_insert_with(|| repo.remote_names())
+                .contains(prefix.as_bstr())
+    })
 }
 
 pub(super) enum AnnexWorktreeSide {

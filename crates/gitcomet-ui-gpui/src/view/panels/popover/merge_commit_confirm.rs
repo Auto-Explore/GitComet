@@ -27,8 +27,7 @@ pub(super) fn panel(
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
-    let sha = commit_id.as_ref();
-    let short: SharedString = sha.get(0..7).unwrap_or(sha).into();
+    let short: SharedString = commit_id.short().into();
     let repo = this.state.repos.iter().find(|repo| repo.id == repo_id);
     let summary = repo
         .and_then(|repo| match &repo.log {

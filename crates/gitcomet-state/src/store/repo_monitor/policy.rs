@@ -53,6 +53,7 @@ impl PolicySnapshot {
         for root in &policy.git_roots {
             policy.cache_roots.insert(root.join("index.lock"));
             policy.tag_roots.insert(root.join("refs/tags"));
+            policy.tag_roots.insert(root.join("reftable"));
             policy.packed_refs.insert(root.join("packed-refs"));
         }
         for path in &inputs.inputs {

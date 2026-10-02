@@ -1385,6 +1385,7 @@ pub(super) fn set_ui_scale_percent_for_test(
     });
 }
 
+mod commit_file_selection;
 mod comparison;
 mod conflict;
 mod control_interaction;
@@ -1396,6 +1397,7 @@ mod file_disk_notice;
 mod file_editor;
 mod file_preview;
 mod file_status;
+mod folder_menus;
 mod large_file_diff;
 mod markdown;
 mod shortcuts;

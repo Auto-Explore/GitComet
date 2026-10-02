@@ -85,6 +85,8 @@ pub enum GitOperationEvent {
         duration: Duration,
     },
     TransferProgress(TransferProgress),
+    /// Progress GitComet measured itself, for work git reports no meter for.
+    Progress(crate::git_progress::GitProgressMeter),
 }
 
 type EventSink = dyn Fn(GitOperationId, GitOperationEvent) + Send + Sync + 'static;

@@ -69,7 +69,7 @@ impl DetailsPaneView {
             .to
             .iter()
             .chain(std::iter::once(&range.from))
-            .filter(|id| id.as_ref() != gitcomet_core::domain::EMPTY_TREE_ID)
+            .filter(|id| !gitcomet_core::domain::is_empty_tree_id(id.as_ref()))
             .cloned()
             .collect()
     }

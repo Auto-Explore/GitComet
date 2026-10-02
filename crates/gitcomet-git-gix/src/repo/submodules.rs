@@ -2,7 +2,7 @@ use super::comparison::{
     NumstatCounts, git_range_numstat_counts, git_range_status_changes, parse_numstat_field,
 };
 use super::history::gix_head_id_or_none;
-use super::{GixRepo, oid_to_arc_str};
+use super::{GixRepo, object_id_from_commit_id, oid_to_arc_str};
 use crate::util::{
     bytes_to_text_preserving_utf8, fnv1a_64, git_workdir_cmd_for, path_buf_from_git_bytes,
     run_git_capture_bytes_cancellable, run_git_simple, run_git_with_output, stable_path_bytes,
@@ -88,9 +88,7 @@ impl GixRepo {
                 submodule_worktree_diff_summary(&repo, path, cancellation)
             }
             DiffTarget::Commit {
-                commit_id,
-                path: Some(path),
-                ..
+                commit_id, path, ..
             } => submodule_commit_diff_summary(&repo, commit_id, path, cancellation),
             _ => Err(Error::new(ErrorKind::Unsupported(
                 "submodule summaries require a submodule working-tree target or committed submodule path",
@@ -406,8 +404,7 @@ fn collect_repo_submodules(
 ) -> Result<()> {
     cancellation.check_cancelled()?;
     let mut gitlinks = collect_gitlinks(repo, cancellation)?;
-    if let Some(submodules) = repo
-        .submodules()
+    if let Some(submodules) = crate::refs::submodules(repo)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
     {
         for submodule in submodules {
@@ -523,8 +520,7 @@ fn collect_repo_untrusted_submodule_sources(
     out: &mut BTreeMap<PathBuf, SubmoduleTrustTarget>,
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<()> {
-    let Some(submodules) = repo
-        .submodules()
+    let Some(submodules) = crate::refs::submodules(repo)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
     else {
         return Ok(());
@@ -566,8 +562,7 @@ fn update_repo_submodules_recursive(
     outputs: &mut Vec<CommandOutput>,
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<()> {
-    let Some(submodules) = repo
-        .submodules()
+    let Some(submodules) = crate::refs::submodules(repo)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
     else {
         return Ok(());
@@ -628,8 +623,7 @@ fn collect_target_submodule_untrusted_sources(
     out: &mut BTreeMap<PathBuf, SubmoduleTrustTarget>,
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<bool> {
-    let Some(submodules) = repo
-        .submodules()
+    let Some(submodules) = crate::refs::submodules(repo)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
     else {
         return Ok(false);
@@ -691,8 +685,7 @@ fn load_target_submodule_recursive(
     outputs: &mut Vec<CommandOutput>,
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<bool> {
-    let Some(submodules) = repo
-        .submodules()
+    let Some(submodules) = crate::refs::submodules(repo)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
     else {
         return Ok(false);
@@ -847,8 +840,7 @@ fn submodule_worktree_diff_summary(
     cancellation: &CancellationToken,
 ) -> Result<SubmoduleDiffSummary> {
     cancellation.check_cancelled()?;
-    let index = repo
-        .index_or_load_from_head_or_empty()
+    let index = crate::refs::index_or_load_from_head_or_empty(repo)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
     let gitlink = index_gitlink_at_path(&index, path);
     if gitlink.is_none() {
@@ -873,8 +865,7 @@ fn submodule_worktree_diff_summary(
     let mut submodule = None;
     let mut configured_repo = None;
     if let Some(gitlink) = gitlink {
-        if let Some(configured) = repo
-            .submodules()
+        if let Some(configured) = crate::refs::submodules(repo)
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
         {
             for candidate in configured {
@@ -1098,7 +1089,7 @@ fn submodule_range_unavailable_reason(
 }
 
 fn submodule_commit_available(repo: &gix::Repository, commit_id: &CommitId) -> bool {
-    object_id_from_commit_id(commit_id)
+    object_id_from_commit_id(commit_id, repo.object_hash())
         .and_then(|object_id| repo.find_commit(object_id).ok())
         .is_some()
 }
@@ -1178,8 +1169,7 @@ fn resolve_submodule_target_commit_id(
     repo: &gix::Repository,
     reference: &str,
 ) -> Result<gix::ObjectId> {
-    let object = repo
-        .rev_parse_single(reference)
+    let object = crate::refs::resolve_required(repo, reference)
         .map_err(|_| {
             Error::new(ErrorKind::Backend(format!(
                 "submodule reference '{}' did not resolve to an object",
@@ -1206,7 +1196,7 @@ fn first_parent_commit_id(
     repo: &gix::Repository,
     commit_id: &CommitId,
 ) -> Result<Option<CommitId>> {
-    let Some(object_id) = object_id_from_commit_id(commit_id) else {
+    let Some(object_id) = object_id_from_commit_id(commit_id, repo.object_hash()) else {
         return Err(Error::new(ErrorKind::Backend(format!(
             "invalid commit id '{}'",
             commit_id.as_ref()
@@ -1226,8 +1216,7 @@ fn gitlink_commit_id_at_revision(
     revision: &str,
     path: &Path,
 ) -> Result<Option<CommitId>> {
-    let object_id = repo
-        .rev_parse_single(revision)
+    let object_id = crate::refs::resolve_required(repo, revision)
         .map(|id| id.detach())
         .map_err(|e| {
             Error::new(ErrorKind::Backend(format!(
@@ -1277,8 +1266,7 @@ fn head_gitlink_commit_id(repo: &gix::Repository, path: &Path) -> Result<Option<
 }
 
 fn resolve_submodule_logical_name(repo: &gix::Repository, path: &Path) -> Result<Option<PathBuf>> {
-    let Some(submodules) = repo
-        .submodules()
+    let Some(submodules) = crate::refs::submodules(repo)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
     else {
         return Ok(None);
@@ -1357,8 +1345,7 @@ fn submodule_path_registered(repo: &gix::Repository, path: &Path) -> Result<bool
 }
 
 fn configured_submodule_path_exists(repo: &gix::Repository, path: &Path) -> Result<bool> {
-    let Some(submodules) = repo
-        .submodules()
+    let Some(submodules) = crate::refs::submodules(repo)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
     else {
         return Ok(false);
@@ -1617,8 +1604,7 @@ fn collect_gitlinks(
     cancellation: &CancellationToken,
 ) -> Result<BTreeMap<PathBuf, GitlinkIndexState>> {
     cancellation.check_cancelled()?;
-    let index = repo
-        .index_or_load_from_head_or_empty()
+    let index = crate::refs::index_or_load_from_head_or_empty(repo)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
     let path_backing = index.path_backing();
 
@@ -1664,8 +1650,7 @@ fn open_gitlink_repo(
 fn open_configured_submodule_repo(
     submodule: &gix::Submodule<'_>,
 ) -> Result<Option<gix::Repository>> {
-    let state = submodule
-        .state()
+    let state = crate::refs::submodule_state(submodule)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule state: {e}"))))?;
     if !(state.repository_exists && state.worktree_checkout) {
         return Ok(None);
@@ -1896,10 +1881,6 @@ fn pathbuf_from_gix_path(path: &gix::bstr::BStr) -> Result<PathBuf> {
     gix::path::try_from_bstr(path)
         .map(|path| path.into_owned())
         .map_err(|_| Error::new(ErrorKind::Unsupported("path is not valid UTF-8")))
-}
-
-fn object_id_from_commit_id(id: &CommitId) -> Option<gix::ObjectId> {
-    gix::ObjectId::from_hex(id.as_ref().as_bytes()).ok()
 }
 
 fn object_id_to_commit_id(id: gix::ObjectId) -> CommitId {
@@ -2289,7 +2270,10 @@ mod tests {
                 "update-index",
                 "--add",
                 "--cacheinfo",
-                "160000,1111111111111111111111111111111111111111,vendor/submodule",
+                &format!(
+                    "160000,{},vendor/submodule",
+                    "1".repeat(gix::open(tmp.path()).unwrap().object_hash().len_in_hex())
+                ),
             ],
         );
         run_git(tmp.path(), &["commit", "-m", "add submodule gitlink"]);
@@ -2315,7 +2299,9 @@ mod tests {
         assert_eq!(summary.status, None);
         assert_eq!(
             staged_range.from,
-            Some(CommitId("1111111111111111111111111111111111111111".into()))
+            Some(CommitId(
+                "1".repeat(repo.repo().object_hash().len_in_hex()).into()
+            ))
         );
         assert_eq!(staged_range.to, None);
     }

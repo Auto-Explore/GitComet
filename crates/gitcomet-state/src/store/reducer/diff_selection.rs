@@ -55,13 +55,13 @@ fn inline_submodule_selected_diff_load_plan(target: &DiffTarget) -> SelectedDiff
     let supports_file = matches!(
         target,
         DiffTarget::WorkingTree { .. }
-            | DiffTarget::Commit { path: Some(_), .. }
+            | DiffTarget::Commit { .. }
             | DiffTarget::CommitRange { path: Some(_), .. }
     );
     let preview = diff_target_preview_flags(target);
 
     SelectedDiffLoadPlan {
-        load_patch_diff: true,
+        load_patch_diff: supports_file,
         load_file_text: supports_file && (!preview.wants_image || preview.is_svg),
         preview_text_side: None,
         load_submodule_summary: false,
@@ -304,7 +304,7 @@ pub(super) fn content_view_target(
             Some(DiffTarget::working_tree(path, DiffArea::Unstaged))
         }
         gitcomet_core::domain::FileSource::Commit(commit_id) => {
-            Some(DiffTarget::commit(commit_id, Some(path)).with_old_path(old_path))
+            Some(DiffTarget::commit(commit_id, path).with_old_path(old_path))
         }
         // Branch file listing is not wired, so this is unreachable from the UI.
         gitcomet_core::domain::FileSource::Branch(_) => None,
@@ -319,7 +319,7 @@ fn view_history_entry_for_target(target: &DiffTarget) -> Option<ViewHistoryEntry
     match target {
         DiffTarget::Commit {
             commit_id,
-            path: Some(path),
+            path,
             old_path,
             ..
         } => Some(ViewHistoryEntry {

@@ -1380,10 +1380,7 @@ fn reload_repo_clears_stale_navigation_history() {
     let commit_a = CommitId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into());
     let commit_b = CommitId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into());
     let snap = |c: &CommitId| crate::model::MainViewSnapshot {
-        diff_target: Some(DiffTarget::commit(
-            c.clone(),
-            Some(PathBuf::from("src/lib.rs")),
-        )),
+        diff_target: Some(DiffTarget::commit(c.clone(), PathBuf::from("src/lib.rs"))),
         content_preview: false,
         edit_mode: false,
         selected_commit: Some(c.clone()),
@@ -1410,7 +1407,7 @@ fn reload_repo_clears_stale_navigation_history() {
     // a no-op and the stack survives intact up to the point ReloadRepo runs.
     state.repos[0].diff_state.diff_target = Some(DiffTarget::commit(
         commit_b.clone(),
-        Some(PathBuf::from("src/lib.rs")),
+        PathBuf::from("src/lib.rs"),
     ));
     state.repos[0].set_selected_commit(Some(commit_b.clone()));
     assert_eq!(state.repos[0].navigation.main_history.entries.len(), 2);

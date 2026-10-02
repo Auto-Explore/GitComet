@@ -102,6 +102,18 @@ impl Default for LargeFileSettings {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MaintenanceSettings {
+    /// Check daily whether a repository needs maintenance, and offer to run it.
+    pub recommend: bool,
+}
+
+impl Default for MaintenanceSettings {
+    fn default() -> Self {
+        Self { recommend: true }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FileBrowserSettings {
     /// Active file browsing follows the selected history row.
     pub follow_selected_commit: bool,
@@ -145,6 +157,7 @@ pub struct AppState {
     pub remote_url_policy: RemoteUrlPolicy,
     pub git_log_settings: GitLogSettings,
     pub remote_settings: RemoteSettings,
+    pub maintenance_settings: MaintenanceSettings,
     pub file_browser_settings: FileBrowserSettings,
     pub sidebar_mode: SidebarMode,
     pub default_tag_type: DefaultTagType,

@@ -173,6 +173,9 @@ pub(super) fn repo_externally_changed(
     repo_id: crate::model::RepoId,
     change: RepoExternalChange,
 ) -> Vec<Effect> {
+    if super::maintenance::defer_external_change(state, repo_id, &change) {
+        return Vec::new();
+    }
     if change.verification_context && state.git_log_settings.verify_commit_signatures {
         // Config includes and control-file replacements can change the verifier
         // or trust settings without changing any commit. Wait for fresh tool

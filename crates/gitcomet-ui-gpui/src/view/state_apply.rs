@@ -475,6 +475,47 @@ impl GitCometView {
             })
             .collect::<Vec<_>>();
 
+        let next_operation_progress = next
+            .repos
+            .iter()
+            .flat_map(|repo| {
+                let name = repo.spec.workdir.file_name().map_or_else(
+                    || repo.spec.workdir.display().to_string(),
+                    |name| name.to_string_lossy().into_owned(),
+                );
+                repo.feedback
+                    .hook_activity
+                    .iter()
+                    // Hook runs and large-file transfers already have their
+                    // own card.
+                    .filter(|operation| {
+                        operation.progress_lane
+                            && !operation.is_reportable()
+                            && operation.status.is_active()
+                    })
+                    .map(move |operation| {
+                        super::operation_progress::OperationProgress::from_operation(
+                            repo.id, &name, operation,
+                        )
+                    })
+            })
+            .collect::<Vec<_>>();
+
+        let next_maintenance_recommendations = next
+            .repos
+            .iter()
+            .filter(|repo| repo.maintenance.recommended)
+            .map(
+                |repo| super::operation_progress::MaintenanceRecommendation {
+                    repo_id: repo.id,
+                    repo_name: repo.spec.workdir.file_name().map_or_else(
+                        || repo.spec.workdir.display().to_string(),
+                        |name| name.to_string_lossy().into_owned(),
+                    ),
+                },
+            )
+            .collect::<Vec<_>>();
+
         let active_hook_chains = next_hook_progress
             .iter()
             .map(|(repo_id, operation)| (*repo_id, operation.id))
@@ -534,6 +575,8 @@ impl GitCometView {
             host.sync_clone_progress(next.clone.as_ref(), cx);
             host.sync_submodule_add_progress(&next_submodule_add_progress, cx);
             host.sync_hook_progress(next_hook_progress, cx);
+            host.sync_operation_progress(next_operation_progress, cx);
+            host.sync_maintenance_recommendations(next_maintenance_recommendations, cx);
             host.set_hook_activity_dialog_repo(hook_activity_workflow_repo, cx);
         });
 
@@ -623,6 +666,9 @@ impl GitCometView {
         self.sync_reflog_panels_with_state();
         if !prev_git_runtime_available && self.state.git_runtime.is_available() {
             self.resume_after_git_runtime_recovery();
+        }
+        if git_runtime_changed {
+            self.maybe_warn_outdated_git(cx);
         }
         for msg in follow_up_msgs {
             self.store.dispatch(msg);
@@ -778,6 +824,8 @@ mod tests {
             latest_line: String::new(),
             command_started: false,
             transfer: None,
+            progress_lane: false,
+            progress: None,
         }
     }
 

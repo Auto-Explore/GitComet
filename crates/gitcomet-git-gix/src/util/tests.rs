@@ -1180,6 +1180,37 @@ fn repository_git_commands_disable_the_ext_protocol() {
     }));
 }
 
+#[test]
+fn repository_git_commands_do_not_start_auto_maintenance() {
+    let repo = tempfile::tempdir().expect("tempdir");
+    let trace_dir = tempfile::tempdir().expect("trace tempdir");
+    let trace = trace_dir.path().join("trace2.json");
+    run_git_test_setup(repo.path(), &["init", "--quiet"]);
+    for (key, value) in [
+        ("user.name", "Test"),
+        ("user.email", "test@example.com"),
+        ("commit.gpgsign", "false"),
+    ] {
+        run_git_test_setup(repo.path(), &["config", key, value]);
+    }
+
+    let output = git_workdir_cmd_for(repo.path())
+        .env("GIT_TRACE2_EVENT", &trace)
+        .args(["commit", "--allow-empty", "--quiet", "-m", "c"])
+        .output()
+        .expect("run git commit");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // Git starts `maintenance run --auto` after every commit unless
+    // `maintenance.auto` is false; GitComet only recommends maintenance.
+    let events = std::fs::read_to_string(&trace).expect("trace2 events");
+    assert!(events.contains("\"name\":\"commit\""), "{events}");
+    assert!(!events.contains("\"maintenance\""), "{events}");
+}
+
 #[cfg(unix)]
 #[test]
 fn repository_config_cannot_reenable_the_ext_protocol() {

@@ -1150,7 +1150,7 @@ impl MainPaneView {
         let (editor_mode, base, header_title, header_detail, loading_state) =
             if let Some(setup) = repo.interactive_rebase_setup.as_ref() {
                 let base = setup.base.clone();
-                // Only abbreviate full 40-char SHAs; leave branch names intact.
+                // Only abbreviate full commit ids; leave branch names intact.
                 let base_short: SharedString =
                     if base.len() > 16 && base.chars().all(|c| c.is_ascii_hexdigit()) {
                         base.get(..8).unwrap_or(&base).to_string().into()
@@ -1469,8 +1469,10 @@ impl MainPaneView {
                                             || !matches!(loading_state, Loadable::Ready(_))
                                             || history_rewrite_busy,
                                     )
-                                    .on_click_handler(theme, ui_scale_percent, cx.listener(
-                                        move |this, _e: &gpui::ClickEvent, _w, cx| {
+                                    .on_click_with_bounds(
+                                        theme,
+                                        cx,
+                                        move |this, _e, bounds, window, cx| {
                                             let Some(st) =
                                                 this.interactive_rebase_states.get_mut(&repo_id)
                                             else {
@@ -1479,15 +1481,10 @@ impl MainPaneView {
                                             if st.entries.is_empty() {
                                                 return;
                                             }
-                                            let entries = if editor_mode
-                                                == ICommitEditorMode::Rebase
-                                            {
-                                                expand_folded(&st.entries, &st.folded)
-                                            } else {
-                                                st.entries.clone()
-                                            };
                                             match editor_mode {
                                                 ICommitEditorMode::Rebase => {
+                                                    let entries =
+                                                        expand_folded(&st.entries, &st.folded);
                                                     if let Some(base) = base.clone() {
                                                         this.store.dispatch(
                                                             Msg::InteractiveRebase {
@@ -1503,24 +1500,32 @@ impl MainPaneView {
                                                         );
                                                     }
                                                 }
+                                                // Commit-or-not is asked like the single
+                                                // pick; the dialog starts the pick.
                                                 ICommitEditorMode::CherryPick => {
-                                                    this.store.dispatch(
-                                                        Msg::InteractiveCherryPick {
-                                                            repo_id,
-                                                            entries,
-                                                        },
-                                                    );
-                                                    this.store.dispatch(
-                                                        Msg::CancelInteractiveCherryPickSetup {
-                                                            repo_id,
-                                                        },
-                                                    );
-                                                    this.interactive_rebase_states.remove(&repo_id);
+                                                    let entries = st.entries.clone();
+                                                    let wh = window.window_handle();
+                                                    let root = this.root_view.clone();
+                                                    cx.defer(move |cx| {
+                                                        let _ = wh.update(cx, |_, window, cx| {
+                                                            let _ = root.update(cx, |root, cx| {
+                                                                root.open_popover_for_bounds(
+                                                                    PopoverKind::InteractiveCherryPickConfirm {
+                                                                        repo_id,
+                                                                        entries,
+                                                                    },
+                                                                    bounds,
+                                                                    window,
+                                                                    cx,
+                                                                );
+                                                            });
+                                                        });
+                                                    });
                                                 }
                                             }
                                             cx.notify();
                                         },
-                                    )),
+                                    ),
                             )),
                     ),
             )

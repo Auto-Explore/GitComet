@@ -170,12 +170,12 @@ impl ChangeSource {
     pub fn target_for(&self, change: &CommitFileChange, base: Option<&CommitId>) -> DiffTarget {
         match self {
             Self::Worktree { area, .. } => DiffTarget::working_tree(change.path.clone(), *area),
-            Self::Commit(id) => DiffTarget::commit(id.clone(), None),
+            Self::Commit(id) => DiffTarget::commit_change(id.clone(), change),
             Self::Comparison { from, to, .. } => {
                 DiffTarget::commit_range(base.unwrap_or(from).clone(), to.clone(), None)
+                    .for_change(change)
             }
         }
-        .for_change(change)
     }
 
     /// Whether the working tree is one side, so external edits reload it.

@@ -5,9 +5,21 @@ use gitcomet_core::services::{
     CancellationToken, GitBackend, GitRepository, Result, WorktreeIgnoreMatcher,
 };
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, Weak};
 
 pub struct GixBackend;
+
+/// Every repository this process opened: each window and worktree scan holds
+/// its own store, and a maintenance run must release them all.
+static OPEN_REPOS: Mutex<Vec<Weak<GixRepo>>> = Mutex::new(Vec::new());
+
+fn register_open_repo(repo: &Arc<GixRepo>) {
+    let mut open = OPEN_REPOS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    open.retain(|repo| repo.strong_count() > 0);
+    open.push(Arc::downgrade(repo));
+}
 
 impl Default for GixBackend {
     fn default() -> Self {
@@ -37,15 +49,18 @@ impl GixBackend {
 
         let repo = crate::open::open_worktree_repo(&workdir)
             .map_err(|e| crate::open::map_open_error(e, "gix open"))?;
+        crate::refs::validate_open(&repo, cancellation)?;
         if let Some(cancellation) = cancellation {
             cancellation.check_cancelled()?;
         }
 
-        Ok(Arc::new(GixRepo::new_with_options(
+        let repo = Arc::new(GixRepo::new_with_options(
             workdir,
             repo.into_sync(),
             options.clone(),
-        )))
+        ));
+        register_open_repo(&repo);
+        Ok(repo)
     }
 }
 
@@ -76,6 +91,21 @@ impl GitBackend for GixBackend {
         cancellation: &CancellationToken,
     ) -> Result<Arc<dyn GitRepository>> {
         self.open_impl(workdir, Some(cancellation), options)
+    }
+
+    fn release_object_stores(&self, common_dir: &Path) {
+        // Upgraded first so reopening runs without the registry lock.
+        let open = OPEN_REPOS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect::<Vec<_>>();
+        for repo in open {
+            if repo.common_dir_impl() == common_dir {
+                let _ = repo.reopen_object_store();
+            }
+        }
     }
 
     fn open_cancellable(

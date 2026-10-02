@@ -1,7 +1,8 @@
 use crate::model::GitLogTagFetchMode;
 use crate::model::{
     BranchExistsPromptState, ConflictFileLoadMode, DefaultTagType, FileBrowserSettings,
-    GitOperationOuterOutcome, RemoteSettings, RepoId, SidebarDataRequest, SidebarMode,
+    GitOperationOuterOutcome, MaintenanceSettings, RemoteSettings, RepoId, SidebarDataRequest,
+    SidebarMode,
 };
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::ConflictSession;
@@ -281,6 +282,7 @@ pub enum Msg {
         verify_commit_signatures: bool,
     },
     SetRemoteSettings(RemoteSettings),
+    SetMaintenanceSettings(MaintenanceSettings),
     SetFileBrowserSettings(FileBrowserSettings),
     SetLargeFileSettings(crate::model::LargeFileSettings),
     SetDefaultTagType(DefaultTagType),
@@ -680,6 +682,13 @@ pub enum Msg {
         mainline: Option<usize>,
         summary: String,
     },
+    /// Applies files' change from a commit or comparison.
+    ApplyFileChange {
+        repo_id: RepoId,
+        target: gitcomet_core::domain::ApplyChangeTarget,
+        commit: bool,
+        commit_retry: Option<gitcomet_core::domain::ApplyFileChangeRetry>,
+    },
     CreateBranch {
         repo_id: RepoId,
         name: String,
@@ -883,6 +892,14 @@ pub enum Msg {
     PruneLocalTags {
         repo_id: RepoId,
     },
+    /// The user accepted git's maintenance recommendation.
+    StartRepoMaintenance {
+        repo_id: RepoId,
+    },
+    /// "Remind me later" on the maintenance recommendation.
+    SnoozeRepoMaintenance {
+        repo_id: RepoId,
+    },
     Pull {
         repo_id: RepoId,
         mode: PullMode,
@@ -997,6 +1014,8 @@ pub enum Msg {
     InteractiveCherryPick {
         repo_id: RepoId,
         entries: Vec<InteractiveRebaseEntry>,
+        /// False merges every pick into the index without committing.
+        commit: bool,
     },
     CancelInteractiveRebaseSetup {
         repo_id: RepoId,
@@ -1203,6 +1222,8 @@ pub enum InternalMsg {
         label: String,
         context: Option<String>,
         time: SystemTime,
+        /// Shown as a progress card while it runs.
+        progress_lane: bool,
     },
     GitOperationEvent {
         repo_id: RepoId,
@@ -1241,6 +1262,10 @@ pub enum InternalMsg {
         repo_id: RepoId,
         spec: RepoSpec,
         repo: Arc<dyn GitRepository>,
+    },
+    RepoMaintenanceChecked {
+        repo_id: RepoId,
+        needed: bool,
     },
     RepoOpenedErr {
         repo_id: RepoId,
@@ -1345,9 +1370,15 @@ pub enum InternalMsg {
         repo_id: RepoId,
         result: Result<Option<String>, Error>,
     },
-    /// The message git prepared for the next commit (after a `--no-commit`
-    /// revert), offered as the commit box's starting text.
+    /// The message git prepared for an uncommitted revert or applied change,
+    /// offered as the commit box's starting text.
     CommitMessageSuggested {
+        repo_id: RepoId,
+        message: String,
+    },
+    /// An automatic commit consumed this suggestion. Clear only that message,
+    /// preserving a newer suggestion or a draft the user has edited.
+    CommitMessageSuggestionConsumed {
         repo_id: RepoId,
         message: String,
     },

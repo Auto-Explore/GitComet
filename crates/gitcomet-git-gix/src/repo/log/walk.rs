@@ -7,10 +7,6 @@ pub(crate) fn empty_log_page() -> LogPage {
     }
 }
 
-pub(crate) fn object_id_from_commit_id(id: &CommitId) -> Option<gix::ObjectId> {
-    gix::ObjectId::from_hex(id.as_ref().as_bytes()).ok()
-}
-
 pub(crate) fn log_paged_walk_handle(repo: &gix::ThreadSafeRepository) -> gix::OdbHandleArc {
     gix::odb::memory::Proxy::from(gix::odb::Cache::from(repo.objects.to_handle()))
         .with_write_passthrough()
@@ -157,7 +153,7 @@ pub(crate) fn new_commit_time_walk(
         .sorting(gix::traverse::commit::simple::Sorting::ByCommitTime(
             CommitTimeOrder::NewestFirst,
         ))
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix walk: {e}"))))?
+        .map_err(|e| crate::repo::object_store::gix_error("gix walk", &gix::Error::from(e)))?
         // Set after the sorting, the way `rev_walk` does: first-parent mode
         // walks the chain in order rather than by date, and asking for it
         // swaps the queue.
@@ -234,9 +230,10 @@ pub(crate) fn new_log_paged_walk(
                 if let Some(cancellation) = cancellation {
                     cancellation.check_cancelled()?;
                 }
-                return Err(Error::new(ErrorKind::Backend(format!(
-                    "gix date-order walk: {error}"
-                ))));
+                return Err(crate::repo::object_store::gix_error(
+                    "gix date-order walk",
+                    &gix::Error::from(error),
+                ));
             }
         }
     };
@@ -261,8 +258,7 @@ pub(crate) fn apply_first_parent_resume_hint(page: &mut LogPage) {
 }
 
 pub(crate) fn reflog_unborn_head_error(repo: &gix::Repository) -> Error {
-    let branch = repo
-        .head_name()
+    let branch = crate::refs::head_name(repo)
         .ok()
         .flatten()
         .map(|name| {
@@ -602,7 +598,7 @@ pub(crate) fn log_page_from_paged_walk_state(
                         if let Some(cancellation) = cancellation {
                             cancellation.check_cancelled()?;
                         }
-                        return Err(Error::new(ErrorKind::Backend(format!("gix walk: {error}"))));
+                        return Err(crate::repo::object_store::gix_error("gix walk", &*error));
                     }
                 };
 

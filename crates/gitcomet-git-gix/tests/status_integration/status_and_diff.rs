@@ -422,7 +422,7 @@ fn diff_file_text_reports_old_and_new_for_working_tree_and_commits() {
     let commit = opened
         .diff_file_text(&DiffTarget::commit(
             gitcomet_core::domain::CommitId(head.into()),
-            Some(PathBuf::from("a.txt")),
+            PathBuf::from("a.txt"),
         ))
         .unwrap()
         .expect("file diff for commit");
@@ -494,7 +494,7 @@ fn diff_file_text_root_commit_has_no_parent_side() {
     let commit = opened
         .diff_file_text(&DiffTarget::commit(
             gitcomet_core::domain::CommitId(head.into()),
-            Some(PathBuf::from("a.txt")),
+            PathBuf::from("a.txt"),
         ))
         .unwrap()
         .expect("file diff for root commit");
@@ -571,7 +571,7 @@ fn diff_preview_text_file_commit_added_file_returns_new_side_blob_path() {
     let commit_id = CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).into());
     let preview_path = opened
         .diff_preview_text_file(
-            &DiffTarget::commit(commit_id, Some(PathBuf::from("docs/added.txt"))),
+            &DiffTarget::commit(commit_id, PathBuf::from("docs/added.txt")),
             DiffPreviewTextSide::New,
         )
         .unwrap()
@@ -612,7 +612,7 @@ fn diff_preview_text_file_commit_deleted_file_returns_old_side_blob_path() {
     let commit_id = CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).into());
     let preview_path = opened
         .diff_preview_text_file(
-            &DiffTarget::commit(commit_id, Some(PathBuf::from("docs/delete-me.txt"))),
+            &DiffTarget::commit(commit_id, PathBuf::from("docs/delete-me.txt")),
             DiffPreviewTextSide::Old,
         )
         .unwrap()
@@ -758,7 +758,7 @@ fn diff_file_image_reports_old_and_new_for_working_tree_and_commits() {
     let commit = opened
         .diff_file_image(&DiffTarget::commit(
             gitcomet_core::domain::CommitId(head.into()),
-            Some(PathBuf::from("img.png")),
+            PathBuf::from("img.png"),
         ))
         .unwrap()
         .expect("image diff for commit");
@@ -1058,33 +1058,6 @@ fn status_cache_invalidates_when_gitlink_appears_on_same_repo_instance() {
 }
 
 #[test]
-fn diff_file_commit_target_without_path_returns_none() {
-    let _ = ensure_isolated_git_test_env();
-    let dir = tempfile::tempdir().unwrap();
-    let repo = dir.path();
-
-    run_git(repo, &["init"]);
-    run_git(repo, &["config", "user.email", "you@example.com"]);
-    run_git(repo, &["config", "user.name", "You"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
-
-    write(repo, "a.txt", "one\n");
-    run_git(repo, &["add", "a.txt"]);
-    run_git(
-        repo,
-        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
-    );
-
-    let head = run_git_output(repo, &["rev-parse", "HEAD"]);
-    let target = DiffTarget::commit(gitcomet_core::domain::CommitId(head.into()), None);
-
-    let backend = GixBackend;
-    let opened = backend.open(repo).unwrap();
-    assert!(opened.diff_file_text(&target).unwrap().is_none());
-    assert!(opened.diff_file_image(&target).unwrap().is_none());
-}
-
-#[test]
 fn diff_unified_outside_repository_path_returns_structured_git_error() {
     let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
@@ -1187,10 +1160,7 @@ fn diff_parsed_merge_commit_uses_first_parent() {
     let opened = backend.open(repo).unwrap();
     let merge_id = CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).into());
     let diff = opened
-        .diff_parsed(&DiffTarget::commit(
-            merge_id,
-            Some(PathBuf::from("shared.txt")),
-        ))
+        .diff_parsed(&DiffTarget::commit(merge_id, PathBuf::from("shared.txt")))
         .expect("parse merge commit diff against its first parent");
 
     assert!(
@@ -1242,8 +1212,9 @@ fn diff_parsed_commit_rename_preserves_rename_headers_and_hunks() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     let commit_id = CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).into());
+    let parent_id = CommitId(run_git_output(repo, &["rev-parse", "HEAD~1"]).into());
     let diff = opened
-        .diff_parsed(&DiffTarget::commit(commit_id, None))
+        .diff_parsed(&DiffTarget::commit_range(parent_id, Some(commit_id), None))
         .expect("parse rename commit diff");
 
     assert!(
@@ -1294,7 +1265,7 @@ fn diff_parsed_commit_added_file_matches_git_show_output() {
     let diff = opened
         .diff_parsed(&DiffTarget::commit(
             commit_id.clone(),
-            Some(PathBuf::from("docs/added.txt")),
+            PathBuf::from("docs/added.txt"),
         ))
         .expect("parse added file commit diff");
     let expected = run_git_output(
@@ -1353,7 +1324,7 @@ fn diff_parsed_commit_added_binary_file_falls_back_to_git_diff() {
     let diff = opened
         .diff_parsed(&DiffTarget::commit(
             CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).into()),
-            Some(PathBuf::from("docs/logo.bin")),
+            PathBuf::from("docs/logo.bin"),
         ))
         .expect("a binary blob must render through git diff");
     assert!(
@@ -1394,7 +1365,7 @@ fn diff_parsed_commit_added_file_truncates_at_the_unified_line_limit() {
     let opened = backend.open(repo).unwrap();
     let target = DiffTarget::commit(
         CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).into()),
-        Some(PathBuf::from("docs/too-many-lines.txt")),
+        PathBuf::from("docs/too-many-lines.txt"),
     );
 
     // Too large for the synthetic fast path: `git diff` renders it truncated.
@@ -1447,7 +1418,7 @@ fn diff_parsed_commit_deleted_file_matches_git_show_output() {
     let diff = opened
         .diff_parsed(&DiffTarget::commit(
             commit_id.clone(),
-            Some(PathBuf::from("docs/delete-me.txt")),
+            PathBuf::from("docs/delete-me.txt"),
         ))
         .expect("parse deleted file commit diff");
     let expected = run_git_output(
@@ -1623,7 +1594,7 @@ fn diff_commit_with_unknown_revision_and_outside_conflict_path_are_handled() {
     let opened = backend.open(&repo).unwrap();
     let unknown_target = DiffTarget::commit(
         gitcomet_core::domain::CommitId("not-a-real-revision".into()),
-        Some(PathBuf::from("a.txt")),
+        PathBuf::from("a.txt"),
     );
 
     let text = opened

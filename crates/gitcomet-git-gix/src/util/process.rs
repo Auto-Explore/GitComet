@@ -127,6 +127,26 @@ pub(super) fn git_timeout_error(
     )))
 }
 
+/// "a.txt", "a.txt and b.txt", or "a.txt, b.txt and 3 more" for messages.
+pub(crate) fn describe_path_list<P: AsRef<[u8]>>(paths: &[P]) -> String {
+    const SHOWN: usize = 3;
+    let names: Vec<String> = paths
+        .iter()
+        .take(if paths.len() > SHOWN + 1 {
+            SHOWN
+        } else {
+            paths.len()
+        })
+        .map(|path| bytes_to_text_preserving_utf8(path.as_ref()))
+        .collect();
+    match (names.as_slice(), paths.len() - names.len()) {
+        ([], _) => String::new(),
+        ([only], 0) => only.clone(),
+        ([init @ .., last], 0) => format!("{} and {last}", init.join(", ")),
+        (shown, more) => format!("{} and {more} more", shown.join(", ")),
+    }
+}
+
 pub(crate) fn git_command_failed_error(label: &str, output: Output) -> Error {
     let Output {
         status,
@@ -632,6 +652,9 @@ fn run_command_with_timeout_auth_stdin(
         None
     };
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    // Meters stream to the operation's progress; the captured stderr reads as
+    // it would without them.
+    let strip_progress = cmd.get_args().any(|arg| arg == "--progress");
 
     timing.stage("prepare");
     let mut child = cmd.spawn().map_err(io_err)?;
@@ -682,6 +705,9 @@ fn run_command_with_timeout_auth_stdin(
 
     let stdout = stdout_handle.join().unwrap_or_default();
     let mut stderr = stderr_handle.join().unwrap_or_default();
+    if strip_progress && let Ok(text) = std::str::from_utf8(&stderr) {
+        stderr = gitcomet_core::git_progress::strip_progress(text).into_bytes();
+    }
     timing.stage("workers-join");
     join_activity_output_aggregator(activity_handle);
     timing.stage("activity-finish");
@@ -1133,7 +1159,17 @@ pub(crate) fn run_git_with_output(cmd: Command, label: &str) -> Result<CommandOu
 /// Like [`run_git_parsed_stdout_until_done`]: ends when the command does or
 /// the user cancels it, never on silence.
 pub(crate) fn run_git_with_output_until_done(cmd: Command, label: &str) -> Result<CommandOutput> {
-    let output = run_command_with_timeout(cmd, label, Duration::MAX, None)?;
+    run_git_with_output_and_timeout(cmd, label, Duration::MAX)
+}
+
+/// [`run_git_with_output`] for work that can rightly take hours, such as a
+/// repack of a large repository; the user stops it rather than a timeout.
+pub(crate) fn run_git_with_output_and_timeout(
+    cmd: Command,
+    label: &str,
+    timeout: Duration,
+) -> Result<CommandOutput> {
+    let output = run_command_with_timeout(cmd, label, timeout, None)?;
     if !output.status.success() {
         return Err(git_command_failed_error(label, output));
     }

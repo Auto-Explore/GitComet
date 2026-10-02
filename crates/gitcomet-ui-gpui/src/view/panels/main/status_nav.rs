@@ -214,6 +214,33 @@ pub(super) enum AdjacentDiffFileTarget {
     },
 }
 
+/// The file `direction` steps to from `path` in a commit-diff file list, and
+/// its position among the files as drawn. `drawn_source_indices` is the list's
+/// display order; `None` means source order.
+fn adjacent_file_in_list<'a>(
+    files: &'a [gitcomet_core::domain::CommitFileChange],
+    drawn_source_indices: Option<&[usize]>,
+    path: &std::path::Path,
+    direction: i8,
+) -> Option<(usize, &'a gitcomet_core::domain::CommitFileChange)> {
+    let source_indices;
+    let drawn = if let Some(indices) = drawn_source_indices {
+        indices
+    } else {
+        source_indices = (0..files.len()).collect::<Vec<_>>();
+        source_indices.as_slice()
+    };
+    let current_ix = drawn
+        .iter()
+        .position(|source_ix| files.get(*source_ix).is_some_and(|file| file.path == path))?;
+    let target_ix = if direction < 0 {
+        current_ix.checked_sub(1)?
+    } else {
+        (current_ix + 1 < drawn.len()).then_some(current_ix + 1)?
+    };
+    Some((target_ix, files.get(*drawn.get(target_ix)?)?))
+}
+
 /// The entry an inline foreign diff should open when stepping `direction` from
 /// `selected_ix`. Entries are in source order, so a sorted or tree-grouped list
 /// passes `drawn_order` -- display position to entry index -- and navigation
@@ -244,7 +271,7 @@ pub(super) fn adjacent_diff_file_target_for_repo(
     diff_target: &DiffTarget,
     change_tracking_view: ChangeTrackingView,
     direction: i8,
-    commit_file_source_indices: Option<&[usize]>,
+    file_list_source_indices: Option<&[usize]>,
     status_section_order: Option<&[usize]>,
 ) -> Option<AdjacentDiffFileTarget> {
     if direction == 0 {
@@ -275,9 +302,7 @@ pub(super) fn adjacent_diff_file_target_for_repo(
             })
         }
         DiffTarget::Commit {
-            commit_id,
-            path: Some(path),
-            ..
+            commit_id, path, ..
         } => {
             let Loadable::Ready(details) = &repo.history_state.commit_details else {
                 return None;
@@ -285,27 +310,8 @@ pub(super) fn adjacent_diff_file_target_for_repo(
             if &details.id != commit_id {
                 return None;
             }
-
-            let source_indices;
-            let visible_source_indices = if let Some(indices) = commit_file_source_indices {
-                indices
-            } else {
-                source_indices = (0..details.files.len()).collect::<Vec<_>>();
-                source_indices.as_slice()
-            };
-            let current_ix = visible_source_indices.iter().position(|source_ix| {
-                details
-                    .files
-                    .get(*source_ix)
-                    .is_some_and(|file| file.path == *path)
-            })?;
-            let target_ix = if direction < 0 {
-                current_ix.checked_sub(1)?
-            } else {
-                (current_ix + 1 < visible_source_indices.len()).then_some(current_ix + 1)?
-            };
-            let source_ix = *visible_source_indices.get(target_ix)?;
-            let file = details.files.get(source_ix)?;
+            let (target_ix, file) =
+                adjacent_file_in_list(&details.files, file_list_source_indices, path, direction)?;
 
             Some(AdjacentDiffFileTarget::Commit {
                 commit_id: commit_id.clone(),
@@ -314,13 +320,13 @@ pub(super) fn adjacent_diff_file_target_for_repo(
                 old_path: file.old_path.clone(),
             })
         }
-        DiffTarget::Commit { path: None, .. } => None,
         DiffTarget::CommitRange {
             from_commit_id,
             to_commit_id,
-            path,
+            path: Some(path),
             ..
         } => {
+            // The file list on screen must be this comparison's.
             let range = repo.history_state.range_selection.as_ref()?;
             if range.diff_from() != from_commit_id || &range.to != to_commit_id {
                 return None;
@@ -328,20 +334,8 @@ pub(super) fn adjacent_diff_file_target_for_repo(
             let Loadable::Ready(files) = &repo.history_state.range_files else {
                 return None;
             };
-            let path = path.as_ref()?;
-            let fallback;
-            let order = match commit_file_source_indices {
-                Some(order) => order,
-                None => {
-                    fallback = (0..files.len()).collect::<Vec<_>>();
-                    &fallback
-                }
-            };
-            let current = order
-                .iter()
-                .position(|ix| files.get(*ix).is_some_and(|file| &file.path == path))?;
-            let next = adjacent_inline_diff_ix(current, order.len(), None, direction)?;
-            let file = files.get(*order.get(next)?)?;
+            let (target_ix, file) =
+                adjacent_file_in_list(files, file_list_source_indices, path, direction)?;
             Some(AdjacentDiffFileTarget::Range {
                 target: DiffTarget::commit_range(
                     from_commit_id.clone(),
@@ -349,9 +343,10 @@ pub(super) fn adjacent_diff_file_target_for_repo(
                     None,
                 )
                 .for_change(file),
-                target_ix: next,
+                target_ix,
             })
         }
+        DiffTarget::CommitRange { path: None, .. } => None,
     }
 }
 
@@ -377,6 +372,31 @@ impl MainPaneView {
                 root.details_pane
                     .read(cx)
                     .active_status_section_order(repo_id, section)
+            })
+            .ok()
+            .flatten()
+    }
+
+    /// The drawn order of the commit-diff file list the open diff belongs to:
+    /// the commit details list, or the comparison list.
+    pub(super) fn active_file_list_source_indices(
+        &self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<std::sync::Arc<[usize]>> {
+        let repo = self.active_repo()?;
+        let is_range = matches!(
+            self.bound_diff_state(repo).diff_target,
+            Some(DiffTarget::CommitRange { .. })
+        );
+        self.root_view
+            .update(cx, |root, cx| {
+                let details = root.details_pane.read(cx);
+                if is_range {
+                    details.active_range_file_source_indices(repo_id)
+                } else {
+                    details.active_commit_file_source_indices(repo_id)
+                }
             })
             .ok()
             .flatten()
@@ -457,15 +477,7 @@ impl MainPaneView {
             return true;
         }
 
-        let commit_file_source_indices = self
-            .root_view
-            .update(cx, |root, cx| {
-                root.details_pane
-                    .read(cx)
-                    .active_commit_file_source_indices(repo_id)
-            })
-            .ok()
-            .flatten();
+        let file_list_source_indices = self.active_file_list_source_indices(repo_id, cx);
         let change_tracking_view = self.active_change_tracking_view(cx);
         let status_section_order =
             self.active_status_section_order(repo_id, change_tracking_view, cx);
@@ -477,7 +489,7 @@ impl MainPaneView {
                 diff_target,
                 change_tracking_view,
                 direction,
-                commit_file_source_indices.as_deref(),
+                file_list_source_indices.as_deref(),
                 status_section_order.as_deref(),
             )
         })() else {
@@ -488,11 +500,9 @@ impl MainPaneView {
             window.focus(&self.diff_panel_focus_handle, cx);
         }
         match target {
-            AdjacentDiffFileTarget::Range {
-                target,
-                target_ix: _,
-            } => {
+            AdjacentDiffFileTarget::Range { target, target_ix } => {
                 self.store.dispatch(Msg::SelectDiff { repo_id, target });
+                self.scroll_range_file_to_ix(target_ix, cx);
             }
             AdjacentDiffFileTarget::WorkingTree {
                 section,
@@ -521,7 +531,7 @@ impl MainPaneView {
             } => {
                 self.store.dispatch(Msg::SelectDiff {
                     repo_id,
-                    target: DiffTarget::commit(commit_id, Some(path)).with_old_path(old_path),
+                    target: DiffTarget::commit(commit_id, path).with_old_path(old_path),
                 });
                 self.scroll_commit_details_file_to_ix(target_ix, cx);
             }
@@ -776,7 +786,7 @@ mod tests {
                 ],
             }));
 
-        let target = DiffTarget::commit(commit_id.clone(), Some(file_b.clone()));
+        let target = DiffTarget::commit(commit_id.clone(), file_b.clone());
 
         assert_eq!(
             adjacent_diff_file_target_for_repo(
@@ -846,7 +856,7 @@ mod tests {
                 ],
             }));
 
-        let target = DiffTarget::commit(commit_id.clone(), Some(file_b.clone()));
+        let target = DiffTarget::commit(commit_id.clone(), file_b.clone());
         let visible_source_indices = [2, 1];
 
         assert_eq!(
@@ -877,7 +887,7 @@ mod tests {
             None,
         );
 
-        let hidden_target = DiffTarget::commit(commit_id, Some(file_a));
+        let hidden_target = DiffTarget::commit(commit_id, file_a);
         assert_eq!(
             adjacent_diff_file_target_for_repo(
                 &repo,
@@ -890,5 +900,67 @@ mod tests {
             None,
             "navigation is a no-op while the open diff is hidden by the filter"
         );
+    }
+
+    fn file_change(path: &std::path::Path) -> gitcomet_core::domain::CommitFileChange {
+        gitcomet_core::domain::CommitFileChange::new(
+            path.to_path_buf(),
+            gitcomet_core::domain::FileStatusKind::Modified,
+        )
+    }
+
+    #[test]
+    fn comparison_file_navigation_steps_through_the_drawn_range_files() {
+        let from = CommitId("1111111111111111".into());
+        let to = CommitId("2222222222222222".into());
+        let file_a = pb("src/a.rs");
+        let file_b = pb("src/b.rs");
+        let file_c = pb("src/c.rs");
+
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.history_state.range_selection = Some(gitcomet_state::model::RangeSelection::new(
+            from.clone(),
+            Some(to.clone()),
+            "from".into(),
+            "to".into(),
+        ));
+        repo.history_state.range_files = Loadable::Ready(std::sync::Arc::new(vec![
+            file_change(&file_a),
+            file_change(&file_b),
+            file_change(&file_c),
+        ]));
+        let target = DiffTarget::commit_range(from.clone(), Some(to.clone()), Some(file_b.clone()));
+        let range_file = |path: &std::path::PathBuf, target_ix| AdjacentDiffFileTarget::Range {
+            target: DiffTarget::commit_range(from.clone(), Some(to.clone()), Some(path.clone())),
+            target_ix,
+        };
+        let adjacent = |repo: &RepoState, direction, drawn: Option<&[usize]>| {
+            adjacent_diff_file_target_for_repo(
+                repo,
+                &target,
+                ChangeTrackingView::Combined,
+                direction,
+                drawn,
+                None,
+            )
+        };
+
+        assert_eq!(adjacent(&repo, -1, None), Some(range_file(&file_a, 0)));
+        assert_eq!(adjacent(&repo, 1, None), Some(range_file(&file_c, 2)));
+        // A sorted list steps in display order, and its ends have no neighbour.
+        assert_eq!(
+            adjacent(&repo, -1, Some(&[2, 1, 0])),
+            Some(range_file(&file_c, 0))
+        );
+        assert_eq!(adjacent(&repo, -1, Some(&[1, 0, 2])), None);
+
+        // A diff left open from another comparison has no list on screen.
+        repo.history_state.range_selection = Some(gitcomet_state::model::RangeSelection::new(
+            from,
+            None,
+            "from".into(),
+            "Working tree".into(),
+        ));
+        assert_eq!(adjacent(&repo, 1, None), None);
     }
 }

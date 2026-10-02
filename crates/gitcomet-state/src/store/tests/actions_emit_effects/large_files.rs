@@ -75,7 +75,7 @@ fn large_file_command_runs_as_a_local_action_and_lock_changes_reload_locks() {
 fn lfs_download_reloads_a_selected_historical_diff() {
     use gitcomet_core::large_files::LargeFileCommand;
     let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
-    let target = DiffTarget::commit(CommitId("abc123".into()), Some("a.bin".into()));
+    let target = DiffTarget::commit(CommitId("abc123".into()), "a.bin".into());
     state.repos[0].set_diff_target(Some(target.clone()));
     state.repos[0].set_selected_commit(Some(CommitId("abc123".into())));
     let effects = reduce(
@@ -187,7 +187,7 @@ fn support_changes_refresh_selected_content_but_unchanged_support_does_not() {
     use crate::msg::InternalMsg;
     let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
     let commit_id = CommitId("abc123".into());
-    let target = DiffTarget::commit(commit_id.clone(), Some("a.bin".into()));
+    let target = DiffTarget::commit(commit_id.clone(), "a.bin".into());
     state.repos[0].history_state.selected_commit = Some(commit_id);
     state.repos[0].diff_state.diff_target = Some(target.clone());
     let mut support = gitcomet_core::large_files::LargeFileSupport::default();
@@ -505,6 +505,7 @@ fn command_log_only_links_reportable_operations() {
                     label: "Push".into(),
                     context: None,
                     time: std::time::SystemTime::UNIX_EPOCH,
+                    progress_lane: false,
                 }),
             );
             if reportable {

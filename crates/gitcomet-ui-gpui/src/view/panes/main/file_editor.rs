@@ -436,9 +436,7 @@ impl MainPaneView {
         let repo = self.active_repo()?;
         match self.bound_diff_state(repo).diff_target.as_ref()? {
             DiffTarget::WorkingTree { path, .. } => Some(path.clone()),
-            DiffTarget::Commit {
-                path: Some(path), ..
-            } => Some(path.clone()),
+            DiffTarget::Commit { path, .. } => Some(path.clone()),
             _ => None,
         }
     }

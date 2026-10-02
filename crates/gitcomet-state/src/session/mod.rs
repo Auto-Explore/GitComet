@@ -94,6 +94,7 @@ pub struct UiSession {
     pub commit_push_after_enabled: Option<bool>,
     pub default_tag_type: Option<DefaultTagType>,
     pub fetch_prune_deleted_remote_branches: Option<bool>,
+    pub recommend_repo_maintenance: Option<bool>,
     pub git_executable_path: Option<PathBuf>,
     pub external_code_editor: Option<ExternalCodeEditorSetting>,
 }
@@ -204,6 +205,7 @@ pub(crate) struct UiSessionFile {
     commit_push_after_enabled: Option<bool>,
     default_tag_type: Option<DefaultTagType>,
     fetch_prune_deleted_remote_branches: Option<bool>,
+    recommend_repo_maintenance: Option<bool>,
     git_executable_path: Option<String>,
     external_code_editor: Option<ExternalCodeEditorSettingFile>,
     repo_history_modes: Option<BTreeMap<String, HistoryModeSetting>>,
@@ -212,6 +214,8 @@ pub(crate) struct UiSessionFile {
     #[serde(skip_serializing)]
     repo_fetch_prune_deleted_remote_tracking_branches: Option<BTreeMap<String, bool>>,
     survey_prompt: Option<SurveyPromptSession>,
+    #[serde(default, deserialize_with = "lenient_repo_maintenance")]
+    repo_maintenance: Option<BTreeMap<String, RepoMaintenanceSession>>,
     /// Extension namespaces, kept verbatim: any JSON loads, so a malformed
     /// namespace never makes the rest of the session unreadable.
     #[serde(default, skip_serializing_if = "ExtensionNamespaces::is_absent")]
@@ -404,6 +408,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         commit_push_after_enabled: file.commit_push_after_enabled,
         default_tag_type: file.default_tag_type,
         fetch_prune_deleted_remote_branches: file.fetch_prune_deleted_remote_branches,
+        recommend_repo_maintenance: file.recommend_repo_maintenance,
         git_executable_path: file
             .git_executable_path
             .as_deref()
@@ -643,12 +648,14 @@ pub use extensions::{
     persist_extension_namespace, persist_extension_namespace_to_path,
 };
 use history_mode::{HistoryModeSetting, HistoryScopeSetting};
+use maintenance::{RepoMaintenanceSession, lenient_repo_maintenance};
 use parse::*;
-use survey::SurveyPromptSession;
+use survey::{SurveyPromptSession, current_unix_seconds};
 use workspaces::*;
 
 mod extensions;
 mod history_mode;
+mod maintenance;
 mod parse;
 mod paths;
 mod repos;
@@ -657,6 +664,11 @@ mod survey;
 mod workspaces;
 
 pub use history_mode::*;
+pub use maintenance::{
+    MAINTENANCE_CHECK_INTERVAL_SECONDS, MAINTENANCE_SNOOZE_SECONDS, claim_repo_maintenance_check,
+    claim_repo_maintenance_check_to_path, persist_repo_maintenance_snooze,
+    persist_repo_maintenance_snooze_to_path,
+};
 pub use paths::*;
 pub use repos::*;
 pub use settings::*;

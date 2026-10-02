@@ -13,10 +13,10 @@ use gitcomet_core::conflict_session::{
     ConflictResolverStrategy, ConflictSession, reconstruct_conflict_marker_sides,
 };
 use gitcomet_core::domain::{
-    Branch, Commit, CommitDetails, CommitId, CommitSignature, EMPTY_TREE_ID, FileEntry, FileSource,
+    Branch, Commit, CommitDetails, CommitId, CommitSignature, FileEntry, FileSource,
     FileStatusKind, LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote,
     RemoteBranch, RemoteTag, RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence, Worktree,
-    WorktreeDirtySummary,
+    WorktreeDirtySummary, empty_tree_id_like, is_empty_tree_id,
 };
 use gitcomet_core::error::Error;
 use gitcomet_core::merge::{MergeSource, OrderedSelection};
@@ -976,7 +976,7 @@ fn merged_selection_range(
             return Some((
                 index
                     .parent_commit_id(oldest, 0)
-                    .unwrap_or_else(|| CommitId(EMPTY_TREE_ID.into())),
+                    .or_else(|| empty_tree_id_like(&index.commit_id(oldest)?))?,
                 index.commit_id(newest)?,
             ));
         }
@@ -1011,7 +1011,7 @@ fn merged_selection_range(
         .parent_ids
         .first()
         .cloned()
-        .unwrap_or_else(|| CommitId(EMPTY_TREE_ID.into()));
+        .or_else(|| empty_tree_id_like(&oldest.id))?;
     Some((from, newest.id.clone()))
 }
 
@@ -1019,7 +1019,7 @@ fn merged_selection_range(
 /// or a name for the empty-tree base, whose sha would be meaningless on screen.
 fn range_endpoint_label(id: &CommitId) -> String {
     let full = id.as_ref();
-    if full == EMPTY_TREE_ID {
+    if is_empty_tree_id(full) {
         return "start of history".to_string();
     }
     full.get(..8).unwrap_or(full).to_string()
@@ -2156,7 +2156,7 @@ fn browse_open_content_path(repo: &RepoState) -> Option<PendingFileBrowserReopen
         return None;
     }
     let path = match &repo.diff_state.diff_target {
-        Some(gitcomet_core::domain::DiffTarget::Commit { path: Some(p), .. }) => p.clone(),
+        Some(gitcomet_core::domain::DiffTarget::Commit { path: p, .. }) => p.clone(),
         Some(gitcomet_core::domain::DiffTarget::WorkingTree { path, .. }) => path.clone(),
         _ => return None,
     };

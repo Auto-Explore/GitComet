@@ -1438,6 +1438,13 @@ fn forget_worktree_scan_handle(handles: &Mutex<WorktreeScanHandles>, repo_id: Re
 /// closed tab's handles -- file descriptors and mapped index data, one set per
 /// linked worktree -- would otherwise sit there for the life of the process,
 /// released only if unrelated repos happened to push the map to its limit.
+/// Drops every scan handle, e.g. after a fetch, so none keeps old packs mapped.
+pub(in crate::store) fn release_all_worktree_scan_handles() {
+    lock_worktree_scan_handles(worktree_scan_handles())
+        .entries
+        .clear();
+}
+
 pub(in crate::store) fn release_worktree_scan_handles(repo_id: RepoId) {
     lock_worktree_scan_handles(worktree_scan_handles())
         .entries
@@ -2128,7 +2135,7 @@ pub(super) fn schedule_open_file_at_commit(
         } else {
             Msg::SelectDiff {
                 repo_id,
-                target: gitcomet_core::domain::DiffTarget::commit(commit_id, Some(resolved)),
+                target: gitcomet_core::domain::DiffTarget::commit(commit_id, resolved),
             }
         };
         send_or_log(&msg_tx, message);

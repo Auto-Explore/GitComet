@@ -124,7 +124,7 @@ impl super::GixRepo {
             })
             .collect::<Result<Vec<_>>>()?;
         let mut revisions = self.lfs_local_trees(paths, false)?;
-        if let Ok(head) = self.repo().head_id() {
+        if let Ok(Some(head)) = crate::refs::head_oid(&self.repo()) {
             revisions.push(head.to_string());
         }
         let fetched = self.lfs_fetch_revisions(&patterns, revisions)?;
@@ -144,13 +144,11 @@ impl super::GixRepo {
                 // An unstaged worktree pointer can also differ from both.
                 local_trees =
                     self.lfs_local_trees(std::slice::from_ref(path), *area == DiffArea::Unstaged)?;
-                let head = self.repo().head_id().is_ok();
+                let head = crate::refs::head_oid(&self.repo()).ok().flatten().is_some();
                 (path, head.then(|| "HEAD".to_string()).into_iter().collect())
             }
             DiffTarget::Commit {
-                commit_id,
-                path: Some(path),
-                ..
+                commit_id, path, ..
             } => {
                 let mut revisions = vec![commit_id.as_ref().to_string()];
                 if let Some(parent) =
@@ -180,8 +178,7 @@ impl super::GixRepo {
         let repo = self.repo();
         for revision in &mut revisions {
             validate_ref_like_arg(revision, "revision")?;
-            *revision = repo
-                .rev_parse_single(revision.as_str())
+            *revision = crate::refs::resolve_required(&repo, revision)
                 .map_err(|e| Error::new(ErrorKind::Backend(format!("resolve LFS revision: {e}"))))?
                 .detach()
                 .to_string();
@@ -218,11 +215,14 @@ impl super::GixRepo {
         // not). Match git-lfs's default download-remote precedence.
         let repo = self.repo_with_current_config()?;
         let config = repo.config_snapshot();
-        let branch_remote = repo.head_name().ok().flatten().and_then(|head| {
-            config
-                .string(&format!("branch.{}.remote", head.shorten()))
-                .map(|value| value.to_string())
-        });
+        let branch_remote = crate::refs::head_name(&repo)
+            .ok()
+            .flatten()
+            .and_then(|head| {
+                config
+                    .string(&format!("branch.{}.remote", head.shorten()))
+                    .map(|value| value.to_string())
+            });
         let remote = branch_remote
             .or_else(|| {
                 config

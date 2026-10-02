@@ -37,9 +37,10 @@ pub(super) fn git_operation_started(
     label: String,
     context: Option<String>,
     time: SystemTime,
+    progress_lane: bool,
 ) -> Vec<Effect> {
     if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
-        git_hook_activity::started(repo, operation_id, label, context, time);
+        git_hook_activity::started(repo, operation_id, label, context, time, progress_lane);
     }
     Vec::new()
 }

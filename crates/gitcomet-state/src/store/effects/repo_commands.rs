@@ -4,8 +4,8 @@ use gitcomet_core::domain::{DiffTarget, Upstream};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::{
-    CommandOutput, ConflictSide, ForcePushLease, GitRepository, InteractiveRebaseEntry, PullMode,
-    RemoteUrlKind, ResetMode, SafePushAfterCommitContext, SafePushAfterCommitTarget,
+    CommandOutput, ConflictSide, ForcePushLease, GitBackend, GitRepository, InteractiveRebaseEntry,
+    PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitContext, SafePushAfterCommitTarget,
     SubmoduleTrustTarget,
 };
 use std::path::{Component, Path, PathBuf};
@@ -41,9 +41,7 @@ fn large_file_command_context(command: &gitcomet_core::large_files::LargeFileCom
         C::LfsPull { paths: p } | C::LfsLock { paths: p } => paths(p),
         C::LfsFetchForDiff { target } => match target {
             DiffTarget::WorkingTree { path, .. }
-            | DiffTarget::Commit {
-                path: Some(path), ..
-            }
+            | DiffTarget::Commit { path, .. }
             | DiffTarget::CommitRange {
                 path: Some(path), ..
             } => path.display().to_string(),
@@ -100,6 +98,7 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
         }
         RepoCommandKind::PruneMergedBranches => "Merged local branches".to_string(),
         RepoCommandKind::PruneLocalTags => "Local tags missing on remotes".to_string(),
+        RepoCommandKind::RunMaintenance => "Repacking objects".to_string(),
         RepoCommandKind::Pull { mode } => pull_mode_suffix(*mode).map_or_else(
             || "Configured upstream → current branch".to_string(),
             |mode| format!("Configured upstream → current branch · {mode}"),
@@ -158,7 +157,7 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
         RepoCommandKind::RebaseContinue => "Current rebase".to_string(),
         RepoCommandKind::RebaseAbort => "Current rebase".to_string(),
         RepoCommandKind::InteractiveRebase { base, .. } => format!("Current branch onto {base}"),
-        RepoCommandKind::InteractiveCherryPick { entries } => match entries.as_slice() {
+        RepoCommandKind::InteractiveCherryPick { entries, .. } => match entries.as_slice() {
             [] => "Selected commits".to_string(),
             [entry] => {
                 message_subject(&entry.summary).unwrap_or_else(|| short_commit_id(&entry.commit_id))
@@ -176,6 +175,13 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
         | RepoCommandKind::Revert {
             commit_id, summary, ..
         } => message_subject(summary).unwrap_or_else(|| short_commit_id(commit_id.as_ref())),
+        RepoCommandKind::ApplyFileChange { target, .. } => {
+            let revision = gitcomet_core::services::apply_change_revision(&target.source);
+            match target.paths.as_slice() {
+                [path] => format!("{} · {revision}", path.display()),
+                paths => format!("{} files · {revision}", paths.len()),
+            }
+        }
         RepoCommandKind::MergeAbort => "Current merge".to_string(),
         RepoCommandKind::CreateTag { name, target, .. } => format!("{name} at {target}"),
         RepoCommandKind::DeleteTag { name } => name.clone(),
@@ -253,7 +259,7 @@ fn schedule_repo_command_with_context<F>(
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
-    command: RepoCommandKind,
+    mut command: RepoCommandKind,
     context_override: Option<String>,
     run: F,
 ) where
@@ -270,12 +276,32 @@ fn schedule_repo_command_with_context<F>(
         repo_id,
         msg_tx,
         move |repo, msg_tx| {
-            let operation = GitOperationTask::start(repo_id, label, context, &msg_tx);
+            let fetches_objects = command.fetches_objects();
+            let operation = GitOperationTask::start_with_progress_lane(
+                repo_id,
+                label,
+                context,
+                command.shows_progress(),
+                &msg_tx,
+            );
             let result = {
                 let _scope = operation.attach();
-                run(repo)
+                run(Arc::clone(&repo))
             };
+            if fetches_objects {
+                // The refresh this command triggers should read the new packs
+                // through a fresh store, and old packs must not stay mapped.
+                repo.release_object_store();
+                super::repo_load::release_all_worktree_scan_handles();
+            }
             let outcome = GitOperationTask::outcome(&result);
+            if let RepoCommandKind::ApplyFileChange { commit_retry, .. } = &mut command
+                && let Err(error) = &result
+                && let ErrorKind::Git(failure) = error.kind()
+                && let Some(retry) = failure.apply_file_change_retry()
+            {
+                *commit_retry = Some(retry.clone());
+            }
             operation.finish(
                 outcome,
                 InternalMsg::RepoCommandFinished {
@@ -1015,6 +1041,72 @@ pub(super) fn schedule_prune_local_tags(
     );
 }
 
+/// Maintenance can run for hours, so it gets a thread of its own rather than
+/// holding one of the primary pool's.
+fn maintenance_executor() -> TaskExecutor {
+    TaskExecutor::shared_for_store(super::super::executor::StoreExecutorPool::Maintenance, 1)
+}
+
+/// Asks git whether the repository needs maintenance, at most once a day per
+/// repository: the claim lives in the session file, shared by its worktrees
+/// and every window.
+pub(super) fn schedule_check_maintenance(
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+) {
+    spawn_with_repo(
+        &maintenance_executor(),
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            let Some(common_dir) = repo.common_dir() else {
+                return;
+            };
+            if !crate::session::claim_repo_maintenance_check(&common_dir).unwrap_or(false) {
+                return;
+            }
+            // Unsupported or failed checks only mean no recommendation.
+            let needed = repo.maintenance_needed().unwrap_or(false);
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(InternalMsg::RepoMaintenanceChecked { repo_id, needed }),
+            );
+        },
+    );
+}
+
+pub(super) fn schedule_run_maintenance(
+    repos: &RepoMap,
+    backend: Arc<dyn GitBackend>,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+) {
+    schedule_repo_command(
+        &maintenance_executor(),
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::RunMaintenance,
+        move |repo| {
+            // Every store mapping these packs, in any window, keeps Windows
+            // from deleting them; afterwards, stores must see the new pack.
+            let common_dir = repo.common_dir();
+            let release = || {
+                if let Some(common_dir) = &common_dir {
+                    backend.release_object_stores(common_dir);
+                }
+                super::repo_load::release_all_worktree_scan_handles();
+            };
+            release();
+            let result = repo.run_maintenance_with_output();
+            release();
+            result
+        },
+    );
+}
+
 pub(super) fn schedule_pull(
     executor: &TaskExecutor,
     repos: &RepoMap,
@@ -1511,6 +1603,7 @@ pub(super) fn schedule_interactive_cherry_pick(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     entries: Vec<InteractiveRebaseEntry>,
+    commit: bool,
 ) {
     let command_entries = entries.clone();
     schedule_repo_command(
@@ -1520,8 +1613,9 @@ pub(super) fn schedule_interactive_cherry_pick(
         repo_id,
         RepoCommandKind::InteractiveCherryPick {
             entries: command_entries,
+            commit,
         },
-        move |repo| repo.interactive_cherry_pick_with_output(&entries),
+        move |repo| repo.interactive_cherry_pick_with_output(&entries, commit),
     );
 }
 
@@ -1534,6 +1628,7 @@ pub(super) fn schedule_cherry_pick_commit(
     commit: bool,
     mainline: Option<usize>,
     summary: String,
+    auth: Option<StagedGitAuth>,
 ) {
     let command_commit_id = commit_id.clone();
     schedule_repo_command(
@@ -1547,7 +1642,11 @@ pub(super) fn schedule_cherry_pick_commit(
             mainline,
             summary,
         },
-        move |repo| repo.cherry_pick_with_output(&commit_id, commit, mainline),
+        move |repo| {
+            run_with_git_auth(auth, || {
+                repo.cherry_pick_with_output(&commit_id, commit, mainline)
+            })
+        },
     );
 }
 
@@ -1593,6 +1692,88 @@ pub(super) fn schedule_revert_commit(
             output
         },
     );
+}
+
+pub(super) fn schedule_apply_file_change(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    target: gitcomet_core::domain::ApplyChangeTarget,
+    commit: bool,
+    commit_retry: Option<gitcomet_core::domain::ApplyFileChangeRetry>,
+    auth: Option<StagedGitAuth>,
+) {
+    let command_target = target.clone();
+    let suggestion_tx = msg_tx.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::ApplyFileChange {
+            target: command_target,
+            commit,
+            commit_retry: commit_retry.clone(),
+        },
+        move |repo| {
+            let output = run_with_git_auth(auth, || match &commit_retry {
+                Some(retry) => repo.commit_applied_file_change_with_output(retry),
+                None => repo.apply_file_change_with_output(&target, commit),
+            });
+            // A change left staged or conflicted still needs a commit the user
+            // types, so offer the message the committing path would use.
+            let awaits_commit = match &output {
+                Ok(output) => {
+                    !commit
+                        && !output.stdout.contains(
+                            gitcomet_core::services::APPLY_FILE_CHANGE_ALREADY_APPLIED_SENTINEL,
+                        )
+                }
+                Err(error) => matches!(
+                    error.kind(),
+                    gitcomet_core::error::ErrorKind::Git(failure) if matches!(
+                        failure.id(),
+                        gitcomet_core::error::GitFailureId::ApplyChangeConflict
+                            | gitcomet_core::error::GitFailureId::ApplyChangeCommitFailed
+                    )
+                ),
+            };
+            if (awaits_commit || (commit && output.is_ok()))
+                && let Some(message) = applied_change_commit_message(&*repo, &target)
+            {
+                send_or_log(
+                    &suggestion_tx,
+                    Msg::Internal(if awaits_commit {
+                        InternalMsg::CommitMessageSuggested { repo_id, message }
+                    } else {
+                        InternalMsg::CommitMessageSuggestionConsumed { repo_id, message }
+                    }),
+                );
+            }
+            output
+        },
+    );
+}
+
+/// The message "Apply change" commits with: the source commit's own message,
+/// or for a comparison one naming the range.
+fn applied_change_commit_message(
+    repo: &dyn gitcomet_core::services::GitRepository,
+    target: &gitcomet_core::domain::ApplyChangeTarget,
+) -> Option<String> {
+    use gitcomet_core::domain::ApplyChangeSource;
+    match &target.source {
+        ApplyChangeSource::Commit(commit_id) => repo
+            .commit_messages(std::slice::from_ref(commit_id))
+            .ok()?
+            .pop()
+            .map(|message| message.trim_end().to_string())
+            .filter(|message| !message.is_empty()),
+        ApplyChangeSource::Range { from, to } => Some(
+            gitcomet_core::services::apply_file_change_range_message(from, to, &target.paths),
+        ),
+    }
 }
 
 pub(super) fn schedule_merge_abort(

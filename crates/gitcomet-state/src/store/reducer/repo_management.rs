@@ -875,6 +875,7 @@ fn fill_set_active_repo_inline_impl(
     let persist_effect = (changed && persist_on_change)
         .then(|| persist_session_effect(state, Some(repo_id), "switching active repository"));
     let git_log_settings = state.git_log_settings;
+    let maintenance_settings = state.maintenance_settings;
     let sidebar_mode = state.sidebar_mode;
     let follow_selection = state.file_browser_settings.follow_selected_commit;
 
@@ -956,7 +957,8 @@ fn fill_set_active_repo_inline_impl(
         + usize::from(file_browser_load.is_some())
         + usize::from(repo_state.sidebar_data_request.worktrees)
         + usize::from(repo_state.sidebar_data_request.submodules)
-        + usize::from(repo_state.sidebar_data_request.stashes);
+        + usize::from(repo_state.sidebar_data_request.stashes)
+        + usize::from(changed);
     let base_effect_capacity = if use_full_refresh {
         refresh_full_effect_capacity()
     } else {
@@ -987,6 +989,10 @@ fn fill_set_active_repo_inline_impl(
     }
     if changed {
         append_auto_background_metadata_effects(repo_state, git_log_settings, effects);
+        effects.extend(super::maintenance::request_check_for(
+            maintenance_settings,
+            repo_state,
+        ));
     }
 
     if let Some(selected_diff_reload) = selected_diff_reload {
@@ -1236,8 +1242,10 @@ pub(super) fn repo_opened_ok(
         return Vec::new();
     }
 
+    let common_dir = repo.common_dir().map(Arc::<std::path::Path>::from);
     repos.insert(repo_id, repo);
     let git_log_settings = state.git_log_settings;
+    let maintenance_settings = state.maintenance_settings;
 
     let spec = RepoSpec {
         workdir: normalize_repo_path(spec.workdir),
@@ -1246,6 +1254,7 @@ pub(super) fn repo_opened_ok(
     let should_refresh_worktrees = state.active_repo == Some(repo_id);
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.set_spec(spec);
+        repo_state.common_dir = common_dir;
         if repo_state.commit_external_drop_open() {
             committed_external_drop = Some((
                 repo_state.spec.workdir.clone(),
@@ -1353,6 +1362,10 @@ pub(super) fn repo_opened_ok(
             }
             append_auto_background_metadata_effects(repo_state, git_log_settings, &mut effects);
         }
+        effects.extend(super::maintenance::request_check_for(
+            maintenance_settings,
+            repo_state,
+        ));
         return effects;
     }
 

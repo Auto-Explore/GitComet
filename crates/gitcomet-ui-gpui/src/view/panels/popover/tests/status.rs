@@ -305,18 +305,9 @@ fn status_file_menu_offers_resolve_actions_for_conflicts(cx: &mut gpui::TestAppC
             }
             _ => false,
         });
+        // The row's left click opens the resolver; the menu does not repeat it.
         let has_manual = model.items.iter().any(|item| match item {
-            ContextMenuItem::Entry { label, action, .. }
-                if label.as_ref() == "Resolve manually…" =>
-            {
-                matches!(
-                    action.as_ref(),
-                    ContextMenuAction::SelectConflictDiff {
-                        repo_id: rid,
-                        path: p
-                    } if *rid == repo_id && p.as_path() == path.as_path()
-                )
-            }
+            ContextMenuItem::Entry { label, .. } => label.starts_with("Resolve manually"),
             _ => false,
         });
         let has_external_mergetool = model.items.iter().any(|item| match item {
@@ -336,7 +327,7 @@ fn status_file_menu_offers_resolve_actions_for_conflicts(cx: &mut gpui::TestAppC
 
         assert!(has_ours);
         assert!(has_theirs);
-        assert!(has_manual);
+        assert!(!has_manual);
         assert!(has_external_mergetool);
     });
 }
@@ -656,6 +647,38 @@ fn status_menu_for(
     selection: &[&str],
     clicked: &str,
 ) -> ContextMenuModel {
+    status_menu_kind_for(cx, entries, selection, clicked, |repo_id, path| {
+        PopoverKind::StatusFileMenu {
+            repo_id,
+            area: DiffArea::Unstaged,
+            path,
+        }
+    })
+}
+
+/// As `status_menu_for`, for the menu a conflicted row's "Resolve…" opens.
+fn status_conflict_menu_for(
+    cx: &mut gpui::TestAppContext,
+    entries: &[(&str, gitcomet_core::domain::FileStatusKind)],
+    selection: &[&str],
+    clicked: &str,
+) -> ContextMenuModel {
+    status_menu_kind_for(cx, entries, selection, clicked, |repo_id, path| {
+        PopoverKind::StatusConflictMenu {
+            repo_id,
+            area: DiffArea::Unstaged,
+            path,
+        }
+    })
+}
+
+fn status_menu_kind_for(
+    cx: &mut gpui::TestAppContext,
+    entries: &[(&str, gitcomet_core::domain::FileStatusKind)],
+    selection: &[&str],
+    clicked: &str,
+    kind: impl FnOnce(RepoId, std::path::PathBuf) -> PopoverKind,
+) -> ContextMenuModel {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -730,18 +753,120 @@ fn status_menu_for(
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.popover_host.update(cx, |host, cx| {
-                host.context_menu_model(
-                    &PopoverKind::StatusFileMenu {
-                        repo_id,
-                        area: DiffArea::Unstaged,
-                        path: std::path::PathBuf::from(clicked),
-                    },
-                    cx,
-                )
+                host.context_menu_model(&kind(repo_id, std::path::PathBuf::from(clicked)), cx)
             })
         })
         .expect("expected status file context menu model")
     })
+}
+
+/// Each entry's label and whether it is enabled, in menu order.
+fn menu_entries(model: &ContextMenuModel) -> Vec<(String, bool)> {
+    model
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            ContextMenuItem::Entry {
+                label, disabled, ..
+            } => Some((label.to_string(), !*disabled)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[gpui::test]
+fn status_conflict_menu_offers_only_resolve_actions(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::domain::FileStatusKind;
+
+    let model = status_conflict_menu_for(
+        cx,
+        &[("conflict.txt", FileStatusKind::Conflicted)],
+        &[],
+        "conflict.txt",
+    );
+
+    let entries = menu_entries(&model);
+    let labels: Vec<&str> = entries.iter().map(|(label, _)| label.as_str()).collect();
+    assert_eq!(
+        labels,
+        [
+            "Resolve using ours",
+            "Resolve using theirs",
+            "Open external mergetool",
+            "Discard changes",
+        ]
+    );
+    assert!(entries.iter().all(|(_, enabled)| *enabled), "{entries:?}");
+    assert!(model.items.iter().any(|item| matches!(
+        item,
+        ContextMenuItem::Entry { label, action, .. }
+            if label.as_ref() == "Discard changes"
+                && matches!(
+                    action.as_ref(),
+                    ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
+                        area: DiffArea::Unstaged,
+                        path,
+                        ..
+                    } if path.as_path() == std::path::Path::new("conflict.txt")
+                )
+    )));
+}
+
+#[gpui::test]
+fn status_conflict_menu_counts_a_conflicted_selection(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::domain::FileStatusKind;
+
+    let model = status_conflict_menu_for(
+        cx,
+        &[
+            ("a.txt", FileStatusKind::Conflicted),
+            ("b.txt", FileStatusKind::Conflicted),
+        ],
+        &["a.txt", "b.txt"],
+        "a.txt",
+    );
+
+    assert_eq!(
+        menu_entries(&model),
+        [
+            ("Resolve selected using ours (2)".to_string(), true),
+            ("Resolve selected using theirs (2)".to_string(), true),
+            ("Open external mergetool (select 1 file)".to_string(), false),
+            ("Discard (2)".to_string(), true),
+        ]
+    );
+}
+
+#[gpui::test]
+fn status_conflict_menu_for_a_resolved_file_is_the_file_menu(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::domain::FileStatusKind;
+
+    // A status refresh can resolve the row between its paint and the click.
+    let model = status_conflict_menu_for(cx, &[("a.txt", FileStatusKind::Modified)], &[], "a.txt");
+
+    let entries = menu_entries(&model);
+    assert!(
+        entries.iter().any(|(label, _)| label == "Stage"),
+        "{entries:?}"
+    );
+}
+
+#[gpui::test]
+fn status_file_menu_enables_discard_for_a_conflict(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::domain::FileStatusKind;
+
+    let model = status_menu_for(
+        cx,
+        &[("conflict.txt", FileStatusKind::Conflicted)],
+        &[],
+        "conflict.txt",
+    );
+
+    assert!(
+        menu_entries(&model).contains(&("Discard changes".to_string(), true)),
+        "{:?}",
+        menu_entries(&model)
+    );
 }
 
 fn gitignore_entry_label(model: &ContextMenuModel) -> Option<String> {
@@ -840,4 +965,47 @@ fn status_file_menu_hides_gitignore_for_a_mixed_selection(cx: &mut gpui::TestApp
         None,
         "one tracked path in the selection would get a pattern that does nothing"
     );
+}
+
+#[test]
+fn discard_dialogs_note_ours_only_for_conflicted_targets() {
+    use gitcomet_core::domain::FileStatusKind;
+
+    let repo_id = RepoId(9);
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        gitcomet_core::domain::RepoSpec {
+            workdir: std::path::PathBuf::from("repo"),
+        },
+    );
+    let entry = |path: &str, kind| gitcomet_core::domain::FileStatus {
+        path: path.into(),
+        kind,
+        conflict: None,
+    };
+    repo.status = Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: Arc::new(vec![]),
+            unstaged: Arc::new(vec![
+                entry("a.txt", FileStatusKind::Conflicted),
+                entry("b.txt", FileStatusKind::Modified),
+            ]),
+        }
+        .into(),
+    );
+    let state = AppState {
+        repos: vec![repo],
+        ..AppState::test_default()
+    };
+    let note = |paths: &[&str]| {
+        super::super::discard_changes_confirm::conflict_discard_note(
+            &state,
+            repo_id,
+            paths.iter().map(Path::new),
+        )
+    };
+
+    assert!(note(&["a.txt"]).is_some_and(|note| note.contains("ours")));
+    assert!(note(&["b.txt", "a.txt"]).is_some());
+    assert_eq!(note(&["b.txt"]), None);
 }

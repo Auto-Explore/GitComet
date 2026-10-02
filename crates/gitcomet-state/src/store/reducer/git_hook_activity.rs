@@ -18,6 +18,7 @@ pub(super) fn started(
     label: String,
     context: Option<String>,
     time: SystemTime,
+    progress_lane: bool,
 ) {
     if repo
         .feedback
@@ -41,6 +42,8 @@ pub(super) fn started(
         latest_line: String::new(),
         command_started: false,
         transfer: None,
+        progress_lane,
+        progress: None,
     });
     repo.feedback.hook_activity_rev = repo.feedback.hook_activity_rev.wrapping_add(1);
 }
@@ -82,7 +85,15 @@ pub(super) fn apply_event(
                     text: Arc::from(text),
                 });
             }
+            if operation.progress_lane
+                && let Some(meter) = latest_progress_in(&operation.output)
+            {
+                operation.progress = Some(meter);
+            }
             trim_operation_output(operation);
+        }
+        GitOperationEvent::Progress(meter) => {
+            operation.progress = Some(meter);
         }
         GitOperationEvent::HookStarted { id, name } => {
             if operation.hooks.iter().any(|hook| hook.id == id) {
@@ -124,6 +135,25 @@ pub(super) fn apply_event(
     }
     enforce_repo_output_budget(repo);
     repo.feedback.hook_activity_rev = repo.feedback.hook_activity_rev.wrapping_add(1);
+}
+
+/// The newest complete meter in the output's tail. A meter can straddle two
+/// chunks, so a few are joined before parsing.
+fn latest_progress_in(
+    output: &VecDeque<GitHookOutputChunk>,
+) -> Option<gitcomet_core::git_progress::GitProgressMeter> {
+    const TAIL_BYTES: usize = 1024;
+    let mut tail: Vec<&str> = Vec::new();
+    let mut bytes = 0;
+    for chunk in output.iter().rev() {
+        tail.push(&chunk.text);
+        bytes += chunk.text.len();
+        if bytes >= TAIL_BYTES {
+            break;
+        }
+    }
+    tail.reverse();
+    gitcomet_core::git_progress::latest_progress(&tail.concat())
 }
 
 pub(super) fn request_cancel(repo: &mut RepoState, operation_id: GitOperationId) -> bool {
@@ -368,6 +398,7 @@ mod tests {
             "git annex sync".into(),
             None,
             SystemTime::UNIX_EPOCH,
+            false,
         );
         apply_event(&mut repo, id, GitOperationEvent::CommandStarted);
         assert!(repo.feedback.hook_activity[0].is_reportable());
@@ -399,6 +430,7 @@ mod tests {
             "Commit".to_string(),
             Some("Exercise hooks".to_string()),
             SystemTime::UNIX_EPOCH,
+            false,
         );
         apply_event(
             repo,
@@ -428,6 +460,7 @@ mod tests {
             "Fetch".to_string(),
             Some("All remotes".to_string()),
             SystemTime::UNIX_EPOCH,
+            false,
         );
 
         finished(
@@ -452,6 +485,7 @@ mod tests {
             "LFS fetch".to_string(),
             Some("all refs".to_string()),
             SystemTime::UNIX_EPOCH,
+            false,
         );
         apply_event(
             &mut repo,
@@ -534,6 +568,7 @@ mod tests {
             "Checkout branch".to_string(),
             Some("feature/hooks".to_string()),
             SystemTime::UNIX_EPOCH,
+            false,
         );
         apply_event(
             &mut repo,
@@ -671,6 +706,7 @@ mod tests {
             "Fetch".to_string(),
             Some("All remotes".to_string()),
             SystemTime::UNIX_EPOCH,
+            false,
         );
 
         assert!(
@@ -720,6 +756,7 @@ mod tests {
             "Fetch".to_string(),
             Some("All remotes".to_string()),
             SystemTime::UNIX_EPOCH,
+            false,
         );
 
         apply_event(
@@ -835,5 +872,83 @@ mod tests {
                 <= MAX_REPO_OUTPUT_BYTES
         );
         assert!(repo.feedback.hook_activity[0].output_truncated);
+    }
+
+    fn stderr(text: &str) -> GitOperationEvent {
+        GitOperationEvent::Output {
+            chunks: vec![GitOutputChunk {
+                stream: GitOutputStream::Stderr,
+                text: text.to_string(),
+            }],
+        }
+    }
+
+    #[test]
+    fn progress_lane_operation_follows_git_meters_split_across_chunks() {
+        let mut repo = repo_state();
+        let operation_id = GitOperationId(41);
+        started(
+            &mut repo,
+            operation_id,
+            "Fetch".to_string(),
+            None,
+            SystemTime::UNIX_EPOCH,
+            true,
+        );
+
+        apply_event(
+            &mut repo,
+            operation_id,
+            stderr(
+                "remote: Counting objects: 100% (5/5), done.\nReceiving objects:  40% (2/5)\rReceiving obj",
+            ),
+        );
+        let progress = repo.feedback.hook_activity[0]
+            .progress
+            .clone()
+            .expect("meter");
+        assert_eq!(
+            (&*progress.title, progress.percent),
+            ("Receiving objects", Some(40))
+        );
+
+        apply_event(&mut repo, operation_id, stderr("ects:  60% (3/5)\r"));
+        let progress = repo.feedback.hook_activity[0]
+            .progress
+            .clone()
+            .expect("meter");
+        assert_eq!(
+            (&*progress.title, progress.percent),
+            ("Receiving objects", Some(60))
+        );
+
+        let measured =
+            gitcomet_core::git_progress::GitProgressMeter::estimated("Writing new pack", 46);
+        apply_event(
+            &mut repo,
+            operation_id,
+            GitOperationEvent::Progress(measured.clone()),
+        );
+        assert_eq!(repo.feedback.hook_activity[0].progress, Some(measured));
+    }
+
+    #[test]
+    fn operations_without_a_progress_lane_do_not_parse_meters() {
+        let mut repo = repo_state();
+        let operation_id = GitOperationId(42);
+        started(
+            &mut repo,
+            operation_id,
+            "Commit".to_string(),
+            None,
+            SystemTime::UNIX_EPOCH,
+            false,
+        );
+        apply_event(
+            &mut repo,
+            operation_id,
+            stderr("Receiving objects:  40% (2/5)\r"),
+        );
+        assert_eq!(repo.feedback.hook_activity[0].progress, None);
     }
 }

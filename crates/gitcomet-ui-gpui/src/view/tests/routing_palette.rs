@@ -874,7 +874,7 @@ fn window_deactivation_clears_live_pointer_feedback(cx: &mut gpui::TestAppContex
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-    cx.update(|window, _| window.activate_window());
+    cx.update(|window, _| window.activate());
     test_support::redraw(cx);
     cx.simulate_mouse_down(
         point(px(300.0), px(300.0)),

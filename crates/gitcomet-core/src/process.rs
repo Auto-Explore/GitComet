@@ -57,6 +57,60 @@ pub enum GitExecutableAvailability {
     Unavailable { detail: String },
 }
 
+/// A `major.minor` git version, as reported by `git --version`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash)]
+pub struct GitVersion {
+    pub major: u32,
+    pub minor: u32,
+}
+
+impl GitVersion {
+    /// Oldest git GitComet supports; older installs get an update notice.
+    pub const MINIMUM: Self = Self {
+        major: 2,
+        minor: 53,
+    };
+    /// First git with `git maintenance is-needed`.
+    pub const MAINTENANCE_IS_NEEDED: Self = Self {
+        major: 2,
+        minor: 53,
+    };
+
+    /// The first version token of `git --version` output, e.g.
+    /// `git version 2.45.1.windows.1`.
+    pub fn parse(raw: &str) -> Option<Self> {
+        raw.split_whitespace().find_map(Self::parse_token)
+    }
+
+    fn parse_token(token: &str) -> Option<Self> {
+        let mut parts = token.split('.');
+        let major = parse_u32_prefix(parts.next()?)?;
+        let minor = parse_u32_prefix(parts.next()?)?;
+        Some(Self { major, minor })
+    }
+
+    pub fn is_supported(self) -> bool {
+        self >= Self::MINIMUM
+    }
+}
+
+impl std::fmt::Display for GitVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.major, self.minor)
+    }
+}
+
+fn parse_u32_prefix(part: &str) -> Option<u32> {
+    let end = part
+        .char_indices()
+        .find_map(|(ix, ch)| (!ch.is_ascii_digit()).then_some(ix))
+        .unwrap_or(part.len());
+    if end == 0 {
+        return None;
+    }
+    part[..end].parse::<u32>().ok()
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GitRuntimeState {
     pub preference: GitExecutablePreference,
@@ -86,6 +140,11 @@ impl GitRuntimeState {
                 None
             }
         }
+    }
+
+    /// The detected git version, when git is available and reports one.
+    pub fn version(&self) -> Option<GitVersion> {
+        self.version_output().and_then(GitVersion::parse)
     }
 
     pub fn unavailable_detail(&self) -> Option<&str> {
@@ -294,6 +353,9 @@ pub(crate) fn git_command_for_preference(preference: &GitExecutablePreference) -
     // Repository config must not enable `ext::`, which runs an arbitrary
     // command. Set in the one constructor so no call site can forget it.
     command.arg("-c").arg("protocol.ext.allow=never");
+    // No gc/repack behind a command: GitComet recommends maintenance and runs
+    // it only when asked. An explicit `git maintenance run` ignores this.
+    command.arg("-c").arg("maintenance.auto=false");
     if let GitExecutablePreference::Custom(path) = preference
         && let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -948,5 +1010,40 @@ mod tests {
     #[test]
     fn bytes_to_text_preserving_utf8_handles_empty_input() {
         assert_eq!(bytes_to_text_preserving_utf8(b""), "");
+    }
+
+    #[test]
+    fn git_version_parses_the_first_version_token() {
+        assert_eq!(
+            GitVersion::parse("git version 2.53.1"),
+            Some(GitVersion {
+                major: 2,
+                minor: 53
+            })
+        );
+        assert_eq!(
+            GitVersion::parse("git version 2.45.1.windows.1"),
+            Some(GitVersion {
+                major: 2,
+                minor: 45
+            })
+        );
+        assert_eq!(GitVersion::parse("git version v2.45.1"), None);
+        assert_eq!(
+            GitVersion::parse_token("2.53rc1"),
+            GitVersion::parse("2.53")
+        );
+        assert_eq!(parse_u32_prefix("rc53"), None);
+    }
+
+    #[test]
+    fn supported_git_version_starts_at_2_53() {
+        let version = |major, minor| GitVersion { major, minor };
+        assert!(version(2, 53).is_supported());
+        assert!(version(2, 54).is_supported());
+        assert!(version(3, 0).is_supported());
+        assert!(!version(2, 52).is_supported());
+        assert!(!version(1, 99).is_supported());
+        assert_eq!(GitVersion::MINIMUM.to_string(), "2.53");
     }
 }

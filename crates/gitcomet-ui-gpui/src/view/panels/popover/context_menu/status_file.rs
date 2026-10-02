@@ -109,14 +109,11 @@ pub(super) fn model(
         .add_to_gitignore_target(repo_id, area, &path.to_path_buf(), cx)
         .is_some();
 
-    // Keep context menu opening fast. Validate precisely when the action runs instead.
-    let can_discard_worktree_changes = if is_conflicted {
-        false
-    } else {
-        match area {
-            DiffArea::Unstaged => true,
-            DiffArea::Staged => has_unstaged_for_path || is_staged_added,
-        }
+    // Keep context menu opening fast. Validate precisely when the action runs
+    // instead. A conflict is discarded by keeping ours.
+    let can_discard_worktree_changes = match area {
+        DiffArea::Unstaged => true,
+        DiffArea::Staged => !is_conflicted && (has_unstaged_for_path || is_staged_added),
     };
 
     let mut items = vec![ContextMenuItem::Header(
@@ -130,23 +127,19 @@ pub(super) fn model(
     ));
     items.push(ContextMenuItem::Separator);
 
-    items.push(ContextMenuItem::Entry {
-        label: "Open diff".into(),
-        icon: Some("icons/open_external.svg".into()),
-        shortcut: None,
-        disabled: false,
-        action: if area == DiffArea::Unstaged && is_unstaged_conflicted {
-            Box::new(ContextMenuAction::SelectConflictDiff {
+    if is_conflicted {
+        items.push(ContextMenuItem::Entry {
+            label: "Resolve conflicts".into(),
+            icon: Some("icons/pencil.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::SelectConflictDiff {
                 repo_id,
                 path: path.to_path_buf(),
-            })
-        } else {
-            Box::new(ContextMenuAction::SelectDiff {
-                repo_id,
-                target: DiffTarget::working_tree(path.to_path_buf(), area),
-            })
-        },
-    });
+            }),
+        });
+    }
+
     items.push(ContextMenuItem::Entry {
         label: "Open file".into(),
         icon: Some("icons/file.svg".into()),
@@ -221,72 +214,15 @@ pub(super) fn model(
     });
     if is_conflicted {
         items.push(ContextMenuItem::Separator);
-        let n = selected_count;
-        items.push(ContextMenuItem::Entry {
-            label: if use_selection {
-                format!("Resolve selected using ours ({n})").into()
-            } else {
-                "Resolve using ours".into()
-            },
-            icon: Some("icons/arrow_left.svg".into()),
-            shortcut: Some(secondary_shortcut("O").into()),
-            disabled: false,
-            action: Box::new(ContextMenuAction::CheckoutConflictSideSelectionOrPath {
-                repo_id,
-                area,
-                path: path.to_path_buf(),
-                side: gitcomet_core::services::ConflictSide::Ours,
-            }),
-        });
-        items.push(ContextMenuItem::Entry {
-            label: if use_selection {
-                format!("Resolve selected using theirs ({n})").into()
-            } else {
-                "Resolve using theirs".into()
-            },
-            icon: Some("icons/arrow_right.svg".into()),
-            shortcut: Some(secondary_shortcut("T").into()),
-            disabled: false,
-            action: Box::new(ContextMenuAction::CheckoutConflictSideSelectionOrPath {
-                repo_id,
-                area,
-                path: path.to_path_buf(),
-                side: gitcomet_core::services::ConflictSide::Theirs,
-            }),
-        });
-
-        let can_manual = !use_selection;
-        items.push(ContextMenuItem::Entry {
-            label: if can_manual {
-                "Resolve manually…".into()
-            } else {
-                "Resolve manually… (select 1 file)".into()
-            },
-            icon: Some("icons/pencil.svg".into()),
-            shortcut: Some(secondary_shortcut("M").into()),
-            disabled: !can_manual,
-            action: Box::new(ContextMenuAction::SelectConflictDiff {
-                repo_id,
-                path: path.to_path_buf(),
-            }),
-        });
-        if area == DiffArea::Unstaged && is_unstaged_conflicted {
-            let can_launch_external_mergetool = !use_selection;
-            items.push(ContextMenuItem::Entry {
-                label: if can_launch_external_mergetool {
-                    "Open external mergetool".into()
-                } else {
-                    "Open external mergetool (select 1 file)".into()
-                },
-                icon: Some("icons/open_external.svg".into()),
-                shortcut: None,
-                disabled: !can_launch_external_mergetool,
-                action: Box::new(ContextMenuAction::LaunchMergetool {
-                    repo_id,
-                    path: path.to_path_buf(),
-                }),
-            });
-        }
+        push_conflict_resolve_entries(
+            &mut items,
+            repo_id,
+            area,
+            path,
+            use_selection,
+            selected_count,
+            is_unstaged_conflicted,
+        );
     } else {
         match area {
             DiffArea::Unstaged => items.push(ContextMenuItem::Entry {
@@ -324,21 +260,14 @@ pub(super) fn model(
 
     let show_discard_changes = !(is_conflicted && area == DiffArea::Staged);
     if show_discard_changes {
-        items.push(ContextMenuItem::Entry {
-            label: if use_selection {
-                format!("Discard ({})", selected_count).into()
-            } else {
-                "Discard changes".into()
-            },
-            icon: Some("icons/refresh.svg".into()),
-            shortcut: Some(secondary_shortcut("D").into()),
-            disabled: !can_discard_worktree_changes,
-            action: Box::new(ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
-                repo_id,
-                area,
-                path: path.to_path_buf(),
-            }),
-        });
+        items.push(discard_changes_entry(
+            repo_id,
+            area,
+            path,
+            use_selection,
+            selected_count,
+            !can_discard_worktree_changes,
+        ));
     }
 
     // Only untracked paths: `.gitignore` has no effect on anything already in
@@ -455,6 +384,163 @@ pub(super) fn model(
     );
 
     ContextMenuModel::new(items)
+}
+
+/// The menu the "Resolve…" button on a conflicted row opens: only the ways
+/// to resolve it. A submodule keeps its full menu.
+pub(super) fn conflict_model(
+    this: &PopoverHost,
+    repo_id: RepoId,
+    area: DiffArea,
+    path: &std::path::Path,
+    cx: &gpui::Context<PopoverHost>,
+) -> ContextMenuModel {
+    let Some(repo) = this.state.repos.iter().find(|r| r.id == repo_id) else {
+        return model(this, repo_id, area, path, cx);
+    };
+    let is_unstaged_conflicted = matches!(
+        repo.status_entry_for_path(DiffArea::Unstaged, path)
+            .map(|status| status.kind),
+        Some(gitcomet_core::domain::FileStatusKind::Conflicted)
+    );
+    let is_submodule = submodule::menu_state(this, repo_id, path).status.is_some()
+        || repo.spec.workdir.join(path).is_dir();
+    if !is_unstaged_conflicted || is_submodule {
+        return model(this, repo_id, area, path, cx);
+    }
+
+    let selection_len = {
+        let pane = this.details_pane.read(cx);
+        let selection = pane
+            .status_multi_selection
+            .get(&repo_id)
+            .map(|sel| sel.selected_paths_for_area(area))
+            .unwrap_or(&[]);
+        (selection.len() > 1 && selection.iter().any(|p| p.as_path() == path))
+            .then_some(selection.len())
+    };
+    let use_selection = selection_len.is_some();
+    let selected_count = selection_len.unwrap_or(1);
+
+    let mut items = vec![ContextMenuItem::Header(
+        path.file_name()
+            .and_then(|p| p.to_str().map(ToOwned::to_owned))
+            .unwrap_or_else(|| format!("{path:?}"))
+            .into(),
+    )];
+    items.push(ContextMenuItem::Label(
+        components::ContextMenuText::path_single_line(path.display().to_string()),
+    ));
+    items.push(ContextMenuItem::Separator);
+    push_conflict_resolve_entries(
+        &mut items,
+        repo_id,
+        area,
+        path,
+        use_selection,
+        selected_count,
+        true,
+    );
+    items.push(ContextMenuItem::Separator);
+    items.push(discard_changes_entry(
+        repo_id,
+        area,
+        path,
+        use_selection,
+        selected_count,
+        false,
+    ));
+    ContextMenuModel::new(items)
+}
+
+/// Ours, theirs and mergetool: shared by the row menu and the "Resolve…"
+/// menu so the two cannot drift apart. Opening the resolver is the row's
+/// left click, so this does not offer it.
+fn push_conflict_resolve_entries(
+    items: &mut Vec<ContextMenuItem>,
+    repo_id: RepoId,
+    area: DiffArea,
+    path: &std::path::Path,
+    use_selection: bool,
+    selected_count: usize,
+    is_unstaged_conflicted: bool,
+) {
+    let n = selected_count;
+    items.push(ContextMenuItem::Entry {
+        label: if use_selection {
+            format!("Resolve selected using ours ({n})").into()
+        } else {
+            "Resolve using ours".into()
+        },
+        icon: Some("icons/arrow_left.svg".into()),
+        shortcut: Some(secondary_shortcut("O").into()),
+        disabled: false,
+        action: Box::new(ContextMenuAction::CheckoutConflictSideSelectionOrPath {
+            repo_id,
+            area,
+            path: path.to_path_buf(),
+            side: gitcomet_core::services::ConflictSide::Ours,
+        }),
+    });
+    items.push(ContextMenuItem::Entry {
+        label: if use_selection {
+            format!("Resolve selected using theirs ({n})").into()
+        } else {
+            "Resolve using theirs".into()
+        },
+        icon: Some("icons/arrow_right.svg".into()),
+        shortcut: Some(secondary_shortcut("T").into()),
+        disabled: false,
+        action: Box::new(ContextMenuAction::CheckoutConflictSideSelectionOrPath {
+            repo_id,
+            area,
+            path: path.to_path_buf(),
+            side: gitcomet_core::services::ConflictSide::Theirs,
+        }),
+    });
+
+    if area == DiffArea::Unstaged && is_unstaged_conflicted {
+        let can_launch_external_mergetool = !use_selection;
+        items.push(ContextMenuItem::Entry {
+            label: if can_launch_external_mergetool {
+                "Open external mergetool".into()
+            } else {
+                "Open external mergetool (select 1 file)".into()
+            },
+            icon: Some("icons/open_external.svg".into()),
+            shortcut: None,
+            disabled: !can_launch_external_mergetool,
+            action: Box::new(ContextMenuAction::LaunchMergetool {
+                repo_id,
+                path: path.to_path_buf(),
+            }),
+        });
+    }
+}
+
+fn discard_changes_entry(
+    repo_id: RepoId,
+    area: DiffArea,
+    path: &std::path::Path,
+    use_selection: bool,
+    selected_count: usize,
+    disabled: bool,
+) -> ContextMenuItem {
+    ContextMenuItem::Entry {
+        label: if use_selection {
+            format!("Discard ({selected_count})").into()
+        } else {
+            "Discard changes".into()
+        },
+        icon: Some("icons/refresh.svg".into()),
+        shortcut: Some(secondary_shortcut("D").into()),
+        disabled,
+        action: Box::new(ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
+            repo_id,
+            area,
+            path: path.to_path_buf(),
+        }),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

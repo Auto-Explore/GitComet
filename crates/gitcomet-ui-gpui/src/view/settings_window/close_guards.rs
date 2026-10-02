@@ -162,7 +162,7 @@ pub(crate) fn request_settings_only_quit(cx: &mut App) -> bool {
         return false;
     };
     let _ = window.update(cx, |view, window, cx| {
-        window.activate_window();
+        window.activate();
         view.confirm_close(CloseScope::Application, reasons, cx);
     });
     true

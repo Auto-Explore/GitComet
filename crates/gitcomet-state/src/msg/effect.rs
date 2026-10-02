@@ -19,6 +19,8 @@ macro_rules! match_git_auth {
         match $effect {
             Effect::RunLargeFileCommand { auth: $auth, .. }
             | Effect::RevertCommit { auth: $auth, .. }
+            | Effect::CherryPickCommit { auth: $auth, .. }
+            | Effect::ApplyFileChange { auth: $auth, .. }
             | Effect::CloneRepo { auth: $auth, .. }
             | Effect::AddSubmodule { auth: $auth, .. }
             | Effect::UpdateSubmodules { auth: $auth, .. }
@@ -389,6 +391,8 @@ pub enum Effect {
         commit: bool,
         mainline: Option<usize>,
         summary: String,
+        /// Signing or fetch auth staged when a failed pick is replayed.
+        auth: Option<StagedGitAuth>,
     },
     RevertCommit {
         repo_id: RepoId,
@@ -397,6 +401,14 @@ pub enum Effect {
         mainline: Option<usize>,
         summary: String,
         /// Signing or fetch auth staged when a failed revert is replayed.
+        auth: Option<StagedGitAuth>,
+    },
+    ApplyFileChange {
+        repo_id: RepoId,
+        target: gitcomet_core::domain::ApplyChangeTarget,
+        commit: bool,
+        commit_retry: Option<gitcomet_core::domain::ApplyFileChangeRetry>,
+        /// Signing auth staged when a failed commit step is replayed.
         auth: Option<StagedGitAuth>,
     },
     CreateBranch {
@@ -582,6 +594,15 @@ pub enum Effect {
     PruneLocalTags {
         repo_id: RepoId,
     },
+    CheckRepoMaintenance {
+        repo_id: RepoId,
+    },
+    PersistRepoMaintenanceSnooze {
+        common_dir: std::path::PathBuf,
+    },
+    RunMaintenance {
+        repo_id: RepoId,
+    },
     Pull {
         repo_id: RepoId,
         mode: PullMode,
@@ -701,6 +722,7 @@ pub enum Effect {
     InteractiveCherryPick {
         repo_id: RepoId,
         entries: Vec<InteractiveRebaseEntry>,
+        commit: bool,
     },
     /// Load the full `%B` messages of the commits selected for an
     /// interactive cherry-pick: the log page only carries subjects, and a

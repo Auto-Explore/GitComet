@@ -21,8 +21,8 @@ use gitcomet_state::store::AppStore;
 
 use gpui::{
     Action, App, AppContext, BorrowAppContext, Bounds, DisplayId, KeyBinding, Pixels, Point, Size,
-    TitlebarOptions, Unbind, Window, WindowBackgroundAppearance, WindowBounds, WindowDecorations,
-    WindowOptions, actions, point, px, size,
+    TitlebarOptions, Unbind, Window, WindowBounds, WindowDecorations, WindowOptions, actions,
+    point, px, size,
 };
 #[cfg(target_os = "macos")]
 use gpui::{Menu, MenuItem, OsAction, SystemMenuType};
