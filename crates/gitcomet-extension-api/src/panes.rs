@@ -53,6 +53,7 @@ pub struct DiffPanePolicy {
     pub allow_stage: bool,
     pub allow_annotate: bool,
     pub file_navigation: bool,
+    /// Clicking a line's gutter or annotation runs the pane's action.
     pub line_action: bool,
     pub select_lines: bool,
     pub search: bool,
@@ -257,7 +258,10 @@ pub struct DiffInset {
     pub side: DiffLineSide,
     pub line: u32,
     pub lines: Vec<SharedString>,
+    /// The text colour; the theme's secondary text by default.
     pub color: Option<Hsla>,
+    /// Runs when the user clicks one of the inset's rows.
+    pub on_click: Option<crate::HostedAction>,
 }
 
 impl DiffInset {
@@ -271,6 +275,7 @@ impl DiffInset {
             line,
             lines: lines.into_iter().collect(),
             color: None,
+            on_click: None,
         }
     }
 
@@ -278,10 +283,16 @@ impl DiffInset {
         self.color = Some(color);
         self
     }
+
+    pub fn with_action(mut self, action: crate::HostedAction) -> Self {
+        self.on_click = Some(action);
+        self
+    }
 }
 
 /// The presentation of the two sides; changing it preserves file-line anchors.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DiffLayout {
     #[default]
     Inline,
@@ -295,6 +306,7 @@ pub struct DiffScrollAnchor {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DiffPaneEvent {
     SelectionChanged(Option<DiffLineRange>),
     TargetChanged(Option<DiffTarget>),
@@ -316,6 +328,9 @@ pub struct DiffPaneOptions {
     pub style: DiffRowStyle,
     pub decor: Option<DiffRowDecorProvider>,
     pub on_gutter_click: Option<DiffGutterAction>,
+    /// Runs instead of `on_gutter_click` when the user clicks a line's
+    /// annotation. Both need [`DiffPanePolicy::line_action`].
+    pub on_annotation_click: Option<DiffGutterAction>,
     pub selection_actions: Vec<DiffSelectionAction>,
 }
 
@@ -365,6 +380,7 @@ impl DiffSnapshot {
 ///
 /// A pane keeps the kind of source it was created with: a repository pane
 /// ignores snapshots and a snapshot pane ignores targets and encodings.
+#[doc(hidden)]
 pub trait DiffPaneImpl {
     fn view(&self) -> AnyView;
     /// The repository target shown; `None` for a snapshot pane.
@@ -404,6 +420,7 @@ pub trait DiffPaneImpl {
 pub struct DiffPane(Rc<dyn DiffPaneImpl>);
 
 impl DiffPane {
+    #[doc(hidden)]
     pub fn new(pane: Rc<dyn DiffPaneImpl>) -> Self {
         Self(pane)
     }
@@ -495,8 +512,8 @@ pub enum FileListMode {
     Tree,
     /// One row per path.
     Flat,
-    /// By change kind, each group under a header that stays in view while
-    /// its files scroll.
+    /// By change kind, or by the groups given to [`FileList::set_groups`],
+    /// each group under a header that stays in view while its files scroll.
     Grouped,
 }
 
@@ -504,6 +521,7 @@ pub enum FileListMode {
 pub type FileSelected = Rc<dyn Fn(&CommitFileChange, DiffTarget, &mut App)>;
 
 /// What the host implements behind a [`FileList`].
+#[doc(hidden)]
 pub trait FileListImpl {
     fn view(&self) -> AnyView;
     fn set_source(&self, source: ChangeSource, cx: &mut App);
@@ -512,6 +530,8 @@ pub trait FileListImpl {
     fn set_kind_filter(&self, filter: crate::FileListFilter, cx: &mut App);
     fn set_marks(&self, marks: crate::FileListMarks, cx: &mut App);
     fn set_filter_chips(&self, chips: Vec<crate::FileListFilterChip>, cx: &mut App);
+    fn set_groups(&self, groups: Option<crate::FileListGroups>, cx: &mut App);
+    fn set_visible(&self, visible: Option<crate::FileListVisible>, cx: &mut App);
     /// Shows only files whose path contains `query` (case-insensitive).
     fn set_filter(&self, query: SharedString, cx: &mut App);
     /// The files as shown: sorted, filtered.
@@ -540,10 +560,21 @@ impl FileList {
     pub fn set_filter_chips(&self, chips: Vec<crate::FileListFilterChip>, cx: &mut App) {
         self.0.set_filter_chips(chips, cx)
     }
+    /// Groups the grouped mode shows instead of change kinds; `None` goes
+    /// back to change kinds. A new set of labels expands every group.
+    pub fn set_groups(&self, groups: Option<crate::FileListGroups>, cx: &mut App) {
+        self.0.set_groups(groups, cx)
+    }
+    /// Shows only these paths (with the kind filter and query still
+    /// applying); `None` shows every path.
+    pub fn set_visible(&self, visible: Option<crate::FileListVisible>, cx: &mut App) {
+        self.0.set_visible(visible, cx)
+    }
     /// Paths in navigation order, including files inside collapsed directories.
     pub fn ordered_paths(&self, cx: &App) -> Vec<PathBuf> {
         self.0.files(cx).into_iter().map(|file| file.path).collect()
     }
+    #[doc(hidden)]
     pub fn new(list: Rc<dyn FileListImpl>) -> Self {
         Self(list)
     }

@@ -157,6 +157,9 @@ impl SidebarPaneView {
             .flex()
             .items_center()
             .gap_2()
+            // Sized like the built-in section headers and rows.
+            .text_size(self.theme.ui_text(14.0))
+            .font_weight(gpui::FontWeight::MEDIUM)
             .child(if collapsed { "▸" } else { "▾" })
             .child(title)
             .control_interaction(
@@ -196,10 +199,11 @@ impl SidebarPaneView {
             return div().into_any_element();
         };
         let action = data.action.clone();
+        let id = format!("sidebar_contribution_{section}_{row}");
+        let selector = id.clone();
         div()
-            .id(SharedString::from(format!(
-                "sidebar_contribution_{section}_{row}"
-            )))
+            .id(SharedString::from(id))
+            .debug_selector(move || selector.clone())
             .h(crate::view::rows::sidebar::sidebar_list_row_height(
                 self.theme,
                 crate::ui_scale::current(cx).percent,
@@ -208,12 +212,19 @@ impl SidebarPaneView {
             .flex()
             .items_center()
             .gap_2()
+            .text_size(self.theme.ui_text(14.0))
             .when_some(data.icon.clone(), |row, icon| {
-                row.child(gpui::svg().path(icon).size_4())
+                // `svg()` is a mask in the text colour; without one it paints nothing.
+                row.child(
+                    gpui::svg()
+                        .path(icon)
+                        .size_4()
+                        .text_color(self.theme.colors.foreground.secondary),
+                )
             })
             .child(div().flex_1().overflow_hidden().child(data.label.clone()))
             .when_some(data.mark.clone(), |row, mark| {
-                row.child(div().text_color(mark.color).child(mark.label))
+                row.child(row_mark(mark, ui_scale::UiScale::current(cx)))
             })
             .control_interaction(
                 controls::InteractionStyle::new(self.theme),
@@ -226,4 +237,29 @@ impl SidebarPaneView {
             )
             .into_any_element()
     }
+}
+
+/// A contributed row's mark: its glyph, then its label, in its colour.
+fn row_mark(mark: gitcomet_extension_api::RowMark, ui_scale: ui_scale::UiScale) -> gpui::Div {
+    let color = mark.color;
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(ui_scale.px(4.0))
+        .text_color(color)
+        .children(mark.glyph.map(|glyph| {
+            match glyph {
+                gitcomet_extension_api::RowGlyph::Icon(path) => gpui::svg()
+                    .path(path)
+                    .size(ui_scale.px(12.0))
+                    .text_color(color)
+                    .into_any_element(),
+                gitcomet_extension_api::RowGlyph::Text(text) => {
+                    div().child(text).into_any_element()
+                }
+                _ => gpui::Empty.into_any_element(),
+            }
+        }))
+        .children(mark.label)
 }

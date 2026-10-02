@@ -187,7 +187,8 @@ impl GitCometView {
                             repo_sidebar_collapsed_items: Some(repo_sidebar_collapsed_items),
                             repo_sidebar_pinned_branches: Some(repo_sidebar_pinned_branches),
                             theme_mode: Some(this.theme_mode.key().to_string()),
-                            ui_scale_percent: Some(this.ui_scale_percent),
+                            // The default is the settings window's; a window's own zoom is not saved.
+                            ui_scale_percent: None,
                             // Owned by the settings window; None preserves it.
                             window_controls_mode: None,
                             browser_open_target: None,

@@ -1291,9 +1291,11 @@ impl GixRepo {
 
     /// Whether the index holds unmerged (conflict) entries — the signature
     /// of a rebase genuinely paused at a conflict.
-    fn index_has_conflicts(&self) -> bool {
-        let repo = self.repo();
-        repo.index_or_empty()
+    pub(super) fn index_has_conflicts(&self) -> bool {
+        // Read fresh: the cached index may predate a just-written conflict
+        // on a filesystem whose timestamps are too coarse to show the rewrite.
+        self.repo()
+            .open_index()
             .is_ok_and(|index| index.entries().iter().any(|e| e.stage_raw() != 0))
     }
 
@@ -2245,6 +2247,47 @@ mod tests {
     use super::{build_todo_content, parse_interactive_rebase_log, shell_quote_path};
     use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
     use std::path::Path;
+
+    #[test]
+    fn conflicts_are_read_from_a_fresh_index_when_its_mtime_does_not_move() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .current_dir(path)
+                .args(["-c", "user.name=T", "-c", "user.email=t@e.st"])
+                .args(["-c", "commit.gpgsign=false"])
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        git(&["init", "-q", "-b", "main"]);
+        std::fs::write(path.join("a.txt"), "base\n").unwrap();
+        git(&["add", "a.txt"]);
+        git(&["commit", "-qm", "base"]);
+        git(&["checkout", "-qb", "dev"]);
+        std::fs::write(path.join("a.txt"), "dev\n").unwrap();
+        git(&["commit", "-qam", "dev"]);
+        git(&["checkout", "-q", "main"]);
+        std::fs::write(path.join("a.txt"), "main\n").unwrap();
+        git(&["commit", "-qam", "main"]);
+
+        let repo = super::GixRepo::new(path.to_path_buf(), gix::open(path).unwrap().into_sync());
+        // Cache the pre-merge index in gix's shared snapshot.
+        assert!(repo.repo().index_or_empty().is_ok());
+        assert!(!repo.index_has_conflicts());
+        let index = path.join(".git/index");
+        let cached_mtime = std::fs::metadata(&index).unwrap().modified().unwrap();
+        assert!(!git(&["merge", "dev"]).status.success());
+        // A coarse-timestamp filesystem: the rewritten index keeps its mtime.
+        std::fs::File::options()
+            .write(true)
+            .open(&index)
+            .unwrap()
+            .set_modified(cached_mtime)
+            .unwrap();
+        assert!(repo.index_has_conflicts());
+    }
 
     const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";

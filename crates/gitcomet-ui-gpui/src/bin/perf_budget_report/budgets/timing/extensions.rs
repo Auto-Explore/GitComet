@@ -42,6 +42,11 @@ pub(crate) const PERF_BUDGETS: &[PerfBudgetSpec] = &[
         threshold_ns: 8.0 * NANOS_PER_MILLISECOND,
     },
     PerfBudgetSpec {
+        label: "file_list/regroup_100k",
+        estimate_path: "file_list/regroup_100k/new/estimates.json",
+        threshold_ns: 8.0 * NANOS_PER_MILLISECOND,
+    },
+    PerfBudgetSpec {
         label: "settings_window_render/active_page_only",
         estimate_path: "settings_window_render/active_page_only/new/estimates.json",
         threshold_ns: 16.0 * NANOS_PER_MILLISECOND,

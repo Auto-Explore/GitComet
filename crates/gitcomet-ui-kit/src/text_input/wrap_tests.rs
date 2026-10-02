@@ -662,7 +662,7 @@ fn wrapped_real_font_typing_is_stable_at_normal_and_enlarged_scale() {
         let mut cx = gpui::HeadlessAppContext::new(platform.text_system());
         let window = cx
             .open_window(size(px(640.0), px(480.0)), |window, app| {
-                crate::ui_scale::set_current(app, percent);
+                crate::ui_scale::set_default(app, percent);
                 crate::ui_scale::apply_to_window(window, percent);
                 app.new(|cx| {
                     let mut view = WrappedInputView::new(window, cx);

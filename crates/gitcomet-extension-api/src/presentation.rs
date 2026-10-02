@@ -51,7 +51,9 @@ impl PartialEq for HostedAction {
 impl Eq for HostedAction {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum HostedMenuItem {
+    #[non_exhaustive]
     Action {
         action: HostedAction,
         icon: Option<SharedString>,
@@ -61,7 +63,35 @@ pub enum HostedMenuItem {
     Separator,
 }
 
+impl HostedMenuItem {
+    /// An enabled entry without an icon.
+    pub fn action(action: HostedAction) -> Self {
+        Self::Action {
+            action,
+            icon: None,
+            disabled: false,
+        }
+    }
+
+    /// Sets an action entry's icon; other entries are unchanged.
+    pub fn with_icon(mut self, path: impl Into<SharedString>) -> Self {
+        if let Self::Action { icon, .. } = &mut self {
+            *icon = Some(path.into());
+        }
+        self
+    }
+
+    /// Disables an action entry; other entries are unchanged.
+    pub fn disabled(mut self, value: bool) -> Self {
+        if let Self::Action { disabled, .. } = &mut self {
+            *disabled = value;
+        }
+        self
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum NotificationKind {
     Success,
     Warning,

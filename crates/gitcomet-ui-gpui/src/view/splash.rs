@@ -24,47 +24,28 @@ static SPLASH_BACKDROP_LIGHT_IMAGE_CACHE: OnceLock<Arc<gpui::Image>> = OnceLock:
 const SPLASH_CARD_MAX_WIDTH_PX: f32 = components::INTERSTITIAL_CARD_MAX_WIDTH_PX;
 const SPLASH_BODY_MAX_WIDTH_PX: f32 = 440.0;
 const SPLASH_DETAIL_MAX_WIDTH_PX: f32 = 460.0;
-const SPLASH_CTA_HEIGHT_PX: f32 = 36.0;
-const SPLASH_CTA_COMFORTABLE_HEIGHT_PX: f32 = 44.0;
-
-/// Brand colours for content drawn over the backdrop artwork.
-#[derive(Clone, Copy)]
-pub(super) struct SplashPalette {
-    pub(super) text: gpui::Rgba,
-    pub(super) muted: gpui::Rgba,
-    pub(super) primary: SplashCtaButtonColors,
-    pub(super) secondary: SplashCtaButtonColors,
-}
 
 fn main_content_card_radius(theme: AppTheme) -> f32 {
     theme.radii.control
 }
 
-#[derive(Clone, Copy)]
-pub(super) struct SplashInteractiveColors {
-    base: gpui::Rgba,
-    hover: gpui::Rgba,
-    active: gpui::Rgba,
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct SplashCtaButtonColors {
-    icon: gpui::Rgba,
-    text: gpui::Rgba,
-    background: SplashInteractiveColors,
-    border: SplashInteractiveColors,
-}
-
+/// The splash backdrop for the theme's appearance: the product's own, else
+/// GitComet's.
 pub(in crate::view) fn load_splash_backdrop_image(is_dark: bool) -> Arc<gpui::Image> {
+    let branding = gitcomet_core::identity::current().branding();
     let (cache, bytes) = if is_dark {
         (
             &SPLASH_BACKDROP_DARK_IMAGE_CACHE,
-            SPLASH_BACKDROP_DARK_PNG_BYTES,
+            branding
+                .splash_backdrop_dark_png
+                .unwrap_or(SPLASH_BACKDROP_DARK_PNG_BYTES),
         )
     } else {
         (
             &SPLASH_BACKDROP_LIGHT_IMAGE_CACHE,
-            SPLASH_BACKDROP_LIGHT_PNG_BYTES,
+            branding
+                .splash_backdrop_light_png
+                .unwrap_or(SPLASH_BACKDROP_LIGHT_PNG_BYTES),
         )
     };
     cache
@@ -284,7 +265,7 @@ impl GitCometView {
             .id("repository_entry_logo")
             .size(size)
             // `svg()` paints a one-colour mask; the logo has two colours.
-            .child(gpui::img("gitcomet_logo.svg").w(size).h(size))
+            .child(gpui::img("brand/logo.svg").w(size).h(size))
             .into_any_element()
     }
 
@@ -300,75 +281,6 @@ impl GitCometView {
             .bg(self.splash_backdrop_base())
             .child(self.splash_backdrop_image_layer())
             .into_any_element()
-    }
-
-    pub(super) fn splash_cta_button(
-        theme: AppTheme,
-        id: &'static str,
-        label: &'static str,
-        icon_path: &'static str,
-        colors: SplashCtaButtonColors,
-        ui_scale_percent: u32,
-    ) -> gpui::Stateful<gpui::Div> {
-        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
-        let SplashCtaButtonColors {
-            icon: icon_color,
-            text: text_color,
-            background,
-            border: border_colors,
-        } = colors;
-        let SplashInteractiveColors {
-            base: bg,
-            hover: hover_bg,
-            active: active_bg,
-        } = background;
-        let SplashInteractiveColors {
-            base: border,
-            hover: hover_border,
-            active: active_border,
-        } = border_colors;
-
-        div()
-            .id(id)
-            .debug_selector(move || id.to_string())
-            .tab_index(0)
-            // Larger than a toolbar control by design, but still a button.
-            .h(crate::ui_scale::design_px_from_percent(
-                theme
-                    .metrics
-                    .row_height(SPLASH_CTA_HEIGHT_PX, SPLASH_CTA_COMFORTABLE_HEIGHT_PX),
-                ui_scale_percent,
-            ))
-            .px(scaled_px(16.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .gap(scaled_px(6.0))
-            .rounded(scaled_px(2.0))
-            .border_1()
-            .border_color(border)
-            .bg(bg)
-            .text_size(theme.ui_text(13.0))
-            .font_weight(FontWeight::BOLD)
-            .text_color(text_color)
-            .cursor(CursorStyle::PointingHand)
-            .whitespace_nowrap()
-            .child(svg_icon(icon_path, icon_color, scaled_px(14.0)))
-            .child(label)
-            .control_interaction(
-                InteractionStyle::new(theme)
-                    .hover(
-                        StyleRefinement::default()
-                            .bg(hover_bg)
-                            .border_color(hover_border),
-                    )
-                    .pressed(
-                        StyleRefinement::default()
-                            .bg(active_bg)
-                            .border_color(active_border),
-                    ),
-                InteractionState::default(),
-            )
     }
 
     fn interstitial_shell(
@@ -391,32 +303,15 @@ impl GitCometView {
         &self,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        let primary_bg = gpui::rgba(0x5ac1feff);
-        let primary_hover = gpui::rgba(0x72c7ffff);
-        let primary_active = gpui::rgba(0x48b6eeff);
-        let primary_text = gpui::rgba(0x04172bff);
         let settings_tooltip: SharedString = "Open settings".into();
 
-        Self::splash_cta_button(
-            self.theme,
+        components::interstitial_cta_button(
             "git_unavailable_open_settings",
             "Open Settings",
             "icons/cog.svg",
-            SplashCtaButtonColors {
-                icon: primary_text,
-                text: primary_text,
-                background: SplashInteractiveColors {
-                    base: primary_bg,
-                    hover: primary_hover,
-                    active: primary_active,
-                },
-                border: SplashInteractiveColors {
-                    base: primary_bg,
-                    hover: primary_hover,
-                    active: primary_active,
-                },
-            },
-            self.ui_scale_percent,
+            true,
+            self.theme,
+            crate::ui_scale::UiScale::from_percent(self.ui_scale_percent),
         )
         .gitcomet_tooltip(self.theme, settings_tooltip)
         .on_activate(
@@ -612,49 +507,6 @@ impl GitCometView {
                 ),
             theme,
         )
-    }
-
-    /// The backdrop is website artwork, so content over it uses the matching
-    /// brand palette. Custom themes select the variant via `is_dark`.
-    pub(super) fn splash_palette(&self) -> SplashPalette {
-        let splash_color = |dark, light| gpui::rgba(if self.theme.is_dark { dark } else { light });
-        let text = splash_color(0xf6f7fbff, 0x171a3bff);
-        let muted = splash_color(0xa8b1c6ff, 0x3f4569ff);
-        let primary_bg = splash_color(0x5ac1feff, 0x1a6fc0ff);
-        let primary_hover = splash_color(0x72c7ffff, 0x155ea6ff);
-        let primary_active = splash_color(0x48b6eeff, 0x124f8dff);
-        let primary_text = splash_color(0x04172bff, 0xffffffff);
-        let primary_states = SplashInteractiveColors {
-            base: primary_bg,
-            hover: primary_hover,
-            active: primary_active,
-        };
-        let primary = SplashCtaButtonColors {
-            icon: primary_text,
-            text: primary_text,
-            background: primary_states,
-            border: primary_states,
-        };
-        let secondary = SplashCtaButtonColors {
-            icon: text,
-            text,
-            background: SplashInteractiveColors {
-                base: splash_color(0xffffff26, 0xffffff99),
-                hover: splash_color(0xffffff33, 0xeef3f9ff),
-                active: splash_color(0xffffff40, 0xe7edf5ff),
-            },
-            border: SplashInteractiveColors {
-                base: splash_color(0xffffff47, 0x6b7590ff),
-                hover: splash_color(0xffffff66, 0x5c6284ff),
-                active: splash_color(0xffffff80, 0x3f4569ff),
-            },
-        };
-        SplashPalette {
-            text,
-            muted,
-            primary,
-            secondary,
-        }
     }
 
     /// The vertical icon rail shown in place of the sidebar while it is collapsed.

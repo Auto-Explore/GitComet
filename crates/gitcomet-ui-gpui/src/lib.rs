@@ -44,6 +44,7 @@ pub use app::{
     run_with_startup_crash_report_shutdown_callback_and_browser_requests,
     run_with_startup_crash_report_shutdown_callback_and_initial_browser_request,
 };
+pub use assets::{BRAND_ASSETS, GitCometAssets};
 pub use launch_guard::UiLaunchError;
 pub use view::StartupCrashReport;
 

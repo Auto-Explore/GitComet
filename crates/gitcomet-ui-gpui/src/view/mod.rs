@@ -675,8 +675,9 @@ impl Element for UiScaleScrollCapture {
                 return;
             }
 
+            let window_id = window.window_handle().window_id();
             cx.defer(move |cx| {
-                crate::app::set_app_ui_scale_percent(cx, next);
+                crate::app::set_window_ui_scale_percent(cx, window_id, Some(next));
             });
         });
     }

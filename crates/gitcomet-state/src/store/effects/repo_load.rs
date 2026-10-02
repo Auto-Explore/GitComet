@@ -1412,6 +1412,40 @@ fn worktree_scan_handle(
     Some(handle)
 }
 
+/// A handle on `repo`'s linked worktree at `path`, from the scan's cache.
+/// Errors when `path` is not one of `repo`'s linked worktrees.
+pub(super) fn linked_worktree_handle(
+    backend: &dyn GitBackend,
+    repo_id: RepoId,
+    repo: &dyn GitRepository,
+    path: &Path,
+) -> Result<Arc<dyn GitRepository>, Error> {
+    let path = gitcomet_core::domain::normalize_worktree_path(path);
+    let canonical = canonicalize_or_original(path.clone());
+    // Git lists canonical paths; a caller may hold another spelling.
+    let names_path = |candidate: &Path| {
+        gitcomet_core::domain::normalize_worktree_path(candidate) == path
+            || canonicalize_or_original(candidate.to_path_buf()) == canonical
+    };
+    let linked = !names_path(&repo.spec().workdir)
+        && repo
+            .list_worktrees()?
+            .iter()
+            .any(|worktree| names_path(&worktree.path));
+    if !linked {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "{} is not a linked worktree of this repository",
+            path.display()
+        ))));
+    }
+    worktree_scan_handle(worktree_scan_handles(), backend, repo_id, &path).ok_or_else(|| {
+        Error::new(ErrorKind::Backend(format!(
+            "Could not open the worktree at {}",
+            path.display()
+        )))
+    })
+}
+
 /// Drops this repo's handles for worktrees the current scan did not walk — ones
 /// that have been pruned, removed, or unmounted since the last scan. Called with
 /// the paths the scan actually saw, so a repo never accumulates handles for

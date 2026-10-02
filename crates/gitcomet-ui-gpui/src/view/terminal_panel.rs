@@ -855,6 +855,10 @@ impl GitCometView {
                 self.flush_workspace_environment(cx);
                 crate::app::mark_window_closing(cx, window.window_handle().window_id());
                 window.remove_window();
+                if self.view_mode != GitCometViewMode::Normal {
+                    // A focused tool ends with its window, Settings or not.
+                    cx.quit();
+                }
             }
             TerminalShutdownAction::DeleteWorkspace { workspace_id } => {
                 // Deferred: finishing may update this view to reset it.

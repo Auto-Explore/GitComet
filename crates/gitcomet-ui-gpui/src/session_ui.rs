@@ -26,8 +26,9 @@ pub(crate) fn initialize_appearance(session: &UiSession, cx: &mut App) {
     appearance::initialize(appearance_preferences(session), cx);
 }
 
+/// The default UI scale new windows open at, seeded from the session once.
 pub(crate) fn ui_scale<C: BorrowAppContext>(session: &UiSession, cx: &mut C) -> AppUiScale {
-    ui_scale::current_or_initialize(session.ui_scale_percent, cx)
+    ui_scale::default_or_initialize(session.ui_scale_percent, cx)
 }
 
 pub(crate) fn font_preferences<C: BorrowAppContext>(

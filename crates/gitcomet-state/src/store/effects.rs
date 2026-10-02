@@ -474,7 +474,14 @@ pub(super) fn schedule_effect(
             if let Some((msg_tx, cancellation)) =
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, work.repo_id)
             {
-                diff_session::schedule(repo_load_executor, repos, msg_tx, work, cancellation);
+                diff_session::schedule(
+                    repo_load_executor,
+                    repos,
+                    Arc::clone(backend),
+                    msg_tx,
+                    work,
+                    cancellation,
+                );
             }
         }
         Effect::LoadLog {

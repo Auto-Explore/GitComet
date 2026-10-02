@@ -219,7 +219,7 @@ impl MainPaneView {
         annotations: Arc<DiffAnnotations>,
         insets: Arc<[DiffInset]>,
     ) {
-        self.store.policy = options.policy;
+        self.store.set_policy(options.policy);
         self.diff_show_line_numbers = options.policy.line_numbers;
         let reset = self
             .hosted_decor
@@ -419,8 +419,12 @@ impl MainPaneView {
                     .unwrap_or(DisplayRow::Document(display));
                 match row {
                     DisplayRow::Inset { inset, line } => {
+                        use crate::kit::interaction::ControlInteractionExt as _;
                         let inset = &this.hosted_decor.as_ref().unwrap().insets[inset];
+                        let own_side = side.is_none_or(|side| side == inset.side);
+                        let action = inset.on_click.clone().filter(|_| own_side);
                         div()
+                            .id(("hosted_inset", display))
                             .debug_selector(move || format!("hosted_diff_{pane_id}_row_{display}"))
                             .h(this.theme.editor_row_height(ui_scale::current(cx).percent))
                             .w_full()
@@ -429,10 +433,20 @@ impl MainPaneView {
                             .text_color(inset.color.unwrap_or_else(|| {
                                 this.theme.colors.foreground.secondary.into_color()
                             }))
-                            .child(if side.is_none_or(|side| side == inset.side) {
+                            .child(if own_side {
                                 inset.lines[line].clone()
                             } else {
                                 "".into()
+                            })
+                            .when_some(action, |row, action| {
+                                row.cursor_pointer().on_activate(
+                                    false,
+                                    crate::kit::interaction::ControlActivation::Action,
+                                    move |_, _, cx| {
+                                        cx.stop_propagation();
+                                        action.invoke(cx);
+                                    },
+                                )
                             })
                             .into_any_element()
                     }
@@ -496,6 +510,9 @@ impl MainPaneView {
                         {
                             return element;
                         }
+                        // The lane draws the annotation, so a click there is on it.
+                        let on_annotation =
+                            annotation.and(decor.options.on_annotation_click.clone());
                         let color = annotation
                             .map(|a| a.color)
                             .or_else(|| mark.as_ref().and_then(|m| m.tint));
@@ -503,10 +520,8 @@ impl MainPaneView {
                             .as_ref()
                             .and_then(|m| m.gutter.clone())
                             .or_else(|| annotation.and_then(|a| a.label.clone()));
-                        let action = decor
-                            .options
-                            .on_gutter_click
-                            .clone()
+                        let action = on_annotation
+                            .or_else(|| decor.options.on_gutter_click.clone())
                             .filter(|_| decor.options.policy.line_action);
 
                         div()

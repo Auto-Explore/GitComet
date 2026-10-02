@@ -51,6 +51,8 @@ impl PopoverHost {
         anchor = anchor_for_corner(anchor_corner);
 
         let panel = match kind {
+            // An extension's menu is a context menu; its dialogs are panels.
+            kind @ PopoverKind::Hosted { menu: true, .. } => self.context_menu_view(kind, cx),
             PopoverKind::Hosted { id, .. } => extension_dialog::panel(self, id, cx),
             PopoverKind::HookActivity {
                 repo_id,
@@ -335,6 +337,7 @@ impl PopoverHost {
             PopoverKind::ChangeTrackingSettings => {
                 self.context_menu_view(PopoverKind::ChangeTrackingSettings, cx)
             }
+            PopoverKind::UiScalePicker => self.context_menu_view(PopoverKind::UiScalePicker, cx),
             PopoverKind::PullPicker => self.context_menu_view(PopoverKind::PullPicker, cx),
             PopoverKind::PushPicker => self.context_menu_view(PopoverKind::PushPicker, cx),
             PopoverKind::CommitOptionsMenu { repo_id } => {

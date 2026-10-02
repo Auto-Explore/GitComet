@@ -583,7 +583,9 @@ impl Driver {
                     let details = view.details_pane.read(cx);
                     let bounds = details.unstaged_scroll.0.borrow().base_handle.bounds();
                     let offset = details.unstaged_scroll.0.borrow().base_handle.offset();
-                    let row = crate::ui_scale::UiScale::current(cx).row_height(24.0, 32.0);
+                    // Outside a window update `UiScale::current` is the default,
+                    // not this window's zoom.
+                    let row = details.ui_scale().row_height(24.0, 32.0);
                     (bounds.size.height > px(0.0)).then(|| {
                         point(
                             bounds.left() + px(60.0),

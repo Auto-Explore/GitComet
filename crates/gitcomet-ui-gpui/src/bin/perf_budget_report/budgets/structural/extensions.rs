@@ -25,6 +25,12 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         threshold: 0.0,
     },
     StructuralBudgetSpec {
+        bench: "file_list/regroup_100k",
+        metric: "replans",
+        comparator: StructuralBudgetComparator::Exactly,
+        threshold: 0.0,
+    },
+    StructuralBudgetSpec {
         bench: "diff_scroll/overlay_lane_window/200",
         metric: "rows_rendered",
         comparator: StructuralBudgetComparator::Exactly,

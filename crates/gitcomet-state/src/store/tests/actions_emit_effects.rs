@@ -315,6 +315,55 @@ fn pull_and_push_do_not_mark_in_flight_before_repo_is_opened() {
 }
 
 #[test]
+fn pull_stopped_at_conflicts_is_summarized_as_a_conflict_stop() {
+    use gitcomet_core::error::{GitFailure, GitFailureId};
+
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+
+    let error = Error::new(ErrorKind::Git(GitFailure::new(
+        "git pull --no-rebase --ff --no-prune . dev",
+        GitFailureId::StoppedAtConflicts,
+        Some(1),
+        b"CONFLICT (content): Merge conflict in a.txt\n".to_vec(),
+        b"From .\n * branch dev -> FETCH_HEAD\n".to_vec(),
+        Some(
+            "Merge conflict in a.txt. Resolve it, then commit, or abort the merge.\n\nCONFLICT (content): Merge conflict in a.txt"
+                .to_string(),
+        ),
+    )));
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::PullBranch {
+                remote: ".".to_string(),
+                branch: "dev".to_string(),
+            },
+            result: Err(error),
+        }),
+    );
+
+    let summary = &state.repos[0].feedback.command_log[0].summary;
+    assert!(
+        summary.starts_with(
+            "Pull stopped at conflicts:\n\n    git pull --no-rebase --ff --no-prune . dev\n\n    Merge conflict in a.txt."
+        ),
+        "{summary}"
+    );
+}
+
+#[test]
 fn pull_error_is_formatted_as_command_and_output() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);

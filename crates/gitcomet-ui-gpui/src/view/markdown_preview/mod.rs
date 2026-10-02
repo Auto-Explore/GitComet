@@ -153,6 +153,8 @@ pub(super) struct MarkdownPreviewRow {
     /// A later row of a list item (another paragraph, a line after a hard
     /// break): it keeps the item's indent but draws no second bullet.
     pub(super) continues_item: bool,
+    /// The `align` of the HTML block around it (`<p align="center">`).
+    pub(super) align: MarkdownTextAlign,
 }
 
 impl Default for MarkdownPreviewRow {
@@ -176,6 +178,7 @@ impl Default for MarkdownPreviewRow {
             table: None,
             task: None,
             continues_item: false,
+            align: MarkdownTextAlign::None,
         }
     }
 }
@@ -239,13 +242,14 @@ pub(super) struct MarkdownTableRow {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(super) struct MarkdownTableInfo {
     /// One per column, from the `:---:` delimiter row.
-    pub(super) alignments: Vec<MarkdownTableAlign>,
+    pub(super) alignments: Vec<MarkdownTextAlign>,
     /// Widest cell per column in chars, for the monospace row-list rendering.
     pub(super) column_widths: Vec<usize>,
 }
 
+/// A table column's alignment, or an HTML block's `align`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(super) enum MarkdownTableAlign {
+pub(super) enum MarkdownTextAlign {
     #[default]
     None,
     Left,
@@ -291,7 +295,9 @@ impl MarkdownPreviewRow {
 pub(super) const MARKDOWN_PREVIEW_IMAGE_DEFAULT_HEIGHT_PX: u32 = 224;
 
 /// Combine the inline style stack into a single effective style.
-fn resolve_style_stack(stack: &[MarkdownInlineStyle]) -> MarkdownInlineStyle {
+fn resolve_style_stack(
+    stack: impl IntoIterator<Item = MarkdownInlineStyle>,
+) -> MarkdownInlineStyle {
     let mut has_bold = false;
     let mut has_italic = false;
     let mut has_strikethrough = false;
@@ -299,7 +305,7 @@ fn resolve_style_stack(stack: &[MarkdownInlineStyle]) -> MarkdownInlineStyle {
     let mut has_code = false;
     let mut has_underline = false;
 
-    for &s in stack {
+    for s in stack {
         match s {
             MarkdownInlineStyle::Bold => has_bold = true,
             MarkdownInlineStyle::Italic => has_italic = true,

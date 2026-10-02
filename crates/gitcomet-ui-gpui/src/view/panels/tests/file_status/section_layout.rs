@@ -980,7 +980,7 @@ fn comfortable_stage_and_commit_targets_fit_rows_at_laptop_and_4k_sizes(
                     ui_font_size_px,
                     ..Appearance::default()
                 });
-                crate::app::set_app_ui_scale_percent(app, percent);
+                crate::ui_scale::set_default(app, percent);
                 view.update(app, |this, cx| {
                     this.notify_font_preferences_changed(cx);
                 });

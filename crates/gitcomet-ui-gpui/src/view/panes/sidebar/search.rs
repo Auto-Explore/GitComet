@@ -777,7 +777,7 @@ mod tests {
                         density,
                         ..Default::default()
                     });
-                    ui_scale::set_current(app, percent);
+                    ui_scale::set_default(app, percent);
                     view.update(app, |view, cx| {
                         view.notify_font_preferences_changed(cx);
                         test_support::set_sidebar_width_for_test(

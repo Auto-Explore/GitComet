@@ -358,13 +358,14 @@ fn lighten(color: gpui::Rgba, amount: f32) -> gpui::Rgba {
     mix(color, gpui::rgba(0xFFFFFFFF), amount)
 }
 
+/// A workspace's dot and tint colour. Fixed per option, never theme-derived,
+/// so a dot always shows the option that was picked; Default dots are Blue.
 pub(in crate::view) fn workspace_color(
     color: Option<gitcomet_state::session::WorkspaceColor>,
-    theme: AppTheme,
 ) -> gpui::Rgba {
     use gitcomet_state::session::WorkspaceColor;
     match color {
-        Some(WorkspaceColor::Gray) => theme.colors.foreground.secondary,
+        Some(WorkspaceColor::Gray) => gpui::rgba(0x8E949CFF),
         Some(WorkspaceColor::Brown) => gpui::rgba(0xA47551FF),
         Some(WorkspaceColor::Red) => gpui::rgba(0xE05252FF),
         Some(WorkspaceColor::Orange) => gpui::rgba(0xE08A3EFF),
@@ -373,12 +374,11 @@ pub(in crate::view) fn workspace_color(
         Some(WorkspaceColor::Green) => gpui::rgba(0x48A868FF),
         Some(WorkspaceColor::Teal) => gpui::rgba(0x2E9E8FFF),
         Some(WorkspaceColor::Cyan) => gpui::rgba(0x39B0D0FF),
-        Some(WorkspaceColor::Blue) => gpui::rgba(0x4B8DDBFF),
+        None | Some(WorkspaceColor::Blue) => gpui::rgba(0x4B8DDBFF),
         Some(WorkspaceColor::Indigo) => gpui::rgba(0x4E66D0FF),
         Some(WorkspaceColor::Purple) => gpui::rgba(0x956EDBFF),
         Some(WorkspaceColor::Magenta) => gpui::rgba(0xC757C7FF),
         Some(WorkspaceColor::Pink) => gpui::rgba(0xD866A4FF),
-        None => theme.colors.accent.foreground,
     }
 }
 
@@ -407,7 +407,7 @@ pub(in crate::view) fn title_bar_background(
     // inactive ones remain identifiable without competing for attention.
     mix(
         base,
-        workspace_color(Some(group_color), theme),
+        workspace_color(Some(group_color)),
         if window_is_active { 0.18 } else { 0.12 },
     )
 }
@@ -738,8 +738,7 @@ impl Render for TitleBarView {
         // The group name and color identify this window beside the repository
         // tabs and open the repository picker.
         let repo_picker_open = self.repo_picker_open;
-        let workspace_dot =
-            workspace_color(workspace.as_ref().and_then(|(_, color)| *color), theme);
+        let workspace_dot = workspace_color(workspace.as_ref().and_then(|(_, color)| *color));
         let workspace_label: SharedString = workspace
             .map(|(name, _)| name)
             .unwrap_or_else(|| "Workspace".to_string())
@@ -1235,7 +1234,7 @@ mod tests {
         };
         for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
             let base = title_bar_background(theme, true, None);
-            let blue = workspace_color(Some(gitcomet_state::session::WorkspaceColor::Blue), theme);
+            let blue = workspace_color(Some(gitcomet_state::session::WorkspaceColor::Blue));
             let tinted = title_bar_background(
                 theme,
                 true,
@@ -1253,6 +1252,15 @@ mod tests {
                 "Default must preserve the existing theme-derived title bar"
             );
         }
+    }
+
+    #[test]
+    fn default_workspace_dot_is_blue() {
+        // The dot takes no theme, so Default can't borrow the theme accent.
+        assert_eq!(
+            workspace_color(None),
+            workspace_color(Some(gitcomet_state::session::WorkspaceColor::Blue))
+        );
     }
 
     #[test]

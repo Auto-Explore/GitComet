@@ -10,7 +10,7 @@ use super::*;
 use gitcomet_extension_api::{
     CommandContext, DialogContent, DialogHandle, EntryOrigin, ExtensionId, GateDecision, HostError,
     MenuLocation, Registry, RepositoryEntryRequest, RepositoryHandle, StateObserver, WindowHost,
-    WindowHostImpl, storage::StorageError,
+    host::WindowHostImpl, storage::StorageError,
 };
 use gitcomet_extension_api::{HostNotifier, ShellEvent, Slot, WindowExtension};
 use gitcomet_state::msg::Msg;
@@ -34,22 +34,39 @@ pub(crate) struct RunExtensionCommand {
 /// The registry, installed once before the first window opens.
 pub(crate) struct ExtensionHost {
     registry: Rc<Registry>,
-    /// Palette rows for every command, leaked once per install.
+    /// Palette rows for every command, leaked once by [`install_bindings`];
+    /// empty while commands are not offered (focused tool windows).
     palette: &'static [CommandEntry],
+    /// Whether commands reach palettes, menus, and key bindings.
+    commands: bool,
 }
 
 impl gpui::Global for ExtensionHost {}
 
-/// Installs a non-empty registry: its key bindings, the app-level command
-/// action, and the global windows read at construction. An empty registry
-/// installs nothing, so every lookup below short-circuits on a missing global.
-///
-/// Call before the host binds its own keys: later bindings win, so a host
-/// chord an extension also claims stays the host's.
-pub(crate) fn install(registry: Registry, cx: &mut App) {
+/// Installs a non-empty registry for every window kind: gates, close guards,
+/// and window hooks read it. An empty registry installs nothing, so every
+/// lookup below short-circuits on a missing global.
+pub(crate) fn install_registry(registry: Registry, cx: &mut App) {
     if registry.is_empty() {
         return;
     }
+    cx.set_global(ExtensionHost {
+        registry: Rc::new(registry),
+        palette: &[],
+        commands: false,
+    });
+}
+
+/// Offers the installed extensions' commands: key bindings, the app-level
+/// command action, palette rows, and menu entries. Main windows only, like
+/// the palette.
+///
+/// Call before the host binds its own keys: later bindings win, so a host
+/// chord an extension also claims stays the host's.
+pub(crate) fn install_bindings(cx: &mut App) {
+    let Some(registry) = registry(cx) else {
+        return;
+    };
     let palette = palette_rows(&registry);
     cx.bind_keys(registry.key_bindings().iter().map(|binding| {
         KeyBinding::new(
@@ -70,10 +87,16 @@ pub(crate) fn install(registry: Registry, cx: &mut App) {
             });
         });
     });
-    cx.set_global(ExtensionHost {
-        registry: Rc::new(registry),
-        palette,
-    });
+    let host = cx.global_mut::<ExtensionHost>();
+    host.palette = palette;
+    host.commands = true;
+}
+
+/// A main-window launch: the registry and its commands (tests and benches).
+#[cfg(any(test, feature = "benchmarks"))]
+pub(crate) fn install(registry: Registry, cx: &mut App) {
+    install_registry(registry, cx);
+    install_bindings(cx);
 }
 
 /// One palette row per command, grouped by category in first-seen order so
@@ -176,9 +199,14 @@ pub(in crate::view) struct ExtensionMenuEntry {
     pub(in crate::view) requires_repository: bool,
 }
 
-/// The extension entries of `location`, in registration order.
+/// The extension entries of `location`, in registration order; none while
+/// commands are not offered.
 pub(in crate::view) fn menu_entries(location: MenuLocation, cx: &App) -> Rc<[ExtensionMenuEntry]> {
-    let Some(registry) = registry(cx) else {
+    let Some(registry) = cx
+        .try_global::<ExtensionHost>()
+        .filter(|host| host.commands)
+        .map(|host| Rc::clone(&host.registry))
+    else {
         return Rc::from([]);
     };
     registry
@@ -345,6 +373,26 @@ impl HostWindow {
         }
     }
 
+    /// Opens `launch` after this update; a failure is reported in the window.
+    fn launch(&self, launch: super::platform_open::Launch, cx: &mut App) -> Result<(), HostError> {
+        self.live()?;
+        let view = self.view.clone();
+        super::platform_open::launch_later(
+            launch,
+            move |err, cx| {
+                let _ = view.update(cx, |root, cx| {
+                    let report = ErrorReport::message(
+                        root.active_repo_id(),
+                        format!("Could not open: {err}"),
+                    );
+                    root.report_error(report, cx);
+                });
+            },
+            cx,
+        )
+        .map_err(|err| HostError::InvalidRequest(err.to_string().into()))
+    }
+
     fn workspace_id(&self, cx: &App) -> Result<WorkspaceId, HostError> {
         self.live()?;
         crate::workspaces::with_workspace_for_window(cx, self.window_id, |workspace| workspace.id)
@@ -386,6 +434,7 @@ impl WindowHostImpl for HostWindow {
                             };
                             Some(index)
                         }
+                        _ => return,
                     };
                     root.select_repository_view(&repository, index, window, cx);
                 });
@@ -727,6 +776,14 @@ impl WindowHostImpl for HostWindow {
         super::pop_out::open(self.host()?, self.window_id, title, content, on_closed, cx)
     }
 
+    fn open_url(&self, url: &str, cx: &mut App) -> Result<(), HostError> {
+        self.launch(super::platform_open::Launch::Url(url.to_string()), cx)
+    }
+
+    fn open_path(&self, path: &std::path::Path, cx: &mut App) -> Result<(), HostError> {
+        self.launch(super::platform_open::Launch::Path(path.to_path_buf()), cx)
+    }
+
     fn notify(&self, message: SharedString, cx: &mut App) -> Result<(), HostError> {
         let view = self.view.upgrade().ok_or(HostError::WindowClosed)?;
         cx.defer(move |cx| {
@@ -788,8 +845,10 @@ impl ExtensionWindow {
         kind: gitcomet_core::identity::WindowKind,
         cx: &mut gpui::Context<GitCometView>,
     ) -> Option<Self> {
+        // The focused difftool hosts its own pane, so it has a host even
+        // without extensions.
         let registry = registry(cx).or_else(|| {
-            (kind != gitcomet_core::identity::WindowKind::Main)
+            (kind == gitcomet_core::identity::WindowKind::FocusedDiff)
                 .then(|| Rc::new(Registry::default()))
         })?;
         let bottom_panels = Rc::new(std::cell::RefCell::new(
@@ -811,7 +870,7 @@ impl ExtensionWindow {
                 let slots = pending.take_pending();
                 if view
                     .update(cx, |view, cx| {
-                        for slot in Slot::ALL {
+                        for slot in Slot::ALL.iter().copied() {
                             if slots & slot.mask() != 0 {
                                 view.invalidate_extension_slot(slot, cx);
                             }
@@ -970,8 +1029,9 @@ pub(in crate::view) fn next_dialog_id() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Builds the window's status items and tells every extension the window
-/// opened. Deferred so both run after the window's own construction.
+/// Builds the window's status items and chrome and tells every extension
+/// the window opened. Deferred so both run after the window's own
+/// construction. Only main windows have a status bar to fill.
 pub(crate) fn window_opened(view: &Entity<GitCometView>, cx: &mut App) {
     let Some(registry) = registry(cx) else {
         return;
@@ -979,6 +1039,7 @@ pub(crate) fn window_opened(view: &Entity<GitCometView>, cx: &mut App) {
     let Some(host) = view.read(cx).extension_window.as_ref().map(|w| w.host()) else {
         return;
     };
+    let has_status_bar = renders_full_chrome(view.read(cx).view_mode);
     let window_handle = view.read(cx).window_handle;
     let view = view.downgrade();
     cx.defer(move |cx| {
@@ -999,7 +1060,7 @@ pub(crate) fn window_opened(view: &Entity<GitCometView>, cx: &mut App) {
                 });
             }
         });
-        if !registry.status_items().is_empty() {
+        if has_status_bar && !registry.status_items().is_empty() {
             let _ = window_handle.update(cx, |_, window, cx| {
                 let items = registry
                     .status_items()
@@ -1019,10 +1080,13 @@ pub(crate) fn window_opened(view: &Entity<GitCometView>, cx: &mut App) {
         }
         if registry.edition_strip().is_some() || registry.title_bar_brand().is_some() {
             let _ = window_handle.update(cx, |_, window, cx| {
-                let edition = registry.edition_strip().map(|item| {
-                    super::perf::extension_dispatch();
-                    (item.build)(host.clone(), window, cx)
-                });
+                let edition = registry
+                    .edition_strip()
+                    .filter(|_| has_status_bar)
+                    .map(|item| {
+                        super::perf::extension_dispatch();
+                        (item.build)(host.clone(), window, cx)
+                    });
                 let brand = registry.title_bar_brand().map(|item| {
                     super::perf::extension_dispatch();
                     (item.build)(host.clone(), window, cx)
@@ -1034,10 +1098,6 @@ pub(crate) fn window_opened(view: &Entity<GitCometView>, cx: &mut App) {
                         .update(cx, |bar, cx| bar.set_brand(brand, cx));
                 });
             });
-        }
-        for (_, callback) in registry.window_opened() {
-            crate::view::perf::extension_dispatch();
-            callback(host.clone(), cx);
         }
     });
 }

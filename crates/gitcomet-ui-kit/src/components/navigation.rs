@@ -106,22 +106,42 @@ impl NavTab {
         self
     }
 
+    /// The icon follows the label: the selected foreground when selected.
+    fn icon_color(&self, theme: AppTheme) -> Rgba {
+        if self.selected {
+            theme.colors.interaction.selected_foreground
+        } else {
+            theme.colors.foreground.secondary
+        }
+    }
+
+    /// Debug selectors `{id}_icon` and `{id}_badge` name the parts.
     pub fn render(self, theme: AppTheme, scale: UiScale) -> gpui::Stateful<Div> {
+        let icon_color = self.icon_color(theme);
+        let id = self.id.clone();
         let mut button = navigation_tab(self.id, self.label, self.selected, None, theme);
         if let Some(icon) = self.icon {
+            let selector = format!("{id}_icon");
             button = button.start_slot(
                 gpui::svg()
                     .path(icon)
                     .size(scale.px(14.0))
-                    .text_color(theme.colors.foreground.secondary),
+                    .flex_none()
+                    .text_color(icon_color)
+                    .debug_selector(move || selector),
             );
         }
         if let Some(badge) = self.badge {
+            let selector = format!("{id}_badge");
             button = button.end_slot(
                 div()
+                    .debug_selector(move || selector)
+                    .flex_none()
                     .px(scale.px(4.0))
                     .rounded(scale.px(8.0))
                     .bg(theme.colors.surface.raised)
+                    .text_size(theme.ui_text(11.0))
+                    .text_color(theme.colors.foreground.secondary)
                     .child(badge),
             );
         }
@@ -132,5 +152,74 @@ impl NavTab {
             } else {
                 gpui::rgba(0x00000000)
             })
+    }
+}
+
+#[cfg(test)]
+mod nav_tab_tests {
+    use super::*;
+
+    struct Tabs {
+        theme: AppTheme,
+    }
+
+    impl gpui::Render for Tabs {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            let scale = UiScale::from_percent(100);
+            navigation_tab_strip(self.theme.colors.surface.canvas, scale)
+                .child(
+                    NavTab::new("tab_on", "History")
+                        .icon("icons/history.svg")
+                        .selected(true)
+                        .render(self.theme, scale),
+                )
+                .child(
+                    NavTab::new("tab_off", "Review")
+                        .badge("3")
+                        .render(self.theme, scale),
+                )
+        }
+    }
+
+    /// Icons and badges are named parts; the selected tab alone is
+    /// underlined with the accent.
+    #[gpui::test]
+    fn nav_tabs_name_their_parts_and_underline_the_selected_tab(cx: &mut gpui::TestAppContext) {
+        let _guard = crate::test_support::lock_visual_test();
+        let theme = AppTheme::gitcomet_dark();
+        let (_view, cx) = cx.add_window_view(|_, _| Tabs { theme });
+        crate::test_support::redraw(cx);
+        assert!(cx.debug_bounds("tab_on_icon").is_some());
+        assert!(cx.debug_bounds("tab_off_icon").is_none());
+        assert!(cx.debug_bounds("tab_off_badge").is_some());
+        assert!(cx.debug_bounds("tab_on_badge").is_none());
+        let borders = |cx: &mut gpui::VisualTestContext, selector| {
+            crate::test_support::painted_control_quads(cx, selector)
+                .into_iter()
+                .map(|(_, border)| border)
+                .collect::<Vec<_>>()
+        };
+        let accent = gpui::Background::from(theme.colors.accent.foreground);
+        assert!(borders(cx, "tab_on").contains(&accent));
+        assert!(!borders(cx, "tab_off").contains(&accent));
+    }
+
+    #[test]
+    fn a_selected_tabs_icon_takes_the_selected_foreground() {
+        let theme = AppTheme::gitcomet_light();
+        assert_ne!(
+            theme.colors.foreground.secondary,
+            theme.colors.interaction.selected_foreground
+        );
+        let tab = NavTab::new("tab", "History").icon("icons/history.svg");
+        assert_eq!(tab.icon_color(theme), theme.colors.foreground.secondary);
+        assert_eq!(
+            tab.selected(true).icon_color(theme),
+            theme.colors.interaction.selected_foreground
+        );
     }
 }

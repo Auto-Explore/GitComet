@@ -1373,15 +1373,14 @@ pub(super) fn set_ui_scale_percent_for_test(
     view: &gpui::Entity<super::super::GitCometView>,
     percent: u32,
 ) {
-    // Apply to the test window through the view first: `set_app_ui_scale_percent`
-    // reaches open windows via `WindowHandle::update`, which silently fails here
-    // because the test window is already borrowed by this `cx.update`, leaving the
-    // window rem size (and thus text scaling) untouched.
+    // Zooms the test window. Applied through the view directly:
+    // `set_window_ui_scale_percent` goes through `WindowHandle::update`, which
+    // fails while this `cx.update` holds the window.
     cx.update(|window, app| {
+        crate::ui_scale::set_window_percent(app, window.window_handle().window_id(), Some(percent));
         view.update(app, |view, cx| {
             view.apply_ui_scale_percent(percent, window, cx);
         });
-        crate::app::set_app_ui_scale_percent(app, percent);
     });
 }
 

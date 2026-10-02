@@ -275,10 +275,7 @@ mod tests {
     #[test]
     fn annotate_tracks_line_numbers_through_hunks() {
         let diff = Diff::from_unified(
-            DiffTarget::WorkingTree {
-                path: PathBuf::from("src/lib.rs"),
-                area: DiffArea::Unstaged,
-            },
+            DiffTarget::working_tree(PathBuf::from("src/lib.rs"), DiffArea::Unstaged),
             "\
 diff --git a/src/lib.rs b/src/lib.rs
 index 1111111..2222222 100644

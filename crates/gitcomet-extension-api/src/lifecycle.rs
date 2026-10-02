@@ -1,13 +1,14 @@
 //! Window-owned extension state and explicit invalidation.
 
 use crate::{RepositoryHandle, WindowHost};
-use gitcomet_ui_kit::gpui::{App, Window};
+use gitcomet_ui_kit::gpui::App;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// The shell surfaces whose descriptor providers may change.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum Slot {
     Gate,
     RepositoryView,
@@ -23,7 +24,7 @@ pub enum Slot {
 }
 
 impl Slot {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: &'static [Self] = &[
         Self::Gate,
         Self::RepositoryView,
         Self::Navigation,
@@ -112,10 +113,6 @@ pub enum ShellEvent {
 pub trait WindowExtension: 'static {
     fn on_event(&mut self, _event: &ShellEvent, _host: &WindowHost, _cx: &mut App) {}
 }
-
-/// A window factory registered without making the extension itself mutable.
-pub type WindowExtensionFactory =
-    std::rc::Rc<dyn Fn(WindowHost, &mut Window, &mut App) -> Option<Box<dyn WindowExtension>>>;
 
 #[cfg(test)]
 mod tests {

@@ -44,6 +44,7 @@ mod submodule_section;
 mod tag;
 mod terminal;
 mod text_format_menu;
+mod ui_scale_picker;
 mod web_link;
 mod worktree;
 mod worktree_section;
@@ -833,6 +834,7 @@ impl PopoverHost {
                 Some(text_format_menu::model(self, *section, cx))
             }
             PopoverKind::ChangeTrackingSettings => Some(change_tracking_settings::model(self)),
+            PopoverKind::UiScalePicker => Some(ui_scale_picker::model(cx)),
             PopoverKind::InteractiveRebaseActionMenu {
                 ix,
                 can_squash,
@@ -1529,6 +1531,12 @@ impl PopoverHost {
                     let _ = root_view.update(cx, |root, cx| {
                         root.set_change_tracking_view(view, cx);
                     });
+                });
+            }
+            ContextMenuAction::SetUiScale { percent } => {
+                let window_id = window.window_handle().window_id();
+                cx.defer(move |cx| {
+                    crate::app::set_window_ui_scale_percent(cx, window_id, percent);
                 });
             }
             ContextMenuAction::SetCommitAmendEnabled { enabled } => {

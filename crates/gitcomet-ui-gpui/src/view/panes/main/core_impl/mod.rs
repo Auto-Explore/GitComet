@@ -319,6 +319,32 @@ impl MainPaneView {
         hasher.finish()
     }
 
+    /// Escape and the diff's close button. In the focused mergetool they
+    /// cancel the tool through the guards a window close runs, so an
+    /// extension or a running operation can still ask first.
+    pub(in crate::view) fn close_diff_or_cancel(
+        &mut self,
+        repo_id: RepoId,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.store.policy.close_button
+            || clear_diff_selection_action(self.view_mode)
+                != ClearDiffSelectionAction::ExitFocusedMergetool
+        {
+            self.clear_diff_selection_or_exit(repo_id, cx);
+            return;
+        }
+        self.set_focused_mergetool_exit_code(FOCUSED_MERGETOOL_EXIT_CANCELED);
+        let handle = window.window_handle();
+        // Deferred: the guards update the root view, which may be updating us.
+        cx.defer(move |cx| {
+            let _ = handle.update(cx, |_, window, cx| {
+                crate::app::close_window_or_warn(window, cx)
+            });
+        });
+    }
+
     pub(in crate::view) fn clear_diff_selection_or_exit(
         &mut self,
         repo_id: RepoId,
@@ -2165,8 +2191,19 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         let _ = self.root_view.update(cx, move |root, cx| {
-            root.submodule_diff_bootstrap =
-                Some(SubmoduleDiffBootstrap::new(submodule_repo_path, target));
+            let bootstrap = SubmoduleDiffBootstrap::new(submodule_repo_path, target);
+            // A submodule's own tab is a repository entry like any other.
+            if let gitcomet_extension_api::GateDecision::Deny { reason } =
+                crate::view::extension_host::entry_decision(
+                    &bootstrap.repo_path,
+                    gitcomet_extension_api::EntryOrigin::Chooser,
+                    cx,
+                )
+            {
+                root.show_repository_entry_denial(reason, cx);
+                return;
+            }
+            root.submodule_diff_bootstrap = Some(bootstrap);
             root.drive_submodule_diff_bootstrap();
             cx.notify();
         });
