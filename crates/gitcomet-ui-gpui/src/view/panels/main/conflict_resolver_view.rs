@@ -35,34 +35,6 @@ fn conflict_output_post_layout_scroll_y(gutter_y: Pixels, editor_max_y: Pixels) 
     gutter_y.clamp(-editor_max_y.max(px(0.0)), px(0.0))
 }
 
-#[cfg(test)]
-mod wheel_tests {
-    use super::*;
-
-    #[test]
-    fn resolved_output_vertical_wheel_keeps_gutter_sync_render_scheduled() {
-        assert!(conflict_output_wheel_requires_notify(px(-1.0), false));
-        assert!(conflict_output_wheel_requires_notify(px(0.0), true));
-        assert!(!conflict_output_wheel_requires_notify(px(0.0), false));
-    }
-
-    #[test]
-    fn resolved_output_post_layout_scroll_clamps_to_editor_range() {
-        assert_eq!(
-            conflict_output_post_layout_scroll_y(px(-240.0), px(180.0)),
-            px(-180.0)
-        );
-        assert_eq!(
-            conflict_output_post_layout_scroll_y(px(-120.0), px(180.0)),
-            px(-120.0)
-        );
-        assert_eq!(
-            conflict_output_post_layout_scroll_y(px(12.0), px(180.0)),
-            px(0.0)
-        );
-    }
-}
-
 impl MainPaneView {
     /// Toolbar controls for simple conflict strategies (binary, keep/delete,
     /// decision-only): file navigation plus resolved counts.
@@ -2658,5 +2630,33 @@ impl MainPaneView {
                     .child(body),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod wheel_tests {
+    use super::*;
+
+    #[test]
+    fn resolved_output_vertical_wheel_keeps_gutter_sync_render_scheduled() {
+        assert!(conflict_output_wheel_requires_notify(px(-1.0), false));
+        assert!(conflict_output_wheel_requires_notify(px(0.0), true));
+        assert!(!conflict_output_wheel_requires_notify(px(0.0), false));
+    }
+
+    #[test]
+    fn resolved_output_post_layout_scroll_clamps_to_editor_range() {
+        assert_eq!(
+            conflict_output_post_layout_scroll_y(px(-240.0), px(180.0)),
+            px(-180.0)
+        );
+        assert_eq!(
+            conflict_output_post_layout_scroll_y(px(-120.0), px(180.0)),
+            px(-120.0)
+        );
+        assert_eq!(
+            conflict_output_post_layout_scroll_y(px(12.0), px(180.0)),
+            px(0.0)
+        );
     }
 }

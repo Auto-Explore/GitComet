@@ -309,6 +309,10 @@ pub(in crate::view) type BlameTimeRangeCache = Option<(
     Option<(i64, i64)>,
 )>;
 
+/// Test hook that observes the pane before a click worker completes.
+#[cfg(test)]
+pub(in crate::view) type ClickSyntaxCompleteHook = Arc<dyn Fn(&MainPaneView) + Send + Sync>;
+
 #[derive(Clone, Copy, Debug, Default)]
 pub(in crate::view) struct FileImagePreviewAnimationSide {
     pub(in crate::view) image_id: Option<gpui::ImageId>,
@@ -666,7 +670,7 @@ pub(crate) struct MainPaneView {
     /// its in-flight marker and installs or rejects its prepared document.
     #[cfg(test)]
     pub(in crate::view) file_diff_click_syntax_before_complete_hook:
-        Option<Arc<dyn Fn(&MainPaneView) + Send + Sync>>,
+        Option<ClickSyntaxCompleteHook>,
     /// Where each side's content lives when it is a file rather than text in
     /// memory. A source-backed side keeps its text off the heap so a huge diff
     /// can render from per-line slices; the click path reads it back from here

@@ -787,7 +787,7 @@ mod tab_stop_tests {
                     .shape_text(
                         SharedString::from(text),
                         px(12.0),
-                        &[run.clone()],
+                        std::slice::from_ref(&run),
                         Some(px(width)),
                         None,
                     )

@@ -677,19 +677,16 @@ fn sticky_sidebar_pinned_branch_interactions_highlight_only_the_clicked_copy(
     let mut state = fixture(4);
     let repo = &mut Arc::make_mut(&mut state).repos[0];
     repo.history_state.selected_commit = Some(CommitId("a".into()));
-    repo.log = Loadable::Ready(
-        Arc::new(LogPage {
-            commits: vec![Commit {
-                id: CommitId("a".into()),
-                parent_ids: Default::default(),
-                summary: "Pinned branch tip".into(),
-                author: "Test".into(),
-                time: std::time::SystemTime::UNIX_EPOCH,
-            }],
-            next_cursor: None,
-        })
-        .into(),
-    );
+    repo.log = Loadable::Ready(Arc::new(LogPage {
+        commits: vec![Commit {
+            id: CommitId("a".into()),
+            parent_ids: Default::default(),
+            summary: "Pinned branch tip".into(),
+            author: "Test".into(),
+            time: std::time::SystemTime::UNIX_EPOCH,
+        }],
+        next_cursor: None,
+    }));
     let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
     cx.update(|_, app| {
         view.update(app, |view, cx| {
@@ -908,19 +905,16 @@ fn sticky_sidebar_double_click_keeps_the_scrolled_branch_under_the_pointer(
     let mut state = fixture(1_000);
     let repo = &mut Arc::make_mut(&mut state).repos[0];
     repo.history_state.selected_commit = Some(CommitId("a".into()));
-    repo.log = Loadable::Ready(
-        Arc::new(LogPage {
-            commits: vec![Commit {
-                id: CommitId("a".into()),
-                parent_ids: Default::default(),
-                summary: "Branch tip".into(),
-                author: "Test".into(),
-                time: std::time::SystemTime::UNIX_EPOCH,
-            }],
-            next_cursor: None,
-        })
-        .into(),
-    );
+    repo.log = Loadable::Ready(Arc::new(LogPage {
+        commits: vec![Commit {
+            id: CommitId("a".into()),
+            parent_ids: Default::default(),
+            summary: "Branch tip".into(),
+            author: "Test".into(),
+            time: std::time::SystemTime::UNIX_EPOCH,
+        }],
+        next_cursor: None,
+    }));
     let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
     cx.update(|_, app| {
         view.update(app, |view, cx| {

@@ -231,6 +231,8 @@ pub enum AppMode {
 }
 
 /// What the command line asked for.
+// Built once at startup, so boxing the mode would buy nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum CliOutcome {
     /// Run a mode.

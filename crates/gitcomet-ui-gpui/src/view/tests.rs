@@ -292,11 +292,11 @@ mod open_remote_in_browser;
 
 /// A Home window with the given saved workspaces and recent repositories, and
 /// the text-input keys bound so arrows reach the search box.
-fn home_view_with<'a>(
-    cx: &'a mut gpui::TestAppContext,
+fn home_view_with(
+    cx: &mut gpui::TestAppContext,
     workspaces: Vec<gitcomet_state::session::Workspace>,
     recents: Vec<PathBuf>,
-) -> (gpui::Entity<GitCometView>, &'a mut gpui::VisualTestContext) {
+) -> (gpui::Entity<GitCometView>, &mut gpui::VisualTestContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     cx.update(|app| crate::workspaces::initialize_for_test(app, workspaces));
     let (view, cx) =

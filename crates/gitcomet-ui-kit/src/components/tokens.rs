@@ -134,7 +134,8 @@ mod tests {
     /// A density step is only useful if it reaches the controls.
     #[test]
     fn every_density_step_grows_controls_and_headers() {
-        let tokens: [(&str, fn(UiScale) -> gpui::Pixels); 5] = [
+        type Measure = fn(UiScale) -> gpui::Pixels;
+        let tokens: [(&str, Measure); 5] = [
             ("control_height", control_height),
             ("control_height_md", control_height_md),
             ("content_header_height", content_header_height),

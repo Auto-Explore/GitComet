@@ -2049,10 +2049,10 @@ mod lane_coalescing_regressions {
             let lanes: Vec<LanePaint> = (0..len)
                 .map(|_| {
                     let r = xorshift(&mut state);
-                    if r % 5 == 0 {
+                    if r.is_multiple_of(5) {
                         LanePaint::HOLE
                     } else {
-                        LanePaint::lane((r % 6) as u8, r % 3 != 0, r % 4 == 0)
+                        LanePaint::lane((r % 6) as u8, !r.is_multiple_of(3), r.is_multiple_of(4))
                     }
                 })
                 .collect();
@@ -2077,7 +2077,8 @@ mod lane_coalescing_regressions {
                 .map(|_| (xorshift(&mut state) % len.max(1) as u64) as usize)
                 .collect();
             let joins_out_of = |col: usize| joins_out.contains(&col);
-            let connect = (xorshift(&mut state) % 2 == 0)
+            let connect = xorshift(&mut state)
+                .is_multiple_of(2)
                 .then(|| (xorshift(&mut state) % len.max(1) as u64) as usize);
             let selection: Option<u8> = match xorshift(&mut state) % 3 {
                 0 => None,

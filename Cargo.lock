@@ -2420,6 +2420,7 @@ dependencies = [
  "smallvec",
  "syn 3.0.6",
  "tempfile",
+ "winapi-util",
 ]
 
 [[package]]

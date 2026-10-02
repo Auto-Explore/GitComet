@@ -482,7 +482,7 @@ fn invalidate_session_setting_cache() {
 #[cfg(test)]
 thread_local! {
     static TEST_CONFIGURED_SETTING_OVERRIDE: std::cell::RefCell<Option<Option<ExternalCodeEditorSetting>>> =
-        std::cell::RefCell::new(None);
+        const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(not(test))]

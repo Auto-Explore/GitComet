@@ -651,6 +651,26 @@ fn has_or_have(count: usize) -> &'static str {
     if count == 1 { "has" } else { "have" }
 }
 
+fn apply_checkpoint(
+    target: &ApplyChangeTarget,
+    head: Option<gix::ObjectId>,
+    paths: &[PathBuf],
+    staged: &[FileVersion],
+) -> ApplyFileChangeRetry {
+    ApplyFileChangeRetry {
+        target: target.clone(),
+        head: head.map(|id| CommitId(id.to_string().into())),
+        index: paths
+            .iter()
+            .zip(staged)
+            .map(|(path, version)| ApplyFileChangeIndexEntry {
+                path: path.clone(),
+                version: version.map(|(mode, id)| (mode as u16, CommitId(id.to_string().into()))),
+            })
+            .collect(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -677,25 +697,5 @@ mod tests {
         assert_eq!(failure.id(), GitFailureId::CommandFailed);
         assert_eq!(failure.stderr(), stderr);
         assert!(!error.to_string().contains("with conflicts"));
-    }
-}
-
-fn apply_checkpoint(
-    target: &ApplyChangeTarget,
-    head: Option<gix::ObjectId>,
-    paths: &[PathBuf],
-    staged: &[FileVersion],
-) -> ApplyFileChangeRetry {
-    ApplyFileChangeRetry {
-        target: target.clone(),
-        head: head.map(|id| CommitId(id.to_string().into())),
-        index: paths
-            .iter()
-            .zip(staged)
-            .map(|(path, version)| ApplyFileChangeIndexEntry {
-                path: path.clone(),
-                version: version.map(|(mode, id)| (mode as u16, CommitId(id.to_string().into()))),
-            })
-            .collect(),
     }
 }

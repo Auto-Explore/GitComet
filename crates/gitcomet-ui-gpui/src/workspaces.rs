@@ -1270,13 +1270,12 @@ mod tests {
         assert_eq!(restored.height, 700);
     }
 
+    /// Each write the gated sink recorded: its thread and the paths written.
+    type WrittenRx = std::sync::mpsc::Receiver<(std::thread::ThreadId, Vec<PathBuf>)>;
+
     /// A writer whose sink records each write and holds the first one until
     /// `release` is sent, so tests can queue behind an in-progress write.
-    fn gated_writer() -> (
-        Arc<WorkspaceWriter>,
-        std::sync::mpsc::Sender<()>,
-        std::sync::mpsc::Receiver<(std::thread::ThreadId, Vec<PathBuf>)>,
-    ) {
+    fn gated_writer() -> (Arc<WorkspaceWriter>, std::sync::mpsc::Sender<()>, WrittenRx) {
         let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
         let release_rx = Mutex::new(Some(release_rx));
         let (written_tx, written_rx) = std::sync::mpsc::channel();

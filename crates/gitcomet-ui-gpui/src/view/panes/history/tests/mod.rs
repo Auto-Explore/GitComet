@@ -223,14 +223,6 @@ fn log_page(commits: Vec<Commit>, next_cursor: Option<&str>) -> LogPage {
     }
 }
 
-/// The commit-id index the base cache carries agrees with the visible order it
-/// was built from.
-///
-/// Its readers -- the worktree row anchors and the selected lane's colour --
-/// look commits up during layout, and both used to scan the page instead. A
-/// map that disagrees with `visible_indices` would anchor rows on the wrong
-/// commits, so this pins the two together.
-
 /// Branch attributed to each visible row, in row order.
 fn lane_branch_labels(
     commits: Vec<Commit>,

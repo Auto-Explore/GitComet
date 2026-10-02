@@ -347,7 +347,7 @@ impl PatchDiffPagedRowsFixture {
         let language = diff_syntax_language_for_path("src/lib.rs");
 
         // Compute per-provider deep offsets clamped to valid range.
-        let patch_start = start_row.min(rows_provider.len_hint().saturating_sub(window).max(0));
+        let patch_start = start_row.min(rows_provider.len_hint().saturating_sub(window));
         let split_start = split_provider
             .len_hint()
             .saturating_mul(9)

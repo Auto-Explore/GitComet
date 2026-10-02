@@ -111,7 +111,7 @@ impl PickerPromptFrameFixture {
         repo.ref_metadata = Loadable::Ready(Arc::new(build_synthetic_ref_metadata(&repo)));
 
         let mut cx = gpui::TestAppContext::single();
-        let window = cx.add_window(|window, cx| PickerPromptBenchView::new(window, cx));
+        let window = cx.add_window(PickerPromptBenchView::new);
 
         Self {
             window,

@@ -172,7 +172,7 @@ mod tests {
                 assert_eq!(image.size(0), dimensions, "incorrect size: {path}");
                 let pixels = image.as_bytes(0).expect("rendered SVG frame");
                 assert!(
-                    pixels.chunks_exact(4).any(|pixel| pixel[3] != 0),
+                    pixels.as_chunks::<4>().0.iter().any(|pixel| pixel[3] != 0),
                     "{path} renders blank at {edge}px"
                 );
             }

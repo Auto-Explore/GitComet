@@ -4028,7 +4028,7 @@ fn appearance_theme_tiles_switch_main_windows_and_explain_workspace_overrides(
     };
     click(&mut settings_cx, "settings_window_theme_gitcomet_light");
     let light = AppTheme::gitcomet_light();
-    let _ = main_view.update(&mut settings_cx, |view, _cx| {
+    main_view.update(&mut settings_cx, |view, _cx| {
         assert_eq!(
             view.theme_mode,
             ThemeMode::Named(crate::theme::DEFAULT_LIGHT_THEME_KEY.to_string())
@@ -4601,7 +4601,7 @@ fn settings_window_renders_every_category_within_a_bounded_stack() {
                     .expect("settings window should be open")
             });
             let view = window.root(&mut app).unwrap();
-            let cx = &mut gpui::VisualTestContext::from_window(*window.deref(), &mut app);
+            let cx = &mut gpui::VisualTestContext::from_window(*window.deref(), &app);
             for &category in SettingsCategory::ALL {
                 view.update(cx, |view, cx| {
                     view.expanded_section = None;
