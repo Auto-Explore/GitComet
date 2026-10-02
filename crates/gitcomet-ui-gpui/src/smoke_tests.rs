@@ -1053,7 +1053,7 @@ fn text_input_context_menu_grows_wider_with_ui_zoom(cx: &mut gpui::TestAppContex
 
     cx.update(|window, app| {
         view.update(app, |_this, cx| {
-            crate::ui_scale::set_current(cx, 200);
+            crate::ui_scale::set_default(cx, 200);
         });
         crate::ui_scale::apply_to_window(window, 200);
         let _ = window.draw(app);
@@ -4488,7 +4488,7 @@ fn the_title_bar_and_repository_tabs_hold_their_size_at_every_ui_scale(
     for percent in [80, 200] {
         cx.update(|window, app| {
             view.update(app, |this, cx| {
-                crate::ui_scale::set_current(cx, percent);
+                crate::ui_scale::set_default(cx, percent);
                 this.apply_ui_scale_percent(percent, window, cx);
             });
         });

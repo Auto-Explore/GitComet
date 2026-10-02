@@ -510,6 +510,8 @@ pub(crate) enum PopoverKind {
         section: TextFormatMenuSection,
     },
     ChangeTrackingSettings,
+    /// The bottom bar's zoom menu for this window.
+    UiScalePicker,
     RebaseOntoConfirm {
         repo_id: RepoId,
         onto: String,

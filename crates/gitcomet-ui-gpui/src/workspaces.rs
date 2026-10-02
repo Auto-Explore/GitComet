@@ -721,7 +721,7 @@ pub(crate) fn rebase_window_frame(
     }
 }
 
-/// Title-bar colours offered for a workspace, `None` being the theme default.
+/// Title-bar colours offered for a workspace; `None` leaves the title bar untinted.
 pub(crate) const WORKSPACE_COLORS: [(Option<session::WorkspaceColor>, &str); 15] = [
     (None, "Default"),
     (Some(session::WorkspaceColor::Gray), "Gray"),

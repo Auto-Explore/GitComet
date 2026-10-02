@@ -118,6 +118,10 @@ fn markers_follow_an_in_place_external_edit(
 
     let repo = gitcomet_git_gix::GixBackend.open(root).expect("open repo");
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    // The test dispatches the watcher's message itself. A live watcher reloads
+    // too (Windows: late NTFS `.git` timestamps ~250 ms in), and a reload that
+    // reads a.rs mid-write lands first and satisfies the wait: markers [0.0].
+    store.disable_repo_monitors_for_test();
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store.clone(), events, None, window, cx)
     });
@@ -229,6 +233,8 @@ fn markers_are_current_after_editing_reloading_and_reopening_the_diff(
 
     let repo = gitcomet_git_gix::GixBackend.open(root).expect("open repo");
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    // Only the reloads the test dispatches; see the helper above.
+    store.disable_repo_monitors_for_test();
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store.clone(), events, None, window, cx)
     });

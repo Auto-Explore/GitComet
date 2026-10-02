@@ -178,10 +178,10 @@ pub(super) fn model_with_update_checks_disabled(
         ("app_menu_zoom_in", "Zoom In", "=", AppMenuAction::ZoomIn),
         ("app_menu_zoom_out", "Zoom Out", "-", AppMenuAction::ZoomOut),
         (
-            "app_menu_actual_size",
-            "Actual Size",
+            "app_menu_reset_zoom",
+            "Reset Zoom",
             "0",
-            AppMenuAction::ActualSize,
+            AppMenuAction::ResetZoom,
         ),
     ] {
         push_entry(
@@ -260,7 +260,7 @@ pub(super) fn activate(
             this.close_popover_and_restore_focus(window, cx);
             cx.defer(crate::view::open_settings_window);
         }
-        AppMenuAction::ZoomIn | AppMenuAction::ZoomOut | AppMenuAction::ActualSize => {
+        AppMenuAction::ZoomIn | AppMenuAction::ZoomOut | AppMenuAction::ResetZoom => {
             this.close_popover_and_restore_focus(window, cx);
             let action: Box<dyn gpui::Action> = match action {
                 AppMenuAction::ZoomIn => Box::new(crate::app::IncreaseUiScale),

@@ -95,7 +95,7 @@ fn secondary_action_label(density: ActionBarDensity, label: &'static str) -> &'s
 
 pub(in super::super) fn action_bar_height<C>(cx: &mut C) -> Pixels
 where
-    C: gpui::BorrowAppContext,
+    C: std::borrow::BorrowMut<gpui::App>,
 {
     crate::ui_scale::UiScale::current(cx).row_height(ACTION_BAR_HEIGHT_PX, 44.0)
 }

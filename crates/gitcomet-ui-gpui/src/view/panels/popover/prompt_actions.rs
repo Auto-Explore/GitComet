@@ -327,6 +327,7 @@ impl PopoverHost {
             PopoverKind::ChangeTrackingSettings => {
                 self.context_menu_view(PopoverKind::ChangeTrackingSettings, cx)
             }
+            PopoverKind::UiScalePicker => self.context_menu_view(PopoverKind::UiScalePicker, cx),
             PopoverKind::PullPicker => self.context_menu_view(PopoverKind::PullPicker, cx),
             PopoverKind::PushPicker => self.context_menu_view(PopoverKind::PushPicker, cx),
             PopoverKind::CommitOptionsMenu { repo_id } => {

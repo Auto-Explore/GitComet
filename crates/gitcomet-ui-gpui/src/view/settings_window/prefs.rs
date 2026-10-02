@@ -22,7 +22,7 @@ impl SettingsWindowView {
             repo_sidebar_collapsed_items: None,
             repo_sidebar_pinned_branches: None,
             theme_mode: Some(self.theme_mode.key().to_string()),
-            ui_scale_percent: Some(self.ui_scale_percent),
+            ui_scale_percent: Some(self.default_ui_scale_percent),
             window_controls_mode: Some(self.window_controls_mode.key().to_string()),
             browser_open_target: Some(self.browser_open_target.key().to_string()),
             ui_density: Some(self.appearance_metrics.density.key().to_string()),
@@ -515,17 +515,20 @@ impl SettingsWindowView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let percent = ui_scale::set_current(cx, percent).percent;
-        if self.ui_scale_percent == percent {
+        let percent = ui_scale::set_default(cx, percent).percent;
+        if self.default_ui_scale_percent == percent {
             return;
         }
 
+        self.default_ui_scale_percent = percent;
         self.expanded_section = None;
-        self.apply_ui_scale_percent(percent, window, cx);
+        if ui_scale::window_override(cx, window.window_handle().window_id()).is_none() {
+            self.apply_ui_scale_percent(percent, window, cx);
+        }
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, root_window, cx| {
-            view.apply_ui_scale_percent(percent, root_window, cx);
-        });
+        // Other windows without their own zoom follow; deferred, since this
+        // window is mid-update.
+        cx.defer(crate::app::apply_ui_scale_to_windows);
         cx.notify();
     }
 

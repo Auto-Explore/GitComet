@@ -134,27 +134,29 @@ pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
             }
         });
     });
-    cx.on_action(|_: &IncreaseUiScale, cx| {
-        cx.defer(|cx| {
-            let next = ui_scale::step_up(current_or_default_ui_scale_percent(cx));
-            set_app_ui_scale_percent(cx, next);
-        });
-    });
-    cx.on_action(|_: &DecreaseUiScale, cx| {
-        cx.defer(|cx| {
-            let next = ui_scale::step_down(current_or_default_ui_scale_percent(cx));
-            set_app_ui_scale_percent(cx, next);
-        });
-    });
+    // Zoom is per window: each step acts on the window the shortcut came from.
+    cx.on_action(|_: &IncreaseUiScale, cx| step_window_ui_scale(cx, ui_scale::step_up));
+    cx.on_action(|_: &DecreaseUiScale, cx| step_window_ui_scale(cx, ui_scale::step_down));
     cx.on_action(|_: &ResetUiScale, cx| {
-        cx.defer(|cx| {
-            set_app_ui_scale_percent(cx, ui_scale::DEFAULT_UI_SCALE_PERCENT);
-        });
+        if let Some(window_id) = zoom_target_window(cx) {
+            cx.defer(move |cx| set_window_ui_scale_percent(cx, window_id, None));
+        }
     });
+    cx.on_window_closed(ui_scale::forget_window).detach();
     cx.on_action(|_: &Hide, cx| cx.defer(|cx| cx.hide()));
     cx.on_action(|_: &HideOthers, cx| cx.defer(|cx| cx.hide_other_apps()));
     cx.on_action(|_: &ShowAll, cx| cx.defer(|cx| cx.unhide_other_apps()));
     cx.on_action(|_: &Quit, cx| cx.defer(quit_app_or_warn));
+}
+
+fn step_window_ui_scale(cx: &mut App, step: fn(u32) -> u32) {
+    let Some(window_id) = zoom_target_window(cx) else {
+        return;
+    };
+    cx.defer(move |cx| {
+        let next = step(ui_scale::percent_for_window(cx, window_id));
+        set_window_ui_scale_percent(cx, window_id, Some(next));
+    });
 }
 
 pub(super) fn install_global_diff_shortcut_fallback(cx: &mut App) {

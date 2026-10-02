@@ -41,7 +41,7 @@ fn toolbar_menu_highlights_end_on_escape_and_outside_click(cx: &mut gpui::TestAp
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     apply_state(cx, &view, app_state_with_active_repo(toolbar_repo()));
     cx.update(|_, app| crate::app::bind_text_input_keys_for_test(app));
-    for selector in ["push_menu", "pull_menu", "stash"] {
+    for selector in ["push_menu", "pull_menu", "stash", "bottom_status_bar_zoom"] {
         for escape in [true, false] {
             leave_controls(cx);
             let resting = paint(cx, selector);
