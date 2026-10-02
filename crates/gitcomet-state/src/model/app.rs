@@ -131,6 +131,10 @@ impl Default for FileBrowserSettings {
 
 #[derive(Clone, Debug, Default)]
 pub struct AppState {
+    pub filesystem: FilesystemState,
+    /// Recent failed opens remain observable after their provisional tab is removed.
+    pub repository_open_failures:
+        std::collections::BTreeMap<PathBuf, (gitcomet_core::filesystem::OperationId, String)>,
     pub repos: Vec<RepoState>,
     pub active_repo: Option<RepoId>,
     /// Unacknowledged open failures, shared by snapshots until they change.
@@ -193,6 +197,18 @@ impl AppState {
             SignatureFormats::NONE
         }
     }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct FilesystemState {
+    pub pending: std::collections::BTreeMap<
+        gitcomet_core::filesystem::OperationId,
+        gitcomet_core::filesystem::Request,
+    >,
+    pub progress: Option<gitcomet_core::filesystem::Progress>,
+    pub completed: std::collections::VecDeque<gitcomet_core::filesystem::OperationResult>,
+    pub undo_available: bool,
+    pub redo_available: bool,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

@@ -1844,6 +1844,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::SaveWorktreeFile {
                 repo_id,
                 path: PathBuf::from("nested/new.txt"),
+                expected_contents: None,
                 contents: "content".to_string().into(),
                 stage: true,
                 completion: None,

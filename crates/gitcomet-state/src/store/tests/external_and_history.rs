@@ -4089,6 +4089,7 @@ fn state_with_loaded_file_browser(sidebar_mode: SidebarMode) -> (AppState, RepoI
         path: Arc::new(PathBuf::from("src")),
         kind: gitcomet_core::domain::FileEntryKind::Directory,
         depth: 0,
+        ignored: false,
     }]));
     state.repos[0]
         .file_browser
@@ -4226,6 +4227,7 @@ fn a_burst_of_worktree_changes_coalesces_into_one_walk_at_a_time() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+            cancellation: None,
             repo_id,
             source: FileSource::WorkingDirectory,
             result: Ok(Vec::new()),
@@ -4274,6 +4276,7 @@ fn a_reply_for_an_abandoned_source_still_releases_the_lane() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+            cancellation: None,
             repo_id,
             source: FileSource::WorkingDirectory,
             result: Ok(Vec::new()),
@@ -4535,6 +4538,7 @@ fn repo_command_finished_bumps_local_worktree_write_rev_only_for_checkout_writer
             repo_id: RepoId(1),
             path: PathBuf::from("a.txt"),
             contents: "new\n".to_string().into(),
+            expected_contents: None,
             stage: false,
             completion: None,
         },

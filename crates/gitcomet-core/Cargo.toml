@@ -18,9 +18,12 @@ benchmarks = []
 chardetng = { workspace = true }
 encoding_rs = { workspace = true }
 faster-hex = { workspace = true }
+filetime = { workspace = true }
 fnv = { workspace = true }
 gix-quote = { workspace = true }
+jiff = { workspace = true }
 md-5 = { workspace = true }
+sha2 = { workspace = true }
 memchr = { workspace = true }
 percent-encoding = { workspace = true }
 process-wrap = { workspace = true }
@@ -33,6 +36,12 @@ strsim = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["fs"] }
+
 [dev-dependencies]
 serde_json = { workspace = true }
 tempfile = { workspace = true }
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+gitcomet-filesystem-native = { path = "../gitcomet-filesystem-native" }

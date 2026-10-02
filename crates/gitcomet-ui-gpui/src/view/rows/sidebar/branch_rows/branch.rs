@@ -158,6 +158,9 @@ impl SidebarPaneView {
             .pr(ctx.trailing_pad())
             .bg(row_surface)
             .interactive_row(row_style, row_state)
+            .when(branch_selected, |row| {
+                row.row_accent(theme.colors.accent.foreground)
+            })
             .text_color(branch_text_color)
             .child(ctx.tree_toggle_slot(None).when(
                 surface == SidebarRowSurface::Pins && depth == 0,

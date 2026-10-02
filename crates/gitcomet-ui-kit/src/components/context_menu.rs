@@ -466,6 +466,10 @@ fn context_menu_icon_color(
     if label == "Close" && icon_path == Some("icons/repo_tab_close.svg") {
         return theme.colors.accent.foreground;
     }
+    // Moving to the trash can be undone; only permanent deletion reads red.
+    if label == "Trash" {
+        return theme.colors.accent.foreground;
+    }
 
     // Semantic-ish mapping for common actions.
     if label.starts_with("Force push")
@@ -547,6 +551,13 @@ pub fn context_menu_icon_path(icon: &str, label: &str) -> Option<&'static str> {
         "icons/disk.svg" => Some("icons/disk.svg"),
         "icons/generic_close.svg" => Some("icons/generic_close.svg"),
         "icons/git_commit.svg" => Some("icons/git_commit.svg"),
+        "icons/file_plus.svg" => Some("icons/file_plus.svg"),
+        "icons/folder_plus.svg" => Some("icons/folder_plus.svg"),
+        "icons/scissors.svg" => Some("icons/scissors.svg"),
+        "icons/clipboard_paste.svg" => Some("icons/clipboard_paste.svg"),
+        "icons/copy_plus.svg" => Some("icons/copy_plus.svg"),
+        "icons/redo.svg" => Some("icons/redo.svg"),
+        "icons/eye_off.svg" => Some("icons/eye_off.svg"),
         _ => None,
     };
     if by_icon.is_some() {
@@ -943,6 +954,13 @@ mod tests {
             "icons/disk.svg",
             "icons/generic_close.svg",
             "icons/git_commit.svg",
+            "icons/file_plus.svg",
+            "icons/folder_plus.svg",
+            "icons/scissors.svg",
+            "icons/clipboard_paste.svg",
+            "icons/copy_plus.svg",
+            "icons/redo.svg",
+            "icons/eye_off.svg",
         ];
 
         for path in paths {
@@ -1001,6 +1019,23 @@ mod tests {
         assert_eq!(
             context_menu_icon_color(theme, false, "Discard changes", Some("icons/warning.svg")),
             theme.colors.status.warning.foreground
+        );
+        // The explorer's reversible Trash stays neutral; permanent deletion is red.
+        assert_eq!(
+            context_menu_icon_color(theme, false, "Trash", Some("icons/trash.svg")),
+            theme.colors.accent.foreground
+        );
+        assert_eq!(
+            context_menu_icon_color(theme, false, "Delete permanently…", Some("icons/trash.svg")),
+            theme.colors.status.danger.foreground
+        );
+        assert_eq!(
+            context_menu_icon_color(theme, false, "Cut", Some("icons/scissors.svg")),
+            theme.colors.accent.foreground
+        );
+        assert_eq!(
+            context_menu_icon_color(theme, false, "Add to .gitignore", Some("icons/eye_off.svg")),
+            theme.colors.accent.foreground
         );
     }
 
@@ -1062,6 +1097,13 @@ mod tests {
             "icons/disk.svg",
             "icons/generic_close.svg",
             "icons/git_commit.svg",
+            "icons/file_plus.svg",
+            "icons/folder_plus.svg",
+            "icons/scissors.svg",
+            "icons/clipboard_paste.svg",
+            "icons/copy_plus.svg",
+            "icons/redo.svg",
+            "icons/eye_off.svg",
         ];
         for path in paths {
             assert_eq!(

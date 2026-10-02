@@ -1398,6 +1398,7 @@ fn a_linked_worktree_pane_offers_and_runs_no_staging_or_editing(cx: &mut gpui::T
                 repo_id,
                 path: "a.rs".into(),
                 contents: "overwritten\n".into(),
+                expected_contents: None,
                 stage: false,
                 completion: Some(saved_tx),
             },

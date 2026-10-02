@@ -30,6 +30,11 @@ use super::RepoId;
 use super::executor::TaskExecutor;
 use super::worker_channel::StoreWorkerSender;
 
+/// Ceiling on how often a running filesystem operation may publish progress.
+/// Fast enough to look continuous, slow enough that the per-message AppState
+/// copy stays off the critical path.
+const FILESYSTEM_PROGRESS_TICK: std::time::Duration = std::time::Duration::from_millis(50);
+
 use load_tokens::repo_load_context;
 
 #[derive(Clone, Copy)]
@@ -137,7 +142,8 @@ fn selected_inline_submodule_diff(
 fn effect_requires_available_git(effect: &Effect) -> bool {
     !matches!(
         effect,
-        Effect::PersistSession { .. }
+        Effect::Filesystem(_)
+            | Effect::PersistSession { .. }
             | Effect::PersistRecentRepo { .. }
             | Effect::PersistRepoHistoryMode { .. }
             | Effect::PersistRepoHistoryModesBatch { .. }
@@ -183,6 +189,37 @@ pub(super) fn schedule_effect(
     }
 
     match effect {
+        Effect::Filesystem(request) => {
+            super::executor::filesystem_executor().spawn(move || {
+                // The engine ticks once per item and every dispatch deep-copies
+                // AppState, so an unthrottled thousand-file drop spends longer
+                // cloning state than moving files -- and starves the progress
+                // bar the ticks exist to drive. Only the newest tick is ever
+                // read, so dropping the ones in between loses nothing; the last
+                // one is held back and flushed so the bar ends where it should.
+                let mut last_sent: Option<std::time::Instant> = None;
+                let mut withheld: Option<gitcomet_core::filesystem::Progress> = None;
+                let result = gitcomet_core::filesystem::global()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .execute(request, |progress| {
+                        let now = std::time::Instant::now();
+                        if last_sent
+                            .is_none_or(|sent| now.duration_since(sent) >= FILESYSTEM_PROGRESS_TICK)
+                        {
+                            last_sent = Some(now);
+                            withheld = None;
+                            util::send_or_log(&msg_tx, Msg::FilesystemProgress(progress));
+                        } else {
+                            withheld = Some(progress);
+                        }
+                    });
+                if let Some(progress) = withheld {
+                    util::send_or_log(&msg_tx, Msg::FilesystemProgress(progress));
+                }
+                util::send_or_log(&msg_tx, Msg::FilesystemFinished(result));
+            });
+        }
         Effect::PersistSession { repo_id, action } => {
             let Some(session_file_path) = session::default_session_file_path_for_effect() else {
                 return;
@@ -569,14 +606,29 @@ pub(super) fn schedule_effect(
             repo_id,
             path,
             contents,
+            expected_contents,
             stage,
             completion,
         } => repo_commands::schedule_save_worktree_file(
-            executor, repos, msg_tx, repo_id, path, contents, stage, completion,
+            super::executor::filesystem_executor(),
+            repos,
+            msg_tx,
+            repo_id,
+            repo_commands::SaveWorktreeFileRequest {
+                path,
+                contents,
+                expected_contents,
+                stage,
+                completion,
+            },
         ),
         Effect::AppendGitignorePatterns { repo_id, patterns } => {
             repo_commands::schedule_append_gitignore_patterns(
-                executor, repos, msg_tx, repo_id, patterns,
+                super::executor::filesystem_executor(),
+                repos,
+                msg_tx,
+                repo_id,
+                patterns,
             )
         }
         Effect::RunLargeFileCommand {
@@ -622,7 +674,11 @@ pub(super) fn schedule_effect(
         }
         Effect::AppendGitattributesRule { repo_id, rule } => {
             repo_commands::schedule_append_gitattributes_rule(
-                executor, repos, msg_tx, repo_id, rule,
+                super::executor::filesystem_executor(),
+                repos,
+                msg_tx,
+                repo_id,
+                rule,
             )
         }
         Effect::LoadFileHistory {
@@ -723,9 +779,21 @@ pub(super) fn schedule_effect(
             }
         }
         Effect::LoadFileBrowser { repo_id, source } => {
-            if let Some((msg_tx, cancellation)) =
-                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
-            {
+            if let Some((msg_tx, cancellation)) = load_tokens::file_browser_load_context(
+                thread_state,
+                repo_task_tokens,
+                msg_tx,
+                repo_id,
+            ) {
+                let options = {
+                    let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
+                    state
+                        .repos
+                        .iter()
+                        .find(|r| r.id == repo_id)
+                        .map(|r| repo_load::explorer_listing::Options::from(&r.file_browser))
+                        .unwrap_or_default()
+                };
                 repo_load::schedule_load_file_browser(
                     repo_load_executor,
                     repos,
@@ -733,6 +801,7 @@ pub(super) fn schedule_effect(
                     repo_id,
                     source,
                     cancellation,
+                    options,
                 );
             }
         }

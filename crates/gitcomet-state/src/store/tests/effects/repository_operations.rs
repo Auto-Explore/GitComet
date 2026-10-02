@@ -399,7 +399,8 @@ fn file_save_receipts_wait_for_execution_and_report_success_or_failure() {
     let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
     for (path, succeeds) in [("file.txt", true), ("../outside.txt", false)] {
         let (release, wait) = std::sync::mpsc::channel();
-        executor.spawn(move || {
+        // Saves run on the shared filesystem queue, not the repo executor.
+        super::super::executor::filesystem_executor().spawn(move || {
             let _ = wait.recv();
         });
         let (completion, received) = smol::channel::bounded(1);
@@ -414,6 +415,7 @@ fn file_save_receipts_wait_for_execution_and_report_success_or_failure() {
                 repo_id,
                 path: PathBuf::from(path),
                 contents: "saved contents".to_string().into(),
+                expected_contents: None,
                 stage: false,
                 completion: Some(completion),
             },
@@ -793,6 +795,7 @@ fn save_worktree_file_effect_writes_and_can_stage() {
     let _ = std::fs::create_dir_all(&base);
 
     let rel = PathBuf::from("dir/out.txt");
+    std::fs::create_dir(base.join("dir")).unwrap();
     let contents = "hello\nworld\n";
 
     let repo_id = RepoId(1);
@@ -822,6 +825,7 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         Effect::SaveWorktreeFile {
             repo_id,
             path: rel.clone(),
+            expected_contents: None,
             contents: contents.to_string().into(),
             stage: true,
             completion: None,
@@ -881,6 +885,7 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         Effect::SaveWorktreeFile {
             repo_id,
             path: escaped_path,
+            expected_contents: None,
             contents: "escape".to_string().into(),
             stage: false,
             completion: None,

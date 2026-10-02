@@ -15,19 +15,51 @@ pub(super) use std::path::Path;
 pub(super) use std::sync::Arc;
 pub(super) use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// The effect-layer tests exercise real writes and their receipts. Holding the
-/// receipt here lets the UI test deterministically cover queued/slow writes.
-pub(super) fn hold_editor_save_receipt(
-    pane: &mut MainPaneView,
-    repo_id: gitcomet_state::model::RepoId,
-    path: &Path,
-) -> smol::channel::Sender<bool> {
-    let (send, received) = smol::channel::bounded(1);
-    pane.file_editor_pending_saves
-        .get_mut(&(repo_id, path.to_path_buf()))
-        .expect("saving must retain a completion receipt")
-        .completions = vec![received];
-    send
+/// Holds the shared filesystem worker, so editor saves queued meanwhile stay
+/// in flight until [`HeldEditorSaves::release`]. The UI thread must not read
+/// through the editor while held: that read takes the same lock.
+pub(super) struct HeldEditorSaves(
+    Option<std::sync::MutexGuard<'static, gitcomet_core::filesystem::Filesystem>>,
+);
+
+pub(super) fn hold_editor_saves() -> HeldEditorSaves {
+    HeldEditorSaves(Some(
+        gitcomet_core::filesystem::global()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()),
+    ))
+}
+
+impl HeldEditorSaves {
+    /// Let the queued saves run. To make them fail, change the file on disk
+    /// first: the worker then refuses the save as a conflict.
+    pub(super) fn release(mut self) {
+        self.0.take();
+    }
+}
+
+/// Filesystem effects run on the real shared worker. Pump the results into the
+/// pane without replacing the synthetic repository the fixture pushed.
+pub(super) fn finish_editor_saves(
+    view: &gpui::Entity<GitCometView>,
+    cx: &mut gpui::VisualTestContext,
+) {
+    for _ in 0..200 {
+        cx.run_until_parked();
+        let drained = cx.update(|_, app| {
+            let main = view.read(app).main_pane.clone();
+            main.update(app, |pane, cx| {
+                let snapshot = pane.store.snapshot();
+                pane.process_file_editor_saves(&snapshot, cx);
+                pane.file_editor_saves.is_empty()
+            })
+        });
+        if drained {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("filesystem save did not finish");
 }
 
 pub(super) fn simulate_counted_click(

@@ -20,12 +20,18 @@ pub struct PendingFileBrowserReopen {
 
 #[derive(Clone, Debug)]
 pub struct FileBrowserState {
+    pub selection: crate::explorer::Selection,
+    pub show_hidden: bool,
+    pub show_ignored: bool,
+    pub revealed_paths: FxHashSet<PathBuf>,
     /// Entered by "Start file browsing" and left by "Exit file browsing".
     /// Selecting the working-tree row changes the source without exiting.
     pub active: bool,
     pub source: FileSource,
     pub entries: Loadable<Arc<Vec<FileEntry>>>,
     pub expanded_dirs: FxHashSet<Arc<PathBuf>>,
+    /// Subtrees to expand after their ignored descendants have been loaded.
+    pub pending_recursive_expansions: FxHashSet<PathBuf>,
     pub search_query: String,
     pub file_browser_rev: u64,
     /// The rows on screen are not the current truth: the worktree moved under
@@ -42,10 +48,15 @@ pub struct FileBrowserState {
 impl Default for FileBrowserState {
     fn default() -> Self {
         Self {
+            selection: crate::explorer::Selection::default(),
+            show_hidden: true,
+            show_ignored: false,
+            revealed_paths: FxHashSet::default(),
             active: false,
             source: FileSource::default(),
             entries: Loadable::NotLoaded,
             expanded_dirs: FxHashSet::default(),
+            pending_recursive_expansions: FxHashSet::default(),
             search_query: String::new(),
             file_browser_rev: 0,
             stale: false,
@@ -56,6 +67,11 @@ impl Default for FileBrowserState {
 }
 
 impl FileBrowserState {
+    pub(crate) fn cancel_pending_expansions(&mut self, path: &std::path::Path) {
+        self.pending_recursive_expansions
+            .retain(|root| !root.starts_with(path) && !path.starts_with(root));
+    }
+
     pub(crate) fn set_active(&mut self, active: bool) {
         if self.active != active {
             self.active = active;

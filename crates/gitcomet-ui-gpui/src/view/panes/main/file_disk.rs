@@ -343,10 +343,8 @@ impl MainPaneView {
     fn file_editor_holds(&self, repo_id: RepoId, path: &Path) -> bool {
         self.is_file_editor_active()
             && !self.file_editor_loading
-            && self
-                .file_editor_key
-                .as_ref()
-                .is_some_and(|(id, editing)| *id == repo_id && editing == path)
+            && self.file_editor_key.is_some()
+            && self.file_editor_key == self.document_identity(repo_id, path)
     }
 
     /// The surface showing bytes straight off the worktree, with the absolute
@@ -518,7 +516,12 @@ impl MainPaneView {
         let Some((repo_id, path, _)) = self.file_disk_target() else {
             return;
         };
-        if self.file_editor_error.is_none() || !self.file_editor_holds(repo_id, &path) {
+        // A failed *save* leaves the unsaved text on screen under its error;
+        // re-reading would replace it with the disk's.
+        if self.file_editor_error.is_none()
+            || self.file_editor_dirty
+            || !self.file_editor_holds(repo_id, &path)
+        {
             return;
         }
         let Some(revs) = self.current_file_disk_revs() else {
@@ -675,6 +678,9 @@ impl MainPaneView {
         match notice.surface {
             DiskSurface::Editor => {
                 self.file_editor_disk.adopt(notice.seen);
+                // Keeping the edits accepts the disk as what the next save
+                // replaces; the save's version check would refuse otherwise.
+                self.refresh_file_editor_disk_version(cx);
                 // Auto-save held off while the question was open.
                 if self.auto_save_file_edits && self.file_editor_dirty {
                     self.schedule_file_editor_autosave(cx);

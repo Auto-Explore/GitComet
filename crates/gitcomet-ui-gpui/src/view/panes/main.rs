@@ -11,12 +11,16 @@ pub(in crate::view) mod diff_search;
 mod diff_stage;
 mod diff_text;
 mod file_disk;
-mod file_editor;
-mod helpers;
+pub(in crate::view) mod file_editor;
+pub(in crate::view) mod helpers;
 mod hosted_binding;
 mod interactive_rebase;
 mod markdown_state;
 mod preview;
+pub(in crate::view) use preview::{
+    TextDecodeRequest, preflight_worktree_file_for_editing, read_worktree_file_for_editing,
+    read_worktree_file_version_for_editing,
+};
 pub(in crate::view) mod submodule_summary;
 mod surface;
 mod text_format;

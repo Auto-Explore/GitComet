@@ -38,6 +38,7 @@ pub(crate) type ReorderRepoTabsEffects =
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OpenRepoMode {
     Standard,
+    DocumentBackground,
     ProvisionalExternalDrop,
 }
 
@@ -387,6 +388,26 @@ pub(super) fn open_repo(
     open_repo_with_mode(repos, id_alloc, state, path, OpenRepoMode::Standard)
 }
 
+pub(super) fn open_document_repository(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    id_alloc: &AtomicU64,
+    state: &mut AppState,
+    path: PathBuf,
+    activate: bool,
+) -> Vec<Effect> {
+    open_repo_with_mode(
+        repos,
+        id_alloc,
+        state,
+        path,
+        if activate {
+            OpenRepoMode::Standard
+        } else {
+            OpenRepoMode::DocumentBackground
+        },
+    )
+}
+
 pub(super) fn open_repo_from_external_drop(
     repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
     id_alloc: &AtomicU64,
@@ -411,12 +432,20 @@ fn open_repo_with_mode(
 ) -> Vec<Effect> {
     let now = SystemTime::now();
     let path = normalize_repo_path(path);
+    state.repository_open_failures.remove(&path);
     if let Some((repo_id, existing_is_provisional_drop)) = state
         .repos
         .iter()
         .find(|r| r.spec.workdir == path)
         .map(|r| (r.id, r.is_provisional_external_drop_open()))
     {
+        if mode == OpenRepoMode::DocumentBackground {
+            let mut effects = vec![];
+            if let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                append_open_repo_effect_if_not_loaded(repo, &mut effects);
+            }
+            return effects;
+        }
         // Re-opening an already open repository should still refresh primary state, so stale
         // status/diff data gets reconciled immediately.
         let mut effects = set_active_repo(repos, state, repo_id);
@@ -447,7 +476,9 @@ fn open_repo_with_mode(
 
     state.repos.push({
         let mut repo_state = match mode {
-            OpenRepoMode::Standard => RepoState::new_opening(repo_id, spec.clone()),
+            OpenRepoMode::Standard | OpenRepoMode::DocumentBackground => {
+                RepoState::new_opening(repo_id, spec.clone())
+            }
             OpenRepoMode::ProvisionalExternalDrop => {
                 RepoState::new_external_drop_opening(repo_id, spec.clone(), previous_active)
             }
@@ -461,14 +492,16 @@ fn open_repo_with_mode(
         repo_state.last_active_at = Some(now);
         repo_state
     });
-    state.active_repo = Some(repo_id);
     let mut effects = Vec::new();
-    append_cancel_loads_for_deactivated_repo(state, previous_active, &mut effects);
+    if mode != OpenRepoMode::DocumentBackground {
+        state.active_repo = Some(repo_id);
+        append_cancel_loads_for_deactivated_repo(state, previous_active, &mut effects);
+    }
     effects.push(Effect::OpenRepo {
         repo_id,
         path: spec.workdir.clone(),
     });
-    if mode == OpenRepoMode::Standard {
+    if mode != OpenRepoMode::ProvisionalExternalDrop {
         effects.push(persist_recent_repo_effect(
             Some(repo_id),
             spec.workdir.clone(),
@@ -1479,6 +1512,16 @@ pub(super) fn repo_opened_err(
     let spec = RepoSpec {
         workdir: normalize_repo_path(spec.workdir),
     };
+    if state.repository_open_failures.len() >= 50 {
+        state.repository_open_failures.pop_first();
+    }
+    state.repository_open_failures.insert(
+        spec.workdir.clone(),
+        (
+            gitcomet_core::filesystem::OperationId::allocate(),
+            error.to_string(),
+        ),
+    );
     state.repo_open_failure_revision += 1;
     Arc::make_mut(&mut state.repo_open_failures)
         .insert(spec.workdir.clone(), state.repo_open_failure_revision);

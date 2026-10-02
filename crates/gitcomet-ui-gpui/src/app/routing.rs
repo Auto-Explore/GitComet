@@ -17,20 +17,46 @@ pub(super) fn register_macos_open_request_handler(
 
             let backend = Arc::clone(&backend);
             cx.update(move |cx| {
-                let paths = paths
-                    .into_iter()
-                    .filter(|path| {
-                        repository_entry_allowed(
-                            cx,
-                            path,
-                            gitcomet_extension_api::EntryOrigin::CommandLine,
-                            None,
-                        )
-                    })
-                    .collect();
-                open_repositories_in_existing_or_new_window(cx, backend, paths);
+                open_files_and_repositories(cx, backend, paths);
             });
         }
+    })
+    .detach();
+}
+
+#[cfg(target_os = "macos")]
+fn open_files_and_repositories(cx: &mut App, backend: Arc<dyn GitBackend>, paths: Vec<PathBuf>) {
+    cx.spawn(async move |cx| {
+        let (directories, files): (Vec<_>, Vec<_>) =
+            smol::unblock(move || paths.into_iter().partition(|path| path.is_dir())).await;
+        cx.update(move |cx| {
+            let directories: Vec<_> = directories
+                .into_iter()
+                .filter(|path| {
+                    repository_entry_allowed(
+                        cx,
+                        path,
+                        gitcomet_extension_api::EntryOrigin::CommandLine,
+                        None,
+                    )
+                })
+                .collect();
+            if !directories.is_empty() {
+                open_repositories_in_existing_or_new_window(cx, backend.clone(), directories);
+            }
+            if files.is_empty() {
+                return;
+            }
+            if let Some(entry) = find_normal_gitcomet_window(cx) {
+                let _ = entry
+                    .view
+                    .update(cx, |view, cx| view.open_document_paths(files, cx));
+            } else {
+                let handle = open_gitcomet_window(cx, backend, &normal_launch_config(None, None));
+                let _ = handle.update(cx, |view, _, cx| view.open_document_paths(files, cx));
+                activate_gitcomet_window(cx, handle.into());
+            }
+        });
     })
     .detach();
 }

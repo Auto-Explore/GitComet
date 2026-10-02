@@ -532,7 +532,12 @@ fn auto_save_close_waits_only_for_dispatched_writes(cx: &mut gpui::TestAppContex
                         view.request_quit_unsaved_file_edits_prompt(cx)
                     });
                     assert_eq!(view.pending_unsaved_file_edits_flush.is_some(), writable);
-                    assert_eq!(view.main_pane.read(cx).file_editor_is_dirty(), !writable);
+                    // Unsaved until the worker confirms the write.
+                    assert!(view.main_pane.read(cx).file_editor_is_dirty());
+                    assert_eq!(
+                        !view.main_pane.read(cx).file_editor_saves.is_empty(),
+                        writable
+                    );
                     if writable {
                         assert!(view.pending_unsaved_file_edits_prompt.is_none());
                         // The test checks scheduling; don't actually close its window.
@@ -548,7 +553,16 @@ fn auto_save_close_waits_only_for_dispatched_writes(cx: &mut gpui::TestAppContex
                     }
                 });
             });
-            assert_eq!(std::fs::read(workdir.path().join(FILE)).unwrap(), original);
+            if writable {
+                // The queued write lands in the file's own encoding.
+                finish_editor_saves(&view, cx);
+                assert_eq!(
+                    std::fs::read(workdir.path().join(FILE)).unwrap(),
+                    b"header caf\xe9\n"
+                );
+            } else {
+                assert_eq!(std::fs::read(workdir.path().join(FILE)).unwrap(), original);
+            }
         }
     }
 }
@@ -604,9 +618,13 @@ fn save_all_encoding_failure_cancels_quit_and_preserves_stashed_edits(
                 "failed saves must not retry quit"
             );
             assert!(view.pending_unsaved_file_edits_prompt.is_none());
-            let stash = &view.main_pane.read(cx).file_editor_stash;
-            let edit = stash
-                .get(&(repo_id, FILE.into()))
+            let pane = view.main_pane.read(cx);
+            let key = pane
+                .document_identity(repo_id, Path::new(FILE))
+                .expect("open repository");
+            let edit = pane
+                .file_editor_stash
+                .get(&key)
                 .expect("retain recovery text");
             assert_eq!(edit.text.as_ref(), "Ācafé\n");
             assert!(edit.is_dirty());
@@ -812,14 +830,12 @@ async fn restored_edits_resume_encoding_refresh_after_attributes_arrive(
             assert_eq!(pane.file_editor_input.read(cx).text(), "edit café\n");
             assert!(pane.file_editor_is_dirty());
             assert!(pane.file_editor_decode_key.is_some());
-            pane.save_file_editor_buffer(cx);
-            assert!(!pane.file_editor_is_dirty());
-            // No backend repository writes here; report the write as landed.
-            hold_editor_save_receipt(pane, repo_id, Path::new(FILE))
-                .try_send(true)
-                .unwrap();
+            assert!(pane.save_file_editor_buffer(cx));
         });
     });
+    // The save writes the edit back in the encoding it was read in.
+    finish_editor_saves(&view, cx);
+    cx.update(|_, app| assert!(!view.read(app).main_pane.read(app).file_editor_is_dirty()));
     show(
         cx,
         &view,
@@ -828,7 +844,7 @@ async fn restored_edits_resume_encoding_refresh_after_attributes_arrive(
     );
     cx.update(|_, app| {
         let pane = view.read(app).main_pane.read(app);
-        assert_eq!(pane.file_editor_input.read(app).text(), "cafИ\n");
+        assert_eq!(pane.file_editor_input.read(app).text(), "edit cafИ\n");
         assert_eq!(
             pane.file_editor_text_format.unwrap().format.encoding,
             koi8()
@@ -1119,12 +1135,17 @@ async fn save_with_encoding_converts_on_the_next_save(cx: &mut gpui::TestAppCont
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.main_pane
-                .update(cx, |pane, cx| pane.save_file_editor_buffer(cx));
+                .update(cx, |pane, cx| assert!(pane.save_file_editor_buffer(cx)));
         });
     });
+    finish_editor_saves(&view, cx);
     cx.update(|_window, app| {
         assert!(!view.read(app).main_pane.read(app).file_editor_is_dirty());
     });
+    assert_eq!(
+        std::fs::read(workdir.join(FILE)).unwrap(),
+        "café\n".as_bytes()
+    );
     let _ = std::fs::remove_dir_all(&workdir);
 }
 
@@ -1510,6 +1531,7 @@ async fn the_error_dialog_goes_to_the_character_and_saves_as_utf8(cx: &mut gpui:
 
     open_dialog(cx);
     click(cx, "error_details_action_0");
+    finish_editor_saves(&view, cx);
     cx.update(|_window, app| {
         let root = view.read(app);
         let pane = root.main_pane.read(app);
@@ -1738,9 +1760,10 @@ fn review_converted_save_keeps_decode_key_while_attributes_load(cx: &mut gpui::T
     let _guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = tempfile::tempdir().unwrap();
-    std::fs::write(workdir.path().join(FILE), b"caf\xe9\n").unwrap();
     let repo_id = RepoId(9695);
     for attribute_encoding in [None, Some(EncodingAttr::from_label("windows-1252"))] {
+        // Each pass's save really lands, so start every pass from the same bytes.
+        std::fs::write(workdir.path().join(FILE), b"caf\xe9\n").unwrap();
         let saved_override = attribute_encoding.as_ref().map(|_| TextEncoding::UTF_8);
         let attributes = Arc::new(TextAttributes {
             encoding: attribute_encoding,
@@ -1775,7 +1798,8 @@ fn review_converted_save_keeps_decode_key_while_attributes_load(cx: &mut gpui::T
             ),
             true,
         );
-        let write = cx.update(|_, app| {
+        let write = hold_editor_saves();
+        cx.update(|_, app| {
             view.read(app).main_pane.clone().update(app, |pane, cx| {
                 let expected = pane
                     .file_editor_decode_key
@@ -1785,9 +1809,8 @@ fn review_converted_save_keeps_decode_key_while_attributes_load(cx: &mut gpui::T
                 assert_eq!(
                     pane.file_editor_decode_key,
                     Some(expected),
-                    "the optimistic save must keep the read identity until the write lands"
+                    "a queued save must keep the read identity until the write lands"
                 );
-                hold_editor_save_receipt(pane, repo_id, Path::new(FILE))
             })
         });
         // The store has accepted the write, but disk still contains the old
@@ -1813,6 +1836,7 @@ fn review_converted_save_keeps_decode_key_while_attributes_load(cx: &mut gpui::T
             );
         });
         // The write lands, so the next pass starts from a saved buffer.
-        write.try_send(true).unwrap();
+        write.release();
+        finish_editor_saves(&view, cx);
     }
 }

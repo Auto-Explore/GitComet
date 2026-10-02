@@ -517,6 +517,9 @@ impl PopoverHost {
             PopoverKind::FileBrowserFolderMenu { repo_id, path } => {
                 self.context_menu_view(PopoverKind::FileBrowserFolderMenu { repo_id, path }, cx)
             }
+            PopoverKind::ExplorerSettingsMenu { repo_id } => {
+                self.context_menu_view(PopoverKind::ExplorerSettingsMenu { repo_id }, cx)
+            }
             kind @ PopoverKind::FileListFolderMenu { .. } => self.context_menu_view(kind, cx),
             PopoverKind::BranchGroupMenu {
                 repo_id,
@@ -717,6 +720,15 @@ impl PopoverHost {
             }
             PopoverKind::UnsavedFileEditsConfirm(prompt) => {
                 unsaved_file_edits_confirm::panel(self, prompt, cx)
+            }
+            PopoverKind::FilesystemConflict(prompt) => {
+                filesystem_conflict_prompt::panel(self, prompt, cx)
+            }
+            PopoverKind::DeletePermanentlyConfirm(prompt) => {
+                delete_permanently_confirm::panel(self, prompt, cx)
+            }
+            PopoverKind::FilesystemUnsavedEditsConfirm(prompt) => {
+                filesystem_unsaved_edits_confirm::panel(self, prompt, cx)
             }
             PopoverKind::CloseGuardConfirm(prompt) => close_guard_confirm::panel(self, prompt, cx),
         };

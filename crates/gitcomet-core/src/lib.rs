@@ -8,6 +8,7 @@ pub mod domain;
 pub mod environment;
 pub mod error;
 pub mod file_diff;
+pub mod filesystem;
 pub mod fs_utils;
 pub mod git_operation;
 pub mod git_ops_trace;

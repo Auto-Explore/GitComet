@@ -781,7 +781,17 @@ pub(crate) struct MainPaneView {
     pub(in crate::view::panes::main) _file_editor_input_subscription: gpui::Subscription,
     /// Which repo/path the input currently holds, so a target change is one
     /// comparison rather than a reload every frame.
-    pub(in crate::view) file_editor_key: Option<(RepoId, std::path::PathBuf)>,
+    pub(in crate::view) file_editor_key: Option<gitcomet_core::filesystem::DocumentIdentity>,
+    pub(crate) filesystem_pauses:
+        std::collections::BTreeSet<gitcomet_core::filesystem::OperationId>,
+    pub(in crate::view) file_editor_disk_versions: FxHashMap<
+        gitcomet_core::filesystem::DocumentIdentity,
+        gitcomet_core::filesystem::DiskVersion,
+    >,
+    pub(in crate::view) file_editor_saves: std::collections::BTreeMap<
+        gitcomet_core::filesystem::OperationId,
+        (gitcomet_core::filesystem::DocumentIdentity, u64),
+    >,
     pub(in crate::view) file_editor_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) file_editor_loading: bool,
     /// Generation of the last disk read, so a superseded read is dropped.
@@ -830,11 +840,10 @@ pub(crate) struct MainPaneView {
     /// makes leaving a file and coming back non-destructive with auto-save off.
     /// Keyed by repo *and* path: two repo tabs can hold the same relative path,
     /// and one must not restore over the other's buffer.
-    pub(in crate::view) file_editor_stash:
-        FxHashMap<(RepoId, std::path::PathBuf), super::super::file_editor::StashedFileEdit>,
-    pub(in crate::view) file_editor_pending_saves:
-        FxHashMap<(RepoId, std::path::PathBuf), super::super::file_editor::PendingFileEditorSave>,
-    pub(in crate::view) file_editor_failed_saves: FxHashSet<(RepoId, std::path::PathBuf)>,
+    pub(in crate::view) file_editor_stash: FxHashMap<
+        gitcomet_core::filesystem::DocumentIdentity,
+        super::super::file_editor::StashedFileEdit,
+    >,
     /// Bumped whenever the set of files with unsaved edits changes.
     ///
     /// That set lives here rather than in the store, so nothing outside this

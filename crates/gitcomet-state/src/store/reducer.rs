@@ -8,6 +8,7 @@ mod diff_selection;
 mod diff_session;
 mod effects;
 mod external_and_history;
+mod filesystem;
 mod git_hook_activity;
 mod git_operations;
 mod history_authors;
@@ -685,6 +686,118 @@ fn reduce_inner(
     }
 
     match msg {
+        Msg::OpenDocumentRepository { path, activate } => {
+            repo_management::open_document_repository(repos, id_alloc, state, path, activate)
+        }
+        Msg::RememberDocumentInRepository { repo_id, path } => {
+            if let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                repo.navigation
+                    .view_history
+                    .record(crate::model::ViewHistoryEntry {
+                        source: gitcomet_core::domain::FileSource::WorkingDirectory,
+                        path,
+                        old_path: None,
+                    });
+            }
+            vec![]
+        }
+        Msg::FilesystemRequest(request) => {
+            if state.filesystem.pending.contains_key(&request.id) {
+                return vec![];
+            }
+            state.filesystem.pending.insert(request.id, request.clone());
+            vec![Effect::Filesystem(request)]
+        }
+        Msg::FilesystemProgress(progress) => {
+            if state.filesystem.pending.contains_key(&progress.id) {
+                state.filesystem.progress = Some(progress);
+            }
+            vec![]
+        }
+        Msg::AcknowledgeFilesystemResults(ids) => {
+            state.filesystem.completed.retain(|r| !ids.contains(&r.id));
+            vec![]
+        }
+        Msg::FilesystemJournalUpdated { undo, redo } => {
+            state.filesystem.undo_available = undo;
+            state.filesystem.redo_available = redo;
+            vec![]
+        }
+        Msg::FilesystemFinished(result) => {
+            state.filesystem.pending.remove(&result.id);
+            if state
+                .filesystem
+                .progress
+                .as_ref()
+                .is_some_and(|p| p.id == result.id)
+            {
+                state.filesystem.progress = None;
+            }
+            state.filesystem.undo_available = result.undo_available;
+            state.filesystem.redo_available = result.redo_available;
+            let effects = filesystem::paths_changed(state, &result.changes);
+            state.filesystem.completed.push_back(result);
+            effects
+        }
+        Msg::FilesystemPathsChanged(changes) => filesystem::paths_changed(state, &changes),
+        Msg::SelectExplorerPath {
+            repo_id,
+            path,
+            visible,
+            toggle,
+            range,
+            context_menu,
+        } => {
+            if let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                repo.file_browser
+                    .selection
+                    .click(path, &visible, toggle, range, context_menu);
+                repo.file_browser.bump_rev();
+            }
+            vec![]
+        }
+        Msg::FocusExplorerPath { repo_id, path } => {
+            if let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                repo.file_browser.selection.focused = Some(path);
+                repo.file_browser.bump_rev();
+            }
+            Vec::new()
+        }
+        Msg::SelectAllExplorerPaths { repo_id, visible } => {
+            if let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                repo.file_browser.selection.select_all(&visible);
+                repo.file_browser.bump_rev();
+            }
+            vec![]
+        }
+        Msg::SetExplorerVisibility {
+            repo_id,
+            hidden,
+            ignored,
+        } => {
+            if let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                repo.file_browser.show_hidden = hidden;
+                repo.file_browser.show_ignored = ignored;
+                if !ignored {
+                    repo.file_browser.pending_recursive_expansions.clear();
+                }
+                // Keyboard actions must not reach rows that just disappeared.
+                if !hidden {
+                    let revealed = &repo.file_browser.revealed_paths;
+                    repo.file_browser.selection.retain(|path| {
+                        !crate::explorer::is_hidden_path(path)
+                            || revealed.iter().any(|shown| shown.starts_with(path))
+                    });
+                }
+                repo.file_browser.stale = true;
+                repo.file_browser.bump_rev();
+                return vec![Effect::LoadFileBrowser {
+                    repo_id,
+                    source: repo.file_browser.source.clone(),
+                }];
+            }
+            vec![]
+        }
         Msg::OpenRepo(path) => repo_management::open_repo(repos, id_alloc, state, path),
         Msg::OpenRepoFromExternalDrop(path) => {
             repo_management::open_repo_from_external_drop(repos, id_alloc, state, path)
@@ -1350,11 +1463,35 @@ fn reduce_inner(
             repo_id,
             path,
             contents,
+            expected_contents,
             stage,
             completion,
         } => {
+            let expected_contents = expected_contents.or_else(|| {
+                state.repos.iter().find(|r| r.id == repo_id).and_then(|r| {
+                    match &r.conflict_state.conflict_file {
+                        crate::model::Loadable::Ready(Some(file))
+                            if file.path.as_path() == path =>
+                        {
+                            file.current_bytes.clone().or_else(|| {
+                                file.current
+                                    .as_ref()
+                                    .map(|text| Arc::<[u8]>::from(text.as_bytes()))
+                            })
+                        }
+                        _ => None,
+                    }
+                })
+            });
             begin_local_action(state, repo_id);
-            actions_emit_effects::save_worktree_file(repo_id, path, contents, stage, completion)
+            actions_emit_effects::save_worktree_file(
+                repo_id,
+                path,
+                contents,
+                expected_contents,
+                stage,
+                completion,
+            )
         }
         Msg::AppendGitignorePatterns { repo_id, patterns } => {
             begin_local_action(state, repo_id);
@@ -2038,10 +2175,17 @@ fn reduce_inner(
             effects::submodules_loaded(state, repo_id, result)
         }
         Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+            cancellation,
             repo_id,
             source,
             result,
-        }) => effects::file_browser_loaded(repos, state, repo_id, source, result),
+        }) => {
+            if cancellation.is_some_and(|token| token.is_cancelled()) {
+                Vec::new()
+            } else {
+                effects::file_browser_loaded(repos, state, repo_id, source, result)
+            }
+        }
         Msg::Internal(crate::msg::InternalMsg::SubmoduleAddTrustChecked {
             repo_id,
             url,

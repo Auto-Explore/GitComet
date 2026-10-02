@@ -54,7 +54,8 @@ pub mod test_support;
 
 pub use minimap::{MINIMAP_COLUMN_WIDTH_PX, MinimapColumn};
 pub use scrollbar::{
-    Scrollbar, ScrollbarAxis, ScrollbarDriver, ScrollbarMarker, ScrollbarMarkerKind,
+    SCROLLBAR_GUTTER_PX, Scrollbar, ScrollbarAxis, ScrollbarDriver, ScrollbarMarker,
+    ScrollbarMarkerKind,
 };
 #[cfg(feature = "benchmarks")]
 pub use scrollbar::{ThumbMetrics, compute_vertical_click_offset, vertical_thumb_metrics};

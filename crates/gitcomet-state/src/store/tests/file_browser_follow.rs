@@ -7,6 +7,226 @@ use std::sync::atomic::AtomicU64;
 
 type Repos = FxHashMap<RepoId, Arc<dyn GitRepository>>;
 
+#[test]
+fn opening_a_background_document_preserves_the_active_repository_and_its_loads() {
+    let (mut repos, ids, mut state, repo_id) = ready_state(SidebarMode::Files);
+    let effects = reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::OpenDocumentRepository {
+            path: PathBuf::from("/tmp/gitcomet-another-document-repo"),
+            activate: false,
+        },
+    );
+    assert_eq!(state.active_repo, Some(repo_id));
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::CancelRepoLoads { .. }))
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::OpenRepo { .. }))
+    );
+    // Opened workdirs are stored normalized; `/tmp/repo` has no drive on Windows.
+    let same = crate::store::reducer::normalize_repo_path(state.repos[0].spec.workdir.clone());
+    state.repos[0].spec.workdir = same.clone();
+    let effects = reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::OpenDocumentRepository {
+            path: same,
+            activate: false,
+        },
+    );
+    assert!(effects.is_empty());
+    assert_eq!(state.active_repo, Some(repo_id));
+}
+
+#[test]
+fn a_superseded_explorer_reply_cannot_replace_current_rows() {
+    let (mut repos, ids, mut state, repo_id) = ready_state(SidebarMode::Files);
+    let cancellation = gitcomet_core::services::CancellationToken::new();
+    cancellation.cancel();
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+            cancellation: Some(cancellation),
+            repo_id,
+            source: FileSource::WorkingDirectory,
+            result: Ok(vec![dir_entry("stale-ignored-subtree")]),
+        }),
+    );
+    let Loadable::Ready(entries) = &state.repos[0].file_browser.entries else {
+        panic!("listing changed");
+    };
+    assert_eq!(entries[0].path.as_path(), Path::new("src"));
+}
+
+#[test]
+fn focusing_an_explorer_row_preserves_selection_and_range_anchor() {
+    let (mut repos, ids, mut state, repo_id) = ready_state(SidebarMode::Files);
+    let paths: Vec<_> = ["a", "b", "c"].into_iter().map(PathBuf::from).collect();
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::SelectExplorerPath {
+            repo_id,
+            path: paths[0].clone(),
+            visible: paths.clone(),
+            toggle: false,
+            range: false,
+            context_menu: false,
+        },
+    );
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::FocusExplorerPath {
+            repo_id,
+            path: paths[2].clone(),
+        },
+    );
+    let selection = &state.repos[0].file_browser.selection;
+    assert_eq!(selection.focused.as_ref(), Some(&paths[2]));
+    assert_eq!(selection.anchor.as_ref(), Some(&paths[0]));
+    assert_eq!(
+        selection.paths.iter().cloned().collect::<Vec<_>>(),
+        vec![paths[0].clone()]
+    );
+}
+
+#[test]
+fn hiding_dot_files_drops_them_from_the_selection_unless_revealed() {
+    let (mut repos, ids, mut state, repo_id) = ready_state(SidebarMode::Files);
+    let paths: Vec<_> = [".env", ".github/ci.yml", "src"]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    let file_browser = &mut state.repos[0].file_browser;
+    file_browser.selection.paths = paths.iter().cloned().collect();
+    file_browser.selection.focused = Some(paths[0].clone());
+    file_browser
+        .revealed_paths
+        .insert(PathBuf::from(".github/ci.yml"));
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::SetExplorerVisibility {
+            repo_id,
+            hidden: false,
+            ignored: false,
+        },
+    );
+    let selection = &state.repos[0].file_browser.selection;
+    assert_eq!(
+        selection.paths,
+        [PathBuf::from(".github/ci.yml"), PathBuf::from("src")]
+            .into_iter()
+            .collect()
+    );
+    assert_eq!(selection.focused, None, "focus on a hidden row goes too");
+}
+
+#[test]
+fn a_complete_listing_drops_selected_paths_that_are_gone() {
+    let (mut repos, ids, mut state, repo_id) = ready_state(SidebarMode::Files);
+    state.repos[0].file_browser.selection.paths = ["src", "ignored.log"]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+            cancellation: None,
+            repo_id,
+            source: FileSource::WorkingDirectory,
+            result: Ok(vec![dir_entry("src")]),
+        }),
+    );
+    assert_eq!(
+        state.repos[0].file_browser.selection.paths,
+        [PathBuf::from("src")].into_iter().collect()
+    );
+}
+
+#[test]
+fn file_repository_discovery_honors_nested_repositories_and_linked_worktrees() {
+    let directory = tempfile::tempdir().unwrap();
+    let outer = directory.path().join("outer");
+    let nested = outer.join("nested");
+    let linked = directory.path().join("linked");
+    fn git(directory: &Path, arguments: &[&std::ffi::OsStr]) {
+        let result = std::process::Command::new("git")
+            .arg("-C")
+            .arg(directory)
+            .args([
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    std::fs::create_dir_all(&nested).unwrap();
+    git(&outer, &["init".as_ref()]);
+    git(&nested, &["init".as_ref()]);
+    git(
+        &outer,
+        &[
+            "commit".as_ref(),
+            "--allow-empty".as_ref(),
+            "-m".as_ref(),
+            "initial".as_ref(),
+        ],
+    );
+    git(
+        &outer,
+        &[
+            "worktree".as_ref(),
+            "add".as_ref(),
+            "-b".as_ref(),
+            "linked-test".as_ref(),
+            linked.as_os_str(),
+        ],
+    );
+    let (store, _) = AppStore::new_test(Arc::new(gitcomet_git_gix::GixBackend));
+    for root in [&outer, &nested, &linked] {
+        let file = root.join("document.txt");
+        std::fs::write(&file, "contents").unwrap();
+        assert_eq!(
+            store
+                .discover_file_repository(&file)
+                .unwrap_or_else(|error| panic!("discover {}: {error:?}", file.display())),
+            Some(gitcomet_core::path_utils::canonicalize_or_original(
+                root.to_path_buf()
+            ))
+        );
+    }
+    let standalone = directory.path().join("outside.txt");
+    std::fs::write(&standalone, "contents").unwrap();
+    assert_eq!(store.discover_file_repository(&standalone).unwrap(), None);
+}
+
 fn commit(n: u8) -> CommitId {
     CommitId(format!("{n:0>40}").into())
 }
@@ -17,6 +237,7 @@ fn dir_entry(path: &str) -> FileEntry {
         path: Arc::new(PathBuf::from(path)),
         kind: FileEntryKind::Directory,
         depth: 0,
+        ignored: false,
     }
 }
 
@@ -86,6 +307,7 @@ fn deliver_listing(
         id_alloc,
         state,
         Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+            cancellation: None,
             repo_id,
             source,
             result: Ok(vec![dir_entry("src")]),
@@ -690,6 +912,7 @@ fn following_reopens_the_file_at_the_latest_selection_and_closes_it_when_missing
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+            cancellation: None,
             repo_id,
             source: FileSource::Commit(latest.clone()),
             result: Ok(vec![
@@ -699,6 +922,7 @@ fn following_reopens_the_file_at_the_latest_selection_and_closes_it_when_missing
                     path: Arc::new(path.clone()),
                     kind: FileEntryKind::File,
                     depth: 1,
+                    ignored: false,
                 },
             ]),
         }),

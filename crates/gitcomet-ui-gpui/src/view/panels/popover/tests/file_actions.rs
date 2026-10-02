@@ -1421,6 +1421,17 @@ fn file_browser_folder_menu_model(
     cx: &mut gpui::TestAppContext,
     configure: impl FnOnce(&mut RepoState),
 ) -> ContextMenuModel {
+    file_browser_menu_model(cx, "src", true, |state| configure(&mut state.repos[0]))
+}
+
+/// The file-browser menu for `path` (`""` is the listing's root) over the
+/// `src/` + `src/a.rs` fixture; `configure` adjusts the state before it is built.
+fn file_browser_menu_model(
+    cx: &mut gpui::TestAppContext,
+    path: &str,
+    is_dir: bool,
+    configure: impl FnOnce(&mut AppState),
+) -> ContextMenuModel {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1445,21 +1456,24 @@ fn file_browser_folder_menu_model(
                     path: Arc::new(std::path::PathBuf::from("src")),
                     kind: gitcomet_core::domain::FileEntryKind::Directory,
                     depth: 0,
+                    ignored: false,
                 },
                 gitcomet_core::domain::FileEntry {
                     name: "a.rs".to_string(),
                     path: Arc::new(std::path::PathBuf::from("src/a.rs")),
                     kind: gitcomet_core::domain::FileEntryKind::File,
                     depth: 1,
+                    ignored: false,
                 },
             ]));
-            configure(&mut repo);
 
-            let state = Arc::new(AppState {
+            let mut state = AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
                 ..AppState::test_default()
-            });
+            };
+            configure(&mut state);
+            let state = Arc::new(state);
             this.state = Arc::clone(&state);
             this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
@@ -1467,20 +1481,257 @@ fn file_browser_folder_menu_model(
         });
     });
 
+    let path = std::path::PathBuf::from(path);
+    let kind = if is_dir {
+        PopoverKind::FileBrowserFolderMenu { repo_id, path }
+    } else {
+        PopoverKind::FileBrowserFileMenu { repo_id, path }
+    };
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.popover_host.update(cx, |host, cx| {
-                host.context_menu_model(
-                    &PopoverKind::FileBrowserFolderMenu {
-                        repo_id,
-                        path: std::path::PathBuf::from("src"),
-                    },
-                    cx,
-                )
-            })
+            this.popover_host
+                .update(cx, |host, cx| host.context_menu_model(&kind, cx))
         })
-        .expect("expected file browser folder context menu model")
+        .expect("expected a file browser context menu model")
     })
+}
+
+/// Entry labels in menu order, with `—` for each separator.
+fn menu_outline(model: &ContextMenuModel) -> Vec<String> {
+    model
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            ContextMenuItem::Entry { label, .. } => Some(label.to_string()),
+            ContextMenuItem::Separator => Some("—".to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[gpui::test]
+fn file_browser_file_menu_groups_working_tree_actions_in_order(cx: &mut gpui::TestAppContext) {
+    let model = file_browser_menu_model(cx, "src/a.rs", false, |_state| {});
+
+    assert_eq!(
+        menu_outline(&model),
+        [
+            "Open",
+            "Edit file",
+            "—",
+            "New file",
+            "New folder",
+            "—",
+            "Cut",
+            "Copy",
+            "Paste",
+            "Duplicate",
+            "—",
+            "Rename…",
+            "Add to .gitignore",
+            "—",
+            "Open file",
+            "Open file location",
+            "File history",
+            "Copy absolute path",
+            "Copy relative path",
+            "—",
+            "Trash",
+            "Delete permanently…",
+            "—",
+            "Undo",
+            "Redo",
+        ]
+    );
+}
+
+#[gpui::test]
+fn file_browser_folder_menu_groups_working_tree_actions_in_order(cx: &mut gpui::TestAppContext) {
+    let _external_editor_guard = crate::external_editor::configured_setting_override_test_guard();
+    crate::external_editor::set_configured_setting_override(None);
+    let model = file_browser_menu_model(cx, "src", true, |_state| {});
+
+    assert_eq!(
+        menu_outline(&model),
+        [
+            "Expand",
+            "Expand all under here",
+            "Collapse all under here",
+            "—",
+            "New file",
+            "New folder",
+            "—",
+            "Cut",
+            "Copy",
+            "Paste",
+            "Duplicate",
+            "—",
+            "Rename…",
+            "Add to .gitignore",
+            "—",
+            "Open folder location",
+            "Copy absolute path",
+            "Copy relative path",
+            "—",
+            "Trash",
+            "Delete permanently…",
+            "—",
+            "Undo",
+            "Redo",
+        ]
+    );
+}
+
+/// The root (empty space below the rows) can only receive new items and
+/// pastes; its tree toggles and relative path would do nothing.
+#[gpui::test]
+fn file_browser_root_menu_offers_create_paste_locations_and_history_only(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _external_editor_guard = crate::external_editor::configured_setting_override_test_guard();
+    crate::external_editor::set_configured_setting_override(None);
+    let model = file_browser_menu_model(cx, "", true, |_state| {});
+
+    assert_eq!(
+        menu_outline(&model),
+        [
+            "New file",
+            "New folder",
+            "—",
+            "Paste",
+            "—",
+            "Open folder location",
+            "Copy absolute path",
+            "—",
+            "Undo",
+            "Redo",
+        ]
+    );
+}
+
+#[gpui::test]
+fn file_browser_file_menu_for_a_commit_source_has_no_explorer_groups(
+    cx: &mut gpui::TestAppContext,
+) {
+    let model = file_browser_menu_model(cx, "src/a.rs", false, |state| {
+        state.repos[0].file_browser.source =
+            gitcomet_core::domain::FileSource::Commit(CommitId("abc123".into()));
+    });
+
+    assert_eq!(
+        menu_outline(&model),
+        [
+            "Open",
+            "Edit file",
+            "—",
+            "File history",
+            "Copy absolute path",
+            "Copy relative path",
+        ]
+    );
+}
+
+#[gpui::test]
+fn explorer_entries_carry_icons_and_platform_shortcuts(cx: &mut gpui::TestAppContext) {
+    use crate::view::shortcut_labels::{Shortcut, secondary_shortcut};
+
+    let model = file_browser_menu_model(cx, "src/a.rs", false, |_state| {});
+    let entry = |label: &str| {
+        model
+            .items
+            .iter()
+            .find_map(|item| match item {
+                ContextMenuItem::Entry {
+                    label: entry_label,
+                    icon,
+                    shortcut,
+                    ..
+                } if entry_label.as_ref() == label => Some((icon.clone(), shortcut.clone())),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("expected `{label}` context menu entry"))
+    };
+    let redo = Shortcut::Platform {
+        macos: "Cmd+Shift+Z",
+        other: "Ctrl+Y",
+    }
+    .label();
+    let expected: [(&str, &str, Option<String>); 13] = [
+        ("New file", "icons/file_plus.svg", None),
+        ("New folder", "icons/folder_plus.svg", None),
+        ("Cut", "icons/scissors.svg", Some(secondary_shortcut("X"))),
+        ("Copy", "icons/copy.svg", Some(secondary_shortcut("C"))),
+        (
+            "Paste",
+            "icons/clipboard_paste.svg",
+            Some(secondary_shortcut("V")),
+        ),
+        (
+            "Duplicate",
+            "icons/copy_plus.svg",
+            Some(secondary_shortcut("D")),
+        ),
+        ("Rename…", "icons/pencil.svg", Some("F2".to_string())),
+        ("Add to .gitignore", "icons/eye_off.svg", None),
+        ("Trash", "icons/trash.svg", Some("Delete".to_string())),
+        (
+            "Delete permanently…",
+            "icons/trash.svg",
+            Some("Shift+Delete".to_string()),
+        ),
+        ("Undo", "icons/undo.svg", Some(secondary_shortcut("Z"))),
+        ("Redo", "icons/redo.svg", redo),
+        ("File history", "icons/refresh.svg", None),
+    ];
+    for (label, icon, shortcut) in expected {
+        let (actual_icon, actual_shortcut) = entry(label);
+        assert_eq!(actual_icon.as_deref(), Some(icon), "{label} icon");
+        assert_eq!(
+            actual_shortcut.as_ref().map(|s| s.to_string()),
+            shortcut,
+            "{label} shortcut"
+        );
+    }
+
+    // The menu's single-key mnemonic is the shortcut's last part, so `c` copies
+    // the row here rather than its relative path, and Undo keeps `z`.
+    let ix_of = |label: &str| {
+        model.items.iter().position(|item| {
+            matches!(item, ContextMenuItem::Entry { label: entry_label, .. }
+                if entry_label.as_ref() == label)
+        })
+    };
+    assert_eq!(context_menu_shortcut_entry_ix(&model, "c"), ix_of("Copy"));
+    assert_eq!(context_menu_shortcut_entry_ix(&model, "x"), ix_of("Cut"));
+}
+
+#[gpui::test]
+fn explorer_undo_redo_disabled_states_follow_filesystem_availability(
+    cx: &mut gpui::TestAppContext,
+) {
+    let unavailable = file_browser_menu_model(cx, "src/a.rs", false, |_state| {});
+    assert!(context_menu_entry_disabled(&unavailable, "Undo"));
+    assert!(context_menu_entry_disabled(&unavailable, "Redo"));
+
+    let available = file_browser_menu_model(cx, "src/a.rs", false, |state| {
+        state.filesystem.undo_available = true;
+        state.filesystem.redo_available = true;
+    });
+    assert!(!context_menu_entry_disabled(&available, "Undo"));
+    assert!(!context_menu_entry_disabled(&available, "Redo"));
+}
+
+/// Rename acts on one item; a multi-selection disables it rather than hiding it.
+#[gpui::test]
+fn explorer_rename_is_disabled_for_a_multi_selection(cx: &mut gpui::TestAppContext) {
+    let model = file_browser_menu_model(cx, "src/a.rs", false, |state| {
+        let selection = &mut state.repos[0].file_browser.selection.paths;
+        selection.insert(std::path::PathBuf::from("src/a.rs"));
+        selection.insert(std::path::PathBuf::from("src"));
+    });
+
+    assert!(context_menu_entry_disabled(&model, "Rename…"));
+    assert!(!context_menu_entry_disabled(&model, "Cut"));
 }
 
 #[gpui::test]
@@ -1493,6 +1744,17 @@ fn file_browser_folder_menu_offers_tree_os_and_copy_actions(cx: &mut gpui::TestA
         },
     ));
     let model = file_browser_folder_menu_model(cx, |_repo| {});
+
+    assert!(matches!(
+        model.items.first(),
+        Some(ContextMenuItem::Entry { .. })
+    ));
+    assert!(
+        !model
+            .items
+            .iter()
+            .any(|item| matches!(item, ContextMenuItem::Header(_) | ContextMenuItem::Label(_)))
+    );
 
     // A collapsed folder's toggle says what activating it will do.
     assert!(context_menu_has_entry(&model, "Expand"));

@@ -6,6 +6,8 @@ use tooltip::clear_visible_tooltip_text_for_test;
 
 impl Render for GitCometView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        self.process_native_transfers(window, cx);
+        self.open_pending_filesystem_dialog(window, cx);
         #[cfg(test)]
         clear_visible_tooltip_text_for_test();
 
@@ -486,6 +488,26 @@ impl Render for GitCometView {
             .cursor(cursor)
             .text_color(theme.colors.foreground.primary);
         root = root.relative();
+        root = root.on_drop(
+            cx.listener(|this, paths: &gpui::ExternalPaths, window, cx| {
+                if let Some(transfer) = window.take_file_drop() {
+                    transfer
+                        .completion
+                        .complete(Some(gpui::FileTransferOperation::Copy));
+                }
+                this.open_document_paths(paths.paths().to_vec(), cx);
+                cx.stop_propagation();
+            }),
+        );
+        root = root.on_drop(cx.listener(|this, drag: &panes::ExplorerDrag, window, cx| {
+            if let Some(transfer) = window.take_file_drop() {
+                transfer
+                    .completion
+                    .complete(Some(gpui::FileTransferOperation::Copy));
+            }
+            this.open_document_paths(drag.paths.to_vec(), cx);
+            cx.stop_propagation();
+        }));
         if external_repo_drop_enabled {
             root = root.on_drag_move(cx.listener(
                 |this, event: &gpui::DragMoveEvent<gpui::ExternalPaths>, _window, cx| {
@@ -768,6 +790,7 @@ impl Render for GitCometView {
             .left_0()
             .size_full()
             .child(self.command_palette.clone())
+            .child(self.document_picker.clone())
             .child(stable_overlay_view(self.reveal_commit_dialog.clone()))
             .child(stable_overlay_view(self.history_refs_hover_host.clone()))
             .child(stable_overlay_view(self.commit_message_hover_host.clone()))

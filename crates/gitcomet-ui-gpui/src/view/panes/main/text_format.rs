@@ -651,7 +651,10 @@ impl MainPaneView {
                     && self
                         .file_editor_key
                         .as_ref()
-                        .is_some_and(|(key_repo, key_path)| key_repo == repo_id && key_path == path)
+                        .and_then(|key| self.document_repo_path(key))
+                        .is_some_and(|(key_repo, key_path)| {
+                            key_repo == *repo_id && key_path == *path
+                        })
             }
             ErrorAction::OpenUrl { .. } | ErrorAction::Hosted(_) => true,
         }

@@ -64,6 +64,7 @@ impl Effect {
 
 #[derive(Clone, Debug, strum::IntoStaticStr)]
 pub enum Effect {
+    Filesystem(gitcomet_core::filesystem::Request),
     IndexedHistory(crate::indexed_history::IndexedHistoryEffect),
     DiffSession(crate::diff_session::DiffSessionEffect),
     HistoryAuthors(crate::history_authors::HistoryAuthorsEffect),
@@ -353,6 +354,7 @@ pub enum Effect {
         repo_id: RepoId,
         path: PathBuf,
         contents: super::message::ContentBytes,
+        expected_contents: Option<std::sync::Arc<[u8]>>,
         stage: bool,
         completion: Option<smol::channel::Sender<bool>>,
     },

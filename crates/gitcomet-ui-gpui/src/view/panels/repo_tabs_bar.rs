@@ -1127,7 +1127,10 @@ impl Render for RepoTabsBarView {
                 .on_activate(
                     false,
                     controls::ControlActivation::Composite,
-                    cx.listener(move |this, _e: &ClickEvent, _w, _cx| {
+                    cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                        let _ = this
+                            .root_view
+                            .update(cx, |root, cx| root.show_repository_canvas(cx));
                         if let Some(msg) =
                             Self::repo_tab_click_message(this.active_repo_id(), repo_id)
                         {
@@ -1299,7 +1302,12 @@ impl Render for RepoTabsBarView {
                     .is_some_and(|paths| !paths.paths().is_empty())
             })
             .on_drop(
-                cx.listener(|this, paths: &gpui::ExternalPaths, _window, cx| {
+                cx.listener(|this, paths: &gpui::ExternalPaths, window, cx| {
+                    if let Some(transfer) = window.take_file_drop() {
+                        transfer
+                            .completion
+                            .complete(Some(gpui::FileTransferOperation::Copy));
+                    }
                     this.set_external_folder_drag_active(false, cx);
                     let paths = paths.clone();
                     let _ = this.root_view.update(cx, |root, cx| {

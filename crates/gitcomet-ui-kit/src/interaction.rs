@@ -87,6 +87,7 @@ pub struct InteractionStyle {
     hover: StyleRefinement,
     pressed: StyleRefinement,
     pointer_feedback: bool,
+    hover_feedback: bool,
     selection_outline: bool,
     disabled_opacity: f32,
 }
@@ -100,6 +101,7 @@ impl InteractionStyle {
             hover: StyleRefinement::default().bg(theme.hover_overlay()),
             pressed: StyleRefinement::default().bg(theme.active_overlay()),
             pointer_feedback: true,
+            hover_feedback: true,
             selection_outline: true,
             disabled_opacity: 1.0,
         }
@@ -236,6 +238,13 @@ impl InteractionStyle {
         self
     }
 
+    /// Skips only the hover style, so pointer moves don't invalidate rows whose
+    /// feedback comes from elsewhere (e.g. a highlighted drop target).
+    pub fn hover_feedback(mut self, enabled: bool) -> Self {
+        self.hover_feedback = enabled;
+        self
+    }
+
     pub fn disabled_opacity(mut self, opacity: f32) -> Self {
         self.disabled_opacity = opacity;
         self
@@ -289,9 +298,11 @@ impl InteractionStyle {
         let pressed = persistent.map_or(self.pressed, |bg| StyleRefinement::default().bg(bg));
         control
             .cursor(CursorStyle::PointingHand)
-            .hover(move |mut style| {
-                style.refine(&hover);
-                style
+            .when(self.hover_feedback, |control| {
+                control.hover(move |mut style| {
+                    style.refine(&hover);
+                    style
+                })
             })
             .active(move |mut style| {
                 style.refine(&pressed);

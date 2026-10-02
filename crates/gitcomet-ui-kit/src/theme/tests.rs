@@ -3,13 +3,40 @@ use super::{
     EMBEDDED_THEME_FILES, GRAPH_LANE_PALETTE_SIZE, GraphLanePalette, HexColor, Rgba,
     THEME_SCHEMA_VERSION, ThemeColor, UNFILLED_COLOR_TOKENS, available_themes, composite_over,
     content_header_bg, derived_syntax_color, fill_missing_color_tokens, has_theme_key,
-    hsla_from_hue_fraction, load_theme_specs_from_json, merged_theme_options,
+    hsla_from_hue_fraction, layer_over, load_theme_specs_from_json, merged_theme_options,
     resolved_runtime_themes_dir, runtime_themes_with_dir, test_theme_bundle_value,
     test_theme_json_with_syntax, theme_label, with_alpha,
 };
 use palette::IntoColor;
 use std::{fs, path::PathBuf};
 use tempfile::tempdir;
+
+#[test]
+fn layer_over_matches_painting_both_layers_in_turn() {
+    let assert_close = |a: Rgba, b: Rgba| {
+        for (x, y) in [
+            (a.red, b.red),
+            (a.green, b.green),
+            (a.blue, b.blue),
+            (a.alpha, b.alpha),
+        ] {
+            assert!((x - y).abs() < 1e-5, "{a:?} vs {b:?}");
+        }
+    };
+    let base = Rgba::new(0.9, 0.6, 0.1, 0.10);
+    let overlay = Rgba::new(1.0, 1.0, 1.0, 0.06);
+    for surface in [gpui::rgb(0x1e2230), gpui::rgb(0xf4f5f7)] {
+        assert_close(
+            composite_over(composite_over(surface, base), overlay),
+            composite_over(surface, layer_over(base, overlay)),
+        );
+        // An opaque base is the case `composite_over` already covers.
+        assert_close(
+            layer_over(surface, overlay),
+            composite_over(surface, overlay),
+        );
+    }
+}
 
 #[test]
 fn theme_hex_colors_keep_all_four_spellings_and_strict_validation() {

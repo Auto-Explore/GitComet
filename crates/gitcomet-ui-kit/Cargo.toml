@@ -40,6 +40,8 @@ unicode-segmentation = { workspace = true }
 url = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# X11 file-clipboard transfers (cut/copy/paste of files) under WSLg.
+gpui_platform = { workspace = true }
 x11-clipboard = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
