@@ -153,7 +153,7 @@ impl GixRepo {
             return Err(backend_error("no files to apply".to_string()));
         }
         let source = self.change_source(target)?;
-        if let Some(operation) = self.operation_in_progress_label() {
+        if let Some(operation) = self.operation_in_progress_label()? {
             return Err(backend_error(format!(
                 "{operation} is in progress; finish or abort it first"
             )));

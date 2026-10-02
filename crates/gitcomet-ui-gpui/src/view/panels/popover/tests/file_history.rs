@@ -93,7 +93,7 @@ macro_rules! file_history_picker {
     ($cx:ident, $host:ident) => {
         let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, $cx) = $cx.add_window_view(|window, cx| {
-            window.activate_window();
+            window.activate();
             GitCometView::new(store, events, None, window, cx)
         });
         let $host = open_file_history(&view, $cx);

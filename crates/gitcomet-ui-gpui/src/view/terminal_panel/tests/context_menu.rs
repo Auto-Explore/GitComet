@@ -206,7 +206,7 @@ fn window_blur_stops_terminal_input_and_live_caret(cx: &mut gpui::TestAppContext
     let _visual = crate::test_support::lock_visual_test();
     let _clipboard = crate::test_support::lock_clipboard_test();
     let (fixture, cx) = fixture(cx);
-    cx.update(|window, _| window.activate_window());
+    cx.update(|window, _| window.activate());
     cx.run_until_parked();
     fixture.term.lock().scroll_display(Scroll::Bottom);
     // Terminal applications that request focus reports must see one loss and
@@ -254,7 +254,7 @@ fn window_blur_stops_terminal_input_and_live_caret(cx: &mut gpui::TestAppContext
                         .is_none()
                 );
             });
-            window.activate_window();
+            window.activate();
         });
         cx.run_until_parked();
         refresh_and_draw(cx);
@@ -300,14 +300,14 @@ fn window_blur_stops_terminal_input_and_live_caret(cx: &mut gpui::TestAppContext
 fn main_window_focus_shortcut_works_after_blur(cx: &mut gpui::TestAppContext) {
     let _visual = crate::test_support::lock_visual_test();
     let (root, _, cx) = test_root_view_with_active_repo(cx);
-    cx.update(|window, _| window.activate_window());
+    cx.update(|window, _| window.activate());
     cx.run_until_parked();
     refresh_and_draw(cx);
     cx.deactivate_window();
     cx.update(|window, app| {
         assert!(window.focused(app).is_none());
         crate::app::install_app_shortcuts_for_test(app, Arc::new(TerminalTestBackend));
-        window.activate_window();
+        window.activate();
     });
     cx.run_until_parked();
     refresh_and_draw(cx);

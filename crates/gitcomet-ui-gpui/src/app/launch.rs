@@ -761,7 +761,7 @@ pub(super) fn open_gitcomet_window(
 
     let window = crate::ui_probe::time_section("open main window", || {
         cx.open_window(
-            WindowOptions {
+            with_main_window_background(WindowOptions {
                 window_bounds: Some(window_bounds),
                 window_min_size: Some(min_size),
                 titlebar: Some(TitlebarOptions {
@@ -774,11 +774,10 @@ pub(super) fn open_gitcomet_window(
                 app_id: Some(app_id),
                 display_id,
                 window_decorations: Some(WindowDecorations::Client),
-                window_background: main_window_background_appearance(),
                 is_movable: true,
                 is_resizable: true,
                 ..Default::default()
-            },
+            }),
             move |window, cx| {
                 ui_scale::apply_to_window(window, ui_scale_percent);
                 window.on_window_should_close(cx, |window, cx| {
@@ -822,21 +821,37 @@ pub(super) fn open_gitcomet_window(
 /// a diagnostic knob: on Windows a transparent surface changes how the
 /// compositor blends the window, so this is the quickest way to tell whether
 /// that is what makes a build feel slow.
-pub(crate) fn main_window_background_appearance() -> WindowBackgroundAppearance {
-    let default = if cfg!(target_os = "macos") {
-        WindowBackgroundAppearance::Opaque
-    } else {
-        WindowBackgroundAppearance::Transparent
+pub(crate) fn with_main_window_background(mut options: WindowOptions) -> WindowOptions {
+    let transparent = match std::env::var("GITCOMET_WINDOW_BACKGROUND") {
+        Ok(value) if value.trim().eq_ignore_ascii_case("opaque") => false,
+        Ok(value) if value.trim().eq_ignore_ascii_case("transparent") => true,
+        _ => !cfg!(target_os = "macos"),
     };
-    match std::env::var("GITCOMET_WINDOW_BACKGROUND") {
-        Ok(value) if value.trim().eq_ignore_ascii_case("opaque") => {
-            WindowBackgroundAppearance::Opaque
-        }
-        Ok(value) if value.trim().eq_ignore_ascii_case("transparent") => {
-            WindowBackgroundAppearance::Transparent
-        }
-        _ => default,
+    #[cfg(target_os = "macos")]
+    {
+        options.macos_window_background = if transparent {
+            gpui::MacosWindowBackground::Transparent
+        } else {
+            gpui::MacosWindowBackground::Opaque
+        };
     }
+    #[cfg(target_os = "windows")]
+    {
+        options.windows_window_background = if transparent {
+            gpui::WindowsWindowBackground::Transparent
+        } else {
+            gpui::WindowsWindowBackground::Opaque
+        };
+    }
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    {
+        options.linux_window_background = if transparent {
+            gpui::LinuxWindowBackground::Transparent
+        } else {
+            gpui::LinuxWindowBackground::Opaque
+        };
+    }
+    options
 }
 
 fn apply_ui_scale_to_window(cx: &mut App, handle: AnyWindowHandle, percent: u32) {

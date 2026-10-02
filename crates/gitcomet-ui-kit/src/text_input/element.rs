@@ -1,3 +1,4 @@
+use super::drag::single_line_reveal_pad;
 use super::highlight::*;
 use super::shaping::*;
 use super::state::*;
@@ -31,6 +32,17 @@ fn caret_metrics(line_height: Pixels) -> (Pixels, Pixels) {
     (height, top_inset)
 }
 
+/// Rows shaped past the viewport. During a drag the text can scroll by one
+/// autoscroll step before the next paint, and the head must still land on a
+/// shaped row there.
+fn guard_rows(selecting: bool, line_height: Pixels) -> usize {
+    if !selecting || line_height <= px(0.0) {
+        return TEXT_INPUT_GUARD_ROWS;
+    }
+    let step_rows = (crate::drag_autoscroll::DRAG_AUTOSCROLL_MAX_STEP / line_height).ceil();
+    (step_rows as usize + 1).max(TEXT_INPUT_GUARD_ROWS)
+}
+
 pub(super) struct PrepaintState {
     layout: Option<TextInputLayout>,
     cursor: Option<PaintQuad>,
@@ -39,6 +51,8 @@ pub(super) struct PrepaintState {
     wrap_cache: Option<WrapCache>,
     scroll_x: Pixels,
     visible_line_range: Range<usize>,
+    /// The host scroll offset this layout was positioned with.
+    scroll_offset: Option<Point<Pixels>>,
     /// Whether any resolved highlight asks for a background. `ShapedLine::paint`
     /// draws glyphs only — run backgrounds need the separate `paint_background`
     /// pass — and walking every visible line for it is wasted work on the
@@ -127,6 +141,14 @@ impl Element for TextElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
+        // gpui has applied (and clamped) the offset before laying out children.
+        let scroll_offset = self
+            .input
+            .read(cx)
+            .interaction
+            .vertical_scroll_handle
+            .as_ref()
+            .map(ScrollHandle::offset);
         self.input.update(cx, |input, cx| {
             let content = input.content.snapshot();
             let selected_range = input.selection.range.clone();
@@ -168,6 +190,7 @@ impl Element for TextElement {
             let line_count = line_starts.len().max(1);
             let (visible_top, visible_bottom) =
                 visible_vertical_window(bounds, input.interaction.vertical_scroll_handle.as_ref());
+            let guard_rows = guard_rows(input.interaction.is_selecting, line_height);
 
             // Resolve highlights for the visible window in the buffer's own
             // coordinates, interpolating across any edits the highlight source
@@ -264,6 +287,7 @@ impl Element for TextElement {
                         wrap_cache: None,
                         scroll_x: px(0.0),
                         visible_line_range: 0..1,
+                        scroll_offset,
                         has_background_runs,
                     };
                 }
@@ -279,7 +303,7 @@ impl Element for TextElement {
                         line_height,
                         visible_top,
                         visible_bottom,
-                        TEXT_INPUT_GUARD_ROWS,
+                        guard_rows,
                     )
                 } else {
                     0..line_count
@@ -372,7 +396,7 @@ impl Element for TextElement {
                 };
                 if let Some((cursor_x, line_w)) = single_line_cursor {
                     let viewport_w = bounds.size.width.max(px(0.0));
-                    let pad = px(8.0).min(viewport_w / 4.0);
+                    let pad = single_line_reveal_pad(viewport_w);
                     let max_scroll_x = (line_w - viewport_w).max(px(0.0));
 
                     let left = scroll_x;
@@ -441,6 +465,7 @@ impl Element for TextElement {
                     wrap_cache: None,
                     scroll_x,
                     visible_line_range,
+                    scroll_offset,
                     has_background_runs,
                 };
             }
@@ -523,7 +548,7 @@ impl Element for TextElement {
                     line_height,
                     visible_top,
                     visible_bottom,
-                    TEXT_INPUT_GUARD_ROWS,
+                    guard_rows,
                 );
                 let streamed_line_runs = input.streamed_highlight_runs_for_visible_window(
                     &wrapped_line_source,
@@ -680,6 +705,7 @@ impl Element for TextElement {
                 wrap_cache,
                 scroll_x: px(0.0),
                 visible_line_range,
+                scroll_offset,
                 has_background_runs,
             }
         })
@@ -753,26 +779,24 @@ impl Element for TextElement {
             });
         }
 
+        // Window-level, so the drag follows the pointer out of the input and
+        // past the window edge. Capture phase, so no bubble handler that stops
+        // propagation can hide a move or the release from it.
         if self.input.read(cx).interaction.is_selecting {
             let input = self.input.clone();
-            window.on_mouse_event(move |event: &MouseMoveEvent, _phase, _window, cx| {
-                input.update(cx, |input, cx| {
-                    if input.interaction.is_selecting {
-                        input.update_mouse_selection(event.position, cx);
-                    }
-                });
+            window.on_mouse_event(move |event: &MouseMoveEvent, phase, _window, cx| {
+                if phase != gpui::DispatchPhase::Capture {
+                    return;
+                }
+                input.update(cx, |input, cx| input.drag_mouse_moved(event, cx));
             });
 
             let input = self.input.clone();
-            window.on_mouse_event(move |event: &MouseUpEvent, _phase, _window, cx| {
-                if event.button != MouseButton::Left {
+            window.on_mouse_event(move |event: &MouseUpEvent, phase, _window, cx| {
+                if phase != gpui::DispatchPhase::Capture || event.button != MouseButton::Left {
                     return;
                 }
-                input.update(cx, |input, _cx| {
-                    input.interaction.is_selecting = false;
-                    input.interaction.mouse_selection_anchor = None;
-                    input.interaction.pending_mouse_selection_anchor = None;
-                });
+                input.update(cx, |input, _cx| input.end_mouse_drag());
             });
         }
 
@@ -883,6 +907,9 @@ impl Element for TextElement {
             input.layout.last = prepaint.layout.take();
             input.layout.line_starts = prepaint.line_starts.clone();
             input.layout.bounds = Some(bounds);
+            input.layout.painted_scroll_offset = prepaint.scroll_offset;
+            input.layout.painted_line_range = prepaint.visible_line_range.clone();
+            input.layout.paint_seq = input.layout.paint_seq.wrapping_add(1);
             input.layout.line_height = line_height;
             input.wrap.cache = prepaint.wrap_cache;
             if input.multiline && input.soft_wrap {

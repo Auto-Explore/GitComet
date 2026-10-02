@@ -7,10 +7,6 @@ pub(crate) fn empty_log_page() -> LogPage {
     }
 }
 
-pub(crate) fn object_id_from_commit_id(id: &CommitId) -> Option<gix::ObjectId> {
-    gix::ObjectId::from_hex(id.as_ref().as_bytes()).ok()
-}
-
 pub(crate) fn log_paged_walk_handle(repo: &gix::ThreadSafeRepository) -> gix::OdbHandleArc {
     gix::odb::memory::Proxy::from(gix::odb::Cache::from(repo.objects.to_handle()))
         .with_write_passthrough()
@@ -262,8 +258,7 @@ pub(crate) fn apply_first_parent_resume_hint(page: &mut LogPage) {
 }
 
 pub(crate) fn reflog_unborn_head_error(repo: &gix::Repository) -> Error {
-    let branch = repo
-        .head_name()
+    let branch = crate::refs::head_name(repo)
         .ok()
         .flatten()
         .map(|name| {

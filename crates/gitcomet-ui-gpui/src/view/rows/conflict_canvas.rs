@@ -193,6 +193,7 @@ pub(super) fn split_conflict_row_canvas(
                 window.with_content_mask(
                     Some(ContentMask {
                         bounds: left_gutter,
+                        ..Default::default()
                     }),
                     |window| {
                         paint_gutter_text(
@@ -210,6 +211,7 @@ pub(super) fn split_conflict_row_canvas(
                 window.with_content_mask(
                     Some(ContentMask {
                         bounds: right_gutter,
+                        ..Default::default()
                     }),
                     |window| {
                         paint_gutter_text(
@@ -263,6 +265,7 @@ pub(super) fn split_conflict_row_canvas(
             window.with_content_mask(
                 Some(ContentMask {
                     bounds: left_text_clip,
+                    ..Default::default()
                 }),
                 |window| {
                     paint_conflict_text(
@@ -279,6 +282,7 @@ pub(super) fn split_conflict_row_canvas(
             window.with_content_mask(
                 Some(ContentMask {
                     bounds: right_text_clip,
+                    ..Default::default()
                 }),
                 |window| {
                     paint_conflict_text(
@@ -443,6 +447,7 @@ pub(super) fn single_column_conflict_canvas(
                 window.with_content_mask(
                     Some(ContentMask {
                         bounds: gutter_bounds,
+                        ..Default::default()
                     }),
                     |window| {
                         paint_gutter_text(
@@ -476,6 +481,7 @@ pub(super) fn single_column_conflict_canvas(
             window.with_content_mask(
                 Some(ContentMask {
                     bounds: text_clip_bounds,
+                    ..Default::default()
                 }),
                 |window| {
                     if let Some(layout) =

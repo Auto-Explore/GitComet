@@ -119,7 +119,7 @@ pub(super) fn tracking_refs_for_remote_branch(
     Ok(tracking_refs)
 }
 
-pub(super) fn configured_upstream_of(reference: &gix::Reference<'_>) -> Option<Upstream> {
+pub(super) fn configured_upstream_of(reference: &crate::refs::Reference<'_>) -> Option<Upstream> {
     let local_branch = reference
         .name()
         .as_bstr()
@@ -155,7 +155,7 @@ pub(super) fn configured_upstream_of(reference: &gix::Reference<'_>) -> Option<U
 /// Whether GitComet intentionally configured this upstream before the remote
 /// branch existed. This distinguishes a future branch from a formerly-live
 /// upstream that disappeared and remains eligible for fetch cleanup.
-pub(super) fn configured_upstream_is_pending(reference: &gix::Reference<'_>) -> bool {
+pub(super) fn configured_upstream_is_pending(reference: &crate::refs::Reference<'_>) -> bool {
     let local_branch = match reference.name().as_bstr().strip_prefix(b"refs/heads/") {
         Some(branch) => branch.as_bstr(),
         None => return false,
@@ -238,9 +238,10 @@ fn run_git_command_with_optional_output(
     )
 }
 
-/// `Some(is_rebase)` while a merge or rebase is in progress.
+/// `Some(is_rebase)` while a merge or rebase is in progress. An unreadable ref
+/// store counts as neither.
 fn integration_in_progress(repo: &gix::Repository) -> Option<bool> {
-    match repo.state()? {
+    match crate::refs::operation_state(repo).ok().flatten()? {
         gix::state::InProgress::Merge => Some(false),
         gix::state::InProgress::Rebase | gix::state::InProgress::RebaseInteractive => Some(true),
         _ => None,
@@ -409,7 +410,7 @@ fn remote_config_boolean(
 /// `tracking_ref` is populated only when the remote's positive and negative
 /// fetch refspecs map this upstream locally.
 fn configured_remote_upstream_of(
-    reference: &gix::Reference<'_>,
+    reference: &crate::refs::Reference<'_>,
 ) -> Option<ConfiguredRemoteUpstream> {
     let local_branch = reference.name().shorten().to_str_lossy().into_owned();
     let Upstream {
@@ -454,18 +455,22 @@ impl GixRepo {
         let Ok(repo) = self.reopen_repo() else {
             return;
         };
+        if crate::refs::backend(&repo).ok() == Some(crate::refs::RefBackend::Reftable) {
+            let names: Vec<_> = ref_names.into_iter().collect();
+            let _ = crate::refs::delete_batch(&repo, &names);
+            return;
+        }
         for ref_name in ref_names {
-            let Ok(Some(reference)) = repo.try_find_reference(ref_name) else {
+            let Ok(Some(reference)) = crate::refs::find(&repo, ref_name) else {
                 continue;
             };
-            let _ = reference.delete();
+            let _ = crate::refs::delete(reference);
         }
     }
 
     fn reference_exists(&self, ref_name: &str) -> Result<bool> {
         let repo = self.reopen_repo()?;
-        Ok(repo
-            .try_find_reference(ref_name)
+        Ok(crate::refs::find(&repo, ref_name)
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
             .is_some())
     }
@@ -597,8 +602,7 @@ impl GixRepo {
         scope: UpstreamCleanupScope<'_>,
     ) -> Result<Vec<ConfiguredRemoteUpstream>> {
         let repo = self.reopen_repo()?;
-        let refs = repo
-            .references()
+        let refs = crate::refs::view(&repo)
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
         let iter = refs
             .local_branches()
@@ -627,6 +631,7 @@ impl GixRepo {
         expected_to_exist: bool,
     ) -> Result<Vec<ConfiguredRemoteUpstream>> {
         let repo = self.reopen_repo()?;
+        let refs = crate::refs::view(&repo)?;
         let mut matching = Vec::new();
         for mut upstream in upstreams {
             // Without a matching fetch refspec, a fetch was not authoritative
@@ -635,8 +640,8 @@ impl GixRepo {
             let Some(tracking_ref) = upstream.tracking_ref.as_deref() else {
                 continue;
             };
-            let tracking_exists = repo
-                .try_find_reference(tracking_ref)
+            let tracking_exists = refs
+                .find(tracking_ref)
                 .map_err(|e| {
                     Error::new(ErrorKind::Backend(format!(
                         "gix try_find upstream reference: {e}"
@@ -777,8 +782,7 @@ impl GixRepo {
 
         let repo = self.reopen_repo()?;
         let ref_name = format!("refs/heads/{branch_name}");
-        let Some(reference) = repo
-            .try_find_reference(ref_name.as_str())
+        let Some(reference) = crate::refs::find(&repo, ref_name.as_str())
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
         else {
             return Ok(None);
@@ -799,8 +803,7 @@ impl GixRepo {
 
         let repo = self.reopen_repo()?;
         let ref_name = format!("refs/heads/{branch_name}");
-        let Some(reference) = repo
-            .try_find_reference(ref_name.as_str())
+        let Some(reference) = crate::refs::find(&repo, ref_name.as_str())
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
         else {
             return Ok(None);
@@ -814,9 +817,8 @@ impl GixRepo {
             return Ok(None);
         };
 
-        let Some(mut tracking_ref) = repo
-            .try_find_reference(tracking_ref_name.as_str())
-            .map_err(|e| {
+        let Some(mut tracking_ref) =
+            crate::refs::find(&repo, tracking_ref_name.as_str()).map_err(|e| {
                 Error::new(ErrorKind::Backend(format!(
                     "gix try_find upstream reference: {e}"
                 )))
@@ -906,8 +908,7 @@ impl GixRepo {
         // before the command and resurrect already-pruned tracking branches in
         // the UI.
         let repo = self.reopen_repo()?;
-        let refs = repo
-            .references()
+        let refs = crate::refs::view(&repo)
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
         let iter = refs
             .remote_branches()
@@ -2236,8 +2237,7 @@ impl GixRepo {
 
         let repo = self.reopen_repo()?;
         let local_ref = format!("refs/heads/{branch}");
-        if repo
-            .try_find_reference(local_ref.as_str())
+        if crate::refs::find(&repo, local_ref.as_str())
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
             .is_none()
         {
@@ -2258,8 +2258,7 @@ impl GixRepo {
                 upstream.remote, upstream.branch
             ))));
         };
-        let tracking_ref_exists = match repo
-            .try_find_reference(tracking_ref.as_str())
+        let tracking_ref_exists = match crate::refs::find(&repo, tracking_ref.as_str())
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
         {
             Some(mut reference) => reference.peel_to_id().map(|_| true).map_err(|e| {

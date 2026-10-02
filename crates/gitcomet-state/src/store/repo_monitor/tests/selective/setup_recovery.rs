@@ -278,16 +278,9 @@ fn replacement_reconciles_all_state(ignore_trigger: bool, recovery: bool) {
                 if hook_armed.swap(false, Ordering::Relaxed) {
                     fs::write(hook_root.join("source/file.txt"), "during gap").unwrap();
                     run_git(&hook_root, &["add", "source/file.txt"]);
-                    let head = fs::read_to_string(hook_root.join(".git/HEAD")).unwrap();
-                    let oid = fs::read(
-                        hook_root
-                            .join(".git")
-                            .join(head.trim().strip_prefix("ref: ").unwrap()),
-                    )
-                    .unwrap();
-                    fs::write(hook_root.join(".git/refs/heads/gap"), &oid).unwrap();
-                    fs::write(hook_root.join(".git/refs/tags/gap"), oid).unwrap();
-                    fs::write(hook_root.join(".git/HEAD"), "ref: refs/heads/gap\n").unwrap();
+                    run_git(&hook_root, &["update-ref", "refs/heads/gap", "HEAD"]);
+                    run_git(&hook_root, &["update-ref", "refs/tags/gap", "HEAD"]);
+                    run_git(&hook_root, &["symbolic-ref", "HEAD", "refs/heads/gap"]);
                 }
             })),
             idle_tick: Duration::from_millis(100),
