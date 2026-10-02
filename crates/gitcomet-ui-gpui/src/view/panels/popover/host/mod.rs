@@ -127,12 +127,12 @@ impl PopoverHost {
         submit: fn(&mut Self, &mut Window, &mut gpui::Context<Self>),
     ) -> gpui::Subscription {
         cx.observe_in(input, window, move |this, input, window, cx| {
-            let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
-            let _ = input.update(cx, |input, _| input.take_escape_pressed());
-
             if !is_active(this) {
                 return;
             }
+
+            let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+            let _ = input.update(cx, |input, _| input.take_escape_pressed());
 
             if enter_pressed {
                 submit(this, window, cx);
@@ -686,6 +686,22 @@ impl PopoverHost {
             },
             |this, window, cx| this.submit_submodule_change_pointer(window, cx),
         ));
+        // The annex prompt reuses the single-line ref input.
+        prompt_input_subscriptions.push(Self::prompt_enter_subscription(
+            &submodule_ref_input,
+            window,
+            cx,
+            |this| {
+                matches!(
+                    this.popover,
+                    Some(PopoverKind::Repo {
+                        kind: RepoPopoverKind::Annex(AnnexPopoverKind::Prompt(_)),
+                        ..
+                    })
+                )
+            },
+            |this, window, cx| this.submit_annex_prompt(window, cx),
+        ));
         for input in [&remote_name_input, &remote_url_input] {
             prompt_input_subscriptions.push(Self::prompt_enter_subscription(
                 input,
@@ -1127,7 +1143,7 @@ impl PopoverHost {
             .find(|repo| repo.id == repo_id)
             .into_iter()
             .flat_map(|repo| repo.feedback.hook_activity.iter())
-            .filter(|operation| operation.has_hooks() && operation.status.is_active())
+            .filter(|operation| operation.is_reportable() && operation.status.is_active())
             .map(|operation| (repo_id, operation.id))
             .collect::<Vec<_>>();
         let _ = self.root_view.update(cx, |root, cx| {
@@ -1510,6 +1526,10 @@ impl PopoverHost {
             | Some(PopoverKind::Repo {
                 kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::ChangePointerPrompt { .. }),
                 ..
+            })
+            | Some(PopoverKind::Repo {
+                kind: RepoPopoverKind::Annex(AnnexPopoverKind::Prompt(_)),
+                ..
             }) => self.dismiss_inline_popover(window, cx),
             Some(PopoverKind::CloneRepo)
             | Some(PopoverKind::CreateTagPrompt { .. })
@@ -1839,14 +1859,14 @@ impl PopoverHost {
                     let selected = operation_id
                         .filter(|requested| {
                             operations.iter().any(|operation| {
-                                operation.id == *requested && operation.has_hooks()
+                                operation.id == *requested && operation.is_reportable()
                             })
                         })
                         .or_else(|| {
                             operations
                                 .iter()
                                 .rev()
-                                .find(|operation| operation.has_hooks())
+                                .find(|operation| operation.is_reportable())
                                 .map(|operation| operation.id)
                         });
                     self.hook_activity_selected = selected;
@@ -2171,6 +2191,26 @@ impl PopoverHost {
                     self.submodule_ref_input.update(cx, |input, cx| {
                         input.set_theme(theme, cx);
                         input.set_text("", cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .submodule_ref_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus, cx);
+                }
+                PopoverKind::Repo {
+                    repo_id,
+                    kind: RepoPopoverKind::Annex(AnnexPopoverKind::Prompt(prompt)),
+                } => {
+                    if matches!(prompt, AnnexPrompt::Unused) {
+                        self.store
+                            .dispatch(Msg::LoadAnnexUnused { repo_id: *repo_id });
+                    }
+                    let theme = self.theme;
+                    let text = annex_prompt::initial_text(prompt);
+                    self.submodule_ref_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(text, cx);
                         cx.notify();
                     });
                     let focus = self

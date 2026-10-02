@@ -3,6 +3,7 @@
 
 use super::*;
 
+mod annex;
 mod branch;
 mod headers;
 mod items;
@@ -414,6 +415,40 @@ impl SidebarPaneView {
                     collapsed,
                     collapse_key,
                     cx,
+                ),
+                BranchSidebarRow::AnnexHeader {
+                    collapsed,
+                    collapse_key,
+                    summary,
+                } => Self::sidebar_annex_header_row(
+                    this,
+                    &ctx,
+                    slot,
+                    collapsed,
+                    collapse_key,
+                    summary,
+                    cx,
+                ),
+                BranchSidebarRow::AnnexPlaceholder {
+                    message,
+                    can_init,
+                    can_restage,
+                } => Self::sidebar_annex_placeholder_row(
+                    &ctx,
+                    slot,
+                    message,
+                    can_init,
+                    can_restage,
+                    cx,
+                ),
+                BranchSidebarRow::AnnexRepositoryItem {
+                    uuid,
+                    name,
+                    detail,
+                    here,
+                    untrusted,
+                } => Self::sidebar_annex_repository_row(
+                    this, &ctx, slot, uuid, name, detail, here, untrusted, cx,
                 ),
                 BranchSidebarRow::SubmodulePlaceholder { message, can_load } => {
                     Self::sidebar_submodule_placeholder_row(&ctx, slot.ix, message, can_load, cx)

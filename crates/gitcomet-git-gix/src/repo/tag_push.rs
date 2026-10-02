@@ -32,13 +32,8 @@ impl GixRepo {
             // Credential helpers can open their own dialogs even when Git's
             // terminal prompts are disabled. Probes never invoke them; an
             // authenticated push remains available when a preview cannot run.
-            cmd.args([
-                "-c",
-                "credential.helper=",
-                "-c",
-                "credential.interactive=false",
-            ]);
-            cmd.env("GCM_INTERACTIVE", "Never");
+            cmd.args(["-c", "credential.helper="]);
+            crate::util::credentials_without_prompts(&mut cmd);
         }
         cmd.arg("push").arg(request.mode.flag());
         if preview {

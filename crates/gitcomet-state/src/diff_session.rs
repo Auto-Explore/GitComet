@@ -402,7 +402,9 @@ pub enum DiffSessionMsg {
 pub enum DiffSessionContent {
     Attributes(Result<TextAttributes>),
     Patch(Result<Diff>),
-    FileText(Result<Option<FileDiffText>>),
+    /// Boxed: the text carries its sources and large-file sides, and this
+    /// enum travels through every session message.
+    FileText(Result<Option<Box<FileDiffText>>>),
     Image(Result<Option<FileDiffImage>>),
     Blame(Result<Vec<BlameLine>>),
 }

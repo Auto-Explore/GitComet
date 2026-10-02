@@ -83,6 +83,8 @@ pub struct RepoExternalChange {
     pub index: bool,
     pub git_state: bool,
     pub tags: bool,
+    /// Attributes changed; ordinary worktree edits do not need support detection.
+    pub large_file_support: bool,
     /// Configuration/watch-policy inputs changed. A routine full refresh does
     /// not imply a changed verification context.
     pub verification_context: bool,
@@ -117,6 +119,7 @@ impl RepoExternalChange {
             index: self.index || other.index,
             git_state: self.git_state || other.git_state,
             tags: self.tags || other.tags,
+            large_file_support: self.large_file_support || other.large_file_support,
             verification_context: self.verification_context || other.verification_context,
             text_attributes: self.text_attributes || other.text_attributes,
             paths: self.paths.merge(&other.paths),
@@ -136,6 +139,7 @@ impl RepoExternalChange {
             index: false,
             git_state: false,
             tags: false,
+            large_file_support: false,
             verification_context: false,
             text_attributes: false,
             paths: ChangedPaths::Unknown,
@@ -148,6 +152,7 @@ impl RepoExternalChange {
             index: true,
             git_state: false,
             tags: false,
+            large_file_support: false,
             verification_context: false,
             text_attributes: false,
             paths: ChangedPaths::Unknown,
@@ -160,6 +165,7 @@ impl RepoExternalChange {
             index: false,
             git_state: true,
             tags: false,
+            large_file_support: false,
             verification_context: false,
             text_attributes: false,
             paths: ChangedPaths::Unknown,
@@ -172,6 +178,7 @@ impl RepoExternalChange {
             index: true,
             git_state: true,
             tags: true,
+            large_file_support: true,
             verification_context: false,
             text_attributes: true,
             paths: ChangedPaths::Unknown,
@@ -184,6 +191,7 @@ impl RepoExternalChange {
             && !self.git_state
             && !self.tags
             && !self.verification_context
+            && !self.large_file_support
             && !self.text_attributes
     }
 }

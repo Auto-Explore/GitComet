@@ -174,6 +174,7 @@ pub(super) fn header_key(row: &BranchSidebarRow) -> Option<&SharedString> {
         | BranchSidebarRow::ContributionHeader { collapse_key, .. }
         | BranchSidebarRow::WorktreesHeader { collapse_key, .. }
         | BranchSidebarRow::SubmodulesHeader { collapse_key, .. }
+        | BranchSidebarRow::AnnexHeader { collapse_key, .. }
         | BranchSidebarRow::StashHeader { collapse_key, .. }
         | BranchSidebarRow::RemoteHeader { collapse_key, .. }
         | BranchSidebarRow::GroupHeader { collapse_key, .. } => Some(collapse_key),
@@ -191,6 +192,7 @@ pub(super) fn row_key(row: &BranchSidebarRow) -> SharedString {
         BranchSidebarRow::SubmoduleItem { path, .. } => {
             format!("submodule:{}", path.display()).into()
         }
+        BranchSidebarRow::AnnexRepositoryItem { uuid, .. } => format!("annex:{uuid}").into(),
         BranchSidebarRow::StashItem { id, .. } => format!("stash:{}", id.0).into(),
         _ => header_key(row)
             .cloned()
@@ -361,6 +363,10 @@ pub(super) fn same_row(a: &BranchSidebarRow, b: &BranchSidebarRow) -> bool {
         (BranchSidebarRow::StashItem { id: a, .. }, BranchSidebarRow::StashItem { id: b, .. }) => {
             a == b
         }
+        (
+            BranchSidebarRow::AnnexRepositoryItem { uuid: a, .. },
+            BranchSidebarRow::AnnexRepositoryItem { uuid: b, .. },
+        ) => a == b,
         _ => header_key(a).is_some() && header_key(a) == header_key(b),
     }
 }

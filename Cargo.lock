@@ -1113,6 +1113,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "const-oid"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
+
+[[package]]
 name = "const-random"
 version = "0.1.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1578,6 +1584,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
 dependencies = [
  "block-buffer 0.12.1",
+ "const-oid",
  "crypto-common 0.2.2",
 ]
 
@@ -1856,6 +1863,16 @@ dependencies = [
  "autocfg",
  "defmt 0.3.100",
  "heapless 0.8.0",
+ "serde",
+]
+
+[[package]]
+name = "faster-hex"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d8d873f78e1d3e1998ed2084da9147e3cd2bb34b67814cd49a3902b970eb124"
+dependencies = [
+ "defmt 0.3.100",
  "serde",
 ]
 
@@ -2343,8 +2360,12 @@ version = "0.2.6"
 dependencies = [
  "chardetng",
  "encoding_rs",
+ "faster-hex 1.0.0",
+ "fnv",
  "gix-quote",
+ "md-5 0.11.0",
  "memchr",
+ "percent-encoding",
  "process-wrap",
  "regex",
  "rustc-hash 2.1.3",
@@ -2412,6 +2433,7 @@ dependencies = [
  "crc32fast",
  "filetime",
  "flate2",
+ "fnv",
  "gitcomet-core",
  "gix",
  "itertools 0.15.0",
@@ -2493,6 +2515,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "shlex",
  "smallvec",
  "smol",
  "stats_alloc",
@@ -2945,7 +2968,7 @@ version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a22b6febaaee8546eb0c9dd21ecdd93aca269a6cb3897e1250f0f60933c0174"
 dependencies = [
- "faster-hex",
+ "faster-hex 0.10.1",
  "gix-error",
  "gix-features",
  "sha1dc",
@@ -3119,7 +3142,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ba540112a3fcc6388eb2aa4dc4837040478c285a35178cd9a44b07345cd6636"
 dependencies = [
  "bstr",
- "faster-hex",
+ "faster-hex 0.10.1",
  "gix-error",
  "gix-trace",
 ]
@@ -4843,6 +4866,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "md-5"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
+dependencies = [
+ "cfg-if",
+ "digest 0.11.3",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5529,7 +5562,7 @@ dependencies = [
  "getrandom 0.4.3",
  "hkdf",
  "hmac",
- "md-5",
+ "md-5 0.10.6",
  "num",
  "num-bigint-dig",
  "pbkdf2",

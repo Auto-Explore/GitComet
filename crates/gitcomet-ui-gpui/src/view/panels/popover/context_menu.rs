@@ -1,5 +1,7 @@
 use super::*;
+use gitcomet_core::domain::Upstream;
 
+mod annex;
 mod branch;
 mod branch_group;
 mod branch_section;
@@ -23,6 +25,7 @@ pub(super) mod file_history_commit;
 mod file_list_folder;
 mod history_branch_filter;
 mod history_refs;
+mod large_file;
 mod local_file_link;
 mod mergetool_settings;
 mod previous_commit_messages;
@@ -119,26 +122,19 @@ pub(super) fn push_copy_path_entries(
     });
 }
 
-fn active_branch_tracking_upstream_name(host: &PopoverHost) -> Option<String> {
-    let repo_id = host.active_repo_id()?;
-    let repo = host.state.repos.iter().find(|repo| repo.id == repo_id)?;
-    let Loadable::Ready(head) = &repo.head_branch else {
-        return None;
-    };
-    let Loadable::Ready(branches) = &repo.branches else {
-        return None;
-    };
-
-    branches
+fn active_branch_tracking_upstream(host: &PopoverHost) -> Option<&Upstream> {
+    let repo = host.active_repo()?;
+    let head = repo.head_branch.ready()?;
+    repo.branches
+        .ready()?
         .iter()
         .find(|branch| branch.name == *head)
         .and_then(|branch| branch.upstream.as_ref())
-        .map(|upstream| format!("{}/{}", upstream.remote, upstream.branch))
 }
 
-fn action_menu_title(base: &'static str, tracking_branch_name: Option<&str>) -> SharedString {
-    match tracking_branch_name {
-        Some(name) => format!("{base} {name}").into(),
+fn action_menu_title(base: &'static str, upstream: Option<&Upstream>) -> SharedString {
+    match upstream {
+        Some(upstream) => format!("{base} {}/{}", upstream.remote, upstream.branch).into(),
         None => base.into(),
     }
 }
@@ -645,6 +641,14 @@ impl PopoverHost {
                 repo_id,
                 kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::Menu { path }),
             } => Some(submodule::model(self, *repo_id, path)),
+            PopoverKind::Repo {
+                repo_id,
+                kind: RepoPopoverKind::Annex(AnnexPopoverKind::SectionMenu),
+            } => Some(annex::section_model(self, *repo_id)),
+            PopoverKind::Repo {
+                repo_id,
+                kind: RepoPopoverKind::Annex(AnnexPopoverKind::RepositoryMenu { uuid }),
+            } => Some(annex::repository_model(self, *repo_id, uuid)),
             PopoverKind::CommitFileMenu {
                 repo_id,
                 commit_id,
@@ -744,7 +748,7 @@ impl PopoverHost {
                 target,
             )),
             PopoverKind::DiffHunkMenu { repo_id, src_ix } => {
-                Some(diff_hunk::model(self, *repo_id, *src_ix))
+                Some(diff_hunk::model(self, *repo_id, *src_ix, cx))
             }
             PopoverKind::DiffEditorMenu {
                 repo_id,
@@ -1665,6 +1669,13 @@ impl PopoverHost {
             ContextMenuAction::LaunchMergetool { repo_id, path } => {
                 self.store.dispatch(Msg::LaunchMergetool { repo_id, path });
             }
+            ContextMenuAction::RunLargeFileCommand { repo_id, command } => {
+                self.store
+                    .dispatch(Msg::RunLargeFileCommand { repo_id, command });
+            }
+            ContextMenuAction::LoadLfsLocks { repo_id } => {
+                self.store.dispatch(Msg::LoadLfsLocks { repo_id });
+            }
             ContextMenuAction::FetchAll { repo_id } => {
                 self.store
                     .dispatch(Msg::Fetch(gitcomet_state::msg::FetchMsg::All { repo_id }));
@@ -1740,7 +1751,7 @@ impl PopoverHost {
                     .repos
                     .iter()
                     .find(|repo| repo.id == repo_id)
-                    .map(push_request)
+                    .map(|repo| push_request(repo, &self.state.large_file_settings))
                     .unwrap_or(PushRequest::NotReady);
                 match request {
                     PushRequest::Push => self.store.dispatch(Msg::Push { repo_id }),
@@ -2060,7 +2071,7 @@ impl PopoverHost {
                 }
             }
             ContextMenuAction::StageHunk { repo_id, src_ix } => {
-                if let Some(patch) = self.build_unified_patch_for_hunk_src_ix(repo_id, src_ix) {
+                if let Some(patch) = self.build_unified_patch_for_hunk_src_ix(repo_id, src_ix, cx) {
                     self.store.dispatch(Msg::StageHunk { repo_id, patch });
                 } else {
                     self.push_toast(
@@ -2071,7 +2082,7 @@ impl PopoverHost {
                 }
             }
             ContextMenuAction::UnstageHunk { repo_id, src_ix } => {
-                if let Some(patch) = self.build_unified_patch_for_hunk_src_ix(repo_id, src_ix) {
+                if let Some(patch) = self.build_unified_patch_for_hunk_src_ix(repo_id, src_ix, cx) {
                     self.store.dispatch(Msg::UnstageHunk { repo_id, patch });
                 } else {
                     self.push_toast(
@@ -2382,9 +2393,17 @@ impl PopoverHost {
         &self,
         repo_id: RepoId,
         hunk_src_ix: usize,
+        cx: &gpui::App,
     ) -> Option<gitcomet_state::msg::ContentBytes> {
-        let repo = self.state.repos.iter().find(|r| r.id == repo_id)?;
-        let Loadable::Ready(diff) = &repo.diff_state.diff else {
+        let pane = self.main_pane.read(cx);
+        // Payload row numbers do not address hunks in the Git pointer patch.
+        if pane.active_repo_id() != Some(repo_id)
+            || pane.is_inline_submodule_diff_active()
+            || pane.has_large_file_text_diff()
+        {
+            return None;
+        }
+        let Some(Loadable::Ready(diff)) = pane.rendered_patch_diff_loadable() else {
             return None;
         };
         crate::view::diff_utils::build_unified_patch_for_hunk(diff.lines.as_slice(), hunk_src_ix)

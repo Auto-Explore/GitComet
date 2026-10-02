@@ -88,13 +88,16 @@ pub(super) fn schedule(
                     // are skipped and the answer says so.
                     if file_text {
                         send(DiffSessionContent::FileText(
-                            cancellation.check_cancelled().and_then(|()| {
-                                repo.diff_file_text_with_encoding_cancellable(
-                                    &target,
-                                    encoding,
-                                    &cancellation,
-                                )
-                            }),
+                            cancellation
+                                .check_cancelled()
+                                .and_then(|()| {
+                                    repo.diff_file_text_with_encoding_cancellable(
+                                        &target,
+                                        encoding,
+                                        &cancellation,
+                                    )
+                                })
+                                .map(|text| text.map(Box::new)),
                         ));
                     }
                     if image {

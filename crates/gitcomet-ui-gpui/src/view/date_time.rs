@@ -259,30 +259,6 @@ pub(super) fn format_datetime_into(
         }
     }
 
-    fn floor_div(a: i64, b: i64) -> i64 {
-        let mut q = a / b;
-        let r = a % b;
-        if (r != 0) && ((r < 0) != (b < 0)) {
-            q -= 1;
-        }
-        q
-    }
-
-    // Howard Hinnant's `civil_from_days` algorithm.
-    fn civil_from_days(days_since_epoch: i64) -> (i32, u32, u32) {
-        let z = days_since_epoch.saturating_add(719_468);
-        let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-        let doe = z - era * 146_097; // [0, 146096]
-        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
-        let y = yoe + era * 400;
-        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
-        let mp = (5 * doy + 2) / 153; // [0, 11]
-        let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
-        let m = mp + if mp < 10 { 3 } else { -9 }; // [1, 12]
-        let y = y + i64::from(m <= 2);
-        (y as i32, m as u32, d as u32)
-    }
-
     /// Two-digit ASCII lookup table: DEC_PAIR[n] = "00".."99" for n in 0..100.
     static DEC_PAIR: [[u8; 2]; 100] = {
         let mut table = [[0u8; 2]; 100];
@@ -324,19 +300,22 @@ pub(super) fn format_datetime_into(
     let unix = unix_seconds(time);
     let offset = timezone.offset_seconds_at(unix);
     let secs = unix.saturating_add(offset);
-    let days = floor_div(secs, 86_400);
-    let sec_of_day = secs - days * 86_400;
-    let sec_of_day: i64 = if sec_of_day < 0 {
-        sec_of_day + 86_400
+    let timestamp = jiff::Timestamp::from_second(secs).unwrap_or(if secs < 0 {
+        jiff::Timestamp::MIN
     } else {
-        sec_of_day
-    };
-
-    let hour = (sec_of_day / 3600) as u32;
-    let minute = ((sec_of_day % 3600) / 60) as u32;
-    let second = (sec_of_day % 60) as u32;
-
-    let (y, m, d) = civil_from_days(days);
+        jiff::Timestamp::MAX
+    });
+    let datetime = jiff::tz::Offset::UTC.to_datetime(timestamp);
+    let (y, m, d) = (
+        i32::from(datetime.year()),
+        datetime.month() as u32,
+        datetime.day() as u32,
+    );
+    let (hour, minute, second) = (
+        datetime.hour() as u32,
+        datetime.minute() as u32,
+        datetime.second() as u32,
+    );
 
     // Build the date-time string in a fixed stack buffer (all ASCII, always
     // valid UTF-8) and push_str once — avoids std::fmt dispatch overhead.
@@ -595,6 +574,30 @@ mod tests {
             ),
             "1970-01-01 00:59:59 UTC+1"
         );
+    }
+
+    #[test]
+    fn format_datetime_preserves_gregorian_leap_year_boundaries() {
+        for (seconds, expected) in [
+            (-2_203_891_201_i64, "1900-02-28 23:59:59"),
+            (-2_203_891_200, "1900-03-01 00:00:00"),
+            (951_782_400, "2000-02-29 00:00:00"),
+            (951_868_800, "2000-03-01 00:00:00"),
+            (4_107_542_399, "2100-02-28 23:59:59"),
+            (4_107_542_400, "2100-03-01 00:00:00"),
+            (1_709_210_096, "2024-02-29 12:34:56"),
+        ] {
+            let duration = Duration::from_secs(seconds.unsigned_abs());
+            let time = if seconds < 0 {
+                UNIX_EPOCH - duration
+            } else {
+                UNIX_EPOCH + duration
+            };
+            assert_eq!(
+                format_datetime(time, DateTimeFormat::YmdHms, Timezone::Utc, false),
+                expected
+            );
+        }
     }
 
     #[test]

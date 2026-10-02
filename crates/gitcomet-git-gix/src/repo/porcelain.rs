@@ -1098,6 +1098,7 @@ impl GixRepo {
     }
 
     pub(super) fn commit_amend_impl(&self, message: &str) -> Result<()> {
+        self.refuse_amending_annex_adjustment()?;
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("commit").arg("--amend").arg("-m").arg(message);
         run_git_simple(cmd, "git commit --amend")

@@ -2971,6 +2971,7 @@ fn diff_file_loaded_and_image_loaded_cover_success_and_error_paths() {
                 path: PathBuf::from("icon.svg"),
                 old: Some(vec![0x01]),
                 new: Some(vec![0x02]),
+                ..Default::default()
             })),
         }),
     );
@@ -3989,6 +3990,7 @@ fn diff_file_image_loaded_drops_old_side_when_content_preview() {
                 path: path.clone(),
                 old: Some(image_data.clone()),
                 new: Some(image_data),
+                ..Default::default()
             })),
         }),
     );

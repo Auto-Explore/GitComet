@@ -17,6 +17,7 @@ const PIN_LOCAL_PREFIX: &str = "local:";
 const PIN_REMOTE_PREFIX: &str = "remote:";
 const WORKTREES_SECTION_KEY: &str = "section:worktrees";
 const SUBMODULES_SECTION_KEY: &str = "section:submodules";
+const ANNEX_SECTION_KEY: &str = "section:annex";
 const STASH_SECTION_KEY: &str = "section:stash";
 const EXPANDED_DEFAULT_SECTION_PREFIX: &str = "expanded:";
 const TRAILING_BOTTOM_SPACERS: usize = 3;
@@ -205,6 +206,10 @@ pub(super) const fn submodules_section_storage_key() -> &'static str {
     SUBMODULES_SECTION_KEY
 }
 
+pub(super) const fn annex_section_storage_key() -> &'static str {
+    ANNEX_SECTION_KEY
+}
+
 pub(super) const fn stash_section_storage_key() -> &'static str {
     STASH_SECTION_KEY
 }
@@ -317,6 +322,28 @@ pub(super) enum BranchSidebarRow {
         status: SubmoduleStatus,
         recorded_head: CommitId,
         checked_out_head: Option<CommitId>,
+    },
+    /// git-annex: the repositories and special remotes content can live in.
+    AnnexHeader {
+        collapsed: bool,
+        collapse_key: SharedString,
+        /// e.g. "numcopies 2" or "adjusted (unlocked)".
+        summary: Option<SharedString>,
+    },
+    AnnexPlaceholder {
+        message: SharedString,
+        /// This clone has not run `git annex init` yet.
+        can_init: bool,
+        /// Files were left stale by an interrupted command; offer a restage.
+        can_restage: bool,
+    },
+    AnnexRepositoryItem {
+        uuid: SharedString,
+        name: SharedString,
+        /// Type and trust, e.g. "directory · untrusted".
+        detail: SharedString,
+        here: bool,
+        untrusted: bool,
     },
     StashHeader {
         top_border: bool,
@@ -450,6 +477,10 @@ pub(in crate::view) struct BranchSidebarSourceFingerprint(u64);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::view) struct BranchSidebarSourceFingerprintParts {
+    annex_refs_hidden: bool,
+    annex_rev: u64,
+    annex_reuse_identity: fingerprint::LoadableArcIdentity,
+    annex_hash: u64,
     local_revs: (u64, u64),
     local_hash: u64,
     local_reuse_key: u64,
@@ -469,6 +500,9 @@ pub(in crate::view) struct BranchSidebarSourceFingerprintParts {
 
 impl BranchSidebarSourceFingerprintParts {
     fn for_repo(repo: &RepoState, reuse: Option<&Self>) -> Self {
+        let annex_refs_hidden = repo.annex_refs_hidden;
+        let annex_rev = repo.large_file_support_rev;
+        let annex_reuse_identity = fingerprint::loadable_arc_identity(&repo.large_file_support);
         let local_revs = (repo.head_branch_rev, repo.branches_rev);
         let local_reuse_key = branch_sidebar_local_reuse_key(repo);
         let remote_revs = (
@@ -486,6 +520,19 @@ impl BranchSidebarSourceFingerprintParts {
         let stash_reuse_identity = fingerprint::loadable_arc_identity(&repo.stashes);
 
         Self {
+            annex_refs_hidden,
+            annex_rev,
+            annex_reuse_identity,
+            annex_hash: reuse
+                .filter(|parts| {
+                    parts.annex_refs_hidden == annex_refs_hidden
+                        && parts.annex_rev == annex_rev
+                        && parts.annex_reuse_identity == annex_reuse_identity
+                })
+                .map_or_else(
+                    || branch_sidebar_annex_source_hash(repo),
+                    |parts| parts.annex_hash,
+                ),
             local_revs,
             local_reuse_key,
             local_hash: reuse
@@ -554,6 +601,8 @@ impl BranchSidebarSourceFingerprintParts {
         self.submodule_hash.hash(&mut hasher);
         4u8.hash(&mut hasher);
         self.stash_hash.hash(&mut hasher);
+        5u8.hash(&mut hasher);
+        self.annex_hash.hash(&mut hasher);
         BranchSidebarSourceFingerprint(hasher.finish())
     }
 }
@@ -574,6 +623,13 @@ pub(in crate::view) fn branch_sidebar_source_matches_cached(
     repo: &RepoState,
     cached: &BranchSidebarSourceFingerprintParts,
 ) -> bool {
+    if cached.annex_refs_hidden != repo.annex_refs_hidden
+        || cached.annex_rev != repo.large_file_support_rev
+        || cached.annex_reuse_identity
+            != fingerprint::loadable_arc_identity(&repo.large_file_support)
+    {
+        return false;
+    }
     let local_revs = (repo.head_branch_rev, repo.branches_rev);
     if cached.local_revs != local_revs
         && cached.local_reuse_key != branch_sidebar_local_reuse_key(repo)
@@ -730,6 +786,16 @@ fn hash_branch_sidebar_worktree_source<H: Hasher>(repo: &RepoState, hasher: &mut
 fn branch_sidebar_worktree_source_hash(repo: &RepoState) -> u64 {
     let mut hasher = FxHasher::default();
     hash_branch_sidebar_worktree_source(repo, &mut hasher);
+    hasher.finish()
+}
+
+fn branch_sidebar_annex_source_hash(repo: &RepoState) -> u64 {
+    let mut hasher = FxHasher::default();
+    repo.annex_refs_hidden.hash(&mut hasher);
+    fingerprint::hash_loadable_kind(&repo.large_file_support, &mut hasher);
+    if let Loadable::Ready(support) = &repo.large_file_support {
+        support.annex.hash(&mut hasher);
+    }
     hasher.finish()
 }
 
@@ -952,6 +1018,7 @@ pub(super) fn is_top_level_collapse_key(key: &str) -> bool {
                 | REMOTE_SECTION_KEY
                 | WORKTREES_SECTION_KEY
                 | SUBMODULES_SECTION_KEY
+                | ANNEX_SECTION_KEY
                 | STASH_SECTION_KEY
         )
 }
@@ -1054,6 +1121,12 @@ fn sidebar_rows(
                     if !matches_branch_filter(&branch.name, &filter) {
                         continue;
                     }
+                    if repo.annex_refs_hidden
+                        && head != Some(branch.name.as_str())
+                        && gitcomet_core::annex::is_annex_ref(&branch.name)
+                    {
+                        continue;
+                    }
                     local_leaf_meta.push(SlashTreeLeafMeta {
                         divergence: branch.divergence,
                         is_head: head.is_some_and(|current| current == branch.name.as_str()),
@@ -1124,6 +1197,9 @@ fn sidebar_rows(
                         branch.name.as_str(),
                         &filter,
                     ) {
+                        continue;
+                    }
+                    if repo.annex_refs_hidden && gitcomet_core::annex::is_annex_ref(&branch.name) {
                         continue;
                     }
                     let inserted = push_remote_group_branch(
@@ -1279,6 +1355,8 @@ fn sidebar_rows(
     }
 
     rows.push(BranchSidebarRow::SectionSpacer);
+
+    push_annex_section_rows(repo, collapsed_items, always_expanded, &mut rows);
 
     rows.push(BranchSidebarRow::StashHeader {
         top_border: true,
@@ -1614,6 +1692,82 @@ fn ensure_remote_group<'a>(
         name: remote,
         branches: Vec::new(),
     });
+}
+
+/// Only repositories that use git-annex get the section.
+fn push_annex_section_rows(
+    repo: &RepoState,
+    collapsed_items: &BTreeSet<String>,
+    always_expanded: bool,
+    rows: &mut Vec<BranchSidebarRow>,
+) {
+    let Loadable::Ready(support) = &repo.large_file_support else {
+        return;
+    };
+    let annex = &support.annex;
+    if !annex.in_use() {
+        return;
+    }
+    let collapsed = !always_expanded && is_collapsed(collapsed_items, annex_section_storage_key());
+    let summary = match (repo.annex_adjusted_branch(), annex.numcopies) {
+        (Some((_, mode)), _) => Some(format!("adjusted ({mode})").into()),
+        (None, Some(copies)) => Some(format!("numcopies {copies}").into()),
+        (None, None) => None,
+    };
+    rows.push(BranchSidebarRow::AnnexHeader {
+        collapsed,
+        collapse_key: annex_section_storage_key().into(),
+        summary,
+    });
+    if collapsed {
+        rows.push(BranchSidebarRow::SectionSpacer);
+        return;
+    }
+    if !annex.initialized() {
+        rows.push(BranchSidebarRow::AnnexPlaceholder {
+            message: "Not initialized in this clone".into(),
+            can_init: true,
+            can_restage: false,
+        });
+    } else {
+        if annex.restage_pending {
+            rows.push(BranchSidebarRow::AnnexPlaceholder {
+                message: "Some annexed files need a refresh".into(),
+                can_init: false,
+                can_restage: true,
+            });
+        }
+        let visible: Vec<_> = annex
+            .repositories
+            .iter()
+            .filter(|repository| !repository.is_builtin())
+            .collect();
+        if visible.is_empty() {
+            rows.push(BranchSidebarRow::AnnexPlaceholder {
+                message: "Repositories unknown (is git-annex installed?)".into(),
+                can_init: false,
+                can_restage: false,
+            });
+        }
+        for repository in visible {
+            let kind = repository
+                .special_type
+                .as_deref()
+                .unwrap_or(if repository.here {
+                    "this clone"
+                } else {
+                    "git repository"
+                });
+            rows.push(BranchSidebarRow::AnnexRepositoryItem {
+                uuid: repository.uuid.clone().into(),
+                name: repository.display_description().into(),
+                detail: format!("{kind} · {}", repository.trust.label()).into(),
+                here: repository.here,
+                untrusted: repository.trust == gitcomet_core::large_files::AnnexTrust::Untrusted,
+            });
+        }
+    }
+    rows.push(BranchSidebarRow::SectionSpacer);
 }
 
 fn push_remote_branch_sidebar_rows(
@@ -2374,6 +2528,281 @@ mod tests {
         // An unknown prefix is ignored rather than mis-rendered, so a stale key
         // from an older session cannot claim a section.
         assert_eq!(parse_branch_pin_key("garbage"), None);
+    }
+
+    fn annex_repo() -> RepoState {
+        let mut repo = RepoState::new_opening(
+            RepoId(7),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/annex"),
+            },
+        );
+        let branch = |name: &str| Branch {
+            name: name.to_string(),
+            target: commit_id("aaaaaaaa"),
+            upstream: None,
+            divergence: None,
+        };
+        repo.branches = Loadable::Ready(Arc::new(vec![
+            branch("main"),
+            branch("git-annex"),
+            branch("synced/main"),
+        ]));
+        repo.remote_branches = Loadable::Ready(Arc::new(vec![
+            RemoteBranch {
+                remote: "origin".to_string(),
+                name: "main".to_string(),
+                target: commit_id("aaaaaaaa"),
+            },
+            RemoteBranch {
+                remote: "origin".to_string(),
+                name: "git-annex".to_string(),
+                target: commit_id("bbbbbbbb"),
+            },
+        ]));
+        let mut support = gitcomet_core::large_files::LargeFileSupport::default();
+        support.annex.uuid = Some("u-here".into());
+        support.annex.has_annex_branch = true;
+        support.annex.numcopies = Some(2);
+        support.annex.repositories = vec![
+            gitcomet_core::large_files::AnnexRepository {
+                uuid: "00000000-0000-0000-0000-000000000001".into(),
+                description: "web".into(),
+                remote_name: None,
+                special_type: None,
+                special_name: None,
+                trust: gitcomet_core::large_files::AnnexTrust::Semitrusted,
+                here: false,
+            },
+            gitcomet_core::large_files::AnnexRepository {
+                uuid: "u-here".into(),
+                description: "laptop".into(),
+                remote_name: None,
+                special_type: None,
+                special_name: None,
+                trust: gitcomet_core::large_files::AnnexTrust::Semitrusted,
+                here: true,
+            },
+            gitcomet_core::large_files::AnnexRepository {
+                uuid: "u-backup".into(),
+                description: String::new(),
+                remote_name: Some("backup".into()),
+                special_type: Some("directory".into()),
+                special_name: None,
+                trust: gitcomet_core::large_files::AnnexTrust::Untrusted,
+                here: false,
+            },
+        ];
+        repo.large_file_support = Loadable::Ready(Arc::new(support));
+        repo
+    }
+
+    fn branch_labels(rows: &[BranchSidebarRow]) -> Vec<String> {
+        rows.iter()
+            .filter_map(|row| match row {
+                BranchSidebarRow::Branch { name, .. } => Some(name.to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn annex_section_lists_repositories_without_builtin_remotes() {
+        let repo = annex_repo();
+        let rows = branch_sidebar_rows(&repo, &BTreeSet::new(), &BTreeSet::new(), "");
+        let header = rows.iter().find_map(|row| match row {
+            BranchSidebarRow::AnnexHeader { summary, .. } => Some(summary.clone()),
+            _ => None,
+        });
+        assert_eq!(header, Some(Some("numcopies 2".into())));
+        let items: Vec<(String, String, bool, bool)> = rows
+            .iter()
+            .filter_map(|row| match row {
+                BranchSidebarRow::AnnexRepositoryItem {
+                    name,
+                    detail,
+                    here,
+                    untrusted,
+                    ..
+                } => Some((name.to_string(), detail.to_string(), *here, *untrusted)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            items,
+            [
+                (
+                    "laptop".into(),
+                    "this clone · semitrusted".into(),
+                    true,
+                    false
+                ),
+                (
+                    "[backup]".into(),
+                    "directory · untrusted".into(),
+                    false,
+                    true
+                ),
+            ]
+        );
+
+        let rows_for =
+            |repo: &RepoState| branch_sidebar_rows(repo, &BTreeSet::new(), &BTreeSet::new(), "");
+        let mut uninitialized = annex_repo();
+        if let Loadable::Ready(support) = &mut uninitialized.large_file_support {
+            Arc::make_mut(support).annex.uuid = None;
+        }
+        let rows = branch_sidebar_rows(&uninitialized, &BTreeSet::new(), &BTreeSet::new(), "");
+        assert!(rows.iter().any(|row| matches!(
+            row,
+            BranchSidebarRow::AnnexPlaceholder { can_init: true, .. }
+        )));
+
+        let is_restage_row = |row: &BranchSidebarRow| {
+            matches!(
+                row,
+                BranchSidebarRow::AnnexPlaceholder {
+                    can_restage: true,
+                    ..
+                }
+            )
+        };
+        assert!(!rows_for(&annex_repo()).iter().any(is_restage_row));
+        let mut stale = annex_repo();
+        if let Loadable::Ready(support) = &mut stale.large_file_support {
+            Arc::make_mut(support).annex.restage_pending = true;
+        }
+        let rows = rows_for(&stale);
+        assert!(
+            rows.iter().any(is_restage_row),
+            "interrupted get offers a refresh"
+        );
+        assert!(
+            rows.iter()
+                .any(|row| matches!(row, BranchSidebarRow::AnnexRepositoryItem { .. })),
+            "repositories stay listed below the refresh row"
+        );
+        let (fresh_source, _) = branch_sidebar_source_fingerprint(&annex_repo(), None);
+        let (stale_source, _) = branch_sidebar_source_fingerprint(&stale, None);
+        assert_ne!(fresh_source, stale_source, "cached rows must not be reused");
+
+        let mut plain = annex_repo();
+        plain.large_file_support = Loadable::Ready(Arc::new(Default::default()));
+        let rows = branch_sidebar_rows(&plain, &BTreeSet::new(), &BTreeSet::new(), "");
+        assert!(
+            !rows
+                .iter()
+                .any(|row| matches!(row, BranchSidebarRow::AnnexHeader { .. }))
+        );
+    }
+
+    #[test]
+    fn review_annex_sidebar_displays_raw_description_with_remote_decoration() {
+        let mut repo = annex_repo();
+        let Loadable::Ready(support) = &mut repo.large_file_support else {
+            panic!("support")
+        };
+        Arc::make_mut(support).annex.repositories[2].description = "Archive".into();
+        let rows = branch_sidebar_rows(&repo, &BTreeSet::new(), &BTreeSet::new(), "");
+        assert!(rows.iter().any(|row| matches!(row, BranchSidebarRow::AnnexRepositoryItem { name, .. } if name.as_ref() == "Archive [backup]")));
+    }
+
+    #[test]
+    fn hidden_annex_refs_leave_branch_lists_and_change_the_cache_source() {
+        let mut repo = annex_repo();
+        let shown = branch_sidebar_rows(&repo, &BTreeSet::new(), &BTreeSet::new(), "");
+        let (shown_source, cached) = branch_sidebar_source_fingerprint(&repo, None);
+        assert!(branch_labels(&shown).iter().any(|name| name == "git-annex"));
+
+        repo.annex_refs_hidden = true;
+        let hidden = branch_sidebar_rows(&repo, &BTreeSet::new(), &BTreeSet::new(), "");
+        let labels = branch_labels(&hidden);
+        assert!(
+            !labels
+                .iter()
+                .any(|name| name == "git-annex" || name.starts_with("synced")),
+            "{labels:?}"
+        );
+        assert!(labels.iter().any(|name| name == "main"), "{labels:?}");
+        assert!(!branch_sidebar_source_matches_cached(&repo, &cached));
+        let (hidden_source, _) = branch_sidebar_source_fingerprint(&repo, Some(&cached));
+        assert_eq!(
+            hidden_source,
+            branch_sidebar_source_fingerprint(&repo, None).0
+        );
+        assert_ne!(
+            shown_source, hidden_source,
+            "cached rows must not be reused"
+        );
+    }
+
+    #[test]
+    fn annex_support_invalidates_both_sidebar_cache_reuse_paths() {
+        let mut repo = annex_repo();
+        repo.large_file_support = Loadable::NotLoaded;
+        let (mut source, mut cached) = branch_sidebar_source_fingerprint(&repo, None);
+        for support in [
+            Loadable::Loading,
+            annex_repo().large_file_support,
+            {
+                let mut support = match annex_repo().large_file_support {
+                    Loadable::Ready(support) => (*support).clone(),
+                    _ => unreachable!(),
+                };
+                support.annex.uuid = Some("changed-uuid".into());
+                support.annex.restage_pending = true;
+                Loadable::Ready(Arc::new(support))
+            },
+            Loadable::NotLoaded,
+        ] {
+            repo.large_file_support = support;
+            repo.branch_sidebar_rev += 1;
+            assert!(!branch_sidebar_source_matches_cached(&repo, &cached));
+            let (next, parts) = branch_sidebar_source_fingerprint(&repo, Some(&cached));
+            assert_ne!(source, next);
+            assert_eq!(next, branch_sidebar_source_fingerprint(&repo, None).0);
+            assert_eq!(parts.local_hash, cached.local_hash);
+            assert_eq!(parts.remote_hash, cached.remote_hash);
+            assert!(branch_sidebar_source_matches_cached(&repo, &parts));
+            (source, cached) = (next, parts);
+        }
+    }
+
+    #[test]
+    fn annex_support_revision_invalidates_an_in_place_update() {
+        let mut repo = annex_repo();
+        let (old, cached) = branch_sidebar_source_fingerprint(&repo, None);
+        let Loadable::Ready(support) = &mut repo.large_file_support else {
+            unreachable!()
+        };
+        Arc::make_mut(support).annex.restage_pending = true;
+        repo.large_file_support_rev += 1;
+        assert!(!branch_sidebar_source_matches_cached(&repo, &cached));
+        let (updated, _) = branch_sidebar_source_fingerprint(&repo, Some(&cached));
+        assert_ne!(old, updated);
+        assert_eq!(updated, branch_sidebar_source_fingerprint(&repo, None).0);
+    }
+
+    #[test]
+    fn checked_out_annex_bookkeeping_branch_stays_visible() {
+        for head in ["git-annex", "synced/main"] {
+            let mut repo = annex_repo();
+            repo.annex_refs_hidden = true;
+            repo.head_branch = Loadable::Ready(head.into());
+            let rows = branch_sidebar_rows(&repo, &BTreeSet::new(), &BTreeSet::new(), "");
+            let labels = branch_labels(&rows);
+            assert!(labels.iter().any(|name| name == head), "{head}: {labels:?}");
+            let other = if head == "git-annex" {
+                "synced/main"
+            } else {
+                "git-annex"
+            };
+            assert!(
+                !labels.iter().any(|name| name == other),
+                "{head}: {labels:?}"
+            );
+            assert!(!labels.iter().any(|name| name == "origin/git-annex"));
+        }
     }
 
     #[test]

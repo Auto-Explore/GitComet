@@ -28,8 +28,16 @@ pub enum GitFailureId {
     ApplyChangeCommitFailed,
     UntrackedRestoreConflict,
     WorktreeWouldBeOverwritten,
+    /// A filter or hook needs `git-lfs`, which is not on Git's PATH.
+    LfsNotInstalled,
     /// A pull or merge left a merge or rebase in progress with unmerged paths.
     StoppedAtConflicts,
+    /// Smudge could not download an LFS object (missing on the server, no remote).
+    LfsObjectMissing,
+    /// A push or edit was refused because another user holds an LFS lock.
+    LfsLocked,
+    /// The pre-push hook could not upload LFS objects.
+    LfsUploadFailed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

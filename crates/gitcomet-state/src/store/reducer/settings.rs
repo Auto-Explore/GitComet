@@ -14,6 +14,8 @@ pub(super) fn set_git_runtime_state(state: &mut AppState, runtime: GitRuntimeSta
     }
     state.git_runtime = runtime;
     state.signing_tools = Default::default();
+    // A different Git resolves `git lfs` / `git annex` differently.
+    state.large_file_tools = Default::default();
     if state.git_log_settings.verify_commit_signatures {
         util::reverify_all_commit_signatures_effects(state)
     } else {
@@ -67,5 +69,24 @@ pub(super) fn set_remote_settings(state: &mut AppState, settings: RemoteSettings
 
 pub(super) fn set_default_tag_type(state: &mut AppState, tag_type: DefaultTagType) -> Vec<Effect> {
     state.default_tag_type = tag_type;
+    Vec::new()
+}
+
+pub(super) fn set_large_file_tools_state(
+    state: &mut AppState,
+    tools: gitcomet_core::large_file_tools::LargeFileToolsState,
+) -> Vec<Effect> {
+    state.large_file_tools = tools;
+    Vec::new()
+}
+
+pub(super) fn set_large_file_settings(
+    state: &mut AppState,
+    settings: crate::model::LargeFileSettings,
+) -> Vec<Effect> {
+    state.large_file_settings = settings;
+    for repo in &mut state.repos {
+        repo.sync_annex_refs_hidden(settings.hide_annex_refs);
+    }
     Vec::new()
 }

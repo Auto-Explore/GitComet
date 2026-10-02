@@ -805,6 +805,7 @@ pub(super) fn append_ready_line_stats_effect(
             staged.len(),
             unstaged.len()
         );
+        let large_files = repo_state.large_file_support_active();
         effects.push_effect(Effect::LoadUncommittedLineStats {
             repo_id,
             generation,
@@ -812,6 +813,7 @@ pub(super) fn append_ready_line_stats_effect(
                 staged: std::sync::Arc::clone(staged),
                 unstaged: std::sync::Arc::clone(unstaged),
             }),
+            large_files,
         });
     }
 }
@@ -1376,6 +1378,7 @@ fn summarize_command(
             RepoCommandKind::LaunchMergetool { .. } => "Mergetool",
             RepoCommandKind::SaveWorktreeFile { .. } => "Save file",
             RepoCommandKind::AppendGitignorePatterns { .. } => "Update .gitignore",
+            RepoCommandKind::LargeFile { command } => command.label(),
             RepoCommandKind::AppendGitattributesRule { .. } => "Update .gitattributes",
             RepoCommandKind::ExportPatch { .. } | RepoCommandKind::ApplyPatch { .. } => "Patch",
             RepoCommandKind::AddWorktree { .. }
@@ -1581,6 +1584,7 @@ fn summarize_command(
                 format!("Saved → {}", path.display())
             }
         }
+        RepoCommandKind::LargeFile { command } => format!("{}: done", command.label()),
         // Deliberately "added to .gitignore" rather than "ignored": a later
         // negation, a nested .gitignore or .git/info/exclude can still win, and
         // promising an outcome we did not verify would be a lie the user only

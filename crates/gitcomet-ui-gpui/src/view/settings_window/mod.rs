@@ -381,6 +381,7 @@ enum SettingsCategory {
     FileEditing,
     GitLog,
     Remotes,
+    LargeFiles,
     Tags,
     Maintenance,
     GitExecutable,
@@ -400,6 +401,7 @@ impl SettingsCategory {
         SettingsCategory::FileEditing,
         SettingsCategory::GitLog,
         SettingsCategory::Remotes,
+        SettingsCategory::LargeFiles,
         SettingsCategory::Tags,
         SettingsCategory::Maintenance,
         SettingsCategory::GitExecutable,
@@ -419,6 +421,7 @@ impl SettingsCategory {
             Self::FileEditing => "File editing",
             Self::GitLog => "Git log",
             Self::Remotes => "Remotes",
+            Self::LargeFiles => "Large files",
             Self::Tags => "Tags",
             Self::Maintenance => "Maintenance",
             Self::GitExecutable => "Executables",
@@ -439,6 +442,7 @@ impl SettingsCategory {
             Self::FileEditing => "icons/pencil.svg",
             Self::GitLog => "icons/history.svg",
             Self::Remotes => "icons/cloud.svg",
+            Self::LargeFiles => "icons/disk.svg",
             Self::Tags => "icons/tag.svg",
             Self::Maintenance => "icons/broom.svg",
             Self::GitExecutable => "icons/git_branch.svg",
@@ -459,6 +463,7 @@ impl SettingsCategory {
             Self::FileEditing => "settings_window_nav_file_editing",
             Self::GitLog => "settings_window_nav_git_log",
             Self::Remotes => "settings_window_nav_remotes",
+            Self::LargeFiles => "settings_window_nav_large_files",
             Self::Tags => "settings_window_nav_tags",
             Self::Maintenance => "settings_window_nav_maintenance",
             Self::GitExecutable => "settings_window_nav_git_executable",
@@ -505,6 +510,10 @@ impl SettingsCategory {
                  verify commit signatures verification signing key trust"
             }
             Self::Remotes => "remotes remote fetch pull prune deleted branches automatically ghost",
+            Self::LargeFiles => {
+                "large files git lfs git-annex annex synced branches adjusted branch pull push \
+                 sync content"
+            }
             Self::Tags => "tags automatically fetch tags",
             Self::Maintenance => {
                 "maintenance recommend repository gc garbage collection repack pack packs \
@@ -657,6 +666,7 @@ pub(crate) struct SettingsWindowView {
     default_history_mode: HistoryMode,
     default_tag_type: DefaultTagType,
     prune_deleted_remote_branches_on_fetch: bool,
+    large_file_settings: gitcomet_state::model::LargeFileSettings,
     recommend_repo_maintenance: bool,
     current_view: SettingsView,
     selected_category: SettingsCategory,
@@ -673,6 +683,8 @@ pub(crate) struct SettingsWindowView {
     environment_value_inputs: FxHashMap<SharedString, Entity<components::TextInput>>,
     signing_tools_probe: Option<gpui::Task<()>>,
     signing_tools_cancellation: gitcomet_core::services::CancellationToken,
+    large_file_tools_probe: Option<gpui::Task<()>>,
+    large_file_tools_cancellation: gitcomet_core::services::CancellationToken,
     git_executable_mode: GitExecutableMode,
     git_custom_path_draft: String,
     git_executable_input: Entity<components::TextInput>,
@@ -1079,6 +1091,7 @@ impl SettingsWindowView {
         let prune_deleted_remote_branches_on_fetch = ui_preferences
             .remotes
             .prune_deleted_remote_branches_on_fetch;
+        let large_file_settings = ui_preferences.large_files;
         let recommend_repo_maintenance = ui_preferences.maintenance.recommend;
         let external_editor_setting = initial_external_editor_setting(&ui_session);
         // Only the saved editor's entry is needed to render the summary row;
@@ -1427,6 +1440,7 @@ impl SettingsWindowView {
             default_history_mode,
             default_tag_type,
             prune_deleted_remote_branches_on_fetch,
+            large_file_settings,
             recommend_repo_maintenance,
             current_view: SettingsView::Root,
             selected_category: SettingsCategory::General,
@@ -1440,6 +1454,8 @@ impl SettingsWindowView {
             environment_value_inputs: FxHashMap::default(),
             signing_tools_probe,
             signing_tools_cancellation: Default::default(),
+            large_file_tools_probe: None,
+            large_file_tools_cancellation: Default::default(),
             git_executable_mode,
             git_custom_path_draft,
             git_executable_input,

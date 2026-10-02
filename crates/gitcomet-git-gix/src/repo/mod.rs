@@ -3,10 +3,10 @@ use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
     Branch, Commit, CommitDetails, CommitFileChange, CommitId, CommitSignature, Diff, DiffArea,
-    DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText, FileEntry, HistoryMode,
-    LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote, RemoteBranch,
-    RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, Upstream,
-    UpstreamDivergence, Worktree,
+    DiffPreviewTextFile, DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText, FileEntry,
+    HistoryMode, LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote,
+    RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary,
+    Tag, Upstream, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::remote_url::RemoteUrlPolicy;
@@ -50,6 +50,7 @@ pub(super) fn bstr_to_arc_str(bytes: &[u8]) -> Arc<str> {
     }
 }
 
+mod annex;
 mod apply_change;
 mod blame;
 mod comparison;
@@ -60,6 +61,8 @@ mod discard;
 mod file_browser;
 mod git_ops;
 mod history;
+mod large_files;
+mod lfs;
 mod line_stats;
 mod log;
 mod maintenance;
@@ -477,6 +480,8 @@ pub(crate) struct GixRepo {
     config_repo: std::sync::Mutex<config::ConfigRepo>,
     gitlink_status_capability: std::sync::Mutex<Option<GitlinkStatusCapabilityCacheEntry>>,
     branch_tracking_config: std::sync::Mutex<Option<BranchTrackingConfigCacheEntry>>,
+    /// Shared by row, diff and preview readers; refreshed with support metadata.
+    large_file_scan: std::sync::Mutex<Option<Arc<large_files::CommittedPointerScan>>>,
     tree_index_cache: std::sync::Mutex<Option<TreeIndexCacheEntry>>,
     log_page_cache: std::sync::Mutex<Vec<LogPageCacheEntry>>,
     history_authors_cache: std::sync::Mutex<Option<log::HistoryAuthorsCache>>,
@@ -526,6 +531,7 @@ impl GixRepo {
             config_repo: std::sync::Mutex::new(config_repo),
             gitlink_status_capability: std::sync::Mutex::new(None),
             branch_tracking_config: std::sync::Mutex::new(None),
+            large_file_scan: Default::default(),
             tree_index_cache: std::sync::Mutex::new(None),
             log_page_cache: std::sync::Mutex::new(Vec::new()),
             history_authors_cache: Default::default(),
@@ -620,6 +626,14 @@ impl GixRepo {
             return Err(error);
         }
         read()
+    }
+
+    /// For index-vs-worktree status: use the refreshed filter configuration,
+    /// but never start git-annex (see [`large_files::strip_annex_filter`]).
+    pub(super) fn status_repo(&self) -> gix::Repository {
+        let mut repo = self.large_file_read_repo();
+        large_files::strip_annex_filter(&mut repo);
+        repo
     }
 
     /// A fresh open, for operations that must see config/ref changes made after
@@ -913,6 +927,50 @@ impl GitRepository for GixRepo {
         self.line_stats_for_entries_impl(&status.unstaged, cancellation)
     }
 
+    fn large_file_support_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::large_files::LargeFileSupport> {
+        self.large_file_support_impl(cancellation)
+    }
+
+    fn uncommitted_large_files_for_status_cancellable(
+        &self,
+        status: &RepoStatus,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::large_files::UncommittedLargeFiles> {
+        self.uncommitted_large_files_impl(status, cancellation)
+    }
+
+    fn run_large_file_command(
+        &self,
+        command: &gitcomet_core::large_files::LargeFileCommand,
+    ) -> Result<CommandOutput> {
+        self.run_large_file_command_impl(command)
+    }
+
+    fn annex_whereis_cancellable(
+        &self,
+        key: &str,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::large_files::AnnexWhereis> {
+        self.annex_whereis_impl(key, cancellation)
+    }
+
+    fn annex_unused_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::large_files::AnnexUnused> {
+        self.annex_unused_impl(cancellation)
+    }
+
+    fn lfs_locks_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<gitcomet_core::large_files::LfsLock>> {
+        self.lfs_locks_impl(cancellation)
+    }
+
     fn commit_messages(&self, ids: &[CommitId]) -> Result<Vec<String>> {
         self.commit_messages_impl(ids)
     }
@@ -1149,7 +1207,7 @@ impl GitRepository for GixRepo {
         &self,
         target: &DiffTarget,
         side: DiffPreviewTextSide,
-    ) -> Result<Option<PathBuf>> {
+    ) -> Result<Option<DiffPreviewTextFile>> {
         self.diff_preview_text_file_impl(target, side)
     }
 
@@ -1172,7 +1230,7 @@ impl GitRepository for GixRepo {
         target: &DiffTarget,
         side: DiffPreviewTextSide,
         cancellation: &CancellationToken,
-    ) -> Result<Option<PathBuf>> {
+    ) -> Result<Option<DiffPreviewTextFile>> {
         let result = self.diff_preview_text_file_impl_cancellable(target, side, cancellation);
         cancellation.check_cancelled()?;
         result

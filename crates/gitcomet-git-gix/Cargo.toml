@@ -33,6 +33,7 @@ doc = false
 [dependencies]
 crc32fast = { workspace = true }
 flate2 = { workspace = true }
+fnv = { workspace = true }
 gitcomet-core = { workspace = true }
 filetime = { workspace = true }
 gix = { workspace = true }

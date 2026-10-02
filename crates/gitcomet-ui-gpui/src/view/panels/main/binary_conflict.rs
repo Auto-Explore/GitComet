@@ -1,6 +1,14 @@
 use super::*;
 use gitcomet_core::services::ConflictSide;
 
+/// Same units as the binary diff placeholder and the large-file card.
+fn side_size_label(size: Option<usize>) -> SharedString {
+    match size {
+        None => "absent".into(),
+        Some(n) => gitcomet_core::text_utils::human_readable_bytes(n as u64).into(),
+    }
+}
+
 impl MainPaneView {
     /// Render the binary/non-UTF8 conflict resolver panel.
     ///
@@ -18,17 +26,8 @@ impl MainPaneView {
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let [base_size, ours_size, theirs_size] = self.conflict_resolver.binary_side_sizes;
 
-        let format_size = |size: Option<usize>| -> SharedString {
-            match size {
-                None => "absent".into(),
-                Some(n) if n < 1024 => format!("{} B", n).into(),
-                Some(n) if n < 1024 * 1024 => format!("{:.1} KiB", n as f64 / 1024.0).into(),
-                Some(n) => format!("{:.1} MiB", n as f64 / (1024.0 * 1024.0)).into(),
-            }
-        };
-
         let side_row = |label: &'static str, size: Option<usize>, has_text: bool| -> gpui::Div {
-            let size_label = format_size(size);
+            let size_label = side_size_label(size);
             let kind_label: SharedString = if has_text {
                 "text (valid UTF-8)".into()
             } else if size.is_some() {
@@ -396,5 +395,18 @@ impl MainPaneView {
                     .child(action_section),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::side_size_label;
+
+    #[test]
+    fn side_sizes_use_the_shared_decimal_units() {
+        assert_eq!(side_size_label(None).as_ref(), "absent");
+        assert_eq!(side_size_label(Some(512)).as_ref(), "512 B");
+        assert_eq!(side_size_label(Some(1_536)).as_ref(), "1.5 KB");
+        assert_eq!(side_size_label(Some(12_345_678)).as_ref(), "12.3 MB");
     }
 }

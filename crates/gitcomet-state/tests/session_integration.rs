@@ -727,3 +727,29 @@ fn file_list_layout_round_trips_through_persist_and_load() {
         Some("tree")
     );
 }
+
+#[test]
+fn large_file_settings_round_trip_and_default_to_unset() {
+    let dir = unique_temp_dir("large-file-settings");
+    let session_file = dir.join("session.json");
+    assert_eq!(
+        session::load_from_path(&session_file).annex_hide_bookkeeping_refs,
+        None
+    );
+
+    session::persist_ui_settings_to_path(
+        UiSettings {
+            annex_hide_bookkeeping_refs: Some(false),
+            annex_pull_push_on_adjusted: Some(false),
+            annex_sync_content: Some(true),
+            ..UiSettings::default()
+        },
+        &session_file,
+    )
+    .expect("persist large-file settings");
+
+    let loaded = session::load_from_path(&session_file);
+    assert_eq!(loaded.annex_hide_bookkeeping_refs, Some(false));
+    assert_eq!(loaded.annex_pull_push_on_adjusted, Some(false));
+    assert_eq!(loaded.annex_sync_content, Some(true));
+}
