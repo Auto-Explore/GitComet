@@ -26,8 +26,8 @@ use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction::ControlInteractionExt as _;
 use crate::view::markdown_preview::{
     MarkdownBlock, MarkdownInlineImage, MarkdownInlineStyle, MarkdownPreviewDiff,
-    MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind, MarkdownTableAlign,
-    MarkdownTaskMarker, markdown_document_blocks,
+    MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind, MarkdownTaskMarker,
+    MarkdownTextAlign, markdown_document_blocks,
 };
 use crate::view::perf::{self, ViewPerfRenderLane};
 use rustc_hash::FxHashMap;
@@ -1634,24 +1634,36 @@ fn render_row_line(
     let leading = || row.inline_images.iter().filter(|i| i.byte_offset == 0);
     let trailing = || row.inline_images.iter().filter(|i| i.byte_offset != 0);
 
+    let aligned = gpui_text_align(row.align).is_some();
+    let alone = row.text.is_empty();
     let mut line = div()
         .flex()
-        .flex_wrap()
+        // Pictures wrap like words. Aligned text beside one hugs its words so
+        // the two move as a group, so it is the text that wraps, beside it.
+        .when(!aligned || alone, |line| line.flex_wrap())
         .items_center()
         .gap(scaled(MARKDOWN_PREVIEW_INLINE_IMAGE_GAP_PX, context))
         .flex_1()
         .min_w(px(0.0));
+    line = markdown_preview_justify(line, row.align);
     for inline in leading() {
-        line = line.child(render_inline_image(row_ix, inline, context));
+        line = line.child(render_inline_image(row_ix, inline, alone, context));
     }
     // A row of nothing but pictures still has to paint its (empty) text: that
     // element is what registers the row's hit-test box, and without one a drag
-    // across the row finds no target and the selection skips over it.
-    if !row.text.is_empty() || context.view.is_some() {
-        line = line.child(render_row_text(tab_width, row_ix, row, context));
+    // across the row finds no target and the selection skips over it. In an
+    // aligned row it stays out of the flow, where its slot and gap would push
+    // the pictures off centre.
+    if !alone || context.view.is_some() {
+        let text = render_row_text(tab_width, row_ix, row, context);
+        line = if alone && aligned {
+            line.child(div().absolute().child(text))
+        } else {
+            line.child(text)
+        };
     }
     for inline in trailing() {
-        line = line.child(render_inline_image(row_ix, inline, context));
+        line = line.child(render_inline_image(row_ix, inline, alone, context));
     }
     line.into_any_element()
 }
@@ -1659,12 +1671,14 @@ fn render_row_line(
 fn render_inline_image(
     row_ix: usize,
     inline: &MarkdownInlineImage,
+    alone: bool,
     context: &MarkdownDocumentContext,
 ) -> AnyElement {
     let image = div()
         .flex_none()
         .child(crate::view::rows::markdown_preview_inline_image(
             inline,
+            alone,
             context.theme,
             context.ui_scale_percent,
             pictures(context),
@@ -1751,12 +1765,21 @@ fn render_row_text(
     let styled = styled.as_ref();
 
     // Text that scrolls takes the width it needs; text that wraps takes the
-    // width it is given.
+    // width it is given — except aligned text beside a picture, which hugs
+    // its words so the line can move them together.
+    let aligned = gpui_text_align(row.align);
     let mut text = if row_scrolls_sideways(row.kind) {
         div().flex_none()
+    } else if aligned.is_some() && !row.inline_images.is_empty() {
+        div().min_w(px(0.0))
     } else {
         div().flex_1().min_w(px(0.0))
     };
+    // `gpui` aligns each wrapped line as it paints; the flow text reads the
+    // same style back to place selections and resolve clicks.
+    if let Some(align) = aligned {
+        text = text.text_align(align);
+    }
     let code_ranges = row
         .inline_spans
         .iter()
@@ -1803,6 +1826,15 @@ fn render_row_text(
         .font_family_ranges(code_ranges, context.editor_font_family.clone()),
     )
     .into_any_element()
+}
+
+/// The `gpui` alignment for `align`, when it moves anything.
+fn gpui_text_align(align: MarkdownTextAlign) -> Option<gpui::TextAlign> {
+    match align {
+        MarkdownTextAlign::Center => Some(gpui::TextAlign::Center),
+        MarkdownTextAlign::Right => Some(gpui::TextAlign::Right),
+        MarkdownTextAlign::None | MarkdownTextAlign::Left => None,
+    }
 }
 
 fn render_heading(
@@ -2186,7 +2218,7 @@ fn render_table(
         );
         for (column, range) in cells.cells.iter().enumerate() {
             let align = if is_header {
-                MarkdownTableAlign::Center
+                MarkdownTextAlign::Center
             } else {
                 cells
                     .table
@@ -2207,11 +2239,7 @@ fn render_table(
                 // The text box moves, not the glyphs inside it: `gpui` hit-tests
                 // and places selections as if every line started at the left.
                 .flex()
-                .map(|cell| match align {
-                    MarkdownTableAlign::Center => cell.justify_center(),
-                    MarkdownTableAlign::Right => cell.justify_end(),
-                    MarkdownTableAlign::None | MarkdownTableAlign::Left => cell,
-                })
+                .map(|cell| markdown_preview_justify(cell, align))
                 .child(render_cell_text(
                     tab_width,
                     row_ix,

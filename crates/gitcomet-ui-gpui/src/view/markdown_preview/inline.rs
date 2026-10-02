@@ -109,6 +109,11 @@ pub(crate) fn parse_inline_markdown_fragment(source: &str) -> (String, Vec<Markd
                     HtmlHandling::AppendLiteral => {
                         text_buf.push_str(&strip_generic_html_tags(cow.as_ref()));
                     }
+                    HtmlHandling::OpenContainer(..) | HtmlHandling::CloseContainer(_) => {
+                        if !text_buf.is_empty() {
+                            text_buf.push(' ');
+                        }
+                    }
                 }
             }
             _ => {}
@@ -203,6 +208,7 @@ pub(crate) fn push_row(
         table: None,
         task: decoration.task,
         continues_item: decoration.continues_item,
+        align: decoration.align,
     });
 
     (rows.len() <= MAX_PREVIEW_ROWS).then_some(())

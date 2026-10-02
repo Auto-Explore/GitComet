@@ -2501,3 +2501,117 @@ fn searching_the_merge_tool_preview_scrolls_the_column_holding_the_match(
 
     let _ = std::fs::remove_dir_all(&workdir);
 }
+
+#[gpui::test]
+fn aligned_rows_are_highlighted_where_their_lines_are_painted(cx: &mut gpui::TestAppContext) {
+    // `gpui` centres each wrapped line as it paints but hit-tests as if every
+    // line started at the left, so a selection drawn from the layout alone
+    // sat beside the text it covered.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let long = "select this centred paragraph across its lines ".repeat(30);
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(140),
+        "markdown_aligned_selection",
+        &format!(
+            "<p align=\"center\">{long}</p>\n\n<p align=\"center\">short</p>\n\n<p align=\"right\">tail</p>\n"
+        ),
+    );
+
+    let mut highlighted = |row_ix: usize| {
+        let text = cx
+            .debug_bounds(leaked_selector(format!(
+                "markdown_preview_text_box_{row_ix}"
+            )))
+            .expect("expected the row's text box");
+        simulate_counted_click(cx, text.center(), 3);
+        cx.run_until_parked();
+        crate::view::rows::clear_markdown_selection_paint_log_for_tests();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        (
+            text,
+            crate::view::rows::markdown_selection_paint_log_for_tests(row_ix),
+        )
+    };
+    let gaps = |text: Bounds<Pixels>, rect: Bounds<Pixels>| {
+        (rect.left() - text.left(), text.right() - rect.right())
+    };
+
+    let (text, rects) = highlighted(fixture.row_ix(long.trim_end()));
+    assert!(rects.len() >= 3, "the paragraph wraps: {rects:?}");
+    for rect in &rects {
+        let (left, right) = gaps(text, *rect);
+        assert!(
+            (left - right).abs() <= px(1.0) && left >= px(-0.5),
+            "every wrapped line is highlighted centred: rect={rect:?} text={text:?}"
+        );
+    }
+
+    let (text, rects) = highlighted(fixture.row_ix("short"));
+    let [rect] = rects.as_slice() else {
+        panic!("one line, one quad: {rects:?}");
+    };
+    let (left, right) = gaps(text, *rect);
+    assert!(
+        (left - right).abs() <= px(1.0) && left > text.size.width * 0.25,
+        "a short centred line is highlighted in the middle: rect={rect:?} text={text:?}"
+    );
+
+    let (text, rects) = highlighted(fixture.row_ix("tail"));
+    let [rect] = rects.as_slice() else {
+        panic!("one line, one quad: {rects:?}");
+    };
+    assert!(
+        (text.right() - rect.right()).abs() <= px(1.0) && rect.left() > text.center().x,
+        "a right-aligned line is highlighted at the right: rect={rect:?} text={text:?}"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn a_double_click_on_an_aligned_word_selects_the_word_painted_there(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(141),
+        "markdown_aligned_double_click",
+        "<p align=\"center\">alpha beta gamma</p>\n\n<p align=\"right\">one two</p>\n",
+    );
+    let text_box = |cx: &mut gpui::VisualTestContext, row_ix: usize| {
+        cx.debug_bounds(leaked_selector(format!(
+            "markdown_preview_text_box_{row_ix}"
+        )))
+        .expect("expected the row's text box")
+    };
+
+    // The middle word is painted at the middle of the row.
+    let centred = text_box(cx, fixture.row_ix("alpha beta gamma"));
+    simulate_counted_click(cx, centred.center(), 2);
+    cx.run_until_parked();
+    assert_eq!(copied_preview_selection(cx, &view).as_deref(), Some("beta"));
+
+    // The last word is painted against the right edge, which the pane's
+    // scrollbar overlays, so the click lands just inside it.
+    let right = text_box(cx, fixture.row_ix("one two"));
+    simulate_counted_click(cx, point(right.right() - px(12.0), right.center().y), 2);
+    cx.run_until_parked();
+    assert_eq!(copied_preview_selection(cx, &view).as_deref(), Some("two"));
+
+    fixture.cleanup();
+}

@@ -917,3 +917,246 @@ fn the_merge_tool_preview_draws_tables_and_local_pictures_like_the_file_preview(
 
     let _ = std::fs::remove_dir_all(&workdir);
 }
+
+#[gpui::test]
+fn an_aligned_html_picture_moves_across_the_document(cx: &mut gpui::TestAppContext) {
+    // `<p align="center"><img …></p>` is how READMEs centre a logo: the
+    // picture keeps its size and moves; its block stays full width.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(142),
+        "markdown_aligned_picture",
+        "Body.\n\n<p align=\"center\">\n  <img src=\"logo.png\" alt=\"centred\">\n</p>\n\n<p align=\"right\"><img src=\"logo.png\" alt=\"right\"></p>\n",
+    );
+    std::fs::write(
+        fixture.workdir.join("docs/logo.png"),
+        test_png_bytes(40, 20).as_slice(),
+    )
+    .expect("write the picture the document points at");
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
+    let column = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_row_box_{}",
+            fixture.row_ix("Body.")
+        )))
+        .expect("the paragraph's row spans the column");
+    let picture = |cx: &mut gpui::VisualTestContext, row_ix: usize| {
+        cx.debug_bounds(leaked_selector(format!(
+            "markdown_preview_block_image_{row_ix}"
+        )))
+        .expect("the picture is drawn once it has decoded")
+    };
+    let centred = picture(cx, fixture.row_ix("centred"));
+    assert!(
+        (centred.size.width - px(40.0)).abs() <= px(0.5),
+        "the picture keeps its size: {centred:?}"
+    );
+    assert!(
+        (centred.center().x - column.center().x).abs() <= px(1.0),
+        "centred picture={centred:?} column={column:?}"
+    );
+    let right = picture(cx, fixture.row_ix("right"));
+    assert!(
+        (right.right() - column.right()).abs() <= px(1.0),
+        "right-aligned picture={right:?} column={column:?}"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn centred_text_beside_a_logo_wraps_inside_the_pane(cx: &mut gpui::TestAppContext) {
+    // An aligned row with a picture hugs its text so the two can move as one,
+    // and that text box must still take the width it needs to wrap.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let long = "words that wrap beside a logo ".repeat(20);
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(143),
+        "markdown_aligned_logo_text",
+        &format!(
+            "Body.\n\n<p align=\"center\"><img src=\"logo.png\" width=\"24\" alt=\"logo\"> {long}</p>\n\n<p align=\"center\"><img src=\"logo.png\" width=\"24\" alt=\"logo\"> Name</p>\n"
+        ),
+    );
+    std::fs::write(
+        fixture.workdir.join("docs/logo.png"),
+        test_png_bytes(24, 24).as_slice(),
+    )
+    .expect("write the picture the document points at");
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
+    let bounds = |cx: &mut gpui::VisualTestContext, selector: String| {
+        cx.debug_bounds(leaked_selector(selector.clone()))
+            .unwrap_or_else(|| panic!("{selector} is drawn"))
+    };
+    let column = bounds(
+        cx,
+        format!("markdown_preview_row_box_{}", fixture.row_ix("Body.")),
+    );
+    let wrapped = bounds(
+        cx,
+        format!(
+            "markdown_preview_text_box_{}",
+            fixture.row_ix(long.trim_end())
+        ),
+    );
+    assert!(
+        wrapped.right() <= column.right() + px(0.5) && wrapped.size.width > column.size.width * 0.5,
+        "long text wraps at the column's width: text={wrapped:?} column={column:?}"
+    );
+    assert!(
+        wrapped.size.height > px(40.0),
+        "and takes several lines: {wrapped:?}"
+    );
+    let logo = bounds(
+        cx,
+        format!(
+            "markdown_preview_inline_image_{}",
+            fixture.picture_offsets()[0]
+        ),
+    );
+    assert!(
+        wrapped.top() < logo.bottom() && wrapped.left() >= logo.right(),
+        "the text starts beside the logo, not on a line below it: text={wrapped:?} logo={logo:?}"
+    );
+
+    // A short name and its logo are centred together.
+    let name = bounds(
+        cx,
+        format!("markdown_preview_text_box_{}", fixture.row_ix("Name")),
+    );
+    assert!(
+        name.size.width < column.size.width * 0.5,
+        "a short name hugs its words: {name:?}"
+    );
+    let group_left = name.left() - px(24.0);
+    assert!(
+        group_left > column.left() + column.size.width * 0.25
+            && name.right() < column.right() - column.size.width * 0.25,
+        "the logo and name sit in the middle: name={name:?} column={column:?}"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn pictures_alone_on_a_row_keep_their_own_size(cx: &mut gpui::TestAppContext) {
+    // Screenshots written one per line in a `<p>` share a row. The inline
+    // height cap keeps a picture from forcing a sentence open; with no
+    // sentence around them they keep their own size, as on GitHub.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(144),
+        "markdown_picture_only_row",
+        "<p float=\"left\">\n  <img src=\"shot.png\" width=\"49%\">\n  <img src=\"shot.png\" width=\"49%\">\n</p>\n",
+    );
+    std::fs::write(
+        fixture.workdir.join("docs/shot.png"),
+        test_png_bytes(120, 80).as_slice(),
+    )
+    .expect("write the picture the document points at");
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
+    for offset in fixture.picture_offsets() {
+        let picture = cx
+            .debug_bounds(leaked_selector(format!(
+                "markdown_preview_inline_image_{offset}"
+            )))
+            .expect("the picture is drawn");
+        assert!(
+            (picture.size.height - px(80.0)).abs() <= px(0.5)
+                && (picture.size.width - px(120.0)).abs() <= px(0.5),
+            "a picture alone on its row keeps its size: {picture:?}"
+        );
+    }
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn a_centred_row_of_badges_is_centred_exactly(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(145),
+        "markdown_centred_badges",
+        "Body.\n\n<p align=\"center\"><img src=\"b.png\" width=\"40\" height=\"20\"><img src=\"b.png\" width=\"40\" height=\"20\"></p>\n",
+    );
+    std::fs::write(
+        fixture.workdir.join("docs/b.png"),
+        test_png_bytes(40, 20).as_slice(),
+    )
+    .expect("write the picture the document points at");
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
+    let column = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_row_box_{}",
+            fixture.row_ix("Body.")
+        )))
+        .expect("the paragraph's row spans the column");
+    let badges: Vec<_> = fixture
+        .picture_offsets()
+        .into_iter()
+        .map(|offset| {
+            cx.debug_bounds(leaked_selector(format!(
+                "markdown_preview_inline_image_{offset}"
+            )))
+            .expect("the badge is drawn")
+        })
+        .collect();
+    let (left, right) = (badges[0].left(), badges[1].right());
+    assert!(
+        ((left + right) / 2.0 - column.center().x).abs() <= px(0.5),
+        "badges {badges:?} centred in {column:?}"
+    );
+
+    fixture.cleanup();
+}

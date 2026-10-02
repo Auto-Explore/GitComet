@@ -1160,7 +1160,7 @@ pub(in crate::view) use self::history::{
     MarkdownPreviewRevealRequest, MarkdownRemoteImageAccess, markdown_preview_alert_bar_color,
     markdown_preview_alert_label, markdown_preview_document_path, markdown_preview_flow_image,
     markdown_preview_highlighted_text, markdown_preview_image_source,
-    markdown_preview_inline_image, markdown_preview_local_link_missing,
+    markdown_preview_inline_image, markdown_preview_justify, markdown_preview_local_link_missing,
     markdown_preview_local_link_target, markdown_preview_marker_label,
     markdown_preview_remote_image_url, markdown_preview_reveal_offset_y,
     markdown_preview_row_background, markdown_preview_row_extent,
@@ -1181,7 +1181,8 @@ pub(in crate::view) use self::markdown_flow_text::{
     take_markdown_flow_texts_built_for_tests,
 };
 pub(in crate::view) use self::markdown_flow_text::{
-    markdown_flow_painted_offset, markdown_flow_range_rects, markdown_flow_row_offset,
+    markdown_flow_index_for_position, markdown_flow_painted_offset, markdown_flow_range_rects,
+    markdown_flow_row_offset,
 };
 pub(in crate::view) use self::sidebar::active_worktree_paths_by_branch;
 pub(in crate::view) use self::sidebar::listed_worktree_paths_by_branch;

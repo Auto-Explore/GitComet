@@ -219,11 +219,20 @@ pub(crate) fn markdown_diff_row_groups(
     }
 
     for group in &mut groups {
-        let changed = group
-            .old
-            .iter()
-            .chain(&group.new)
-            .any(|row| row.change_hint != MarkdownChangeHint::None);
+        // A row whose lines are untouched still changed when the `<div align>`
+        // around it did: that line has no row of its own to mark.
+        let realigned = group.old.len() == group.new.len()
+            && group
+                .old
+                .iter()
+                .zip(&group.new)
+                .any(|(old, new)| old.align != new.align);
+        let changed = realigned
+            || group
+                .old
+                .iter()
+                .chain(&group.new)
+                .any(|row| row.change_hint != MarkdownChangeHint::None);
         if !changed {
             continue;
         }
@@ -372,6 +381,7 @@ pub(crate) fn markdown_inline_diff_rows_can_merge(
         && old_row.alert_kind == new_row.alert_kind
         && old_row.starts_alert == new_row.starts_alert
         && old_row.continues_item == new_row.continues_item
+        && old_row.align == new_row.align
         && old_row.task.map(|task| task.checked) == new_row.task.map(|task| task.checked)
 }
 

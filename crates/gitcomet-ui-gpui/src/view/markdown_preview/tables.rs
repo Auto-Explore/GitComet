@@ -62,7 +62,7 @@ fn finish_table_block(rows: &mut [MarkdownPreviewRow]) {
         }
     }
     let mut alignments = alignments;
-    alignments.resize(column_count, MarkdownTableAlign::None);
+    alignments.resize(column_count, MarkdownTextAlign::None);
     let table = Arc::new(MarkdownTableInfo {
         alignments,
         column_widths,

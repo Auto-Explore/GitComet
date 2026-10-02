@@ -936,6 +936,9 @@ pub(super) struct DiffTextWrappedHit {
     pub(super) layout: gpui::TextLayout,
     /// The row's raw text, when tabs were expanded for painting.
     pub(super) untabbed: Option<SharedString>,
+    /// How the layout's lines were aligned when painted, which hit testing
+    /// has to undo.
+    pub(super) align: gpui::TextAlign,
 }
 
 impl DiffTextWrappedHit {
