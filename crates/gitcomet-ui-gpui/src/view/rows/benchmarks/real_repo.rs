@@ -206,7 +206,7 @@ impl RealRepoFixture {
                 .to_string();
             Some(DiffTarget::commit(
                 CommitId(resolve_commitish(&worktree, &commitish).into()),
-                Some(diff_path),
+                diff_path,
             ))
         } else {
             None

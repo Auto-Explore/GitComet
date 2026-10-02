@@ -366,7 +366,7 @@ fn repo_browsing_commit(sha: &str, content_preview: bool) -> RepoState {
 }
 
 fn commit_content_target(sha: &str) -> DiffTarget {
-    DiffTarget::commit(CommitId(sha.into()), Some(PathBuf::from("src/main.rs")))
+    DiffTarget::commit(CommitId(sha.into()), PathBuf::from("src/main.rs"))
 }
 
 #[test]

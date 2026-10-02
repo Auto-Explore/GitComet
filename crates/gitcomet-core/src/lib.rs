@@ -10,6 +10,7 @@ pub mod file_diff;
 pub mod fs_utils;
 pub mod git_operation;
 pub mod git_ops_trace;
+pub mod git_progress;
 pub mod gitattributes;
 pub mod gitignore;
 pub mod hex;

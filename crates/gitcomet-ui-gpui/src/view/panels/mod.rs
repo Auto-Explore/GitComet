@@ -297,6 +297,28 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    /// Expands or collapses a file list folder; `recursive` takes every folder
+    /// below it along.
+    SetFileListFolderCollapsed {
+        repo_id: RepoId,
+        list: crate::view::rows::FileListId,
+        key: std::sync::Arc<std::path::Path>,
+        chain: std::sync::Arc<[std::sync::Arc<std::path::Path>]>,
+        collapsed: bool,
+        recursive: bool,
+    },
+    /// Stages (or, in the staged section, unstages) everything under a status
+    /// tree folder.
+    StageStatusFolder {
+        repo_id: RepoId,
+        section: StatusSection,
+        key: std::sync::Arc<std::path::Path>,
+    },
+    /// Opens the "Apply change" confirmation for files of a commit or comparison.
+    ApplyFileChange {
+        repo_id: RepoId,
+        target: gitcomet_core::domain::ApplyChangeTarget,
+    },
     /// Opens the squash confirmation prompt for the current multi-selection.
     SquashSelectedCommits {
         repo_id: RepoId,

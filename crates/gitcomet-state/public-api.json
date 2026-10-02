@@ -9859,6 +9859,35 @@
                         },
                         "deprecation": null,
                         "name": "summary"
+                      },
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": {
+                                "angle_bracketed": {
+                                  "args": [
+                                    {
+                                      "type": {
+                                        "resolved_path": {
+                                          "args": null,
+                                          "path": "gitcomet_core::auth::StagedGitAuth",
+                                          "type_path": "gitcomet_core::auth::StagedGitAuth"
+                                        }
+                                      }
+                                    }
+                                  ],
+                                  "constraints": []
+                                }
+                              },
+                              "path": "Option",
+                              "type_path": "core::option::Option"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "auth"
                       }
                     ],
                     "has_stripped_fields": false
@@ -9991,6 +10020,119 @@
             },
             "deprecation": null,
             "name": "RevertCommit"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "struct": {
+                    "fields": [
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "crate::model::RepoId",
+                              "type_path": "gitcomet_state::model::repository::RepoId"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "repo_id"
+                      },
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "gitcomet_core::domain::ApplyChangeTarget",
+                              "type_path": "gitcomet_core::domain::ApplyChangeTarget"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "target"
+                      },
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "primitive": "bool"
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "commit"
+                      },
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": {
+                                "angle_bracketed": {
+                                  "args": [
+                                    {
+                                      "type": {
+                                        "resolved_path": {
+                                          "args": null,
+                                          "path": "gitcomet_core::domain::ApplyFileChangeRetry",
+                                          "type_path": "gitcomet_core::domain::ApplyFileChangeRetry"
+                                        }
+                                      }
+                                    }
+                                  ],
+                                  "constraints": []
+                                }
+                              },
+                              "path": "Option",
+                              "type_path": "core::option::Option"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "commit_retry"
+                      },
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": {
+                                "angle_bracketed": {
+                                  "args": [
+                                    {
+                                      "type": {
+                                        "resolved_path": {
+                                          "args": null,
+                                          "path": "gitcomet_core::auth::StagedGitAuth",
+                                          "type_path": "gitcomet_core::auth::StagedGitAuth"
+                                        }
+                                      }
+                                    }
+                                  ],
+                                  "constraints": []
+                                }
+                              },
+                              "path": "Option",
+                              "type_path": "core::option::Option"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "auth"
+                      }
+                    ],
+                    "has_stripped_fields": false
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "ApplyFileChange"
           },
           {
             "attrs": [],
@@ -12412,6 +12554,99 @@
                         },
                         "deprecation": null,
                         "name": "repo_id"
+                      }
+                    ],
+                    "has_stripped_fields": false
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "CheckRepoMaintenance"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "struct": {
+                    "fields": [
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "std::path::PathBuf",
+                              "type_path": "std::path::PathBuf"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "common_dir"
+                      }
+                    ],
+                    "has_stripped_fields": false
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "PersistRepoMaintenanceSnooze"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "struct": {
+                    "fields": [
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "crate::model::RepoId",
+                              "type_path": "gitcomet_state::model::repository::RepoId"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "repo_id"
+                      }
+                    ],
+                    "has_stripped_fields": false
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "RunMaintenance"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "struct": {
+                    "fields": [
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "crate::model::RepoId",
+                              "type_path": "gitcomet_state::model::repository::RepoId"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "repo_id"
                       },
                       {
                         "attrs": [],
@@ -13924,6 +14159,16 @@
                         },
                         "deprecation": null,
                         "name": "entries"
+                      },
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "primitive": "bool"
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "commit"
                       }
                     ],
                     "has_stripped_fields": false
@@ -15427,6 +15672,16 @@
                         },
                         "deprecation": null,
                         "name": "time"
+                      },
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "primitive": "bool"
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "progress_lane"
                       }
                     ],
                     "has_stripped_fields": false
@@ -15968,6 +16223,47 @@
             },
             "deprecation": null,
             "name": "RepoOpenedOk"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "struct": {
+                    "fields": [
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "crate::model::RepoId",
+                              "type_path": "gitcomet_state::model::repository::RepoId"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "repo_id"
+                      },
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "primitive": "bool"
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "needed"
+                      }
+                    ],
+                    "has_stripped_fields": false
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "RepoMaintenanceChecked"
           },
           {
             "attrs": [],
@@ -17812,6 +18108,51 @@
             },
             "deprecation": null,
             "name": "CommitMessageSuggested"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "struct": {
+                    "fields": [
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "crate::model::RepoId",
+                              "type_path": "gitcomet_state::model::repository::RepoId"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "repo_id"
+                      },
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "String",
+                              "type_path": "alloc::string::String"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "message"
+                      }
+                    ],
+                    "has_stripped_fields": false
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "CommitMessageSuggestionConsumed"
           },
           {
             "attrs": [],
@@ -22419,6 +22760,34 @@
                         "struct_field": {
                           "resolved_path": {
                             "args": null,
+                            "path": "crate::model::MaintenanceSettings",
+                            "type_path": "gitcomet_state::model::app::MaintenanceSettings"
+                          }
+                        }
+                      },
+                      "deprecation": null,
+                      "name": "0"
+                    }
+                  ]
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "SetMaintenanceSettings"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "tuple": [
+                    {
+                      "attrs": [],
+                      "definition": {
+                        "struct_field": {
+                          "resolved_path": {
+                            "args": null,
                             "path": "crate::model::FileBrowserSettings",
                             "type_path": "gitcomet_state::model::app::FileBrowserSettings"
                           }
@@ -26293,6 +26662,90 @@
                           "struct_field": {
                             "resolved_path": {
                               "args": null,
+                              "path": "gitcomet_core::domain::ApplyChangeTarget",
+                              "type_path": "gitcomet_core::domain::ApplyChangeTarget"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "target"
+                      },
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "primitive": "bool"
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "commit"
+                      },
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": {
+                                "angle_bracketed": {
+                                  "args": [
+                                    {
+                                      "type": {
+                                        "resolved_path": {
+                                          "args": null,
+                                          "path": "gitcomet_core::domain::ApplyFileChangeRetry",
+                                          "type_path": "gitcomet_core::domain::ApplyFileChangeRetry"
+                                        }
+                                      }
+                                    }
+                                  ],
+                                  "constraints": []
+                                }
+                              },
+                              "path": "Option",
+                              "type_path": "core::option::Option"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "commit_retry"
+                      }
+                    ],
+                    "has_stripped_fields": false
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "ApplyFileChange"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "struct": {
+                    "fields": [
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "crate::model::RepoId",
+                              "type_path": "gitcomet_state::model::repository::RepoId"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "repo_id"
+                      },
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": null,
                               "path": "String",
                               "type_path": "alloc::string::String"
                             }
@@ -28426,6 +28879,68 @@
                         },
                         "deprecation": null,
                         "name": "repo_id"
+                      }
+                    ],
+                    "has_stripped_fields": false
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "StartRepoMaintenance"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "struct": {
+                    "fields": [
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "crate::model::RepoId",
+                              "type_path": "gitcomet_state::model::repository::RepoId"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "repo_id"
+                      }
+                    ],
+                    "has_stripped_fields": false
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "SnoozeRepoMaintenance"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "struct": {
+                    "fields": [
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "crate::model::RepoId",
+                              "type_path": "gitcomet_state::model::repository::RepoId"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "repo_id"
                       },
                       {
                         "attrs": [],
@@ -29706,6 +30221,16 @@
                         },
                         "deprecation": null,
                         "name": "entries"
+                      },
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "primitive": "bool"
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "commit"
                       }
                     ],
                     "has_stripped_fields": false
@@ -32413,6 +32938,17 @@
             "definition": {
               "variant": {
                 "discriminant": null,
+                "kind": "plain"
+              }
+            },
+            "deprecation": null,
+            "name": "RunMaintenance"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
                 "kind": {
                   "struct": {
                     "fields": [
@@ -33141,6 +33677,16 @@
                         },
                         "deprecation": null,
                         "name": "entries"
+                      },
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "primitive": "bool"
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "commit"
                       }
                     ],
                     "has_stripped_fields": false
@@ -33310,6 +33856,76 @@
             },
             "deprecation": null,
             "name": "Revert"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "struct": {
+                    "fields": [
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "gitcomet_core::domain::ApplyChangeTarget",
+                              "type_path": "gitcomet_core::domain::ApplyChangeTarget"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "target"
+                      },
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "primitive": "bool"
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "commit"
+                      },
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": {
+                                "angle_bracketed": {
+                                  "args": [
+                                    {
+                                      "type": {
+                                        "resolved_path": {
+                                          "args": null,
+                                          "path": "gitcomet_core::domain::ApplyFileChangeRetry",
+                                          "type_path": "gitcomet_core::domain::ApplyFileChangeRetry"
+                                        }
+                                      }
+                                    }
+                                  ],
+                                  "constraints": []
+                                }
+                              },
+                              "path": "Option",
+                              "type_path": "core::option::Option"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "commit_retry"
+                      }
+                    ],
+                    "has_stripped_fields": false
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "ApplyFileChange"
           },
           {
             "attrs": [],
@@ -34914,6 +35530,45 @@
             },
             "deprecation": null,
             "name": "Worktree"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "generic": "Self"
+                      }
+                    ],
+                    [
+                      "other",
+                      {
+                        "generic": "Self"
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "union"
           },
           {
             "attrs": [

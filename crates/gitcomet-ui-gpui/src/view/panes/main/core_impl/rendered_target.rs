@@ -4,15 +4,11 @@ impl MainPaneView {
     pub(super) fn rendered_file_target_path(target: &DiffTarget) -> Option<&std::path::Path> {
         match target {
             DiffTarget::WorkingTree { path, .. } => Some(path.as_path()),
-            DiffTarget::Commit {
-                path: Some(path), ..
-            }
+            DiffTarget::Commit { path, .. }
             | DiffTarget::CommitRange {
                 path: Some(path), ..
             } => Some(path.as_path()),
-            DiffTarget::Commit { path: None, .. } | DiffTarget::CommitRange { path: None, .. } => {
-                None
-            }
+            DiffTarget::CommitRange { path: None, .. } => None,
         }
     }
 

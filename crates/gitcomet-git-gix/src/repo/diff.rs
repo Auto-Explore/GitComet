@@ -108,7 +108,7 @@ impl GixRepo {
                     .arg("--first-parent")
                     .arg("--pretty=format:")
                     .arg(commit_id.as_ref());
-                Self::pathspec_with_source(&mut cmd, path.as_deref(), old_path.as_deref());
+                Self::pathspec_with_source(&mut cmd, Some(path), old_path.as_deref());
             }
             DiffTarget::CommitRange {
                 from_commit_id,
@@ -527,10 +527,6 @@ impl GixRepo {
                 old_path,
                 ..
             } => {
-                let Some(path) = path else {
-                    return Ok(None);
-                };
-
                 let parent = gix_first_parent_optional(&repo, commit_id.as_ref())?;
 
                 let old = match parent {
@@ -652,10 +648,6 @@ impl GixRepo {
                 old_path,
                 ..
             } => {
-                let Some(path) = path else {
-                    return Ok(None);
-                };
-
                 let repo = self.repo();
                 let blob_id = match side {
                     DiffPreviewTextSide::New => {
@@ -837,10 +829,6 @@ impl GixRepo {
                 old_path,
                 ..
             } => {
-                let Some(path) = path else {
-                    return Ok(None);
-                };
-
                 let repo = self.repo();
                 let parent = gix_first_parent_optional(&repo, commit_id.as_ref())?;
 
@@ -1176,9 +1164,7 @@ fn commit_path_diff_revisions(
 ) -> Result<Option<(std::path::PathBuf, Option<String>, String)>> {
     match target {
         DiffTarget::Commit {
-            commit_id,
-            path: Some(path),
-            ..
+            commit_id, path, ..
         } => Ok(Some((
             path.clone(),
             gix_first_parent_optional(repo, commit_id.as_ref())?,
@@ -1492,32 +1478,7 @@ fn gix_revision_id_optional(
     repo: &gix::Repository,
     revision: &str,
 ) -> Result<Option<gix::ObjectId>> {
-    if revision == "HEAD" {
-        return match repo.head_id() {
-            Ok(id) => Ok(Some(id.detach())),
-            Err(_) => Ok(None),
-        };
-    }
-
-    if let Ok(id) = gix::ObjectId::from_hex(revision.as_bytes()) {
-        return Ok(Some(id));
-    }
-
-    let Some(mut reference) = repo
-        .try_find_reference(revision)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
-    else {
-        return Ok(None);
-    };
-
-    let id = match reference.try_id() {
-        Some(id) => id.detach(),
-        None => match reference.peel_to_id() {
-            Ok(id) => id.detach(),
-            Err(_) => return Ok(None),
-        },
-    };
-    Ok(Some(id))
+    crate::refs::resolve(repo, revision)
 }
 
 fn gix_revision_path_blob_object_id_optional(
@@ -1607,8 +1568,7 @@ fn gix_index_unconflicted_image_blob_bytes_optional(
     repo: &gix::Repository,
     path: &Path,
 ) -> Result<IndexUnconflictedBlob> {
-    let index = repo
-        .index_or_load_from_head_or_empty()
+    let index = crate::refs::index_or_load_from_head_or_empty(repo)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
 
     let path_key = gix::path::os_str_into_bstr(path.as_os_str())
@@ -1636,8 +1596,7 @@ fn gix_index_unconflicted_blob_id_optional(
     repo: &gix::Repository,
     path: &Path,
 ) -> Result<IndexUnconflictedBlobId> {
-    let index = repo
-        .index_or_load_from_head_or_empty()
+    let index = crate::refs::index_or_load_from_head_or_empty(repo)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
 
     let path = gix::path::os_str_into_bstr(path.as_os_str())
@@ -2359,7 +2318,7 @@ mod tests {
         let head = super::super::history::gix_head_id_or_none(&repo.repo())
             .unwrap()
             .unwrap();
-        let target = DiffTarget::commit(CommitId(head.to_string().into()), Some("b.rs".into()))
+        let target = DiffTarget::commit(CommitId(head.to_string().into()), "b.rs".into())
             .with_old_path(Some("a.rs".into()));
         let patch = repo.diff_unified_impl(&target).unwrap();
         assert!(patch.contains("copy from a.rs\n"), "{patch}");
@@ -2458,8 +2417,12 @@ mod tests {
     fn stage_blob(workdir: &Path, relative: &str, content: &[u8]) -> gix::ObjectId {
         std::fs::write(workdir.join(relative), content).expect("write file");
         run_git(workdir, &["add", relative]);
-        gix::objs::compute_hash(gix::hash::Kind::Sha1, gix::objs::Kind::Blob, content)
-            .expect("blob id")
+        gix::objs::compute_hash(
+            gix::open(workdir).unwrap().object_hash(),
+            gix::objs::Kind::Blob,
+            content,
+        )
+        .expect("blob id")
     }
 
     #[test]
@@ -2767,7 +2730,7 @@ mod tests {
         std::fs::write(tmp.path().join(logical_path), b"fn unchanged() {}\n")
             .expect("write worktree source");
         let repo = open_repo(tmp.path());
-        let thread_local_repo = repo._repo.to_thread_local();
+        let thread_local_repo = repo.repo();
 
         let first = repo
             .cached_git_normalized_worktree_file_source(&thread_local_repo, logical_path)
@@ -2822,7 +2785,10 @@ mod tests {
                 "update-index",
                 "--add",
                 "--cacheinfo",
-                "160000,1111111111111111111111111111111111111111,vendor/sub",
+                &format!(
+                    "160000,{},vendor/sub",
+                    "1".repeat(gix::open(tmp.path()).unwrap().object_hash().len_in_hex())
+                ),
             ],
         );
 

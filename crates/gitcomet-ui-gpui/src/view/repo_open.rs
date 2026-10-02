@@ -631,9 +631,12 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                // Every command from `git_command()` carries the ext guard.
+                // Every command from `git_command()` carries the ext guard
+                // and never starts git's automatic maintenance.
                 std::ffi::OsString::from("-c"),
                 std::ffi::OsString::from("protocol.ext.allow=never"),
+                std::ffi::OsString::from("-c"),
+                std::ffi::OsString::from("maintenance.auto=false"),
                 std::ffi::OsString::from("-C"),
                 path.as_os_str().to_owned(),
                 std::ffi::OsString::from("init"),

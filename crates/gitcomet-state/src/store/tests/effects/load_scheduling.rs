@@ -1858,6 +1858,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 commit: true,
                 mainline: None,
                 summary: "pick me".into(),
+                auth: None,
             },
             1,
         ),
@@ -1868,6 +1869,19 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 commit: true,
                 mainline: None,
                 summary: "revert me".into(),
+                auth: None,
+            },
+            1,
+        ),
+        (
+            Effect::ApplyFileChange {
+                commit_retry: None,
+                repo_id,
+                target: gitcomet_core::domain::ApplyChangeTarget::commit(
+                    commit_id.clone(),
+                    PathBuf::from("tracked.txt"),
+                ),
+                commit: false,
                 auth: None,
             },
             1,

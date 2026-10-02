@@ -205,8 +205,14 @@ impl PopoverHost {
             PopoverKind::CherryPickCommitConfirm { repo_id, commit_id } => {
                 cherry_pick_commit_confirm::panel(self, repo_id, commit_id, cx)
             }
+            PopoverKind::InteractiveCherryPickConfirm { repo_id, entries } => {
+                interactive_cherry_pick_confirm::panel(self, repo_id, entries, cx)
+            }
             PopoverKind::RevertCommitConfirm { repo_id, commit_id } => {
                 revert_commit_confirm::panel(self, repo_id, commit_id, cx)
+            }
+            PopoverKind::ApplyFileChangeConfirm { repo_id, target } => {
+                apply_file_change_confirm::panel(self, repo_id, target, cx)
             }
             PopoverKind::MergeCommitConfirm { repo_id, commit_id } => {
                 merge_commit_confirm::panel(self, repo_id, commit_id, cx)
@@ -227,6 +233,11 @@ impl PopoverHost {
                 area,
                 path,
             } => discard_changes_confirm::panel(self, repo_id, area, path.clone(), cx),
+            PopoverKind::DiscardFolderChangesConfirm {
+                repo_id,
+                section,
+                folder,
+            } => discard_folder_changes_confirm::panel(self, repo_id, section, folder, cx),
             PopoverKind::AddToGitignorePrompt {
                 repo_id,
                 area,
@@ -448,6 +459,18 @@ impl PopoverHost {
                 },
                 cx,
             ),
+            PopoverKind::StatusConflictMenu {
+                repo_id,
+                area,
+                path,
+            } => self.context_menu_view(
+                PopoverKind::StatusConflictMenu {
+                    repo_id,
+                    area,
+                    path,
+                },
+                cx,
+            ),
             PopoverKind::BranchMenu { repo_id, target } => {
                 self.context_menu_view(PopoverKind::BranchMenu { repo_id, target }, cx)
             }
@@ -478,12 +501,14 @@ impl PopoverHost {
                 },
                 cx,
             ),
+            kind @ PopoverKind::CommitRangeFileMenu { .. } => self.context_menu_view(kind, cx),
             PopoverKind::FileBrowserFileMenu { repo_id, path } => {
                 self.context_menu_view(PopoverKind::FileBrowserFileMenu { repo_id, path }, cx)
             }
             PopoverKind::FileBrowserFolderMenu { repo_id, path } => {
                 self.context_menu_view(PopoverKind::FileBrowserFolderMenu { repo_id, path }, cx)
             }
+            kind @ PopoverKind::FileListFolderMenu { .. } => self.context_menu_view(kind, cx),
             PopoverKind::BranchGroupMenu {
                 repo_id,
                 section,

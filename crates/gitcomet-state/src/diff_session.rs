@@ -217,12 +217,12 @@ impl ChangeSource {
             Self::LinkedWorktree { path, area, .. } => {
                 DiffTarget::working_tree(change.path.clone(), *area).in_worktree(path.clone())
             }
-            Self::Commit(id) => DiffTarget::commit(id.clone(), None),
+            Self::Commit(id) => DiffTarget::commit_change(id.clone(), change),
             Self::Comparison { from, to, .. } => {
                 DiffTarget::commit_range(base.unwrap_or(from).clone(), to.clone(), None)
+                    .for_change(change)
             }
         }
-        .for_change(change)
     }
 
     /// Whether the working tree is one side, so external edits reload it.

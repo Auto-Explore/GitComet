@@ -17,8 +17,7 @@ pub(super) fn panel(
     let actions_disabled = mainline.pending
         || !merge_commit_repo_is_ready(repo)
         || commit_mainline::mainline_actions_disabled(mainline_choices.len(), selected_mainline);
-    let sha = commit_id.as_ref();
-    let short = sha.get(0..7).unwrap_or(sha).to_string();
+    let short = commit_id.short().to_string();
     let summary = commit_mainline::commit_summary(this, repo_id, &commit_id);
 
     let dispatch = move |this: &mut PopoverHost,

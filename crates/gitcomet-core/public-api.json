@@ -1,4 +1,1029 @@
 {
+  "gitcomet_core::domain::ApplyChangeSource": {
+    "attrs": [],
+    "definition": {
+      "enum": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "has_stripped_variants": false,
+        "variants": [
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "tuple": [
+                    {
+                      "attrs": [],
+                      "definition": {
+                        "struct_field": {
+                          "resolved_path": {
+                            "args": null,
+                            "path": "CommitId",
+                            "type_path": "gitcomet_core::domain::CommitId"
+                          }
+                        }
+                      },
+                      "deprecation": null,
+                      "name": "0"
+                    }
+                  ]
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "Commit"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "struct": {
+                    "fields": [
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "CommitId",
+                              "type_path": "gitcomet_core::domain::CommitId"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "from"
+                      },
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "CommitId",
+                              "type_path": "gitcomet_core::domain::CommitId"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "to"
+                      }
+                    ],
+                    "has_stripped_fields": false
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "Range"
+          }
+        ]
+      }
+    },
+    "deprecation": null,
+    "impls": [
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ApplyChangeSource",
+            "type_path": "gitcomet_core::domain::ApplyChangeSource"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Clone",
+          "type_path": "core::clone::Clone"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ApplyChangeSource",
+            "type_path": "gitcomet_core::domain::ApplyChangeSource"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Debug",
+          "type_path": "core::fmt::Debug"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ApplyChangeSource",
+            "type_path": "gitcomet_core::domain::ApplyChangeSource"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Eq",
+          "type_path": "core::cmp::Eq"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ApplyChangeSource",
+            "type_path": "gitcomet_core::domain::ApplyChangeSource"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Hash",
+          "type_path": "core::hash::Hash"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ApplyChangeSource",
+            "type_path": "gitcomet_core::domain::ApplyChangeSource"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "PartialEq",
+          "type_path": "core::cmp::PartialEq"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ApplyChangeSource",
+            "type_path": "gitcomet_core::domain::ApplyChangeSource"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "StructuralPartialEq",
+          "type_path": "core::marker::StructuralPartialEq"
+        }
+      }
+    ],
+    "name": "ApplyChangeSource"
+  },
+  "gitcomet_core::domain::ApplyChangeTarget": {
+    "attrs": [],
+    "definition": {
+      "struct": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "kind": {
+          "plain": {
+            "fields": [
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "ApplyChangeSource",
+                      "type_path": "gitcomet_core::domain::ApplyChangeSource"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "source"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "std::path::PathBuf",
+                                  "type_path": "std::path::PathBuf"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Vec",
+                      "type_path": "alloc::vec::Vec"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "paths"
+              }
+            ],
+            "has_stripped_fields": false
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "impls": [
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ApplyChangeTarget",
+            "type_path": "gitcomet_core::domain::ApplyChangeTarget"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Clone",
+          "type_path": "core::clone::Clone"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ApplyChangeTarget",
+            "type_path": "gitcomet_core::domain::ApplyChangeTarget"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Debug",
+          "type_path": "core::fmt::Debug"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ApplyChangeTarget",
+            "type_path": "gitcomet_core::domain::ApplyChangeTarget"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Eq",
+          "type_path": "core::cmp::Eq"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ApplyChangeTarget",
+            "type_path": "gitcomet_core::domain::ApplyChangeTarget"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Hash",
+          "type_path": "core::hash::Hash"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ApplyChangeTarget",
+            "type_path": "gitcomet_core::domain::ApplyChangeTarget"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "PartialEq",
+          "type_path": "core::cmp::PartialEq"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ApplyChangeTarget",
+            "type_path": "gitcomet_core::domain::ApplyChangeTarget"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "StructuralPartialEq",
+          "type_path": "core::marker::StructuralPartialEq"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ApplyChangeTarget",
+            "type_path": "gitcomet_core::domain::ApplyChangeTarget"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "commit_id",
+                      {
+                        "resolved_path": {
+                          "args": null,
+                          "path": "CommitId",
+                          "type_path": "gitcomet_core::domain::CommitId"
+                        }
+                      }
+                    ],
+                    [
+                      "path",
+                      {
+                        "resolved_path": {
+                          "args": null,
+                          "path": "PathBuf",
+                          "type_path": "std::path::PathBuf"
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "commit"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "from",
+                      {
+                        "resolved_path": {
+                          "args": null,
+                          "path": "CommitId",
+                          "type_path": "gitcomet_core::domain::CommitId"
+                        }
+                      }
+                    ],
+                    [
+                      "to",
+                      {
+                        "resolved_path": {
+                          "args": null,
+                          "path": "CommitId",
+                          "type_path": "gitcomet_core::domain::CommitId"
+                        }
+                      }
+                    ],
+                    [
+                      "paths",
+                      {
+                        "resolved_path": {
+                          "args": {
+                            "angle_bracketed": {
+                              "args": [
+                                {
+                                  "type": {
+                                    "resolved_path": {
+                                      "args": null,
+                                      "path": "PathBuf",
+                                      "type_path": "std::path::PathBuf"
+                                    }
+                                  }
+                                }
+                              ],
+                              "constraints": []
+                            }
+                          },
+                          "path": "Vec",
+                          "type_path": "alloc::vec::Vec"
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "range"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "target",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "DiffTarget",
+                              "type_path": "gitcomet_core::domain::DiffTarget"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "generic": "Self"
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "from_diff_target"
+          }
+        ],
+        "trait": null
+      }
+    ],
+    "name": "ApplyChangeTarget"
+  },
+  "gitcomet_core::domain::ApplyFileChangeIndexEntry": {
+    "attrs": [],
+    "definition": {
+      "struct": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "kind": {
+          "plain": {
+            "fields": [
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "std::path::PathBuf",
+                      "type_path": "std::path::PathBuf"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "path"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "tuple": [
+                                  {
+                                    "primitive": "u16"
+                                  },
+                                  {
+                                    "resolved_path": {
+                                      "args": null,
+                                      "path": "CommitId",
+                                      "type_path": "gitcomet_core::domain::CommitId"
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "version"
+              }
+            ],
+            "has_stripped_fields": false
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "impls": [
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ApplyFileChangeIndexEntry",
+            "type_path": "gitcomet_core::domain::ApplyFileChangeIndexEntry"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Clone",
+          "type_path": "core::clone::Clone"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ApplyFileChangeIndexEntry",
+            "type_path": "gitcomet_core::domain::ApplyFileChangeIndexEntry"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Debug",
+          "type_path": "core::fmt::Debug"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ApplyFileChangeIndexEntry",
+            "type_path": "gitcomet_core::domain::ApplyFileChangeIndexEntry"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Eq",
+          "type_path": "core::cmp::Eq"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ApplyFileChangeIndexEntry",
+            "type_path": "gitcomet_core::domain::ApplyFileChangeIndexEntry"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "PartialEq",
+          "type_path": "core::cmp::PartialEq"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ApplyFileChangeIndexEntry",
+            "type_path": "gitcomet_core::domain::ApplyFileChangeIndexEntry"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "StructuralPartialEq",
+          "type_path": "core::marker::StructuralPartialEq"
+        }
+      }
+    ],
+    "name": "ApplyFileChangeIndexEntry"
+  },
+  "gitcomet_core::domain::ApplyFileChangeRetry": {
+    "attrs": [],
+    "definition": {
+      "struct": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "kind": {
+          "plain": {
+            "fields": [
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "ApplyChangeTarget",
+                      "type_path": "gitcomet_core::domain::ApplyChangeTarget"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "target"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "CommitId",
+                                  "type_path": "gitcomet_core::domain::CommitId"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "head"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "ApplyFileChangeIndexEntry",
+                                  "type_path": "gitcomet_core::domain::ApplyFileChangeIndexEntry"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Vec",
+                      "type_path": "alloc::vec::Vec"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "index"
+              }
+            ],
+            "has_stripped_fields": false
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "impls": [
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ApplyFileChangeRetry",
+            "type_path": "gitcomet_core::domain::ApplyFileChangeRetry"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Clone",
+          "type_path": "core::clone::Clone"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ApplyFileChangeRetry",
+            "type_path": "gitcomet_core::domain::ApplyFileChangeRetry"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Debug",
+          "type_path": "core::fmt::Debug"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ApplyFileChangeRetry",
+            "type_path": "gitcomet_core::domain::ApplyFileChangeRetry"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Eq",
+          "type_path": "core::cmp::Eq"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ApplyFileChangeRetry",
+            "type_path": "gitcomet_core::domain::ApplyFileChangeRetry"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "PartialEq",
+          "type_path": "core::cmp::PartialEq"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ApplyFileChangeRetry",
+            "type_path": "gitcomet_core::domain::ApplyFileChangeRetry"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "StructuralPartialEq",
+          "type_path": "core::marker::StructuralPartialEq"
+        }
+      }
+    ],
+    "name": "ApplyFileChangeRetry"
+  },
   "gitcomet_core::domain::BlameSource": {
     "attrs": [],
     "definition": {
@@ -2032,6 +3057,51 @@
         "is_synthetic": false,
         "is_unsafe": false,
         "items": [
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "generic": "Self"
+                          }
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "borrowed_ref": {
+                      "is_mutable": false,
+                      "lifetime": null,
+                      "type": {
+                        "primitive": "str"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "short"
+          },
           {
             "attrs": [],
             "definition": {
@@ -5039,24 +6109,9 @@
                         "definition": {
                           "struct_field": {
                             "resolved_path": {
-                              "args": {
-                                "angle_bracketed": {
-                                  "args": [
-                                    {
-                                      "type": {
-                                        "resolved_path": {
-                                          "args": null,
-                                          "path": "std::path::PathBuf",
-                                          "type_path": "std::path::PathBuf"
-                                        }
-                                      }
-                                    }
-                                  ],
-                                  "constraints": []
-                                }
-                              },
-                              "path": "Option",
-                              "type_path": "core::option::Option"
+                              "args": null,
+                              "path": "std::path::PathBuf",
+                              "type_path": "std::path::PathBuf"
                             }
                           }
                         },
@@ -5519,24 +6574,9 @@
                       "path",
                       {
                         "resolved_path": {
-                          "args": {
-                            "angle_bracketed": {
-                              "args": [
-                                {
-                                  "type": {
-                                    "resolved_path": {
-                                      "args": null,
-                                      "path": "PathBuf",
-                                      "type_path": "std::path::PathBuf"
-                                    }
-                                  }
-                                }
-                              ],
-                              "constraints": []
-                            }
-                          },
-                          "path": "Option",
-                          "type_path": "core::option::Option"
+                          "args": null,
+                          "path": "PathBuf",
+                          "type_path": "std::path::PathBuf"
                         }
                       }
                     ]
@@ -5550,6 +6590,59 @@
             },
             "deprecation": null,
             "name": "commit"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "commit_id",
+                      {
+                        "resolved_path": {
+                          "args": null,
+                          "path": "CommitId",
+                          "type_path": "gitcomet_core::domain::CommitId"
+                        }
+                      }
+                    ],
+                    [
+                      "change",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "CommitFileChange",
+                              "type_path": "gitcomet_core::domain::CommitFileChange"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "commit_change"
           },
           {
             "attrs": [],
@@ -5879,7 +6972,7 @@
     ],
     "name": "DiffTarget"
   },
-  "gitcomet_core::domain::EMPTY_TREE_ID": {
+  "gitcomet_core::domain::EMPTY_TREE_ID_SHA1": {
     "attrs": [],
     "definition": {
       "constant": {
@@ -5900,7 +6993,30 @@
       }
     },
     "deprecation": null,
-    "name": "EMPTY_TREE_ID"
+    "name": "EMPTY_TREE_ID_SHA1"
+  },
+  "gitcomet_core::domain::EMPTY_TREE_ID_SHA256": {
+    "attrs": [],
+    "definition": {
+      "constant": {
+        "const": {
+          "expr": "\"6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321\"",
+          "is_literal": true,
+          "value": null
+        },
+        "type": {
+          "borrowed_ref": {
+            "is_mutable": false,
+            "lifetime": null,
+            "type": {
+              "primitive": "str"
+            }
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "name": "EMPTY_TREE_ID_SHA256"
   },
   "gitcomet_core::domain::FileConflictKind": {
     "attrs": [],
@@ -17492,6 +18608,107 @@
     "deprecation": null,
     "name": "count_file_statuses"
   },
+  "gitcomet_core::domain::empty_tree_id_like": {
+    "attrs": [],
+    "definition": {
+      "function": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "header": {
+          "abi": "Rust",
+          "is_async": false,
+          "is_const": false,
+          "is_unsafe": false
+        },
+        "sig": {
+          "inputs": [
+            [
+              "sibling",
+              {
+                "borrowed_ref": {
+                  "is_mutable": false,
+                  "lifetime": null,
+                  "type": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "CommitId",
+                      "type_path": "gitcomet_core::domain::CommitId"
+                    }
+                  }
+                }
+              }
+            ]
+          ],
+          "is_c_variadic": false,
+          "output": {
+            "resolved_path": {
+              "args": {
+                "angle_bracketed": {
+                  "args": [
+                    {
+                      "type": {
+                        "resolved_path": {
+                          "args": null,
+                          "path": "CommitId",
+                          "type_path": "gitcomet_core::domain::CommitId"
+                        }
+                      }
+                    }
+                  ],
+                  "constraints": []
+                }
+              },
+              "path": "Option",
+              "type_path": "core::option::Option"
+            }
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "name": "empty_tree_id_like"
+  },
+  "gitcomet_core::domain::is_empty_tree_id": {
+    "attrs": [],
+    "definition": {
+      "function": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "header": {
+          "abi": "Rust",
+          "is_async": false,
+          "is_const": false,
+          "is_unsafe": false
+        },
+        "sig": {
+          "inputs": [
+            [
+              "id",
+              {
+                "borrowed_ref": {
+                  "is_mutable": false,
+                  "lifetime": null,
+                  "type": {
+                    "primitive": "str"
+                  }
+                }
+              }
+            ]
+          ],
+          "is_c_variadic": false,
+          "output": {
+            "primitive": "bool"
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "name": "is_empty_tree_id"
+  },
   "gitcomet_core::domain::is_uncommitted_commit_id": {
     "attrs": [],
     "definition": {
@@ -17577,6 +18794,51 @@
     },
     "deprecation": null,
     "name": "normalize_worktree_path"
+  },
+  "gitcomet_core::domain::short_commit_id": {
+    "attrs": [],
+    "definition": {
+      "function": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "header": {
+          "abi": "Rust",
+          "is_async": false,
+          "is_const": false,
+          "is_unsafe": false
+        },
+        "sig": {
+          "inputs": [
+            [
+              "id",
+              {
+                "borrowed_ref": {
+                  "is_mutable": false,
+                  "lifetime": null,
+                  "type": {
+                    "primitive": "str"
+                  }
+                }
+              }
+            ]
+          ],
+          "is_c_variadic": false,
+          "output": {
+            "borrowed_ref": {
+              "is_mutable": false,
+              "lifetime": null,
+              "type": {
+                "primitive": "str"
+              }
+            }
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "name": "short_commit_id"
   },
   "gitcomet_core::identity::IdentityError": {
     "attrs": [],
@@ -23388,6 +24650,29 @@
     "deprecation": null,
     "name": "install"
   },
+  "gitcomet_core::services::APPLY_FILE_CHANGE_ALREADY_APPLIED_SENTINEL": {
+    "attrs": [],
+    "definition": {
+      "constant": {
+        "const": {
+          "expr": "\"GITCOMET_APPLY_CHANGE_ALREADY_APPLIED\"",
+          "is_literal": true,
+          "value": null
+        },
+        "type": {
+          "borrowed_ref": {
+            "is_mutable": false,
+            "lifetime": null,
+            "type": {
+              "primitive": "str"
+            }
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "name": "APPLY_FILE_CHANGE_ALREADY_APPLIED_SENTINEL"
+  },
   "gitcomet_core::services::BlameLine": {
     "attrs": [],
     "definition": {
@@ -27112,6 +28397,59 @@
                       }
                     ],
                     [
+                      "_common_dir",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "Path",
+                              "type_path": "std::path::Path"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": null
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "release_object_stores"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "generic": "Self"
+                          }
+                        }
+                      }
+                    ],
+                    [
                       "workdir",
                       {
                         "borrowed_ref": {
@@ -27729,6 +29067,43 @@
             },
             "deprecation": null,
             "name": "spec"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "generic": "Self"
+                          }
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": null
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "release_object_store"
           },
           {
             "attrs": [],
@@ -35333,6 +36708,160 @@
                       }
                     ],
                     [
+                      "_target",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "crate::domain::ApplyChangeTarget",
+                              "type_path": "gitcomet_core::domain::ApplyChangeTarget"
+                            }
+                          }
+                        }
+                      }
+                    ],
+                    [
+                      "_commit",
+                      {
+                        "primitive": "bool"
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "CommandOutput",
+                                  "type_path": "gitcomet_core::services::CommandOutput"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Result",
+                      "type_path": "gitcomet_core::services::Result"
+                    }
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "apply_file_change_with_output"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "generic": "Self"
+                          }
+                        }
+                      }
+                    ],
+                    [
+                      "_retry",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "crate::domain::ApplyFileChangeRetry",
+                              "type_path": "gitcomet_core::domain::ApplyFileChangeRetry"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "CommandOutput",
+                                  "type_path": "gitcomet_core::services::CommandOutput"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Result",
+                      "type_path": "gitcomet_core::services::Result"
+                    }
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "commit_applied_file_change_with_output"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "generic": "Self"
+                          }
+                        }
+                      }
+                    ],
+                    [
                       "message",
                       {
                         "borrowed_ref": {
@@ -36490,6 +38019,12 @@
                           }
                         }
                       }
+                    ],
+                    [
+                      "_commit",
+                      {
+                        "primitive": "bool"
+                      }
                     ]
                   ],
                   "is_c_variadic": false,
@@ -37239,6 +38774,176 @@
             },
             "deprecation": null,
             "name": "prune_merged_branches_with_output"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "generic": "Self"
+                          }
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "std::path::PathBuf",
+                                  "type_path": "std::path::PathBuf"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "common_dir"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "generic": "Self"
+                          }
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "primitive": "bool"
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Result",
+                      "type_path": "gitcomet_core::services::Result"
+                    }
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "maintenance_needed"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "generic": "Self"
+                          }
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "CommandOutput",
+                                  "type_path": "gitcomet_core::services::CommandOutput"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Result",
+                      "type_path": "gitcomet_core::services::Result"
+                    }
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "run_maintenance_with_output"
           },
           {
             "attrs": [],
@@ -45594,6 +47299,29 @@
     ],
     "name": "LogChunk"
   },
+  "gitcomet_core::services::MAINTENANCE_CHECK_COMMAND": {
+    "attrs": [],
+    "definition": {
+      "constant": {
+        "const": {
+          "expr": "\"git maintenance is-needed --auto\"",
+          "is_literal": true,
+          "value": null
+        },
+        "type": {
+          "borrowed_ref": {
+            "is_mutable": false,
+            "lifetime": null,
+            "type": {
+              "primitive": "str"
+            }
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "name": "MAINTENANCE_CHECK_COMMAND"
+  },
   "gitcomet_core::services::MergetoolResult": {
     "attrs": [],
     "definition": {
@@ -48802,6 +50530,134 @@
       }
     ],
     "name": "WorktreePathKind"
+  },
+  "gitcomet_core::services::apply_change_revision": {
+    "attrs": [],
+    "definition": {
+      "function": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "header": {
+          "abi": "Rust",
+          "is_async": false,
+          "is_const": false,
+          "is_unsafe": false
+        },
+        "sig": {
+          "inputs": [
+            [
+              "source",
+              {
+                "borrowed_ref": {
+                  "is_mutable": false,
+                  "lifetime": null,
+                  "type": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "ApplyChangeSource",
+                      "type_path": "gitcomet_core::domain::ApplyChangeSource"
+                    }
+                  }
+                }
+              }
+            ]
+          ],
+          "is_c_variadic": false,
+          "output": {
+            "resolved_path": {
+              "args": null,
+              "path": "String",
+              "type_path": "alloc::string::String"
+            }
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "name": "apply_change_revision"
+  },
+  "gitcomet_core::services::apply_file_change_range_message": {
+    "attrs": [],
+    "definition": {
+      "function": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "header": {
+          "abi": "Rust",
+          "is_async": false,
+          "is_const": false,
+          "is_unsafe": false
+        },
+        "sig": {
+          "inputs": [
+            [
+              "from",
+              {
+                "borrowed_ref": {
+                  "is_mutable": false,
+                  "lifetime": null,
+                  "type": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "CommitId",
+                      "type_path": "gitcomet_core::domain::CommitId"
+                    }
+                  }
+                }
+              }
+            ],
+            [
+              "to",
+              {
+                "borrowed_ref": {
+                  "is_mutable": false,
+                  "lifetime": null,
+                  "type": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "CommitId",
+                      "type_path": "gitcomet_core::domain::CommitId"
+                    }
+                  }
+                }
+              }
+            ],
+            [
+              "paths",
+              {
+                "borrowed_ref": {
+                  "is_mutable": false,
+                  "lifetime": null,
+                  "type": {
+                    "slice": {
+                      "resolved_path": {
+                        "args": null,
+                        "path": "std::path::PathBuf",
+                        "type_path": "std::path::PathBuf"
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          ],
+          "is_c_variadic": false,
+          "output": {
+            "resolved_path": {
+              "args": null,
+              "path": "String",
+              "type_path": "alloc::string::String"
+            }
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "name": "apply_file_change_range_message"
   },
   "gitcomet_core::services::decode_utf8_optional": {
     "attrs": [],

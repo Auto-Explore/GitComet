@@ -95,7 +95,7 @@ pub fn persist_survey_prompt_postponed_to_path(
     })
 }
 
-fn current_unix_seconds() -> u64 {
+pub(super) fn current_unix_seconds() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

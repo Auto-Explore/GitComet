@@ -27,9 +27,6 @@ const SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX: f32 = 42.0;
 const SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX: f32 = 24.0;
 const SETTINGS_DROPDOWN_DENSE_DETAIL_ROW_HEIGHT_PX: f32 = 28.0;
 
-const MIN_GIT_MAJOR: u32 = 2;
-const MIN_GIT_MINOR: u32 = 50;
-
 fn settings_window_title() -> String {
     format!("Settings: {}", crate::view::product_name())
 }
@@ -387,6 +384,7 @@ enum SettingsCategory {
     GitLog,
     Remotes,
     Tags,
+    Maintenance,
     GitExecutable,
     Environment,
     Links,
@@ -404,6 +402,7 @@ impl SettingsCategory {
         SettingsCategory::GitLog,
         SettingsCategory::Remotes,
         SettingsCategory::Tags,
+        SettingsCategory::Maintenance,
         SettingsCategory::GitExecutable,
         SettingsCategory::Environment,
         SettingsCategory::Links,
@@ -421,6 +420,7 @@ impl SettingsCategory {
             Self::GitLog => "Git log",
             Self::Remotes => "Remotes",
             Self::Tags => "Tags",
+            Self::Maintenance => "Maintenance",
             Self::GitExecutable => "Executables",
             Self::Environment => "Environment",
             Self::Links => "Links",
@@ -439,6 +439,7 @@ impl SettingsCategory {
             Self::GitLog => "icons/history.svg",
             Self::Remotes => "icons/cloud.svg",
             Self::Tags => "icons/tag.svg",
+            Self::Maintenance => "icons/broom.svg",
             Self::GitExecutable => "icons/git_branch.svg",
             Self::Environment => "icons/computer.svg",
             Self::Links => "icons/link.svg",
@@ -457,6 +458,7 @@ impl SettingsCategory {
             Self::GitLog => "settings_window_nav_git_log",
             Self::Remotes => "settings_window_nav_remotes",
             Self::Tags => "settings_window_nav_tags",
+            Self::Maintenance => "settings_window_nav_maintenance",
             Self::GitExecutable => "settings_window_nav_git_executable",
             Self::Environment => "settings_window_nav_environment",
             Self::Links => "settings_window_nav_links",
@@ -498,6 +500,10 @@ impl SettingsCategory {
             }
             Self::Remotes => "remotes remote fetch pull prune deleted branches automatically ghost",
             Self::Tags => "tags automatically fetch tags",
+            Self::Maintenance => {
+                "maintenance recommend repository gc garbage collection repack pack packs \
+                 loose objects optimize optimise housekeeping"
+            }
             Self::GitExecutable => {
                 "executables git executable custom path system path version gpg gnupg \
                  openpgp x.509 ssh-keygen openssh commit signature verification verified trust key guide"
@@ -634,6 +640,7 @@ pub(crate) struct SettingsWindowView {
     default_history_mode: HistoryMode,
     default_tag_type: DefaultTagType,
     prune_deleted_remote_branches_on_fetch: bool,
+    recommend_repo_maintenance: bool,
     current_view: SettingsView,
     selected_category: SettingsCategory,
     /// Extension pages, fixed when the window opens; empty without extensions.
@@ -687,7 +694,7 @@ pub(crate) fn open_settings_window(cx: &mut App) {
         .find_map(|window| window.downcast::<SettingsWindowView>())
     {
         let _ = window.update(cx, |_view, window, _cx| {
-            window.activate_window();
+            window.activate();
         });
         cx.activate(true);
         return;
@@ -816,7 +823,7 @@ fn settings_window_options_for_scale(
     bounds: Bounds<Pixels>,
     ui_scale_percent: u32,
 ) -> WindowOptions {
-    WindowOptions {
+    crate::app::with_main_window_background(WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         window_min_size: Some(settings_window_min_size_for_percent(ui_scale_percent)),
         titlebar: Some(settings_window_titlebar_options()),
@@ -825,12 +832,11 @@ fn settings_window_options_for_scale(
                 .window_app_id(gitcomet_core::identity::WindowKind::Settings),
         ),
         window_decorations: Some(WindowDecorations::Client),
-        window_background: crate::app::main_window_background_appearance(),
         icon: crate::assets::window_icon(),
         is_movable: true,
         is_resizable: true,
         ..Default::default()
-    }
+    })
 }
 
 fn settings_window_titlebar_options() -> TitlebarOptions {
@@ -1086,6 +1092,7 @@ impl SettingsWindowView {
         let prune_deleted_remote_branches_on_fetch = ui_preferences
             .remotes
             .prune_deleted_remote_branches_on_fetch;
+        let recommend_repo_maintenance = ui_preferences.maintenance.recommend;
         let external_editor_setting = initial_external_editor_setting(&ui_session);
         // Only the saved editor's entry is needed to render the summary row;
         // installed editors are detected once the row is expanded, see
@@ -1433,6 +1440,7 @@ impl SettingsWindowView {
             default_history_mode,
             default_tag_type,
             prune_deleted_remote_branches_on_fetch,
+            recommend_repo_maintenance,
             current_view: SettingsView::Root,
             selected_category: SettingsCategory::General,
             extension_pages: extension_pages::extension_pages(cx),

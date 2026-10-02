@@ -516,6 +516,8 @@ mod tests {
                 std::ffi::OsStr::new("-c"),
                 std::ffi::OsStr::new("protocol.ext.allow=never"),
                 std::ffi::OsStr::new("-c"),
+                std::ffi::OsStr::new("maintenance.auto=false"),
+                std::ffi::OsStr::new("-c"),
                 std::ffi::OsStr::new("color.ui=false"),
                 std::ffi::OsStr::new("clone"),
                 std::ffi::OsStr::new("--progress"),

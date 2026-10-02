@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::drag_autoscroll::{DRAG_AUTOSCROLL_TICK, drag_autoscroll_step};
 
 #[cfg(test)]
 thread_local! {
@@ -1328,9 +1329,7 @@ impl MainPaneView {
         let autoscroll_seq = self.diff_text_autoscroll_seq;
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(16))
-                    .await;
+                cx.background_executor().timer(DRAG_AUTOSCROLL_TICK).await;
                 let mut keep_going = false;
                 let _ = view.update(cx, |this, cx| {
                     if !this.diff_text_selecting {
@@ -3201,8 +3200,8 @@ impl MainPaneView {
         let old_offset = handle.offset();
         let mouse = self.diff_text_last_mouse_pos;
 
-        let delta_x = autoscroll_delta_for_axis(mouse.x, bounds.left(), bounds.right());
-        let delta_y = autoscroll_delta_for_axis(mouse.y, bounds.top(), bounds.bottom());
+        let delta_x = drag_autoscroll_step(mouse.x, bounds.left(), bounds.right());
+        let delta_y = drag_autoscroll_step(mouse.y, bounds.top(), bounds.bottom());
 
         let new_x = (old_offset.x + delta_x).clamp(-max_offset.x, px(0.0));
         let new_y = (old_offset.y + delta_y).clamp(-max_offset.y, px(0.0));
@@ -3262,23 +3261,6 @@ impl MainPaneView {
                 .base_handle
                 .clone(),
         }
-    }
-}
-
-fn autoscroll_delta_for_axis(cursor: Pixels, min: Pixels, max: Pixels) -> Pixels {
-    fn speed(distance: Pixels) -> Pixels {
-        // 2–48px per tick, scaling with how far outside the container the cursor is.
-        let min_step = px(2.0);
-        let max_step = px(48.0);
-        (distance * 0.4).max(min_step).min(max_step)
-    }
-
-    if cursor < min {
-        speed(min - cursor)
-    } else if cursor > max {
-        -speed(cursor - max)
-    } else {
-        px(0.0)
     }
 }
 

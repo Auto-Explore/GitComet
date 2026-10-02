@@ -1,9 +1,11 @@
+use super::FileListId;
 use crate::theme::AppTheme;
 use crate::view::components::{self, InteractiveRowExt, InteractiveRowState, InteractiveRowStyle};
 use crate::view::file_icons;
 use crate::view::icons::svg_icon;
 use gpui::prelude::*;
 use gpui::{CursorStyle, Div, ElementId, SharedString, Stateful, px};
+use std::path::Path;
 
 /// Design indent per tree level, matched to the file explorer's.
 pub(in crate::view) const INDENT_STEP_PX: f32 = 12.0;
@@ -77,6 +79,17 @@ pub(in crate::view) struct DirectoryRowProps<'a> {
     pub(in crate::view) row_group: Option<SharedString>,
     /// From [`directory_row_detail_for_width`].
     pub(in crate::view) detail: DirectoryRowDetail,
+    /// The row's context menu is open, so it stays lit like a file row's.
+    pub(in crate::view) menu_open: bool,
+}
+
+/// Names the folder row whose menu is open, so the row can show it.
+pub(in crate::view) fn file_list_folder_menu_invoker(
+    repo_id: u64,
+    list: FileListId,
+    key: &Path,
+) -> SharedString {
+    format!("file_list_folder_menu_{repo_id}_{list:?}_{}", key.display()).into()
 }
 
 /// Indent a file row sitting at `depth` in a tree, so its label lines up under
@@ -101,6 +114,7 @@ pub(in crate::view) fn directory_row(props: DirectoryRowProps<'_>) -> Stateful<D
         row_height,
         row_group,
         detail,
+        menu_open,
     } = props;
     let scaled = |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
     let secondary = theme.colors.foreground.secondary;
@@ -120,7 +134,7 @@ pub(in crate::view) fn directory_row(props: DirectoryRowProps<'_>) -> Stateful<D
         .cursor(CursorStyle::PointingHand)
         .interactive_row(
             InteractiveRowStyle::new(theme, theme.colors.surface.panel).flat(),
-            InteractiveRowState::default(),
+            InteractiveRowState::default().open(menu_open),
         )
         .child(
             gpui::div()

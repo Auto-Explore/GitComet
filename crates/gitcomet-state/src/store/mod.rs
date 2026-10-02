@@ -803,12 +803,18 @@ impl AppStore {
                             &mut repos,
                             &id_alloc,
                             |app_state, repos, id| {
-                                reduce(
+                                let mut effects = reduce(
                                     repos,
                                     id,
                                     app_state,
                                     Msg::RepoExternallyChanged { repo_id, change },
-                                )
+                                );
+                                // A day-long session gets its daily check on
+                                // focus; the reducer throttles it hourly.
+                                effects.extend(reducer::maintenance::request_check(
+                                    app_state, repo_id,
+                                ));
+                                effects
                             },
                         );
                     }

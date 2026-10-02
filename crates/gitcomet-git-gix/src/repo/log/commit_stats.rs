@@ -226,8 +226,7 @@ pub(crate) fn tree_diff_file_changes(
     old_tree: Option<&gix::Tree<'_>>,
     new_tree: &gix::Tree<'_>,
 ) -> Result<Vec<CommitFileChange>> {
-    let changes = repo
-        .diff_tree_to_tree(old_tree, new_tree, None)
+    let changes = crate::refs::diff_tree_to_tree(repo, old_tree, new_tree)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix diff_tree_to_tree: {e}"))))?;
 
     let compute_stats = changes.len() <= COMMIT_STATS_MAX_FILES;
@@ -287,7 +286,7 @@ pub(crate) fn diff_range_files(
     // An absent base already means "no content" to the tree diff, which is
     // exactly what the empty tree stands for — so resolve it as absence rather
     // than through the object database, which is not guaranteed to hold it.
-    let from_tree = (from.as_ref() != EMPTY_TREE_ID)
+    let from_tree = (!is_empty_tree_id(from.as_ref()))
         .then(|| commit_tree_for_id(repo, from, "gix range from"))
         .transpose()?;
     let to_tree = commit_tree_for_id(repo, to, "gix range to")?;
@@ -303,7 +302,7 @@ pub(crate) fn commit_tree_for_id<'repo>(
     context: &str,
 ) -> Result<gix::Tree<'repo>> {
     let spec = id.as_ref();
-    repo.rev_parse_single(spec)
+    crate::refs::resolve_required(repo, spec)
         .map_err(|e| {
             Error::new(ErrorKind::Backend(format!(
                 "{context} rev-parse {spec}: {e}"

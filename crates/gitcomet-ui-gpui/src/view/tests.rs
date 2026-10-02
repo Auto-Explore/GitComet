@@ -171,7 +171,7 @@ fn install_app_shortcuts_for_test(cx: &mut gpui::VisualTestContext, backend: Arc
     cx.update(|window, app| {
         crate::app::install_app_shortcuts_for_test(app, backend);
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
     });
 }
 
@@ -209,7 +209,7 @@ fn available_git_runtime_state() -> GitRuntimeState {
     GitRuntimeState {
         preference: GitExecutablePreference::SystemPath,
         availability: GitExecutableAvailability::Available {
-            version_output: "git version 2.51.0".to_string(),
+            version_output: "git version 2.55.0".to_string(),
         },
     }
 }

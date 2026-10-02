@@ -378,6 +378,7 @@ impl FileListView {
                             ("hosted_file_list_dir", ix).into(),
                             move || format!("hosted_file_list_{list_id}_dir_{ix}"),
                             directory,
+                            false,
                             theme,
                             ui_scale_percent,
                         )?;

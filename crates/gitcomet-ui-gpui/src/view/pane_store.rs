@@ -252,12 +252,11 @@ impl PaneStore {
                         in_session_worktree(DiffTarget::working_tree(path, DiffArea::Unstaged))
                     }
                     gitcomet_core::domain::FileSource::Commit(commit) => {
-                        DiffTarget::commit(commit, Some(path))
+                        DiffTarget::commit(commit, path)
                     }
-                    gitcomet_core::domain::FileSource::Branch(branch) => DiffTarget::commit(
-                        gitcomet_core::domain::CommitId(branch.into()),
-                        Some(path),
-                    ),
+                    gitcomet_core::domain::FileSource::Branch(branch) => {
+                        DiffTarget::commit(gitcomet_core::domain::CommitId(branch.into()), path)
+                    }
                 };
                 store.dispatch(Msg::DiffSession(DiffSessionMsg::Open {
                     repo_id,

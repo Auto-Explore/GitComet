@@ -268,6 +268,7 @@ impl GitCometView {
                             commit_push_after_enabled: Some(this.commit_push_after_enabled),
                             default_tag_type: None,
                             fetch_prune_deleted_remote_branches: None,
+                            recommend_repo_maintenance: None,
                             git_executable_path: None,
                             external_code_editor: None,
                         };

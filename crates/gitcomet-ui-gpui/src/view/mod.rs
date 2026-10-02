@@ -22,7 +22,7 @@ use gitcomet_state::model::{
     AppNotificationKind, AppState, AuthPromptKind, BranchExistsPromptOperation,
     BranchExistsPromptState, CloneOpState, CloneOpStatus, DefaultTagType, DiagnosticKind,
     FileBrowserSettings, GitHookOperation, GitHookOperationStatus, GitHookRunStatus, Loadable,
-    RemoteSettings, RepoId, RepoState, SubmoduleTrustPromptOperation,
+    MaintenanceSettings, RemoteSettings, RepoId, RepoState, SubmoduleTrustPromptOperation,
 };
 use gitcomet_state::msg::{BranchExistsChoice, Msg, StoreEvent};
 use gitcomet_state::session;
@@ -237,6 +237,7 @@ mod fetch_ref;
 mod file_diff_display;
 mod file_list_controller;
 mod fingerprint;
+mod git_version_notice;
 mod history_graph;
 pub(crate) mod history_mode;
 mod history_refs_hover;
@@ -247,6 +248,7 @@ mod linux_desktop_integration;
 mod markdown_preview;
 mod mod_helpers;
 mod open_source_licenses_data;
+mod operation_progress;
 mod pane_store;
 mod panels;
 mod panes;

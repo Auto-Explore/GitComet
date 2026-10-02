@@ -153,6 +153,7 @@ impl DetailsPaneView {
                     if current {
                         self.sync_commit_details_message_input(
                             details.message.as_str(),
+                            details.id.as_ref().len(),
                             theme,
                             repo_id,
                             &find.summary,

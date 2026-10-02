@@ -203,6 +203,10 @@ pub fn refresh_history_page(
     }
 }
 
+/// The label of the check a maintenance run returns when git found nothing
+/// to do; the run itself writes nothing to a pipe, so its output can't tell.
+pub const MAINTENANCE_CHECK_COMMAND: &str = "git maintenance is-needed --auto";
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CommandOutput {
     pub command: String,
@@ -384,6 +388,41 @@ pub enum SequencerState {
 /// the branch no longer has the reverted changes, so no commit was created.
 pub const REVERT_NOTHING_TO_REVERT_SENTINEL: &str = "GITCOMET_REVERT_NOTHING_TO_REVERT";
 
+/// Marker an applied file change puts in its output when the branch already has
+/// that change, so nothing was applied or committed.
+pub const APPLY_FILE_CHANGE_ALREADY_APPLIED_SENTINEL: &str =
+    "GITCOMET_APPLY_CHANGE_ALREADY_APPLIED";
+
+/// The revision an applied change comes from, as messages name it:
+/// `abc1234`, or `abc1234..def5678` for a comparison.
+pub fn apply_change_revision(source: &ApplyChangeSource) -> String {
+    match source {
+        ApplyChangeSource::Commit(commit_id) => commit_id.short().to_owned(),
+        ApplyChangeSource::Range { from, to } => format!("{}..{}", from.short(), to.short()),
+    }
+}
+
+/// Commit message for file changes applied from a comparison, which has no
+/// single source commit message to reuse. More than one file is listed in
+/// the body.
+pub fn apply_file_change_range_message(
+    from: &CommitId,
+    to: &CommitId,
+    paths: &[PathBuf],
+) -> String {
+    let range = format!("{}..{}", from.short(), to.short());
+    match paths {
+        [path] => format!("Apply {} from {range}", path.display()),
+        _ => {
+            let mut message = format!("Apply {} files from {range}\n", paths.len());
+            for path in paths {
+                message.push_str(&format!("\n- {}", path.display()));
+            }
+            message
+        }
+    }
+}
+
 /// Command label of a Continue that skipped a revert its resolution left empty.
 pub const REVERT_SKIP_COMMAND: &str = "git revert --skip";
 
@@ -495,6 +534,10 @@ pub enum SafePushAfterCommitDecision {
 
 pub trait GitRepository: Send + Sync {
     fn spec(&self) -> &RepoSpec;
+
+    /// Drops held object-store handles so their pack files can be deleted and
+    /// packs written since become visible; later reads reopen the store.
+    fn release_object_store(&self) {}
 
     /// Distinct author names across the complete, unfiltered history scope.
     /// Called on demand, independently of the visible commit metadata cache.
@@ -1227,6 +1270,30 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
+    /// Applies the change to `target`'s files from a commit or comparison to
+    /// the index and worktree with a 3-way fallback, then with `commit`
+    /// commits just those paths.
+    fn apply_file_change_with_output(
+        &self,
+        _target: &crate::domain::ApplyChangeTarget,
+        _commit: bool,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "applying a file change is not implemented for this backend",
+        )))
+    }
+
+    /// Retry only the failed commit step, after checking that HEAD and the
+    /// applied paths still match the checkpoint returned by that failure.
+    fn commit_applied_file_change_with_output(
+        &self,
+        _retry: &crate::domain::ApplyFileChangeRetry,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "committing an applied file change is not implemented for this backend",
+        )))
+    }
+
     fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()>;
     fn stash_list(&self) -> Result<Vec<StashEntry>>;
     fn stash_list_cancellable(&self, cancellation: &CancellationToken) -> Result<Vec<StashEntry>> {
@@ -1287,9 +1354,12 @@ pub trait GitRepository: Send + Sync {
             "git rebase -i is not implemented for this backend",
         )))
     }
+    /// Picks `entries` in order. Without `commit` every pick only merges into
+    /// the index and worktree, and reword/squash/fixup steps are refused.
     fn interactive_cherry_pick_with_output(
         &self,
         _entries: &[InteractiveRebaseEntry],
+        _commit: bool,
     ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "interactive cherry-pick is not implemented for this backend",
@@ -1358,6 +1428,27 @@ pub trait GitRepository: Send + Sync {
     fn prune_merged_branches_with_output(&self) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "pruning merged branches is not implemented for this backend",
+        )))
+    }
+    /// The shared git directory (the main `.git` of a linked worktree),
+    /// canonicalized; worktrees of one repository share its maintenance.
+    fn common_dir(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+    /// Whether the repository needs substantial maintenance: git's gc
+    /// thresholds (`gc.auto` loose objects, `gc.autoPackLimit` packs).
+    fn maintenance_needed(&self) -> Result<bool> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "maintenance checks are not implemented for this backend",
+        )))
+    }
+    /// Runs the maintenance git recommends, in the foreground, reporting
+    /// progress through the attached git operation. When git finds nothing
+    /// to do it skips the run and returns the check, labelled
+    /// [`MAINTENANCE_CHECK_COMMAND`].
+    fn run_maintenance_with_output(&self) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "maintenance is not implemented for this backend",
         )))
     }
     fn prune_local_tags_with_output(&self) -> Result<CommandOutput> {
@@ -2149,6 +2240,9 @@ fn unsupported_repository_options() -> Error {
 pub trait GitBackend: Send + Sync {
     fn open(&self, workdir: &Path) -> Result<Arc<dyn GitRepository>>;
 
+    /// Releases the object stores of every repository this backend opened on
+    /// `common_dir`, in every window, so git can delete the packs they map.
+    fn release_object_stores(&self, _common_dir: &Path) {}
     /// Opens `workdir` with `options`. A backend that cannot honor a
     /// non-default option refuses instead of opening without it.
     fn open_with_options(
@@ -2452,6 +2546,8 @@ mod tests {
         // Likewise: "not a gitlink" is the safe answer for a backend that
         // cannot read HEAD trees.
         assert!(!repo.head_path_is_gitlink(path).unwrap());
+        // A backend without a long-lived store has nothing to release.
+        repo.release_object_store();
 
         assert_unsupported(repo.log_all_branches_page(25, Some(&cursor)));
         assert_unsupported(repo.log_file_page(path, 25, None));
@@ -2490,6 +2586,10 @@ mod tests {
         ));
         assert_unsupported(repo.cherry_pick_with_output(&commit, true, None));
         assert_unsupported(repo.revert_with_output(&commit, true, None));
+        assert_unsupported(repo.apply_file_change_with_output(
+            &crate::domain::ApplyChangeTarget::commit(commit.clone(), path.to_path_buf()),
+            false,
+        ));
         assert_unsupported(repo.rebase_with_output("main"));
         assert_unsupported(repo.rebase_continue_with_output());
         assert_unsupported(repo.rebase_abort_with_output());
@@ -2497,6 +2597,9 @@ mod tests {
         assert_unsupported(repo.create_tag_with_output("v1.0.0", "HEAD", None, false));
         assert_unsupported(repo.delete_tag_with_output("v1.0.0"));
         assert_unsupported(repo.prune_merged_branches_with_output());
+        assert_unsupported(repo.maintenance_needed());
+        assert_unsupported(repo.run_maintenance_with_output());
+        assert_eq!(repo.common_dir(), None);
         assert_unsupported(repo.prune_local_tags_with_output());
         assert_unsupported(repo.push_tag_with_output("origin", "v1.0.0"));
         assert_unsupported(repo.delete_remote_tag_with_output("origin", "v1.0.0"));

@@ -387,7 +387,7 @@ impl SettingsWindowView {
     }
 
     pub(super) fn git_runtime_row(&self, theme: AppTheme) -> Stateful<gpui::Div> {
-        let min_git_version = format!("{MIN_GIT_MAJOR}.{MIN_GIT_MINOR}");
+        let min_git_version = gitcomet_core::process::GitVersion::MINIMUM;
         let (git_icon_path, git_icon_color, git_status_text): (
             &'static str,
             gpui::Rgba,

@@ -62,6 +62,7 @@ pub(super) fn cherry_pick_commit(
         commit,
         mainline,
         summary,
+        auth: None,
     }]
 }
 
@@ -78,6 +79,21 @@ pub(super) fn revert_commit(
         commit,
         mainline,
         summary,
+        auth: None,
+    }]
+}
+
+pub(super) fn apply_file_change(
+    repo_id: RepoId,
+    target: gitcomet_core::domain::ApplyChangeTarget,
+    commit: bool,
+    commit_retry: Option<gitcomet_core::domain::ApplyFileChangeRetry>,
+) -> Vec<Effect> {
+    vec![Effect::ApplyFileChange {
+        repo_id,
+        target,
+        commit,
+        commit_retry,
         auth: None,
     }]
 }
@@ -710,8 +726,13 @@ pub(super) fn open_interactive_cherry_pick_setup(
 pub(super) fn interactive_cherry_pick(
     repo_id: RepoId,
     entries: Vec<InteractiveRebaseEntry>,
+    commit: bool,
 ) -> Vec<Effect> {
-    vec![Effect::InteractiveCherryPick { repo_id, entries }]
+    vec![Effect::InteractiveCherryPick {
+        repo_id,
+        entries,
+        commit,
+    }]
 }
 
 pub(super) fn cancel_interactive_rebase_setup(
@@ -1042,6 +1063,7 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::InteractiveCherryPick { .. }
             | RepoCommandKind::CherryPick { .. }
             | RepoCommandKind::Revert { .. }
+            | RepoCommandKind::ApplyFileChange { .. }
             | RepoCommandKind::MergeAbort
             | RepoCommandKind::CreateTag { .. }
             | RepoCommandKind::DeleteTag { .. }
@@ -1085,6 +1107,7 @@ pub(super) fn command_touches_sequencer_state(command: &RepoCommandKind) -> bool
             | RepoCommandKind::InteractiveCherryPick { .. }
             | RepoCommandKind::CherryPick { .. }
             | RepoCommandKind::Revert { .. }
+            | RepoCommandKind::ApplyFileChange { commit: true, .. }
             | RepoCommandKind::MergeAbort
     )
 }
@@ -1110,6 +1133,7 @@ fn command_clears_pending_force_push_lease(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::InteractiveCherryPick { .. }
             | RepoCommandKind::CherryPick { .. }
             | RepoCommandKind::Revert { .. }
+            | RepoCommandKind::ApplyFileChange { commit: true, .. }
             | RepoCommandKind::MergeAbort
     )
 }
@@ -1164,14 +1188,7 @@ pub(super) fn repo_command_finished(
             | RepoCommandKind::RemoveSubmodule { .. }
     ) && result.is_ok();
     let command_succeeded = result.is_ok();
-    let fetch_like_command = matches!(
-        &command,
-        RepoCommandKind::FetchAll
-            | RepoCommandKind::FetchRefspecs { .. }
-            | RepoCommandKind::PruneMergedBranches
-            | RepoCommandKind::Pull { .. }
-            | RepoCommandKind::PullBranch { .. }
-    );
+    let fetch_like_command = command.fetches_objects();
     let refresh_remote_branches = fetch_like_command
         || matches!(
             &command,

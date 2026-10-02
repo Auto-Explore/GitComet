@@ -18,7 +18,9 @@ use std::path::Path;
 /// The raw [`gix::Error`] is returned so callers can map it to their own
 /// error type or treat "not a repository" as absence.
 pub(crate) fn open_worktree_repo(workdir: &Path) -> gix::Result<gix::Repository> {
-    gix::open(git_dir_for_workdir(workdir))
+    let mut repo = gix::open(git_dir_for_workdir(workdir))?;
+    crate::refs::reload_conditional_includes(&mut repo)?;
+    Ok(repo)
 }
 
 /// Translate a failed [`open_worktree_repo`] into the crate's error type.
@@ -35,6 +37,40 @@ pub(crate) fn map_open_error(error: gix::Error, context: &str) -> Error {
     }
     match error.classify().find_map(|class| class.io_kind()) {
         Some(kind) => Error::new(ErrorKind::Io(kind)),
-        None => Error::new(ErrorKind::Backend(format!("{context}: {error}"))),
+        None => {
+            // The top frame is generic ("configuration could not be loaded");
+            // the innermost names the offending key or file.
+            let mut message = format!("{context}: {error}");
+            if let Some(cause) = error.iter_errors().last().map(ToString::to_string)
+                && !message.contains(&cause)
+            {
+                message.push_str(": ");
+                message.push_str(&cause);
+            }
+            Error::new(ErrorKind::Backend(message))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn open_error_names_the_innermost_cause() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = crate::util::git_workdir_cmd_for(dir.path())
+            .args(["init", "-q"])
+            .status()
+            .unwrap();
+        assert!(git.success());
+        let config = dir.path().join(".git/config");
+        let mut text = std::fs::read_to_string(&config).unwrap();
+        text = text.replace("repositoryformatversion = 0", "repositoryformatversion = 1");
+        text.push_str("[extensions]\n\tobjectFormat = sha512\n");
+        std::fs::write(&config, text).unwrap();
+
+        let error = super::open_worktree_repo(dir.path()).unwrap_err();
+        let message = super::map_open_error(error, "gix open").to_string();
+        assert!(message.contains("objectFormat"), "{message}");
+        assert!(message.contains("sha512"), "{message}");
     }
 }

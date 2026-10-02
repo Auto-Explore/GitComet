@@ -22,6 +22,7 @@ crates/gitcomet-fs-watch/src/macos.rs identifier 1 FSEvents dispatch queue label
 crates/gitcomet-git-gix/examples/status-refresh-bench.rs identifier 2 benchmark example scratch names
 crates/gitcomet-git-gix/src/repo/diff.rs identifier 2 temporary file prefixes
 crates/gitcomet-git-gix/src/repo/history.rs identifier 6 rebase state files in .git, shared by every product for resumable rebases
+crates/gitcomet-git-gix/src/repo/maintenance.rs identifier 1 progress thread name (profiler attribution)
 crates/gitcomet-git-gix/src/repo/mergetool.rs identifier 3 temporary prefixes and the shared per-repo trust config key
 crates/gitcomet-git-gix/src/repo/submodules.rs identifier 1 shared per-repo submodule trust config key
 crates/gitcomet-git-gix/src/repo/text_decode.rs identifier 1 temporary file prefix
@@ -30,7 +31,7 @@ crates/gitcomet-state/src/history_find.rs identifier 1 worker thread name (profi
 crates/gitcomet-state/src/session/mod.rs identifier 2 session path encoding markers (file format)
 crates/gitcomet-state/src/store/effects/history_authors.rs identifier 1 worker thread name (profiler attribution)
 crates/gitcomet-state/src/store/effects/indexed_history.rs identifier 1 worker thread name (profiler attribution)
-crates/gitcomet-state/src/store/executor.rs identifier 6 worker thread names and diagnostic prefix
+crates/gitcomet-state/src/store/executor.rs identifier 7 worker thread names and diagnostic prefix
 crates/gitcomet-state/src/store/mod.rs identifier 2 store and repo-load worker thread names (profiler attribution)
 crates/gitcomet-state/src/store/repo_load_trace.rs identifier 1 diagnostic prefix
 crates/gitcomet-state/src/store/repo_monitor.rs identifier 3 diagnostic prefix and thread names

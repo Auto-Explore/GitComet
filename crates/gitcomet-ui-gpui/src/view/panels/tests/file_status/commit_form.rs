@@ -43,6 +43,17 @@ fn staged_revert_offers_its_message_to_an_empty_commit_box(cx: &mut gpui::TestAp
     });
     assert_eq!(commit_box_text(cx), message);
 
+    // Repeated signing failures can suggest the same message more than once.
+    // A successful retry consumes it, and the auto-filled draft clears too.
+    for (text, rev, expected) in [(Some(message), 2, message), (None, 3, "")] {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                push_test_state(this, state_with(text, rev), cx);
+            });
+        });
+        assert_eq!(commit_box_text(cx), expected);
+    }
+
     // A message the user is already writing is never overwritten.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
@@ -56,7 +67,13 @@ fn staged_revert_offers_its_message_to_an_empty_commit_box(cx: &mut gpui::TestAp
     });
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            push_test_state(this, state_with(Some("Revert \"other\""), 2), cx);
+            push_test_state(this, state_with(Some("Revert \"other\""), 4), cx);
+        });
+    });
+    assert_eq!(commit_box_text(cx), "my own words");
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, state_with(None, 5), cx);
         });
     });
     assert_eq!(commit_box_text(cx), "my own words");
@@ -382,7 +399,7 @@ fn amend_prefills_commit_message_once_recent_messages_load(cx: &mut gpui::TestAp
 fn commit_message_focus_after_initial_draw_accepts_typed_input(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
-        window.activate_window();
+        window.activate();
         super::super::super::GitCometView::new(store, events, None, window, cx)
     });
 
@@ -529,7 +546,7 @@ fn typing_in_the_commit_box_replays_the_cached_bottom_bar_and_toasts(
     let _cache_guard = crate::view::enable_stable_cached_views_for_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
-        window.activate_window();
+        window.activate();
         super::super::super::GitCometView::new(store, events, None, window, cx)
     });
     let repo_id = gitcomet_state::model::RepoId(45);
@@ -700,4 +717,101 @@ fn a_tiling_change_rerenders_the_cached_bottom_bar(cx: &mut gpui::TestAppContext
         renders(cx) > before,
         "the bottom bar must redraw its corners ({before} renders before)"
     );
+}
+
+/// A held drag selection past the commit box scrolls it. Cached views on: the
+/// autoscroll only notifies the input, and the cached details pane around it
+/// must still re-lay out its scroll container.
+#[gpui::test]
+fn holding_a_drag_selection_past_the_commit_box_scrolls_it(cx: &mut gpui::TestAppContext) {
+    let _cache_guard = crate::view::enable_stable_cached_views_for_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate();
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(48);
+    let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-commit-box-drag-scroll"));
+    repo.status = gitcomet_state::model::Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
+                path: std::path::PathBuf::from("staged.txt"),
+                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                conflict: None,
+            }]),
+            unstaged: std::sync::Arc::new(Vec::new()),
+        }
+        .into(),
+    );
+    let message: String = (0..40)
+        .map(|ix| format!("commit message line {ix}\n"))
+        .collect();
+    let draw = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    };
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.run_until_parked();
+    draw(cx);
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.commit_message_input.update(cx, |input, cx| {
+                    input.set_text(message.clone(), cx);
+                    input.set_caret(0, cx);
+                });
+                let focus = pane.commit_message_input.read(cx).focus_handle();
+                window.focus(&focus, cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+    for _ in 0..3 {
+        draw(cx);
+    }
+    let scroll = cx.update(|_window, app| {
+        view.read(app)
+            .details_pane
+            .read(app)
+            .commit_message_scroll
+            .clone()
+    });
+    let viewport = scroll.bounds();
+    assert!(
+        scroll.max_offset().y > px(0.0),
+        "the message overflows the box"
+    );
+
+    let at = point(viewport.left() + px(20.0), viewport.top() + px(12.0));
+    cx.simulate_mouse_move(at, None, Modifiers::default());
+    cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::default());
+    draw(cx);
+    let below = point(at.x, viewport.bottom() + px(20.0));
+    cx.simulate_mouse_move(below, Some(MouseButton::Left), Modifiers::default());
+    draw(cx);
+    for _ in 0..10 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(16));
+        cx.run_until_parked();
+        draw(cx);
+    }
+    assert!(
+        scroll.offset().y < px(0.0),
+        "held below, the commit box scrolls"
+    );
+    let selected = cx.update(|_window, app| {
+        view.read(app)
+            .details_pane
+            .read(app)
+            .commit_message_input
+            .read(app)
+            .selected_range()
+    });
+    assert!(!selected.is_empty(), "and the drag selects");
+    cx.simulate_mouse_up(below, MouseButton::Left, Modifiers::default());
 }

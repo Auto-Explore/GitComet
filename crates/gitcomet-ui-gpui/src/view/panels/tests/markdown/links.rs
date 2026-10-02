@@ -1015,7 +1015,7 @@ fn a_link_in_a_commit_preview_is_offered_even_when_the_worktree_lost_the_file(
             let mut repo = opening_repo_state(repo_id, &workdir);
             repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::commit(
                 commit_id.clone(),
-                Some(std::path::PathBuf::from("docs/preview.md")),
+                std::path::PathBuf::from("docs/preview.md"),
             ));
             repo.diff_state.diff_state_rev = 1;
             push_test_state(this, app_state_with_repo(repo, repo_id), cx);
@@ -1807,7 +1807,7 @@ fn a_link_on_the_old_side_of_a_commit_diff_opens_the_parent_version(cx: &mut gpu
     std::fs::create_dir_all(workdir.join("docs")).expect("create workdir");
     let commit_id = gitcomet_core::domain::CommitId("c0ffee".into());
     let path = std::path::PathBuf::from("docs/a.md");
-    let target = gitcomet_core::domain::DiffTarget::commit(commit_id.clone(), Some(path.clone()));
+    let target = gitcomet_core::domain::DiffTarget::commit(commit_id.clone(), path.clone());
     let old_text = "See [old](old.md) here.\n\nBefore.\n";
     let new_text = "See [old](old.md) here.\n\nAfter.\n";
 
@@ -2069,7 +2069,7 @@ fn a_link_on_the_old_copy_of_a_modified_paragraph_opens_the_parent_version(
     std::fs::create_dir_all(workdir.join("docs")).expect("create workdir");
     let commit_id = gitcomet_core::domain::CommitId("c0ffee".into());
     let path = std::path::PathBuf::from("docs/a.md");
-    let target = gitcomet_core::domain::DiffTarget::commit(commit_id.clone(), Some(path.clone()));
+    let target = gitcomet_core::domain::DiffTarget::commit(commit_id.clone(), path.clone());
     let old_text = "See [spec](spec.md) and\nthe old ending.\n";
     let new_text = "See [spec](spec.md) and\nthe new ending.\n";
 

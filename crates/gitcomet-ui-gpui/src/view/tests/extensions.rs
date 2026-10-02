@@ -510,7 +510,7 @@ fn commands_reach_the_palette_key_bindings_and_menus(cx: &mut gpui::TestAppConte
         view.update(app, |this, cx| {
             test_support::push_test_state(this, state_with_repo(RepoId(1), &repo), cx)
         });
-        window.activate_window();
+        window.activate();
     });
     test_support::redraw(cx);
 

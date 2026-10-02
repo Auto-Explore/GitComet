@@ -2058,7 +2058,7 @@
     "definition": {
       "constant": {
         "const": {
-          "expr": "\"bdd090f243921570bc0c28855ebd2ff105cd225c\"",
+          "expr": "\"46e1ede350cc95071b389e83831e18e7d114bbaf\"",
           "is_literal": true,
           "value": null
         },
@@ -48922,6 +48922,109 @@
     "deprecation": null,
     "name": "trailing_fade"
   },
+  "gitcomet_ui_kit::drag_autoscroll::DRAG_AUTOSCROLL_MAX_STEP": {
+    "attrs": [],
+    "definition": {
+      "constant": {
+        "const": {
+          "expr": "_",
+          "is_literal": false,
+          "value": null
+        },
+        "type": {
+          "resolved_path": {
+            "args": null,
+            "path": "gpui::Pixels",
+            "type_path": "gpui::geometry::Pixels"
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "name": "DRAG_AUTOSCROLL_MAX_STEP"
+  },
+  "gitcomet_ui_kit::drag_autoscroll::DRAG_AUTOSCROLL_TICK": {
+    "attrs": [],
+    "definition": {
+      "constant": {
+        "const": {
+          "expr": "_",
+          "is_literal": false,
+          "value": null
+        },
+        "type": {
+          "resolved_path": {
+            "args": null,
+            "path": "std::time::Duration",
+            "type_path": "core::time::Duration"
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "name": "DRAG_AUTOSCROLL_TICK"
+  },
+  "gitcomet_ui_kit::drag_autoscroll::drag_autoscroll_step": {
+    "attrs": [],
+    "definition": {
+      "function": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "header": {
+          "abi": "Rust",
+          "is_async": false,
+          "is_const": false,
+          "is_unsafe": false
+        },
+        "sig": {
+          "inputs": [
+            [
+              "pointer",
+              {
+                "resolved_path": {
+                  "args": null,
+                  "path": "gpui::Pixels",
+                  "type_path": "gpui::geometry::Pixels"
+                }
+              }
+            ],
+            [
+              "min",
+              {
+                "resolved_path": {
+                  "args": null,
+                  "path": "gpui::Pixels",
+                  "type_path": "gpui::geometry::Pixels"
+                }
+              }
+            ],
+            [
+              "max",
+              {
+                "resolved_path": {
+                  "args": null,
+                  "path": "gpui::Pixels",
+                  "type_path": "gpui::geometry::Pixels"
+                }
+              }
+            ]
+          ],
+          "is_c_variadic": false,
+          "output": {
+            "resolved_path": {
+              "args": null,
+              "path": "gpui::Pixels",
+              "type_path": "gpui::geometry::Pixels"
+            }
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "name": "drag_autoscroll_step"
+  },
   "gitcomet_ui_kit::file_icons::chevron_icon": {
     "attrs": [],
     "definition": {
@@ -58877,6 +58980,12 @@
                     "primitive": "str"
                   }
                 }
+              }
+            ],
+            [
+              "max_id_len",
+              {
+                "primitive": "usize"
               }
             ]
           ],
@@ -70927,6 +71036,39 @@
             },
             "deprecation": null,
             "name": "uses_toast_ttl"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": true,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "generic": "Self"
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "primitive": "bool"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "uses_progress_ticker"
           },
           {
             "attrs": [],

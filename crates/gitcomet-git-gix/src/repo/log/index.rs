@@ -18,7 +18,8 @@ impl GixRepo {
             gitcomet_core::git_ops_trace::GitOpTraceKind::LogWalk,
         );
         cancellation.check_cancelled()?;
-        let repo = self._repo.to_thread_local();
+        let (store, _) = self.thread_safe_repo();
+        let repo = store.to_thread_local();
         let shallow = shallow_snapshot(&repo)?;
         let tips = if mode == HistoryMode::AllBranches {
             self.all_branches_tips(&repo, Some(cancellation))?
@@ -30,21 +31,20 @@ impl GixRepo {
         let mut builder =
             HistoryIndexBuilder::new(snapshot, mode, repo.object_hash().len_in_bytes())?;
         let mut walk = new_log_paged_walk(
-            &self._repo,
+            &store,
             tips.iter().copied(),
             mode,
             &shallow,
             Some(cancellation),
             None,
         )?;
-        let topology = repo.commit_graph_if_enabled().ok().flatten();
         let mut decode_buf = Vec::new();
         let mut scanned = 0u64;
         let mut last_progress = Instant::now();
         for info in &mut walk.walk {
             cancellation.check_cancelled()?;
             let info = info.map_err(|error| {
-                Error::new(ErrorKind::Backend(format!("gix history index: {error}")))
+                crate::repo::object_store::gix_error("gix history index", &*error)
             })?;
             scanned += 1;
             if scanned.is_multiple_of(1024) && last_progress.elapsed() >= Duration::from_millis(100)
@@ -58,15 +58,10 @@ impl GixRepo {
             if !mode_includes(mode, info.parent_ids.len()) {
                 continue;
             }
-            // Author filtering requires object headers. The stash heuristic
-            // only needs messages from commits with two or three parents.
-            let stash_candidate = (2..=3).contains(&info.parent_ids.len())
-                && topology
-                    .as_ref()
-                    .and_then(|graph| stash_shape(graph, &info.parent_ids))
-                    .unwrap_or(true);
-            let mut probable_stash = false;
-            if author.is_some() || stash_candidate {
+            // Only author filtering needs object headers during traversal.
+            // Defer stash classification until the walk's maps are released.
+            let mut stash_candidate = (2..=3).contains(&info.parent_ids.len());
+            if let Some(author) = &author {
                 gitcomet_core::history_perf::record(
                     gitcomet_core::history_perf::Work::IndexObjectRead,
                 );
@@ -74,35 +69,68 @@ impl GixRepo {
                     .objects
                     .find_commit(info.id.as_ref(), &mut decode_buf)
                     .map_err(|error| {
-                        Error::new(ErrorKind::Backend(format!(
-                            "gix history index object: {error}"
-                        )))
+                        crate::repo::object_store::gix_error(
+                            "gix history index object",
+                            &gix::Error::from(error),
+                        )
                     })?;
-                if let Some(author) = &author
-                    && !commit
-                        .author()
-                        .ok()
-                        .is_some_and(|signature| author.matches(signature.name.as_ref()))
+                if !commit
+                    .author()
+                    .ok()
+                    .is_some_and(|signature| author.matches(signature.name.as_ref()))
                 {
                     continue;
                 }
-                if stash_candidate {
-                    let summary = commit.message.lines().next().unwrap_or_default();
-                    probable_stash = (summary.starts_with(b"WIP on ")
-                        || summary.starts_with(b"On "))
-                        && summary.windows(2).any(|pair| pair == b": ");
-                }
+                stash_candidate = stash_candidate && has_stash_summary(commit.message);
             }
             builder.push(
                 info.id.as_bytes(),
                 info.parent_ids.iter().map(|id| id.as_bytes()),
-                probable_stash,
+                stash_candidate,
             )?;
         }
         on_progress(HistoryIndexProgress {
             scanned,
             matched: builder.len() as u64,
         });
+        // The topo walk retains two hash maps covering the entire history.
+        // Drop them and its commit graph before stash classification opens
+        // another graph and possibly maps packs to read commit messages.
+        drop(walk);
+        drop(decode_buf);
+
+        // Author-filtered walks have already checked their messages and no
+        // longer need the potentially large author-decoding scratch buffer.
+        let mut decode_buf = Vec::new();
+        let topology = std::cell::OnceCell::new();
+        builder.retain_probable_stashes(|id, parents| {
+            cancellation.check_cancelled()?;
+            if let Some(graph) =
+                topology.get_or_init(|| repo.commit_graph_if_enabled().ok().flatten())
+            {
+                let parents: smallvec::SmallVec<[gix::ObjectId; 3]> =
+                    parents.map(gix::ObjectId::from_bytes_or_panic).collect();
+                if stash_shape(graph, &parents) == Some(false) {
+                    return Ok(false);
+                }
+            }
+            if author.is_some() {
+                // Author filtering already decoded and checked this message.
+                return Ok(true);
+            }
+            gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::IndexObjectRead);
+            let commit = repo
+                .objects
+                .find_commit(gix::oid::from_bytes_unchecked(id), &mut decode_buf)
+                .map_err(|error| {
+                    Error::new(ErrorKind::Backend(format!(
+                        "gix history index object: {error}"
+                    )))
+                })?;
+            Ok(has_stash_summary(commit.message))
+        })?;
+        drop(topology);
+        drop(decode_buf);
         builder.finish(cancellation).map(Some)
     }
 
@@ -131,7 +159,10 @@ impl GixRepo {
                 .objects
                 .find_commit(id.as_ref(), &mut header_buf)
                 .map_err(|error| {
-                    Error::new(ErrorKind::Backend(format!("gix history range: {error}")))
+                    crate::repo::object_store::gix_error(
+                        "gix history range",
+                        &gix::Error::from(error),
+                    )
                 })?;
             // Use precisely the indexed topology (including first-parent,
             // shallow boundaries and parents excluded by an author filter).
@@ -157,6 +188,12 @@ impl GixRepo {
             commits,
         })
     }
+}
+
+fn has_stash_summary(message: &[u8]) -> bool {
+    let summary = message.lines().next().unwrap_or_default();
+    (summary.starts_with(b"WIP on ") || summary.starts_with(b"On "))
+        && summary.windows(2).any(|pair| pair == b": ")
 }
 
 /// Only reject when unfiltered commit-graph topology proves the shape impossible.

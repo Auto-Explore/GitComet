@@ -150,11 +150,12 @@ pub(in crate::view) struct DirectoryToggle {
 }
 
 /// A directory row's element (the caller adds its toggle action), or `None`
-/// for a file row.
+/// for a file row. `menu_open` keeps it lit while its context menu is up.
 pub(in crate::view) fn changed_file_directory_row(
     element_id: ElementId,
     selector: impl FnOnce() -> String + 'static,
     row: FileListRow,
+    menu_open: bool,
     theme: AppTheme,
     ui_scale_percent: u32,
 ) -> Option<(Stateful<Div>, DirectoryToggle)> {
@@ -189,6 +190,7 @@ pub(in crate::view) fn changed_file_directory_row(
             additions.is_some() || deletions.is_some(),
             ui_scale_percent,
         ),
+        menu_open,
     })
     .debug_selector(selector);
     Some((

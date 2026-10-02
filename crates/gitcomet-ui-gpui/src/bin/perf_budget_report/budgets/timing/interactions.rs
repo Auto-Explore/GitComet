@@ -222,20 +222,20 @@ pub(crate) const PERF_BUDGETS: &[PerfBudgetSpec] = &[
         threshold_ns: 100.0 * NANOS_PER_MILLISECOND,
     },
     PerfBudgetSpec {
-        label: "git_ops/diff_rename_heavy",
-        estimate_path: "git_ops/diff_rename_heavy/new/estimates.json",
-        // Full commit diff over 256 rename-detected files.
+        label: "git_ops/diff_range_rename_heavy",
+        estimate_path: "git_ops/diff_range_rename_heavy/new/estimates.json",
+        // Parent-to-commit range diff over 256 rename-detected files.
         threshold_ns: 750.0 * NANOS_PER_MILLISECOND,
     },
     PerfBudgetSpec {
-        label: "git_ops/diff_binary_heavy",
-        estimate_path: "git_ops/diff_binary_heavy/new/estimates.json",
-        // Full commit diff over 128 binary file rewrites.
+        label: "git_ops/diff_range_binary_heavy",
+        estimate_path: "git_ops/diff_range_binary_heavy/new/estimates.json",
+        // Parent-to-commit range diff over 128 binary file rewrites.
         threshold_ns: 500.0 * NANOS_PER_MILLISECOND,
     },
     PerfBudgetSpec {
-        label: "git_ops/diff_large_single_file_100k_lines",
-        estimate_path: "git_ops/diff_large_single_file_100k_lines/new/estimates.json",
+        label: "git_ops/diff_range_large_single_file_100k_lines",
+        estimate_path: "git_ops/diff_range_large_single_file_100k_lines/new/estimates.json",
         // 100k-line full-file rewrite; backend diff generation is intentionally heavy.
         threshold_ns: 2_000.0 * NANOS_PER_MILLISECOND,
     },

@@ -30,6 +30,8 @@ fn running_hook_activity(operation_id: u64) -> GitHookOperation {
         output_bytes: output.len(),
         output_truncated: false,
         latest_line: "checking file 79".to_string(),
+        progress_lane: false,
+        progress: None,
     }
 }
 
@@ -1191,4 +1193,186 @@ fn hook_activity_stays_minimized_when_another_overlay_blocks_auto_open(
         idle_button,
         "a blocked auto-open does not enable keep-minimized styling"
     );
+}
+
+fn running_fetch(operation_id: u64, percent: Option<u8>) -> GitHookOperation {
+    GitHookOperation {
+        id: GitOperationId(operation_id),
+        label: "Fetch".to_string(),
+        context: Some("All remotes".to_string()),
+        time: std::time::SystemTime::UNIX_EPOCH,
+        duration: None,
+        status: GitHookOperationStatus::Running,
+        hooks: Vec::new(),
+        output: Default::default(),
+        output_bytes: 0,
+        output_truncated: false,
+        latest_line: String::new(),
+        progress_lane: true,
+        progress: percent.map(|percent| gitcomet_core::git_progress::GitProgressMeter {
+            title: Arc::from("Receiving objects"),
+            percent: Some(percent),
+            estimated: false,
+        }),
+    }
+}
+
+#[gpui::test]
+fn operation_progress_card_shows_git_meter_and_stops_the_operation(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(731);
+    let mut repo = shortcut_fixture_repo(
+        repo_id,
+        &std::env::temp_dir().join(format!(
+            "gitcomet_ui_test_{}_operation_progress",
+            std::process::id()
+        )),
+        &CommitId("7317317317317317".into()),
+    );
+    repo.feedback
+        .hook_activity
+        .push(running_fetch(731, Some(45)));
+    repo.feedback.hook_activity_rev = 1;
+    apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
+    draw_and_drain_test_window(cx);
+
+    assert!(cx.debug_bounds("operation_progress_toast_731").is_some());
+    let lane = cx.update(|_window, app| {
+        let host = view.read(app).toast_host.read(app);
+        (
+            host.operation_progress_for_tests().to_vec(),
+            host.has_progress_ticker_for_tests(),
+        )
+    });
+    assert_eq!(lane.0.len(), 1);
+    assert_eq!(lane.0[0].percent_label().as_deref(), Some("45%"));
+    assert!(!lane.1, "no ticker outside the live runtime");
+
+    let stop = cx
+        .debug_bounds("operation_progress_stop_731")
+        .expect("Stop on the progress card");
+    cx.simulate_click(stop.center(), Modifiers::default());
+    sync_store_snapshot(cx, &view);
+    let status = cx.update(|_window, app| {
+        view.read(app).state.repos[0]
+            .feedback
+            .hook_activity
+            .first()
+            .map(|operation| operation.status)
+    });
+    assert_eq!(status, Some(GitHookOperationStatus::Cancelling));
+
+    repo.feedback.hook_activity.clear();
+    repo.feedback.hook_activity_rev = 2;
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    draw_and_drain_test_window(cx);
+    assert!(cx.debug_bounds("operation_progress_toast_731").is_none());
+}
+
+#[gpui::test]
+fn hook_runs_stay_out_of_the_operation_progress_lane(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(732);
+    let mut repo = shortcut_fixture_repo(
+        repo_id,
+        &std::env::temp_dir().join(format!(
+            "gitcomet_ui_test_{}_operation_progress_hooks",
+            std::process::id()
+        )),
+        &CommitId("7327327327327327".into()),
+    );
+    let mut with_hook = running_hook_activity(732);
+    with_hook.progress_lane = true;
+    repo.feedback.hook_activity.push(with_hook);
+    repo.feedback.hook_activity_rev = 1;
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    draw_and_drain_test_window(cx);
+
+    let lane_len = cx.update(|_window, app| {
+        view.read(app)
+            .toast_host
+            .read(app)
+            .operation_progress_for_tests()
+            .len()
+    });
+    assert_eq!(lane_len, 0);
+    assert!(cx.debug_bounds("operation_progress_toast_732").is_none());
+}
+
+#[gpui::test]
+fn maintenance_recommendation_stays_until_answered(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(741);
+    let mut repo = shortcut_fixture_repo(
+        repo_id,
+        &std::env::temp_dir().join(format!(
+            "gitcomet_ui_test_{}_maintenance_card",
+            std::process::id()
+        )),
+        &CommitId("7417417417417417".into()),
+    );
+    repo.common_dir = Some(Arc::from(std::path::Path::new(
+        "/tmp/maintenance-card/.git",
+    )));
+    repo.maintenance.recommended = true;
+    apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
+    for index in 0..3 {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.push_toast(components::ToastKind::Warning, format!("newer {index}"), cx);
+            });
+        });
+    }
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.debug_bounds("maintenance_recommendation_741").is_some(),
+        "newer toasts must not push the question out of view"
+    );
+
+    let later = cx
+        .debug_bounds("maintenance_later_741")
+        .expect("Remind me later");
+    cx.simulate_click(later.center(), Modifiers::default());
+    sync_store_snapshot(cx, &view);
+    draw_and_drain_test_window(cx);
+    let recommended =
+        cx.update(|_window, app| view.read(app).state.repos[0].maintenance.recommended);
+    assert!(!recommended);
+    assert!(cx.debug_bounds("maintenance_recommendation_741").is_none());
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    draw_and_drain_test_window(cx);
+    let start = cx.debug_bounds("maintenance_start_741").expect("Start");
+    cx.simulate_click(start.center(), Modifiers::default());
+    sync_store_snapshot(cx, &view);
+    draw_and_drain_test_window(cx);
+    assert!(cx.debug_bounds("maintenance_recommendation_741").is_none());
+}
+
+#[test]
+fn maintenance_progress_card_explains_the_wait() {
+    let progress = super::super::operation_progress::OperationProgress {
+        repo_id: RepoId(1),
+        operation_id: GitOperationId(1),
+        label: "Maintenance".to_string(),
+        subtitle: "app · Repacking objects".to_string(),
+        started: std::time::SystemTime::UNIX_EPOCH,
+        cancelling: false,
+        progress: Some(gitcomet_core::git_progress::GitProgressMeter::estimated(
+            "Writing new pack",
+            46,
+        )),
+    };
+    assert_eq!(progress.title(), "Optimizing repository…");
+    assert!(progress.explanation().is_some());
+    assert_eq!(progress.percent_label().as_deref(), Some("~46%"));
 }

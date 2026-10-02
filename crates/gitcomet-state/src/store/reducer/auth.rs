@@ -2,8 +2,8 @@
 //! the credentials the user then enters.
 
 use super::{
-    actions_emit_effects, begin_commit_action, reduce, refresh_selected_head_gitlink,
-    repo_management, util,
+    actions_emit_effects, begin_commit_action, external_and_history, maintenance, reduce,
+    refresh_selected_head_gitlink, repo_management, util,
 };
 use crate::model::AuthPromptKind;
 use crate::model::{AppState, AuthPromptState, AuthRetryOperation, PendingCommitRetry, RepoId};
@@ -131,6 +131,7 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         }
         RepoCommandKind::PruneMergedBranches => Msg::PruneMergedBranches { repo_id },
         RepoCommandKind::PruneLocalTags => Msg::PruneLocalTags { repo_id },
+        RepoCommandKind::RunMaintenance => Msg::StartRepoMaintenance { repo_id },
         RepoCommandKind::Pull { mode } => Msg::Pull { repo_id, mode },
         RepoCommandKind::PullBranch { remote, branch } => Msg::PullBranch {
             repo_id,
@@ -199,27 +200,33 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         // or rebase state on disk: replaying the original plan would be
         // rejected as already in progress (and its effect has no auth slot).
         // Continue the paused sequencer with the staged auth instead.
-        RepoCommandKind::InteractiveCherryPick { .. } => Msg::RebaseContinue { repo_id },
+        RepoCommandKind::InteractiveCherryPick { commit: true, .. } => {
+            Msg::RebaseContinue { repo_id }
+        }
+        // Uncommitted picks never sign or leave a sequencer; replay them, and
+        // the steps that already landed merge again as no-ops.
+        RepoCommandKind::InteractiveCherryPick {
+            entries,
+            commit: false,
+        } => Msg::InteractiveCherryPick {
+            repo_id,
+            entries,
+            commit: false,
+        },
+        // Replayed whole, like revert: a pick beside staged work rolls back a
+        // failed commit step, and one stopped at its commit step resumes there.
         RepoCommandKind::CherryPick {
             commit_id,
             commit,
             mainline,
             summary,
-        } => {
-            if commit {
-                Msg::RebaseContinue { repo_id }
-            } else {
-                // `--no-commit` picks never sign, so an auth prompt here is
-                // not a paused sequencer; replay the command itself.
-                Msg::CherryPickCommit {
-                    repo_id,
-                    commit_id,
-                    commit,
-                    mainline,
-                    summary,
-                }
-            }
-        }
+        } => Msg::CherryPickCommit {
+            repo_id,
+            commit_id,
+            commit,
+            mainline,
+            summary,
+        },
         // Replayed whole: the auth may be for the `--no-commit` step (a
         // promisor fetch), and a revert stopped at its commit step resumes
         // there with the same hooks skipped, which `revert --continue` would not.
@@ -234,6 +241,17 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
             commit,
             mainline,
             summary,
+        },
+        // Only a command with the failed commit's checkpoint can skip apply.
+        RepoCommandKind::ApplyFileChange {
+            target,
+            commit,
+            commit_retry,
+        } => Msg::ApplyFileChange {
+            repo_id,
+            target,
+            commit,
+            commit_retry,
         },
         RepoCommandKind::MergeAbort => Msg::MergeAbort { repo_id },
         RepoCommandKind::CreateTag {
@@ -374,7 +392,9 @@ fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> 
         | Effect::PushTag { auth: slot, .. }
         | Effect::DeleteRemoteTag { auth: slot, .. }
         | Effect::RebaseContinue { auth: slot, .. }
-        | Effect::RevertCommit { auth: slot, .. } => {
+        | Effect::CherryPickCommit { auth: slot, .. }
+        | Effect::RevertCommit { auth: slot, .. }
+        | Effect::ApplyFileChange { auth: slot, .. } => {
             *slot = Some(auth);
         }
         _ => {}
@@ -613,7 +633,18 @@ pub(super) fn repo_command_finished(
         refresh_selected_head_gitlink(repos, state, repo_id);
     }
 
-    let effects = actions_emit_effects::repo_command_finished(state, repo_id, command, result);
+    let maintenance_ended = matches!(command, RepoCommandKind::RunMaintenance);
+    let mut effects = actions_emit_effects::repo_command_finished(state, repo_id, command, result);
+    if maintenance_ended {
+        for (deferred_repo, change) in maintenance::finished(state, repo_id) {
+            effects.extend(external_and_history::repo_externally_changed(
+                repos,
+                state,
+                deferred_repo,
+                change,
+            ));
+        }
+    }
 
     if let Some(path) = removed_worktree_path {
         let repo_ids_to_close = state

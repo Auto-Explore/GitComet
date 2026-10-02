@@ -193,7 +193,7 @@ mod tests {
         use super::super::rows::rows_from_patch;
         use gitcomet_core::domain::{CommitId, Diff, DiffTarget};
         let diff = Diff::from_unified(
-            DiffTarget::commit(CommitId("head".into()), None),
+            DiffTarget::commit_range(CommitId("base".into()), Some(CommitId("head".into())), None),
             "diff --git a/a b/a\n@@ -1 +1 @@\n-old a\n+new a\ndiff --git a/b b/b\n@@ -1 +1 @@\n-old b\n+new b\n",
         );
         let rows = rows_from_patch(&diff);

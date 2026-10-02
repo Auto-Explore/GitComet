@@ -7,13 +7,13 @@ fn commit(id: &str) -> CommitId {
 
 #[test]
 fn targets_equal_whether_or_not_they_carry_the_derived_rename_source() {
-    let bare = DiffTarget::commit(commit("c"), Some(PathBuf::from("new.rs")));
+    let bare = DiffTarget::commit(commit("c"), PathBuf::from("new.rs"));
     let renamed = bare.clone().with_old_path(Some(PathBuf::from("old.rs")));
     assert_eq!(renamed.old_file_path(), Some(Path::new("old.rs")));
     assert_eq!(bare, renamed);
     assert_ne!(
         bare,
-        DiffTarget::commit(commit("c"), Some(PathBuf::from("other.rs")))
+        DiffTarget::commit(commit("c"), PathBuf::from("other.rs"))
     );
     assert_ne!(
         DiffTarget::commit_range(commit("a"), None, None),

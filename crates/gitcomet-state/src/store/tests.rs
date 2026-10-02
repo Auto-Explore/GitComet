@@ -191,6 +191,7 @@ mod diff_sessions;
 mod effects;
 mod external_and_history;
 mod file_browser_follow;
+mod maintenance;
 mod reducer_diagnostics;
 mod repo_management;
 mod repo_monitor;

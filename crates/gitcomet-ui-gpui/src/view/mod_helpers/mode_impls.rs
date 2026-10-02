@@ -210,9 +210,20 @@ pub(crate) enum PopoverKind {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    /// Commit-or-not choice for a multi-commit cherry-pick; `entries` is the
+    /// editor's plan as it was when Start was clicked.
+    InteractiveCherryPickConfirm {
+        repo_id: RepoId,
+        entries: Vec<gitcomet_core::services::InteractiveRebaseEntry>,
+    },
     RevertCommitConfirm {
         repo_id: RepoId,
         commit_id: CommitId,
+    },
+    /// "Apply change": `target` names the files whose change is applied.
+    ApplyFileChangeConfirm {
+        repo_id: RepoId,
+        target: gitcomet_core::domain::ApplyChangeTarget,
     },
     MergeCommitConfirm {
         repo_id: RepoId,
@@ -278,6 +289,24 @@ pub(crate) enum PopoverKind {
     },
     CommitFileSortMenu {
         list: crate::view::rows::FileListId,
+    },
+    /// Right-click menu of a folder row in a file list's tree view.
+    FileListFolderMenu {
+        repo_id: RepoId,
+        list: crate::view::rows::FileListId,
+        /// The folder's path; for a folded chain, its deepest segment.
+        key: std::sync::Arc<std::path::Path>,
+        chain: std::sync::Arc<[std::sync::Arc<std::path::Path>]>,
+        collapsed: bool,
+        /// Where "Apply changes" takes the folder's files from; `None` for a
+        /// list with no change to apply.
+        apply_source: Option<gitcomet_core::domain::ApplyChangeSource>,
+    },
+    /// Confirms discarding every change under a status tree folder.
+    DiscardFolderChangesConfirm {
+        repo_id: RepoId,
+        section: StatusSection,
+        folder: std::sync::Arc<std::path::Path>,
     },
     PreviousCommitMessagesMenu {
         repo_id: RepoId,
@@ -392,6 +421,12 @@ pub(crate) enum PopoverKind {
         area: DiffArea,
         path: std::path::PathBuf,
     },
+    /// Opened by a conflicted row's "Resolve…" button: only the resolve actions.
+    StatusConflictMenu {
+        repo_id: RepoId,
+        area: DiffArea,
+        path: std::path::PathBuf,
+    },
     BranchMenu {
         repo_id: RepoId,
         target: BranchMenuTarget,
@@ -432,6 +467,14 @@ pub(crate) enum PopoverKind {
     CommitFileMenu {
         repo_id: RepoId,
         commit_id: CommitId,
+        path: std::path::PathBuf,
+    },
+    /// A file row of the comparison view; `to_commit_id` is `None` when the
+    /// comparison runs to the working tree.
+    CommitRangeFileMenu {
+        repo_id: RepoId,
+        from_commit_id: CommitId,
+        to_commit_id: Option<CommitId>,
         path: std::path::PathBuf,
     },
     FileBrowserFileMenu {
@@ -787,10 +830,7 @@ pub(crate) fn normalize_bootstrap_diff_target(
         }
         DiffTarget::Commit {
             commit_id, path, ..
-        } => DiffTarget::commit(
-            commit_id,
-            path.map(|path| normalize_bootstrap_target_path(repo_path, path)),
-        ),
+        } => DiffTarget::commit(commit_id, normalize_bootstrap_target_path(repo_path, path)),
         DiffTarget::CommitRange {
             from_commit_id,
             to_commit_id,
