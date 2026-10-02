@@ -394,7 +394,7 @@ impl SettingsWindowView {
             SharedString,
         ) = match self.runtime_info.git.compatibility {
             GitCompatibility::Checking => (
-                "icons/info.svg",
+                "icons/question.svg",
                 theme.colors.foreground.secondary,
                 "Checking...".into(),
             ),

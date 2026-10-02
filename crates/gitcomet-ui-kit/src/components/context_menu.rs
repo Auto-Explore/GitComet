@@ -85,7 +85,8 @@ pub enum ContextMenuIconSlot {
     /// Keep the icon column empty so the label stays aligned with sibling
     /// entries that carry an icon.
     Reserved,
-    /// An icon name or `icons/*.svg` path resolved via `context_menu_icon_path`.
+    /// An icon name or `icons/*.svg` path resolved via `context_menu_icon_path`,
+    /// or an extension's own asset path (`extensions/<id>/…`), drawn as given.
     Icon(SharedString),
 }
 
@@ -351,6 +352,15 @@ fn context_menu_entry<V: 'static>(
         ContextMenuIconSlot::Reserved | ContextMenuIconSlot::None => None,
     };
     let icon_color = context_menu_icon_color(theme, disabled, label.as_ref(), icon_path);
+    // An extension's own asset (`extensions/<id>/…`) is drawn as given.
+    let drawn_icon = icon_path
+        .map(SharedString::new_static)
+        .or_else(|| match &icon {
+            ContextMenuIconSlot::Icon(name) if name.starts_with("extensions/") => {
+                Some(name.clone())
+            }
+            _ => None,
+        });
     let text_color = context_menu_entry_text_color(theme, disabled, icon_color);
     let mut row = crate::menu::menu_item(id, theme, ui_scale, selected, disabled)
         .text_color(text_color)
@@ -369,7 +379,7 @@ fn context_menu_entry<V: 'static>(
                             .flex()
                             .items_center()
                             .justify_center()
-                            .when_some(icon_path, |this, path| {
+                            .when_some(drawn_icon, |this, path| {
                                 let icon_label = label.text.clone();
                                 this.child(
                                     crate::icons::svg_icon(path, icon_color, scaled_px(13.0))
@@ -765,6 +775,39 @@ mod tests {
                         .debug_selector(|| "row_header".to_string()),
                 )
         }
+    }
+
+    struct ExtensionIcon {
+        theme: AppTheme,
+    }
+
+    impl gpui::Render for ExtensionIcon {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            let scale = crate::ui_scale::UiScale::current(cx);
+            ContextMenuEntry::new("ext", "Mark reviewed")
+                .icon(ContextMenuIconSlot::Icon(
+                    "extensions/com.example.review/icons/review.svg".into(),
+                ))
+                .render(self.theme, scale, cx)
+        }
+    }
+
+    /// An extension's own asset is drawn as given: it is not in the kit's
+    /// icon table, and dropping it left a blank slot.
+    #[gpui::test]
+    fn extension_menu_icons_draw_their_asset(cx: &mut gpui::TestAppContext) {
+        let _guard = crate::test_support::lock_visual_test();
+        let theme = AppTheme::gitcomet_dark();
+        let (_view, cx) = cx.add_window_view(|_, _| ExtensionIcon { theme });
+        crate::test_support::redraw(cx);
+        assert!(
+            cx.debug_bounds("context_menu_entry_icon_Mark reviewed")
+                .is_some()
+        );
     }
 
     #[gpui::test]

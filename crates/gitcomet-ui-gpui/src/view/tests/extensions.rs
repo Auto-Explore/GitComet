@@ -394,6 +394,44 @@ fn view_and_details_tabs_show_their_icons(cx: &mut gpui::TestAppContext) {
     }
 }
 
+/// An extension's menu opens as a menu in the main window, with its own
+/// icons (`extensions/<id>/…`), and runs its entries.
+#[gpui::test]
+fn extension_menus_draw_the_extensions_icons(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    cx.update(install_example);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            test_support::push_test_state(
+                this,
+                state_with_repo(RepoId(1), Path::new("/tmp/extension-menu-icons")),
+                cx,
+            )
+        });
+    });
+    test_support::redraw(cx);
+    click_debug_selector(cx, "repository_view_0");
+    test_support::redraw(cx);
+    click_debug_selector(cx, "example_review_more");
+    cx.run_until_parked();
+    test_support::redraw(cx);
+    assert!(
+        cx.debug_bounds("context_menu_entry_icon_Mark reviewed")
+            .is_some()
+    );
+    // The entry runs its action.
+    click_debug_selector(cx, "context_menu_mark_reviewed");
+    cx.run_until_parked();
+    let window_id = cx.update(|window, _| window.window_handle().window_id());
+    cx.update(|_, app| {
+        let workdir = Path::new("/tmp/extension-menu-icons");
+        assert_eq!(review::reviews(app).read(app).count(window_id, workdir), 1);
+    });
+}
+
 #[gpui::test]
 fn repository_views_switch_with_history_and_are_kept(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();

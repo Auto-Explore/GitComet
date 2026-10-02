@@ -15,11 +15,12 @@ use gitcomet_core::identity::WindowKind;
 use gitcomet_extension_api::{
     BottomPanelDescriptor, ChromeDescriptor, CloseDecision, CloseRequest, CloseScope,
     CommandContext, CommandDescriptor, DetailsTabDescriptor, DialogHandle, EntryOrigin, Extension,
-    ExtensionId, GateDecision, HistoryAnnotator, HistoryRowAnnotation, HostedAction, MenuLocation,
-    NotificationKind, Registrar, RepositoryEntryRequest, RepositoryViewContext,
-    RepositoryViewDescriptor, RowGlyph, RowMark, SettingsPageContext, SettingsPageDescriptor,
-    ShellEvent, SidebarProvider, SidebarRow, SidebarSectionDescriptor, SidebarSectionRows,
-    SlotSignal, StatusItemDescriptor, WindowExtension, WindowGateDescriptor, WindowHost,
+    ExtensionId, GateDecision, HistoryAnnotator, HistoryRowAnnotation, HostedAction,
+    HostedMenuItem, MenuLocation, NotificationKind, Registrar, RepositoryEntryRequest,
+    RepositoryViewContext, RepositoryViewDescriptor, RowGlyph, RowMark, SettingsPageContext,
+    SettingsPageDescriptor, ShellEvent, SidebarProvider, SidebarRow, SidebarSectionDescriptor,
+    SidebarSectionRows, SlotSignal, StatusItemDescriptor, WindowExtension, WindowGateDescriptor,
+    WindowHost,
 };
 use gitcomet_ui_kit::components::{Button, ButtonStyle};
 use gitcomet_ui_kit::gpui::prelude::*;
@@ -200,6 +201,31 @@ impl Render for ReviewView {
                         mark_reviewed(&window, &workdir, cx);
                     }),
             )
+            .child(Button::new("example_review_more", "More").on_click(
+                theme,
+                cx,
+                |this, event, _, cx| this.open_more(event.position(), cx),
+            ))
+    }
+}
+
+impl ReviewView {
+    /// A menu of the view's actions, with the extension's own icon.
+    fn open_more(
+        &self,
+        anchor: gitcomet_ui_kit::gpui::Point<gitcomet_ui_kit::gpui::Pixels>,
+        cx: &mut App,
+    ) {
+        let window = self.context.window.clone();
+        let workdir = self.context.repository.workdir().to_path_buf();
+        let mark = HostedAction::new("Mark reviewed", move |cx| {
+            mark_reviewed(&window, &workdir, cx)
+        });
+        let _ = self.context.window.open_menu(
+            anchor,
+            vec![HostedMenuItem::action(mark).with_icon(ICON_PATH)],
+            cx,
+        );
     }
 }
 

@@ -510,6 +510,15 @@ Since then:
   checkout's status, and the renderer's own working-tree retargets stay in
   the linked worktree. History ignores a linked `SelectDiff`. The example's
   Changes view can list a linked worktree.
+- An extension's menu in a main window opened an empty popover: the popover
+  routed every hosted kind to the dialog panel, which draws nothing without
+  dialog content. Hosted menus now render as context menus, and the kit's
+  menu entry draws an extension's own icon (`extensions/<id>/…`) instead of
+  an empty slot. A host guard checks every `icons/…` path literal in
+  production code loads; it found two missing icons (the Settings "Checking
+  Git" row and a bench fixture's tab). Closing a repository tab still
+  discards its unsaved editor buffers without asking; an ignored test
+  (`closing_a_repository_tab_prompts_for_its_unsaved_edits`) reproduces it.
 
 ## History find (#532)
 

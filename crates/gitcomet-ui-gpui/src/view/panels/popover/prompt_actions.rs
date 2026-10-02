@@ -51,6 +51,8 @@ impl PopoverHost {
         anchor = anchor_for_corner(anchor_corner);
 
         let panel = match kind {
+            // An extension's menu is a context menu; its dialogs are panels.
+            kind @ PopoverKind::Hosted { menu: true, .. } => self.context_menu_view(kind, cx),
             PopoverKind::Hosted { id, .. } => extension_dialog::panel(self, id, cx),
             PopoverKind::HookActivity {
                 repo_id,

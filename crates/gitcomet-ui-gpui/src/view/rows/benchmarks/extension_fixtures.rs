@@ -15,7 +15,7 @@ impl Extension for BenchExtension {
     fn register(&self, r: &mut Registrar) {
         r.repository_view(
             "second",
-            RepositoryViewDescriptor::new("Second", "icons/diff.svg", |_, _, cx| {
+            RepositoryViewDescriptor::new("Second", "icons/code.svg", |_, _, cx| {
                 cx.new(|_| gpui::Empty).into()
             }),
         );
