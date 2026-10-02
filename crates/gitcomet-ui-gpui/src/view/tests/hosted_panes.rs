@@ -514,6 +514,22 @@ fn the_example_changes_view_shows_picks_in_two_panes(cx: &mut gpui::TestAppConte
         cx.debug_bounds(selector(format!("hosted_diff_{current_id}_markers")))
             .is_some()
     );
+    // The list groups by role and flags the file; its chip shows only it.
+    for part in ["group_Code", "glyph_a.rs"] {
+        assert!(
+            cx.debug_bounds(selector(format!("hosted_file_list_{list_id}_{part}")))
+                .is_some(),
+            "{part}"
+        );
+    }
+    click_debug_selector(cx, selector(format!("file_filter_{list_id}_0")));
+    publish(cx, &view, store.snapshot());
+    assert!(
+        cx.debug_bounds(selector(format!("hosted_file_list_{list_id}_file_b.rs")))
+            .is_none()
+    );
+    click_debug_selector(cx, selector(format!("file_filter_{list_id}_0")));
+    publish(cx, &view, store.snapshot());
 
     click_debug_selector(
         cx,

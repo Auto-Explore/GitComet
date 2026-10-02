@@ -4,10 +4,45 @@ use gitcomet_core::domain::Commit;
 use gitcomet_ui_kit::gpui::{AnyView, App, Hsla, SharedString, Window};
 use std::rc::Rc;
 
+/// A small mark in a row, in one colour: a glyph, a label, or both. File
+/// lists draw the glyph in a column before the file icon and the label at
+/// the end; History and sidebar rows draw the glyph before the label.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct RowMark {
-    pub label: SharedString,
+    pub label: Option<SharedString>,
     pub color: Hsla,
+    pub glyph: Option<RowGlyph>,
+}
+
+impl RowMark {
+    pub fn new(color: Hsla) -> Self {
+        Self {
+            label: None,
+            color,
+            glyph: None,
+        }
+    }
+
+    pub fn with_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    pub fn with_glyph(mut self, glyph: RowGlyph) -> Self {
+        self.glyph = Some(glyph);
+        self
+    }
+}
+
+/// A mark's glyph, drawn in the mark's colour.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RowGlyph {
+    /// An svg asset path, such as `extensions/<id>/icons/flag.svg`.
+    Icon(SharedString),
+    /// A character or two, such as a status letter.
+    Text(SharedString),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

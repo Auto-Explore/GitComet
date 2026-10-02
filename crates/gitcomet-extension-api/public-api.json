@@ -11554,6 +11554,162 @@
                       }
                     ],
                     [
+                      "groups",
+                      {
+                        "resolved_path": {
+                          "args": {
+                            "angle_bracketed": {
+                              "args": [
+                                {
+                                  "type": {
+                                    "resolved_path": {
+                                      "args": null,
+                                      "path": "crate::FileListGroups",
+                                      "type_path": "gitcomet_extension_api::FileListGroups"
+                                    }
+                                  }
+                                }
+                              ],
+                              "constraints": []
+                            }
+                          },
+                          "path": "Option",
+                          "type_path": "core::option::Option"
+                        }
+                      }
+                    ],
+                    [
+                      "cx",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": true,
+                          "lifetime": null,
+                          "type": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "App",
+                              "type_path": "gpui::app::App"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": null
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "set_groups"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "generic": "Self"
+                          }
+                        }
+                      }
+                    ],
+                    [
+                      "visible",
+                      {
+                        "resolved_path": {
+                          "args": {
+                            "angle_bracketed": {
+                              "args": [
+                                {
+                                  "type": {
+                                    "resolved_path": {
+                                      "args": null,
+                                      "path": "crate::FileListVisible",
+                                      "type_path": "gitcomet_extension_api::FileListVisible"
+                                    }
+                                  }
+                                }
+                              ],
+                              "constraints": []
+                            }
+                          },
+                          "path": "Option",
+                          "type_path": "core::option::Option"
+                        }
+                      }
+                    ],
+                    [
+                      "cx",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": true,
+                          "lifetime": null,
+                          "type": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "App",
+                              "type_path": "gpui::app::App"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": null
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "set_visible"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "generic": "Self"
+                          }
+                        }
+                      }
+                    ],
+                    [
                       "cx",
                       {
                         "borrowed_ref": {
@@ -12413,48 +12569,112 @@
     "name": "FileListFilter"
   },
   "gitcomet_extension_api::FileListFilterChip": {
-    "attrs": [],
+    "attrs": [
+      "non_exhaustive"
+    ],
     "definition": {
-      "struct": {
+      "enum": {
         "generics": {
           "params": [],
           "where_predicates": []
         },
-        "kind": {
-          "plain": {
-            "fields": [
-              {
-                "attrs": [],
-                "definition": {
-                  "struct_field": {
-                    "resolved_path": {
-                      "args": null,
-                      "path": "gitcomet_ui_kit::gpui::SharedString",
-                      "type_path": "gpui_ce_shared_string::SharedString"
-                    }
-                  }
-                },
-                "deprecation": null,
-                "name": "label"
-              },
-              {
-                "attrs": [],
-                "definition": {
-                  "struct_field": {
-                    "resolved_path": {
-                      "args": null,
-                      "path": "gitcomet_ui_kit::gpui::SharedString",
-                      "type_path": "gpui_ce_shared_string::SharedString"
-                    }
-                  }
-                },
-                "deprecation": null,
-                "name": "query"
-              }
+        "has_stripped_variants": false,
+        "variants": [
+          {
+            "attrs": [
+              "non_exhaustive"
             ],
-            "has_stripped_fields": false
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "struct": {
+                    "fields": [
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "gitcomet_ui_kit::gpui::SharedString",
+                              "type_path": "gpui_ce_shared_string::SharedString"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "label"
+                      },
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "gitcomet_ui_kit::gpui::SharedString",
+                              "type_path": "gpui_ce_shared_string::SharedString"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "query"
+                      }
+                    ],
+                    "has_stripped_fields": false
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "Query"
+          },
+          {
+            "attrs": [
+              "non_exhaustive"
+            ],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "struct": {
+                    "fields": [
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "gitcomet_ui_kit::gpui::SharedString",
+                              "type_path": "gpui_ce_shared_string::SharedString"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "label"
+                      },
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "FileListVisible",
+                              "type_path": "gitcomet_extension_api::FileListVisible"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "visible"
+                      }
+                    ],
+                    "has_stripped_fields": false
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "Visible"
           }
-        }
+        ]
       }
     },
     "deprecation": null,
@@ -12504,9 +12724,755 @@
           "path": "Debug",
           "type_path": "core::fmt::Debug"
         }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "FileListFilterChip",
+            "type_path": "gitcomet_extension_api::FileListFilterChip"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [
+                    {
+                      "kind": {
+                        "type": {
+                          "bounds": [
+                            {
+                              "trait_bound": {
+                                "generic_params": [],
+                                "modifier": "none",
+                                "trait": {
+                                  "args": {
+                                    "angle_bracketed": {
+                                      "args": [
+                                        {
+                                          "type": {
+                                            "resolved_path": {
+                                              "args": null,
+                                              "path": "SharedString",
+                                              "type_path": "gpui_ce_shared_string::SharedString"
+                                            }
+                                          }
+                                        }
+                                      ],
+                                      "constraints": []
+                                    }
+                                  },
+                                  "path": "Into",
+                                  "type_path": "core::convert::Into"
+                                }
+                              }
+                            }
+                          ],
+                          "default": null,
+                          "is_synthetic": true
+                        }
+                      },
+                      "name": "impl Into<SharedString>"
+                    },
+                    {
+                      "kind": {
+                        "type": {
+                          "bounds": [
+                            {
+                              "trait_bound": {
+                                "generic_params": [],
+                                "modifier": "none",
+                                "trait": {
+                                  "args": {
+                                    "angle_bracketed": {
+                                      "args": [
+                                        {
+                                          "type": {
+                                            "resolved_path": {
+                                              "args": null,
+                                              "path": "SharedString",
+                                              "type_path": "gpui_ce_shared_string::SharedString"
+                                            }
+                                          }
+                                        }
+                                      ],
+                                      "constraints": []
+                                    }
+                                  },
+                                  "path": "Into",
+                                  "type_path": "core::convert::Into"
+                                }
+                              }
+                            }
+                          ],
+                          "default": null,
+                          "is_synthetic": true
+                        }
+                      },
+                      "name": "impl Into<SharedString>"
+                    }
+                  ],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "label",
+                      {
+                        "impl_trait": [
+                          {
+                            "trait_bound": {
+                              "generic_params": [],
+                              "modifier": "none",
+                              "trait": {
+                                "args": {
+                                  "angle_bracketed": {
+                                    "args": [
+                                      {
+                                        "type": {
+                                          "resolved_path": {
+                                            "args": null,
+                                            "path": "SharedString",
+                                            "type_path": "gpui_ce_shared_string::SharedString"
+                                          }
+                                        }
+                                      }
+                                    ],
+                                    "constraints": []
+                                  }
+                                },
+                                "path": "Into",
+                                "type_path": "core::convert::Into"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ],
+                    [
+                      "query",
+                      {
+                        "impl_trait": [
+                          {
+                            "trait_bound": {
+                              "generic_params": [],
+                              "modifier": "none",
+                              "trait": {
+                                "args": {
+                                  "angle_bracketed": {
+                                    "args": [
+                                      {
+                                        "type": {
+                                          "resolved_path": {
+                                            "args": null,
+                                            "path": "SharedString",
+                                            "type_path": "gpui_ce_shared_string::SharedString"
+                                          }
+                                        }
+                                      }
+                                    ],
+                                    "constraints": []
+                                  }
+                                },
+                                "path": "Into",
+                                "type_path": "core::convert::Into"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "query"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [
+                    {
+                      "kind": {
+                        "type": {
+                          "bounds": [
+                            {
+                              "trait_bound": {
+                                "generic_params": [],
+                                "modifier": "none",
+                                "trait": {
+                                  "args": {
+                                    "angle_bracketed": {
+                                      "args": [
+                                        {
+                                          "type": {
+                                            "resolved_path": {
+                                              "args": null,
+                                              "path": "SharedString",
+                                              "type_path": "gpui_ce_shared_string::SharedString"
+                                            }
+                                          }
+                                        }
+                                      ],
+                                      "constraints": []
+                                    }
+                                  },
+                                  "path": "Into",
+                                  "type_path": "core::convert::Into"
+                                }
+                              }
+                            }
+                          ],
+                          "default": null,
+                          "is_synthetic": true
+                        }
+                      },
+                      "name": "impl Into<SharedString>"
+                    }
+                  ],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "label",
+                      {
+                        "impl_trait": [
+                          {
+                            "trait_bound": {
+                              "generic_params": [],
+                              "modifier": "none",
+                              "trait": {
+                                "args": {
+                                  "angle_bracketed": {
+                                    "args": [
+                                      {
+                                        "type": {
+                                          "resolved_path": {
+                                            "args": null,
+                                            "path": "SharedString",
+                                            "type_path": "gpui_ce_shared_string::SharedString"
+                                          }
+                                        }
+                                      }
+                                    ],
+                                    "constraints": []
+                                  }
+                                },
+                                "path": "Into",
+                                "type_path": "core::convert::Into"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ],
+                    [
+                      "visible",
+                      {
+                        "resolved_path": {
+                          "args": null,
+                          "path": "FileListVisible",
+                          "type_path": "gitcomet_extension_api::FileListVisible"
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "visible"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "generic": "Self"
+                          }
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "borrowed_ref": {
+                      "is_mutable": false,
+                      "lifetime": null,
+                      "type": {
+                        "resolved_path": {
+                          "args": null,
+                          "path": "SharedString",
+                          "type_path": "gpui_ce_shared_string::SharedString"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "label"
+          }
+        ],
+        "trait": null
       }
     ],
     "name": "FileListFilterChip"
+  },
+  "gitcomet_extension_api::FileListGroups": {
+    "attrs": [
+      "non_exhaustive"
+    ],
+    "definition": {
+      "struct": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "kind": {
+          "plain": {
+            "fields": [
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "primitive": "u64"
+                  }
+                },
+                "deprecation": null,
+                "name": "revision"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "slice": {
+                                  "resolved_path": {
+                                    "args": null,
+                                    "path": "gitcomet_ui_kit::gpui::SharedString",
+                                    "type_path": "gpui_ce_shared_string::SharedString"
+                                  }
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "std::sync::Arc",
+                      "type_path": "alloc::sync::Arc"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "labels"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "GroupOf",
+                      "type_path": "gitcomet_extension_api::GroupOf"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "group_of"
+              }
+            ],
+            "has_stripped_fields": false
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "impls": [
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "FileListGroups",
+            "type_path": "gitcomet_extension_api::FileListGroups"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Clone",
+          "type_path": "core::clone::Clone"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "FileListGroups",
+            "type_path": "gitcomet_extension_api::FileListGroups"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Debug",
+          "type_path": "core::fmt::Debug"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "FileListGroups",
+            "type_path": "gitcomet_extension_api::FileListGroups"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [
+                    {
+                      "kind": {
+                        "type": {
+                          "bounds": [
+                            {
+                              "trait_bound": {
+                                "generic_params": [],
+                                "modifier": "none",
+                                "trait": {
+                                  "args": {
+                                    "angle_bracketed": {
+                                      "args": [
+                                        {
+                                          "type": {
+                                            "resolved_path": {
+                                              "args": {
+                                                "angle_bracketed": {
+                                                  "args": [
+                                                    {
+                                                      "type": {
+                                                        "slice": {
+                                                          "resolved_path": {
+                                                            "args": null,
+                                                            "path": "SharedString",
+                                                            "type_path": "gpui_ce_shared_string::SharedString"
+                                                          }
+                                                        }
+                                                      }
+                                                    }
+                                                  ],
+                                                  "constraints": []
+                                                }
+                                              },
+                                              "path": "Arc",
+                                              "type_path": "alloc::sync::Arc"
+                                            }
+                                          }
+                                        }
+                                      ],
+                                      "constraints": []
+                                    }
+                                  },
+                                  "path": "Into",
+                                  "type_path": "core::convert::Into"
+                                }
+                              }
+                            }
+                          ],
+                          "default": null,
+                          "is_synthetic": true
+                        }
+                      },
+                      "name": "impl Into<Arc<[SharedString]>>"
+                    },
+                    {
+                      "kind": {
+                        "type": {
+                          "bounds": [
+                            {
+                              "trait_bound": {
+                                "generic_params": [],
+                                "modifier": "none",
+                                "trait": {
+                                  "args": {
+                                    "parenthesized": {
+                                      "inputs": [
+                                        {
+                                          "borrowed_ref": {
+                                            "is_mutable": false,
+                                            "lifetime": null,
+                                            "type": {
+                                              "resolved_path": {
+                                                "args": null,
+                                                "path": "Path",
+                                                "type_path": "std::path::Path"
+                                              }
+                                            }
+                                          }
+                                        }
+                                      ],
+                                      "output": {
+                                        "resolved_path": {
+                                          "args": {
+                                            "angle_bracketed": {
+                                              "args": [
+                                                {
+                                                  "type": {
+                                                    "primitive": "usize"
+                                                  }
+                                                }
+                                              ],
+                                              "constraints": []
+                                            }
+                                          },
+                                          "path": "Option",
+                                          "type_path": "core::option::Option"
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "path": "Fn",
+                                  "type_path": "core::ops::function::Fn"
+                                }
+                              }
+                            },
+                            {
+                              "outlives": "'static"
+                            }
+                          ],
+                          "default": null,
+                          "is_synthetic": true
+                        }
+                      },
+                      "name": "impl Fn(&Path) -> Option<usize> + 'static"
+                    }
+                  ],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "revision",
+                      {
+                        "primitive": "u64"
+                      }
+                    ],
+                    [
+                      "labels",
+                      {
+                        "impl_trait": [
+                          {
+                            "trait_bound": {
+                              "generic_params": [],
+                              "modifier": "none",
+                              "trait": {
+                                "args": {
+                                  "angle_bracketed": {
+                                    "args": [
+                                      {
+                                        "type": {
+                                          "resolved_path": {
+                                            "args": {
+                                              "angle_bracketed": {
+                                                "args": [
+                                                  {
+                                                    "type": {
+                                                      "slice": {
+                                                        "resolved_path": {
+                                                          "args": null,
+                                                          "path": "SharedString",
+                                                          "type_path": "gpui_ce_shared_string::SharedString"
+                                                        }
+                                                      }
+                                                    }
+                                                  }
+                                                ],
+                                                "constraints": []
+                                              }
+                                            },
+                                            "path": "Arc",
+                                            "type_path": "alloc::sync::Arc"
+                                          }
+                                        }
+                                      }
+                                    ],
+                                    "constraints": []
+                                  }
+                                },
+                                "path": "Into",
+                                "type_path": "core::convert::Into"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ],
+                    [
+                      "group_of",
+                      {
+                        "impl_trait": [
+                          {
+                            "trait_bound": {
+                              "generic_params": [],
+                              "modifier": "none",
+                              "trait": {
+                                "args": {
+                                  "parenthesized": {
+                                    "inputs": [
+                                      {
+                                        "borrowed_ref": {
+                                          "is_mutable": false,
+                                          "lifetime": null,
+                                          "type": {
+                                            "resolved_path": {
+                                              "args": null,
+                                              "path": "Path",
+                                              "type_path": "std::path::Path"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    ],
+                                    "output": {
+                                      "resolved_path": {
+                                        "args": {
+                                          "angle_bracketed": {
+                                            "args": [
+                                              {
+                                                "type": {
+                                                  "primitive": "usize"
+                                                }
+                                              }
+                                            ],
+                                            "constraints": []
+                                          }
+                                        },
+                                        "path": "Option",
+                                        "type_path": "core::option::Option"
+                                      }
+                                    }
+                                  }
+                                },
+                                "path": "Fn",
+                                "type_path": "core::ops::function::Fn"
+                              }
+                            }
+                          },
+                          {
+                            "outlives": "'static"
+                          }
+                        ]
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "new"
+          }
+        ],
+        "trait": null
+      }
+    ],
+    "name": "FileListGroups"
   },
   "gitcomet_extension_api::FileListMarks": {
     "attrs": [
@@ -13335,6 +14301,337 @@
     ],
     "name": "FileListSort"
   },
+  "gitcomet_extension_api::FileListVisible": {
+    "attrs": [
+      "non_exhaustive"
+    ],
+    "definition": {
+      "struct": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "kind": {
+          "plain": {
+            "fields": [
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "primitive": "u64"
+                  }
+                },
+                "deprecation": null,
+                "name": "revision"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": {
+                                    "angle_bracketed": {
+                                      "args": [
+                                        {
+                                          "type": {
+                                            "resolved_path": {
+                                              "args": null,
+                                              "path": "std::path::PathBuf",
+                                              "type_path": "std::path::PathBuf"
+                                            }
+                                          }
+                                        }
+                                      ],
+                                      "constraints": []
+                                    }
+                                  },
+                                  "path": "std::collections::BTreeSet",
+                                  "type_path": "alloc::collections::btree::set::BTreeSet"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "std::sync::Arc",
+                      "type_path": "alloc::sync::Arc"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "paths"
+              }
+            ],
+            "has_stripped_fields": false
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "impls": [
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "FileListVisible",
+            "type_path": "gitcomet_extension_api::FileListVisible"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Clone",
+          "type_path": "core::clone::Clone"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "FileListVisible",
+            "type_path": "gitcomet_extension_api::FileListVisible"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Debug",
+          "type_path": "core::fmt::Debug"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "FileListVisible",
+            "type_path": "gitcomet_extension_api::FileListVisible"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Default",
+          "type_path": "core::default::Default"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "FileListVisible",
+            "type_path": "gitcomet_extension_api::FileListVisible"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [
+                    {
+                      "kind": {
+                        "type": {
+                          "bounds": [
+                            {
+                              "trait_bound": {
+                                "generic_params": [],
+                                "modifier": "none",
+                                "trait": {
+                                  "args": {
+                                    "angle_bracketed": {
+                                      "args": [
+                                        {
+                                          "type": {
+                                            "resolved_path": {
+                                              "args": {
+                                                "angle_bracketed": {
+                                                  "args": [
+                                                    {
+                                                      "type": {
+                                                        "resolved_path": {
+                                                          "args": {
+                                                            "angle_bracketed": {
+                                                              "args": [
+                                                                {
+                                                                  "type": {
+                                                                    "resolved_path": {
+                                                                      "args": null,
+                                                                      "path": "PathBuf",
+                                                                      "type_path": "std::path::PathBuf"
+                                                                    }
+                                                                  }
+                                                                }
+                                                              ],
+                                                              "constraints": []
+                                                            }
+                                                          },
+                                                          "path": "BTreeSet",
+                                                          "type_path": "alloc::collections::btree::set::BTreeSet"
+                                                        }
+                                                      }
+                                                    }
+                                                  ],
+                                                  "constraints": []
+                                                }
+                                              },
+                                              "path": "Arc",
+                                              "type_path": "alloc::sync::Arc"
+                                            }
+                                          }
+                                        }
+                                      ],
+                                      "constraints": []
+                                    }
+                                  },
+                                  "path": "Into",
+                                  "type_path": "core::convert::Into"
+                                }
+                              }
+                            }
+                          ],
+                          "default": null,
+                          "is_synthetic": true
+                        }
+                      },
+                      "name": "impl Into<Arc<BTreeSet<PathBuf>>>"
+                    }
+                  ],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "revision",
+                      {
+                        "primitive": "u64"
+                      }
+                    ],
+                    [
+                      "paths",
+                      {
+                        "impl_trait": [
+                          {
+                            "trait_bound": {
+                              "generic_params": [],
+                              "modifier": "none",
+                              "trait": {
+                                "args": {
+                                  "angle_bracketed": {
+                                    "args": [
+                                      {
+                                        "type": {
+                                          "resolved_path": {
+                                            "args": {
+                                              "angle_bracketed": {
+                                                "args": [
+                                                  {
+                                                    "type": {
+                                                      "resolved_path": {
+                                                        "args": {
+                                                          "angle_bracketed": {
+                                                            "args": [
+                                                              {
+                                                                "type": {
+                                                                  "resolved_path": {
+                                                                    "args": null,
+                                                                    "path": "PathBuf",
+                                                                    "type_path": "std::path::PathBuf"
+                                                                  }
+                                                                }
+                                                              }
+                                                            ],
+                                                            "constraints": []
+                                                          }
+                                                        },
+                                                        "path": "BTreeSet",
+                                                        "type_path": "alloc::collections::btree::set::BTreeSet"
+                                                      }
+                                                    }
+                                                  }
+                                                ],
+                                                "constraints": []
+                                              }
+                                            },
+                                            "path": "Arc",
+                                            "type_path": "alloc::sync::Arc"
+                                          }
+                                        }
+                                      }
+                                    ],
+                                    "constraints": []
+                                  }
+                                },
+                                "path": "Into",
+                                "type_path": "core::convert::Into"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "new"
+          }
+        ],
+        "trait": null
+      }
+    ],
+    "name": "FileListVisible"
+  },
   "gitcomet_extension_api::FileSelected": {
     "attrs": [],
     "definition": {
@@ -13591,6 +14888,85 @@
       }
     ],
     "name": "GateDecision"
+  },
+  "gitcomet_extension_api::GroupOf": {
+    "attrs": [],
+    "definition": {
+      "type_alias": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "type": {
+          "resolved_path": {
+            "args": {
+              "angle_bracketed": {
+                "args": [
+                  {
+                    "type": {
+                      "dyn_trait": {
+                        "lifetime": null,
+                        "traits": [
+                          {
+                            "generic_params": [],
+                            "trait": {
+                              "args": {
+                                "parenthesized": {
+                                  "inputs": [
+                                    {
+                                      "borrowed_ref": {
+                                        "is_mutable": false,
+                                        "lifetime": null,
+                                        "type": {
+                                          "resolved_path": {
+                                            "args": null,
+                                            "path": "std::path::Path",
+                                            "type_path": "std::path::Path"
+                                          }
+                                        }
+                                      }
+                                    }
+                                  ],
+                                  "output": {
+                                    "resolved_path": {
+                                      "args": {
+                                        "angle_bracketed": {
+                                          "args": [
+                                            {
+                                              "type": {
+                                                "primitive": "usize"
+                                              }
+                                            }
+                                          ],
+                                          "constraints": []
+                                        }
+                                      },
+                                      "path": "Option",
+                                      "type_path": "core::option::Option"
+                                    }
+                                  }
+                                }
+                              },
+                              "path": "Fn",
+                              "type_path": "core::ops::function::Fn"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                ],
+                "constraints": []
+              }
+            },
+            "path": "std::rc::Rc",
+            "type_path": "alloc::rc::Rc"
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "name": "GroupOf"
   },
   "gitcomet_extension_api::HistoryAnnotator": {
     "attrs": [
@@ -23149,8 +24525,224 @@
     "deprecation": null,
     "name": "RepositoryWatch"
   },
+  "gitcomet_extension_api::RowGlyph": {
+    "attrs": [
+      "non_exhaustive"
+    ],
+    "definition": {
+      "enum": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "has_stripped_variants": false,
+        "variants": [
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "tuple": [
+                    {
+                      "attrs": [],
+                      "definition": {
+                        "struct_field": {
+                          "resolved_path": {
+                            "args": null,
+                            "path": "gitcomet_ui_kit::gpui::SharedString",
+                            "type_path": "gpui_ce_shared_string::SharedString"
+                          }
+                        }
+                      },
+                      "deprecation": null,
+                      "name": "0"
+                    }
+                  ]
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "Icon"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "tuple": [
+                    {
+                      "attrs": [],
+                      "definition": {
+                        "struct_field": {
+                          "resolved_path": {
+                            "args": null,
+                            "path": "gitcomet_ui_kit::gpui::SharedString",
+                            "type_path": "gpui_ce_shared_string::SharedString"
+                          }
+                        }
+                      },
+                      "deprecation": null,
+                      "name": "0"
+                    }
+                  ]
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "Text"
+          }
+        ]
+      }
+    },
+    "deprecation": null,
+    "impls": [
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "RowGlyph",
+            "type_path": "gitcomet_extension_api::RowGlyph"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Clone",
+          "type_path": "core::clone::Clone"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "RowGlyph",
+            "type_path": "gitcomet_extension_api::RowGlyph"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Debug",
+          "type_path": "core::fmt::Debug"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "RowGlyph",
+            "type_path": "gitcomet_extension_api::RowGlyph"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Eq",
+          "type_path": "core::cmp::Eq"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "RowGlyph",
+            "type_path": "gitcomet_extension_api::RowGlyph"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Hash",
+          "type_path": "core::hash::Hash"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "RowGlyph",
+            "type_path": "gitcomet_extension_api::RowGlyph"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "PartialEq",
+          "type_path": "core::cmp::PartialEq"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "RowGlyph",
+            "type_path": "gitcomet_extension_api::RowGlyph"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "StructuralPartialEq",
+          "type_path": "core::marker::StructuralPartialEq"
+        }
+      }
+    ],
+    "name": "RowGlyph"
+  },
   "gitcomet_extension_api::RowMark": {
-    "attrs": [],
+    "attrs": [
+      "non_exhaustive"
+    ],
     "definition": {
       "struct": {
         "generics": {
@@ -23165,9 +24757,24 @@
                 "definition": {
                   "struct_field": {
                     "resolved_path": {
-                      "args": null,
-                      "path": "gitcomet_ui_kit::gpui::SharedString",
-                      "type_path": "gpui_ce_shared_string::SharedString"
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "gitcomet_ui_kit::gpui::SharedString",
+                                  "type_path": "gpui_ce_shared_string::SharedString"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
                     }
                   }
                 },
@@ -23187,6 +24794,35 @@
                 },
                 "deprecation": null,
                 "name": "color"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "RowGlyph",
+                                  "type_path": "gitcomet_extension_api::RowGlyph"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "glyph"
               }
             ],
             "has_stripped_fields": false
@@ -23287,6 +24923,210 @@
           "path": "StructuralPartialEq",
           "type_path": "core::marker::StructuralPartialEq"
         }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "RowMark",
+            "type_path": "gitcomet_extension_api::RowMark"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "color",
+                      {
+                        "resolved_path": {
+                          "args": null,
+                          "path": "Hsla",
+                          "type_path": "palette::hsl::Hsla"
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "new"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [
+                    {
+                      "kind": {
+                        "type": {
+                          "bounds": [
+                            {
+                              "trait_bound": {
+                                "generic_params": [],
+                                "modifier": "none",
+                                "trait": {
+                                  "args": {
+                                    "angle_bracketed": {
+                                      "args": [
+                                        {
+                                          "type": {
+                                            "resolved_path": {
+                                              "args": null,
+                                              "path": "SharedString",
+                                              "type_path": "gpui_ce_shared_string::SharedString"
+                                            }
+                                          }
+                                        }
+                                      ],
+                                      "constraints": []
+                                    }
+                                  },
+                                  "path": "Into",
+                                  "type_path": "core::convert::Into"
+                                }
+                              }
+                            }
+                          ],
+                          "default": null,
+                          "is_synthetic": true
+                        }
+                      },
+                      "name": "impl Into<SharedString>"
+                    }
+                  ],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "generic": "Self"
+                      }
+                    ],
+                    [
+                      "label",
+                      {
+                        "impl_trait": [
+                          {
+                            "trait_bound": {
+                              "generic_params": [],
+                              "modifier": "none",
+                              "trait": {
+                                "args": {
+                                  "angle_bracketed": {
+                                    "args": [
+                                      {
+                                        "type": {
+                                          "resolved_path": {
+                                            "args": null,
+                                            "path": "SharedString",
+                                            "type_path": "gpui_ce_shared_string::SharedString"
+                                          }
+                                        }
+                                      }
+                                    ],
+                                    "constraints": []
+                                  }
+                                },
+                                "path": "Into",
+                                "type_path": "core::convert::Into"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "with_label"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "generic": "Self"
+                      }
+                    ],
+                    [
+                      "glyph",
+                      {
+                        "resolved_path": {
+                          "args": null,
+                          "path": "RowGlyph",
+                          "type_path": "gitcomet_extension_api::RowGlyph"
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "with_glyph"
+          }
+        ],
+        "trait": null
       }
     ],
     "name": "RowMark"
@@ -34817,11 +36657,20 @@
   "gitcomet_extension_api::files::FileListFilterChip": {
     "reexport": "gitcomet_extension_api::FileListFilterChip"
   },
+  "gitcomet_extension_api::files::FileListGroups": {
+    "reexport": "gitcomet_extension_api::FileListGroups"
+  },
   "gitcomet_extension_api::files::FileListMarks": {
     "reexport": "gitcomet_extension_api::FileListMarks"
   },
   "gitcomet_extension_api::files::FileListSort": {
     "reexport": "gitcomet_extension_api::FileListSort"
+  },
+  "gitcomet_extension_api::files::FileListVisible": {
+    "reexport": "gitcomet_extension_api::FileListVisible"
+  },
+  "gitcomet_extension_api::files::GroupOf": {
+    "reexport": "gitcomet_extension_api::GroupOf"
   },
   "gitcomet_extension_api::host::DialogContent": {
     "reexport": "gitcomet_extension_api::DialogContent"

@@ -499,8 +499,8 @@ pub enum FileListMode {
     Tree,
     /// One row per path.
     Flat,
-    /// By change kind, each group under a header that stays in view while
-    /// its files scroll.
+    /// By change kind, or by the groups given to [`FileList::set_groups`],
+    /// each group under a header that stays in view while its files scroll.
     Grouped,
 }
 
@@ -517,6 +517,8 @@ pub trait FileListImpl {
     fn set_kind_filter(&self, filter: crate::FileListFilter, cx: &mut App);
     fn set_marks(&self, marks: crate::FileListMarks, cx: &mut App);
     fn set_filter_chips(&self, chips: Vec<crate::FileListFilterChip>, cx: &mut App);
+    fn set_groups(&self, groups: Option<crate::FileListGroups>, cx: &mut App);
+    fn set_visible(&self, visible: Option<crate::FileListVisible>, cx: &mut App);
     /// Shows only files whose path contains `query` (case-insensitive).
     fn set_filter(&self, query: SharedString, cx: &mut App);
     /// The files as shown: sorted, filtered.
@@ -544,6 +546,16 @@ impl FileList {
     }
     pub fn set_filter_chips(&self, chips: Vec<crate::FileListFilterChip>, cx: &mut App) {
         self.0.set_filter_chips(chips, cx)
+    }
+    /// Groups the grouped mode shows instead of change kinds; `None` goes
+    /// back to change kinds. A new set of labels expands every group.
+    pub fn set_groups(&self, groups: Option<crate::FileListGroups>, cx: &mut App) {
+        self.0.set_groups(groups, cx)
+    }
+    /// Shows only these paths (with the kind filter and query still
+    /// applying); `None` shows every path.
+    pub fn set_visible(&self, visible: Option<crate::FileListVisible>, cx: &mut App) {
+        self.0.set_visible(visible, cx)
     }
     /// Paths in navigation order, including files inside collapsed directories.
     pub fn ordered_paths(&self, cx: &App) -> Vec<PathBuf> {

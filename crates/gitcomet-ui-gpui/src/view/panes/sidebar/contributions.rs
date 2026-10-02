@@ -220,7 +220,7 @@ impl SidebarPaneView {
             })
             .child(div().flex_1().overflow_hidden().child(data.label.clone()))
             .when_some(data.mark.clone(), |row, mark| {
-                row.child(div().text_color(mark.color).child(mark.label))
+                row.child(row_mark(mark, ui_scale::UiScale::current(cx)))
             })
             .control_interaction(
                 controls::InteractionStyle::new(self.theme),
@@ -233,4 +233,29 @@ impl SidebarPaneView {
             )
             .into_any_element()
     }
+}
+
+/// A contributed row's mark: its glyph, then its label, in its colour.
+fn row_mark(mark: gitcomet_extension_api::RowMark, ui_scale: ui_scale::UiScale) -> gpui::Div {
+    let color = mark.color;
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(ui_scale.px(4.0))
+        .text_color(color)
+        .children(mark.glyph.map(|glyph| {
+            match glyph {
+                gitcomet_extension_api::RowGlyph::Icon(path) => gpui::svg()
+                    .path(path)
+                    .size(ui_scale.px(12.0))
+                    .text_color(color)
+                    .into_any_element(),
+                gitcomet_extension_api::RowGlyph::Text(text) => {
+                    div().child(text).into_any_element()
+                }
+                _ => gpui::Empty.into_any_element(),
+            }
+        }))
+        .children(mark.label)
 }

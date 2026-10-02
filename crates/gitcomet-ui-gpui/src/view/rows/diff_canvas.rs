@@ -433,7 +433,7 @@ fn paint_blame_icon(
 /// Paint `path` as a square icon of `glyph` size, centered in `cell` and clamped
 /// so it never spills out of it.
 pub(super) fn paint_centered_svg_icon(
-    path: &'static str,
+    path: impl Into<SharedString>,
     cell: Bounds<Pixels>,
     glyph: Pixels,
     color: gpui::Rgba,

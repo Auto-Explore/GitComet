@@ -131,6 +131,7 @@ impl DetailsPaneView {
                 context_menu_active,
                 path_alignment_group,
                 diff_stat,
+                leading: None,
             },
             theme,
             ui_scale_percent,

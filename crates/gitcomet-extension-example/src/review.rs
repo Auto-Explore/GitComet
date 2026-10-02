@@ -17,9 +17,9 @@ use gitcomet_extension_api::{
     CommandContext, CommandDescriptor, DetailsTabDescriptor, DialogHandle, EntryOrigin, Extension,
     ExtensionId, GateDecision, HistoryAnnotator, HistoryRowAnnotation, HostedAction, MenuLocation,
     NotificationKind, Registrar, RepositoryEntryRequest, RepositoryViewContext,
-    RepositoryViewDescriptor, RowMark, SettingsPageContext, SettingsPageDescriptor, ShellEvent,
-    SidebarProvider, SidebarRow, SidebarSectionDescriptor, SidebarSectionRows, SlotSignal,
-    StatusItemDescriptor, WindowExtension, WindowGateDescriptor, WindowHost,
+    RepositoryViewDescriptor, RowGlyph, RowMark, SettingsPageContext, SettingsPageDescriptor,
+    ShellEvent, SidebarProvider, SidebarRow, SidebarSectionDescriptor, SidebarSectionRows,
+    SlotSignal, StatusItemDescriptor, WindowExtension, WindowGateDescriptor, WindowHost,
 };
 use gitcomet_ui_kit::components::{Button, ButtonStyle};
 use gitcomet_ui_kit::gpui::prelude::*;
@@ -40,6 +40,12 @@ pub const DENY_MARKER: &str = ".comet-example-deny";
 pub const ICON_PATH: &str = "extensions/com.example.review/icons/review.svg";
 
 const ICON_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M2 8l4 4 8-8" stroke="currentColor" fill="none" stroke-width="2"/></svg>"#;
+
+/// The Changes list's flag glyph, served at
+/// `extensions/com.example.review/icons/flag.svg`.
+pub const FLAG_ICON_PATH: &str = "extensions/com.example.review/icons/flag.svg";
+
+const FLAG_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M3 15V2h9l-2 3 2 3H3" stroke="currentColor" fill="none" stroke-width="1.5" stroke-linejoin="round"/></svg>"#;
 
 /// The bottom panel listing this repository's reviews.
 pub const REVIEW_LOG_PANEL: &str = "review-log";
@@ -582,14 +588,11 @@ fn annotate(context: &RepositoryViewContext, commit: &Commit, cx: &App) -> Histo
 }
 
 fn review_mark(commit: &Commit, color: gitcomet_ui_kit::gpui::Hsla) -> Option<RowMark> {
-    commit
-        .summary
-        .to_lowercase()
-        .contains("review")
-        .then(|| RowMark {
-            label: "review".into(),
-            color,
-        })
+    commit.summary.to_lowercase().contains("review").then(|| {
+        RowMark::new(color)
+            .with_glyph(RowGlyph::Icon(ICON_PATH.into()))
+            .with_label("review")
+    })
 }
 
 /// The sidebar rows: one action marking the repository reviewed.
@@ -736,6 +739,7 @@ impl Extension for ReviewExtension {
             .menu_item(MenuLocation::Application, "show-summary")
             .menu_item(MenuLocation::RepositoryTab, "mark-reviewed")
             .asset("icons/review.svg", ICON_SVG)
+            .asset("icons/flag.svg", FLAG_SVG)
             .repository_entry_gate("deny-marker", Rc::new(gate))
             .close_guard("unreviewed", Rc::new(close_guard))
             .window_gate(

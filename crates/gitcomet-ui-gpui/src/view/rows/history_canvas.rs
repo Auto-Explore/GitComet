@@ -1343,44 +1343,84 @@ pub(super) fn history_commit_row_canvas(
             let date_bounds = column_layout.date;
             let sha_bounds = column_layout.sha;
 
-            // Marks share the existing summary canvas, reserving their text width
-            // so neither the commit subject nor adjacent columns are obscured.
+            // Marks share the existing summary canvas, reserving their width so
+            // neither the commit subject nor adjacent columns are obscured. A
+            // text glyph shapes with the label; an icon glyph leads it.
             for (leading, mark) in [
                 (true, annotation.leading.as_ref()),
                 (false, annotation.trailing.as_ref()),
             ] {
-                if let Some(mark) = mark {
+                let Some(mark) = mark else {
+                    continue;
+                };
+                let color: gpui::Rgba = mark.color.into_color();
+                let (icon, text) = match &mark.glyph {
+                    Some(gitcomet_extension_api::RowGlyph::Icon(path)) => {
+                        (Some(path), mark.label.clone())
+                    }
+                    Some(gitcomet_extension_api::RowGlyph::Text(glyph)) => (
+                        None,
+                        Some(match &mark.label {
+                            Some(label) => format!("{glyph} {label}").into(),
+                            None => glyph.clone(),
+                        }),
+                    ),
+                    _ => (None, mark.label.clone()),
+                };
+                let icon_size = xxs_line_height.min(bounds.size.height);
+                let icon_width = if icon.is_some() {
+                    icon_size + scaled_px(2.0)
+                } else {
+                    px(0.0)
+                };
+                let available = (summary_bounds.size.width * 0.3).min(scaled_px(96.0));
+                let text = text.map(|text| {
                     let mut hasher = FxHasher::default();
-                    mark.label.hash(&mut hasher);
-                    let available = (summary_bounds.size.width * 0.3).min(scaled_px(96.0));
-                    let text = shape_truncated_line_cached(
+                    text.hash(&mut hasher);
+                    shape_truncated_line_cached(
                         window,
                         &base_style,
                         xxs_font,
-                        &mark.label,
+                        &text,
                         hasher.finish(),
-                        available,
-                        mark.color.into_color(),
+                        (available - icon_width).max(px(0.0)),
+                        color,
                         None,
+                    )
+                });
+                let content = icon_width + text.as_ref().map_or(px(0.0), |text| text.width);
+                if content <= px(0.0) {
+                    continue;
+                }
+                let width = (content + scaled_px(8.0)).min(summary_bounds.size.width);
+                let x = if leading {
+                    summary_bounds.left() + scaled_px(4.0)
+                } else {
+                    summary_bounds.right() - width
+                };
+                if let Some(path) = icon {
+                    super::diff_canvas::paint_centered_svg_icon(
+                        path.clone(),
+                        Bounds::new(point(x, center_y(icon_size)), size(icon_size, icon_size)),
+                        icon_size,
+                        color,
+                        window,
+                        cx,
                     );
-                    let width = (text.width + scaled_px(8.0)).min(summary_bounds.size.width);
-                    let x = if leading {
-                        summary_bounds.left() + scaled_px(4.0)
-                    } else {
-                        summary_bounds.right() - width
-                    };
+                }
+                if let Some(text) = text {
                     let _ = text.paint(
-                        point(x, center_y(xxs_line_height)),
+                        point(x + icon_width, center_y(xxs_line_height)),
                         xxs_line_height,
                         gpui::TextAlign::Left,
                         None,
                         window,
                         cx,
                     );
-                    summary_bounds.size.width -= width;
-                    if leading {
-                        summary_bounds.origin.x += width;
-                    }
+                }
+                summary_bounds.size.width -= width;
+                if leading {
+                    summary_bounds.origin.x += width;
                 }
             }
 

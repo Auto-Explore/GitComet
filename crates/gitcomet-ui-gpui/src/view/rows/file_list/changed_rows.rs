@@ -8,7 +8,7 @@ use crate::theme::AppTheme;
 use crate::view::components;
 use gitcomet_core::domain::CommitFileChange;
 use gpui::prelude::*;
-use gpui::{Div, ElementId, SharedString, Stateful, div, px};
+use gpui::{AnyElement, Div, ElementId, SharedString, Stateful, div, px};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -25,6 +25,8 @@ pub(in crate::view) struct ChangedFileRow<'a, S> {
     pub(in crate::view) context_menu_active: bool,
     pub(in crate::view) path_alignment_group: Option<components::PathTruncationAlignmentGroup>,
     pub(in crate::view) diff_stat: bool,
+    /// Drawn before the file icon (a hosted list's mark glyphs).
+    pub(in crate::view) leading: Option<AnyElement>,
 }
 
 /// A file row's body; the caller adds its click action and tooltip (the
@@ -47,6 +49,7 @@ pub(in crate::view) fn changed_file_row<V: 'static, S: FnOnce() -> String + 'sta
         context_menu_active,
         path_alignment_group,
         diff_stat,
+        leading,
     } = row;
     let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
     let visuals = presentation.visuals;
@@ -93,6 +96,7 @@ pub(in crate::view) fn changed_file_row<V: 'static, S: FnOnce() -> String + 'sta
         .pr(scaled_px(8.0))
         .w_full()
         .map(|row| interaction.apply(row))
+        .children(leading)
         .child(crate::view::rows::file_row_icon_slot(
             icon,
             color,

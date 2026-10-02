@@ -462,6 +462,18 @@ Since then:
   right group (terminal, branch, stash) is unchanged. `ViewNavigation` now
   has tests: the action bar's Back/Forward and the mouse side buttons
   route to the selected view, and to History again once it is back.
+- Hosted file lists take caller-defined groups (`FileList::set_groups`:
+  labels in order plus a per-path lookup; the rest under "Other"), a
+  visible-path filter (`set_visible`, composing with the kind filter and
+  query), and `Visible` filter chips beside `Query` ones; chips show their
+  active state and a second click clears them. `RowMark` is now
+  non-exhaustive with an optional label and a `RowGlyph` (icon or text):
+  file lists draw glyphs in a column before the file icon, History and
+  sidebar rows before the label. Regrouping is one pass over the shown
+  files, cached apart from collapse and keyed on the grouping's revision,
+  so scrolling never regroups and grouping never replans
+  (`file_list/regroup_100k`). The example's Changes list groups by role,
+  flags files with flagged lines and offers a "Flagged" chip.
 
 ## History find (#532)
 

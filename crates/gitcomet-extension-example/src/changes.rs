@@ -1,17 +1,19 @@
 //! The example's Changes view: the working tree against HEAD in a hosted
-//! file list, the picked file in one diff pane and the previous pick in a
-//! second, read-only one. Retargeting either leaves the other and History
-//! as they were. Clicking the current pane's gutter flags a line, and a
-//! selection can be given a note shown under it. The current pane can pop
-//! out into a window of its own and comes back when that window closes. Its
-//! action-bar context names the comparison and marks the repository
-//! reviewed.
+//! file list grouped by the files' roles, the picked file in one diff pane and
+//! the previous pick in a second, read-only one. Retargeting either leaves the
+//! other and History as they were. Clicking the current pane's gutter flags
+//! a line; a file with flagged lines gets a flag in the list and its
+//! "Flagged" chip shows only those files. A selection can be given a note
+//! shown under it. The current pane can pop out into a window of its own and
+//! comes back when that window closes. Its action-bar context names the
+//! comparison and marks the repository reviewed.
 
 use gitcomet_core::domain::{CommitId, DiffTarget};
 use gitcomet_extension_api::{
     ChangeSource, DiffAnnotation, DiffAnnotations, DiffInset, DiffLegendItem, DiffLineRange,
     DiffLineSide, DiffPane, DiffPaneOptions, DiffPanePolicy, DiffSelectionAction, FileList,
-    PopOutWindow, RepositoryViewContext,
+    FileListFilterChip, FileListGroups, FileListMarks, FileListMode, FileListVisible, PopOutWindow,
+    RepositoryViewContext, RowGlyph, RowMark,
 };
 use gitcomet_ui_kit::components::Button;
 use gitcomet_ui_kit::gpui::prelude::*;
@@ -19,16 +21,47 @@ use gitcomet_ui_kit::gpui::{
     AnyElement, App, Context, Entity, SharedString, Subscription, WeakEntity, Window, div, px,
     rgb_to_hsla,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
+
+type Flags = BTreeSet<(DiffLineSide, u32)>;
+
+/// The list's groups, by what a file is for; the rest show under "Other".
+const ROLES: [&str; 4] = ["Code", "Tests", "Docs", "Config"];
+
+fn role_of(path: &Path) -> Option<usize> {
+    let extension = path.extension().and_then(|extension| extension.to_str());
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("");
+    if path.components().any(|part| part.as_os_str() == "tests")
+        || stem.ends_with("_test")
+        || stem.ends_with("_tests")
+    {
+        return Some(1);
+    }
+    match extension? {
+        "md" | "txt" | "rst" => Some(2),
+        "toml" | "json" | "yml" | "yaml" | "lock" => Some(3),
+        "rs" | "js" | "ts" | "py" | "go" | "c" | "h" | "cpp" | "java" | "swift" => Some(0),
+        _ => None,
+    }
+}
 
 pub struct ChangesView {
     context: RepositoryViewContext,
     list: Result<FileList, SharedString>,
     current: Option<DiffPane>,
     previous: Option<DiffPane>,
-    /// The current pane's flagged lines and notes; a new pick clears them.
-    flags: BTreeSet<(DiffLineSide, u32)>,
+    /// The file the current pane shows.
+    current_path: Option<PathBuf>,
+    /// Flagged lines by file; the current pane shows its file's.
+    flags: BTreeMap<PathBuf, Flags>,
+    /// Bumped with every flag change.
+    flags_revision: u64,
+    /// The current pane's notes; a new pick clears them.
     notes: Vec<DiffInset>,
     /// The window the current pane is shown in instead of here.
     popped: Option<PopOutWindow>,
@@ -48,12 +81,19 @@ impl ChangesView {
                 cx,
             )
             .map_err(|error| SharedString::from(error.to_string()));
+        if let Ok(list) = &list {
+            list.set_mode(FileListMode::Grouped, cx);
+            let labels: Vec<SharedString> = ROLES.into_iter().map(SharedString::from).collect();
+            list.set_groups(Some(FileListGroups::new(0, labels, role_of)), cx);
+        }
         Self {
             context,
             list,
             current: None,
             previous: None,
-            flags: BTreeSet::new(),
+            current_path: None,
+            flags: BTreeMap::new(),
+            flags_revision: 0,
             notes: Vec::new(),
             popped: None,
         }
@@ -106,17 +146,44 @@ impl ChangesView {
         }
     }
 
-    pub fn flags(&self) -> &BTreeSet<(DiffLineSide, u32)> {
-        &self.flags
+    /// The current file's flagged lines.
+    pub fn flags(&self) -> &Flags {
+        static NONE: Flags = BTreeSet::new();
+        self.current_path
+            .as_ref()
+            .and_then(|path| self.flags.get(path))
+            .unwrap_or(&NONE)
+    }
+
+    /// Files with flagged lines.
+    pub fn flagged_paths(&self) -> BTreeSet<PathBuf> {
+        self.flags.keys().cloned().collect()
     }
 
     fn toggle_flag(&mut self, side: DiffLineSide, line: u32, cx: &mut Context<Self>) {
-        if !self.flags.remove(&(side, line)) {
-            self.flags.insert((side, line));
+        let Some(path) = self.current_path.clone() else {
+            return;
+        };
+        let flags = self.flags.entry(path.clone()).or_default();
+        if !flags.remove(&(side, line)) {
+            flags.insert((side, line));
         }
+        if flags.is_empty() {
+            self.flags.remove(&path);
+        }
+        self.flags_revision += 1;
+        self.show_flags(cx);
+        self.mark_flagged_files(cx);
+    }
+
+    /// The current file's flags as annotations in the current pane.
+    fn show_flags(&self, cx: &mut Context<Self>) {
+        let Some(current) = &self.current else {
+            return;
+        };
         let color = rgb_to_hsla(self.context.window.theme(cx).colors.accent.solid);
         let annotations =
-            self.flags
+            self.flags()
                 .iter()
                 .fold(DiffAnnotations::new(), |annotations, (side, line)| {
                     annotations.with(
@@ -125,10 +192,31 @@ impl ChangesView {
                         DiffAnnotation::new(color).with_label("flagged"),
                     )
                 });
-        if let Some(current) = &self.current {
-            current.set_annotations(annotations, cx);
-            current.set_legend(vec![DiffLegendItem::new("Flagged", color)], cx);
-        }
+        let legend = if self.flags().is_empty() {
+            Vec::new()
+        } else {
+            vec![DiffLegendItem::new("Flagged", color)]
+        };
+        current.set_annotations(annotations, cx);
+        current.set_legend(legend, cx);
+    }
+
+    /// Flags the flagged files in the list and offers a chip showing only them.
+    fn mark_flagged_files(&self, cx: &mut Context<Self>) {
+        let Ok(list) = &self.list else {
+            return;
+        };
+        let color = rgb_to_hsla(self.context.window.theme(cx).colors.accent.solid);
+        let mark =
+            RowMark::new(color).with_glyph(RowGlyph::Icon(crate::review::FLAG_ICON_PATH.into()));
+        let rows: BTreeMap<PathBuf, RowMark> = self
+            .flags
+            .keys()
+            .map(|path| (path.clone(), mark.clone()))
+            .collect();
+        list.set_marks(FileListMarks::new(self.flags_revision, rows), cx);
+        let visible = FileListVisible::new(self.flags_revision, self.flagged_paths());
+        list.set_filter_chips(vec![FileListFilterChip::visible("Flagged", visible)], cx);
     }
 
     pub fn current(&self) -> Option<&DiffPane> {
@@ -155,6 +243,7 @@ impl ChangesView {
     /// previous one.
     fn show(&mut self, target: DiffTarget, cx: &mut Context<Self>) {
         let Some(current) = self.current.clone() else {
+            self.current_path = target.file_path().map(Path::to_path_buf);
             let options = self.current_options(cx);
             self.current = self.pane(target, options, cx);
             cx.notify();
@@ -176,10 +265,9 @@ impl ChangesView {
                 }
             }
         }
-        self.flags.clear();
+        self.current_path = target.file_path().map(Path::to_path_buf);
         self.notes.clear();
-        current.set_annotations(DiffAnnotations::new(), cx);
-        current.set_legend(Vec::new(), cx);
+        self.show_flags(cx);
         current.set_insets(Vec::new(), cx);
         current.set_target(target, cx);
         cx.notify();
