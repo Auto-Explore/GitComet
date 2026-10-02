@@ -704,7 +704,7 @@ pub(crate) fn open_settings_window(cx: &mut App) {
         .find_map(|window| window.downcast::<SettingsWindowView>())
     {
         let _ = window.update(cx, |_view, window, _cx| {
-            window.activate_window();
+            window.activate();
         });
         cx.activate(true);
         return;
@@ -832,7 +832,7 @@ fn settings_window_options_for_scale(
     bounds: Bounds<Pixels>,
     ui_scale_percent: u32,
 ) -> WindowOptions {
-    WindowOptions {
+    crate::app::with_main_window_background(WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         window_min_size: Some(settings_window_min_size_for_percent(ui_scale_percent)),
         titlebar: Some(settings_window_titlebar_options()),
@@ -841,11 +841,10 @@ fn settings_window_options_for_scale(
                 .window_app_id(gitcomet_core::identity::WindowKind::Settings),
         ),
         window_decorations: Some(WindowDecorations::Client),
-        window_background: crate::app::main_window_background_appearance(),
         is_movable: true,
         is_resizable: true,
         ..Default::default()
-    }
+    })
 }
 
 fn settings_window_titlebar_options() -> TitlebarOptions {

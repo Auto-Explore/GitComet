@@ -537,7 +537,7 @@ mod tests {
         let _guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) = cx.add_window_view(|window, cx| {
-            window.activate_window();
+            window.activate();
             GitCometView::new(store, events, None, window, cx)
         });
         let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
@@ -646,7 +646,7 @@ mod tests {
         let _guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) = cx.add_window_view(|window, cx| {
-            window.activate_window();
+            window.activate();
             GitCometView::new(store, events, None, window, cx)
         });
         let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());

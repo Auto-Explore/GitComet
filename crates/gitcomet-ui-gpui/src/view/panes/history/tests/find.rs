@@ -76,7 +76,7 @@ fn mount_find_fixture(
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let store_for_assert = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
-        window.activate_window();
+        window.activate();
         GitCometView::new(store, events, None, window, cx)
     });
     draw_and_park(cx);

@@ -1150,7 +1150,7 @@ impl MainPaneView {
         let (editor_mode, base, header_title, header_detail, loading_state) =
             if let Some(setup) = repo.interactive_rebase_setup.as_ref() {
                 let base = setup.base.clone();
-                // Only abbreviate full 40-char SHAs; leave branch names intact.
+                // Only abbreviate full commit ids; leave branch names intact.
                 let base_short: SharedString =
                     if base.len() > 16 && base.chars().all(|c| c.is_ascii_hexdigit()) {
                         base.get(..8).unwrap_or(&base).to_string().into()

@@ -3,6 +3,7 @@ mod backend;
 pub mod command_trace;
 mod ignore;
 mod open;
+mod refs;
 mod repo;
 mod util;
 

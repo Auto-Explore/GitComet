@@ -112,7 +112,12 @@ fn custom_lfs_storage_covers_submodules_and_linked_worktrees() {
             .is_none()
         );
     }
-    assert!(plan.dirs.contains(&root.join(".git/refs/heads")));
+    let ref_dir = if root.join(".git/reftable").is_dir() {
+        ".git/reftable"
+    } else {
+        ".git/refs/heads"
+    };
+    assert!(plan.dirs.contains(&root.join(ref_dir)));
     assert!(
         !plan
             .policy

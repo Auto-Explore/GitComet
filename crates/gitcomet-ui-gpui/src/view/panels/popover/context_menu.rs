@@ -1930,11 +1930,11 @@ impl PopoverHost {
                 }
             }
             ContextMenuAction::CopyText { text } => {
-                window.activate_window();
+                window.activate();
                 crate::clipboard::write_text(cx, text, crate::clipboard::CopySource::ContextMenu);
             }
             ContextMenuAction::CopyLinkAddress { url } => {
-                window.activate_window();
+                window.activate();
                 crate::clipboard::write_text(cx, url, crate::clipboard::CopySource::ContextMenu);
                 self.push_toast(
                     components::ToastKind::Success,
@@ -1963,7 +1963,7 @@ impl PopoverHost {
                 );
             }
             ContextMenuAction::CopyDiffSelection { text } => {
-                window.activate_window();
+                window.activate();
                 crate::clipboard::write_text(
                     cx,
                     text,
@@ -1971,7 +1971,7 @@ impl PopoverHost {
                 );
             }
             ContextMenuAction::CopyDiffText { visible_ix, region } => {
-                window.activate_window();
+                window.activate();
                 self.main_pane.update(cx, |pane, cx| {
                     pane.copy_diff_text_for_context_menu_to_clipboard(visible_ix, region, cx);
                 });
@@ -1981,7 +1981,7 @@ impl PopoverHost {
                 session_seq,
                 command,
             } => {
-                window.activate_window();
+                window.activate();
                 let dispatched = self
                     .root_view
                     .update(cx, |root, cx| {

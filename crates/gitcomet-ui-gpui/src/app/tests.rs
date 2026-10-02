@@ -76,7 +76,7 @@ fn manual_update_check_activates_its_feedback_window(cx: &mut gpui::TestAppConte
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let main_window_id = cx.update(|window, app| {
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
         window.window_handle().window_id()
     });
 
@@ -89,7 +89,7 @@ fn manual_update_check_activates_its_feedback_window(cx: &mut gpui::TestAppConte
             .expect("Settings window should open")
     });
     cx.cx.update(|app| {
-        let _ = settings_window.update(app, |_view, window, _cx| window.activate_window());
+        let _ = settings_window.update(app, |_view, window, _cx| window.activate());
         assert_ne!(
             app.active_window().map(|window| window.window_id()),
             Some(main_window_id),
@@ -796,7 +796,7 @@ fn review_regression_forwarded_open_falls_back_to_the_last_focused_normal_window
         .add_window(|window, cx| GitCometView::new(second_store, second_events, None, window, cx));
 
     first
-        .update(cx, |_view, window, _cx| window.activate_window())
+        .update(cx, |_view, window, _cx| window.activate())
         .expect("activate a window before simulating app blur");
     cx.background_executor.run_until_parked();
     let mut first_context = gpui::VisualTestContext::from_window(first.into(), cx);
@@ -812,7 +812,7 @@ fn review_regression_forwarded_open_falls_back_to_the_last_focused_normal_window
         gpui::AnyWindowHandle::from(first)
     };
     expected
-        .update(cx, |_view, window, _cx| window.activate_window())
+        .update(cx, |_view, window, _cx| window.activate())
         .expect("activate the non-fallback window");
     cx.background_executor.run_until_parked();
     let mut expected_context = gpui::VisualTestContext::from_window(expected, cx);
@@ -847,7 +847,7 @@ fn review_regression_recovering_a_saved_workspace_keeps_overlapping_repositories
     cx.update(|window, app| {
         install_app_shortcuts_for_test(app, Arc::clone(&backend));
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
     });
     seed_worktree_repo(cx, &store, view);
     assert!(
@@ -899,7 +899,7 @@ fn review_regression_move_to_a_saved_workspace_with_the_same_repository(
     let source_window_id = cx.update(|window, app| {
         install_app_shortcuts_for_test(app, Arc::clone(&backend));
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
         window.window_handle().window_id()
     });
     seed_worktree_repo(cx, &store, view);
@@ -1004,7 +1004,7 @@ fn review_regression_move_noop_check_ignores_closed_windows(cx: &mut gpui::TestA
     let source_window_id = cx.update(|window, app| {
         install_app_shortcuts_for_test(app, Arc::clone(&backend));
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
         window.window_handle().window_id()
     });
     seed_worktree_repo(cx, &store, view);
@@ -1642,7 +1642,7 @@ fn review_regression_closing_immediately_flushes_the_current_workspace_layout(
     let window_id = cx.update(|window, app| {
         install_app_shortcuts_for_test(app, Arc::clone(&backend));
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
         window.window_handle().window_id()
     });
     seed_worktree_repo(cx, &store, view.clone());
@@ -2563,7 +2563,7 @@ fn settings_shortcut_opens_a_window(cx: &mut gpui::TestAppContext) {
     cx.update(|window, app| {
         install_app_shortcuts_for_test(app, Arc::clone(&backend));
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
     });
     seed_worktree_repo(cx, &store, view);
 
@@ -2584,7 +2584,7 @@ fn settings_shortcut_reuses_existing_window_and_activates_it(cx: &mut gpui::Test
     let main_window = cx.update(|window, app| {
         install_app_shortcuts_for_test(app, Arc::clone(&backend));
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
         window.window_handle()
     });
     let main_window_id = main_window.window_id();
@@ -2603,7 +2603,7 @@ fn settings_shortcut_reuses_existing_window_and_activates_it(cx: &mut gpui::Test
 
     cx.cx.update(|app| {
         let _ = main_window.update(app, |_, window, _cx| {
-            window.activate_window();
+            window.activate();
         });
         assert_eq!(
             app.active_window().map(|window| window.window_id()),
@@ -2637,7 +2637,7 @@ fn recent_picker_shortcut_toggles_the_popover(cx: &mut gpui::TestAppContext) {
     cx.update(|window, app| {
         install_app_shortcuts_for_test(app, Arc::clone(&backend));
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
     });
     seed_worktree_repo(cx, &store, view);
 
@@ -2671,7 +2671,7 @@ fn new_window_shortcuts_open_new_windows(cx: &mut gpui::TestAppContext) {
     cx.update(|window, app| {
         install_app_shortcuts_for_test(app, Arc::clone(&backend));
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
     });
     seed_worktree_repo(cx, &store, view);
 
@@ -2846,7 +2846,7 @@ fn closing_the_active_window_saves_a_layout_change_the_debounce_has_not_written(
     let (view, cx, window_id) = empty_window_for_adoption(cx, vec![workspace]);
     cx.update(|window, app| {
         open_workspace_in_window(app, window_id, id);
-        window.activate_window();
+        window.activate();
     });
     cx.update(|_window, app| {
         view.update(app, |view, cx| {
@@ -3005,7 +3005,7 @@ fn moving_the_last_repository_out_of_a_customized_workspace_keeps_the_window(
         crate::workspaces::initialize_for_test(app, Vec::new());
         install_app_shortcuts_for_test(app, Arc::clone(&backend));
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
         window.window_handle().window_id()
     });
     seed_worktree_repo(cx, &store, view.clone());
@@ -3090,7 +3090,7 @@ fn moving_the_only_repository_to_a_new_window_closes_the_source(cx: &mut gpui::T
     let source_window_id = cx.update(|window, app| {
         install_app_shortcuts_for_test(app, Arc::clone(&backend));
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
         window.window_handle().window_id()
     });
     seed_worktree_repo(cx, &store, view.clone());
@@ -3213,7 +3213,7 @@ fn close_button_closes_only_the_clicked_window_after_opening_a_new_window(
     let first_window_id = cx.update(|window, app| {
         install_app_shortcuts_for_test(app, Arc::clone(&backend));
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
         window.window_handle().window_id()
     });
 
@@ -3277,7 +3277,7 @@ fn close_shortcut_closes_the_active_window_when_no_repo_tab_can_close(
     cx.update(|window, app| {
         install_app_shortcuts_for_test(app, Arc::clone(&backend));
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
     });
 
     assert_eq!(cx.update(|_window, app| app.windows().len()), 1);
@@ -3297,7 +3297,7 @@ fn close_window_shortcut_closes_the_active_window(cx: &mut gpui::TestAppContext)
     cx.update(|window, app| {
         install_app_shortcuts_for_test(app, Arc::clone(&backend));
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
     });
 
     assert_eq!(cx.update(|_window, app| app.windows().len()), 1);
@@ -3325,7 +3325,7 @@ fn ctrl_tab_shortcuts_cycle_repository_tabs_in_the_main_window(cx: &mut gpui::Te
     cx.update(|window, app| {
         install_app_shortcuts_for_test(app, Arc::clone(&backend));
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
     });
 
     store.dispatch(Msg::RestoreSession {
@@ -3404,7 +3404,7 @@ fn repository_picker_fallback_reuses_existing_normal_window(cx: &mut gpui::TestA
 
     cx.update(|window, app| {
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
     });
 
     assert_eq!(cx.cx.update(|app| app.windows().len()), 1);
@@ -3485,7 +3485,7 @@ fn macos_clone_repository_action_opens_native_clone_prompt(cx: &mut gpui::TestAp
     cx.update(|window, app| {
         install_macos_app_menu(app, Arc::clone(&backend));
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
     });
     cx.cx.update(|app| app.dispatch_action(&CloneRepository));
     cx.run_until_parked();
@@ -3511,7 +3511,7 @@ fn macos_initialize_repository_action_requests_folder_picker(cx: &mut gpui::Test
     cx.update(|window, app| {
         install_macos_app_menu(app, Arc::clone(&backend));
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
     });
     cx.cx
         .update(|app| app.dispatch_action(&InitializeRepository));
@@ -3563,7 +3563,7 @@ fn macos_repository_actions_validate_background_normal_window(cx: &mut gpui::Tes
             );
         });
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
         window.window_handle().window_id()
     });
 
@@ -3577,7 +3577,7 @@ fn macos_repository_actions_validate_background_normal_window(cx: &mut gpui::Tes
     });
     let settings_window_id = settings_window.window_id();
     cx.cx.update(|app| {
-        let _ = settings_window.update(app, |_view, window, _cx| window.activate_window());
+        let _ = settings_window.update(app, |_view, window, _cx| window.activate());
         assert_eq!(
             app.active_window().map(|window| window.window_id()),
             Some(settings_window_id),
@@ -3617,7 +3617,7 @@ fn locate_file_action_activates_background_normal_window(cx: &mut gpui::TestAppC
     let main_window_id = cx.update(|window, app| {
         install_app_shortcuts_for_test(app, Arc::clone(&backend));
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
         window.window_handle().window_id()
     });
     cx.cx.update(crate::view::open_settings_window);
@@ -3630,7 +3630,7 @@ fn locate_file_action_activates_background_normal_window(cx: &mut gpui::TestAppC
     });
     let settings_window_id = settings_window.window_id();
     cx.cx.update(|app| {
-        let _ = settings_window.update(app, |_view, window, _cx| window.activate_window());
+        let _ = settings_window.update(app, |_view, window, _cx| window.activate());
         assert_eq!(
             app.active_window().map(|window| window.window_id()),
             Some(settings_window_id),
@@ -3665,7 +3665,7 @@ fn focus_existing_repository_window_for_path_avoids_reading_the_active_window_on
 
     let window_handle = cx.update(|window, app| {
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
         window.window_handle()
     });
 
@@ -3691,7 +3691,7 @@ fn update_active_normal_gitcomet_window_avoids_reading_the_active_window_on_stac
 
     let window_handle = cx.update(|window, app| {
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
         window.window_handle()
     });
 

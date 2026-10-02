@@ -342,7 +342,7 @@ fn holding_a_drag_selection_past_the_file_editor_scrolls_it(test_cx: &mut gpui::
     for (case, (filename, wrap)) in cases.into_iter().enumerate() {
         let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) = test_cx.add_window_view(|window, cx| {
-            window.activate_window();
+            window.activate();
             crate::view::GitCometView::new(store, events, None, window, cx)
         });
         let repo_id = gitcomet_state::model::RepoId(1150 + case as u64);

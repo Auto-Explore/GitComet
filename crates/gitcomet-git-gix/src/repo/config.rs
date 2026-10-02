@@ -8,7 +8,7 @@ use std::sync::Arc;
 pub(super) struct ConfigRepo {
     repo: Arc<gix::ThreadSafeRepository>,
     inputs: Vec<(PathBuf, std::io::Result<ConfigStamp>)>,
-    branch: Option<(PathBuf, Option<Vec<u8>>)>,
+    branch: Option<Option<Vec<u8>>>,
 }
 
 /// Config freshness needs metadata, not another read of every input. Include
@@ -40,11 +40,8 @@ impl ConfigStamp {
     }
 }
 
-fn symbolic_head(path: &Path) -> Option<Vec<u8>> {
-    let bytes = std::fs::read(path).ok()?;
-    bytes
-        .strip_prefix(b"ref: ")
-        .map(|name| name.trim_ascii().to_vec())
+fn symbolic_head(repo: &gix::Repository) -> Result<Option<Vec<u8>>> {
+    Ok(crate::refs::head_name(repo)?.map(|name| name.as_bstr().to_vec()))
 }
 
 impl ConfigRepo {
@@ -105,11 +102,7 @@ impl ConfigRepo {
                 (path, stamp)
             })
             .collect();
-        let branch = depends_on_branch.then(|| {
-            let path = repo.git_dir().join("HEAD");
-            let name = symbolic_head(&path);
-            (path, name)
-        });
+        let branch = depends_on_branch.then(|| symbolic_head(&repo).ok().flatten());
         Self {
             repo: Arc::new(repo.into_sync()),
             inputs,
@@ -125,19 +118,18 @@ impl ConfigRepo {
     }
 
     fn is_current(&self) -> bool {
-        self.branch
-            .as_ref()
-            .is_none_or(|(path, previous)| *previous == symbolic_head(path))
-            && self.inputs.iter().all(|(path, previous)| {
-                match (previous, ConfigStamp::read(path)) {
-                    (Ok(previous), Ok(current)) => *previous == current,
-                    (Err(previous), Err(current)) => {
-                        previous.kind() == std::io::ErrorKind::NotFound
-                            && current.kind() == std::io::ErrorKind::NotFound
-                    }
-                    _ => false,
+        self.branch.as_ref().is_none_or(|previous| {
+            symbolic_head(&self.repo.to_thread_local()).is_ok_and(|name| name == *previous)
+        }) && self.inputs.iter().all(
+            |(path, previous)| match (previous, ConfigStamp::read(path)) {
+                (Ok(previous), Ok(current)) => *previous == current,
+                (Err(previous), Err(current)) => {
+                    previous.kind() == std::io::ErrorKind::NotFound
+                        && current.kind() == std::io::ErrorKind::NotFound
                 }
-            })
+                _ => false,
+            },
+        )
     }
 }
 

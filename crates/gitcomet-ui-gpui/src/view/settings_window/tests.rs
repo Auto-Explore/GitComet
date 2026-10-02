@@ -582,7 +582,7 @@ fn theme_tiles_list_automatic_first_then_every_theme_once_by_appearance() {
 fn settings_window_blur_requires_deliberate_input_focus(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let (view, cx) = cx.add_window_view(SettingsWindowView::new);
-    cx.update(|window, _| window.activate_window());
+    cx.update(|window, _| window.activate());
     cx.run_until_parked();
     let input = cx.update(|window, app| {
         let input = view.read(app).search_input.clone();
@@ -594,7 +594,7 @@ fn settings_window_blur_requires_deliberate_input_focus(cx: &mut gpui::TestAppCo
     cx.deactivate_window();
     cx.update(|window, app| {
         assert!(window.focused(app).is_none());
-        window.activate_window();
+        window.activate();
     });
     cx.run_until_parked();
     crate::test_support::refresh_and_draw(cx);

@@ -73,7 +73,12 @@ fn cursor_gate_skips_until_after_last_seen() {
 
 #[test]
 fn object_id_from_commit_id_rejects_invalid_hex() {
-    assert!(object_id_from_commit_id(&CommitId("not-a-sha".into())).is_none());
+    assert!(
+        object_id_from_commit_id(&CommitId("not-a-sha".into()), gix::hash::Kind::Sha1).is_none()
+    );
+    let sha1 = CommitId("a".repeat(40).into());
+    assert!(object_id_from_commit_id(&sha1, gix::hash::Kind::Sha1).is_some());
+    assert!(object_id_from_commit_id(&sha1, gix::hash::Kind::Sha256).is_none());
 }
 
 #[test]
@@ -245,7 +250,10 @@ fn diff_range_files_flags_a_submodule_pointer_against_the_working_tree() {
             "update-index",
             "--add",
             "--cacheinfo",
-            "160000,1111111111111111111111111111111111111111,vendor/sub",
+            &format!(
+                "160000,{},vendor/sub",
+                "1".repeat(gix::open(repo).unwrap().object_hash().len_in_hex())
+            ),
         ],
     );
 
@@ -323,7 +331,7 @@ fn diff_range_files_parses_renames_against_the_working_tree() {
 /// comparison base even though it is not a commit.
 #[test]
 fn diff_range_files_accepts_the_empty_tree_as_a_base() {
-    use gitcomet_core::domain::{EMPTY_TREE_ID, FileStatusKind};
+    use gitcomet_core::domain::{FileStatusKind, empty_tree_id_like};
     use gitcomet_core::services::GitRepository;
 
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -339,7 +347,7 @@ fn diff_range_files_accepts_the_empty_tree_as_a_base() {
     let opened = open_repo(repo);
     let mut files = opened
         .diff_range_files(
-            &CommitId(EMPTY_TREE_ID.into()),
+            &empty_tree_id_like(&CommitId(root.clone().into())).unwrap(),
             Some(&CommitId(root.into())),
         )
         .expect("the empty tree should resolve as a base");
@@ -1637,7 +1645,7 @@ fn preview_blob_verification_memo_rechecks_a_rewritten_cache_file() {
     write_file(tmp.path(), "image.bin", "real blob bytes");
     git_success(tmp.path(), &["add", "image.bin"]);
     let blob_id = gix::objs::compute_hash(
-        gix::hash::Kind::Sha1,
+        gix::open(tmp.path()).unwrap().object_hash(),
         gix::objs::Kind::Blob,
         b"real blob bytes",
     )
