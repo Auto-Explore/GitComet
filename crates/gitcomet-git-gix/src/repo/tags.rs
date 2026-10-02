@@ -51,12 +51,12 @@ fn local_tags_to_prune(local_tags_output: &str, remote_tags: &FxHashSet<String>)
 
 fn delete_local_tag(repo: &gix::Repository, name: &str) -> Result<()> {
     let ref_name = format!("refs/tags/{name}");
-    let reference = repo
-        .find_reference(ref_name.as_str())
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix find tag reference: {e}"))))?;
-    reference
-        .delete()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix delete tag {name}: {e}"))))
+    if !crate::refs::delete_named(repo, &ref_name)? {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "tag {name} not found"
+        ))));
+    }
+    Ok(())
 }
 
 impl GixRepo {
@@ -71,8 +71,7 @@ impl GixRepo {
         cancellation.check_cancelled()?;
         let repo = self.repo();
 
-        let refs = repo
-            .references()
+        let refs = crate::refs::view_cancellable(&repo, cancellation)
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
 
         let iter = refs

@@ -196,7 +196,7 @@ impl GixRepo {
         cancellation: Option<&CancellationToken>,
     ) -> Result<Vec<(gix::ObjectId, Option<CommitSignature>)>> {
         let mut stdin =
-            Vec::with_capacity(formats.len() * (gix::hash::Kind::Sha1.len_in_hex() + 1));
+            Vec::with_capacity(formats.keys().map(|oid| oid.kind().len_in_hex() + 1).sum());
         for oid in formats.keys() {
             stdin.extend_from_slice(oid.to_hex().to_string().as_bytes());
             stdin.push(b'\n');
