@@ -895,7 +895,7 @@ impl GixRepo {
             .iter()
             .map(|parent| CommitId(oid_to_arc_str(parent)))
             .collect::<Vec<_>>();
-        let files = commit_file_changes(&repo, &commit, &parent_oids)?;
+        let files = commit_file_changes(self, &repo, &commit, &parent_oids)?;
 
         Ok(CommitDetails {
             id: id.clone(),
@@ -946,7 +946,7 @@ impl GixRepo {
         match to {
             Some(to) => {
                 let repo = self.repo();
-                diff_range_files(&repo, from, to)
+                diff_range_files(self, &repo, from, to)
             }
             // Working-tree tip: the newer side is the live worktree, which has no
             // tree object, so shell out to `git diff <from>` for the file list

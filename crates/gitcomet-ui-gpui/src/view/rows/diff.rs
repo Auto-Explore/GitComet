@@ -2560,7 +2560,7 @@ fn diff_row(
             .on_activate(false, controls::ControlActivation::Composite, on_click);
         let on_right_click = cx.listener(move |this, e: &MouseDownEvent, window, cx| {
             cx.stop_propagation();
-            if this.is_inline_submodule_diff_active() {
+            if this.is_inline_submodule_diff_active() || this.has_large_file_text_diff() {
                 return;
             }
             let Some(repo_id) = this.active_repo_id() else {
@@ -2823,7 +2823,7 @@ fn collapsed_inline_header_row(
             let text_color = collapsed_inline_hunk_fg(theme, collapsed_hunk);
             let on_right_click = cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
-                if this.is_inline_submodule_diff_active() {
+                if this.is_inline_submodule_diff_active() || this.has_large_file_text_diff() {
                     return;
                 }
                 let Some(repo_id) = this.active_repo_id() else {
@@ -3229,7 +3229,7 @@ fn patch_split_header_row(
                 .on_activate(false, controls::ControlActivation::Composite, on_click);
             let on_right_click = cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
-                if this.is_inline_submodule_diff_active() {
+                if this.is_inline_submodule_diff_active() || this.has_large_file_text_diff() {
                     return;
                 }
                 let Some(repo_id) = this.active_repo_id() else {
@@ -3404,7 +3404,7 @@ fn collapsed_split_header_row(
             };
             let on_right_click = cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
-                if this.is_inline_submodule_diff_active() {
+                if this.is_inline_submodule_diff_active() || this.has_large_file_text_diff() {
                     return;
                 }
                 let Some(repo_id) = this.active_repo_id() else {

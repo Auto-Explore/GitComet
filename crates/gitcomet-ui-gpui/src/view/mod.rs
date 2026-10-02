@@ -243,6 +243,7 @@ pub(crate) mod history_mode;
 mod history_refs_hover;
 mod home;
 pub(crate) mod hosted;
+mod large_file_card;
 #[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 mod linux_desktop_integration;
 mod markdown_preview;

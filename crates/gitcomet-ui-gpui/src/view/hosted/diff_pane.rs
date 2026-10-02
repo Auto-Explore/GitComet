@@ -482,7 +482,7 @@ impl DiffPaneView {
                 )),
             ];
             let cache = cache.expect("text snapshots have a prepared file");
-            let prepared = cache.build().map_err(Clone::clone)?;
+            let prepared = cache.build().map_err(ToString::to_string)?;
             Ok((
                 rows_from_file_rows(
                     prepared
@@ -598,7 +598,7 @@ impl DiffPaneView {
         }
         self.build_rows(Some(rev), loading, error, cx, move || match cache {
             Some(cache) => {
-                let prepared = cache.build().map_err(Clone::clone)?;
+                let prepared = cache.build().map_err(ToString::to_string)?;
                 Ok((
                     rows_from_file_rows(
                         prepared

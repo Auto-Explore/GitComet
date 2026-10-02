@@ -1,7 +1,9 @@
 //! A hosted pane's API and renderer use the same prepared file generation.
 //! The cell is evaluated by their background workers, never while rendering.
 
-use super::file_diff::{FileDiffCacheRebuild, build_file_diff_cache_rebuild_with_patch};
+use super::file_diff::{
+    FileDiffCacheError, FileDiffCacheRebuild, build_file_diff_cache_rebuild_with_patch,
+};
 use super::*;
 use gitcomet_core::domain::{Diff, DiffLineKind, FileDiffText};
 use std::path::{Path, PathBuf};
@@ -11,7 +13,7 @@ pub(in crate::view) struct SharedFileDiffCache {
     pub(in crate::view) file: Arc<FileDiffText>,
     patch: Option<Arc<Diff>>,
     workdir: PathBuf,
-    prepared: OnceLock<Result<FileDiffCacheRebuild, String>>,
+    prepared: OnceLock<Result<FileDiffCacheRebuild, FileDiffCacheError>>,
 }
 
 fn alignment_patch(patch: Option<&Arc<Diff>>) -> Option<&Arc<Diff>> {
@@ -52,7 +54,7 @@ impl SharedFileDiffCache {
             }
     }
 
-    pub(in crate::view) fn build(&self) -> Result<&FileDiffCacheRebuild, &String> {
+    pub(in crate::view) fn build(&self) -> Result<&FileDiffCacheRebuild, &FileDiffCacheError> {
         self.prepared
             .get_or_init(|| {
                 build_file_diff_cache_rebuild_with_patch(

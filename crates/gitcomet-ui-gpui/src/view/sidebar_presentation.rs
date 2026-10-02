@@ -375,6 +375,7 @@ pub(in crate::view) fn build_sidebar_presentation_scoped(
                 BranchSidebarRow::Branch { .. }
                     | BranchSidebarRow::WorktreeItem { .. }
                     | BranchSidebarRow::SubmoduleItem { .. }
+                    | BranchSidebarRow::AnnexRepositoryItem { .. }
                     | BranchSidebarRow::StashItem { .. }
             )
         })

@@ -269,6 +269,7 @@ pub enum Msg {
     CancelAuthPrompt,
     SetGitRuntimeState(GitRuntimeState),
     SetSigningToolsState(SigningToolsState),
+    SetLargeFileToolsState(gitcomet_core::large_file_tools::LargeFileToolsState),
     SetCommitSignatureTargets {
         repo_id: RepoId,
         epoch: u64,
@@ -283,6 +284,7 @@ pub enum Msg {
     SetRemoteSettings(RemoteSettings),
     SetMaintenanceSettings(MaintenanceSettings),
     SetFileBrowserSettings(FileBrowserSettings),
+    SetLargeFileSettings(crate::model::LargeFileSettings),
     SetDefaultTagType(DefaultTagType),
     SetActiveRepo {
         repo_id: RepoId,
@@ -845,6 +847,24 @@ pub enum Msg {
         repo_id: RepoId,
         patterns: Vec<String>,
     },
+    /// Run a Git LFS or git-annex operation through the tool.
+    RunLargeFileCommand {
+        repo_id: RepoId,
+        command: gitcomet_core::large_files::LargeFileCommand,
+    },
+    /// Reload Git LFS locks from the server; never polled.
+    LoadLfsLocks {
+        repo_id: RepoId,
+    },
+    /// Ask git-annex where the displayed content keys are.
+    LoadAnnexWhereis {
+        repo_id: RepoId,
+        keys: Vec<String>,
+    },
+    /// List local annexed content no file uses any more.
+    LoadAnnexUnused {
+        repo_id: RepoId,
+    },
     /// Append one rule line to the repository-root `.gitattributes`, creating
     /// it when absent; skipped when it is already the last rule.
     AppendGitattributesRule {
@@ -1276,6 +1296,8 @@ pub enum InternalMsg {
         repo_id: RepoId,
         generation: crate::model::LineStatsGeneration,
         result: Result<UncommittedLineStats, Error>,
+        /// Present when the effect asked for large-file rows.
+        large_files: Option<Result<gitcomet_core::large_files::UncommittedLargeFiles, Error>>,
     },
     StatusLoaded {
         repo_id: RepoId,
@@ -1401,6 +1423,23 @@ pub enum InternalMsg {
         repo_id: RepoId,
         result: Result<Vec<Submodule>, Error>,
     },
+    LargeFileSupportLoaded {
+        repo_id: RepoId,
+        result: Result<gitcomet_core::large_files::LargeFileSupport, Error>,
+    },
+    LfsLocksLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<gitcomet_core::large_files::LfsLock>, Error>,
+    },
+    AnnexWhereisLoaded {
+        repo_id: RepoId,
+        key: String,
+        result: Result<gitcomet_core::large_files::AnnexWhereis, Error>,
+    },
+    AnnexUnusedLoaded {
+        repo_id: RepoId,
+        result: Result<gitcomet_core::large_files::AnnexUnused, Error>,
+    },
     FileBrowserLoaded {
         repo_id: RepoId,
         source: FileSource,
@@ -1495,7 +1534,7 @@ pub enum InternalMsg {
         repo_id: RepoId,
         target: DiffTarget,
         side: DiffPreviewTextSide,
-        result: Result<Option<PathBuf>, Error>,
+        result: Result<Option<DiffPreviewTextFile>, Error>,
     },
     SubmoduleSummaryLoaded {
         repo_id: RepoId,

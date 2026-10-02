@@ -17,8 +17,12 @@ benchmarks = []
 [dependencies]
 chardetng = { workspace = true }
 encoding_rs = { workspace = true }
+faster-hex = { workspace = true }
+fnv = { workspace = true }
 gix-quote = { workspace = true }
+md-5 = { workspace = true }
 memchr = { workspace = true }
+percent-encoding = { workspace = true }
 process-wrap = { workspace = true }
 regex = { workspace = true }
 rustc-hash = { workspace = true }

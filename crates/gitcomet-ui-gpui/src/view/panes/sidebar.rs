@@ -162,20 +162,31 @@ pub(in crate::view) enum CollapsedSidebarSection {
     Remote,
     Worktrees,
     Submodules,
+    Annex,
     Stashes,
     Files,
 }
 
 impl CollapsedSidebarSection {
-    /// Rail order, top to bottom.
-    pub(in crate::view) const ALL: [Self; 6] = [
+    /// Rail order, top to bottom, matching the expanded sidebar.
+    pub(in crate::view) const ALL: [Self; 7] = [
         Self::Local,
         Self::Remote,
         Self::Worktrees,
         Self::Submodules,
+        Self::Annex,
         Self::Stashes,
         Self::Files,
     ];
+
+    /// Whether the rail shows this section for `repo`. The git-annex section
+    /// exists only where annex is in use, like its expanded counterpart.
+    pub(in crate::view) fn is_available(self, repo: Option<&RepoState>) -> bool {
+        match self {
+            Self::Annex => repo.is_some_and(repo_uses_annex),
+            _ => true,
+        }
+    }
 
     pub(in crate::view) fn icon_path(self) -> &'static str {
         match self {
@@ -183,6 +194,7 @@ impl CollapsedSidebarSection {
             Self::Remote => "icons/cloud.svg",
             Self::Worktrees => "icons/git_worktree.svg",
             Self::Submodules => "icons/box.svg",
+            Self::Annex => "icons/disk.svg",
             Self::Stashes => super::super::icons::STASH_ICON_PATH,
             Self::Files => "icons/file.svg",
         }
@@ -194,6 +206,7 @@ impl CollapsedSidebarSection {
             Self::Remote => "Remote Branches",
             Self::Worktrees => "Worktrees",
             Self::Submodules => "Submodules",
+            Self::Annex => "git-annex",
             Self::Stashes => "Stashes",
             Self::Files => "Files",
         }
@@ -205,6 +218,7 @@ impl CollapsedSidebarSection {
             Self::Remote => "collapsed_sidebar_icon_remote",
             Self::Worktrees => "collapsed_sidebar_icon_worktrees",
             Self::Submodules => "collapsed_sidebar_icon_submodules",
+            Self::Annex => "collapsed_sidebar_icon_annex",
             Self::Stashes => "collapsed_sidebar_icon_stashes",
             Self::Files => "collapsed_sidebar_icon_files",
         }
@@ -237,6 +251,10 @@ impl CollapsedSidebarSection {
                 format!("submodules_section_menu_{}", repo_id.0),
                 PopoverKind::submodule(repo_id, SubmodulePopoverKind::SectionMenu),
             ),
+            Self::Annex => (
+                format!("annex_section_menu_{}", repo_id.0),
+                PopoverKind::annex(repo_id, AnnexPopoverKind::SectionMenu),
+            ),
             Self::Stashes => (
                 format!("stash_section_menu_{}", repo_id.0),
                 PopoverKind::StashPrompt,
@@ -252,6 +270,7 @@ impl CollapsedSidebarSection {
             Self::Remote => Some(branch_sidebar::remote_section_storage_key()),
             Self::Worktrees => Some(branch_sidebar::worktrees_section_storage_key()),
             Self::Submodules => Some(branch_sidebar::submodules_section_storage_key()),
+            Self::Annex => Some(branch_sidebar::annex_section_storage_key()),
             Self::Stashes => Some(branch_sidebar::stash_section_storage_key()),
             Self::Files => None,
         }
@@ -1321,7 +1340,10 @@ impl SidebarPaneView {
                         .dispatch(Msg::LoadFileBrowser { repo_id, source });
                 }
             }
-            CollapsedSidebarSection::Local | CollapsedSidebarSection::Remote => {}
+            // Large-file support loads with the repository.
+            CollapsedSidebarSection::Local
+            | CollapsedSidebarSection::Remote
+            | CollapsedSidebarSection::Annex => {}
         }
     }
 
@@ -2550,6 +2572,10 @@ impl Render for SidebarPaneView {
             None => self.sidebar(cx).into_any_element(),
         }
     }
+}
+
+fn repo_uses_annex(repo: &RepoState) -> bool {
+    matches!(&repo.large_file_support, Loadable::Ready(support) if support.annex.in_use())
 }
 
 fn open_repo_workdirs_fingerprint(state: &AppState) -> (usize, u64) {

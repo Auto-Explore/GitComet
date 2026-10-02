@@ -361,26 +361,26 @@ fn is_full_sha(reference: &str) -> bool {
 /// `/`, which separates path segments). Backslashes from Windows path
 /// rendering are normalized to forward slashes.
 fn encode_path(path: &str) -> String {
-    let mut out = String::with_capacity(path.len());
-    for byte in path.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(byte as char)
-            }
-            b'\\' => out.push('/'),
-            _ => {
-                out.push('%');
-                out.push(char::from(b"0123456789ABCDEF"[(byte >> 4) as usize]));
-                out.push(char::from(b"0123456789ABCDEF"[(byte & 0x0F) as usize]));
-            }
-        }
-    }
-    out
+    let path = if path.contains('\\') {
+        std::borrow::Cow::Owned(path.replace('\\', "/"))
+    } else {
+        std::borrow::Cow::Borrowed(path)
+    };
+    gitcomet_core::url_encoding::encode_path(path.as_bytes()).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_encoding_preserves_separators_and_normalizes_windows_paths() {
+        assert_eq!(
+            encode_path(r"src\ä file+#%.rs"),
+            "src/%C3%A4%20file%2B%23%25.rs"
+        );
+        assert_eq!(encode_path("src/az-_.~09.rs"), "src/az-_.~09.rs");
+    }
 
     /// Full-length ids of both object formats, so width-sensitive tests share
     /// one recognizable pattern.

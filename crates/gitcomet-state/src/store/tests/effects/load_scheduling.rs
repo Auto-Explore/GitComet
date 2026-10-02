@@ -1560,106 +1560,129 @@ fn activation_load_effect_is_not_blocked_by_main_executor_queue() {
 }
 
 #[test]
-fn remote_tag_load_for_one_repo_does_not_block_other_repo_metadata_refresh() {
-    let repo_a = RepoId(510);
-    let repo_b = RepoId(511);
-    let release = Arc::new((Mutex::new(false), Condvar::new()));
-    let _release_guard = BlockingReleaseGuard {
-        release: Arc::clone(&release),
-    };
-    let (started_tx, started_rx) = std::sync::mpsc::channel::<&'static str>();
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(
+fn slow_large_file_and_remote_tag_loads_do_not_block_other_repo_metadata() {
+    for (load, expected) in [
+        (
+            Effect::LoadRemoteTags {
+                repo_id: RepoId(510),
+            },
+            "remote_tags",
+        ),
+        (
+            Effect::LoadLfsLocks {
+                repo_id: RepoId(510),
+            },
+            "lfs_locks",
+        ),
+        (
+            Effect::LoadAnnexUnused {
+                repo_id: RepoId(510),
+            },
+            "annex_unused",
+        ),
+    ] {
+        let repo_a = RepoId(510);
+        let repo_b = RepoId(511);
+        let release = Arc::new((Mutex::new(false), Condvar::new()));
+        let _release_guard = BlockingReleaseGuard {
+            release: Arc::clone(&release),
+        };
+        let (started_tx, started_rx) = std::sync::mpsc::channel::<&'static str>();
+        let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
+            let mut repos = FxHashMap::default();
+            repos.insert(
+                repo_a,
+                Arc::new(MetadataSchedulingRepo {
+                    spec: RepoSpec {
+                        workdir: unique_temp_path("gitcomet-metadata-blocking-remote-tags"),
+                    },
+                    mode: MetadataRepoMode::BlockingRemoteTags,
+                    started_tx: started_tx.clone(),
+                    release: Arc::clone(&release),
+                }) as Arc<dyn GitRepository>,
+            );
+            repos.insert(
+                repo_b,
+                Arc::new(MetadataSchedulingRepo {
+                    spec: RepoSpec {
+                        workdir: unique_temp_path("gitcomet-metadata-ready-tags"),
+                    },
+                    mode: MetadataRepoMode::ReadyTags,
+                    started_tx,
+                    release: Arc::clone(&release),
+                }) as Arc<dyn GitRepository>,
+            );
+            repos
+        };
+        let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+        let executor = super::executor::TaskExecutor::new(1);
+        let repo_load_executor = super::executor::TaskExecutor::new(1);
+        let metadata_executor = super::executor::TaskExecutor::new(if expected == "remote_tags" {
+            super::executor::metadata_worker_threads()
+        } else {
+            1
+        });
+        let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
+        let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
+        let mut state = AppState::test_default();
+        state.repos.push(RepoState::new_opening(
             repo_a,
-            Arc::new(MetadataSchedulingRepo {
-                spec: RepoSpec {
-                    workdir: unique_temp_path("gitcomet-metadata-blocking-remote-tags"),
-                },
-                mode: MetadataRepoMode::BlockingRemoteTags,
-                started_tx: started_tx.clone(),
-                release: Arc::clone(&release),
-            }) as Arc<dyn GitRepository>,
-        );
-        repos.insert(
+            RepoSpec {
+                workdir: unique_temp_path("gitcomet-metadata-state-a"),
+            },
+        ));
+        state.repos.push(RepoState::new_opening(
             repo_b,
-            Arc::new(MetadataSchedulingRepo {
-                spec: RepoSpec {
-                    workdir: unique_temp_path("gitcomet-metadata-ready-tags"),
-                },
-                mode: MetadataRepoMode::ReadyTags,
-                started_tx,
-                release: Arc::clone(&release),
-            }) as Arc<dyn GitRepository>,
+            RepoSpec {
+                workdir: unique_temp_path("gitcomet-metadata-state-b"),
+            },
+        ));
+        let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
+        let mut repo_task_tokens = FxHashMap::default();
+        let executors = super::effects::EffectExecutors {
+            executor: &executor,
+            repo_load_executor: &repo_load_executor,
+            session_persist_executor: &executor,
+            metadata_executor: &metadata_executor,
+            signature_executor: &metadata_executor,
+            history_find_executor: &std::sync::LazyLock::new(|| {
+                super::super::executor::TaskExecutor::new(1)
+            }),
+        };
+
+        super::effects::schedule_effect(
+            executors,
+            &thread_state,
+            &backend,
+            &repos,
+            &mut repo_task_tokens,
+            msg_tx.clone(),
+            load,
         );
-        repos
-    };
-    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
-    let executor = super::super::executor::TaskExecutor::new(1);
-    let repo_load_executor = super::super::executor::TaskExecutor::new(1);
-    let metadata_executor = super::super::executor::TaskExecutor::new(
-        super::super::executor::metadata_worker_threads(),
-    );
-    let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
-    let msg_tx = super::super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
-    let mut state = AppState::test_default();
-    state.repos.push(RepoState::new_opening(
-        repo_a,
-        RepoSpec {
-            workdir: unique_temp_path("gitcomet-metadata-state-a"),
-        },
-    ));
-    state.repos.push(RepoState::new_opening(
-        repo_b,
-        RepoSpec {
-            workdir: unique_temp_path("gitcomet-metadata-state-b"),
-        },
-    ));
-    let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
-    let mut repo_task_tokens = FxHashMap::default();
-    let executors = super::super::effects::EffectExecutors {
-        executor: &executor,
-        repo_load_executor: &repo_load_executor,
-        session_persist_executor: &executor,
-        metadata_executor: &metadata_executor,
-        signature_executor: &metadata_executor,
-        history_find_executor: &std::sync::LazyLock::new(|| {
-            super::super::executor::TaskExecutor::new(1)
-        }),
-    };
+        assert_eq!(
+            started_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("slow task did not start"),
+            expected
+        );
 
-    super::super::effects::schedule_effect(
-        executors,
-        &thread_state,
-        &backend,
-        &repos,
-        &mut repo_task_tokens,
-        msg_tx.clone(),
-        Effect::LoadRemoteTags { repo_id: repo_a },
-    );
-    assert_eq!(
-        started_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("remote tag task did not start"),
-        "remote_tags"
-    );
+        super::effects::schedule_effect(
+            executors,
+            &thread_state,
+            &backend,
+            &repos,
+            &mut repo_task_tokens,
+            msg_tx,
+            Effect::LoadTags { repo_id: repo_b },
+        );
 
-    super::super::effects::schedule_effect(
-        executors,
-        &thread_state,
-        &backend,
-        &repos,
-        &mut repo_task_tokens,
-        msg_tx,
-        Effect::LoadTags { repo_id: repo_b },
-    );
-
-    assert_eq!(
-        started_rx
-            .recv_timeout(Duration::from_millis(200))
-            .expect("metadata refresh for repo B should not wait behind repo A remote tags"),
-        "tags"
-    );
+        assert_eq!(
+            started_rx
+                .recv_timeout(Duration::from_millis(200))
+                .unwrap_or_else(|e| panic!("metadata refresh waited behind {expected}: {e}")),
+            "tags"
+        );
+    }
 }
 
 #[test]

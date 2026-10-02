@@ -128,6 +128,14 @@ pub(in crate::view) fn changed_file_row<V: 'static, S: FnOnce() -> String + 'sta
                     .render(cx),
                 ),
         )
+        .when_some(f.large_file.as_ref(), |row, state| {
+            row.child(components::large_file_chip(
+                theme,
+                ui_scale_percent,
+                state,
+                false,
+            ))
+        })
         .when(
             diff_stat && (f.additions.is_some() || f.deletions.is_some()),
             |row| {

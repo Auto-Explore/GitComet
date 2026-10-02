@@ -67,7 +67,7 @@ pub(super) fn git_operation_finished(
     duration: Duration,
     message: Box<InternalMsg>,
 ) -> Vec<Effect> {
-    let (has_hooks, all_hooks_succeeded) = state
+    let (is_reportable, has_hooks, all_hooks_succeeded) = state
         .repos
         .iter()
         .find(|repo| repo.id == repo_id)
@@ -79,6 +79,7 @@ pub(super) fn git_operation_finished(
         })
         .map(|operation| {
             (
+                operation.is_reportable(),
                 operation.has_hooks(),
                 operation.has_hooks()
                     && operation
@@ -112,8 +113,8 @@ pub(super) fn git_operation_finished(
                 })
         })
         .flatten();
-    if has_hooks && let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
-        repo.feedback.command_log_operation_id = Some(operation_id);
+    if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+        repo.feedback.command_log_operation_id = is_reportable.then_some(operation_id);
     }
 
     let mut effects = reduce(repos, id_alloc, state, Msg::Internal(*message));

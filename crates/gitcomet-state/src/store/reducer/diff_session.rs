@@ -296,7 +296,7 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                     session.diff_file_rev = session.diff_file_rev.wrapping_add(1);
                     settle(
                         &mut session.diff_file,
-                        result.map(|text| text.map(Arc::new)),
+                        result.map(|text| text.map(|text| Arc::new(*text))),
                     )
                 }
                 DiffSessionContent::Image(result) => {

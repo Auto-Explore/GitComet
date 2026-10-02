@@ -285,6 +285,7 @@ pub(super) struct UiPreferences {
     pub(super) remotes: RemotePreferences,
     pub(super) maintenance: MaintenancePreferences,
     pub(super) terminal: TerminalPreferences,
+    pub(super) large_files: gitcomet_state::model::LargeFileSettings,
 }
 
 impl UiPreferences {
@@ -421,6 +422,20 @@ impl UiPreferences {
                 recommend: session.recommend_repo_maintenance.unwrap_or(true),
             },
             terminal: TerminalPreferences::from_ui_session(session),
+            large_files: {
+                let defaults = gitcomet_state::model::LargeFileSettings::default();
+                gitcomet_state::model::LargeFileSettings {
+                    hide_annex_refs: session
+                        .annex_hide_bookkeeping_refs
+                        .unwrap_or(defaults.hide_annex_refs),
+                    annex_pull_push: session
+                        .annex_pull_push_on_adjusted
+                        .unwrap_or(defaults.annex_pull_push),
+                    annex_sync_content: session
+                        .annex_sync_content
+                        .unwrap_or(defaults.annex_sync_content),
+                }
+            },
         }
     }
 }

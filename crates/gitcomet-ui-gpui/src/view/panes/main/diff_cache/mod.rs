@@ -13,6 +13,7 @@ mod shared_file;
 mod word_highlight;
 pub(in crate::view) use shared_file::SharedFileDiffCache;
 
+pub(in crate::view) use self::file_diff::FileDiffCacheError;
 #[cfg(any(test, feature = "benchmarks"))]
 #[allow(unused_imports)]
 pub(in crate::view) use self::file_diff::build_file_diff_cache_rebuild;

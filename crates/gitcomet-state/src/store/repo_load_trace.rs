@@ -151,6 +151,10 @@ pub(super) fn effect_repo_id(effect: &Effect) -> Option<RepoId> {
         | Effect::LoadWorktreeDirty { repo_id, .. }
         | Effect::LoadRefMetadata { repo_id }
         | Effect::LoadSubmodules { repo_id }
+        | Effect::LoadLargeFileSupport { repo_id }
+        | Effect::LoadLfsLocks { repo_id }
+        | Effect::LoadAnnexWhereis { repo_id, .. }
+        | Effect::LoadAnnexUnused { repo_id }
         | Effect::LoadRebaseAndMergeState { repo_id }
         | Effect::LoadRebaseState { repo_id }
         | Effect::LoadMergeCommitMessage { repo_id } => Some(*repo_id),

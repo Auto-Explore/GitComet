@@ -1491,6 +1491,67 @@ fn commit_links_cancel_cross_link_and_outside_releases(cx: &mut gpui::TestAppCon
     );
 }
 
+/// Chips arrive after the list (with line stats), so the row must pick them
+/// up from the snapshot and the details pane must repaint for them.
+#[gpui::test]
+fn status_row_shows_large_file_chip_for_managed_paths(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(7431);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_large_file_chip",
+        std::process::id()
+    ));
+
+    let push = |cx: &mut gpui::VisualTestContext, with_chip: bool| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = opening_repo_state(repo_id, &workdir);
+                set_test_file_status(
+                    &mut repo,
+                    std::path::PathBuf::from("art/hero.psd"),
+                    gitcomet_core::domain::FileStatusKind::Modified,
+                    gitcomet_core::domain::DiffArea::Unstaged,
+                );
+                if with_chip {
+                    let mut files = gitcomet_core::large_files::UncommittedLargeFiles::default();
+                    files.unstaged.insert(
+                        std::path::PathBuf::from("art/hero.psd"),
+                        gitcomet_core::large_files::LargeFileState {
+                            pointer: gitcomet_core::large_files::LargeFilePointer::Lfs(
+                                gitcomet_core::lfs::LfsPointer {
+                                    oid: gitcomet_core::lfs::LfsOid([3; 32]),
+                                    size: 42,
+                                },
+                            ),
+                            in_local_store: Some(false),
+                            worktree: Some(gitcomet_core::large_files::LargeFileWorktree::Pointer),
+                            lockable: false,
+                        },
+                    );
+                    repo.uncommitted_large_files = Arc::new(files);
+                    repo.large_files_rev = 1;
+                }
+                push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+            });
+        });
+        draw_and_drain_test_window(cx);
+    };
+
+    push(cx, false);
+    assert!(
+        cx.debug_bounds("status_row_large_file_0").is_none(),
+        "plain rows carry no chip"
+    );
+    push(cx, true);
+    assert!(
+        cx.debug_bounds("status_row_large_file_0").is_some(),
+        "managed rows show the chip once their state arrives"
+    );
+}
+
 /// Frames caused elsewhere must not re-render the cached details pane. The
 /// commit link menus used to notify on every `sync`, which the details render
 /// calls, so after its first re-render the pane re-rendered on every frame
