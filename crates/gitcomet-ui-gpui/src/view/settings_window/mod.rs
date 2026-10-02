@@ -470,7 +470,7 @@ impl SettingsCategory {
     fn search_haystack(self) -> &'static str {
         match self {
             Self::General => {
-                "general theme date format ui scale ui font editor font ligatures \
+                "general theme date format default ui scale zoom ui font editor font ligatures \
                  external code editor date timezone appearance window controls title bar \
                  minimize maximize tiling command line cli gitcomet open repository window density compact comfortable spacious \
                  font size markdown preview"
@@ -573,7 +573,10 @@ pub(crate) struct SettingsWindowView {
     extension_notice: Option<(SharedString, Vec<gitcomet_extension_api::HostedAction>)>,
     theme_mode: ThemeMode,
     theme: AppTheme,
+    /// This window's own render scale.
     ui_scale_percent: u32,
+    /// The "Default UI scale" setting.
+    default_ui_scale_percent: u32,
     pub(super) window_controls_mode: crate::window_controls::WindowControlsMode,
     pub(super) browser_open_target: crate::app::BrowserOpenTarget,
     appearance_metrics: Appearance,
@@ -1376,6 +1379,7 @@ impl SettingsWindowView {
             _font_size_subscriptions: font_size_subscriptions,
             theme: theme.with_appearance(appearance_metrics),
             ui_scale_percent: ui_scale.percent,
+            default_ui_scale_percent: ui_scale.percent,
             window_controls_mode: window_controls.mode,
             browser_open_target,
             ui_font_family: font_preferences.ui_font_family,

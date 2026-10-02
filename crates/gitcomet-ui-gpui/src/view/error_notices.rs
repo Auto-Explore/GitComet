@@ -210,13 +210,38 @@ impl ErrorText {
         }
     }
 
-    /// One line under the summary in the toast: where the output starts.
+    /// One line under the summary in the toast: where the output starts,
+    /// past any fetch transcript a failed pull leads with.
     pub(crate) fn preview(&self) -> Option<&str> {
-        self.details
-            .as_deref()
-            .and_then(|details| details.lines().find(|line| !line.trim().is_empty()))
+        let lines: Vec<&str> = self
+            .details
+            .as_deref()?
+            .lines()
             .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect();
+        // The "From <remote>" header is translated, so it is recognized by
+        // the ref-update line that follows it.
+        let transcript = |ix: usize| {
+            is_ref_update(lines[ix]) || lines.get(ix + 1).is_some_and(|next| is_ref_update(next))
+        };
+        let first = *lines.first()?;
+        Some(
+            (0..lines.len())
+                .find(|&ix| !transcript(ix))
+                .map_or(first, |ix| lines[ix]),
+        )
     }
+}
+
+/// A `git fetch` ref-update line such as `* branch dev -> FETCH_HEAD`.
+/// Rejections (`! [rejected] …`) are the failure itself and are kept.
+fn is_ref_update(line: &str) -> bool {
+    if !line.contains(" -> ") {
+        return false;
+    }
+    let flag = line.split_whitespace().next().unwrap_or_default();
+    matches!(flag, "*" | "+" | "-" | "=" | "t") || flag.contains("..")
 }
 
 #[cfg(test)]
@@ -237,6 +262,44 @@ mod tests {
         assert_eq!(
             text.preview(),
             Some("! [rejected] main -> main (fetch first)")
+        );
+    }
+
+    #[test]
+    fn a_failed_pull_previews_past_the_fetch_transcript() {
+        let text = ErrorText::parse(
+            "Pull failed:\n\n    git pull --no-prune\n\n    From .\n     * branch            dev        -> FETCH_HEAD\n       1a2b3c4..5d6e7f8  main -> origin/main\n    error: Your local changes would be overwritten by merge",
+        );
+        assert_eq!(
+            text.preview(),
+            Some("error: Your local changes would be overwritten by merge")
+        );
+
+        // Nothing past the transcript: show where the output starts.
+        let text = ErrorText::parse("Pull failed:\n\n    git pull\n\n    From .");
+        assert_eq!(text.preview(), Some("From ."));
+    }
+
+    #[test]
+    fn a_localized_fetch_header_is_skipped_too() {
+        let text = ErrorText::parse(
+            "Pull failed:\n\n    git pull\n\n    Von .\n     * branch            dev        -> FETCH_HEAD\n    Fehler: Ihre lokalen Änderungen würden überschrieben",
+        );
+        assert_eq!(
+            text.preview(),
+            Some("Fehler: Ihre lokalen Änderungen würden überschrieben")
+        );
+    }
+
+    #[test]
+    fn a_pull_stopped_at_conflicts_previews_what_to_do() {
+        let text = ErrorText::parse(
+            "Pull stopped at conflicts:\n\n    git pull --no-rebase --ff --no-prune . dev\n\n    Merge conflict in a.txt. Resolve it, then commit, or abort the merge.\n\n    CONFLICT (content): Merge conflict in a.txt\n    From .",
+        );
+        assert_eq!(text.summary, "Pull stopped at conflicts");
+        assert_eq!(
+            text.preview(),
+            Some("Merge conflict in a.txt. Resolve it, then commit, or abort the merge.")
         );
     }
 

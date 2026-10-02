@@ -3448,7 +3448,7 @@ dependencies = [
 [[package]]
 name = "gpui-ce"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=bdd090f243921570bc0c28855ebd2ff105cd225c#bdd090f243921570bc0c28855ebd2ff105cd225c"
+source = "git+file:///tmp/claude-1000/-home-sampo-git-GitComet5/a0be1968-c4bb-4936-adc4-4f50f2392083/scratchpad/gpui-ce?rev=867fa4ae98ae6441122cc5a89063c795bbd0b32e#867fa4ae98ae6441122cc5a89063c795bbd0b32e"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -3521,7 +3521,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_apple"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=bdd090f243921570bc0c28855ebd2ff105cd225c#bdd090f243921570bc0c28855ebd2ff105cd225c"
+source = "git+file:///tmp/claude-1000/-home-sampo-git-GitComet5/a0be1968-c4bb-4936-adc4-4f50f2392083/scratchpad/gpui-ce?rev=867fa4ae98ae6441122cc5a89063c795bbd0b32e#867fa4ae98ae6441122cc5a89063c795bbd0b32e"
 dependencies = [
  "anyhow",
  "block",
@@ -3547,7 +3547,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_collections"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=bdd090f243921570bc0c28855ebd2ff105cd225c#bdd090f243921570bc0c28855ebd2ff105cd225c"
+source = "git+file:///tmp/claude-1000/-home-sampo-git-GitComet5/a0be1968-c4bb-4936-adc4-4f50f2392083/scratchpad/gpui-ce?rev=867fa4ae98ae6441122cc5a89063c795bbd0b32e#867fa4ae98ae6441122cc5a89063c795bbd0b32e"
 dependencies = [
  "gpui_ce_util",
  "indexmap",
@@ -3557,7 +3557,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_derive_refineable"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=bdd090f243921570bc0c28855ebd2ff105cd225c#bdd090f243921570bc0c28855ebd2ff105cd225c"
+source = "git+file:///tmp/claude-1000/-home-sampo-git-GitComet5/a0be1968-c4bb-4936-adc4-4f50f2392083/scratchpad/gpui-ce?rev=867fa4ae98ae6441122cc5a89063c795bbd0b32e#867fa4ae98ae6441122cc5a89063c795bbd0b32e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3567,7 +3567,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_linux"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=bdd090f243921570bc0c28855ebd2ff105cd225c#bdd090f243921570bc0c28855ebd2ff105cd225c"
+source = "git+file:///tmp/claude-1000/-home-sampo-git-GitComet5/a0be1968-c4bb-4936-adc4-4f50f2392083/scratchpad/gpui-ce?rev=867fa4ae98ae6441122cc5a89063c795bbd0b32e#867fa4ae98ae6441122cc5a89063c795bbd0b32e"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -3614,7 +3614,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_macos"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=bdd090f243921570bc0c28855ebd2ff105cd225c#bdd090f243921570bc0c28855ebd2ff105cd225c"
+source = "git+file:///tmp/claude-1000/-home-sampo-git-GitComet5/a0be1968-c4bb-4936-adc4-4f50f2392083/scratchpad/gpui-ce?rev=867fa4ae98ae6441122cc5a89063c795bbd0b32e#867fa4ae98ae6441122cc5a89063c795bbd0b32e"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -3661,7 +3661,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_macros"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=bdd090f243921570bc0c28855ebd2ff105cd225c#bdd090f243921570bc0c28855ebd2ff105cd225c"
+source = "git+file:///tmp/claude-1000/-home-sampo-git-GitComet5/a0be1968-c4bb-4936-adc4-4f50f2392083/scratchpad/gpui-ce?rev=867fa4ae98ae6441122cc5a89063c795bbd0b32e#867fa4ae98ae6441122cc5a89063c795bbd0b32e"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -3672,7 +3672,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_media"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=bdd090f243921570bc0c28855ebd2ff105cd225c#bdd090f243921570bc0c28855ebd2ff105cd225c"
+source = "git+file:///tmp/claude-1000/-home-sampo-git-GitComet5/a0be1968-c4bb-4936-adc4-4f50f2392083/scratchpad/gpui-ce?rev=867fa4ae98ae6441122cc5a89063c795bbd0b32e#867fa4ae98ae6441122cc5a89063c795bbd0b32e"
 dependencies = [
  "anyhow",
  "bindgen",
@@ -3686,7 +3686,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_platform"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=bdd090f243921570bc0c28855ebd2ff105cd225c#bdd090f243921570bc0c28855ebd2ff105cd225c"
+source = "git+file:///tmp/claude-1000/-home-sampo-git-GitComet5/a0be1968-c4bb-4936-adc4-4f50f2392083/scratchpad/gpui-ce?rev=867fa4ae98ae6441122cc5a89063c795bbd0b32e#867fa4ae98ae6441122cc5a89063c795bbd0b32e"
 dependencies = [
  "console_error_panic_hook",
  "gpui-ce",
@@ -3700,7 +3700,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_refineable"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=bdd090f243921570bc0c28855ebd2ff105cd225c#bdd090f243921570bc0c28855ebd2ff105cd225c"
+source = "git+file:///tmp/claude-1000/-home-sampo-git-GitComet5/a0be1968-c4bb-4936-adc4-4f50f2392083/scratchpad/gpui-ce?rev=867fa4ae98ae6441122cc5a89063c795bbd0b32e#867fa4ae98ae6441122cc5a89063c795bbd0b32e"
 dependencies = [
  "gpui_ce_derive_refineable",
 ]
@@ -3708,7 +3708,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_render"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=bdd090f243921570bc0c28855ebd2ff105cd225c#bdd090f243921570bc0c28855ebd2ff105cd225c"
+source = "git+file:///tmp/claude-1000/-home-sampo-git-GitComet5/a0be1968-c4bb-4936-adc4-4f50f2392083/scratchpad/gpui-ce?rev=867fa4ae98ae6441122cc5a89063c795bbd0b32e#867fa4ae98ae6441122cc5a89063c795bbd0b32e"
 dependencies = [
  "gpui-ce",
  "naga 24.0.0",
@@ -3721,7 +3721,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_scheduler"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=bdd090f243921570bc0c28855ebd2ff105cd225c#bdd090f243921570bc0c28855ebd2ff105cd225c"
+source = "git+file:///tmp/claude-1000/-home-sampo-git-GitComet5/a0be1968-c4bb-4936-adc4-4f50f2392083/scratchpad/gpui-ce?rev=867fa4ae98ae6441122cc5a89063c795bbd0b32e#867fa4ae98ae6441122cc5a89063c795bbd0b32e"
 dependencies = [
  "async-task",
  "backtrace",
@@ -3736,7 +3736,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_shared_string"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=bdd090f243921570bc0c28855ebd2ff105cd225c#bdd090f243921570bc0c28855ebd2ff105cd225c"
+source = "git+file:///tmp/claude-1000/-home-sampo-git-GitComet5/a0be1968-c4bb-4936-adc4-4f50f2392083/scratchpad/gpui-ce?rev=867fa4ae98ae6441122cc5a89063c795bbd0b32e#867fa4ae98ae6441122cc5a89063c795bbd0b32e"
 dependencies = [
  "schemars",
  "serde",
@@ -3746,7 +3746,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_sum_tree"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=bdd090f243921570bc0c28855ebd2ff105cd225c#bdd090f243921570bc0c28855ebd2ff105cd225c"
+source = "git+file:///tmp/claude-1000/-home-sampo-git-GitComet5/a0be1968-c4bb-4936-adc4-4f50f2392083/scratchpad/gpui-ce?rev=867fa4ae98ae6441122cc5a89063c795bbd0b32e#867fa4ae98ae6441122cc5a89063c795bbd0b32e"
 dependencies = [
  "heapless 0.9.3",
  "log",
@@ -3757,7 +3757,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_util"
 version = "0.2.6"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=bdd090f243921570bc0c28855ebd2ff105cd225c#bdd090f243921570bc0c28855ebd2ff105cd225c"
+source = "git+file:///tmp/claude-1000/-home-sampo-git-GitComet5/a0be1968-c4bb-4936-adc4-4f50f2392083/scratchpad/gpui-ce?rev=867fa4ae98ae6441122cc5a89063c795bbd0b32e#867fa4ae98ae6441122cc5a89063c795bbd0b32e"
 dependencies = [
  "anyhow",
  "log",
@@ -3767,7 +3767,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_web"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=bdd090f243921570bc0c28855ebd2ff105cd225c#bdd090f243921570bc0c28855ebd2ff105cd225c"
+source = "git+file:///tmp/claude-1000/-home-sampo-git-GitComet5/a0be1968-c4bb-4936-adc4-4f50f2392083/scratchpad/gpui-ce?rev=867fa4ae98ae6441122cc5a89063c795bbd0b32e#867fa4ae98ae6441122cc5a89063c795bbd0b32e"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -3790,7 +3790,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_wgpu"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=bdd090f243921570bc0c28855ebd2ff105cd225c#bdd090f243921570bc0c28855ebd2ff105cd225c"
+source = "git+file:///tmp/claude-1000/-home-sampo-git-GitComet5/a0be1968-c4bb-4936-adc4-4f50f2392083/scratchpad/gpui-ce?rev=867fa4ae98ae6441122cc5a89063c795bbd0b32e#867fa4ae98ae6441122cc5a89063c795bbd0b32e"
 dependencies = [
  "anyhow",
  "core-foundation",
@@ -3827,7 +3827,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_windows"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=bdd090f243921570bc0c28855ebd2ff105cd225c#bdd090f243921570bc0c28855ebd2ff105cd225c"
+source = "git+file:///tmp/claude-1000/-home-sampo-git-GitComet5/a0be1968-c4bb-4936-adc4-4f50f2392083/scratchpad/gpui-ce?rev=867fa4ae98ae6441122cc5a89063c795bbd0b32e#867fa4ae98ae6441122cc5a89063c795bbd0b32e"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -3858,7 +3858,7 @@ dependencies = [
 [[package]]
 name = "gpui_xim"
 version = "0.4.0-gpui"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=bdd090f243921570bc0c28855ebd2ff105cd225c#bdd090f243921570bc0c28855ebd2ff105cd225c"
+source = "git+file:///tmp/claude-1000/-home-sampo-git-GitComet5/a0be1968-c4bb-4936-adc4-4f50f2392083/scratchpad/gpui-ce?rev=867fa4ae98ae6441122cc5a89063c795bbd0b32e#867fa4ae98ae6441122cc5a89063c795bbd0b32e"
 dependencies = [
  "ahash",
  "hashbrown 0.17.1",
@@ -9311,7 +9311,7 @@ checksum = "163b33ed8786455e2fa5d72f554057ce3f3182425434f756cd39c99839d88e23"
 [[package]]
 name = "xim-ctext"
 version = "0.3.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=bdd090f243921570bc0c28855ebd2ff105cd225c#bdd090f243921570bc0c28855ebd2ff105cd225c"
+source = "git+file:///tmp/claude-1000/-home-sampo-git-GitComet5/a0be1968-c4bb-4936-adc4-4f50f2392083/scratchpad/gpui-ce?rev=867fa4ae98ae6441122cc5a89063c795bbd0b32e#867fa4ae98ae6441122cc5a89063c795bbd0b32e"
 dependencies = [
  "encoding_rs",
 ]
@@ -9319,7 +9319,7 @@ dependencies = [
 [[package]]
 name = "xim-parser"
 version = "0.2.1"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=bdd090f243921570bc0c28855ebd2ff105cd225c#bdd090f243921570bc0c28855ebd2ff105cd225c"
+source = "git+file:///tmp/claude-1000/-home-sampo-git-GitComet5/a0be1968-c4bb-4936-adc4-4f50f2392083/scratchpad/gpui-ce?rev=867fa4ae98ae6441122cc5a89063c795bbd0b32e#867fa4ae98ae6441122cc5a89063c795bbd0b32e"
 dependencies = [
  "bitflags 2.13.2",
 ]

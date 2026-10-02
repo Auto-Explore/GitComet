@@ -1,3 +1,4 @@
+use gitcomet_core::error::{ErrorKind, GitFailureId};
 #[cfg(unix)]
 use gitcomet_core::process::{
     GitExecutablePreference, current_git_executable_preference, install_git_executable_path,
@@ -1431,6 +1432,207 @@ fn pull_local_branch_with_pruning_does_not_treat_dot_as_a_named_remote() {
 
     assert_eq!(output.exit_code, Some(0));
     assert!(repo.join("dev.txt").exists(), "expected dev to be merged");
+}
+
+/// `main` and `dev` both rewrite base.txt, so integrating one into the other conflicts.
+fn init_conflicting_local_branches(repo: &Path) {
+    init_repo_with_user(repo);
+    run_git(repo, &["branch", "-m", "main"]);
+    fs::write(repo.join("base.txt"), "base\n").expect("write base file");
+    run_git(repo, &["add", "base.txt"]);
+    run_git(repo, &["commit", "-m", "base"]);
+    run_git(repo, &["checkout", "-b", "dev"]);
+    fs::write(repo.join("base.txt"), "dev\n").expect("write dev change");
+    run_git(repo, &["commit", "-am", "dev"]);
+    run_git(repo, &["checkout", "main"]);
+    fs::write(repo.join("base.txt"), "main\n").expect("write main change");
+    run_git(repo, &["commit", "-am", "main"]);
+}
+
+fn stopped_at_conflicts_detail(error: &gitcomet_core::error::Error) -> String {
+    match error.kind() {
+        ErrorKind::Git(failure) if failure.id() == GitFailureId::StoppedAtConflicts => {
+            failure.detail().expect("conflict detail").to_string()
+        }
+        other => panic!("expected a stopped-at-conflicts failure, got {other:?}"),
+    }
+}
+
+#[test]
+fn pull_local_branch_stopped_at_conflicts_says_so() {
+    let _guard = remote_management_test_lock();
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path();
+    init_conflicting_local_branches(repo);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).expect("open repository");
+    let error = opened
+        .pull_branch_with_output_prune(".", "dev", true)
+        .expect_err("conflicting pull");
+
+    let detail = stopped_at_conflicts_detail(&error);
+    assert!(
+        detail.starts_with(
+            "Merge conflict in base.txt. Resolve it, then commit, or abort the merge."
+        ),
+        "{detail}"
+    );
+    // Git's own output follows, conflict lines included.
+    assert!(detail.contains("CONFLICT (content)"), "{detail}");
+    assert!(repo.join(".git/MERGE_HEAD").exists());
+
+    // With the merge in progress git refuses to pull; that is a plain failure.
+    let error = opened
+        .pull_branch_with_output_prune(".", "dev", true)
+        .expect_err("pull during a merge");
+    assert!(
+        matches!(error.kind(), ErrorKind::Git(failure) if failure.id() == GitFailureId::CommandFailed),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn pull_rebase_stopped_at_conflicts_says_so() {
+    let _guard = remote_management_test_lock();
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path();
+    init_conflicting_local_branches(repo);
+    run_git(repo, &["branch", "--set-upstream-to=dev", "main"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).expect("open repository");
+    let error = opened
+        .pull_with_output(PullMode::Rebase)
+        .expect_err("conflicting rebase pull");
+
+    let detail = stopped_at_conflicts_detail(&error);
+    assert!(
+        detail.starts_with(
+            "Rebase stopped at a conflict in base.txt. Resolve it and continue the rebase, or abort it."
+        ),
+        "{detail}"
+    );
+}
+
+#[test]
+fn pull_stopped_at_conflicts_keeps_a_local_branch_upstream() {
+    let _guard = remote_management_test_lock();
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let origin = dir.path().join("origin");
+    let clone = dir.path().join("clone");
+    fs::create_dir(&origin).expect("create origin");
+    init_repo_with_user(&origin);
+    run_git(&origin, &["branch", "-m", "main"]);
+    fs::write(origin.join("base.txt"), "base\n").expect("write base");
+    run_git(&origin, &["add", "base.txt"]);
+    run_git(&origin, &["commit", "-m", "base"]);
+    run_git(&origin, &["checkout", "-b", "feature"]);
+    fs::write(origin.join("base.txt"), "origin\n").expect("write origin change");
+    run_git(&origin, &["commit", "-am", "origin feature"]);
+    run_git(&origin, &["checkout", "main"]);
+
+    let origin_url = origin.to_string_lossy().to_string();
+    run_git(dir.path(), &["clone", "-q", &origin_url, "clone"]);
+    run_git(&clone, &["config", "user.email", "you@example.com"]);
+    run_git(&clone, &["config", "user.name", "You"]);
+    run_git(&clone, &["config", "commit.gpgsign", "false"]);
+    // `feature` tracks the local `main`, which the backend does not treat as
+    // a configured upstream, so the pull goes to `origin feature`.
+    run_git(
+        &clone,
+        &["checkout", "-q", "-b", "feature", "--track", "main"],
+    );
+    fs::write(clone.join("base.txt"), "local\n").expect("write local change");
+    run_git(&clone, &["commit", "-am", "local feature"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(&clone).expect("open repository");
+    let error = opened
+        .pull_with_output(PullMode::Default)
+        .expect_err("conflicting pull");
+    stopped_at_conflicts_detail(&error);
+    run_git(&clone, &["merge", "--abort"]);
+
+    assert_eq!(
+        run_git_capture(&clone, &["config", "branch.feature.remote"]).trim(),
+        ".",
+        "a pull that stopped at conflicts must not rewrite the branch's tracking"
+    );
+}
+
+#[test]
+fn pull_after_a_committed_cherry_pick_step_still_reports_conflicts() {
+    let _guard = remote_management_test_lock();
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path();
+    init_conflicting_local_branches(repo);
+    // A two-commit cherry-pick that stops at its first, conflicting, step.
+    run_git(repo, &["checkout", "-q", "-b", "side", "main~1"]);
+    fs::write(repo.join("base.txt"), "side\n").expect("write side change");
+    run_git(repo, &["commit", "-am", "side A"]);
+    fs::write(repo.join("extra.txt"), "x\n").expect("write extra");
+    run_git(repo, &["add", "extra.txt"]);
+    run_git(repo, &["commit", "-m", "side B"]);
+    run_git(repo, &["checkout", "-q", "main"]);
+    assert!(!run_git_status(repo, &["cherry-pick", "side~1", "side"]).success());
+    fs::write(repo.join("base.txt"), "resolved\n").expect("resolve");
+    run_git(repo, &["add", "base.txt"]);
+    // Committing the step clears CHERRY_PICK_HEAD but keeps .git/sequencer.
+    run_git(repo, &["commit", "--no-edit"]);
+    assert!(repo.join(".git/sequencer").exists());
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).expect("open repository");
+    let error = opened
+        .pull_branch_with_output_prune(".", "dev", false)
+        .expect_err("conflicting pull");
+    stopped_at_conflicts_detail(&error);
+}
+
+#[test]
+fn pull_with_rerere_resolved_conflicts_reports_the_merge_in_progress() {
+    let _guard = remote_management_test_lock();
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path();
+    init_conflicting_local_branches(repo);
+    run_git(repo, &["config", "rerere.enabled", "true"]);
+    run_git(repo, &["config", "rerere.autoUpdate", "true"]);
+    // Record a resolution, then undo the merge so the conflict recurs.
+    assert!(!run_git_status(repo, &["merge", "dev"]).success());
+    fs::write(repo.join("base.txt"), "resolved\n").expect("resolve");
+    run_git(repo, &["add", "base.txt"]);
+    run_git(repo, &["commit", "--no-edit"]);
+    run_git(repo, &["reset", "-q", "--hard", "HEAD~1"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).expect("open repository");
+    let error = opened
+        .pull_branch_with_output_prune(".", "dev", false)
+        .expect_err("pull stopped by rerere");
+    let detail = stopped_at_conflicts_detail(&error);
+    assert!(detail.contains("base.txt"), "{detail}");
+    assert!(repo.join(".git/MERGE_HEAD").exists());
+}
+
+#[test]
+fn merge_ref_stopped_at_conflicts_says_so() {
+    let _guard = remote_management_test_lock();
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path();
+    init_conflicting_local_branches(repo);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).expect("open repository");
+    let error = opened
+        .merge_ref_with_output("dev")
+        .expect_err("conflicting merge");
+
+    let detail = stopped_at_conflicts_detail(&error);
+    assert!(
+        detail.starts_with("Merge conflict in base.txt."),
+        "{detail}"
+    );
 }
 
 #[test]

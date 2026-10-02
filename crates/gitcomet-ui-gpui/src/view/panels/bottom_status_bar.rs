@@ -3,8 +3,8 @@ use crate::kit::interaction as controls;
 use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
 
 /// Slimmer than the tab-bar slot the bottom bar used to borrow; it hosts the
-/// pane collapse toggles and the branding strip on one shared
-/// centerline, so every saved pixel goes to the content area.
+/// pane collapse toggles, the window's zoom control and the branding strip on
+/// one shared centerline, so every saved pixel goes to the content area.
 const BOTTOM_STATUS_BAR_HEIGHT_PX: f32 = 26.0;
 /// The bar and its chips are chrome like the title bar, so they take the
 /// density ramp.
@@ -17,7 +17,7 @@ const PANE_TOGGLE_ICON_SIZE_PX: f32 = 16.0;
 /// the height before the bar renders; the bar draws itself at the same height.
 pub(in super::super) fn bottom_status_bar_height<C>(cx: &mut C) -> Pixels
 where
-    C: gpui::BorrowAppContext,
+    C: std::borrow::BorrowMut<gpui::App>,
 {
     crate::ui_scale::UiScale::current(cx).row_height(
         BOTTOM_STATUS_BAR_HEIGHT_PX,
@@ -225,6 +225,19 @@ impl BottomStatusBarView {
         cx.notify();
     }
 
+    fn open_popover_for_bounds(
+        &mut self,
+        kind: impl Into<PopoverRequest>,
+        anchor_bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let kind: PopoverRequest = kind.into();
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
+        });
+    }
+
     fn open_popover_centered(
         &mut self,
         kind: impl Into<PopoverRequest>,
@@ -247,8 +260,52 @@ impl Render for BottomStatusBarView {
         let theme = self.theme;
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
+
+        // Zoom is per window, so it lives in the window's own footer. It shows
+        // the percent only once this window is zoomed away from the default.
+        let zoom_picker_invoker: SharedString = "ui_scale_picker".into();
+        let zoom_picker_active = self
+            .active_context_menu_invoker
+            .as_ref()
+            .is_some_and(|id| id.as_ref() == zoom_picker_invoker.as_ref());
+        let zoomed = crate::ui_scale::window_override(cx, window.window_handle().window_id());
+        let zoom_label = zoomed.map(crate::ui_scale::label).unwrap_or_default();
+        let zoom_icon_color = if zoom_picker_active {
+            theme.colors.accent.foreground
+        } else {
+            theme.colors.foreground.secondary
+        };
+        let zoom_button = components::Button::new("bottom_status_bar_zoom", zoom_label)
+            .start_slot(
+                div()
+                    .debug_selector(|| "bottom_status_bar_zoom_icon".to_string())
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(svg_icon(
+                        "icons/zoom_in.svg",
+                        zoom_icon_color,
+                        scaled_px(14.0),
+                    )),
+            )
+            .style(components::ButtonStyle::Subtle)
+            .borderless()
+            .no_hover_border()
+            .open(zoom_picker_active)
+            .selected_bg(components::control_open_background(theme))
+            .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
+                this.open_popover_for_bounds(
+                    PopoverKind::UiScalePicker.invoked_by(zoom_picker_invoker.clone()),
+                    bounds,
+                    window,
+                    cx,
+                );
+            })
+            .gitcomet_tooltip(theme, "Zoom this window".into())
+            .debug_selector(|| "bottom_status_bar_zoom".to_string());
+
         // Pane collapse toggles live here (not floating inside the panes) so
-        // they share one centerline with the branding links.
+        // they share one centerline with the zoom control.
         let (sidebar_collapsed, details_collapsed) = self
             .root_view
             .upgrade()
@@ -574,6 +631,7 @@ impl Render for BottomStatusBarView {
                     )
                     .child(details_toggle)
                     .child(hook_activity_button)
+                    .child(zoom_button)
                     .children(self.edition_strip.clone())
                     .when(self.edition_strip.is_none(), |row| {
                         row.child(

@@ -2,11 +2,12 @@ use super::history::gix_head_id_or_none;
 use super::porcelain::edit_local_config_strict;
 use super::{GixRepo, oid_to_arc_str};
 use crate::util::{
-    bytes_to_text_preserving_utf8, git_command_failed_error, run_git_capture, run_git_raw_output,
-    run_git_simple, run_git_with_output, validate_hex_commit_id, validate_ref_like_arg,
+    bytes_to_text_preserving_utf8, describe_path_list, git_command_failed_error, run_git_capture,
+    run_git_raw_output, run_git_simple, run_git_with_output, validate_hex_commit_id,
+    validate_ref_like_arg,
 };
 use gitcomet_core::domain::{CommitId, Remote, RemoteBranch, Upstream};
-use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::remote_url::{RemoteUrlPolicy, validate_remote_url_with_policy};
 use gitcomet_core::services::{
     CancellationToken, CommandOutput, ForcePushLease, PullMode, RemoteUrlKind, Result,
@@ -235,6 +236,38 @@ fn run_git_command_with_optional_output(
         run_git_simple,
         run_git_with_output,
     )
+}
+
+/// `Some(is_rebase)` while a merge or rebase is in progress.
+fn integration_in_progress(repo: &gix::Repository) -> Option<bool> {
+    match repo.state()? {
+        gix::state::InProgress::Merge => Some(false),
+        gix::state::InProgress::Rebase | gix::state::InProgress::RebaseInteractive => Some(true),
+        _ => None,
+    }
+}
+
+/// The paths under the `Conflicts:` comment git adds to MERGE_MSG when a merge
+/// or pick stops at conflicts. They outlive rerere staging the resolutions.
+fn merge_msg_conflict_paths(git_dir: &std::path::Path) -> Vec<Vec<u8>> {
+    let message = std::fs::read(git_dir.join("MERGE_MSG")).unwrap_or_default();
+    let mut lines = message.split(|byte| *byte == b'\n');
+    // The comment prefix follows core.commentChar, so take it from the header.
+    let Some(prefix) = lines.by_ref().find_map(|line| {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        let prefix = line.strip_suffix(b"Conflicts:")?;
+        let comment = prefix.trim_ascii_end();
+        (!comment.is_empty()).then_some(comment)
+    }) else {
+        return Vec::new();
+    };
+    lines
+        .map(|line| line.strip_suffix(b"\r").unwrap_or(line))
+        .skip_while(|line| line.trim_ascii() == prefix)
+        .map_while(|line| line.strip_prefix(prefix)?.strip_prefix(b"\t"))
+        .filter(|path| !path.is_empty())
+        .map(<[u8]>::to_vec)
+        .collect()
 }
 
 /// A remote's configured fetch refspecs, grouped by destination namespace.
@@ -1293,7 +1326,7 @@ impl GixRepo {
             "git pull --no-prune".to_string()
         };
 
-        let output = match run_git_command_with_optional_output(cmd, &label, capture_output) {
+        let output = match self.run_integrating_git(cmd, &label, capture_output) {
             Ok(output) => output,
             Err(error) => {
                 // `git pull --prune` deletes the tracking ref before it reports
@@ -1352,11 +1385,7 @@ impl GixRepo {
             // No remote to name; let Git report why it cannot pull.
             let mut cmd = self.pull_cmd(None, mode);
             cmd.arg("--no-prune");
-            return run_git_command_with_optional_output(
-                cmd,
-                "git pull --no-prune",
-                capture_output,
-            );
+            return self.run_integrating_git(cmd, "git pull --no-prune", capture_output);
         };
         validate_ref_like_arg(&remote, "remote name")?;
         validate_ref_like_arg(branch, "branch name")?;
@@ -1371,7 +1400,7 @@ impl GixRepo {
         let mut cmd = self.pull_cmd(Some(&remote), mode);
         cmd.arg("--no-prune").arg("--").arg(&remote).arg(branch);
         let pull_label = format!("git pull --no-prune {remote} {branch}");
-        let output = run_git_command_with_optional_output(cmd, &pull_label, capture_output)?;
+        let output = self.run_integrating_git(cmd, &pull_label, capture_output)?;
 
         let mut set_upstream = self.git_workdir_cmd();
         set_upstream
@@ -2006,7 +2035,7 @@ impl GixRepo {
             .arg("--")
             .arg(remote)
             .arg(branch);
-        run_git_with_output(cmd, &command_str)
+        self.run_integrating_git(cmd, &command_str, true)
     }
 
     pub(super) fn merge_ref_with_output_impl(&self, reference: &str) -> Result<CommandOutput> {
@@ -2022,7 +2051,105 @@ impl GixRepo {
             .arg("--no-edit")
             .arg("--")
             .arg(reference);
-        run_git_with_output(cmd, &command_str)
+        self.run_integrating_git(cmd, &command_str, true)
+    }
+
+    /// Runs a pull or merge. A failure that leaves a new merge or rebase
+    /// stopped at conflicts says so, instead of echoing git's fetch output.
+    fn run_integrating_git(
+        &self,
+        cmd: Command,
+        label: &str,
+        capture_output: bool,
+    ) -> Result<CommandOutput> {
+        // A merge or rebase already in progress makes git refuse; that stays a failure.
+        let integrating_before = integration_in_progress(&self.repo()).is_some();
+        run_git_command_with_optional_output(cmd, label, capture_output).map_err(|error| {
+            if integrating_before {
+                error
+            } else {
+                self.stopped_at_conflicts_error(error)
+            }
+        })
+    }
+
+    fn stopped_at_conflicts_error(&self, error: Error) -> Error {
+        let ErrorKind::Git(failure) = error.kind() else {
+            return error;
+        };
+        let repo = self.repo();
+        let Some(rebase) = integration_in_progress(&repo) else {
+            return error;
+        };
+        if failure.id() != GitFailureId::CommandFailed {
+            return error;
+        }
+        // Read fresh: the cached index may predate the merge on a filesystem
+        // whose timestamps are too coarse to show the rewrite.
+        let unmerged: Vec<Vec<u8>> = repo
+            .open_index()
+            .map(|index| {
+                let mut paths: Vec<Vec<u8>> = index
+                    .entries()
+                    .iter()
+                    .filter(|entry| entry.stage_raw() != 0)
+                    .map(|entry| entry.path(&index).to_vec())
+                    .collect();
+                paths.dedup();
+                paths
+            })
+            .unwrap_or_default();
+        // rerere with autoUpdate stages the recorded resolutions, leaving no
+        // unmerged entries, only MERGE_MSG's conflict list.
+        let (paths, rerere) = if unmerged.is_empty() {
+            (merge_msg_conflict_paths(repo.path()), true)
+        } else {
+            (unmerged, false)
+        };
+        if paths.is_empty() {
+            return error;
+        }
+        let files = describe_path_list(&paths);
+        let one = paths.len() == 1;
+        let (them, it_conflicts) = if one {
+            ("it", "a conflict")
+        } else {
+            ("them", "conflicts")
+        };
+        let lead = match (rebase, rerere) {
+            (false, false) => format!(
+                "Merge {} in {files}. Resolve {them}, then commit, or abort the merge.",
+                if one { "conflict" } else { "conflicts" }
+            ),
+            (false, true) => format!(
+                "Merge conflicts in {files} were resolved from recorded resolutions. Review them, then commit, or abort the merge."
+            ),
+            (true, false) => format!(
+                "Rebase stopped at {it_conflicts} in {files}. Resolve {them} and continue the rebase, or abort it."
+            ),
+            (true, true) => format!(
+                "Rebase stopped at conflicts in {files}, resolved from recorded resolutions. Review them and continue the rebase, or abort it."
+            ),
+        };
+        let output = [failure.stdout(), failure.stderr()]
+            .into_iter()
+            .map(|bytes| bytes_to_text_preserving_utf8(bytes).trim().to_string())
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let detail = if output.is_empty() {
+            lead
+        } else {
+            format!("{lead}\n\n{output}")
+        };
+        Error::new(ErrorKind::Git(GitFailure::new(
+            failure.command(),
+            GitFailureId::StoppedAtConflicts,
+            failure.exit_code(),
+            failure.stdout().to_vec(),
+            failure.stderr().to_vec(),
+            Some(detail),
+        )))
     }
 
     pub(super) fn squash_ref_with_output_impl(&self, reference: &str) -> Result<CommandOutput> {
