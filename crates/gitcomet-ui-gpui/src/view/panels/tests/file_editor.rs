@@ -4994,15 +4994,17 @@ fn file_editor_saves_stay_paused_until_rename_retargets_the_unsaved_buffer(
         super::super::GitCometView::new(store, events, None, window, cx)
     });
     let directory = tempfile::tempdir().unwrap();
-    let original = directory.path().join("before.rs");
-    let renamed = directory.path().join("after.rs");
+    let workdir =
+        gitcomet_core::path_utils::canonicalize_or_original(directory.path().to_path_buf());
+    let original = workdir.join("before.rs");
+    let renamed = workdir.join("after.rs");
     std::fs::write(&original, "fn original() {}\n").unwrap();
     let repo_id = gitcomet_state::model::RepoId(995);
     cx.update(|_, app| {
         view.update(app, |this, cx| {
             push_test_state(
                 this,
-                editor_state(repo_id, directory.path(), Path::new("before.rs")),
+                editor_state(repo_id, &workdir, Path::new("before.rs")),
                 cx,
             );
             this.main_pane
@@ -5054,7 +5056,7 @@ fn file_editor_saves_stay_paused_until_rename_retargets_the_unsaved_buffer(
             });
             push_test_state(
                 this,
-                editor_state(repo_id, directory.path(), Path::new("after.rs")),
+                editor_state(repo_id, &workdir, Path::new("after.rs")),
                 cx,
             );
         });

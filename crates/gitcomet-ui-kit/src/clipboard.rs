@@ -204,7 +204,7 @@ impl PasteReceipt {
     ) -> Self {
         Self {
             native: Some(transfer.completion),
-            remaining: paths.clone(),
+            remaining: service_identities(&paths),
             payload: FilePayload {
                 paths,
                 intent,
@@ -213,6 +213,7 @@ impl PasteReceipt {
             intent,
         }
     }
+    /// `paths` are the filesystem service's canonical sources.
     pub fn completed(&mut self, paths: &[std::path::PathBuf]) {
         self.remaining
             .retain(|path| !paths.iter().any(|completed| path.starts_with(completed)));
@@ -237,6 +238,17 @@ impl PasteReceipt {
     }
 }
 
+/// Spelled as the filesystem service reports completed sources, so a path
+/// reached through a symlink or a Windows 8.3 name still matches.
+fn service_identities(paths: &[std::path::PathBuf]) -> Vec<std::path::PathBuf> {
+    paths
+        .iter()
+        .map(|path| {
+            gitcomet_core::filesystem::absolute_identity(path).unwrap_or_else(|_| path.clone())
+        })
+        .collect()
+}
+
 pub fn capture_paste<T: 'static>(
     cx: &gpui::Context<T>,
     paths: &[std::path::PathBuf],
@@ -257,7 +269,7 @@ pub fn capture_paste<T: 'static>(
     };
     let native = cx.capture_file_paste(&files);
     Some(PasteReceipt {
-        remaining: payload.paths.clone(),
+        remaining: service_identities(&payload.paths),
         native,
         payload,
         intent,
@@ -441,7 +453,9 @@ fn write_text_to_x11(_text: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{ClipboardBackend, replace_clipboard_owner, select_clipboard_backend};
+    use super::{
+        ClipboardBackend, PasteReceipt, replace_clipboard_owner, select_clipboard_backend,
+    };
 
     #[test]
     fn wslg_all_copy_paths_exclusively_use_x11() {
@@ -495,6 +509,31 @@ mod tests {
 
         assert_eq!(served, vec![(1, "first"), (2, "second")]);
         assert_eq!(active, Some(FakeClipboard(2)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn drop_receipts_match_completions_reported_under_the_canonical_parent() {
+        let directory = tempfile::tempdir().unwrap();
+        let real = directory.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        std::fs::write(real.join("a.txt"), "a").unwrap();
+        let link = directory.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let mut receipt = PasteReceipt::from_drop(
+            vec![link.join("a.txt")],
+            gpui::FileDropTransfer {
+                operation: gpui::FileTransferOperation::Move,
+                source_owns_move: false,
+                completion: gpui::FilePaste::new(|_| {}),
+            },
+            gitcomet_core::filesystem::TransferIntent::Move,
+        );
+        receipt.completed(&[std::fs::canonicalize(&real).unwrap().join("a.txt")]);
+        assert!(
+            receipt.remaining.is_empty(),
+            "a moved source dropped through a symlink still completes the drop"
+        );
     }
 
     #[test]

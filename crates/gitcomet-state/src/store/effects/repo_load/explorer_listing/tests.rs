@@ -247,7 +247,7 @@ fn augment_flags_only_entries_missing_from_the_backend_listing() {
     let flags: Vec<_> = augment(root, base, options, &CancellationToken::new())
         .unwrap()
         .into_iter()
-        .map(|e| (e.path.to_string_lossy().into_owned(), e.ignored))
+        .map(|e| ((*e.path).clone(), e.ignored))
         .collect();
     let expected = [
         ("src", false),
@@ -256,9 +256,11 @@ fn augment_flags_only_entries_missing_from_the_backend_listing() {
         ("target", true),
         ("notes.txt", true),
     ];
+    // Compared as paths: walked entries use the native separator (`src\gen.rs`
+    // on Windows) while backend rows use `/`.
     assert_eq!(
         flags,
-        expected.map(|(path, ignored)| (path.to_owned(), ignored))
+        expected.map(|(path, ignored)| (PathBuf::from(path), ignored))
     );
 }
 

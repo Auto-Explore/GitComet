@@ -90,12 +90,13 @@ mod tests {
     #[test]
     fn documents_deduplicate_cap_and_keep_missing_entries_removable() {
         let dir = tempfile::tempdir().unwrap();
-        let session = dir.path().join("session.json");
+        // Entries are stored as canonical identities.
+        let root = gitcomet_core::path_utils::canonicalize_or_original(dir.path().to_path_buf());
+        let session = root.join("session.json");
         for i in 0..55 {
-            update_recent_document_at(&session, &dir.path().join(format!("missing-{i}")), false)
-                .unwrap();
+            update_recent_document_at(&session, &root.join(format!("missing-{i}")), false).unwrap();
         }
-        let first = dir.path().join("missing-54");
+        let first = root.join("missing-54");
         update_recent_document_at(&session, &first, false).unwrap();
         let loaded = load_from_path(&session);
         assert_eq!(loaded.recent_documents.len(), 50);

@@ -30,7 +30,9 @@ fn opening_a_background_document_preserves_the_active_repository_and_its_loads()
             .iter()
             .any(|effect| matches!(effect, Effect::OpenRepo { .. }))
     );
-    let same = state.repos[0].spec.workdir.clone();
+    // Opened workdirs are stored normalized; `/tmp/repo` has no drive on Windows.
+    let same = crate::store::reducer::normalize_repo_path(state.repos[0].spec.workdir.clone());
+    state.repos[0].spec.workdir = same.clone();
     let effects = reduce(
         &mut repos,
         &ids,
@@ -215,7 +217,9 @@ fn file_repository_discovery_honors_nested_repositories_and_linked_worktrees() {
             store
                 .discover_file_repository(&file)
                 .unwrap_or_else(|error| panic!("discover {}: {error:?}", file.display())),
-            Some(root.canonicalize().unwrap())
+            Some(gitcomet_core::path_utils::canonicalize_or_original(
+                root.to_path_buf()
+            ))
         );
     }
     let standalone = directory.path().join("outside.txt");

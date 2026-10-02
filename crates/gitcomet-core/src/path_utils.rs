@@ -180,8 +180,9 @@ pub fn symlink_free_write_target(workdir: &Path, relative: &Path) -> io::Result<
 #[cfg(test)]
 mod tests {
     use super::{
-        git_dir_for_workdir, has_service_owned_component, is_service_owned_name, resolved_git_dir,
-        symlink_free_write_target, validated_repo_relative_path,
+        canonicalize_or_original, git_dir_for_workdir, has_service_owned_component,
+        is_service_owned_name, resolved_git_dir, symlink_free_write_target,
+        validated_repo_relative_path,
     };
     use std::fs;
     use std::path::Path;
@@ -205,7 +206,8 @@ mod tests {
     #[test]
     fn resolved_git_dir_follows_directories_and_gitdir_files() {
         let dir = tempdir().unwrap();
-        let root = fs::canonicalize(dir.path()).unwrap();
+        // Without the `\\?\` prefix `fs::canonicalize` adds on Windows.
+        let root = canonicalize_or_original(dir.path().to_path_buf());
         let plain = root.join("plain");
         fs::create_dir_all(plain.join(".git")).unwrap();
         assert_eq!(resolved_git_dir(&plain), Some(plain.join(".git")));

@@ -1,5 +1,20 @@
 use super::*;
 
+/// Card and Activity buttons dispatch to the store worker, which reduces on its
+/// own thread. Syncing before it publishes pushes the stale snapshot back (the
+/// slow macOS x64 runner lost that race).
+fn sync_store_when(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    description: &str,
+    reduced: impl Fn(&AppState) -> bool,
+) {
+    wait_until(cx, description, |cx| {
+        cx.update(|_window, app| reduced(&view.read(app).store.snapshot()))
+    });
+    sync_store_snapshot(cx, view);
+}
+
 fn running_hook_activity(operation_id: u64) -> GitHookOperation {
     let output = (0..80)
         .map(|line| format!("checking file {line:02}\n"))
@@ -935,7 +950,13 @@ fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
         .debug_bounds("hook_activity_stop_714")
         .expect("expected danger-colored Stop button for the active operation");
     cx.simulate_click(stop.center(), Modifiers::default());
-    sync_store_snapshot(cx, &view);
+    sync_store_when(cx, &view, "the store to cancel the operation", |state| {
+        state.repos.iter().any(|repo| {
+            repo.feedback.hook_activity.iter().any(|operation| {
+                operation.id.0 == 714 && operation.status == GitHookOperationStatus::Cancelling
+            })
+        })
+    });
     assert!(
         cx.debug_bounds("hook_activity_panel").is_some(),
         "Stop should keep Activity open instead of replacing it with a confirmation dialog"
@@ -1255,7 +1276,13 @@ fn operation_progress_card_shows_git_meter_and_stops_the_operation(cx: &mut gpui
         .debug_bounds("operation_progress_stop_731")
         .expect("Stop on the progress card");
     cx.simulate_click(stop.center(), Modifiers::default());
-    sync_store_snapshot(cx, &view);
+    sync_store_when(cx, &view, "the store to cancel the operation", |state| {
+        state.repos[0]
+            .feedback
+            .hook_activity
+            .first()
+            .is_some_and(|operation| operation.status == GitHookOperationStatus::Cancelling)
+    });
     let status = cx.update(|_window, app| {
         view.read(app).state.repos[0]
             .feedback
@@ -1342,7 +1369,12 @@ fn maintenance_recommendation_stays_until_answered(cx: &mut gpui::TestAppContext
         .debug_bounds("maintenance_later_741")
         .expect("Remind me later");
     cx.simulate_click(later.center(), Modifiers::default());
-    sync_store_snapshot(cx, &view);
+    sync_store_when(
+        cx,
+        &view,
+        "the store to clear the recommendation",
+        |state| !state.repos[0].maintenance.recommended,
+    );
     draw_and_drain_test_window(cx);
     let recommended =
         cx.update(|_window, app| view.read(app).state.repos[0].maintenance.recommended);
@@ -1353,7 +1385,12 @@ fn maintenance_recommendation_stays_until_answered(cx: &mut gpui::TestAppContext
     draw_and_drain_test_window(cx);
     let start = cx.debug_bounds("maintenance_start_741").expect("Start");
     cx.simulate_click(start.center(), Modifiers::default());
-    sync_store_snapshot(cx, &view);
+    sync_store_when(
+        cx,
+        &view,
+        "the store to clear the recommendation",
+        |state| !state.repos[0].maintenance.recommended,
+    );
     draw_and_drain_test_window(cx);
     assert!(cx.debug_bounds("maintenance_recommendation_741").is_none());
 }

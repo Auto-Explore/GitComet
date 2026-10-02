@@ -1176,7 +1176,9 @@ fn status_bar_documents_button_opens_a_picker_that_opens_typed_paths(
     });
     cx.update(|_, app| crate::app::bind_text_input_keys_for_test(app));
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("notes.md");
+    let workdir =
+        gitcomet_core::path_utils::canonicalize_or_original(directory.path().to_path_buf());
+    let path = workdir.join("notes.md");
     std::fs::write(&path, "# Notes").unwrap();
 
     // The button once updated the bar from inside the bar's own update.

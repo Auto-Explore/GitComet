@@ -1035,7 +1035,11 @@ fn copy_names_increment_before_extension_and_preserve_native_names() {
     );
     assert!(validate_name(OsStr::new("../escape")).is_err());
     assert!(validate_name(OsStr::new(".")).is_err());
-    assert!(validate_name(OsStr::new("file name\nline")).is_ok());
+    // Windows reserves control characters in names; other systems accept them.
+    assert_eq!(
+        validate_name(OsStr::new("file name\nline")).is_ok(),
+        cfg!(not(windows))
+    );
 }
 
 #[cfg(unix)]
@@ -1057,8 +1061,10 @@ fn trash_info_escapes_native_path_and_reserves_distinct_receipts() {
 #[test]
 fn merge_undo_preserves_existing_children_and_reports_only_moved_paths() {
     let dir = tempfile::tempdir().unwrap();
-    let source = dir.path().join("a/folder");
-    let destination = dir.path().join("b/folder");
+    // Resolutions are keyed by the canonical destination the engine reports.
+    let root = canonical_path(dir.path()).unwrap();
+    let source = root.join("a/folder");
+    let destination = root.join("b/folder");
     fs::create_dir_all(&source).unwrap();
     fs::create_dir_all(&destination).unwrap();
     fs::write(source.join("new"), b"new").unwrap();
@@ -1066,7 +1072,7 @@ fn merge_undo_preserves_existing_children_and_reports_only_moved_paths() {
     let mut service = Filesystem::default();
     let mut request = Request::new(Operation::Transfer {
         sources: vec![source.clone()],
-        destination: dir.path().join("b"),
+        destination: root.join("b"),
         intent: TransferIntent::Move,
     });
     request.resolutions.insert(
@@ -1245,8 +1251,9 @@ fn cross_filesystem_move_and_its_undo_redo_preserve_bytes() {
 fn merge_resumes_after_a_child_collision_and_undo_groups_all_successes() {
     for intent in [TransferIntent::Copy, TransferIntent::Move] {
         let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join("source/items");
-        let parent = directory.path().join("destination");
+        let root = canonical_path(directory.path()).unwrap();
+        let source = root.join("source/items");
+        let parent = root.join("destination");
         let destination = parent.join("items");
         fs::create_dir_all(&source).unwrap();
         fs::create_dir_all(&destination).unwrap();
@@ -1401,9 +1408,10 @@ fn the_recovery_log_records_both_native_paths_of_every_move() {
     // Nothing covered `record_intent`, which is the only record of where a
     // parked `.gitcomet-operation-*/item` came from.
     let directory = tempfile::tempdir().unwrap();
-    let source = directory.path().join("notes.txt");
+    let root = canonical_path(directory.path()).unwrap();
+    let source = root.join("notes.txt");
     fs::write(&source, b"x").unwrap();
-    let destination = directory.path().join("into");
+    let destination = root.join("into");
     fs::create_dir(&destination).unwrap();
     let mut service = Filesystem::default();
     success(&run(
@@ -1522,7 +1530,7 @@ fn journal_storage_prefers_the_first_writable_same_volume_candidate() {
     let state_path = canonical_path(state.path()).unwrap();
     let mut service = Filesystem::with_storage_candidates(vec![
         PathBuf::from("/nonexistent/gitcomet-journal"),
-        state.path().to_path_buf(),
+        state_path.clone(),
     ]);
     replace_for_shutdown(&mut service, fixture.path());
     let root = canonical_path(fixture.path()).unwrap();

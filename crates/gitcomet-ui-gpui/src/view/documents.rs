@@ -1408,7 +1408,7 @@ impl GitCometView {
         .detach();
     }
 
-    pub(in crate::view) fn open_document_paths(
+    pub(crate) fn open_document_paths(
         &mut self,
         paths: Vec<PathBuf>,
         cx: &mut gpui::Context<Self>,

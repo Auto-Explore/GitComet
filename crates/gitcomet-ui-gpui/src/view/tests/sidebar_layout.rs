@@ -2568,11 +2568,13 @@ fn explorer_ctrl_x_after_a_plain_click_cuts_the_clicked_file(cx: &mut gpui::Test
     install_app_shortcuts_for_test(cx, backend);
     cx.update(|_, app| crate::app::bind_text_input_keys_for_test(app));
     let directory = tempfile::tempdir().unwrap();
+    // Backend workdirs are canonical; Windows cuts publish canonical paths.
+    let workdir = canonicalize_or_original(directory.path().to_path_buf());
     for name in ["a.txt", "b.txt"] {
-        std::fs::write(directory.path().join(name), "saved").unwrap();
+        std::fs::write(workdir.join(name), "saved").unwrap();
     }
     let mut state = view_state_with_active_ready_repo(RepoId(1));
-    state.repos[0].spec.workdir = directory.path().to_path_buf();
+    state.repos[0].spec.workdir = workdir.clone();
     state.sidebar_mode = gitcomet_state::model::SidebarMode::Files;
     state.repos[0].file_browser.entries = Loadable::Ready(Arc::new(
         ["a.txt", "b.txt"]
@@ -2624,10 +2626,8 @@ fn explorer_ctrl_x_after_a_plain_click_cuts_the_clicked_file(cx: &mut gpui::Test
                 "round {round}: the clicked tree must keep the keyboard (anything focused: {focused})"
             );
         });
-        eprintln!("TEMPDEBUG before ctrl-x");
         cx.simulate_keystrokes(cut);
         cx.run_until_parked();
-        eprintln!("TEMPDEBUG after ctrl-x");
         cx.update(|_, app| {
             view.update(app, |_, cx| {
                 let files =
@@ -2636,12 +2636,10 @@ fn explorer_ctrl_x_after_a_plain_click_cuts_the_clicked_file(cx: &mut gpui::Test
                     files.intent,
                     gitcomet_core::filesystem::TransferIntent::Move
                 );
-                assert_eq!(files.paths, vec![directory.path().join("a.txt")]);
+                assert_eq!(files.paths, vec![workdir.join("a.txt")]);
             })
         });
-        eprintln!("TEMPDEBUG redraw");
         test_support::redraw(cx);
-        eprintln!("TEMPDEBUG redraw done");
         assert!(
             cx.debug_bounds("explorer_cut_marker_0").is_some(),
             "round {round}: the cut row shows its marker"
