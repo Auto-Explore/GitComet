@@ -27,9 +27,12 @@ GitComet Dark.
 | Catppuccin Frappé, Catppuccin Mocha | Catppuccin Latte | [Catppuccin](https://github.com/catppuccin/vscode) |
 | Night Owl | Night Owl Light | [Night Owl](https://github.com/sdras/night-owl-vscode-theme) |
 
-Ported themes keep their upstream backgrounds and hues. Where an upstream text
-or syntax colour falls below a 4.5:1 contrast ratio, GitComet shifts its
-lightness until it reaches that ratio.
+Ported themes keep their upstream backgrounds and hues. Every bundled theme
+meets WCAG AA: 4.5:1 for all text (including placeholders, line numbers and
+text on selected or hovered rows), and 3:1 for the focus ring, the selection
+indicator and syntax on diff, selection and search highlights. Where a colour
+falls short, GitComet shifts its lightness, or fades a highlight, until it
+reaches that ratio.
 
 ## Theme File Location
 

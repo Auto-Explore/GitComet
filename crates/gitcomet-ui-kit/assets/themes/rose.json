@@ -54,7 +54,7 @@
           "selected_indicator": "#ef3f88ff",
           "focus_ring": {
             "hex": "#ef3f88ff",
-            "alpha": 0.82
+            "alpha": 0.87
           },
           "focus_background": {
             "hex": "#ef3f88ff",
@@ -62,7 +62,7 @@
           }
         },
         "accent": {
-          "foreground": "#ef3f88ff",
+          "foreground": "#ff5b9aff",
           "solid": "#ee3d86ff",
           "on_solid": "#241523ff",
           "subtle_background": {
@@ -131,7 +131,7 @@
           },
           "search_match_background": {
             "hex": "#fbbf24ff",
-            "alpha": 0.22
+            "alpha": 0.20
           },
           "search_match_foreground": "#fbbf24ff",
           "bracket_match_background": {
@@ -315,7 +315,7 @@
           },
           "placeholder": {
             "hex": "#ac1668ff",
-            "alpha": 0.72
+            "alpha": 0.78
           },
           "emphasis": "#000000ff"
         },
@@ -351,7 +351,7 @@
           }
         },
         "accent": {
-          "foreground": "#c70067ff",
+          "foreground": "#c40065ff",
           "solid": "#d72174ff",
           "on_solid": "#fffaffff",
           "subtle_background": {
@@ -419,7 +419,7 @@
             "hex": "#b05109ff",
             "alpha": 0.26
           },
-          "search_match_foreground": "#a84a00ff",
+          "search_match_foreground": "#964100ff",
           "bracket_match_background": {
             "hex": "#b05109ff",
             "alpha": 0.24

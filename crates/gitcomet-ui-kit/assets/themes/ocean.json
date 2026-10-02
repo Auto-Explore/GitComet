@@ -16,14 +16,14 @@
         },
         "foreground": {
           "primary": "#fffaffff",
-          "secondary": "#a7a9b1ff",
+          "secondary": "#babcc4ff",
           "disabled": {
             "hex": "#a7a9b1ff",
             "alpha": 0.62
           },
           "placeholder": {
             "hex": "#a7a9b1ff",
-            "alpha": 0.72
+            "alpha": 0.98
           },
           "emphasis": "#ffffffff"
         },
@@ -72,7 +72,7 @@
         },
         "status": {
           "info": {
-            "foreground": "#62a2ffff",
+            "foreground": "#67a5ffff",
             "background": {
               "hex": "#62a2ffff",
               "alpha": 0.18
@@ -105,7 +105,7 @@
             }
           },
           "danger": {
-            "foreground": "#ff7072ff",
+            "foreground": "#ff7b7bff",
             "background": {
               "hex": "#ff7072ff",
               "alpha": 0.18
@@ -127,11 +127,11 @@
           },
           "selection_background": {
             "hex": "#70b9eeff",
-            "alpha": 0.28
+            "alpha": 0.20
           },
           "search_match_background": {
             "hex": "#ffb900ff",
-            "alpha": 0.22
+            "alpha": 0.19
           },
           "search_match_foreground": "#ffb900ff",
           "bracket_match_background": {
@@ -308,14 +308,14 @@
         },
         "foreground": {
           "primary": "#241523ff",
-          "secondary": "#6d656eff",
+          "secondary": "#5c545dff",
           "disabled": {
             "hex": "#6d656eff",
             "alpha": 0.62
           },
           "placeholder": {
             "hex": "#6d656eff",
-            "alpha": 0.72
+            "alpha": 0.92
           },
           "emphasis": "#000000ff"
         },
@@ -351,7 +351,7 @@
           }
         },
         "accent": {
-          "foreground": "#1f6ca9ff",
+          "foreground": "#1d6aa7ff",
           "solid": "#2672afff",
           "on_solid": "#fffaffff",
           "subtle_background": {
@@ -419,7 +419,7 @@
             "hex": "#b74b00ff",
             "alpha": 0.26
           },
-          "search_match_foreground": "#ac4100ff",
+          "search_match_foreground": "#9a3900ff",
           "bracket_match_background": {
             "hex": "#b74b00ff",
             "alpha": 0.24

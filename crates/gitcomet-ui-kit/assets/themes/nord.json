@@ -16,14 +16,14 @@
         },
         "foreground": {
           "primary": "#d8dee9ff",
-          "secondary": "#b5bed1ff",
+          "secondary": "#c3ccdfff",
           "disabled": {
             "hex": "#b5bed1ff",
             "alpha": 0.62
           },
           "placeholder": {
             "hex": "#b5bed1ff",
-            "alpha": 0.72
+            "alpha": 0.98
           },
           "emphasis": "#eceff4ff"
         },
@@ -62,7 +62,7 @@
           }
         },
         "accent": {
-          "foreground": "#88c0d0ff",
+          "foreground": "#8dc5d5ff",
           "solid": "#88c0d0ff",
           "on_solid": "#2e3440ff",
           "subtle_background": {
@@ -120,7 +120,7 @@
           "background": "#2e3440ff",
           "foreground": "#d8dee9ff",
           "gutter_background": "#2e3440ff",
-          "line_number": "#75829dff",
+          "line_number": "#8e9cb8ff",
           "cursor": {
             "hex": "#d8dee9ff",
             "alpha": 0.78
@@ -131,7 +131,7 @@
           },
           "search_match_background": {
             "hex": "#ebcb8bff",
-            "alpha": 0.22
+            "alpha": 0.18
           },
           "search_match_foreground": "#ebcb8bff",
           "bracket_match_background": {

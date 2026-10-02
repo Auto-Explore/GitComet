@@ -750,7 +750,7 @@ fn built_in_themes_load_from_embedded_json() {
     assert!(!light.is_dark);
     assert_eq!(
         dark.colors.interaction.focus_ring,
-        with_alpha(gpui::rgba(0x4f8ef7ff), 0.55)
+        with_alpha(gpui::rgba(0x4f8ef7ff), 0.74)
     );
     assert_eq!(light.colors.surface.canvas, gpui::rgba(0xffffffff));
     assert_eq!(light.colors.surface.panel, gpui::rgba(0xf2f4f7ff));
@@ -769,7 +769,7 @@ fn built_in_themes_load_from_embedded_json() {
         with_alpha(gpui::rgba(0x76d39cff), 0.15)
     );
     assert_eq!(light.colors.diff.removed.foreground, gpui::rgba(0xa52a35ff));
-    assert_eq!(dark.colors.foreground.placeholder, gpui::rgba(0x767c8bff));
+    assert_eq!(dark.colors.foreground.placeholder, gpui::rgba(0x8d94a3ff));
     assert_eq!(light.colors.accent.on_solid, gpui::rgba(0xffffffff));
     assert_eq!(dark.colors.foreground.emphasis, gpui::rgba(0xffffffff));
     assert_eq!(light.colors.foreground.emphasis, gpui::rgba(0x000000ff));
@@ -854,7 +854,7 @@ fn gitcomet_dark_uses_the_tuned_neutral_and_diff_palette() {
         colors.interaction.selected_background,
         gpui::rgba(0x2c3242ff)
     );
-    assert_eq!(colors.accent.foreground, gpui::rgba(0x4f8ef7ff));
+    assert_eq!(colors.accent.foreground, gpui::rgba(0x5393fcff));
     assert_eq!(colors.status.danger.foreground, gpui::rgba(0xf0625dff));
     assert_eq!(colors.status.warning.foreground, gpui::rgba(0xf2a53aff));
     assert_eq!(colors.status.success.foreground, gpui::rgba(0x33c06bff));
@@ -1168,116 +1168,313 @@ fn amber_dark_semantic_foregrounds_have_strong_canvas_contrast() {
     }
 }
 
-/// Contrast gaps in the house themes that predate
-/// `every_bundled_theme_meets_the_readability_floor`. Each entry is a theme
-/// key and a check-name prefix. New themes must not add any.
-const READABILITY_FLOOR_EXCEPTIONS: &[(&str, &str)] = &[
-    (DEFAULT_DARK_THEME_KEY, "accent.on_solid"),
-    (AMBER_DARK_THEME_KEY, "syntax.comment"),
-    ("tokyo_night", "secondary/"),
-    ("tokyo_night", "syntax.comment"),
-];
+/// One readability requirement: the theme token `token` drawn over `background`.
+struct ReadabilityCheck {
+    name: String,
+    /// JSON path of the foreground, e.g. `colors.foreground.secondary`.
+    token: String,
+    foreground: Rgba,
+    background: Rgba,
+    minimum: f32,
+}
 
-/// WCAG AA for every bundled theme: 4.5:1 for text, 3:1 for syntax on a diff
-/// wash and for graph lanes. Washes are composited over what they tint.
+impl ReadabilityCheck {
+    /// Translucent text blends into what it is drawn on.
+    fn ratio(&self) -> f32 {
+        contrast_ratio(
+            composite_over(self.background, self.foreground),
+            self.background,
+        )
+    }
+}
+
+/// WCAG AA: 4.5:1 for text; 3:1 for focus/selection indicators, graph lanes and
+/// syntax on a diff, selection or search wash. Washes are composited over what they tint.
+/// Control borders (`stroke.control`) are deliberately not held to 3:1.
+fn readability_checks(theme: AppTheme) -> Vec<ReadabilityCheck> {
+    const TEXT: f32 = 4.5;
+    const NON_TEXT: f32 = 3.0;
+    let colors = theme.colors;
+    let canvas = colors.surface.canvas;
+    let editor = colors.editor.background;
+    let surfaces = [
+        ("canvas", canvas),
+        ("chrome", colors.surface.chrome),
+        ("panel", colors.surface.panel),
+        ("raised", colors.surface.raised),
+        ("input", colors.surface.input),
+    ];
+    // Where selectable, hoverable rows sit.
+    let row_surfaces = &surfaces[..3];
+    let mut checks = Vec::new();
+    let mut check = |name: String, token: &str, foreground, background, minimum| {
+        checks.push(ReadabilityCheck {
+            name,
+            token: token.to_string(),
+            foreground,
+            background,
+            minimum,
+        });
+    };
+
+    for (surface_name, surface) in surfaces {
+        for (name, token, foreground) in [
+            (
+                "primary",
+                "colors.foreground.primary",
+                colors.foreground.primary,
+            ),
+            (
+                "secondary",
+                "colors.foreground.secondary",
+                colors.foreground.secondary,
+            ),
+            (
+                "accent.foreground",
+                "colors.accent.foreground",
+                colors.accent.foreground,
+            ),
+        ] {
+            check(
+                format!("{name}/{surface_name}"),
+                token,
+                foreground,
+                surface,
+                TEXT,
+            );
+        }
+        check(
+            format!("focus_ring/{surface_name}"),
+            "colors.interaction.focus_ring",
+            colors.interaction.focus_ring,
+            surface,
+            NON_TEXT,
+        );
+    }
+    for (surface_name, surface) in row_surfaces.iter().copied() {
+        let selected = composite_over(surface, colors.interaction.selected_background);
+        let hovered = composite_over(surface, colors.interaction.hover_background);
+        for (name, token, foreground, background) in [
+            (
+                "selected_foreground/selected",
+                "colors.interaction.selected_foreground",
+                colors.interaction.selected_foreground,
+                selected,
+            ),
+            (
+                "secondary/selected",
+                "colors.foreground.secondary",
+                colors.foreground.secondary,
+                selected,
+            ),
+            (
+                "primary/hover",
+                "colors.foreground.primary",
+                colors.foreground.primary,
+                hovered,
+            ),
+            (
+                "secondary/hover",
+                "colors.foreground.secondary",
+                colors.foreground.secondary,
+                hovered,
+            ),
+        ] {
+            check(
+                format!("{name}@{surface_name}"),
+                token,
+                foreground,
+                background,
+                TEXT,
+            );
+        }
+        check(
+            format!("selected_indicator/{surface_name}"),
+            "colors.interaction.selected_indicator",
+            colors.interaction.selected_indicator,
+            surface,
+            NON_TEXT,
+        );
+    }
+    for (name, token, foreground, background) in [
+        (
+            "emphasis/canvas",
+            "colors.foreground.emphasis",
+            colors.foreground.emphasis,
+            canvas,
+        ),
+        (
+            "placeholder/input",
+            "colors.foreground.placeholder",
+            colors.foreground.placeholder,
+            colors.surface.input,
+        ),
+        (
+            "accent.foreground/subtle",
+            "colors.accent.foreground",
+            colors.accent.foreground,
+            composite_over(canvas, colors.accent.subtle_background),
+        ),
+        (
+            "accent.on_solid",
+            "colors.accent.on_solid",
+            colors.accent.on_solid,
+            colors.accent.solid,
+        ),
+        (
+            "tooltip",
+            "colors.tooltip.foreground",
+            colors.tooltip.foreground,
+            composite_over(canvas, colors.tooltip.background),
+        ),
+        (
+            "notice.foreground",
+            "colors.notice.foreground",
+            colors.notice.foreground,
+            composite_over(canvas, colors.notice.background),
+        ),
+        (
+            "notice.secondary",
+            "colors.notice.secondary",
+            colors.notice.secondary,
+            composite_over(canvas, colors.notice.background),
+        ),
+        (
+            "editor.foreground",
+            "colors.editor.foreground",
+            colors.editor.foreground,
+            editor,
+        ),
+        (
+            "editor.foreground/selection",
+            "colors.editor.foreground",
+            colors.editor.foreground,
+            composite_over(editor, colors.editor.selection_background),
+        ),
+        // Diff header rows draw their text in the line-number colour too.
+        (
+            "line_number/editor",
+            "colors.editor.line_number",
+            colors.editor.line_number,
+            editor,
+        ),
+        (
+            "line_number/gutter",
+            "colors.editor.line_number",
+            colors.editor.line_number,
+            composite_over(editor, colors.editor.gutter_background),
+        ),
+    ] {
+        check(name.into(), token, foreground, background, TEXT);
+    }
+    let search_match = composite_over(editor, colors.editor.search_match_background);
+    if !theme.is_dark {
+        // Dark themes keep the syntax colours on a match (checked below).
+        check(
+            "search_match".into(),
+            "colors.editor.search_match_foreground",
+            colors.editor.search_match_foreground,
+            search_match,
+            TEXT,
+        );
+    }
+    for (name, set) in [
+        ("info", colors.status.info),
+        ("success", colors.status.success),
+        ("warning", colors.status.warning),
+        ("danger", colors.status.danger),
+    ] {
+        let token = format!("colors.status.{name}.foreground");
+        for (background_name, background) in [
+            ("wash", composite_over(canvas, set.background)),
+            ("chrome", colors.surface.chrome),
+            ("raised", colors.surface.raised),
+        ] {
+            check(
+                format!("status.{name}/{background_name}"),
+                &token,
+                set.foreground,
+                background,
+                TEXT,
+            );
+        }
+    }
+    for (name, set) in [
+        ("added", colors.diff.added),
+        ("removed", colors.diff.removed),
+        ("modified", colors.diff.modified),
+    ] {
+        let token = format!("colors.diff.{name}.foreground");
+        check(
+            format!("diff.{name}"),
+            &token,
+            set.foreground,
+            composite_over(editor, set.background),
+            TEXT,
+        );
+        check(
+            format!("diff.{name}.word"),
+            &token,
+            set.foreground,
+            composite_over(editor, set.word_background),
+            TEXT,
+        );
+    }
+    for (name, color) in syntax_foregrounds(theme) {
+        let token = format!("syntax.{name}");
+        check(format!("{token}/editor"), &token, color, editor, TEXT);
+        // Text selection and the current search match share one wash.
+        let mut washes = vec![
+            (
+                "diff.added",
+                composite_over(editor, colors.diff.added.background),
+            ),
+            (
+                "diff.removed",
+                composite_over(editor, colors.diff.removed.background),
+            ),
+            (
+                "selection",
+                composite_over(editor, colors.editor.selection_background),
+            ),
+        ];
+        if theme.is_dark {
+            washes.push(("search_match", search_match));
+        }
+        for (wash, background) in washes {
+            check(
+                format!("{token}/{wash}"),
+                &token,
+                color,
+                background,
+                NON_TEXT,
+            );
+        }
+    }
+    for (index, color) in theme.graph_lane_palette.as_slice().iter().enumerate() {
+        check(
+            format!("graph_lane_palette[{index}]"),
+            "colors.graph_lane_palette",
+            *color,
+            canvas,
+            NON_TEXT,
+        );
+    }
+    checks
+}
+
 #[test]
 fn every_bundled_theme_meets_the_readability_floor() {
     let mut failures = Vec::new();
     for (key, _) in bundled_theme_keys() {
         let theme = AppTheme::from_key(&key).expect("bundled theme should load");
-        let colors = theme.colors;
-        let canvas = colors.surface.canvas;
-        let editor = colors.editor.background;
-        let mut checks: Vec<(String, Rgba, Rgba, f32)> = Vec::new();
-
-        for (surface_name, surface) in [
-            ("canvas", colors.surface.canvas),
-            ("chrome", colors.surface.chrome),
-            ("panel", colors.surface.panel),
-            ("raised", colors.surface.raised),
-            ("input", colors.surface.input),
-        ] {
-            checks.push((
-                format!("primary/{surface_name}"),
-                colors.foreground.primary,
-                surface,
-                4.5,
-            ));
-            checks.push((
-                format!("secondary/{surface_name}"),
-                colors.foreground.secondary,
-                surface,
-                4.5,
-            ));
-        }
-        checks.push((
-            "accent.foreground".into(),
-            colors.accent.foreground,
-            canvas,
-            4.5,
-        ));
-        checks.push((
-            "accent.on_solid".into(),
-            colors.accent.on_solid,
-            colors.accent.solid,
-            4.5,
-        ));
-        for (name, set) in [
-            ("status.info", colors.status.info),
-            ("status.success", colors.status.success),
-            ("status.warning", colors.status.warning),
-            ("status.danger", colors.status.danger),
-        ] {
-            checks.push((
-                name.into(),
-                set.foreground,
-                composite_over(canvas, set.background),
-                4.5,
-            ));
-        }
-        for (name, set) in [
-            ("diff.added", colors.diff.added),
-            ("diff.removed", colors.diff.removed),
-            ("diff.modified", colors.diff.modified),
-        ] {
-            checks.push((
-                name.into(),
-                set.foreground,
-                composite_over(editor, set.background),
-                4.5,
-            ));
-            checks.push((
-                format!("{name}.word"),
-                set.foreground,
-                composite_over(editor, set.word_background),
-                4.5,
-            ));
-        }
-        for (token, color) in syntax_foregrounds(theme) {
-            checks.push((format!("syntax.{token}/editor"), color, editor, 4.5));
-            for (wash, background) in [
-                ("diff.added", colors.diff.added.background),
-                ("diff.removed", colors.diff.removed.background),
-            ] {
-                checks.push((
-                    format!("syntax.{token}/{wash}"),
-                    color,
-                    composite_over(editor, background),
-                    3.0,
+        for check in readability_checks(theme) {
+            let actual = check.ratio();
+            if actual < check.minimum {
+                failures.push(format!(
+                    "{key} {} ({}): {actual:.2} < {:.2}",
+                    check.name, check.token, check.minimum
                 ));
-            }
-        }
-        for (index, color) in theme.graph_lane_palette.as_slice().iter().enumerate() {
-            checks.push((format!("graph_lane_palette[{index}]"), *color, canvas, 3.0));
-        }
-
-        for (name, foreground, background, minimum) in checks {
-            let exempt = READABILITY_FLOOR_EXCEPTIONS
-                .iter()
-                .any(|(k, prefix)| *k == key && name.starts_with(prefix));
-            let actual = contrast_ratio(foreground, background);
-            if !exempt && actual < minimum {
-                failures.push(format!("{key} {name}: {actual:.2} < {minimum:.2}"));
             }
         }
     }

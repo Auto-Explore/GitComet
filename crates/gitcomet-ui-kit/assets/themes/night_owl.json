@@ -16,14 +16,14 @@
         },
         "foreground": {
           "primary": "#d6deebff",
-          "secondary": "#859eb4ff",
+          "secondary": "#8ca5bbff",
           "disabled": {
             "hex": "#859eb4ff",
             "alpha": 0.62
           },
           "placeholder": {
             "hex": "#859eb4ff",
-            "alpha": 0.72
+            "alpha": 0.99
           },
           "emphasis": "#ffffffff"
         },
@@ -105,7 +105,7 @@
             }
           },
           "danger": {
-            "foreground": "#f55855ff",
+            "foreground": "#fa5c59ff",
             "background": {
               "hex": "#f55855ff",
               "alpha": 0.18
@@ -120,15 +120,15 @@
           "background": "#011627ff",
           "foreground": "#d6deebff",
           "gutter_background": "#011627ff",
-          "line_number": "#516a7fff",
+          "line_number": "#688197ff",
           "cursor": {
             "hex": "#d6deebff",
             "alpha": 0.78
           },
-          "selection_background": "#1d3b53ff",
+          "selection_background": "#1b3951ff",
           "search_match_background": {
             "hex": "#ecc48dff",
-            "alpha": 0.22
+            "alpha": 0.19
           },
           "search_match_foreground": "#ecc48dff",
           "bracket_match_background": {
@@ -301,14 +301,14 @@
         },
         "foreground": {
           "primary": "#403f53ff",
-          "secondary": "#656979ff",
+          "secondary": "#606474ff",
           "disabled": {
             "hex": "#656979ff",
             "alpha": 0.62
           },
           "placeholder": {
             "hex": "#656979ff",
-            "alpha": 0.72
+            "alpha": 0.92
           },
           "emphasis": "#111111ff"
         },
@@ -402,7 +402,7 @@
           "background": "#fbfbfbff",
           "foreground": "#403f53ff",
           "gutter_background": "#fbfbfbff",
-          "line_number": "#79909aff",
+          "line_number": "#617781ff",
           "cursor": "#403f53ff",
           "selection_background": "#e0e0e0ff",
           "search_match_background": {

@@ -16,14 +16,14 @@
         },
         "foreground": {
           "primary": "#abb2bfff",
-          "secondary": "#a7acb7ff",
+          "secondary": "#a9aeb9ff",
           "disabled": {
             "hex": "#a7acb7ff",
             "alpha": 0.62
           },
           "placeholder": {
             "hex": "#a7acb7ff",
-            "alpha": 0.72
+            "alpha": 0.98
           },
           "emphasis": "#ffffffff"
         },
@@ -62,7 +62,7 @@
           }
         },
         "accent": {
-          "foreground": "#61afefff",
+          "foreground": "#67b5f5ff",
           "solid": "#61afefff",
           "on_solid": "#282c34ff",
           "subtle_background": {
@@ -118,9 +118,9 @@
         },
         "editor": {
           "background": "#282c34ff",
-          "foreground": "#abb2bfff",
+          "foreground": "#b0b7c4ff",
           "gutter_background": "#282c34ff",
-          "line_number": "#707a90ff",
+          "line_number": "#8893a9ff",
           "cursor": {
             "hex": "#abb2bfff",
             "alpha": 0.78
@@ -131,7 +131,7 @@
           },
           "search_match_background": {
             "hex": "#e5c07bff",
-            "alpha": 0.22
+            "alpha": 0.19
           },
           "search_match_foreground": "#e5c07bff",
           "bracket_match_background": {

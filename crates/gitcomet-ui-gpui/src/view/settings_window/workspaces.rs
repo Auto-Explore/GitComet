@@ -72,6 +72,7 @@ impl SettingsWindowView {
         cx.notify();
     }
 
+    /// Keeps the theme grid open so themes can be compared pick after pick.
     pub(super) fn set_workspace_theme(
         &mut self,
         id: WorkspaceId,
@@ -82,7 +83,6 @@ impl SettingsWindowView {
         if crate::workspaces::set_workspace_theme_mode(cx, id, key) {
             crate::app::notify_workspace_changed_from_view(cx, id);
         }
-        self.expanded_section = None;
         cx.notify();
     }
 

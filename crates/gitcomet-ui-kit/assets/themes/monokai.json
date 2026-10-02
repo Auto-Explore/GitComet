@@ -16,14 +16,14 @@
         },
         "foreground": {
           "primary": "#f8f8f2ff",
-          "secondary": "#b7b096ff",
+          "secondary": "#beb79cff",
           "disabled": {
             "hex": "#b7b096ff",
             "alpha": 0.62
           },
           "placeholder": {
             "hex": "#b7b096ff",
-            "alpha": 0.72
+            "alpha": 0.98
           },
           "emphasis": "#ffffffff"
         },
@@ -127,11 +127,11 @@
           },
           "selection_background": {
             "hex": "#878b91ff",
-            "alpha": 0.5
+            "alpha": 0.29
           },
           "search_match_background": {
             "hex": "#e6db74ff",
-            "alpha": 0.22
+            "alpha": 0.16
           },
           "search_match_foreground": "#e6db74ff",
           "bracket_match_background": {

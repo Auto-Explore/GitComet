@@ -4349,7 +4349,12 @@ fn workspaces_page_edits_colour_theme_name_and_deletes(cx: &mut gpui::TestAppCon
         read(&mut settings_cx).and_then(|workspace| workspace.theme_mode),
         Some("tokyo_night".to_string())
     );
-    click(&mut settings_cx, "settings_window_workspace_theme");
+    // The grid stays open after a pick so themes can be compared in turn.
+    click(&mut settings_cx, "settings_window_workspace_theme_nord");
+    assert_eq!(
+        read(&mut settings_cx).and_then(|workspace| workspace.theme_mode),
+        Some("nord".to_string())
+    );
     click(
         &mut settings_cx,
         "settings_window_workspace_theme_follow_app",
@@ -4357,6 +4362,13 @@ fn workspaces_page_edits_colour_theme_name_and_deletes(cx: &mut gpui::TestAppCon
     assert_eq!(
         read(&mut settings_cx).and_then(|workspace| workspace.theme_mode),
         None
+    );
+    // Only the header collapses it.
+    click(&mut settings_cx, "settings_window_workspace_theme");
+    assert!(
+        settings_cx
+            .debug_bounds("settings_window_workspace_theme_grid")
+            .is_none()
     );
 
     // Typing alone does not save; the Save button beside the field does.
