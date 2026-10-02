@@ -4242,6 +4242,35 @@
                 },
                 "deprecation": null,
                 "name": "color"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "crate::HostedAction",
+                                  "type_path": "gitcomet_extension_api::HostedAction"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "on_click"
               }
             ],
             "has_stripped_fields": false
@@ -4528,6 +4557,49 @@
             },
             "deprecation": null,
             "name": "with_color"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "generic": "Self"
+                      }
+                    ],
+                    [
+                      "action",
+                      {
+                        "resolved_path": {
+                          "args": null,
+                          "path": "crate::HostedAction",
+                          "type_path": "gitcomet_extension_api::HostedAction"
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "with_action"
           }
         ],
         "trait": null
@@ -7690,6 +7762,35 @@
                 },
                 "deprecation": null,
                 "name": "on_gutter_click"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "DiffGutterAction",
+                                  "type_path": "gitcomet_extension_api::DiffGutterAction"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "on_annotation_click"
               },
               {
                 "attrs": [],

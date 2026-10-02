@@ -531,6 +531,25 @@ fn the_example_changes_view_shows_picks_in_two_panes(cx: &mut gpui::TestAppConte
     click_debug_selector(cx, selector(format!("file_filter_{list_id}_0")));
     publish(cx, &view, store.snapshot());
 
+    // The flag's own click removes it, and with it the file's flag.
+    click_debug_selector(cx, selector(format!("hosted_diff_{current_id}_gutter_0")));
+    publish(cx, &view, store.snapshot());
+    assert!(cx.update(|_window, app| changes.read(app).flags().is_empty()));
+    assert!(
+        cx.debug_bounds(selector(format!("hosted_file_list_{list_id}_glyph_a.rs")))
+            .is_none()
+    );
+
+    // A note on the selected line goes under it; clicking it removes it.
+    click_debug_selector(cx, selector(format!("hosted_diff_{current_id}_row_0")));
+    publish(cx, &view, store.snapshot());
+    click_debug_selector(cx, selector(format!("hosted_diff_{current_id}_action_0")));
+    publish(cx, &view, store.snapshot());
+    assert_eq!(cx.update(|_window, app| changes.read(app).notes().len()), 1);
+    click_debug_selector(cx, selector(format!("hosted_diff_{current_id}_row_1")));
+    publish(cx, &view, store.snapshot());
+    assert!(cx.update(|_window, app| changes.read(app).notes().is_empty()));
+
     click_debug_selector(
         cx,
         selector(format!("hosted_file_list_{list_id}_file_b.rs")),
@@ -1103,4 +1122,152 @@ fn the_example_pops_its_pane_out_and_back(cx: &mut gpui::TestAppContext) {
     cx.update(|window, _app| window.remove_window());
     cx.run_until_parked();
     assert!(windows(cx).is_empty());
+}
+
+type Clicks = std::rc::Rc<std::cell::RefCell<Vec<(&'static str, DiffLineSide, u32)>>>;
+
+/// A snapshot pane with a clickable note under new line 2 and an annotation
+/// on new line 3, drawn by the shared renderer or by its own rows.
+fn clickable_pane(
+    host: &gitcomet_extension_api::WindowHost,
+    root: Option<gpui::WeakEntity<GitCometView>>,
+    policy: DiffPanePolicy,
+    clicks: &Clicks,
+    app: &mut App,
+) -> (
+    DiffPane,
+    gpui::Entity<crate::view::hosted::diff_pane::DiffPaneView>,
+) {
+    use crate::view::hosted::diff_pane::{DiffPaneView, HostedDiffPane};
+    use gitcomet_extension_api::{DiffAnnotation, DiffAnnotations, DiffInset, HostedAction};
+    let record = |kind: &'static str| {
+        let clicks = clicks.clone();
+        Some(std::rc::Rc::new(move |side, line, _: &mut App| {
+            clicks.borrow_mut().push((kind, side, line))
+        }) as gitcomet_extension_api::DiffGutterAction)
+    };
+    let options = DiffPaneOptions {
+        policy,
+        on_gutter_click: record("gutter"),
+        on_annotation_click: record("annotation"),
+        ..DiffPaneOptions::default()
+    };
+    let snapshot = DiffSnapshot::new("notes.txt", "one\ntwo\nthree\n", "one\nTWO\nthree\n");
+    let entity = app.new(|cx| {
+        let mut pane = DiffPaneView::snapshot(host.clone(), snapshot, options, cx);
+        if let Some(root) = root {
+            pane.attach_root(root);
+        }
+        pane
+    });
+    let pane = DiffPane::new(std::rc::Rc::new(HostedDiffPane {
+        entity: entity.clone(),
+    }));
+    let noted = clicks.clone();
+    pane.set_insets(
+        vec![
+            DiffInset::new(DiffLineSide::New, 2, ["note".into()])
+                .with_action(HostedAction::new("Open note", move |_| {
+                    noted.borrow_mut().push(("inset", DiffLineSide::New, 2))
+                })),
+        ],
+        app,
+    );
+    pane.set_annotations(
+        DiffAnnotations::new().with(
+            DiffLineSide::New,
+            3,
+            DiffAnnotation::new(gpui::red()).with_label("flag"),
+        ),
+        app,
+    );
+    (pane, entity)
+}
+
+/// A note's click runs its action and a click on an annotation runs the
+/// annotation action, in the shared renderer and in the pane's own rows;
+/// other lines' gutters still run the gutter action. A read-only pane runs
+/// no line action, but its notes stay clickable.
+#[gpui::test]
+fn insets_and_annotations_run_their_actions(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    install_example(cx);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, app_cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    publish(app_cx, &view, Arc::new(AppState::test_default()));
+    let host =
+        app_cx.update(|_window, app| view.read(app).extension_window.as_ref().unwrap().host());
+    let root = view.downgrade();
+    let (new2, new3) = ((DiffLineSide::New, 2), (DiffLineSide::New, 3));
+
+    for (renderer, policy) in [
+        (true, DiffPanePolicy::default()),
+        (false, DiffPanePolicy::default()),
+        (true, DiffPanePolicy::read_only()),
+        (false, DiffPanePolicy::read_only()),
+    ] {
+        let clicks = Clicks::default();
+        let (pane, entity) = cx.update(|app| {
+            clickable_pane(&host, renderer.then(|| root.clone()), policy, &clicks, app)
+        });
+        cx.run_until_parked();
+        let view_any = pane.view();
+        let (_holder, cx) = cx.add_window_view(move |_, _| PaneHolder(view_any));
+        for _ in 0..3 {
+            cx.update(|window, app| {
+                let _ = window.draw(app);
+            });
+            cx.run_until_parked();
+        }
+        let (id, shared, rows) = cx.update(|_, app| {
+            let pane = entity.read(app);
+            let rows = if renderer {
+                // Rows: one, two (removed), TWO, the note, three.
+                (3, 2, 4)
+            } else {
+                (
+                    pane.display_row_of_inset(0, 0).unwrap(),
+                    pane.display_row_of_line(new2.0, new2.1).unwrap(),
+                    pane.display_row_of_line(new3.0, new3.1).unwrap(),
+                )
+            };
+            (pane.view_id(), pane.shares_renderer_rows(app), rows)
+        });
+        assert_eq!(shared, renderer);
+        let (note, two, three) = rows;
+        let click = |cx: &mut gpui::VisualTestContext, part: String| {
+            click_with(
+                cx,
+                selector(format!("hosted_diff_{id}_{part}")),
+                Default::default(),
+            );
+            cx.run_until_parked();
+        };
+        click(cx, format!("row_{note}"));
+        click(cx, format!("gutter_{two}"));
+        if renderer {
+            // The lane draws the annotation.
+            click(cx, format!("gutter_{three}"));
+        } else {
+            click(cx, format!("annotation_{three}"));
+            click(cx, format!("annotation_label_{three}"));
+        }
+        let expected: Vec<_> = if policy.line_action {
+            let annotations = if renderer { 1 } else { 2 };
+            [("inset", new2), ("gutter", new2)]
+                .into_iter()
+                .chain(std::iter::repeat_n(("annotation", new3), annotations))
+                .map(|(kind, (side, line))| (kind, side, line))
+                .collect()
+        } else {
+            vec![("inset", new2.0, new2.1)]
+        };
+        assert_eq!(
+            *clicks.borrow(),
+            expected,
+            "renderer: {renderer}, line actions: {}",
+            policy.line_action
+        );
+    }
 }

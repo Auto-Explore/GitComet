@@ -53,6 +53,7 @@ pub struct DiffPanePolicy {
     pub allow_stage: bool,
     pub allow_annotate: bool,
     pub file_navigation: bool,
+    /// Clicking a line's gutter or annotation runs the pane's action.
     pub line_action: bool,
     pub select_lines: bool,
     pub search: bool,
@@ -257,7 +258,10 @@ pub struct DiffInset {
     pub side: DiffLineSide,
     pub line: u32,
     pub lines: Vec<SharedString>,
+    /// The text colour; the theme's secondary text by default.
     pub color: Option<Hsla>,
+    /// Runs when the user clicks one of the inset's rows.
+    pub on_click: Option<crate::HostedAction>,
 }
 
 impl DiffInset {
@@ -271,11 +275,17 @@ impl DiffInset {
             line,
             lines: lines.into_iter().collect(),
             color: None,
+            on_click: None,
         }
     }
 
     pub fn with_color(mut self, color: Hsla) -> Self {
         self.color = Some(color);
+        self
+    }
+
+    pub fn with_action(mut self, action: crate::HostedAction) -> Self {
+        self.on_click = Some(action);
         self
     }
 }
@@ -318,6 +328,9 @@ pub struct DiffPaneOptions {
     pub style: DiffRowStyle,
     pub decor: Option<DiffRowDecorProvider>,
     pub on_gutter_click: Option<DiffGutterAction>,
+    /// Runs instead of `on_gutter_click` when the user clicks a line's
+    /// annotation. Both need [`DiffPanePolicy::line_action`].
+    pub on_annotation_click: Option<DiffGutterAction>,
     pub selection_actions: Vec<DiffSelectionAction>,
 }
 

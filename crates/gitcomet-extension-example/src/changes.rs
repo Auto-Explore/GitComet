@@ -3,8 +3,9 @@
 //! the previous pick in a second, read-only one. Retargeting either leaves the
 //! other and History as they were. Clicking the current pane's gutter flags
 //! a line; a file with flagged lines gets a flag in the list and its
-//! "Flagged" chip shows only those files. A selection can be given a note
-//! shown under it. The current pane can pop out into a window of its own and
+//! "Flagged" chip shows only those files; clicking a flag removes it. A
+//! selection can be given a note shown under it, and clicking the note
+//! removes it. The current pane can pop out into a window of its own and
 //! comes back when that window closes. Its action-bar context names the
 //! comparison and marks the repository reviewed.
 
@@ -12,8 +13,8 @@ use gitcomet_core::domain::{CommitId, DiffTarget};
 use gitcomet_extension_api::{
     ChangeSource, DiffAnnotation, DiffAnnotations, DiffInset, DiffLegendItem, DiffLineRange,
     DiffLineSide, DiffPane, DiffPaneOptions, DiffPanePolicy, DiffSelectionAction, FileList,
-    FileListFilterChip, FileListGroups, FileListMarks, FileListMode, FileListVisible, PopOutWindow,
-    RepositoryViewContext, RowGlyph, RowMark,
+    FileListFilterChip, FileListGroups, FileListMarks, FileListMode, FileListVisible, HostedAction,
+    PopOutWindow, RepositoryViewContext, RowGlyph, RowMark,
 };
 use gitcomet_ui_kit::components::Button;
 use gitcomet_ui_kit::gpui::prelude::*;
@@ -61,8 +62,9 @@ pub struct ChangesView {
     flags: BTreeMap<PathBuf, Flags>,
     /// Bumped with every flag change.
     flags_revision: u64,
-    /// The current pane's notes; a new pick clears them.
-    notes: Vec<DiffInset>,
+    /// The current pane's notes by id; a new pick clears them.
+    notes: Vec<(u64, DiffInset)>,
+    next_note: u64,
     /// The window the current pane is shown in instead of here.
     popped: Option<PopOutWindow>,
 }
@@ -95,6 +97,7 @@ impl ChangesView {
             flags: BTreeMap::new(),
             flags_revision: 0,
             notes: Vec::new(),
+            next_note: 0,
             popped: None,
         }
     }
@@ -131,14 +134,17 @@ impl ChangesView {
         cx.notify();
     }
 
-    /// Options for the current pane: gutter flags and selection notes.
+    /// Options for the current pane: gutter flags (a flag's own click
+    /// removes it) and selection notes.
     fn current_options(&self, cx: &mut Context<Self>) -> DiffPaneOptions {
         let view = cx.weak_entity();
         let noted = view.clone();
+        let toggle: gitcomet_extension_api::DiffGutterAction = Rc::new(move |side, line, cx| {
+            let _ = view.update(cx, |this, cx| this.toggle_flag(side, line, cx));
+        });
         DiffPaneOptions {
-            on_gutter_click: Some(Rc::new(move |side, line, cx| {
-                let _ = view.update(cx, |this, cx| this.toggle_flag(side, line, cx));
-            })),
+            on_gutter_click: Some(Rc::clone(&toggle)),
+            on_annotation_click: Some(toggle),
             selection_actions: vec![DiffSelectionAction::new("Add note", move |range, cx| {
                 add_note(&noted, range, cx);
             })],
@@ -219,6 +225,17 @@ impl ChangesView {
         list.set_filter_chips(vec![FileListFilterChip::visible("Flagged", visible)], cx);
     }
 
+    /// The current pane's notes.
+    pub fn notes(&self) -> Vec<DiffInset> {
+        self.notes.iter().map(|(_, note)| note.clone()).collect()
+    }
+
+    fn show_notes(&self, cx: &mut Context<Self>) {
+        if let Some(current) = &self.current {
+            current.set_insets(self.notes(), cx);
+        }
+    }
+
     pub fn current(&self) -> Option<&DiffPane> {
         self.current.as_ref()
     }
@@ -282,14 +299,19 @@ fn add_note(view: &WeakEntity<ChangesView>, range: DiffLineRange, cx: &mut App) 
         } else {
             format!("Note on lines {}–{}", range.start, range.end)
         };
-        this.notes.push(DiffInset::new(
-            range.side,
-            range.end,
-            [SharedString::from(text)],
-        ));
-        if let Some(current) = &this.current {
-            current.set_insets(this.notes.clone(), cx);
-        }
+        let id = this.next_note;
+        this.next_note += 1;
+        let owner = cx.weak_entity();
+        let remove = HostedAction::new("Remove note", move |cx| {
+            let _ = owner.update(cx, |this, cx| {
+                this.notes.retain(|(note, _)| *note != id);
+                this.show_notes(cx);
+            });
+        });
+        let note =
+            DiffInset::new(range.side, range.end, [SharedString::from(text)]).with_action(remove);
+        this.notes.push((id, note));
+        this.show_notes(cx);
     });
 }
 

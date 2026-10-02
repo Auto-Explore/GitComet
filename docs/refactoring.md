@@ -474,6 +474,15 @@ Since then:
   so scrolling never regroups and grouping never replans
   (`file_list/regroup_100k`). The example's Changes list groups by role,
   flags files with flagged lines and offers a "Flagged" chip.
+- Diff panes' insets and annotations are clickable: `DiffInset::with_action`
+  runs a hosted action from any of the inset's rows (on its own side in a
+  split), and `DiffPaneOptions::on_annotation_click` runs instead of the
+  gutter action when the click lands on an annotation (the renderer's
+  gutter lane, the fallback rows' bar and label). Both rendering paths now
+  agree: line actions need `DiffPanePolicy::line_action` (the fallback rows
+  offered and ran gutter clicks regardless), and an inset's colour is its
+  text colour (the fallback used it as the background). In the example,
+  clicking a flag unflags the line and clicking a note removes it.
 
 ## History find (#532)
 
