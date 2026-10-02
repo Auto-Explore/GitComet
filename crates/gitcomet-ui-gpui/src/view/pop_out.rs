@@ -4,7 +4,7 @@
 
 use super::*;
 use gitcomet_extension_api::{
-    HostError, OnWindowClosed, PopOutImpl, PopOutWindow, WindowContent, WindowHost,
+    HostError, OnWindowClosed, PopOutWindow, WindowContent, WindowHost, host::PopOutImpl,
 };
 use gpui::{TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions};
 use std::rc::Rc;
@@ -45,7 +45,7 @@ pub(in crate::view) fn open(
     on_closed: OnWindowClosed,
     cx: &mut App,
 ) -> Result<PopOutWindow, HostError> {
-    let percent = crate::ui_scale::current(cx).percent;
+    let percent = crate::ui_scale::percent_for_window(cx, main);
     let bounds = Bounds::centered(
         None,
         crate::ui_scale::design_size_from_percent(
@@ -70,12 +70,15 @@ pub(in crate::view) fn open(
         }),
         app_id: Some(identity.window_app_id(gitcomet_core::identity::WindowKind::Main)),
         window_decorations: Some(WindowDecorations::Server),
+        icon: crate::assets::window_icon(),
         is_movable: true,
         is_resizable: true,
         ..Default::default()
     };
     let handle = cx
         .open_window(options, move |window, cx| {
+            // Renders at its main window's zoom, and changes with it.
+            crate::ui_scale::follow_window(cx, window.window_handle().window_id(), main);
             crate::ui_scale::apply_to_window(window, percent);
             let popped = window.window_handle();
             let content = content(window, cx);

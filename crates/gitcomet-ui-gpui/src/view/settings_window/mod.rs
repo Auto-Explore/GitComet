@@ -477,7 +477,7 @@ impl SettingsCategory {
             }
             Self::Appearance => {
                 "appearance theme themes color colour scheme dark light automatic custom \
-                 interface ui scale zoom density compact comfortable spacious window controls \
+                 interface default ui scale zoom density compact comfortable spacious window controls \
                  title bar minimize maximize tiling typography ui font editor font ligatures \
                  font size markdown preview"
             }
@@ -585,10 +585,17 @@ pub(crate) struct SettingsWindowView {
     extension_window: Option<extension_host::SettingsExtensions>,
     window_gates: Option<super::window_gates::WindowGates>,
     extension_dialog: Option<extension_host::SettingsDialog>,
-    extension_notice: Option<(SharedString, Vec<gitcomet_extension_api::HostedAction>)>,
+    extension_notice: Option<(
+        gitcomet_extension_api::NotificationKind,
+        SharedString,
+        Vec<gitcomet_extension_api::HostedAction>,
+    )>,
     theme_mode: ThemeMode,
     theme: AppTheme,
+    /// This window's own render scale.
     ui_scale_percent: u32,
+    /// The "Default UI scale" setting.
+    default_ui_scale_percent: u32,
     pub(super) window_controls_mode: crate::window_controls::WindowControlsMode,
     pub(super) browser_open_target: crate::app::BrowserOpenTarget,
     appearance_metrics: Appearance,
@@ -802,6 +809,7 @@ pub(in crate::view) fn open_settings_at(
                 };
                 view.select_category(page, cx);
             }
+            _ => return,
         }
         cx.notify();
     });
@@ -841,6 +849,7 @@ fn settings_window_options_for_scale(
                 .window_app_id(gitcomet_core::identity::WindowKind::Settings),
         ),
         window_decorations: Some(WindowDecorations::Client),
+        icon: crate::assets::window_icon(),
         is_movable: true,
         is_resizable: true,
         ..Default::default()
@@ -1359,6 +1368,7 @@ impl SettingsWindowView {
             _font_size_subscriptions: font_size_subscriptions,
             theme: theme.with_appearance(appearance_metrics),
             ui_scale_percent: ui_scale.percent,
+            default_ui_scale_percent: ui_scale.percent,
             window_controls_mode: window_controls.mode,
             browser_open_target,
             ui_font_family: font_preferences.ui_font_family,

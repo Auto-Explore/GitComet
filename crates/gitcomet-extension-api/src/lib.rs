@@ -37,29 +37,29 @@ pub use contributions::{
     BottomPanelDescriptor, ChromeDescriptor, CloseDecision, CloseGuard, CloseRequest, CloseScope,
     CommandContext, CommandDescriptor, CommandHandler, DetailsTabDescriptor, EntryOrigin,
     GateDecision, MenuLocation, Navigate, NavigationAvailability, RepositoryEntryGate,
-    RepositoryEntryRequest, RepositoryViewContext, RepositoryViewDescriptor,
+    RepositoryEntryRequest, RepositoryViewContext, RepositoryViewDescriptor, SettingsPageContext,
     SettingsPageDescriptor, SettingsTarget, SidebarSectionDescriptor, StatusItemDescriptor,
-    ViewBuilder, ViewNavigation, ViewTarget, WindowGateDescriptor,
+    ViewBuilder, ViewNavigation, ViewTarget, WindowGateDescriptor, WindowGatePredicate,
 };
 /// Revision-pinned state types hosted panes take.
 pub use gitcomet_state::diff_session::ChangeSource;
 pub use host::{
-    DialogContent, DialogHandle, HostError, OnWindowClosed, PopOutImpl, PopOutWindow,
-    RepositoryHandle, RepositoryWatch, StateObserver, StateSubscription, WindowContent, WindowHost,
-    WindowHostImpl,
+    DialogContent, DialogHandle, HostError, OnWindowClosed, PopOutWindow, RepositoryHandle,
+    RepositoryWatch, StateObserver, StateSubscription, WindowContent, WindowHost,
 };
 pub use id::{ContributionId, ExtensionId, IdError};
-pub use lifecycle::{
-    HostNotifier, ShellEvent, Slot, SlotSignal, WindowExtension, WindowExtensionFactory,
-};
+pub use lifecycle::{HostNotifier, ShellEvent, Slot, SlotSignal, WindowExtension};
 pub use panes::{
     DiffAnnotation, DiffAnnotations, DiffFileNavigation, DiffGutterAction, DiffInset, DiffLayout,
     DiffLegendItem, DiffLineRange, DiffLineSide, DiffPane, DiffPaneEvent, DiffPaneEventHandler,
-    DiffPaneImpl, DiffPaneOptions, DiffPanePolicy, DiffRowDecor, DiffRowDecorProvider,
-    DiffRowStyle, DiffScrollAnchor, DiffSelectionAction, DiffSelectionRun, DiffSnapshot, FileList,
-    FileListImpl, FileListMode, FileSelected,
+    DiffPaneOptions, DiffPanePolicy, DiffRowDecor, DiffRowDecorProvider, DiffRowStyle,
+    DiffScrollAnchor, DiffSelectionAction, DiffSelectionRun, DiffSnapshot, FileList, FileListMode,
+    FileSelected,
 };
-pub use registry::{Registrar, RegistrationError, Registry};
+pub use registry::{
+    KeyBindingDeclaration, MenuItemDeclaration, Registrar, RegistrationError, Registry,
+};
+pub use storage::StorageError;
 
 /// A compiled-in extension. The host calls [`Extension::register`] once, before
 /// any window opens.
@@ -68,6 +68,9 @@ pub trait Extension: 'static {
 
     fn register(&self, registrar: &mut Registrar);
 
+    /// Called once per window after it opens; [`WindowHost::kind`] says which.
+    /// The returned state receives that window's [`ShellEvent`]s and is
+    /// dropped with it.
     fn window_opened(
         &self,
         _host: WindowHost,

@@ -1613,7 +1613,7 @@ fn sticky_sidebar_short_viewports_and_resizing_keep_content_accessible(
                 density,
                 ..Default::default()
             });
-            ui_scale::set_current(app, scale);
+            ui_scale::set_default(app, scale);
             view.update(app, |view, cx| view.notify_font_preferences_changed(cx));
         });
         test_support::redraw(cx);
@@ -1753,7 +1753,7 @@ fn sticky_sidebar_surfaces_and_pin_alignment_follow_theme_density_and_scale(
                     density,
                     ..Default::default()
                 });
-                ui_scale::set_current(app, scale);
+                ui_scale::set_default(app, scale);
                 view.update(app, |view, cx| {
                     view.notify_font_preferences_changed(cx);
                     view.set_theme(AppTheme::from_key(key).unwrap(), cx);

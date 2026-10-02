@@ -365,13 +365,16 @@ pub(super) fn resume_queued_loads(repo: &mut RepoState, effects: &mut impl Exten
 
 /// Queue at most one refresh while a load is in flight. Known worktree
 /// paths only invalidate panes for those files; index/HEAD changes are broad.
+/// `worktree` names the linked worktree that changed (`None`: the main one);
+/// only its sessions and lists reload.
 pub(super) fn reload_worktree_sessions(
     repo: &mut RepoState,
     change: &crate::msg::RepoExternalChange,
+    worktree: Option<&std::path::Path>,
 ) -> Vec<Effect> {
     let (repo_id, lifetime) = (repo.id, repo.lifetime());
     let affected = |session: &DiffSession| {
-        if !session.follows_worktree() {
+        if !session.follows_worktree() || session.worktree() != worktree {
             return false;
         }
         if change.index || change.git_state || change.text_attributes {
@@ -403,7 +406,7 @@ pub(super) fn reload_worktree_sessions(
     // A list covers the whole repository, including files not listed yet.
     effects.extend(refresh_affected(
         &mut repo.change_lists,
-        |list| list.source.follows_worktree(),
+        |list| list.source.follows_worktree() && list.source.linked_path() == worktree,
         |view, list| refresh_changes(repo_id, lifetime, view, list),
     ));
     effects
@@ -434,7 +437,11 @@ fn load_blame(
         view,
         lifetime,
         generation: session.generation,
-        work: DiffSessionWork::Blame { path, source },
+        work: DiffSessionWork::Blame {
+            path,
+            source,
+            worktree: session.worktree().map(std::path::Path::to_path_buf),
+        },
         cancellation: session.cancellation.clone(),
     })]
 }

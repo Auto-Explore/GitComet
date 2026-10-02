@@ -169,16 +169,20 @@ impl Render for SettingsWindowView {
             body.into_any_element(),
             self.ui_scale_percent,
         ));
-        let root = root.when_some(self.extension_notice.clone(), |root, (notice, actions)| {
-            root.child(
-                div()
-                    .absolute()
-                    .bottom_4()
-                    .left_4()
-                    .right_4()
-                    .p_3()
-                    .bg(theme.colors.surface.raised)
-                    .child(notice)
+        let ui_scale = crate::ui_scale::UiScale::from_percent(self.ui_scale_percent);
+        let root = root.when_some(
+            self.extension_notice.clone(),
+            |root, (kind, notice, actions)| {
+                use gitcomet_extension_api::NotificationKind;
+                let kind = match kind {
+                    NotificationKind::Success => components::ToastKind::Success,
+                    NotificationKind::Error => components::ToastKind::Error,
+                    _ => components::ToastKind::Warning,
+                };
+                let buttons = div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_1()
                     .children(actions.into_iter().enumerate().map(|(ix, action)| {
                         components::Button::new(
                             format!("settings_notice_action_{ix}"),
@@ -195,9 +199,24 @@ impl Render for SettingsWindowView {
                                 cx.notify();
                             },
                         ),
-                    ),
-            )
-        });
+                    );
+                root.child(
+                    div()
+                        .id("settings_notice")
+                        .debug_selector(|| "settings_notice".to_string())
+                        .absolute()
+                        .bottom_4()
+                        .right_4()
+                        .occlude()
+                        .child(components::toast(
+                            theme,
+                            ui_scale,
+                            kind,
+                            div().flex().flex_col().gap_2().child(notice).child(buttons),
+                        )),
+                )
+            },
+        );
         let dialog = self.extension_dialog.as_ref().map(|dialog| {
             (
                 dialog.title.clone(),
@@ -208,54 +227,64 @@ impl Render for SettingsWindowView {
         });
         root.when_some(dialog, |root, (title, view, anchor, focus)| {
             let bounds = window.viewport_size();
-            root.child(
-                div()
+            // The main window's hosted dialogs use the same kit surfaces: a
+            // scrim-backed modal, or a popover at its anchor.
+            let surface = match anchor {
+                None => components::modal_surface(theme),
+                Some(_) => components::popover_surface(theme),
+            };
+            let dialog = surface
+                .id("settings_hosted_dialog")
+                .debug_selector(|| "settings_hosted_dialog".to_string())
+                .track_focus(&focus)
+                .tab_group()
+                .tab_stop(false)
+                .on_key_down(cx.listener(Self::hosted_dialog_key))
+                .w(ui_scale.px(384.0))
+                .max_h_full()
+                .p(ui_scale.px(16.0))
+                .flex()
+                .flex_col()
+                .gap(ui_scale.px(8.0))
+                .text_color(theme.colors.foreground.primary)
+                .child(title)
+                .child(view)
+                .child(
+                    components::Button::new("settings_dialog_close", "Close").on_click(
+                        theme,
+                        cx,
+                        |view, _, window, cx| view.close_hosted_dialog(window, cx),
+                    ),
+                );
+            root.child(match anchor {
+                None => components::modal_scrim(theme)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(dialog)
+                    .into_any_element(),
+                Some(anchor) => div()
                     .absolute()
                     .inset_0()
                     .occlude()
-                    .when(anchor.is_none(), |div| {
-                        div.flex()
-                            .items_center()
-                            .justify_center()
-                            .bg(gpui::rgba(0x00000080))
-                    })
                     .child(
-                        div()
-                            .id("settings_hosted_dialog")
-                            .track_focus(&focus)
-                            .tab_group()
-                            .tab_stop(false)
-                            .on_key_down(cx.listener(Self::hosted_dialog_key))
-                            .when_some(anchor, |div, anchor| {
-                                div.absolute()
-                                    .left(
-                                        anchor
-                                            .x
-                                            .min((bounds.width - px(384.0)).max(px(0.0)))
-                                            .max(px(0.0)),
-                                    )
-                                    .top(
-                                        anchor
-                                            .y
-                                            .min((bounds.height - px(120.0)).max(px(0.0)))
-                                            .max(px(0.0)),
-                                    )
-                            })
-                            .w_96()
-                            .max_h_full()
-                            .p_4()
-                            .bg(theme.colors.surface.panel)
-                            .child(title)
-                            .child(view)
-                            .child(
-                                components::Button::new("settings_dialog_close", "Close").on_click(
-                                    theme,
-                                    cx,
-                                    |view, _, window, cx| view.close_hosted_dialog(window, cx),
-                                ),
+                        dialog
+                            .absolute()
+                            .left(
+                                anchor
+                                    .x
+                                    .min((bounds.width - ui_scale.px(384.0)).max(px(0.0)))
+                                    .max(px(0.0)),
+                            )
+                            .top(
+                                anchor
+                                    .y
+                                    .min((bounds.height - ui_scale.px(120.0)).max(px(0.0)))
+                                    .max(px(0.0)),
                             ),
-                    ),
-            )
+                    )
+                    .into_any_element(),
+            })
         })
     }
 }

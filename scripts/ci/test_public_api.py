@@ -1,6 +1,6 @@
 import copy
 import unittest
-from public_api import public_api
+from public_api import CRATES, public_api, selected_crates
 
 
 class PublicApiTests(unittest.TestCase):
@@ -43,3 +43,24 @@ class PublicApiTests(unittest.TestCase):
                                  inner={"use":{"id":999,"name":"Source","is_glob":False}})
         doc["paths"]["999"] = {"path":["state","ChangeSource"]}
         self.assertEqual(public_api(doc)["api::Source"], {"reexport":"state::ChangeSource"})
+
+    def test_a_module_allowlist_keeps_only_those_root_modules(self):
+        def item(item_id, name, inner):
+            return {"id": item_id, "crate_id": 0, "name": name, "inner": inner,
+                    "visibility": "public", "attrs": [], "docs": None, "span": None}
+        items = [item(1, "core", {"module": {"items": [2, 4, 6]}}),
+                 item(2, "identity", {"module": {"items": [3]}}),
+                 item(3, "Identity", {"struct": {"kind": {"plain": {"fields": []}}, "impls": []}}),
+                 item(4, "internal", {"module": {"items": [5]}}),
+                 item(5, "Hidden", {"struct": {"kind": {"plain": {"fields": []}}, "impls": []}}),
+                 item(6, "top_level", {"function": {"has_body": True}})]
+        doc = {"root": 1, "paths": {}, "index": {str(entry["id"]): entry for entry in items}}
+        self.assertEqual(list(public_api(doc, ("identity",))), ["core::identity::Identity"])
+        self.assertEqual(sorted(public_api(doc)),
+                         ["core::identity::Identity", "core::internal::Hidden", "core::top_level"])
+
+    def test_every_crate_is_checked_unless_some_are_named(self):
+        self.assertEqual(selected_crates(None), list(CRATES))
+        self.assertEqual(selected_crates(["gitcomet-core"]), ["gitcomet-core"])
+        with self.assertRaises(SystemExit):
+            selected_crates(["not-a-crate"])

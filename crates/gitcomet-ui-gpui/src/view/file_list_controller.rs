@@ -5,7 +5,7 @@ use crate::view::rows::{
     FileListPlanCache, FileTree, FileTreeItem,
 };
 use gitcomet_core::domain::{CommitFileChange, FileStatusKind};
-use gitcomet_extension_api::FileListMode;
+use gitcomet_extension_api::{FileListGroups, FileListMode, FileListVisible};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
@@ -49,11 +49,13 @@ pub(in crate::view) enum GroupedRow {
 }
 
 /// A grouped list's rows, all one height.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(in crate::view) struct GroupedRows {
     pub(in crate::view) rows: Vec<GroupedRow>,
     /// The row of each header, ascending.
     headers: Vec<usize>,
+    /// Each group's label, by group index.
+    pub(in crate::view) labels: Arc<[SharedString]>,
 }
 
 impl GroupedRows {
@@ -70,6 +72,22 @@ impl GroupedRows {
     }
 }
 
+/// What a grouped list groups by.
+enum Grouping {
+    ByKind,
+    /// The caller's groups; `labels` ends with "Other".
+    Custom {
+        groups: FileListGroups,
+        labels: Arc<[SharedString]>,
+    },
+}
+
+/// The shown files' ordinals by group.
+struct GroupBuckets {
+    groups: Vec<Vec<usize>>,
+    labels: Arc<[SharedString]>,
+}
+
 /// One list's presentation state, independent of every other list.
 pub(in crate::view) struct FileListController {
     pub(in crate::view) files: Arc<Vec<CommitFileChange>>,
@@ -79,15 +97,23 @@ pub(in crate::view) struct FileListController {
     pub(in crate::view) query: SharedString,
     pub(in crate::view) mode: FileListMode,
     pub(in crate::view) collapsed: CollapsedDirs,
-    collapsed_groups: [bool; GROUP_ORDER.len()],
+    grouping: Grouping,
+    kind_labels: Arc<[SharedString]>,
+    /// Per group; reset when the group labels change.
+    collapsed_groups: Vec<bool>,
+    visible: Option<FileListVisible>,
     pub(in crate::view) selected: Option<PathBuf>,
     pub(in crate::view) projection_cache: CommitFileProjectionCache<u64>,
     pub(in crate::view) presentations: crate::view::rows::CommitFileRowPresentationCache<u64>,
     pub(in crate::view) plan_cache: FileListPlanCache,
     shown: Option<(u64, Arc<[usize]>)>,
+    buckets: Option<(u64, Arc<GroupBuckets>)>,
     grouped: Option<(u64, Arc<GroupedRows>)>,
-    #[cfg(test)]
+    /// Row builds (collapse included) and regroup passes.
+    #[cfg(any(test, feature = "benchmarks"))]
     pub(in crate::view) group_builds: usize,
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub(in crate::view) bucket_builds: usize,
 }
 
 impl FileListController {
@@ -100,16 +126,117 @@ impl FileListController {
             query: SharedString::default(),
             mode,
             collapsed: CollapsedDirs::default(),
-            collapsed_groups: [false; GROUP_ORDER.len()],
+            grouping: Grouping::ByKind,
+            kind_labels: (0..GROUP_ORDER.len())
+                .map(|group| SharedString::new_static(group_label(group)))
+                .collect(),
+            collapsed_groups: vec![false; GROUP_ORDER.len()],
+            visible: None,
             selected: None,
             projection_cache: CommitFileProjectionCache::default(),
             presentations: Default::default(),
             plan_cache: FileListPlanCache::default(),
             shown: None,
+            buckets: None,
             grouped: None,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "benchmarks"))]
             group_builds: 0,
+            #[cfg(any(test, feature = "benchmarks"))]
+            bucket_builds: 0,
         }
+    }
+
+    /// Groups by `groups` instead of change kinds (`None`: by kind). New
+    /// labels expand every group.
+    pub(in crate::view) fn set_groups(&mut self, groups: Option<FileListGroups>) {
+        let grouping = match groups {
+            None => Grouping::ByKind,
+            Some(groups) => Grouping::Custom {
+                labels: groups
+                    .labels
+                    .iter()
+                    .cloned()
+                    .chain([SharedString::new_static("Other")])
+                    .collect(),
+                groups,
+            },
+        };
+        let labels = match &grouping {
+            Grouping::ByKind => &self.kind_labels,
+            Grouping::Custom { labels, .. } => labels,
+        };
+        if labels[..] != self.group_labels()[..] {
+            self.collapsed_groups = vec![false; labels.len()];
+        }
+        self.grouping = grouping;
+    }
+
+    /// Shows only `visible`'s paths (`None`: all).
+    pub(in crate::view) fn set_visible(&mut self, visible: Option<FileListVisible>) {
+        self.visible = visible;
+    }
+
+    /// Whether `visible` is the set this list shows.
+    pub(in crate::view) fn shows_only(&self, visible: &FileListVisible) -> bool {
+        self.visible.as_ref().is_some_and(|current| {
+            current.revision == visible.revision && Arc::ptr_eq(&current.paths, &visible.paths)
+        })
+    }
+
+    fn group_labels(&self) -> Arc<[SharedString]> {
+        match &self.grouping {
+            Grouping::ByKind => Arc::clone(&self.kind_labels),
+            Grouping::Custom { labels, .. } => Arc::clone(labels),
+        }
+    }
+
+    /// Changes when the buckets would: the shown files or the grouping.
+    fn grouping_key(&self) -> u64 {
+        let mut hasher = rustc_hash::FxHasher::default();
+        self.projection_key().hash(&mut hasher);
+        if let Grouping::Custom { groups, labels } = &self.grouping {
+            groups.revision.hash(&mut hasher);
+            (std::rc::Rc::as_ptr(&groups.group_of) as *const () as usize).hash(&mut hasher);
+            (Arc::as_ptr(labels) as *const () as usize).hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    /// The shown files by group: one pass over them, asking a custom
+    /// grouping once per file.
+    fn buckets(&mut self) -> Arc<GroupBuckets> {
+        let key = self.grouping_key();
+        if let Some((cached, buckets)) = &self.buckets
+            && *cached == key
+        {
+            return Arc::clone(buckets);
+        }
+        let shown = self.shown();
+        let labels = self.group_labels();
+        let mut groups = vec![Vec::new(); labels.len()];
+        match &self.grouping {
+            Grouping::ByKind => {
+                for (ordinal, &ix) in shown.iter().enumerate() {
+                    groups[group_of(self.files[ix].kind)].push(ordinal);
+                }
+            }
+            Grouping::Custom { groups: custom, .. } => {
+                let other = labels.len() - 1;
+                for (ordinal, &ix) in shown.iter().enumerate() {
+                    let group = (custom.group_of)(&self.files[ix].path)
+                        .filter(|group| *group < other)
+                        .unwrap_or(other);
+                    groups[group].push(ordinal);
+                }
+            }
+        }
+        #[cfg(any(test, feature = "benchmarks"))]
+        {
+            self.bucket_builds += 1;
+        }
+        let buckets = Arc::new(GroupBuckets { groups, labels });
+        self.buckets = Some((key, Arc::clone(&buckets)));
+        buckets
     }
 
     pub(in crate::view) fn set_mode(&mut self, mode: FileListMode) {
@@ -131,11 +258,11 @@ impl FileListController {
         }
     }
 
-    /// The shown files by change kind; rebuilt only when the shown files or
-    /// the collapsed groups change.
+    /// The grouped rows; rebuilt only when the shown files, the grouping or
+    /// the collapsed groups change, and regrouped only for the first two.
     pub(in crate::view) fn grouped(&mut self) -> Arc<GroupedRows> {
         let mut hasher = rustc_hash::FxHasher::default();
-        self.projection_key().hash(&mut hasher);
+        self.grouping_key().hash(&mut hasher);
         self.collapsed_groups.hash(&mut hasher);
         let key = hasher.finish();
         if let Some((cached, grouped)) = &self.grouped
@@ -143,17 +270,17 @@ impl FileListController {
         {
             return Arc::clone(grouped);
         }
-        let shown = self.shown();
-        let mut groups = vec![Vec::new(); GROUP_ORDER.len()];
-        for (ordinal, &ix) in shown.iter().enumerate() {
-            groups[group_of(self.files[ix].kind)].push(ordinal);
-        }
-        let mut grouped = GroupedRows::default();
-        for (group, ordinals) in groups.into_iter().enumerate() {
+        let buckets = self.buckets();
+        let mut grouped = GroupedRows {
+            rows: Vec::new(),
+            headers: Vec::new(),
+            labels: Arc::clone(&buckets.labels),
+        };
+        for (group, ordinals) in buckets.groups.iter().enumerate() {
             if ordinals.is_empty() {
                 continue;
             }
-            let collapsed = self.collapsed_groups[group];
+            let collapsed = self.collapsed_groups.get(group).copied().unwrap_or(false);
             grouped.headers.push(grouped.rows.len());
             grouped.rows.push(GroupedRow::Header {
                 group,
@@ -161,14 +288,12 @@ impl FileListController {
                 collapsed,
             });
             if !collapsed {
-                grouped.rows.extend(
-                    ordinals
-                        .into_iter()
-                        .map(|ordinal| GroupedRow::File { ordinal }),
-                );
+                grouped
+                    .rows
+                    .extend(ordinals.iter().map(|&ordinal| GroupedRow::File { ordinal }));
             }
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "benchmarks"))]
         {
             self.group_builds += 1;
         }
@@ -203,6 +328,10 @@ impl FileListController {
         self.sort.hash(&mut hasher);
         self.kind_filter.hash(&mut hasher);
         self.query.hash(&mut hasher);
+        if let Some(visible) = &self.visible {
+            visible.revision.hash(&mut hasher);
+            Arc::as_ptr(&visible.paths).hash(&mut hasher);
+        }
         hasher.finish()
     }
 
@@ -218,7 +347,12 @@ impl FileListController {
             self.projection_cache
                 .projection_for(&key, &self.files, self.sort, self.kind_filter);
         let query = self.query.to_lowercase();
-        let shown: Arc<[usize]> = if query.is_empty() {
+        // Hashed once per rebuild: path comparisons in a tree set are slow.
+        let visible: Option<rustc_hash::FxHashSet<&Path>> = self
+            .visible
+            .as_ref()
+            .map(|visible| visible.paths.iter().map(PathBuf::as_path).collect());
+        let shown: Arc<[usize]> = if query.is_empty() && visible.is_none() {
             Arc::clone(&projection.source_indices)
         } else {
             projection
@@ -226,11 +360,12 @@ impl FileListController {
                 .iter()
                 .copied()
                 .filter(|&ix| {
-                    self.files[ix]
-                        .path
-                        .to_string_lossy()
-                        .to_lowercase()
-                        .contains(&query)
+                    let path = &self.files[ix].path;
+                    visible
+                        .as_ref()
+                        .is_none_or(|visible| visible.contains(path.as_path()))
+                        && (query.is_empty()
+                            || path.to_string_lossy().to_lowercase().contains(&query))
                 })
                 .collect()
         };
@@ -286,15 +421,7 @@ impl FileListController {
         let shown = self.shown();
         let ordinals: Vec<usize> = match self.mode {
             FileListMode::Tree => self.plan().ordered().iter().collect(),
-            FileListMode::Grouped => {
-                let mut ordered = Vec::with_capacity(shown.len());
-                for group in 0..GROUP_ORDER.len() {
-                    ordered.extend(shown.iter().enumerate().filter_map(|(ordinal, &ix)| {
-                        (group_of(self.files[ix].kind) == group).then_some(ordinal)
-                    }));
-                }
-                ordered
-            }
+            FileListMode::Grouped => self.buckets().groups.iter().flatten().copied().collect(),
             _ => (0..shown.len()).collect(),
         };
         ordinals

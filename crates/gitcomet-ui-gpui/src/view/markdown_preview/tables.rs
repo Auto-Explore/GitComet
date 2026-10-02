@@ -62,7 +62,7 @@ fn finish_table_block(rows: &mut [MarkdownPreviewRow]) {
         }
     }
     let mut alignments = alignments;
-    alignments.resize(column_count, MarkdownTableAlign::None);
+    alignments.resize(column_count, MarkdownTextAlign::None);
     let table = Arc::new(MarkdownTableInfo {
         alignments,
         column_widths,
@@ -82,7 +82,9 @@ pub(crate) fn normalize_whitespace(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut prev_ws = false;
     for ch in s.chars() {
-        if ch.is_whitespace() {
+        // HTML collapses only ASCII whitespace: a no-break or em space keeps
+        // its width and its place.
+        if ch.is_ascii_whitespace() {
             if !prev_ws {
                 result.push(' ');
             }
@@ -110,7 +112,7 @@ pub(crate) fn normalize_whitespace_with_spans(
 
     for (byte_ix, ch) in text.char_indices() {
         byte_map[byte_ix] = normalized_len;
-        if ch.is_whitespace() {
+        if ch.is_ascii_whitespace() {
             if !prev_ws {
                 normalized.push(' ');
                 normalized_len += 1;

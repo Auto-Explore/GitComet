@@ -2428,6 +2428,7 @@ fn build_markdown_preview_row(
         table: None,
         task: None,
         continues_item: false,
+        align: Default::default(),
     }
 }
 

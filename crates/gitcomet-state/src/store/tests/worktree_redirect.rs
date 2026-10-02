@@ -14,7 +14,7 @@ fn git_output(repo: &Path, args: &[&str]) -> String {
 }
 
 /// Main worktree on `main` (two commits), linked worktree on `feature` (first commit).
-fn repo_with_linked_worktree() -> (tempfile::TempDir, PathBuf, PathBuf) {
+pub(super) fn repo_with_linked_worktree() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = dir.path().join("repo");
     fs::create_dir_all(&repo).expect("repo dir");
@@ -43,7 +43,7 @@ fn repo_with_linked_worktree() -> (tempfile::TempDir, PathBuf, PathBuf) {
     (dir, repo, canonicalize_or_original(worktree))
 }
 
-fn wait_until(description: &str, ready: impl Fn() -> bool) {
+pub(super) fn wait_until(description: &str, ready: impl Fn() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while !ready() {
         assert!(
@@ -54,7 +54,7 @@ fn wait_until(description: &str, ready: impl Fn() -> bool) {
     }
 }
 
-fn open_repo_and_wait(store: &AppStore, path: &Path) -> RepoId {
+pub(super) fn open_repo_and_wait(store: &AppStore, path: &Path) -> RepoId {
     let expected = canonicalize_or_original(path.to_path_buf());
     store.dispatch(Msg::OpenRepo(path.to_path_buf()));
     wait_until("repository to open", || {
@@ -275,5 +275,94 @@ fn overwrite_from_remote_branch_held_by_linked_worktree_clears_its_upstream() {
         git_config_is_unset(&worktree, "branch.feature.remote")
             && git_config_is_unset(&worktree, "branch.feature.merge"),
         "an overwritten branch tracks nothing, even when reset in another worktree"
+    );
+}
+
+/// A list and a session on a linked worktree read that checkout through the
+/// real backend: its edit is listed and diffed while History stays as it was.
+#[test]
+fn a_linked_worktrees_changes_and_diff_load_from_its_own_checkout() {
+    use crate::diff_session::{ChangeSource, DiffSessionMsg, DiffViewId};
+    let (_dir, repo, worktree) = repo_with_linked_worktree();
+    fs::write(worktree.join("a.txt"), "one\nlinked edit\n").expect("edit the worktree");
+    let (store, _events) = AppStore::new_test(Arc::new(gitcomet_git_gix::GixBackend));
+    let repo_id = open_repo_and_wait(&store, &repo);
+    let state = |store: &AppStore| {
+        store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .cloned()
+            .expect("repository")
+    };
+    let before = state(&store);
+    let lifetime = before.lifetime();
+    let history = (
+        before.diff_state.diff_target_rev,
+        before.navigation.main_history.entries.len(),
+    );
+
+    let (list, pane) = (DiffViewId::next(), DiffViewId::next());
+    let source = ChangeSource::linked_worktree(
+        worktree.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+        true,
+    );
+    store.dispatch(Msg::DiffSession(DiffSessionMsg::OpenChanges {
+        repo_id,
+        lifetime,
+        view: list,
+        source: source.clone(),
+    }));
+    wait_until("the linked worktree's changes", || {
+        state(&store)
+            .change_lists
+            .get(&list)
+            .is_some_and(|list| !list.is_loading() && !matches!(list.files, Loadable::NotLoaded))
+    });
+    let files = match &state(&store).change_lists[&list].files {
+        Loadable::Ready(files) => files.as_ref().clone(),
+        other => panic!("changes did not load: {other:?}"),
+    };
+    let paths: Vec<_> = files.iter().map(|file| file.path.clone()).collect();
+    assert_eq!(
+        paths,
+        vec![PathBuf::from("a.txt")],
+        "the main checkout is clean"
+    );
+
+    store.dispatch(Msg::DiffSession(DiffSessionMsg::Open {
+        repo_id,
+        lifetime,
+        view: pane,
+        target: source.target_for(&files[0], None),
+    }));
+    wait_until("the linked file's diff", || {
+        state(&store)
+            .diff_sessions
+            .get(&pane)
+            .is_some_and(|session| !matches!(session.diff, Loadable::Loading | Loadable::NotLoaded))
+    });
+    let after = state(&store);
+    let Loadable::Ready(diff) = &after.diff_sessions[&pane].diff else {
+        panic!(
+            "the diff did not load: {:?}",
+            after.diff_sessions[&pane].diff
+        );
+    };
+    assert!(
+        diff.lines
+            .iter()
+            .any(|line| line.text.as_ref().contains("linked edit")),
+        "the diff reads the linked checkout"
+    );
+    assert_eq!(after.diff_state.diff_target, None);
+    assert_eq!(
+        (
+            after.diff_state.diff_target_rev,
+            after.navigation.main_history.entries.len(),
+        ),
+        history
     );
 }

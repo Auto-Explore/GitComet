@@ -1569,7 +1569,7 @@ fn indexed_history_real_frame_benchmark(cx: &mut gpui::TestAppContext) {
         .and_then(|s| s.parse().ok())
         .unwrap_or(38.0);
     cx.update(|app| {
-        crate::ui_scale::set_current(app, scale);
+        crate::ui_scale::set_default(app, scale);
     });
     let (index, commits) = indexed_fixture_with_width(20_000, width);
     let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));

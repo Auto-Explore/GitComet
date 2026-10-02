@@ -1,5 +1,6 @@
 //! Settings has its own weak host and lifecycle, even without a repository.
 use super::*;
+use gitcomet_extension_api::host::WindowHostImpl;
 use gitcomet_extension_api::*;
 use std::{
     cell::{Cell, RefCell},
@@ -147,6 +148,30 @@ impl SettingsHost {
     fn unsupported<T>(&self) -> Result<T, HostError> {
         self.live()?;
         Err(HostError::Unsupported)
+    }
+    /// Opens `launch` after this update; a failure shows as an error notice.
+    fn launch(
+        &self,
+        launch: crate::view::platform_open::Launch,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.live()?;
+        let view = self.view.clone();
+        crate::view::platform_open::launch_later(
+            launch,
+            move |err, cx| {
+                let _ = view.update(cx, |view, cx| {
+                    view.extension_notice = Some((
+                        NotificationKind::Error,
+                        format!("Could not open: {err}").into(),
+                        Vec::new(),
+                    ));
+                    cx.notify();
+                });
+            },
+            cx,
+        )
+        .map_err(|err| HostError::InvalidRequest(err.to_string().into()))
     }
     fn handle(&self) -> Result<WindowHost, HostError> {
         self.live()?;
@@ -326,7 +351,7 @@ impl WindowHostImpl for SettingsHost {
     }
     fn toast(
         &self,
-        _: NotificationKind,
+        kind: NotificationKind,
         message: SharedString,
         actions: Vec<HostedAction>,
         cx: &mut App,
@@ -335,7 +360,7 @@ impl WindowHostImpl for SettingsHost {
         let view = self.view.clone();
         cx.defer(move |cx| {
             let _ = view.update(cx, |view, cx| {
-                view.extension_notice = Some((message, actions));
+                view.extension_notice = Some((kind, message, actions));
                 cx.notify();
             });
         });
@@ -359,6 +384,15 @@ impl WindowHostImpl for SettingsHost {
     }
     fn notify(&self, message: SharedString, cx: &mut App) -> Result<(), HostError> {
         self.toast(NotificationKind::Success, message, Vec::new(), cx)
+    }
+    fn open_url(&self, url: &str, cx: &mut App) -> Result<(), HostError> {
+        self.launch(crate::view::platform_open::Launch::Url(url.to_string()), cx)
+    }
+    fn open_path(&self, path: &std::path::Path, cx: &mut App) -> Result<(), HostError> {
+        self.launch(
+            crate::view::platform_open::Launch::Path(path.to_path_buf()),
+            cx,
+        )
     }
 
     fn workspace_state(
@@ -385,6 +419,7 @@ struct SettingsMenu {
 }
 impl Render for SettingsMenu {
     fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let ui_scale = crate::ui_scale::UiScale::current(cx);
         div()
             .flex()
             .flex_col()
@@ -398,22 +433,34 @@ impl Render for SettingsMenu {
                         .bg(self.theme.colors.stroke.subtle)
                         .into_any_element(),
                     HostedMenuItem::Action {
-                        action, disabled, ..
+                        action,
+                        icon,
+                        disabled,
+                        ..
                     } => {
                         let action = action.clone();
                         let parent = self.parent.clone();
-                        components::Button::new(
+                        let mut button = components::Button::new(
                             format!("settings_hosted_action_{index}"),
                             action.label().clone(),
-                        )
-                        .disabled(*disabled)
-                        .on_click(self.theme, cx, move |_, _, window, cx| {
-                            let _ =
-                                parent.update(cx, |view, cx| view.close_hosted_dialog(window, cx));
-                            action.invoke(cx);
-                        })
-                        .into_any_element()
+                        );
+                        if let Some(icon) = icon.clone() {
+                            button = button.start_slot(crate::view::icons::svg_icon(
+                                icon,
+                                self.theme.colors.foreground.secondary,
+                                ui_scale.px(14.0),
+                            ));
+                        }
+                        button
+                            .disabled(*disabled)
+                            .on_click(self.theme, cx, move |_, _, window, cx| {
+                                let _ = parent
+                                    .update(cx, |view, cx| view.close_hosted_dialog(window, cx));
+                                action.invoke(cx);
+                            })
+                            .into_any_element()
                     }
+                    _ => gpui::Empty.into_any_element(),
                 }
             }))
     }

@@ -35,7 +35,8 @@ pub use avatar::{
 };
 pub use button::{Button, ButtonStyle, inline_icon_button};
 pub use containers::{
-    ScrollContainer, content_header_bar, empty_state, empty_state_message, split_columns_header,
+    ScrollContainer, content_header_bar, empty_state, empty_state_message, progress_bar,
+    progress_bar_border_color, progress_bar_track_color, split_columns_header,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use containers::{panel, pill};
@@ -46,7 +47,7 @@ pub use context_menu::{
 };
 pub use diff_stat::{diff_stat, diff_stat_optional};
 pub use interactive_row::{InteractiveRowExt, InteractiveRowState, InteractiveRowStyle};
-pub use interstitial::{INTERSTITIAL_CARD_MAX_WIDTH_PX, interstitial};
+pub use interstitial::{INTERSTITIAL_CARD_MAX_WIDTH_PX, interstitial, interstitial_cta_button};
 pub use modal::{modal_scrim, modal_surface, popover_surface};
 pub use navigation::{
     NavTab, navigation_tab, navigation_tab_metrics, navigation_tab_strip, selectable_field,
@@ -73,9 +74,9 @@ pub use resize_grip::{ResizeGripAxis, resize_grip, resize_grip_hover_tint};
 pub use settings_rows::{
     SETTINGS_NAV_COLUMN_WIDTH_PX, settings_card, settings_card_with_action,
     settings_detail_container, settings_dropdown_background, settings_dropdown_border_color,
-    settings_info_row, settings_link_row, settings_nav_item, settings_row_separator_color,
-    settings_subsection_heading, settings_summary_row, settings_summary_row_with_value_prefix,
-    settings_toggle_row,
+    settings_info_row, settings_link_row, settings_nav_item, settings_option_row,
+    settings_row_separator_color, settings_subsection_heading, settings_summary_row,
+    settings_summary_row_with_value_prefix, settings_toggle_row,
 };
 pub use shortcut_keys::shortcut_keys;
 pub use skeleton::skeleton;

@@ -869,7 +869,7 @@ fn review_fractional_sidebar_rows_share_the_decoration_geometry(cx: &mut gpui::T
     for (scale, display_scale) in [(100, 1.0), (139, 1.25), (139, 1.5), (133, 1.25)] {
         cx.update(|window, app| {
             window.set_scale_factor(display_scale);
-            ui_scale::set_current(app, scale);
+            ui_scale::set_default(app, scale);
             view.update(app, |view, cx| view.notify_font_preferences_changed(cx));
         });
         test_support::redraw(cx);

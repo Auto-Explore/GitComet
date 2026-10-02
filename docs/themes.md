@@ -132,6 +132,28 @@ Each theme file is a bundle with a bundle name and one or more themes. The examp
           "foreground": "#edf1f7ff",
           "secondary": "#9ea7b8ff"
         },
+        "interstitial": {
+          "text": "#f6f7fbff",
+          "muted": "#a8b1c6ff",
+          "primary": {
+            "text": "#04172bff",
+            "background": "#5ac1feff",
+            "background_hover": "#72c7ffff",
+            "background_active": "#48b6eeff",
+            "border": "#5ac1feff",
+            "border_hover": "#72c7ffff",
+            "border_active": "#48b6eeff"
+          },
+          "secondary": {
+            "text": "#f6f7fbff",
+            "background": "#ffffff26",
+            "background_hover": "#ffffff33",
+            "background_active": "#ffffff40",
+            "border": "#ffffff47",
+            "border_hover": "#ffffff66",
+            "border_active": "#ffffff80"
+          }
+        },
         "shadow": "#000000ff",
         "graph_lane_palette": [                         // Optional
           "#ff6b6bff",
@@ -257,6 +279,10 @@ you misspell is still an error — the file is rejected rather than half-applied
 - `notice`: `background`, `border`, `foreground`, `secondary` — inline notices
   that ask for a decision, such as "File changed on disk". `foreground` colors
   the title and `secondary` the explanation beside it
+- `interstitial`: `text`, `muted`, and the `primary` and `secondary`
+  call-to-action buttons (`text`, `background`, `background_hover`,
+  `background_active`, `border`, `border_hover`, `border_active`) drawn over
+  the loading, Home, and Git-unavailable backdrops
 - `shadow`
 - `graph_lane_palette` and `graph_lane_hues` are optional
 

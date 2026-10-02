@@ -1539,7 +1539,7 @@ fn sidebar_tabs_grow_with_density_at_each_ui_scale(cx: &mut gpui::TestAppContext
                     density,
                     ..Default::default()
                 });
-                ui_scale::set_current(app, scale);
+                ui_scale::set_default(app, scale);
                 view.update(app, |view, cx| {
                     view.notify_font_preferences_changed(cx);
                     // Real scale changes resize the panel too. Measure the

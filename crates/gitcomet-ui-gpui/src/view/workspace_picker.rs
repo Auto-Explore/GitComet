@@ -41,7 +41,7 @@ pub(crate) fn workspace_picker_item(workspace: &session::Workspace) -> PickerPro
 pub(crate) fn workspace_swatch(color: Option<WorkspaceColor>) -> PickerSwatch {
     let key = color.map_or(0, |color| color as u64 + 1);
     PickerSwatch::new(key, move |theme| PickerSwatchColors {
-        dot: chrome::workspace_color(color, theme),
+        dot: chrome::workspace_color(color),
         row_tint: chrome::workspace_row_tint(color, theme),
     })
 }

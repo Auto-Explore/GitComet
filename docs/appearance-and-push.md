@@ -18,6 +18,13 @@ Font sizes are saved separately and apply immediately across open windows:
 Use the minus/plus buttons or type a whole-number value. Reset affects only that
 font size. UI scale remains a separate multiplier for the whole window.
 
+UI scale is per window. **Default UI scale** in Settings → General is the scale
+new windows open at. In a main window, zoom it on its own with Ctrl/Cmd +, - and
+0, Ctrl/Cmd + scroll, or the zoom button in its status bar; Ctrl/Cmd 0 or the
+menu's **Reset Zoom** returns it to the default. Extension pop-outs follow their
+main window's zoom. A window's own zoom lasts until it closes; only the default
+is saved.
+
 Window title bars are the one exception to all three. A title bar shares its row
 with the operating system's own window controls, which do not resize, so the
 bar, its buttons and the repository tabs hold a single size at every density,
