@@ -90,6 +90,7 @@ const TEXT_INPUT_STREAMED_HIGHLIGHT_LEGACY_LINE_THRESHOLD: usize = 64;
 const TEXT_INPUT_STREAMED_HIGHLIGHT_ESTIMATED_RUNS_PER_VISIBLE_LINE: usize = 2;
 const TEXT_INPUT_INLINE_ACTIVE_HIGHLIGHT_CAPACITY: usize = 8;
 const TEXT_INPUT_INLINE_TEXT_RUN_CAPACITY: usize = 32;
+mod drag;
 mod editing;
 mod element;
 mod highlight;
@@ -115,6 +116,8 @@ pub use shaping::benchmark_text_input_shaping_slice;
 #[cfg(feature = "benchmarks")]
 pub use wrap::benchmark_text_input_wrap_rows_for_line;
 
+#[cfg(test)]
+mod drag_autoscroll_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

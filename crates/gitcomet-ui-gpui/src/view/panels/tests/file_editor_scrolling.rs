@@ -327,3 +327,113 @@ fn file_editor_wrapped_typing_keeps_the_viewport_stable(test_cx: &mut gpui::Test
         std::fs::remove_dir_all(workdir).unwrap();
     }
 }
+
+/// Code and markdown source are both edited in `file_editor_input`; a held
+/// drag selection past the viewport must scroll it in either wrap mode.
+#[gpui::test]
+fn holding_a_drag_selection_past_the_file_editor_scrolls_it(test_cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let cases = [
+        ("notes.md", false),
+        ("notes.md", true),
+        ("main.rs", false),
+        ("main.rs", true),
+    ];
+    for (case, (filename, wrap)) in cases.into_iter().enumerate() {
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) = test_cx.add_window_view(|window, cx| {
+            window.activate();
+            crate::view::GitCometView::new(store, events, None, window, cx)
+        });
+        let repo_id = gitcomet_state::model::RepoId(1150 + case as u64);
+        let workdir = unique_workdir("file_editor_drag_autoscroll");
+        let file_rel = PathBuf::from(filename);
+        std::fs::write(
+            workdir.join(&file_rel),
+            format!("{}\n", "long line ".repeat(200)).repeat(100),
+        )
+        .unwrap();
+        cx.update(|_window, app| {
+            view.update(app, |view, cx| {
+                push_test_state(view, editor_state(repo_id, &workdir, &file_rel), cx);
+                view.main_pane.update(cx, |pane, cx| {
+                    pane.diff_word_wrap = wrap;
+                    pane.ensure_file_editor_loaded(cx);
+                });
+            });
+        });
+        cx.run_until_parked();
+        for _ in 0..3 {
+            draw_editor_frame(cx);
+        }
+        let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+        let scroll = cx.update(|_window, app| main_pane.read(app).file_editor_scroll.clone());
+        let viewport = cx
+            .debug_bounds("file_editor_scroll")
+            .expect("editor viewport");
+        let tick = |cx: &mut gpui::VisualTestContext| {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(16));
+            cx.run_until_parked();
+            draw_editor_frame(cx);
+        };
+
+        let at = point(viewport.left() + px(60.0), viewport.top() + px(30.0));
+        cx.simulate_mouse_move(at, None, Modifiers::default());
+        cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::default());
+        draw_editor_frame(cx);
+        let below = point(at.x, viewport.bottom() + px(30.0));
+        cx.simulate_mouse_move(below, Some(MouseButton::Left), Modifiers::default());
+        draw_editor_frame(cx);
+        for _ in 0..10 {
+            tick(cx);
+        }
+        cx.update(|_window, app| {
+            let pane = main_pane.read(app);
+            let offset = pane.file_editor_scroll.offset();
+            assert!(
+                offset.y < px(0.0),
+                "{filename} wrap={wrap}: held below, the editor scrolls"
+            );
+            let gutter_y = pane
+                .file_editor_gutter_scroll
+                .0
+                .borrow()
+                .base_handle
+                .offset()
+                .y;
+            assert!(
+                (gutter_y - offset.y).abs() <= px(1.0),
+                "{filename} wrap={wrap}: line numbers follow the drag"
+            );
+            let selected = pane.file_editor_input.read(app).selected_range();
+            assert!(!selected.is_empty(), "{filename} wrap={wrap}: drag selects");
+        });
+
+        if !wrap {
+            let right = point(viewport.right() + px(40.0), viewport.center().y);
+            cx.simulate_mouse_move(right, Some(MouseButton::Left), Modifiers::default());
+            draw_editor_frame(cx);
+            for _ in 0..5 {
+                tick(cx);
+            }
+            assert!(
+                scroll.offset().x < px(0.0),
+                "{filename}: held right, the unwrapped editor scrolls sideways"
+            );
+        }
+
+        cx.simulate_mouse_up(below, MouseButton::Left, Modifiers::default());
+        draw_editor_frame(cx);
+        let released = scroll.offset();
+        for _ in 0..5 {
+            tick(cx);
+        }
+        assert_eq!(
+            scroll.offset(),
+            released,
+            "{filename} wrap={wrap}: release stops it"
+        );
+        std::fs::remove_dir_all(workdir).unwrap();
+    }
+}
