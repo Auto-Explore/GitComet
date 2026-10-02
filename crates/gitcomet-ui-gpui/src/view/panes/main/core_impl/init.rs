@@ -76,6 +76,7 @@ impl MainPaneView {
             cx.notify();
         });
 
+        let diff_raw_scroll = ScrollHandle::new();
         let diff_raw_input = cx.new(|cx| {
             let mut input = components::TextInput::new(
                 components::TextInputOptions {
@@ -87,6 +88,7 @@ impl MainPaneView {
                 cx,
             );
             input.set_editor_font(cx);
+            input.set_vertical_scroll_handle(Some(diff_raw_scroll.clone()));
             input
         });
         let submodule_hash_inputs = (0..4)
@@ -377,6 +379,7 @@ impl MainPaneView {
             diff_panel_focus_handle,
             diff_autoscroll_pending: false,
             diff_raw_input,
+            diff_raw_scroll,
             submodule_hash_inputs,
             submodule_summary_cache: None,
             diff_visible_indices: Arc::from([]),
