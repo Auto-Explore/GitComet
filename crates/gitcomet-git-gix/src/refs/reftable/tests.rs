@@ -5,10 +5,8 @@ use std::path::Path;
 fn git(path: &Path, args: &[&str]) -> Vec<u8> {
     let output = crate::util::git_workdir_cmd_for(path)
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env(
-            "GIT_CONFIG_GLOBAL",
-            if cfg!(windows) { "NUL" } else { "/dev/null" },
-        )
+        // Empty = no global config everywhere; Git for Windows dies on "NUL".
+        .env("GIT_CONFIG_GLOBAL", "")
         .env("GIT_AUTHOR_DATE", "1700000000 +0000")
         .env("GIT_COMMITTER_DATE", "1800000000 +0530")
         .env("GIT_TEST_REFTABLE_AUTOCOMPACTION", "0")

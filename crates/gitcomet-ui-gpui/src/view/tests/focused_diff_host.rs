@@ -89,7 +89,7 @@ fn focused_diff_escape_and_q_close_the_window(cx: &mut gpui::TestAppContext) {
             test_support::redraw(cx);
         }
         let host = cx.update(|window, app| {
-            window.activate_window();
+            window.activate();
             view.read(app).extension_window.as_ref().unwrap().host()
         });
         cx.simulate_click(

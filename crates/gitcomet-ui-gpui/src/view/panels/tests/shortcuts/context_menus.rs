@@ -98,7 +98,7 @@ fn recent_repository_shortcut_does_not_select_diff_content(cx: &mut gpui::TestAp
         app.clear_key_bindings();
         crate::app::install_app_shortcuts_for_test(app, Arc::new(TestBackend));
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
     });
     focus_diff_panel(cx, &view);
     draw_and_drain_test_window(cx);
@@ -357,7 +357,7 @@ fn history_author_filter_applies_the_selected_author(cx: &mut gpui::TestAppConte
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
-        window.activate_window();
+        window.activate();
         super::super::super::GitCometView::new(store, events, None, window, cx)
     });
 
@@ -408,7 +408,7 @@ fn history_author_filter_applies_free_form_text(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
-        window.activate_window();
+        window.activate();
         super::super::super::GitCometView::new(store, events, None, window, cx)
     });
 
@@ -450,7 +450,7 @@ fn history_author_filter_enter_applies_the_row_the_list_highlights(cx: &mut gpui
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
-        window.activate_window();
+        window.activate();
         super::super::super::GitCometView::new(store, events, None, window, cx)
     });
 
@@ -1529,7 +1529,7 @@ fn open_workspace_shortcut_opens_the_workspace_chooser_with_nothing_focused(
         app.clear_key_bindings();
         crate::app::install_app_shortcuts_for_test(app, Arc::new(TestBackend));
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
     });
     focus_detached_window_focus(cx);
 

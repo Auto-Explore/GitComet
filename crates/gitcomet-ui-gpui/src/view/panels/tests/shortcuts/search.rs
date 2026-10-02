@@ -72,7 +72,7 @@ fn history_author_filter_focuses_its_search_box_and_narrows_the_list(
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
-        window.activate_window();
+        window.activate();
         super::super::super::GitCometView::new(store, events, None, window, cx)
     });
 
@@ -333,7 +333,7 @@ fn diff_search_secondary_f_selects_existing_query(cx: &mut gpui::TestAppContext)
 fn diff_search_input_accepts_spaces_without_staging_file(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
-        window.activate_window();
+        window.activate();
         super::super::super::GitCometView::new(store, events, None, window, cx)
     });
 
@@ -382,7 +382,7 @@ fn diff_search_input_accepts_spaces_without_staging_file(cx: &mut gpui::TestAppC
 fn diff_search_close_clears_query_and_input(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
-        window.activate_window();
+        window.activate();
         super::super::super::GitCometView::new(store, events, None, window, cx)
     });
 
@@ -986,7 +986,7 @@ fn diff_search_arrow_buttons_are_disabled_without_matches(cx: &mut gpui::TestApp
 fn diff_search_shift_enter_inserts_a_newline(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
-        window.activate_window();
+        window.activate();
         super::super::super::GitCometView::new(store, events, None, window, cx)
     });
     open_diff_search_on_two_hunk_diff(cx, &view, RepoId(70943), "diff_search_shift_enter");
@@ -1775,7 +1775,7 @@ fn commit_message_text_input_secondary_f_without_visible_diff_opens_history_find
     apply_state(cx, &view, app_state_with_active_repo(repo));
     focus_commit_message_input(cx, &view);
     cx.update(|window, app| {
-        window.activate_window();
+        window.activate();
         crate::app::bind_app_keys_for_test(app);
         let _ = window.draw(app);
     });
