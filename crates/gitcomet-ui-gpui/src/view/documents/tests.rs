@@ -174,7 +174,7 @@ fn check_document_line_endings(cx: &mut gpui::TestAppContext, adopted: bool) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) = cx.add_window_view(|window, cx| {
         // Text input only accepts typing in the active window.
-        window.activate_window();
+        window.activate();
         GitCometView::new(store, events, None, window, cx)
     });
     let directory = tempfile::tempdir().unwrap();
@@ -598,7 +598,7 @@ fn replace_asks_about_unsaved_edits_in_a_themed_dialog(cx: &mut gpui::TestAppCon
     cx.update(|window, app| {
         crate::app::install_app_shortcuts_for_test(app, Arc::new(TestBackend));
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
     });
     let directory = tempfile::tempdir().unwrap();
     let workdir =
@@ -1035,7 +1035,6 @@ fn detached_buffers_survive_missing_files_history_removal_and_path_collisions(
             assert_eq!(docs.unsaved_labels(cx).len(), 2);
             let ids: Vec<_> = docs.buffers.keys().copied().collect();
             docs.active = Some(ids[0]);
-            docs.picker = false;
             assert_eq!(
                 docs.buffers[&ids[0]].read(cx).input.read(cx).text(),
                 "first buffer"
@@ -1146,4 +1145,154 @@ fn unsaved_svg_is_editable_and_discarded_missing_files_stay_clean(cx: &mut gpui:
         assert!(b.error.is_some());
     });
     assert!(!path.exists());
+}
+
+fn click_status_bar_documents_button(cx: &mut gpui::VisualTestContext) {
+    crate::view::test_support::redraw(cx);
+    let button = cx
+        .debug_bounds("bottom_documents")
+        .expect("the status bar shows the Documents button")
+        .center();
+    cx.simulate_mouse_move(button, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(button, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.simulate_mouse_up(button, gpui::MouseButton::Left, gpui::Modifiers::default());
+    crate::view::test_support::redraw(cx);
+}
+
+fn document_picker_open(root: &Entity<GitCometView>, cx: &mut gpui::VisualTestContext) -> bool {
+    cx.update(|_, app| root.read(app).document_picker_open(app))
+}
+
+#[gpui::test]
+fn status_bar_documents_button_opens_a_picker_that_opens_typed_paths(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (root, cx) = cx.add_window_view(|window, cx| {
+        // Text input only accepts typing in the active window.
+        window.activate();
+        GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|_, app| crate::app::bind_text_input_keys_for_test(app));
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("notes.md");
+    std::fs::write(&path, "# Notes").unwrap();
+
+    // The button once updated the bar from inside the bar's own update.
+    click_status_bar_documents_button(cx);
+    assert!(document_picker_open(&root, cx));
+    assert!(cx.debug_bounds("documents_picker").is_some());
+    assert!(
+        !cx.update(|_, app| root.read(app).documents_active),
+        "opening the picker must not replace the canvas"
+    );
+
+    cx.simulate_input(&path.display().to_string());
+    cx.simulate_keystrokes("enter");
+    for _ in 0..400 {
+        cx.run_until_parked();
+        if cx.update(|_, app| {
+            let root = root.read(app);
+            root.documents_active && root.documents.read(app).active.is_some()
+        }) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    drain(&root, cx);
+    assert!(!document_picker_open(&root, cx));
+    cx.update(|_, app| {
+        let docs = root.read(app).documents.read(app);
+        let buffer = docs.buffers[&docs.active.expect("Enter opens the typed path")].read(app);
+        assert_eq!(buffer.identity.0, path);
+        assert_eq!(buffer.input.read(app).text(), "# Notes");
+        assert!(buffer.wrap, "prose wraps by default");
+    });
+    crate::view::test_support::redraw(cx);
+    assert!(cx.debug_bounds("document_header").is_some());
+    assert!(cx.debug_bounds("document_gutter").is_some());
+
+    click_status_bar_documents_button(cx);
+    assert!(document_picker_open(&root, cx));
+    cx.simulate_keystrokes("escape");
+    assert!(!document_picker_open(&root, cx));
+    assert!(cx.update(|_, app| root.read(app).documents_active));
+}
+
+#[gpui::test]
+fn repository_windows_keep_their_panes_around_documents_until_the_repository_navigates(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (root, cx) = cx.add_window_view({
+        let store = store.clone();
+        |window, cx| GitCometView::new(store, events, None, window, cx)
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("standalone.rs");
+    std::fs::write(&path, "fn main() {}\n").unwrap();
+    let repo_id = RepoId(1);
+    let mut repo = gitcomet_state::model::RepoState::new_opening(
+        repo_id,
+        gitcomet_core::domain::RepoSpec {
+            workdir: directory.path().join("repo"),
+        },
+    );
+    repo.open = Loadable::Ready(());
+    let mut state = gitcomet_state::model::AppState {
+        repos: vec![repo],
+        active_repo: Some(repo_id),
+        ..gitcomet_state::model::AppState::test_default()
+    };
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    cx.update(|_, app| {
+        root.update(app, |root, cx| {
+            root.documents
+                .update(cx, |docs, cx| docs.open(path.clone(), true, cx));
+            root.show_documents_canvas(cx);
+        })
+    });
+    drain(&root, cx);
+    crate::view::test_support::redraw(cx);
+    let canvas = cx
+        .debug_bounds("documents_canvas")
+        .expect("the viewer is on screen");
+    let sidebar = cx
+        .debug_bounds("sidebar_pane")
+        .expect("the sidebar stays beside the viewer");
+    let details = cx
+        .debug_bounds("details_pane")
+        .expect("the details pane stays beside the viewer");
+    assert!(canvas.left() >= sidebar.right() && canvas.right() <= details.left());
+    assert!(!cx.update(|_, app| root.read(app).documents.read(app).buffers.is_empty()));
+
+    let push = |state: &gitcomet_state::model::AppState, cx: &mut gpui::VisualTestContext| {
+        store.replace_snapshot_for_test(Arc::new(state.clone()));
+        cx.update(|_, app| {
+            root.update(app, |root, cx| {
+                crate::view::test_support::sync_store_snapshot(root, cx)
+            })
+        });
+        cx.run_until_parked();
+    };
+    // Refreshes clear selections; that is not the user going somewhere.
+    let repo = &mut state.repos[0];
+    repo.history_state.selected_commit = None;
+    repo.history_state.selected_commit_rev += 1;
+    push(&state, cx);
+    assert!(cx.update(|_, app| root.read(app).documents_active));
+
+    let repo = &mut state.repos[0];
+    repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::working_tree(
+        std::path::PathBuf::from("a.txt"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    ));
+    repo.diff_state.diff_target_rev += 1;
+    push(&state, cx);
+    assert!(
+        !cx.update(|_, app| root.read(app).documents_active),
+        "opening a file in the repository takes the main slot back"
+    );
 }

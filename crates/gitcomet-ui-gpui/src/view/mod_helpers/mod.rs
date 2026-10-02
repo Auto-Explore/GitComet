@@ -1135,6 +1135,7 @@ pub struct GitCometView {
     pub(super) external_drag_paths: Option<gpui::ExternalPaths>,
     pub(super) file_operations: file_operations::FileOperationsUi,
     pub(super) documents: Entity<documents::DocumentsView>,
+    pub(super) document_picker: Entity<documents::DocumentPicker>,
     pub(super) documents_active: bool,
     pub(super) document_routing: documents::Routing,
     pub(super) external_drag_payload: Option<external_drag::ClassifiedExternalPaths>,

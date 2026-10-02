@@ -606,28 +606,33 @@ impl Render for BottomStatusBarView {
                     )
                     .child(details_toggle)
                     .child(hook_activity_button)
-                    .child(
+                    .child({
+                        let (documents_shown, picker_open) = self
+                            .root_view
+                            .upgrade()
+                            .map(|root| {
+                                let root = root.read(cx);
+                                (root.documents_active, root.document_picker_open(cx))
+                            })
+                            .unwrap_or_default();
                         components::Button::new("bottom_documents", "")
                             .start_slot(svg_icon(
                                 "icons/file.svg",
                                 theme.colors.foreground.secondary,
                                 scaled_px(16.),
                             ))
-                            .selected(
-                                self.root_view
-                                    .upgrade()
-                                    .is_some_and(|r| r.read(cx).documents_active),
-                            )
+                            .selected(documents_shown)
+                            .open(picker_open)
                             .style(components::ButtonStyle::Subtle)
                             .borderless()
-                            .on_click(theme, cx, |this, _, window, cx| {
-                                let _ = this
-                                    .root_view
-                                    .update(cx, |root, cx| root.toggle_documents(window, cx));
+                            .on_click_with_bounds(theme, cx, |this, _, bounds, window, cx| {
+                                let _ = this.root_view.update(cx, |root, cx| {
+                                    root.toggle_document_picker(bounds, window, cx)
+                                });
                             })
-                            .gitcomet_tooltip(theme, "Documents".into())
-                            .debug_selector(|| "bottom_documents".into()),
-                    )
+                            .gitcomet_tooltip(theme, "Open a file…".into())
+                            .debug_selector(|| "bottom_documents".into())
+                    })
                     .children(self.edition_strip.clone())
                     .when(self.edition_strip.is_none(), |row| {
                         row.child(

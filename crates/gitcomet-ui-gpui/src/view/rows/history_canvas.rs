@@ -955,6 +955,7 @@ fn paint_history_ref_chips(
     window.with_content_mask(
         Some(ContentMask {
             bounds: content_bounds,
+            ..Default::default()
         }),
         |window| {
             // paint_quad has no layout-level radius clamping, so a
@@ -1417,6 +1418,7 @@ pub(super) fn history_commit_row_canvas(
                 window.with_content_mask(
                     Some(ContentMask {
                         bounds: graph_bounds,
+                        ..Default::default()
                     }),
                     |window| {
                         window.paint_layer(graph_bounds, |window| {
@@ -1512,6 +1514,7 @@ pub(super) fn history_commit_row_canvas(
                 window.with_content_mask(
                     Some(ContentMask {
                         bounds: branch_content_bounds,
+                        ..Default::default()
                     }),
                     |window| {
                         let _ = shaped.paint(
@@ -1576,6 +1579,7 @@ pub(super) fn history_commit_row_canvas(
                 window.with_content_mask(
                     Some(ContentMask {
                         bounds: summary_text_bounds,
+                        ..Default::default()
                     }),
                     |window| {
                         let _ = shaped.paint(
@@ -1729,6 +1733,7 @@ pub(super) fn history_commit_row_canvas(
                 window.with_content_mask(
                     Some(ContentMask {
                         bounds: author_text_bounds,
+                        ..Default::default()
                     }),
                     |window| {
                         let _ = shaped.paint(
@@ -1767,6 +1772,7 @@ pub(super) fn history_commit_row_canvas(
                 window.with_content_mask(
                     Some(ContentMask {
                         bounds: date_text_bounds,
+                        ..Default::default()
                     }),
                     |window| {
                         let _ = shaped.paint(
@@ -1804,6 +1810,7 @@ pub(super) fn history_commit_row_canvas(
                 window.with_content_mask(
                     Some(ContentMask {
                         bounds: sha_text_bounds,
+                        ..Default::default()
                     }),
                     |window| {
                         let _ = shaped.paint(

@@ -309,11 +309,9 @@ fn wrap_boundaries(
 ) -> Vec<gpui::WrapBoundary> {
     let mut boundaries = Vec::new();
     let mut seen_non_whitespace = false;
-    let mut last_candidate: Option<(gpui::WrapBoundary, Pixels)> = None;
-    let mut last_boundary = gpui::WrapBoundary {
-        run_ix: 0,
-        glyph_ix: 0,
-    };
+    // Glyphs as `(run_ix, glyph_ix)`, which orders them as the text does.
+    let mut last_candidate: Option<((usize, usize), Pixels)> = None;
+    let mut last_boundary = (0, 0);
     let mut last_boundary_x = px(0.0);
     let mut prev_ch = '\0';
     let mut glyphs = layout
@@ -321,13 +319,13 @@ fn wrap_boundaries(
         .iter()
         .enumerate()
         .flat_map(|(run_ix, run)| {
-            run.glyphs.iter().enumerate().map(move |(glyph_ix, glyph)| {
-                let boundary = gpui::WrapBoundary { run_ix, glyph_ix };
-                (boundary, glyph.index, glyph.position.x)
-            })
+            run.glyphs
+                .iter()
+                .enumerate()
+                .map(move |(glyph_ix, glyph)| ((run_ix, glyph_ix), glyph.index, glyph.position.x))
         })
         .peekable();
-    while let Some((boundary, index, x)) = glyphs.next() {
+    while let Some((glyph, index, x)) = glyphs.next() {
         let ch = match text.get(index..).and_then(|rest| rest.chars().next()) {
             Some('\t') => ' ',
             Some('\n') | None => continue,
@@ -335,20 +333,67 @@ fn wrap_boundaries(
         };
         if is_word_char(ch) {
             if prev_ch == ' ' && ch != ' ' && seen_non_whitespace {
-                last_candidate = Some((boundary, x));
+                last_candidate = Some((glyph, x));
             }
         } else if ch != ' ' && seen_non_whitespace {
-            last_candidate = Some((boundary, x));
+            last_candidate = Some((glyph, x));
         }
         seen_non_whitespace |= ch != ' ';
         let next_x = glyphs.peek().map_or(layout.width, |&(_, _, x)| x);
-        if next_x - last_boundary_x > wrap_width && boundary > last_boundary {
-            (last_boundary, last_boundary_x) = last_candidate.take().unwrap_or((boundary, x));
-            boundaries.push(last_boundary);
+        if next_x - last_boundary_x > wrap_width && glyph > last_boundary {
+            let line_start = last_boundary;
+            (last_boundary, last_boundary_x) = last_candidate.take().unwrap_or((glyph, x));
+            let (run_ix, glyph_ix) = last_boundary;
+            boundaries.push(gpui::WrapBoundary {
+                run_ix,
+                glyph_ix,
+                trailing_whitespace_x: trailing_whitespace_x(
+                    layout,
+                    text,
+                    line_start,
+                    last_boundary,
+                ),
+            });
         }
         prev_ch = ch;
     }
     boundaries
+}
+
+/// gpui's private `LineLayout::trailing_whitespace_x`: the x of the first of
+/// the spaces (tabs included) running up to `boundary`, followed back no
+/// further than `line_start`; the boundary glyph's own x when there are none.
+fn trailing_whitespace_x(
+    layout: &gpui::LineLayout,
+    text: &str,
+    line_start: (usize, usize),
+    boundary: (usize, usize),
+) -> Pixels {
+    let (run_ix, glyph_ix) = boundary;
+    layout.runs[..=run_ix]
+        .iter()
+        .enumerate()
+        .rev()
+        .flat_map(|(ix, run)| {
+            let end = if ix == run_ix {
+                glyph_ix
+            } else {
+                run.glyphs.len()
+            };
+            run.glyphs[..end]
+                .iter()
+                .enumerate()
+                .rev()
+                .map(move |(glyph_ix, glyph)| ((ix, glyph_ix), glyph))
+        })
+        .take_while(|&(ix, glyph)| {
+            ix >= line_start && matches!(text.as_bytes().get(glyph.index), Some(b' ' | b'\t'))
+        })
+        .last()
+        .map_or_else(
+            || layout.runs[run_ix].glyphs[glyph_ix].position.x,
+            |(_, glyph)| glyph.position.x,
+        )
 }
 
 /// gpui's `LineWrapper::is_word_char` (crate-private there): characters a
@@ -705,13 +750,15 @@ mod tab_stop_tests {
         };
         let layout = apply_tab_stops_wrapped(&wrapped, text, 4).expect("tabs moved");
         // Tabs end at 40/80/120, `abc ` at 120..160, `def` at 160..190.
-        let boundary = |glyph_ix| gpui::WrapBoundary {
+        let boundary = |glyph_ix, trailing_whitespace_x| gpui::WrapBoundary {
             run_ix: 0,
             glyph_ix,
+            trailing_whitespace_x: px(trailing_whitespace_x),
         };
+        // A row of only tabs hangs whole; `abc ` hangs its space at 150.
         assert_eq!(
             layout.wrap_boundaries.as_slice(),
-            &[boundary(2), boundary(7)]
+            &[boundary(2, 0.0), boundary(7, 150.0)]
         );
         let row_starts = [0.0, 80.0, 160.0, f32::from(layout.unwrapped_layout.width)];
         for row in row_starts.windows(2) {

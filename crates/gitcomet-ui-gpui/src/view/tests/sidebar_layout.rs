@@ -1249,7 +1249,7 @@ fn collapsed_branch_popover_search_keeps_its_section_scope(cx: &mut gpui::TestAp
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
-        window.activate_window();
+        window.activate();
         GitCometView::new(store_for_view, events, None, window, cx)
     });
 

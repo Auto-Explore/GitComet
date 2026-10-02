@@ -1737,12 +1737,25 @@ impl GitCometView {
         let documents = cx.new(|cx| {
             documents::DocumentsView::new(
                 initial_theme,
-                documents_root,
+                documents_root.clone(),
                 store.clone(),
                 ui_model.clone(),
                 cx,
             )
         });
+        let document_picker = {
+            let status_bar = bottom_status_bar.entity_id();
+            cx.new(|cx| {
+                documents::DocumentPicker::new(
+                    initial_theme,
+                    documents_root,
+                    &documents,
+                    status_bar,
+                    window,
+                    cx,
+                )
+            })
+        };
 
         // The error details dialog shows what the toast host holds.
         let toast_errors_subscription = cx.observe(&toast_host, |this, toast_host, cx| {
@@ -1872,6 +1885,7 @@ impl GitCometView {
             external_drag_paths: None,
             file_operations: file_operations::FileOperationsUi::default(),
             documents,
+            document_picker,
             documents_active: false,
             document_routing: documents::Routing::default(),
             external_drag_payload: None,
@@ -1957,6 +1971,8 @@ impl GitCometView {
         let theme = theme.with_appearance(crate::appearance::current(cx));
         self.documents
             .update(cx, |documents, cx| documents.set_theme(theme, cx));
+        self.document_picker
+            .update(cx, |picker, cx| picker.set_theme(theme, cx));
         self.splash_backdrop_image = splash::load_splash_backdrop_image(theme.is_dark);
         self.theme = theme;
         if let Some(extension_window) = self.extension_window.as_ref() {

@@ -4758,7 +4758,7 @@ async fn ctrl_f_and_escape_walk_in_and_out_of_the_editor(cx: &mut gpui::TestAppC
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
-        window.activate_window();
+        window.activate();
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 
@@ -4875,7 +4875,7 @@ async fn recent_repository_shortcut_does_not_select_the_file_editor(cx: &mut gpu
             });
         });
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
     });
     assert_eq!(editor_selected_range(&view, cx), 6..6);
 

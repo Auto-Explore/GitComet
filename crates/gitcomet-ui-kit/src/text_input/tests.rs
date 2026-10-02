@@ -9,7 +9,7 @@ fn window_blur_stops_text_input_until_deliberately_refocused(cx: &mut gpui::Test
     crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
         for multiline in [false, true] {
             let (input, cx) = cx.add_window_view(|window, cx| {
-                window.activate_window();
+                window.activate();
                 cx.observe_window_activation(window, |_input, window, cx| {
                     crate::window_focus::reset_on_deactivation(window, cx);
                 })
@@ -66,7 +66,7 @@ fn window_blur_stops_text_input_until_deliberately_refocused(cx: &mut gpui::Test
                     assert_eq!(input.selection.range, 1..4);
                     assert_eq!(input.selection.undo_stack.len(), undo_len);
                 });
-                window.activate_window();
+                window.activate();
             });
             cx.run_until_parked();
             crate::test_support::refresh_and_draw(cx);
@@ -104,7 +104,7 @@ fn window_blur_stops_text_input_until_deliberately_refocused(cx: &mut gpui::Test
 #[gpui::test]
 fn control_blur_cancels_caret_and_drag_without_losing_selection(cx: &mut gpui::TestAppContext) {
     let (input, cx) = multiline_input(cx);
-    cx.update(|window, _| window.activate_window());
+    cx.update(|window, _| window.activate());
     cx.run_until_parked();
     cx.update(|window, app| {
         input.update(app, |input, cx| {
@@ -2405,7 +2405,7 @@ fn multiline_input(
     cx: &mut gpui::TestAppContext,
 ) -> (Entity<TextInput>, &mut gpui::VisualTestContext) {
     cx.add_window_view(|window, cx| {
-        window.activate_window();
+        window.activate();
         let input = TextInput::new(
             TextInputOptions {
                 multiline: true,

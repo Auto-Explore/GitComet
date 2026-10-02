@@ -1010,7 +1010,7 @@ fn explorer_window(
 ) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
-        window.activate_window();
+        window.activate();
         GitCometView::new(store, events, None, window, cx)
     });
     cx.update(|_, app| {
@@ -1204,7 +1204,7 @@ fn explorer_inline_edit_survives_window_deactivation(cx: &mut gpui::TestAppConte
         "switching windows is not a commit"
     );
 
-    cx.update(|window, _| window.activate_window());
+    cx.update(|window, _| window.activate());
     cx.run_until_parked();
     test_support::redraw(cx);
     assert!(

@@ -618,7 +618,7 @@ pub(crate) fn quit_app_or_warn(cx: &mut App) {
         if queued {
             entry
                 .handle
-                .update(cx, |_, window, _| window.activate_window())
+                .update(cx, |_, window, _| window.activate())
                 .ok();
             return;
         }
@@ -744,7 +744,7 @@ pub(super) fn find_normal_gitcomet_window_for_repo(
 
 pub(super) fn activate_gitcomet_window(cx: &mut App, window: gpui::AnyWindowHandle) {
     let _ = window.update(cx, |_view, window, _cx| {
-        window.activate_window();
+        window.activate();
     });
 }
 

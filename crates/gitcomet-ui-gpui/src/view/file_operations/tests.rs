@@ -19,7 +19,7 @@ fn open_window(
         // Escape for dialogs is bound with the text-input keys.
         crate::app::bind_text_input_keys_for_test(app);
         let _ = window.draw(app);
-        window.activate_window();
+        window.activate();
     });
     (root, cx)
 }

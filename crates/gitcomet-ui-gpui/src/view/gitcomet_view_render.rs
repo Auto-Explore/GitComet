@@ -790,6 +790,7 @@ impl Render for GitCometView {
             .left_0()
             .size_full()
             .child(self.command_palette.clone())
+            .child(self.document_picker.clone())
             .child(stable_overlay_view(self.reveal_commit_dialog.clone()))
             .child(stable_overlay_view(self.history_refs_hover_host.clone()))
             .child(stable_overlay_view(self.commit_message_hover_host.clone()))

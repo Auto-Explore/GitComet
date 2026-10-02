@@ -63,23 +63,31 @@ offer Keep Both, Replace, Skip, or Cancel; directory collisions also offer Merge
 
 ## Documents
 
-The bottom-bar Documents button is available without an open repository. Its
-searchable picker provides Open File and a menu to remove each recent entry.
-History contains up to 50 normalized absolute paths, shared across windows and
+The bottom-bar Documents button is available without an open repository. It
+opens a searchable picker above the button with unsaved and recent documents,
+an Open File button for the system dialog, and Save All while anything is
+unsaved. Typing an absolute or `~/` path offers to open that path directly.
+Each recent entry can be removed from its row or its context menu. History
+contains up to 50 normalized absolute paths, shared across windows and
 persisted in the session file. Removing history never deletes files. Missing
 entries remain removable and report an error when opened.
 
 Opening a file discovers its owning repository, including nested repositories
 and linked worktrees. GitComet prefers an existing tab in the current window,
 then another window, and opens the repository when needed. The working-tree
-explorer reveals the file. Files outside repositories open on the Documents
-canvas with a selectable absolute path. Text files have an explicit Edit action,
-Save, and Save As; image and binary previews use the existing restrictions.
+explorer reveals the file. Files outside repositories open in the document
+viewer. With a repository open, the viewer takes the main content area and the
+sidebar, details pane and action bar stay visible; without one it fills the
+content card. The viewer header shows the file name and a selectable absolute
+path. Text has line numbers, syntax highlighting and a Wrap toggle (on by
+default for prose such as Markdown), plus Edit, Discard, Save and Save As;
+image and binary previews use the existing restrictions.
 
-Selecting a repository tab restores its canvas. Unsaved standalone buffers remain
-available above recent documents even after history removal or eviction. A
-multiple-file drop records every successful file and displays the first one;
-later background replies cannot steal focus after another navigation.
+The viewer's close button, selecting a repository tab, or opening a file or
+commit in the repository restores the repository canvas. Unsaved standalone
+buffers remain available above recent documents even after history removal or
+eviction. A multiple-file drop records every successful file and displays the
+first one; later background replies cannot steal focus after another navigation.
 
 ## Filesystem service and recovery
 

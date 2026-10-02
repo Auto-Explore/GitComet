@@ -399,7 +399,7 @@ fn amend_prefills_commit_message_once_recent_messages_load(cx: &mut gpui::TestAp
 fn commit_message_focus_after_initial_draw_accepts_typed_input(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
-        window.activate_window();
+        window.activate();
         super::super::super::GitCometView::new(store, events, None, window, cx)
     });
 
@@ -546,7 +546,7 @@ fn typing_in_the_commit_box_replays_the_cached_bottom_bar_and_toasts(
     let _cache_guard = crate::view::enable_stable_cached_views_for_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
-        window.activate_window();
+        window.activate();
         super::super::super::GitCometView::new(store, events, None, window, cx)
     });
     let repo_id = gitcomet_state::model::RepoId(45);
