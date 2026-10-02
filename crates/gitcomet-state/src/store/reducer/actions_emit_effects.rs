@@ -281,6 +281,7 @@ pub(super) fn save_worktree_file(
     repo_id: RepoId,
     path: PathBuf,
     contents: crate::msg::ContentBytes,
+    expected_contents: Option<std::sync::Arc<[u8]>>,
     stage: bool,
     completion: Option<smol::channel::Sender<bool>>,
 ) -> Vec<Effect> {
@@ -288,6 +289,7 @@ pub(super) fn save_worktree_file(
         repo_id,
         path,
         contents,
+        expected_contents,
         stage,
         completion,
     }]

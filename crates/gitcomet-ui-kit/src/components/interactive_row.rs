@@ -1,9 +1,9 @@
 #[cfg(test)]
 use crate::interaction::interaction_outline;
 use crate::interaction::{InteractionFeedback, InteractionState, InteractionStyle};
-use crate::theme::{AppTheme, composite_over};
+use crate::theme::{AppTheme, composite_over, layer_over};
 use gpui::prelude::*;
-use gpui::{Div, Rgba, Stateful, px};
+use gpui::{Div, Rgba, Stateful, StyleRefinement, px};
 
 pub type InteractiveRowState = InteractionState;
 
@@ -13,7 +13,9 @@ pub type InteractiveRowState = InteractionState;
 pub struct InteractiveRowStyle {
     surface: Rgba,
     theme: AppTheme,
+    hover_enabled: bool,
     radius: f32,
+    tint: Option<Rgba>,
 }
 
 impl InteractiveRowStyle {
@@ -21,7 +23,9 @@ impl InteractiveRowStyle {
         Self {
             surface,
             theme,
+            hover_enabled: true,
             radius: theme.radii.row,
+            tint: None,
         }
     }
 
@@ -30,19 +34,55 @@ impl InteractiveRowStyle {
         self
     }
 
+    /// Avoid hover invalidations when another interaction supplies the feedback,
+    /// such as a drag whose destination is highlighted explicitly.
+    pub fn without_hover(mut self) -> Self {
+        self.hover_enabled = false;
+        self
+    }
+
+    /// A translucent wash the row keeps in every state: it lies under hover
+    /// and press feedback, and over the fill from [`Self::selection_fill`].
+    pub fn tinted(mut self, tint: Option<Rgba>) -> Self {
+        self.tint = tint;
+        self
+    }
+
+    /// The selection colour to pass for this row, so a selected row keeps
+    /// its wash even under an opaque selection fill. Half strength: a full
+    /// wash greys out a light theme's selection.
+    pub fn selection_fill(&self, selected: Rgba) -> Rgba {
+        self.tint.map_or(selected, |tint| {
+            layer_over(selected, crate::theme::with_alpha(tint, tint.alpha * 0.5))
+        })
+    }
+
+    fn interaction(&self) -> InteractionStyle {
+        let style = InteractionStyle::new(self.theme);
+        let Some(tint) = self.tint else {
+            return style;
+        };
+        let over_tint = |overlay| StyleRefinement::default().bg(layer_over(tint, overlay));
+        style
+            .resting_background(tint)
+            .persistent_background(layer_over(self.theme.active_overlay(), tint))
+            .hover(over_tint(self.theme.hover_overlay()))
+            .pressed(over_tint(self.theme.active_overlay()))
+    }
+
     fn resting_fill(&self, state: InteractiveRowState) -> Option<Rgba> {
-        InteractionStyle::new(self.theme).resting_fill(state)
+        self.interaction().resting_fill(state)
     }
 
     fn hover_fill(&self, state: InteractiveRowState) -> Rgba {
-        InteractionStyle::new(self.theme)
+        self.interaction()
             .fill(state, InteractionFeedback::Hovered)
             .unwrap_or(gpui::rgba(0x00000000))
     }
 
     #[cfg(test)]
     fn active_fill(&self, state: InteractiveRowState) -> Rgba {
-        InteractionStyle::new(self.theme)
+        self.interaction()
             .fill(state, InteractionFeedback::Pressed)
             .unwrap_or(gpui::rgba(0x00000000))
     }
@@ -67,15 +107,35 @@ impl InteractiveRowStyle {
     }
 
     fn apply(self, row: Stateful<Div>, state: InteractiveRowState) -> Stateful<Div> {
-        InteractionStyle::new(self.theme).apply(row.rounded(px(self.radius)), state)
+        self.interaction()
+            .hover_feedback(self.hover_enabled)
+            .apply(row.rounded(px(self.radius)), state)
     }
 }
 
 pub trait InteractiveRowExt {
     fn interactive_row(self, style: InteractiveRowStyle, state: InteractiveRowState) -> Self;
+    /// Paint a leading accent without changing the row's content geometry or hitboxes.
+    fn row_accent(self, color: Rgba) -> Self;
 }
 
 impl InteractiveRowExt for Stateful<Div> {
+    fn row_accent(self, color: Rgba) -> Self {
+        self.relative().child(
+            gpui::canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    window.paint_quad(gpui::fill(bounds, color));
+                },
+            )
+            .absolute()
+            .left_0()
+            .top_0()
+            .w(px(1.0))
+            .h_full(),
+        )
+    }
+
     fn interactive_row(self, style: InteractiveRowStyle, state: InteractiveRowState) -> Self {
         style.apply(self, state)
     }
@@ -160,6 +220,51 @@ mod tests {
         assert_eq!(
             outline.color,
             theme.colors.interaction.selected_indicator.into()
+        );
+    }
+
+    #[test]
+    fn tinted_rows_keep_their_wash_in_every_state() {
+        let theme = dark_theme();
+        let surface = theme.colors.surface.chrome;
+        let tint = gpui::rgba(0xe0a02020);
+        let plain = InteractiveRowStyle::new(theme, surface);
+        let tinted = plain.tinted(Some(tint));
+        let idle = InteractiveRowState::default();
+
+        assert_eq!(plain.resting_fill(idle), None);
+        assert_eq!(tinted.resting_fill(idle), Some(tint));
+        assert_eq!(
+            tinted.resolved_background(idle),
+            composite_over(surface, tint)
+        );
+        assert_eq!(
+            tinted.resolved_hover_background(idle),
+            composite_over(surface, layer_over(tint, theme.hover_overlay()))
+        );
+        assert_ne!(
+            tinted.resolved_hover_background(idle),
+            plain.resolved_hover_background(idle)
+        );
+        assert_eq!(
+            tinted.active_fill(idle),
+            layer_over(tint, theme.active_overlay())
+        );
+
+        // An opaque selection would hide a wash painted under it.
+        let selected = theme.colors.interaction.selected_background;
+        assert_eq!(plain.selection_fill(selected), selected);
+        let fill = tinted.selection_fill(selected);
+        assert_eq!(
+            fill,
+            layer_over(selected, crate::theme::with_alpha(tint, tint.alpha * 0.5))
+        );
+        let state = idle.selected(true, fill);
+        assert_eq!(tinted.resting_fill(state), Some(fill));
+        assert_eq!(tinted.hover_fill(state), fill);
+        assert_eq!(
+            tinted.resting_fill(idle.open(true)),
+            Some(layer_over(theme.active_overlay(), tint))
         );
     }
 

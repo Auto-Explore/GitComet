@@ -2072,6 +2072,24 @@ pub fn composite_over(base: Rgba, overlay: Rgba) -> Rgba {
     )
 }
 
+/// `overlay` stacked on a possibly translucent `base`: painting the result on
+/// any surface looks the same as painting `base` and then `overlay` on it.
+pub fn layer_over(base: Rgba, overlay: Rgba) -> Rgba {
+    let top = overlay.alpha.clamp(0.0, 1.0);
+    let bottom = base.alpha.clamp(0.0, 1.0) * (1.0 - top);
+    let alpha = top + bottom;
+    if alpha <= 0.0 {
+        return Rgba::new(0.0, 0.0, 0.0, 0.0);
+    }
+    let mix = |over: f32, under: f32| (over * top + under * bottom) / alpha;
+    Rgba::new(
+        mix(overlay.red, base.red),
+        mix(overlay.green, base.green),
+        mix(overlay.blue, base.blue),
+        alpha,
+    )
+}
+
 /// A fixed, deliberately-distinct purple flagging that the user is browsing a
 /// historical commit rather than the live repository state. Intentionally outside
 /// the theme palette so it reads as "off-live" in every theme.

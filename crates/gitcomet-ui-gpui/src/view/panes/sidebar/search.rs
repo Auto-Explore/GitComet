@@ -181,7 +181,8 @@ impl SidebarPaneView {
                                         &entries[*entry_index].path.to_string_lossy(),
                                     )
                                 }),
-                            FileBrowserVisibleRow::FileSetHeader { .. } => false,
+                            FileBrowserVisibleRow::FileSetHeader { .. }
+                            | FileBrowserVisibleRow::NameEntry { .. } => false,
                         })
                         .count();
                 *cache = Some((Rc::clone(&rows), count));

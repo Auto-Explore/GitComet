@@ -30,6 +30,7 @@ pub mod interaction;
 pub mod interaction_paint;
 pub mod linux_gui_env;
 pub mod menu;
+pub mod menu_placement;
 mod minimap;
 pub mod press_gesture;
 pub mod rope;
@@ -54,7 +55,8 @@ pub mod test_support;
 
 pub use minimap::{MINIMAP_COLUMN_WIDTH_PX, MinimapColumn};
 pub use scrollbar::{
-    Scrollbar, ScrollbarAxis, ScrollbarDriver, ScrollbarMarker, ScrollbarMarkerKind,
+    SCROLLBAR_GUTTER_PX, Scrollbar, ScrollbarAxis, ScrollbarDriver, ScrollbarMarker,
+    ScrollbarMarkerKind,
 };
 #[cfg(feature = "benchmarks")]
 pub use scrollbar::{ThumbMetrics, compute_vertical_click_offset, vertical_thumb_metrics};

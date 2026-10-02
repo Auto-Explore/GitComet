@@ -188,8 +188,10 @@ impl GitCometView {
         let Some(repo_id) = self.repo_id_for_path(path) else {
             return false;
         };
+        let was_document = self.documents_active;
+        self.show_repository_canvas(cx);
         if self.state.active_repo == Some(repo_id) {
-            return false;
+            return was_document;
         }
 
         self.store.dispatch(Msg::SetActiveRepo { repo_id });
@@ -325,8 +327,10 @@ impl GitCometView {
             return false;
         };
 
+        let was_document = self.documents_active;
+        self.show_repository_canvas(cx);
         if self.state.active_repo == Some(next_repo_id) {
-            return false;
+            return was_document;
         }
 
         self.store.dispatch(Msg::SetActiveRepo {
@@ -351,6 +355,7 @@ impl GitCometView {
         path: std::path::PathBuf,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.show_repository_canvas(cx);
         self.reserve_pending_repo_open(&path, true, cx);
         if self.store.snapshot().git_runtime.is_available() {
             self.store.dispatch(Msg::OpenRepo(path));

@@ -7,6 +7,7 @@ pub(super) struct GitCometWindowEntry {
     pub(super) handle: gpui::AnyWindowHandle,
     pub(super) view: gpui::WeakEntity<GitCometView>,
     pub(super) main_pane: gpui::WeakEntity<MainPaneView>,
+    pub(super) documents: gpui::WeakEntity<crate::view::documents::DocumentsView>,
     pub(super) view_mode: GitCometViewMode,
     pub(super) diff_fallback_enabled: bool,
     pub(super) workspace_id: Option<session::WorkspaceId>,
@@ -20,6 +21,133 @@ pub(super) struct GitCometWindowRegistry {
 }
 
 impl gpui::Global for GitCometWindowRegistry {}
+
+pub(crate) fn route_document_to_existing_window(
+    repository: &Path,
+    path: &Path,
+    display: bool,
+    cx: &mut App,
+) -> bool {
+    let window = cx
+        .try_global::<GitCometWindowRegistry>()
+        .and_then(|r| {
+            r.windows
+                .values()
+                .find(|w| w.repo_paths.iter().any(|p| p == repository))
+        })
+        .cloned();
+    let Some(window) = window else {
+        return false;
+    };
+    let root = repository.to_path_buf();
+    let path = path.to_path_buf();
+    cx.defer(move |cx| {
+        let _ = window.view.update(cx, |view, cx| {
+            view.queue_repository_document(root, path, display, cx)
+        });
+        if display {
+            activate_gitcomet_window(cx, window.handle);
+        }
+    });
+    true
+}
+
+fn filesystem_document_windows(
+    cx: &App,
+) -> Vec<gpui::WeakEntity<crate::view::documents::DocumentsView>> {
+    cx.try_global::<GitCometWindowRegistry>()
+        .map(|r| r.windows.values().map(|w| w.documents.clone()).collect())
+        .unwrap_or_default()
+}
+
+fn filesystem_editor_windows(cx: &App) -> Vec<gpui::WeakEntity<MainPaneView>> {
+    cx.try_global::<GitCometWindowRegistry>()
+        .map(|r| r.windows.values().map(|w| w.main_pane.clone()).collect())
+        .unwrap_or_default()
+}
+
+pub(crate) fn filesystem_has_unsaved_buffers(paths: &[PathBuf], cx: &App) -> bool {
+    filesystem_document_windows(cx).iter().any(|docs| {
+        docs.upgrade()
+            .is_some_and(|docs| docs.read(cx).filesystem_has_unsaved(paths, cx))
+    }) || filesystem_editor_windows(cx).iter().any(|pane| {
+        pane.upgrade()
+            .is_some_and(|pane| pane.read(cx).filesystem_has_unsaved(paths))
+    })
+}
+
+/// The given paths that are, or contain, a buffer with unsaved edits.
+pub(crate) fn filesystem_unsaved_buffer_paths(paths: &[PathBuf], cx: &App) -> Vec<PathBuf> {
+    paths
+        .iter()
+        .filter(|path| filesystem_has_unsaved_buffers(std::slice::from_ref(*path), cx))
+        .cloned()
+        .collect()
+}
+
+pub(crate) fn resolve_filesystem_buffers(paths: &[PathBuf], save: bool, cx: &mut App) {
+    for docs in filesystem_document_windows(cx) {
+        let _ = docs.update(cx, |docs, cx| docs.filesystem_resolve(paths, save, cx));
+    }
+    for pane in filesystem_editor_windows(cx) {
+        let _ = pane.update(cx, |pane, cx| {
+            pane.filesystem_resolve_unsaved(paths, save, cx)
+        });
+    }
+}
+
+pub(crate) fn filesystem_saves_drained(cx: &App) -> bool {
+    filesystem_document_windows(cx).iter().all(|docs| {
+        docs.upgrade()
+            .is_none_or(|docs| docs.read(cx).saves_drained(cx))
+    }) && filesystem_editor_windows(cx).iter().all(|pane| {
+        pane.upgrade()
+            .is_none_or(|pane| pane.read(cx).filesystem_saves_drained())
+    })
+}
+
+pub(crate) fn pause_filesystem_editors(id: gitcomet_core::filesystem::OperationId, cx: &mut App) {
+    for docs in filesystem_document_windows(cx) {
+        let _ = docs.update(cx, |docs, cx| docs.filesystem_pause(id, cx));
+    }
+    for pane in filesystem_editor_windows(cx) {
+        let _ = pane.update(cx, |pane, cx| pane.filesystem_pause(id, cx));
+    }
+}
+
+pub(crate) fn finish_filesystem_editors(
+    id: gitcomet_core::filesystem::OperationId,
+    changes: &[gitcomet_core::filesystem::PathChange],
+    versions: &std::collections::BTreeMap<PathBuf, gitcomet_core::filesystem::DiskVersion>,
+    undo: bool,
+    redo: bool,
+    cx: &mut App,
+) {
+    for docs in filesystem_document_windows(cx) {
+        let _ = docs.update(cx, |docs, cx| {
+            docs.filesystem_finish(id, changes, versions, cx)
+        });
+    }
+    for pane in filesystem_editor_windows(cx) {
+        let _ = pane.update(cx, |pane, cx| {
+            pane.filesystem_finish(id, changes, versions, cx)
+        });
+    }
+    let views: Vec<_> = cx
+        .try_global::<GitCometWindowRegistry>()
+        .map(|r| r.windows.values().map(|w| w.view.clone()).collect())
+        .unwrap_or_default();
+    for view in views {
+        let changes = changes.to_vec();
+        // The originating view is already being updated; defer to avoid updating it
+        // re-entrantly while broadcasting a cross-window path change.
+        cx.defer(move |cx| {
+            let _ = view.update(cx, |view, cx| {
+                view.notify_filesystem_paths_changed(changes, undo, redo, cx)
+            });
+        });
+    }
+}
 
 #[derive(Default)]
 pub(super) struct ProcessStartupHooksState {
@@ -78,6 +206,7 @@ pub(crate) fn sync_gitcomet_window_registry<C>(
     handle: gpui::AnyWindowHandle,
     view: gpui::WeakEntity<GitCometView>,
     main_pane: gpui::WeakEntity<MainPaneView>,
+    documents: gpui::WeakEntity<crate::view::documents::DocumentsView>,
     view_mode: GitCometViewMode,
     workspace_id: Option<session::WorkspaceId>,
     repo_paths: Arc<[PathBuf]>,
@@ -95,6 +224,7 @@ pub(crate) fn sync_gitcomet_window_registry<C>(
         handle,
         view,
         main_pane,
+        documents,
         view_mode,
         workspace_id,
         repo_paths,

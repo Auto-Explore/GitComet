@@ -320,6 +320,14 @@ fn press(cx: &mut gpui::VisualTestContext, keys: &str) {
     });
 }
 
+fn dispatch_file_drop(cx: &mut gpui::VisualTestContext, event: gpui::FileDropEvent) {
+    cx.update(|window, app| {
+        let _ = window.dispatch_event(gpui::PlatformInput::FileDrop(event), app);
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+}
+
 fn named_saved_workspace(name: &str, repo: &str) -> gitcomet_state::session::Workspace {
     let mut workspace = gitcomet_state::session::Workspace::new(vec![PathBuf::from(repo)]);
     workspace.custom_name = Some(name.to_string());

@@ -150,28 +150,11 @@ pub(super) fn worktree_preview_materialized_line_raw_text(
 /// materializing UTF-8 past the tree-sitter parse ceiling, which is a
 /// highlighting budget — a 3 MB log or CSV is perfectly editable, it just does
 /// not get a tree — so past the ceiling this re-reads the file plainly.
-pub(super) fn read_worktree_file_for_editing(
+pub(in crate::view) fn read_worktree_file_for_editing(
     path: &std::path::Path,
     request: &TextDecodeRequest,
 ) -> Result<(SharedString, DiskStamp, u64, SideTextFormat), String> {
-    let len = std::fs::metadata(path)
-        .map_err(|e| match e.kind() {
-            // Reachable from a commit's file list: the editor always opens the
-            // workspace copy, and a file deleted since that commit has none.
-            // A raw "No such file or directory (os error 2)" as the editor body
-            // says nothing about why.
-            std::io::ErrorKind::NotFound => {
-                "This file does not exist in the working tree.".to_string()
-            }
-            _ => e.to_string(),
-        })?
-        .len();
-    if len > FILE_EDITOR_MAX_TEXT_BYTES as u64 {
-        return Err(format!(
-            "File is larger than {} MB; editing is not supported.",
-            FILE_EDITOR_MAX_TEXT_BYTES / (1024 * 1024)
-        ));
-    }
+    preflight_worktree_file_for_editing(path)?;
     let indexed = index_worktree_preview_file(path, request)?;
     let stamp = indexed.stamp;
     if let (Some(text), Some(hash)) = (indexed.source_text, indexed.content_hash) {
@@ -185,6 +168,37 @@ pub(super) fn read_worktree_file_for_editing(
             (SharedString::from(text), stamp, hash, indexed.format)
         })
         .map_err(|e| e.to_string())
+}
+
+pub(in crate::view) fn preflight_worktree_file_for_editing(
+    path: &std::path::Path,
+) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|e| match e.kind() {
+        // Reachable from a commit's file list: the editor always opens the
+        // workspace copy, and a file deleted since that commit has none.
+        // A raw "No such file or directory (os error 2)" as the editor body
+        // says nothing about why.
+        std::io::ErrorKind::NotFound => "This file does not exist in the working tree.".to_string(),
+        _ => e.to_string(),
+    })?;
+    if !metadata.is_file() {
+        return Err("Only regular files can be edited.".into());
+    }
+    if metadata.len() > FILE_EDITOR_MAX_TEXT_BYTES as u64 {
+        return Err(format!(
+            "File is larger than {} MB; editing is not supported.",
+            FILE_EDITOR_MAX_TEXT_BYTES / (1024 * 1024)
+        ));
+    }
+    Ok(())
+}
+
+pub(in crate::view) fn read_worktree_file_version_for_editing(
+    path: &std::path::Path,
+) -> Result<gitcomet_core::filesystem::DiskVersion, String> {
+    preflight_worktree_file_for_editing(path)?;
+    gitcomet_core::filesystem::DiskVersion::read_file(path, FILE_EDITOR_MAX_TEXT_BYTES as u64)
+        .map_err(|error| error.to_string())
 }
 
 /// Line starts and flags of materialized text.
@@ -2411,31 +2425,35 @@ impl MainPaneView {
                     format.format
                 });
             match std::fs::read(&abs_path) {
-                Ok(bytes) => match toggle_task_marker_in_format(bytes, task, format) {
-                    Some((contents, bytes)) => {
-                        self.store.dispatch(Msg::SaveWorktreeFile {
-                            repo_id,
-                            path,
-                            contents: bytes,
-                            stage: false,
-                            completion: None,
-                        });
-                        // The file preview only reloads when its target
-                        // changes, and re-reading now could beat the write:
-                        // show the text being written, as a fresh read would.
-                        if self.worktree_preview_source_path.as_ref() == Some(&abs_path) {
-                            let line_starts: Arc<[usize]> = build_line_starts(&contents).into();
-                            self.set_worktree_preview_ready_source(
-                                abs_path,
-                                contents.into(),
-                                line_starts,
-                                cx,
-                            );
+                Ok(bytes) => {
+                    let expected_contents = Some(Arc::<[u8]>::from(bytes.as_slice()));
+                    match toggle_task_marker_in_format(bytes, task, format) {
+                        Some((contents, bytes)) => {
+                            self.store.dispatch(Msg::SaveWorktreeFile {
+                                repo_id,
+                                path,
+                                contents: bytes,
+                                expected_contents,
+                                stage: false,
+                                completion: None,
+                            });
+                            // The file preview only reloads when its target
+                            // changes, and re-reading now could beat the write:
+                            // show the text being written, as a fresh read would.
+                            if self.worktree_preview_source_path.as_ref() == Some(&abs_path) {
+                                let line_starts: Arc<[usize]> = build_line_starts(&contents).into();
+                                self.set_worktree_preview_ready_source(
+                                    abs_path,
+                                    contents.into(),
+                                    line_starts,
+                                    cx,
+                                );
+                            }
+                            None
                         }
-                        None
+                        None => Some("The file changed on disk; the preview is catching up"),
                     }
-                    None => Some("The file changed on disk; the preview is catching up"),
-                },
+                }
                 Err(_) => Some("Couldn't read the file to update the checkbox"),
             }
         };

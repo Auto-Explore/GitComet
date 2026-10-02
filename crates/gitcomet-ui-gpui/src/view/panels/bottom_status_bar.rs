@@ -115,8 +115,11 @@ impl BottomStatusBarView {
             let previous_summary = Self::hook_activity_summary(&this.state);
             let next = Arc::clone(&model.read(cx).state);
             let next_summary = Self::hook_activity_summary(&next);
+            let filesystem_changed = next.filesystem.pending.len()
+                != this.state.filesystem.pending.len()
+                || next.filesystem.progress != this.state.filesystem.progress;
             this.state = next;
-            if next_summary != previous_summary {
+            if next_summary != previous_summary || filesystem_changed {
                 cx.notify();
             }
         });
@@ -260,6 +263,10 @@ impl Render for BottomStatusBarView {
             self.render_count += 1;
         }
         let theme = self.theme;
+        let filesystem_pending = self
+            .root_view
+            .upgrade()
+            .is_some_and(|root| root.read(cx).file_operations.has_pending());
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
 
@@ -610,7 +617,32 @@ impl Render for BottomStatusBarView {
                     .flex()
                     .items_center()
                     .gap(scaled_px(2.0))
-                    .child(sidebar_toggle),
+                    .child(sidebar_toggle)
+                    .when(filesystem_pending, |d| {
+                        d.child(
+                            components::Button::new(
+                                "filesystem_progress",
+                                self.state
+                                    .filesystem
+                                    .progress
+                                    .as_ref()
+                                    .map(|p| {
+                                        format!(
+                                            "Files: {}/{} · Cancel",
+                                            p.completed_items, p.total_items
+                                        )
+                                    })
+                                    .unwrap_or_else(|| "Files: waiting · Cancel".into()),
+                            )
+                            .borderless()
+                            .style(components::ButtonStyle::Subtle)
+                            .on_click(theme, cx, |this, _, _, cx| {
+                                let _ = this
+                                    .root_view
+                                    .update(cx, |root, cx| root.cancel_filesystem_operations(cx));
+                            }),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -629,6 +661,33 @@ impl Render for BottomStatusBarView {
                     )
                     .child(details_toggle)
                     .child(hook_activity_button)
+                    .child({
+                        let (documents_shown, picker_open) = self
+                            .root_view
+                            .upgrade()
+                            .map(|root| {
+                                let root = root.read(cx);
+                                (root.documents_active, root.document_picker_open(cx))
+                            })
+                            .unwrap_or_default();
+                        components::Button::new("bottom_documents", "")
+                            .start_slot(svg_icon(
+                                "icons/file.svg",
+                                theme.colors.foreground.secondary,
+                                scaled_px(16.),
+                            ))
+                            .selected(documents_shown)
+                            .open(picker_open)
+                            .style(components::ButtonStyle::Subtle)
+                            .borderless()
+                            .on_click_with_bounds(theme, cx, |this, _, bounds, window, cx| {
+                                let _ = this.root_view.update(cx, |root, cx| {
+                                    root.toggle_document_picker(bounds, window, cx)
+                                });
+                            })
+                            .gitcomet_tooltip(theme, "Open a file…".into())
+                            .debug_selector(|| "bottom_documents".into())
+                    })
                     .child(zoom_button)
                     .children(self.edition_strip.clone())
                     .when(self.edition_strip.is_none(), |row| {

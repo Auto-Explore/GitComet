@@ -734,6 +734,11 @@ pub(super) fn activate(
     entry: RepoPickerEntry,
     cx: &mut gpui::Context<PopoverHost>,
 ) {
+    // Deferred: activation can run inside a root-view update.
+    let root_view = this.root_view.clone();
+    cx.defer(move |cx| {
+        let _ = root_view.update(cx, |root, cx| root.show_repository_canvas(cx));
+    });
     match entry {
         RepoPickerEntry::Workspace(workspace_id) => activate_workspace(this, workspace_id, cx),
         RepoPickerEntry::Open(repo_id) => {

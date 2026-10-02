@@ -695,12 +695,52 @@ impl GitCometView {
         let ui_scale_percent = self.ui_scale_percent;
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
 
+        // With a repository open the viewer takes only the main slot below, so
+        // the sidebar, details and action bar stay put. Without one there is no
+        // chrome to keep, and the viewer gets the whole content card.
+        let repository_chrome = renders_full_chrome(self.view_mode)
+            && !self.is_startup_repository_loading_screen_active()
+            && !self.is_home_screen_active();
+        if self.documents_active && !repository_chrome {
+            return div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h(px(0.))
+                .bg(theme.colors.surface.chrome)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h(px(0.))
+                        .mx(scaled_px(6.0))
+                        .mt(scaled_px(4.0))
+                        .mb(scaled_px(CONTENT_CARD_BOTTOM_MARGIN_PX))
+                        .rounded(px(main_content_card_radius(theme)))
+                        .border_1()
+                        .border_color(theme.colors.stroke.default)
+                        .overflow_hidden()
+                        .child(self.documents.clone()),
+                )
+                .child(stable_cached_fixed_height_view(
+                    self.bottom_status_bar.clone(),
+                    bottom_status_bar_height(cx),
+                ))
+                .into_any_element();
+        }
+
         if self.is_startup_repository_loading_screen_active() {
             return self.startup_repository_loading_screen();
         }
 
         if self.is_home_screen_active() {
-            return self.home_screen(cx);
+            return div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h(px(0.))
+                .child(self.home_screen(cx))
+                .child(self.bottom_status_bar.clone())
+                .into_any_element();
         }
 
         if renders_full_chrome(self.view_mode) {

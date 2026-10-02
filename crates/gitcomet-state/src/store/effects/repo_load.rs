@@ -169,6 +169,79 @@ mod selected_diff_guard_tests {
         assert!(!stale_target.is_current());
     }
 
+    fn finish_filesystem_rename(
+        thread_state: &Arc<RwLock<Arc<AppState>>>,
+    ) -> Vec<crate::msg::Effect> {
+        let mut state = (**thread_state.read().unwrap()).clone();
+        let root = &state.repos[0].spec.workdir;
+        let changes = vec![gitcomet_core::filesystem::PathChange {
+            old: Some(root.join("src")),
+            new: Some(root.join("renamed")),
+        }];
+        let effects = crate::store::reducer::reduce(
+            &mut Default::default(),
+            &std::sync::atomic::AtomicU64::new(2),
+            &mut state,
+            Msg::FilesystemPathsChanged(changes),
+        );
+        *thread_state.write().unwrap() = Arc::new(state);
+        effects
+    }
+
+    #[test]
+    fn filesystem_changes_preserve_pending_loads_for_unchanged_diff_targets() {
+        use gitcomet_core::domain::CommitId;
+        for selected in [
+            DiffTarget::commit_range(CommitId("abc".into()), Some(CommitId("def".into())), None),
+            DiffTarget::commit(CommitId("abc".into()), "src/lib.rs".into()),
+            DiffTarget::commit_range(
+                CommitId("abc".into()),
+                Some(CommitId("def".into())),
+                Some("src/lib.rs".into()),
+            ),
+            DiffTarget::working_tree("src/lib.rs".into(), DiffArea::Staged),
+            target("unrelated.rs"),
+        ] {
+            let state = thread_state_with_target(RepoId(1), selected.clone(), 7);
+            let guard = SelectedDiffLoadGuard::new(state.clone(), RepoId(1), selected, 7);
+            finish_filesystem_rename(&state);
+            assert!(
+                guard.is_current(),
+                "an unaffected pending read must still be delivered"
+            );
+        }
+    }
+
+    #[test]
+    fn filesystem_moves_replace_pending_diff_loads_for_the_retargeted_path() {
+        use crate::model::Loadable;
+        use crate::msg::{Effect, InternalMsg};
+        let selected = target("src/lib.rs");
+        let state = thread_state_with_target(RepoId(1), selected.clone(), 7);
+        let guard = SelectedDiffLoadGuard::new(state.clone(), RepoId(1), selected, 7);
+        let effects = finish_filesystem_rename(&state);
+        assert!(!guard.is_current());
+        let expected = target("renamed/lib.rs");
+        assert!(effects.iter().any(|effect| matches!(effect,
+            Effect::LoadDiff { target, .. } if target == &expected)));
+        let mut next = (**state.read().unwrap()).clone();
+        assert!(matches!(next.repos[0].diff_state.diff, Loadable::Loading));
+        crate::store::reducer::reduce(
+            &mut Default::default(),
+            &std::sync::atomic::AtomicU64::new(2),
+            &mut next,
+            Msg::Internal(InternalMsg::DiffLoaded {
+                repo_id: RepoId(1),
+                target: expected.clone(),
+                result: Ok(gitcomet_core::domain::Diff {
+                    target: expected,
+                    lines: vec![],
+                }),
+            }),
+        );
+        assert!(matches!(next.repos[0].diff_state.diff, Loadable::Ready(_)));
+    }
+
     /// The repo-load trace explains slow or stuck loads, so selected-diff work
     /// must record when it is queued, replaced, skipped, started and finished.
     /// The trace target is read from the environment once per process, so the
@@ -1600,6 +1673,8 @@ pub(super) fn schedule_load_submodules(
     );
 }
 
+pub(in crate::store::effects) mod explorer_listing;
+
 pub(super) fn schedule_load_large_file_support(
     executor: &TaskExecutor,
     repos: &RepoMap,
@@ -1741,9 +1816,11 @@ pub(super) fn schedule_load_file_browser(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     source: gitcomet_core::domain::FileSource,
-    _cancellation: CancellationToken,
+    cancellation: CancellationToken,
+    options: explorer_listing::Options,
 ) {
     let source_for_err = source.clone();
+    let cancellation_for_err = cancellation.clone();
     spawn_with_repo_or_else(
         executor,
         repos,
@@ -1751,7 +1828,16 @@ pub(super) fn schedule_load_file_browser(
         msg_tx,
         move |repo, msg_tx| {
             let result = match &source {
-                gitcomet_core::domain::FileSource::WorkingDirectory => repo.list_worktree_files(),
+                gitcomet_core::domain::FileSource::WorkingDirectory => {
+                    repo.list_worktree_files().and_then(|entries| {
+                        explorer_listing::augment(
+                            &repo.spec().workdir,
+                            entries,
+                            options,
+                            &cancellation,
+                        )
+                    })
+                }
                 gitcomet_core::domain::FileSource::Commit(commit_id) => {
                     repo.list_tree_files_at_commit(commit_id)
                 }
@@ -1764,6 +1850,7 @@ pub(super) fn schedule_load_file_browser(
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+                    cancellation: Some(cancellation),
                     repo_id,
                     source,
                     result,
@@ -1774,6 +1861,7 @@ pub(super) fn schedule_load_file_browser(
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+                    cancellation: Some(cancellation_for_err),
                     repo_id,
                     source: source_for_err,
                     result: Err(missing_repo_error(repo_id)),

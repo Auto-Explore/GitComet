@@ -233,6 +233,52 @@ pub fn context_menu_separator(theme: AppTheme, ui_scale: impl Into<UiScale>) -> 
         .border_color(theme.colors.stroke.subtle)
 }
 
+/// Which way a menu's scroll arrow scrolls.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum MenuScrollDirection {
+    Up,
+    Down,
+}
+
+/// Height of a menu scroll arrow at 100%.
+pub const MENU_SCROLL_ARROW_HEIGHT_PX: f32 = 16.0;
+
+/// The strip on the top or bottom edge of a menu taller than the window: a
+/// chevron on the menu's own surface, laid over the rows it hides (macOS
+/// style). The host shows it only while rows are hidden that way and scrolls
+/// while it is hovered; its parent must be `relative()`.
+pub fn context_menu_scroll_arrow(
+    theme: AppTheme,
+    ui_scale: impl Into<UiScale>,
+    direction: MenuScrollDirection,
+    hovered: bool,
+) -> Div {
+    let scaled_px = crate::ui_scale::scaler(ui_scale.into());
+    let icon = match direction {
+        MenuScrollDirection::Up => "icons/chevron_up.svg",
+        MenuScrollDirection::Down => "icons/chevron_down.svg",
+    };
+    let color = if hovered {
+        theme.colors.foreground.primary
+    } else {
+        theme.colors.foreground.secondary
+    };
+    div()
+        .absolute()
+        .left_0()
+        .right_0()
+        .map(|strip| match direction {
+            MenuScrollDirection::Up => strip.top_0(),
+            MenuScrollDirection::Down => strip.bottom_0(),
+        })
+        .h(scaled_px(MENU_SCROLL_ARROW_HEIGHT_PX))
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(theme.colors.surface.raised)
+        .child(crate::icons::svg_icon(icon, color, scaled_px(12.0)))
+}
+
 /// One inline submenu (its header row plus the rows it expands to) on the
 /// sidebar-header surface, so rows that act on the same object read as a unit.
 /// Rows inside keep a transparent rest, so hover and selection overlays land
@@ -466,6 +512,10 @@ fn context_menu_icon_color(
     if label == "Close" && icon_path == Some("icons/repo_tab_close.svg") {
         return theme.colors.accent.foreground;
     }
+    // Moving to the trash can be undone; only permanent deletion reads red.
+    if label == "Trash" {
+        return theme.colors.accent.foreground;
+    }
 
     // Semantic-ish mapping for common actions.
     if label.starts_with("Force push")
@@ -547,6 +597,13 @@ pub fn context_menu_icon_path(icon: &str, label: &str) -> Option<&'static str> {
         "icons/disk.svg" => Some("icons/disk.svg"),
         "icons/generic_close.svg" => Some("icons/generic_close.svg"),
         "icons/git_commit.svg" => Some("icons/git_commit.svg"),
+        "icons/file_plus.svg" => Some("icons/file_plus.svg"),
+        "icons/folder_plus.svg" => Some("icons/folder_plus.svg"),
+        "icons/scissors.svg" => Some("icons/scissors.svg"),
+        "icons/clipboard_paste.svg" => Some("icons/clipboard_paste.svg"),
+        "icons/copy_plus.svg" => Some("icons/copy_plus.svg"),
+        "icons/redo.svg" => Some("icons/redo.svg"),
+        "icons/eye_off.svg" => Some("icons/eye_off.svg"),
         _ => None,
     };
     if by_icon.is_some() {
@@ -943,6 +1000,13 @@ mod tests {
             "icons/disk.svg",
             "icons/generic_close.svg",
             "icons/git_commit.svg",
+            "icons/file_plus.svg",
+            "icons/folder_plus.svg",
+            "icons/scissors.svg",
+            "icons/clipboard_paste.svg",
+            "icons/copy_plus.svg",
+            "icons/redo.svg",
+            "icons/eye_off.svg",
         ];
 
         for path in paths {
@@ -1001,6 +1065,23 @@ mod tests {
         assert_eq!(
             context_menu_icon_color(theme, false, "Discard changes", Some("icons/warning.svg")),
             theme.colors.status.warning.foreground
+        );
+        // The explorer's reversible Trash stays neutral; permanent deletion is red.
+        assert_eq!(
+            context_menu_icon_color(theme, false, "Trash", Some("icons/trash.svg")),
+            theme.colors.accent.foreground
+        );
+        assert_eq!(
+            context_menu_icon_color(theme, false, "Delete permanently…", Some("icons/trash.svg")),
+            theme.colors.status.danger.foreground
+        );
+        assert_eq!(
+            context_menu_icon_color(theme, false, "Cut", Some("icons/scissors.svg")),
+            theme.colors.accent.foreground
+        );
+        assert_eq!(
+            context_menu_icon_color(theme, false, "Add to .gitignore", Some("icons/eye_off.svg")),
+            theme.colors.accent.foreground
         );
     }
 
@@ -1062,6 +1143,13 @@ mod tests {
             "icons/disk.svg",
             "icons/generic_close.svg",
             "icons/git_commit.svg",
+            "icons/file_plus.svg",
+            "icons/folder_plus.svg",
+            "icons/scissors.svg",
+            "icons/clipboard_paste.svg",
+            "icons/copy_plus.svg",
+            "icons/redo.svg",
+            "icons/eye_off.svg",
         ];
         for path in paths {
             assert_eq!(

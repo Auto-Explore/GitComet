@@ -190,6 +190,18 @@ where
     )
 }
 
+/// Filesystem and native payload jobs use the same deterministic test runtime
+/// as other view computations; production work always runs off the UI thread.
+pub async fn background_compute<O: Send + 'static>(
+    compute: impl FnOnce() -> O + Send + 'static,
+) -> O {
+    if current().uses_background_compute() {
+        smol::unblock(compute).await
+    } else {
+        compute()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

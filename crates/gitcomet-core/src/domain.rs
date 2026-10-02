@@ -456,6 +456,8 @@ pub struct FileEntry {
     pub path: Arc<PathBuf>,
     pub kind: FileEntryKind,
     pub depth: usize,
+    /// Excluded by gitignore; only the working-tree listing's ignored pass sets it.
+    pub ignored: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

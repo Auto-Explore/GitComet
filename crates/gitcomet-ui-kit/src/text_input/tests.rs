@@ -2018,6 +2018,18 @@ fn make_dual_providers() -> DualProviders {
     }
 }
 
+#[test]
+fn detected_line_endings_prefer_file_contents_over_platform_default() {
+    for (content, expected) in [
+        ("first\r\nsecond", "\r\n"),
+        ("first\nsecond", "\n"),
+        ("first\r\nsecond\nthird", "\r\n"),
+        ("no newline", if cfg!(windows) { "\r\n" } else { "\n" }),
+    ] {
+        assert_eq!(TextInput::detect_line_ending(content), expected);
+    }
+}
+
 #[gpui::test]
 fn multiline_shift_enter_inserts_a_line_break(cx: &mut gpui::TestAppContext) {
     let (input, cx) = multiline_input(cx);

@@ -1423,6 +1423,7 @@ impl GitCometView {
             let next = Arc::clone(&model.read(cx).state);
             let should_quit = crate::startup_probe::observe_app_state(next.as_ref());
             let should_notify = this.apply_state_snapshot(next, cx);
+            this.process_filesystem_results(cx);
             if should_notify {
                 cx.notify();
             }
@@ -1825,6 +1826,29 @@ impl GitCometView {
         };
 
         let terminal_keystroke_interceptor = Self::install_terminal_keystroke_interceptor(cx);
+        let documents_root = cx.weak_entity();
+        let documents = cx.new(|cx| {
+            documents::DocumentsView::new(
+                initial_theme,
+                documents_root.clone(),
+                store.clone(),
+                ui_model.clone(),
+                cx,
+            )
+        });
+        let document_picker = {
+            let status_bar = bottom_status_bar.entity_id();
+            cx.new(|cx| {
+                documents::DocumentPicker::new(
+                    initial_theme,
+                    documents_root,
+                    &documents,
+                    status_bar,
+                    window,
+                    cx,
+                )
+            })
+        };
 
         // The error details dialog shows what the toast host holds.
         let toast_errors_subscription = cx.observe(&toast_host, |this, toast_host, cx| {
@@ -1953,6 +1977,11 @@ impl GitCometView {
             home_pinned_repos: ui_session.pinned_repos.clone(),
             home_recent_repos: ui_session.recent_repos.clone(),
             external_drag_paths: None,
+            file_operations: file_operations::FileOperationsUi::default(),
+            documents,
+            document_picker,
+            documents_active: false,
+            document_routing: documents::Routing::default(),
             external_drag_payload: None,
             external_drag_classification_seq: 0,
             external_drag_drop_pending: false,
@@ -2034,6 +2063,10 @@ impl GitCometView {
 
     pub(super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         let theme = theme.with_appearance(crate::appearance::current(cx));
+        self.documents
+            .update(cx, |documents, cx| documents.set_theme(theme, cx));
+        self.document_picker
+            .update(cx, |picker, cx| picker.set_theme(theme, cx));
         self.splash_backdrop_image = splash::load_splash_backdrop_image(theme.is_dark);
         self.theme = theme;
         if let Some(extension_window) = self.extension_window.as_ref() {

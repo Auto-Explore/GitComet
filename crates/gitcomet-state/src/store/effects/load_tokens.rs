@@ -21,6 +21,7 @@ pub(in crate::store) struct RepoTaskToken {
     /// replacement to start at all — but stopping it must not disturb the
     /// repository's other loads, which share [`Self::cancellation`].
     log_cancellation: Arc<Mutex<CancellationToken>>,
+    file_browser_cancellation: Arc<Mutex<CancellationToken>>,
     // The revision distinguishes refreshes of the same path. All loads for one
     // selection share a child token, so superseding it leaves log/status work alive.
     pub(super) selected_diff: Arc<Mutex<Option<(DiffTarget, u64, CancellationToken)>>>,
@@ -36,6 +37,7 @@ impl RepoTaskToken {
             load_epoch,
             cancellation: CancellationToken::new(),
             log_cancellation: Arc::new(Mutex::new(CancellationToken::new())),
+            file_browser_cancellation: Arc::new(Mutex::new(CancellationToken::new())),
             selected_diff: Arc::new(Mutex::new(None)),
             selected_diff_key: None,
             selected_diff_slots: SelectedDiffSlots::default(),
@@ -53,6 +55,16 @@ impl RepoTaskToken {
         let next = CancellationToken::new();
         *slot = next.clone();
         next
+    }
+
+    fn take_over_file_browser(&self) -> CancellationToken {
+        let mut current = self
+            .file_browser_cancellation
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        current.cancel();
+        *current = CancellationToken::new();
+        current.clone()
     }
 
     pub(super) fn selected_diff_cancellation(
@@ -102,6 +114,10 @@ impl RepoTaskToken {
     /// Cancels every task running under this token, log walks included.
     pub(in crate::store) fn cancel(&self) {
         self.cancellation.cancel();
+        self.file_browser_cancellation
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .cancel();
         self.log_cancellation
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -182,6 +198,20 @@ fn log_load_context(
     let token = ensure_repo_task_token(thread_state, repo_task_tokens, repo_id)?;
     let msg_tx = msg_tx.with_repo_load_guard(repo_id, token.load_epoch, token.cancellation.clone());
     Some((msg_tx, token.take_over_log()))
+}
+
+/// Like [`log_load_context`], but a new listing supersedes only the previous
+/// listing, and its replies are guarded by that listing's own token.
+pub(super) fn file_browser_load_context(
+    thread_state: &Arc<RwLock<Arc<AppState>>>,
+    repo_task_tokens: &mut FxHashMap<RepoId, RepoTaskToken>,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+) -> Option<(StoreWorkerSender, CancellationToken)> {
+    let token = ensure_repo_task_token(thread_state, repo_task_tokens, repo_id)?;
+    let cancellation = token.take_over_file_browser();
+    let msg_tx = msg_tx.with_repo_load_guard(repo_id, token.load_epoch, cancellation.clone());
+    Some((msg_tx, cancellation))
 }
 
 pub(super) fn cancel_repo_loads(

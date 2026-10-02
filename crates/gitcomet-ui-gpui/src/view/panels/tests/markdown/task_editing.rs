@@ -65,6 +65,12 @@ fn toggling_a_task_invalidates_the_file_preview(cx: &mut gpui::TestAppContext) {
     let task = fixture.document.rows[row_ix].task.expect("task row");
 
     cx.update(|_window, app| {
+        view.read(app).store.insert_repo_for_test(
+            gitcomet_state::model::RepoId(8808),
+            Arc::new(gitcomet_core::test_support::UnconfiguredRepository::new(
+                &fixture.workdir,
+            )),
+        );
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.toggle_markdown_preview_task(DiffTextRegion::Inline, task, cx);
@@ -72,6 +78,16 @@ fn toggling_a_task_invalidates_the_file_preview(cx: &mut gpui::TestAppContext) {
         });
     });
     cx.run_until_parked();
+
+    let saved_path = fixture.workdir.join("docs/preview.md");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::fs::read_to_string(&saved_path).unwrap() != "- [x] ship it\n" {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "checkbox save did not reach disk"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);

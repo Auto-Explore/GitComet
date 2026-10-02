@@ -117,7 +117,7 @@ pub(in crate::view) fn diff_hunk_header_height_for_ui_scale(
 /// The previous shape tokenized the entire document and handed the result to
 /// `set_highlights` on every keystroke, which is the one thing this arm — the
 /// arm reached by the *largest* buffers — could least afford.
-pub(in crate::view::panes::main) fn resolved_output_heuristic_highlights_for_range(
+pub(in crate::view) fn resolved_output_heuristic_highlights_for_range(
     theme: AppTheme,
     output_text: &Rope,
     language: rows::DiffSyntaxLanguage,

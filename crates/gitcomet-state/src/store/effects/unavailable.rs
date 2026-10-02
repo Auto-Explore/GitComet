@@ -42,7 +42,8 @@ pub(super) fn send_unavailable_git_effect_result(
     let send = |msg| util::send_or_log(msg_tx, msg);
 
     match effect {
-        Effect::PersistSession { .. }
+        Effect::Filesystem(_)
+        | Effect::PersistSession { .. }
         | Effect::PersistRecentRepo { .. }
         | Effect::PersistRepoHistoryMode { .. }
         | Effect::PersistRepoHistoryModesBatch { .. }
@@ -301,6 +302,7 @@ pub(super) fn send_unavailable_git_effect_result(
         )),
         Effect::LoadFileBrowser { repo_id, source } => {
             send(Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+                cancellation: None,
                 repo_id,
                 source,
                 result: Err(git_unavailable_error(runtime)),

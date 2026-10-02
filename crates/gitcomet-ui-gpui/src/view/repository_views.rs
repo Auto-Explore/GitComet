@@ -455,11 +455,15 @@ impl GitCometView {
     }
 
     /// The main area for the active repository: History, or the selected
-    /// extension view under a strip naming both.
+    /// extension view under a strip naming both, or an open standalone document.
     pub(in crate::view) fn repository_main_content(
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        // A standalone document takes the main slot; the panes around it stay.
+        if self.documents_active {
+            return stable_cached_fill_view(self.documents.clone());
+        }
         let history = || stable_cached_fill_view(self.main_pane.clone());
         let (Some(router), Some(repo)) = (self.repository_views.as_ref(), self.active_repo())
         else {

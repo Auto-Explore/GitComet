@@ -19,6 +19,8 @@ mod diff_actions;
 mod diff_content_mode_settings;
 mod diff_editor;
 mod diff_hunk;
+mod explorer_operations;
+mod explorer_settings;
 mod file_browser_file;
 mod file_browser_folder;
 pub(super) mod file_history_commit;
@@ -110,6 +112,10 @@ pub(super) fn push_copy_path_entries(
                 text: path_text_for_copy(&absolute),
             }),
         });
+    }
+    // The root's relative path is empty text.
+    if path.as_os_str().is_empty() {
+        return;
     }
     items.push(ContextMenuItem::Entry {
         label: "Copy relative path".into(),
@@ -828,6 +834,9 @@ impl PopoverHost {
                 Some(history_branch_filter::model(self, *repo_id))
             }
             PopoverKind::DiffActionMenu => Some(diff_actions::model(self)),
+            PopoverKind::ExplorerSettingsMenu { repo_id } => {
+                Some(explorer_settings::model(self, *repo_id))
+            }
             PopoverKind::MergetoolSettingsMenu => Some(mergetool_settings::model(self, cx)),
             PopoverKind::DiffContentModeSettings => Some(diff_content_mode_settings::model(self)),
             PopoverKind::TextFormatMenu { section } => {
@@ -870,7 +879,21 @@ impl PopoverHost {
     ) {
         let mut close_after_action = true;
         let mut restore_diff_panel_focus_after_action = false;
+        let mut restore_invoker_focus_after_action = true;
         match action {
+            ContextMenuAction::Explorer {
+                repo_id,
+                path,
+                action,
+            } => {
+                if self.state.active_repo == Some(repo_id) {
+                    let editing = self.sidebar_pane.update(cx, |pane, cx| {
+                        pane.explorer_action(action, Some(path), window, cx);
+                        pane.explorer_inline_edit_owns_focus(window, cx)
+                    });
+                    restore_invoker_focus_after_action = !editing;
+                }
+            }
             ContextMenuAction::Hosted(action) => action.invoke(cx),
             ContextMenuAction::ToggleHistoryRefGroup { target } => {
                 self.expanded_history_ref = if self.expanded_history_ref.as_ref() == Some(&target) {
@@ -943,6 +966,9 @@ impl PopoverHost {
                 source,
                 path,
             } => {
+                let _ = self
+                    .root_view
+                    .update(cx, |root, cx| root.show_repository_canvas(cx));
                 self.store.dispatch(Msg::OpenFileContent {
                     repo_id,
                     source,
@@ -950,6 +976,9 @@ impl PopoverHost {
                 });
             }
             ContextMenuAction::EditFile { repo_id, path } => {
+                let _ = self
+                    .root_view
+                    .update(cx, |root, cx| root.show_repository_canvas(cx));
                 self.store.dispatch(Msg::OpenFileEditor { repo_id, path });
             }
             ContextMenuAction::DiscardFileEdits { repo_id, path } => {
@@ -1171,6 +1200,9 @@ impl PopoverHost {
                     self.warn_repository_gone(cx);
                     return;
                 }
+                let _ = self
+                    .root_view
+                    .update(cx, |root, cx| root.show_repository_canvas(cx));
                 self.store.dispatch(Msg::SetActiveRepo { repo_id });
             }
             ContextMenuAction::CloseRepo { repo_id } if !self.repo_is_open(repo_id) => {
@@ -1524,6 +1556,18 @@ impl PopoverHost {
                     });
                 });
             }
+            ContextMenuAction::SetExplorerVisibility {
+                repo_id,
+                hidden,
+                ignored,
+            } => {
+                close_after_action = false;
+                self.store.dispatch(Msg::SetExplorerVisibility {
+                    repo_id,
+                    hidden,
+                    ignored,
+                });
+            }
             ContextMenuAction::SetChangeTrackingView { view } => {
                 self.change_tracking_view = view;
                 let root_view = self.root_view.clone();
@@ -1626,11 +1670,26 @@ impl PopoverHost {
                 );
                 return;
             }
+            ContextMenuAction::AddExplorerToGitignore { repo_id, path } => {
+                self.gitignore_explorer = true;
+                self.open_popover_at(
+                    PopoverKind::AddToGitignorePrompt {
+                        repo_id,
+                        area: DiffArea::Unstaged,
+                        path,
+                    },
+                    self.popover_anchor_point(),
+                    window,
+                    cx,
+                );
+                return;
+            }
             ContextMenuAction::AddToGitignoreSelectionOrPath {
                 repo_id,
                 area,
                 path,
             } => {
+                self.gitignore_explorer = false;
                 let anchor = self.popover_anchor_point();
                 // Deliberately does not consume the row selection: the dialog
                 // can still be cancelled, and `submit_add_to_gitignore` is what
@@ -2122,7 +2181,12 @@ impl PopoverHost {
         // the way in, and whether the picker underneath survives is the picker's
         // call, not the action's.
         if close_after_action && !self.suppress_popover_close_after_action {
-            self.close_popover_and_restore_focus(window, cx);
+            if restore_invoker_focus_after_action {
+                self.close_popover_and_restore_focus(window, cx);
+            } else {
+                // The action put focus in an inline editor; restoring the invoker would take it.
+                self.close_popover(cx);
+            }
         } else {
             if restore_diff_panel_focus_after_action {
                 let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
@@ -2209,6 +2273,51 @@ impl PopoverHost {
         Some((paths, suggestions))
     }
 
+    pub(super) fn explorer_gitignore_target(
+        &self,
+        repo_id: RepoId,
+        path: &std::path::Path,
+    ) -> Option<(
+        Vec<std::path::PathBuf>,
+        gitcomet_core::gitignore::GitignoreSuggestions,
+    )> {
+        let repo = self.state.repos.iter().find(|r| r.id == repo_id)?;
+        if repo.file_browser.source != gitcomet_core::domain::FileSource::WorkingDirectory
+            || path.as_os_str().is_empty()
+        {
+            return None;
+        }
+        let paths: Vec<_> = if repo.file_browser.selection.paths.contains(path) {
+            repo.file_browser.selection.paths.iter().cloned().collect()
+        } else {
+            vec![path.to_path_buf()]
+        };
+        let Loadable::Ready(entries) = &repo.file_browser.entries else {
+            return None;
+        };
+        let mut targets = Vec::new();
+        for path in &paths {
+            if matches!(&repo.submodules, Loadable::Ready(submodules) if submodules.iter().any(|submodule| submodule.path.as_path() == path))
+            {
+                return None;
+            }
+            let directory = entries.iter().any(|e| {
+                e.path.as_path() == path
+                    && e.kind == gitcomet_core::domain::FileEntryKind::Directory
+            });
+            if !directory
+                && !repo
+                    .status_entry_for_path(DiffArea::Unstaged, path)
+                    .is_some_and(|s| s.kind == gitcomet_core::domain::FileStatusKind::Untracked)
+            {
+                return None;
+            }
+            targets.push((path.clone(), directory));
+        }
+        let suggestions = gitcomet_core::gitignore::suggestions_for_entries(&targets)?;
+        Some((paths, suggestions))
+    }
+
     /// Seed the "Add to .gitignore" dialog when it opens.
     pub(super) fn prepare_add_to_gitignore(
         &mut self,
@@ -2218,7 +2327,11 @@ impl PopoverHost {
         window: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let target = self.add_to_gitignore_target(repo_id, area, path, cx);
+        let target = if self.gitignore_explorer {
+            self.explorer_gitignore_target(repo_id, path)
+        } else {
+            self.add_to_gitignore_target(repo_id, area, path, cx)
+        };
         let scope = gitcomet_core::gitignore::GitignoreScope::File;
         let text = target
             .as_ref()
@@ -2321,7 +2434,9 @@ impl PopoverHost {
         // Now that the action is going ahead, the row selection has served its
         // purpose and is cleared. The returned paths are unused — the patterns
         // come from the field, which the user may have edited.
-        let _ = self.take_status_paths_for_action(repo_id, area, &path, cx);
+        if !self.gitignore_explorer {
+            let _ = self.take_status_paths_for_action(repo_id, area, &path, cx);
+        }
         self.store
             .dispatch(Msg::AppendGitignorePatterns { repo_id, patterns });
         self.close_popover(cx);
@@ -2410,12 +2525,31 @@ impl PopoverHost {
             .map(Into::into)
     }
 
-    fn scroll_context_menu_selection(&self, window: &mut Window, cx: &mut gpui::Context<Self>) {
-        if let Some(anchor) = self
+    /// Scrolls the least that fully shows the selected row, counting the area
+    /// under a visible scroll arrow as hidden. Reads the extents recorded in the
+    /// last prepaint; navigation does not change the rows, so they still hold.
+    fn scroll_context_menu_selection(&self, cx: &mut gpui::Context<Self>) {
+        let Some((top, height)) = self
             .context_menu_selected_ix
-            .and_then(|ix| self.context_menu_scroll_anchors.get(ix))
-        {
-            anchor.scroll_to(window, cx);
+            .and_then(|ix| self.context_menu_row_extents.borrow().get(ix).copied())
+            .flatten()
+        else {
+            return;
+        };
+        let scroll = &self.context_menu_scroll;
+        let offset = scroll.offset();
+        let current = -offset.y;
+        let edge = super::popover_ui_scale(cx).px(components::MENU_SCROLL_ARROW_HEIGHT_PX);
+        let target = crate::kit::menu_placement::reveal_scroll(
+            top,
+            top + height,
+            scroll.bounds().size.height,
+            scroll.max_offset().y,
+            current,
+            edge,
+        );
+        if target != current {
+            scroll.set_offset(point(offset.x, -target));
         }
     }
 
@@ -2430,17 +2564,17 @@ impl PopoverHost {
         let model = self
             .context_menu_model(&kind, cx)
             .unwrap_or_else(|| ContextMenuModel::new(vec![]));
-        self.context_menu_scroll_anchors
-            .resize_with(model.items.len(), || {
-                gpui::ScrollAnchor::for_handle(self.context_menu_scroll.clone())
-            });
-        let scroll_anchors = self.context_menu_scroll_anchors.clone();
+        self.context_menu_row_extents
+            .borrow_mut()
+            .resize(model.items.len(), None);
+        let row_extents = self.context_menu_row_extents.clone();
+        let menu_scroll = self.context_menu_scroll.clone();
         let model_for_keys = model.clone();
         let model_for_mouse = model.clone();
         let tooltip_host = self.tooltip_host.clone();
         let entry_tooltips = model.entry_tooltips.clone();
         let entry_debug_selectors = model.entry_debug_selectors.clone();
-        let groups = model.groups.clone();
+        let slots = context_menu_slots(model.items.len(), &model.groups);
         let shortcut_keycaps = model.shortcut_keycaps;
 
         let focus = self.context_menu_focus_handle.clone();
@@ -2478,6 +2612,7 @@ impl PopoverHost {
             )
             .on_key_down(
                 cx.listener(move |this, e: &gpui::KeyDownEvent, window, cx| {
+                    this.latch_context_menu_placement();
                     let key = e.keystroke.key.as_str();
                     let mods = e.keystroke.modifiers;
                     if mods.control || mods.platform || mods.alt || mods.function {
@@ -2518,7 +2653,7 @@ impl PopoverHost {
                             let next =
                                 model_for_keys.next_selectable(this.context_menu_selected_ix, -1);
                             this.context_menu_selected_ix = next;
-                            this.scroll_context_menu_selection(window, cx);
+                            this.scroll_context_menu_selection(cx);
                             cx.notify();
                         }
                         "down" => {
@@ -2526,7 +2661,7 @@ impl PopoverHost {
                             let next =
                                 model_for_keys.next_selectable(this.context_menu_selected_ix, 1);
                             this.context_menu_selected_ix = next;
-                            this.scroll_context_menu_selection(window, cx);
+                            this.scroll_context_menu_selection(cx);
                             cx.notify();
                         }
                         "tab" => {
@@ -2534,19 +2669,19 @@ impl PopoverHost {
                             let direction = if mods.shift { -1 } else { 1 };
                             this.context_menu_selected_ix = model_for_keys
                                 .next_selectable(this.context_menu_selected_ix, direction);
-                            this.scroll_context_menu_selection(window, cx);
+                            this.scroll_context_menu_selection(cx);
                             cx.notify();
                         }
                         "home" => {
                             cx.stop_propagation();
                             this.context_menu_selected_ix = model_for_keys.first_selectable();
-                            this.scroll_context_menu_selection(window, cx);
+                            this.scroll_context_menu_selection(cx);
                             cx.notify();
                         }
                         "end" => {
                             cx.stop_propagation();
                             this.context_menu_selected_ix = model_for_keys.last_selectable();
-                            this.scroll_context_menu_selection(window, cx);
+                            this.scroll_context_menu_selection(cx);
                             cx.notify();
                         }
                         "enter" | "space" => {
@@ -2573,6 +2708,15 @@ impl PopoverHost {
                     }
                 }),
             )
+            .on_children_prepainted({
+                let slots = slots.clone();
+                record_row_extents(row_extents.clone(), menu_scroll.clone(), move |child| {
+                    match slots.get(child) {
+                        Some(MenuSlot::Row(ix)) => Some(*ix),
+                        _ => None,
+                    }
+                })
+            })
             .children(group_context_menu_rows(
                 model
                     .items
@@ -2712,7 +2856,6 @@ impl PopoverHost {
                             .disabled(disabled)
                             .tooltip_host(tooltip_host.clone())
                             .render(theme, ui_scale, cx)
-                            .anchor_scroll(scroll_anchors.get(ix).cloned())
                             .debug_selector(move || debug_selector.clone());
 
                             row.on_mouse_move(cx.listener(
@@ -2754,46 +2897,103 @@ impl PopoverHost {
                             .into_any_element()
                         }
                     }),
-                &groups,
+                &slots,
                 theme,
                 ui_scale,
+                &row_extents,
+                &menu_scroll,
             ))
+    }
+}
+
+/// Content-space `(top, height)` of each menu row from the last prepaint.
+pub(super) type RowExtents = Rc<std::cell::RefCell<Vec<Option<(Pixels, Pixels)>>>>;
+
+/// A direct child of the menu column: one row, or one group block of rows.
+#[derive(Clone, Debug, PartialEq)]
+enum MenuSlot {
+    Row(usize),
+    Group(std::ops::Range<usize>),
+}
+
+/// How `len` rows lay out once each model group is wrapped in one block. A
+/// group that runs past the last row stays unwrapped.
+fn context_menu_slots(len: usize, groups: &[std::ops::Range<usize>]) -> Vec<MenuSlot> {
+    let mut slots = Vec::new();
+    let mut groups = groups.iter().filter(|range| !range.is_empty()).peekable();
+    let mut block_start = None;
+    for ix in 0..len {
+        let Some(range) = groups.peek().filter(|range| range.start <= ix) else {
+            slots.push(MenuSlot::Row(ix));
+            continue;
+        };
+        let start = *block_start.get_or_insert(ix);
+        if ix + 1 == range.end {
+            slots.push(MenuSlot::Group(start..ix + 1));
+            block_start = None;
+            groups.next();
+        }
+    }
+    if let Some(start) = block_start {
+        slots.extend((start..len).map(MenuSlot::Row));
+    }
+    slots
+}
+
+/// Records the content-space extents of a column's children; `row_of` maps a
+/// child index to the menu row it is, if it is one.
+pub(super) fn record_row_extents(
+    extents: RowExtents,
+    scroll: ScrollHandle,
+    row_of: impl Fn(usize) -> Option<usize> + 'static,
+) -> impl Fn(Vec<Bounds<Pixels>>, &mut Window, &mut gpui::App) + 'static {
+    move |bounds, _window, _cx| {
+        let content_top = scroll.bounds().top() + scroll.offset().y;
+        let mut extents = extents.borrow_mut();
+        for (child, bounds) in bounds.iter().enumerate() {
+            if let Some(slot) = row_of(child).and_then(|ix| extents.get_mut(ix)) {
+                *slot = Some((bounds.top() - content_top, bounds.size.height));
+            }
+        }
     }
 }
 
 /// Wrap each model group's rows in one tinted block; other rows pass through.
 fn group_context_menu_rows(
     rows: impl Iterator<Item = AnyElement>,
-    groups: &[std::ops::Range<usize>],
+    slots: &[MenuSlot],
     theme: AppTheme,
     ui_scale: crate::ui_scale::UiScale,
+    extents: &RowExtents,
+    scroll: &ScrollHandle,
 ) -> Vec<AnyElement> {
-    let mut out = Vec::new();
-    let mut groups = groups.iter().filter(|range| !range.is_empty()).peekable();
-    let mut block = Vec::new();
+    let mut rows: Vec<Option<AnyElement>> = rows.map(Some).collect();
+    let mut take = |ix: usize| rows[ix].take().expect("each menu row is placed once");
     let mut previous_end = None;
-    for (ix, row) in rows.enumerate() {
-        let Some(range) = groups.peek().filter(|range| range.start <= ix) else {
-            out.push(row);
-            continue;
-        };
-        block.push(row);
-        if ix + 1 == range.end {
-            let start = range.start;
-            // Neighbouring blocks would merge into one tint without a gap.
-            let spaced = previous_end == Some(start);
-            previous_end = Some(range.end);
-            groups.next();
-            out.push(
-                components::context_menu_group(theme, ui_scale, spaced)
-                    .id(("context_menu_group", start))
-                    .debug_selector(move || format!("context_menu_group_{start}"))
-                    .children(block.drain(..))
-                    .into_any_element(),
-            );
+    let mut out = Vec::with_capacity(slots.len());
+    for slot in slots {
+        match slot {
+            MenuSlot::Row(ix) => out.push(take(*ix)),
+            MenuSlot::Group(range) => {
+                let start = range.start;
+                // Neighbouring blocks would merge into one tint without a gap.
+                let spaced = previous_end == Some(start);
+                previous_end = Some(range.end);
+                out.push(
+                    components::context_menu_group(theme, ui_scale, spaced)
+                        .on_children_prepainted(record_row_extents(
+                            extents.clone(),
+                            scroll.clone(),
+                            move |child| Some(start + child),
+                        ))
+                        .id(("context_menu_group", start))
+                        .debug_selector(move || format!("context_menu_group_{start}"))
+                        .children(range.clone().map(&mut take))
+                        .into_any_element(),
+                );
+            }
         }
     }
-    out.extend(block);
     out
 }
 

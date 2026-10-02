@@ -176,6 +176,7 @@ impl GitCometView {
             self.window_handle,
             cx.weak_entity(),
             self.main_pane.downgrade(),
+            self.documents.downgrade(),
             self.view_mode,
             self.workspace_id,
             Arc::clone(&self.synced_repo_paths),
@@ -597,13 +598,23 @@ impl GitCometView {
             .repos
             .iter()
             .any(|repo| !next.repos.iter().any(|next_repo| next_repo.id == repo.id));
+        // Opening a file or commit in the repository asks to see it, so the
+        // main slot goes back from the document viewer.
+        let leave_documents =
+            self.documents_active && repository_navigated(&self.state, next.as_ref());
         self.state = next;
+        if leave_documents {
+            self.show_repository_canvas(cx);
+        }
         if let Some(extension_window) = self.extension_window.as_ref() {
             extension_window.set_state(&self.state, cx);
         }
         self.retain_open_repository_views();
         if self.repository_views.is_some() {
             self.sync_extension_navigation(cx);
+        }
+        if !self.document_routing.pending.is_empty() {
+            self.finish_document_routing(cx);
         }
         if repos_closed {
             // A closed repo's errors name what no longer exists.
@@ -787,6 +798,23 @@ fn parse_worktree_remove_path_from_command(command: &str) -> Option<std::path::P
         return None;
     }
     Some(std::path::PathBuf::from(path))
+}
+
+/// Whether the active repository opened a file or a commit between two
+/// snapshots. Clearing either is not navigation: refreshes do that.
+fn repository_navigated(prev: &AppState, next: &AppState) -> bool {
+    let Some(repo_id) = next.active_repo.filter(|id| prev.active_repo == Some(*id)) else {
+        return false;
+    };
+    let find = |state: &AppState| state.repos.iter().position(|repo| repo.id == repo_id);
+    let (Some(prev_ix), Some(next_ix)) = (find(prev), find(next)) else {
+        return false;
+    };
+    let (prev, next) = (&prev.repos[prev_ix], &next.repos[next_ix]);
+    (next.diff_state.diff_target.is_some()
+        && next.diff_state.diff_target_rev != prev.diff_state.diff_target_rev)
+        || (next.history_state.selected_commit.is_some()
+            && next.history_state.selected_commit_rev != prev.history_state.selected_commit_rev)
 }
 
 #[cfg(test)]

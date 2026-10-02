@@ -17,6 +17,7 @@ pub struct UiSession {
     pub open_repos: Vec<PathBuf>,
     pub active_repo: Option<PathBuf>,
     pub recent_repos: Vec<PathBuf>,
+    pub recent_documents: Vec<PathBuf>,
     /// Repositories the user pinned in the repository picker, in the order they
     /// were pinned. Independent of `recent_repos`, so a pin outlives the
     /// recents cap.
@@ -131,6 +132,7 @@ pub(crate) struct UiSessionFile {
     open_repos: Vec<String>,
     active_repo: Option<String>,
     recent_repos: Option<Vec<String>>,
+    recent_documents: Option<Vec<String>>,
     pinned_repos: Option<Vec<String>>,
     repo_picker_sort: Option<String>,
     repo_picker_collapsed_sections: Option<BTreeSet<String>>,
@@ -319,6 +321,11 @@ pub fn load_from_path(path: &Path) -> UiSession {
         open_repos,
         active_repo,
         recent_repos,
+        recent_documents: parse_path_list(file.recent_documents.unwrap_or_default())
+            .into_iter()
+            .filter(|p| p.is_absolute())
+            .take(50)
+            .collect(),
         pinned_repos,
         repo_picker_sort: file.repo_picker_sort,
         repo_picker_collapsed_sections: file.repo_picker_collapsed_sections.unwrap_or_default(),
@@ -600,6 +607,15 @@ pub fn browser_instance_file_path() -> Option<PathBuf> {
     Some(dirs::state_dir()?.join("browser-instance.json"))
 }
 
+/// Where the filesystem service keeps undo and staging areas, beside the
+/// session rather than in a worktree. Test binaries get none, like the session.
+pub fn journal_storage_dir() -> Option<PathBuf> {
+    if cfg!(test) || running_under_test_harness() {
+        return None;
+    }
+    Some(dirs::state_dir()?.join("journal"))
+}
+
 pub(crate) fn default_session_file_path_for_effect() -> Option<PathBuf> {
     default_session_file_path()
 }
@@ -653,6 +669,7 @@ use parse::*;
 use survey::{SurveyPromptSession, current_unix_seconds};
 use workspaces::*;
 
+mod documents;
 mod extensions;
 mod history_mode;
 mod maintenance;
@@ -663,6 +680,7 @@ mod settings;
 mod survey;
 mod workspaces;
 
+pub use documents::*;
 pub use history_mode::*;
 pub use maintenance::{
     MAINTENANCE_CHECK_INTERVAL_SECONDS, MAINTENANCE_SNOOZE_SECONDS, claim_repo_maintenance_check,

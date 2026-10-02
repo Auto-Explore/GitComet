@@ -1532,7 +1532,7 @@ fn repo_picker_row_menu_stays_inside_a_short_window(cx: &mut gpui::TestAppContex
         popover_host.update(app, |host, cx| {
             picker_row_menu::open(
                 host,
-                picker_row_menu::PickerRowMenuTarget::Repo(entry),
+                picker_row_menu::PickerRowMenuTarget::Repo(entry.clone()),
                 0,
                 gpui::point(gpui::px(200.0), window_h / 2.0),
                 cx,
@@ -1557,6 +1557,46 @@ fn repo_picker_row_menu_stays_inside_a_short_window(cx: &mut gpui::TestAppContex
     assert!(
         menu.size.height > gpui::px(0.0),
         "the cap must not collapse the menu"
+    );
+    assert!(
+        menu.top() >= gpui::px(15.5) && menu.bottom() <= window_h - gpui::px(15.5),
+        "the menu keeps the window margin, got {menu:?}"
+    );
+    assert!(
+        cx.debug_bounds("picker_row_menu_scroll_down").is_some(),
+        "the rows it cannot show are marked with a scroll arrow"
+    );
+    assert!(cx.debug_bounds("picker_row_menu_scroll_up").is_none());
+
+    // With room for all of it, the same menu opened mid-window shows whole.
+    cx.update(|_window, app| popover_host.update(app, picker_row_menu::close));
+    cx.simulate_resize(gpui::size(gpui::px(720.0), gpui::px(900.0)));
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.update(|_window, app| {
+        popover_host.update(app, |host, cx| {
+            picker_row_menu::open(
+                host,
+                picker_row_menu::PickerRowMenuTarget::Repo(entry),
+                0,
+                gpui::point(gpui::px(200.0), gpui::px(450.0)),
+                cx,
+            );
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    let max_scroll =
+        cx.update(|_window, app| popover_host.read(app).picker_row_menu_scroll.max_offset().y);
+    assert_eq!(max_scroll, gpui::px(0.0), "nothing scrolls when it fits");
+    assert_eq!(
+        (
+            cx.debug_bounds("picker_row_menu_scroll_up"),
+            cx.debug_bounds("picker_row_menu_scroll_down")
+        ),
+        (None, None)
     );
 }
 

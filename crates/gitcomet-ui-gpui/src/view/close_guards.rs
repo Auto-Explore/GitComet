@@ -107,6 +107,12 @@ impl GitCometView {
             }
             return true;
         }
+        // Explorer operations, native transfers and Documents saves share the
+        // filesystem queue with editor saves; let them land first.
+        if self.filesystem_writes_pending(cx) {
+            self.retry_once_file_edit_writes_drain(action, cx);
+            return true;
+        }
         // `pending_*_prompt` is `take()`n by `Render` when it opens the popover,
         // so it is `None` for as long as the dialog is actually on screen. Ask
         // the popover host whether the dialog is up rather than mirroring that
@@ -128,19 +134,19 @@ impl GitCometView {
         // Save/Discard prompt below.
         let moving_repo = action.moving_repo();
         let writes_pending = self.main_pane.update(cx, |pane, cx| {
-            pane.settle_file_editor_saves(cx);
             if moving_repo.is_none_or(|repo_id| {
                 pane.file_editor_key
                     .as_ref()
-                    .is_some_and(|(editing_repo, _)| *editing_repo == repo_id)
+                    .and_then(|key| pane.document_repo_path(key))
+                    .is_some_and(|(editing_repo, _)| editing_repo == repo_id)
             }) {
                 // Moving is an automatic flush, not permission to overwrite a
                 // disk conflict. Dirty stashed buffers can also be held behind
                 // a conflict, so leave those for the explicit Save/Discard prompt.
                 pane.flush_file_editor_buffer(cx);
             }
-            // Include writes dispatched before this request, even though their
-            // buffers already look clean. A queued write is still pending.
+            // Failed saves and dirty stashes are unsaved edits. Only an actual
+            // queued save should delay the dialog and retry the action.
             pane.file_editor_saves_block_action(&action)
         });
         if writes_pending {
@@ -204,6 +210,16 @@ impl GitCometView {
                 true
             }
         });
+        // Documents belong to the window, not to a repository being moved.
+        if moving_repo.is_none() {
+            self.documents.update(cx, |documents, cx| {
+                if save {
+                    documents.save_all(cx);
+                } else {
+                    documents.discard_all(cx);
+                }
+            });
+        }
 
         if !saved {
             return;
@@ -228,9 +244,21 @@ impl GitCometView {
     ) -> Vec<SharedString> {
         let pane = self.main_pane.read(cx);
         moving_repo.map_or_else(
-            || pane.unsaved_file_edit_labels(),
+            || {
+                let mut files = pane.unsaved_file_edit_labels();
+                files.extend(self.documents.read(cx).unsaved_labels(cx));
+                files
+            },
             |repo_id| pane.unsaved_file_edit_labels_for_repo(repo_id),
         )
+    }
+
+    /// Filesystem work outside the editor that closing must not cut short.
+    fn filesystem_writes_pending(&self, cx: &gpui::App) -> bool {
+        super::native_transfers::active(cx)
+            || self.file_operations.has_pending()
+            || !self.state.filesystem.pending.is_empty()
+            || !self.documents.read(cx).saves_drained(cx)
     }
 
     /// Wait for receipts from the exact editor writes, rather than assuming an
@@ -242,7 +270,7 @@ impl GitCometView {
     ) {
         self.pending_file_edits_action = Some(action);
         self.pending_unsaved_file_edits_flush = Some(cx.spawn(async move |view, cx| {
-            let deadline = cx.background_executor().now() + UNSAVED_FILE_EDITS_FLUSH_TIMEOUT;
+            let mut deadline = cx.background_executor().now() + UNSAVED_FILE_EDITS_FLUSH_TIMEOUT;
             loop {
                 cx.background_executor()
                     .timer(UNSAVED_FILE_EDITS_FLUSH_POLL)
@@ -253,50 +281,66 @@ impl GitCometView {
                         .pending_file_edits_action
                         .as_ref()
                         .expect("pending save action");
-                    this.main_pane.update(cx, |pane, cx| {
-                        pane.settle_file_editor_saves(cx);
-                        pane.file_editor_saves_block_action(action)
-                    })
+                    this.filesystem_writes_pending(cx)
+                        || this
+                            .main_pane
+                            .read(cx)
+                            .file_editor_saves_block_action(action)
                 }) else {
                     return;
                 };
-                if !pending || timed_out {
+                if !pending {
                     let _ = view.update(cx, |this, cx| {
                         this.pending_unsaved_file_edits_flush = None;
                         let action = this
                             .pending_file_edits_action
                             .take()
                             .expect("pending save action");
-                        if pending {
-                            this.main_pane.update(cx, |pane, cx| {
-                                pane.restore_pending_file_editor_saves(action.moving_repo(), cx);
-                            });
-                            let mut files =
-                                this.unsaved_file_edit_labels_for(action.moving_repo(), cx);
-                            let waiting_for_writes = files.is_empty();
-                            if waiting_for_writes && let Some(repo_id) = action.moving_repo() {
-                                files = this
-                                    .main_pane
-                                    .read(cx)
-                                    .pending_file_edit_labels_for_repo(repo_id);
-                            }
-                            if !files.is_empty() {
-                                this.pending_unsaved_file_edits_prompt =
-                                    Some(UnsavedFileEditsPrompt {
-                                        action,
-                                        files,
-                                        waiting_for_writes,
-                                    });
-                                cx.notify();
-                            }
-                        } else {
-                            // Failed receipts restored dirty buffers. Re-entering
-                            // the guard prompts for those instead of detaching.
-                            cx.defer(move |cx| retry_close_action(action, cx));
-                        }
+                        // Failed saves stay dirty. Re-entering the guard
+                        // prompts for those instead of detaching.
+                        cx.defer(move |cx| retry_close_action(action, cx));
                     });
                     return;
                 }
+                if !timed_out {
+                    continue;
+                }
+                // A timeout is not a save: ask again about what is still
+                // unwritten. With nothing to list, keep waiting.
+                let prompted = view.update(cx, |this, cx| {
+                    let moving_repo = this
+                        .pending_file_edits_action
+                        .as_ref()
+                        .expect("pending save action")
+                        .moving_repo();
+                    let mut files = this.unsaved_file_edit_labels_for(moving_repo, cx);
+                    let waiting_for_writes = files.is_empty();
+                    if waiting_for_writes && let Some(repo_id) = moving_repo {
+                        files = this
+                            .main_pane
+                            .read(cx)
+                            .pending_file_edit_labels_for_repo(repo_id);
+                    }
+                    if files.is_empty() {
+                        return false;
+                    }
+                    this.pending_unsaved_file_edits_flush = None;
+                    let action = this
+                        .pending_file_edits_action
+                        .take()
+                        .expect("pending save action");
+                    this.pending_unsaved_file_edits_prompt = Some(UnsavedFileEditsPrompt {
+                        action,
+                        files,
+                        waiting_for_writes,
+                    });
+                    cx.notify();
+                    true
+                });
+                if !matches!(prompted, Ok(false)) {
+                    return;
+                }
+                deadline = cx.background_executor().now() + UNSAVED_FILE_EDITS_FLUSH_TIMEOUT;
             }
         }));
     }

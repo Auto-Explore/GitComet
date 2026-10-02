@@ -2,14 +2,6 @@
 
 use super::*;
 
-fn dispatch_file_drop(cx: &mut gpui::VisualTestContext, event: gpui::FileDropEvent) {
-    cx.update(|window, app| {
-        let _ = window.dispatch_event(gpui::PlatformInput::FileDrop(event), app);
-        let _ = window.draw(app);
-    });
-    cx.run_until_parked();
-}
-
 fn assert_external_drag_cleared(view: &GitCometView, app: &gpui::App) {
     assert!(
         view.external_drag_paths.is_none(),

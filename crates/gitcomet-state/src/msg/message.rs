@@ -218,6 +218,44 @@ pub enum RepoWatchDegradedReason {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, strum::IntoStaticStr)]
 pub enum Msg {
+    OpenDocumentRepository {
+        path: PathBuf,
+        activate: bool,
+    },
+    RememberDocumentInRepository {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    FilesystemRequest(gitcomet_core::filesystem::Request),
+    FilesystemProgress(gitcomet_core::filesystem::Progress),
+    AcknowledgeFilesystemResults(Vec<gitcomet_core::filesystem::OperationId>),
+    FilesystemJournalUpdated {
+        undo: bool,
+        redo: bool,
+    },
+    FilesystemFinished(gitcomet_core::filesystem::OperationResult),
+    FilesystemPathsChanged(Vec<gitcomet_core::filesystem::PathChange>),
+    SelectExplorerPath {
+        repo_id: RepoId,
+        path: PathBuf,
+        visible: Vec<PathBuf>,
+        toggle: bool,
+        range: bool,
+        context_menu: bool,
+    },
+    FocusExplorerPath {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    SelectAllExplorerPaths {
+        repo_id: RepoId,
+        visible: Vec<PathBuf>,
+    },
+    SetExplorerVisibility {
+        repo_id: RepoId,
+        hidden: bool,
+        ignored: bool,
+    },
     IndexedHistory(crate::indexed_history::IndexedHistoryMsg),
     DiffSession(crate::diff_session::DiffSessionMsg),
     HistoryAuthors(crate::history_authors::HistoryAuthorsMsg),
@@ -836,6 +874,8 @@ pub enum Msg {
         repo_id: RepoId,
         path: PathBuf,
         contents: ContentBytes,
+        /// Contents read by the caller, or `None` to use the loaded conflict baseline.
+        expected_contents: Option<Arc<[u8]>>,
         stage: bool,
         /// Reports whether this exact write succeeded. A closed channel also
         /// means failure; callers must not infer success from an idle queue.
@@ -1441,6 +1481,7 @@ pub enum InternalMsg {
         result: Result<gitcomet_core::large_files::AnnexUnused, Error>,
     },
     FileBrowserLoaded {
+        cancellation: Option<gitcomet_core::services::CancellationToken>,
         repo_id: RepoId,
         source: FileSource,
         result: Result<Vec<FileEntry>, Error>,

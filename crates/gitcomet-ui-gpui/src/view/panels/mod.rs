@@ -56,6 +56,11 @@ pub(in crate::view) enum HistoryMenuRef {
 
 #[derive(Clone)]
 pub(in crate::view) enum ContextMenuAction {
+    Explorer {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+        action: panes::ExplorerAction,
+    },
     Hosted(gitcomet_extension_api::HostedAction),
     /// An extension command for one repository tab.
     RunExtensionCommand {
@@ -364,6 +369,11 @@ pub(in crate::view) enum ContextMenuAction {
     SetDiffShowLineNumbers {
         enabled: bool,
     },
+    SetExplorerVisibility {
+        repo_id: RepoId,
+        hidden: bool,
+        ignored: bool,
+    },
     SetChangeTrackingView {
         view: ChangeTrackingView,
     },
@@ -393,6 +403,10 @@ pub(in crate::view) enum ContextMenuAction {
     DiscardWorktreeChangesSelectionOrPath {
         repo_id: RepoId,
         area: DiffArea,
+        path: std::path::PathBuf,
+    },
+    AddExplorerToGitignore {
+        repo_id: RepoId,
         path: std::path::PathBuf,
     },
     AddToGitignoreSelectionOrPath {

@@ -61,6 +61,8 @@ enum ClipboardBackend {
 }
 
 pub fn write_text<T: 'static>(cx: &mut gpui::Context<T>, text: String, source: CopySource) {
+    FILE_CLIPBOARD.with(|owned| owned.borrow_mut().take());
+    bump_files_revision();
     let backend = clipboard_backend();
     write_copy_diagnostic(source, text.len(), backend);
 
@@ -70,6 +72,258 @@ pub fn write_text<T: 'static>(cx: &mut gpui::Context<T>, text: String, source: C
         }
         ClipboardBackend::X11 => write_text_to_x11(&text),
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FilePayload {
+    pub paths: Vec<std::path::PathBuf>,
+    pub intent: gitcomet_core::filesystem::TransferIntent,
+    pub ownership: u64,
+}
+
+thread_local! {
+    static FILE_CLIPBOARD: std::cell::RefCell<Option<(FilePayload, gpui::ClipboardItem)>> = const { std::cell::RefCell::new(None) };
+    /// Bumped whenever this process changes the file clipboard. Views key a
+    /// cached cut set on it rather than reading the platform clipboard every
+    /// frame -- on X11 that read is a synchronous selection transfer.
+    ///
+    /// Only our own writes move it, so a cut made in another application is not
+    /// reflected until something here touches the clipboard. That is the
+    /// deliberate trade: dimming another app's cut is not worth a poll.
+    static FILE_CLIPBOARD_REV: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    /// Counts platform clipboard reads so tests can pin that the file-browser
+    /// row builder is not doing one per frame.
+    pub static FILE_CLIPBOARD_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Changes whenever this process writes or clears the file clipboard.
+pub fn files_revision() -> u64 {
+    FILE_CLIPBOARD_REV.with(|rev| rev.get())
+}
+
+fn bump_files_revision() {
+    FILE_CLIPBOARD_REV.with(|rev| rev.set(rev.get().wrapping_add(1)));
+}
+
+pub fn write_files<T: 'static>(
+    cx: &mut gpui::Context<T>,
+    paths: Vec<std::path::PathBuf>,
+    intent: gitcomet_core::filesystem::TransferIntent,
+) {
+    write_files_owned(
+        cx,
+        paths,
+        intent,
+        gitcomet_core::filesystem::OperationId::allocate().0,
+    );
+}
+
+pub fn write_files_owned<T: 'static>(
+    cx: &mut gpui::Context<T>,
+    paths: Vec<std::path::PathBuf>,
+    intent: gitcomet_core::filesystem::TransferIntent,
+    ownership: u64,
+) {
+    let files = gpui::FileTransfer {
+        paths: gpui::ExternalPaths(paths.iter().cloned().collect()),
+        operation: if intent == gitcomet_core::filesystem::TransferIntent::Move {
+            gpui::FileTransferOperation::Move
+        } else {
+            gpui::FileTransferOperation::Copy
+        },
+        ownership,
+    };
+    let item = gpui::ClipboardItem {
+        entries: vec![gpui::ClipboardEntry::Files(files.clone())],
+    };
+    #[cfg(target_os = "linux")]
+    if clipboard_backend() == ClipboardBackend::X11 {
+        if let Err(error) = gpui_platform::write_files_to_x11_clipboard(&files) {
+            eprintln!("Could not copy files: {error}");
+            return;
+        }
+    } else {
+        cx.write_to_clipboard(item.clone());
+    }
+    #[cfg(not(target_os = "linux"))]
+    cx.write_to_clipboard(item.clone());
+    FILE_CLIPBOARD.with(|owned| {
+        *owned.borrow_mut() = Some((
+            FilePayload {
+                paths,
+                intent,
+                ownership,
+            },
+            item,
+        ))
+    });
+    bump_files_revision();
+    cx.refresh_windows();
+}
+
+pub fn read_files<T: 'static>(cx: &gpui::Context<T>) -> Option<FilePayload> {
+    #[cfg(any(test, feature = "test-support"))]
+    FILE_CLIPBOARD_READS.with(|reads| reads.set(reads.get() + 1));
+    #[cfg(target_os = "linux")]
+    let item = if clipboard_backend() == ClipboardBackend::X11 {
+        gpui_platform::read_files_from_x11_clipboard().map(|files| gpui::ClipboardItem {
+            entries: vec![gpui::ClipboardEntry::Files(files)],
+        })
+    } else {
+        cx.read_from_clipboard()
+    };
+    #[cfg(not(target_os = "linux"))]
+    let item = cx.read_from_clipboard();
+    FILE_CLIPBOARD.with(|owned| {
+        let mut owned = owned.borrow_mut();
+        if let Some((payload, written)) = owned.as_ref()
+            && item.as_ref() == Some(written)
+        {
+            return Some(payload.clone());
+        }
+        owned.take();
+        let item = item?;
+        let files = item.file_transfer()?;
+        Some(FilePayload {
+            paths: files.paths.paths().to_vec(),
+            intent: if files.operation == gpui::FileTransferOperation::Move {
+                gitcomet_core::filesystem::TransferIntent::Move
+            } else {
+                gitcomet_core::filesystem::TransferIntent::Copy
+            },
+            ownership: files.ownership,
+        })
+    })
+}
+
+/// Keeps the native owner alive across a paste and its conflict continuations.
+pub struct PasteReceipt {
+    native: Option<gpui::FilePaste>,
+    payload: FilePayload,
+    remaining: Vec<std::path::PathBuf>,
+    intent: gitcomet_core::filesystem::TransferIntent,
+}
+impl PasteReceipt {
+    pub fn from_drop(
+        paths: Vec<std::path::PathBuf>,
+        transfer: gpui::FileDropTransfer,
+        intent: gitcomet_core::filesystem::TransferIntent,
+    ) -> Self {
+        Self {
+            native: Some(transfer.completion),
+            remaining: service_identities(&paths),
+            payload: FilePayload {
+                paths,
+                intent,
+                ownership: 0,
+            },
+            intent,
+        }
+    }
+    /// `paths` are the filesystem service's canonical sources.
+    pub fn completed(&mut self, paths: &[std::path::PathBuf]) {
+        self.remaining
+            .retain(|path| !paths.iter().any(|completed| path.starts_with(completed)));
+    }
+    pub fn finish<T: 'static>(self, cx: &mut gpui::Context<T>) {
+        let complete = self.remaining.is_empty();
+        let operation = complete.then_some(
+            if self.intent == gitcomet_core::filesystem::TransferIntent::Move {
+                gpui::FileTransferOperation::Move
+            } else {
+                gpui::FileTransferOperation::Copy
+            },
+        );
+        if let Some(native) = self.native {
+            native.complete(operation);
+        } else if complete
+            && self.intent == gitcomet_core::filesystem::TransferIntent::Move
+            && read_files(cx).as_ref() == Some(&self.payload)
+        {
+            write_text(cx, String::new(), CopySource::ContextMenu);
+        }
+    }
+}
+
+/// Spelled as the filesystem service reports completed sources, so a path
+/// reached through a symlink or a Windows 8.3 name still matches.
+fn service_identities(paths: &[std::path::PathBuf]) -> Vec<std::path::PathBuf> {
+    paths
+        .iter()
+        .map(|path| {
+            gitcomet_core::filesystem::absolute_identity(path).unwrap_or_else(|_| path.clone())
+        })
+        .collect()
+}
+
+pub fn capture_paste<T: 'static>(
+    cx: &gpui::Context<T>,
+    paths: &[std::path::PathBuf],
+    intent: gitcomet_core::filesystem::TransferIntent,
+) -> Option<PasteReceipt> {
+    let payload = read_files(cx)?;
+    if payload.paths != paths {
+        return None;
+    }
+    let files = gpui::FileTransfer {
+        paths: gpui::ExternalPaths(payload.paths.iter().cloned().collect()),
+        operation: if payload.intent == gitcomet_core::filesystem::TransferIntent::Move {
+            gpui::FileTransferOperation::Move
+        } else {
+            gpui::FileTransferOperation::Copy
+        },
+        ownership: payload.ownership,
+    };
+    let native = cx.capture_file_paste(&files);
+    Some(PasteReceipt {
+        remaining: service_identities(&payload.paths),
+        native,
+        payload,
+        intent,
+    })
+}
+
+pub fn cancel_cut<T: 'static>(cx: &mut gpui::Context<T>) {
+    let current = read_files(cx);
+    if let Some(payload) = current
+        && payload.intent == gitcomet_core::filesystem::TransferIntent::Move
+        && payload.ownership != 0
+    {
+        write_files(
+            cx,
+            payload.paths,
+            gitcomet_core::filesystem::TransferIntent::Copy,
+        );
+    }
+}
+
+pub fn complete_file_move<T: 'static>(
+    cx: &mut gpui::Context<T>,
+    ownership: u64,
+    completed: &[std::path::PathBuf],
+) {
+    let Some(mut current) = read_files(cx).filter(|p| p.ownership == ownership && ownership != 0)
+    else {
+        return;
+    };
+    current
+        .paths
+        .retain(|path| !completed.iter().any(|done| path.starts_with(done)));
+    if current.paths.is_empty() {
+        FILE_CLIPBOARD.with(|owned| owned.borrow_mut().take());
+        write_text(cx, String::new(), CopySource::ContextMenu);
+    } else {
+        write_files_owned(cx, current.paths, current.intent, ownership);
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn snapshot<T: 'static>(cx: &gpui::Context<T>) -> Option<gpui::ClipboardItem> {
+    cx.read_from_clipboard()
 }
 
 pub fn read_text<T: 'static>(cx: &gpui::Context<T>) -> Option<String> {
@@ -217,8 +471,8 @@ fn write_text_to_x11(_text: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        ClipboardBackend, clipboard_backend, copy_diagnostics_enabled, replace_clipboard_owner,
-        select_clipboard_backend,
+        ClipboardBackend, PasteReceipt, clipboard_backend, copy_diagnostics_enabled,
+        replace_clipboard_owner, select_clipboard_backend,
     };
     use crate::ui_runtime::{UiRuntime, with_override};
 
@@ -287,6 +541,31 @@ mod tests {
 
         assert_eq!(served, vec![(1, "first"), (2, "second")]);
         assert_eq!(active, Some(FakeClipboard(2)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn drop_receipts_match_completions_reported_under_the_canonical_parent() {
+        let directory = tempfile::tempdir().unwrap();
+        let real = directory.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        std::fs::write(real.join("a.txt"), "a").unwrap();
+        let link = directory.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let mut receipt = PasteReceipt::from_drop(
+            vec![link.join("a.txt")],
+            gpui::FileDropTransfer {
+                operation: gpui::FileTransferOperation::Move,
+                source_owns_move: false,
+                completion: gpui::FilePaste::new(|_| {}),
+            },
+            gitcomet_core::filesystem::TransferIntent::Move,
+        );
+        receipt.completed(&[std::fs::canonicalize(&real).unwrap().join("a.txt")]);
+        assert!(
+            receipt.remaining.is_empty(),
+            "a moved source dropped through a symlink still completes the drop"
+        );
     }
 
     #[test]
