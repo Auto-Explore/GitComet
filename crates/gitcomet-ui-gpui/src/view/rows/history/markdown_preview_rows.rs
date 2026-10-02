@@ -766,6 +766,9 @@ pub(in crate::view) fn markdown_preview_flow_image(
         .map(|image| (image.width_px, image.height_px))
         .unwrap_or_default();
     let failed_label = markdown_preview_image_label(row, "Failed to load");
+    // A picture keeps its declared or its own size, up to the width of the
+    // document: wider, it would overflow it, and an aligned block would push
+    // it past the edge it cannot be scrolled to.
     let image = match declared {
         (Some(width), Some(height)) => image
             .w(markdown_preview_scaled_px(width as f32, ui_scale_percent))
@@ -775,10 +778,9 @@ pub(in crate::view) fn markdown_preview_flow_image(
         (None, Some(height)) => {
             image.h(markdown_preview_scaled_px(height as f32, ui_scale_percent))
         }
-        // Without a declared size the picture keeps its own, up to the width
-        // of the document.
-        (None, None) => image.max_w_full(),
-    };
+        (None, None) => image,
+    }
+    .max_w_full();
 
     place(div().w_full().min_w(px(0.0)))
         .child(
@@ -906,11 +908,12 @@ pub(in crate::view) const MARKDOWN_PREVIEW_INLINE_IMAGE_GAP_PX: f32 = 4.0;
 ///
 /// Badges, shields, and a logo beside a heading are all written inline, so they
 /// are sized to the line rather than to the document: a declared width wins,
-/// and anything else keeps its own size up to the inline height cap. Pictures
-/// with no text on their line (`alone`) keep their own size, as on GitHub.
+/// and anything else keeps its own size up to the inline height cap — unless
+/// it sits before or after the words rather than inside them (`own_size`),
+/// where it keeps its own size up to the line's width, as on GitHub.
 pub(in crate::view) fn markdown_preview_inline_image(
     inline: &MarkdownInlineImage,
-    alone: bool,
+    own_size: bool,
     theme: AppTheme,
     ui_scale_percent: u32,
     pictures: MarkdownPictureContext<'_>,
@@ -935,7 +938,7 @@ pub(in crate::view) fn markdown_preview_inline_image(
     let measured_aspect_ratio = measured.map(|(width, height)| width as f32 / height as f32);
     // A picture with its line to itself is drawn at its own size, which its
     // header gives before it decodes.
-    let uncapped = alone && inline.image.width_px.is_none() && inline.image.height_px.is_none();
+    let uncapped = own_size && inline.image.width_px.is_none() && inline.image.height_px.is_none();
     let measured_size = measured
         .filter(|_| uncapped)
         .map(|(width, height)| (px(width as f32), px(height as f32)));

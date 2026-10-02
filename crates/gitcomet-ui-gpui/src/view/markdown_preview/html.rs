@@ -19,6 +19,8 @@ pub(crate) enum HtmlHandling {
     /// `<h1>`–`<h6>`, with its `align`.
     OpenContainer(HtmlContainerKind, MarkdownTextAlign),
     CloseContainer(HtmlContainerKind),
+    /// `<hr>`: a thematic break.
+    Rule,
     AppendLiteral,
 }
 
@@ -30,15 +32,26 @@ pub(crate) enum HtmlContainerKind {
     Heading(u8),
 }
 
+/// The elements read as containers, by tag name.
+const HTML_CONTAINERS: [(&str, HtmlContainerKind); 9] = [
+    ("p", HtmlContainerKind::Paragraph),
+    ("div", HtmlContainerKind::Division),
+    ("center", HtmlContainerKind::Center),
+    ("h1", HtmlContainerKind::Heading(1)),
+    ("h2", HtmlContainerKind::Heading(2)),
+    ("h3", HtmlContainerKind::Heading(3)),
+    ("h4", HtmlContainerKind::Heading(4)),
+    ("h5", HtmlContainerKind::Heading(5)),
+    ("h6", HtmlContainerKind::Heading(6)),
+];
+
 impl HtmlContainerKind {
+    /// The container a tag name, in any case, names.
     fn from_tag_name(name: &str) -> Option<Self> {
-        Some(match name {
-            "p" => Self::Paragraph,
-            "div" => Self::Division,
-            "center" => Self::Center,
-            "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => Self::Heading(name.as_bytes()[1] - b'0'),
-            _ => return None,
-        })
+        HTML_CONTAINERS
+            .iter()
+            .find(|(tag, _)| name.eq_ignore_ascii_case(tag))
+            .map(|(_, kind)| *kind)
     }
 
     /// Whether a closing tag of `self` ends `open`; any `</hN>` ends a heading.
@@ -157,6 +170,8 @@ pub(crate) fn classify_html_tag(tag: &str) -> HtmlHandling {
     }
     match (name, closing) {
         ("br", _) => HtmlHandling::HardBreak,
+        ("hr", false) => HtmlHandling::Rule,
+        ("hr", true) => HtmlHandling::Ignore,
         ("img", false) => {
             let images = extract_html_images(tag);
             if !images.is_empty() {
@@ -181,36 +196,48 @@ pub(crate) fn classify_html_tag(tag: &str) -> HtmlHandling {
     }
 }
 
-/// The container tags in `html`, in order: each kind, its `align`, and
-/// whether it closes. Comments are skipped; other tags are passed over by
-/// name alone, so a line of table markup costs little more than a scan.
+/// The container tags in `html`, in order: where each lies, its kind, its
+/// `align`, and whether it closes. Tags are read whole, so one inside a
+/// comment or a quoted attribute value does not count; nor does anything in
+/// a `<script>`, `<style>`, `<pre>` or `<textarea>` block, whose text is
+/// not markup.
 pub(crate) fn html_container_tags(
     html: &str,
-) -> impl Iterator<Item = (HtmlContainerKind, MarkdownTextAlign, bool)> + '_ {
-    let bytes = html.as_bytes();
-    let mut search = 0;
-    std::iter::from_fn(move || {
-        while let Some(found) = memchr::memchr(b'<', &bytes[search..]) {
-            let ix = search + found;
-            search = ix + 1;
-            if html[ix..].starts_with("<!--") {
-                search = html_tag_end(html, ix);
-                continue;
+) -> impl Iterator<Item = (Range<usize>, HtmlContainerKind, MarkdownTextAlign, bool)> + '_ {
+    let raw_text = is_raw_text_html(html);
+    html_tokens(html)
+        .filter(move |_| !raw_text)
+        .filter_map(move |token| {
+            let HtmlToken::Tag(range) = token else {
+                return None;
+            };
+            let tag = &html[range.clone()];
+            if !is_html_container_tag(tag) {
+                return None;
             }
-            if !starts_html_tag(bytes, ix) || !is_html_container_tag(&html[ix..]) {
-                continue;
-            }
-            search = html_tag_end(html, ix);
-            match classify_html_tag(&html[ix..search]) {
-                HtmlHandling::OpenContainer(kind, align) => return Some((kind, align, false)),
+            match classify_html_tag(tag) {
+                HtmlHandling::OpenContainer(kind, align) => Some((range, kind, align, false)),
                 HtmlHandling::CloseContainer(kind) => {
-                    return Some((kind, MarkdownTextAlign::None, true));
+                    Some((range, kind, MarkdownTextAlign::None, true))
                 }
-                _ => {}
+                _ => None,
             }
-        }
-        None
-    })
+        })
+}
+
+/// Whether an HTML block opens with `<script>`, `<style>`, `<pre>` or
+/// `<textarea>`, whose content is text rather than markup.
+pub(crate) fn is_raw_text_html(html: &str) -> bool {
+    html_tokens(html)
+        .find_map(|token| match token {
+            HtmlToken::Tag(tag) => Some(tag),
+            HtmlToken::Text(_) => None,
+        })
+        .and_then(|first| {
+            html_tag_name(&html[first].to_ascii_lowercase())
+                .map(|(name, _)| matches!(name, "script" | "style" | "pre" | "textarea"))
+        })
+        .unwrap_or(false)
 }
 
 /// Whether `tag` (or text starting with it) opens or closes a `<p>`, `<div>`,
@@ -221,10 +248,7 @@ fn is_html_container_tag(tag: &str) -> bool {
     let end = rest
         .find(|c: char| !c.is_ascii_alphanumeric() && c != '-')
         .unwrap_or(rest.len());
-    let name = &rest[..end];
-    ["p", "div", "center", "h1", "h2", "h3", "h4", "h5", "h6"]
-        .iter()
-        .any(|container| name.eq_ignore_ascii_case(container))
+    HtmlContainerKind::from_tag_name(&rest[..end]).is_some()
 }
 
 /// The formatting a tag gives the text inside it.
@@ -314,6 +338,12 @@ fn starts_html_tag(bytes: &[u8], ix: usize) -> bool {
 /// quoted attribute value, or the end of `html` when it never closes.
 fn html_tag_end(html: &str, start: usize) -> usize {
     if html[start..].starts_with("<!--") {
+        // `<!-->` and `<!--->` are comments that end at once.
+        for empty in ["<!-->", "<!--->"] {
+            if html[start..].starts_with(empty) {
+                return start + empty.len();
+            }
+        }
         return html[start + 4..]
             .find("-->")
             .map_or(html.len(), |end| start + 4 + end + 3);
@@ -374,12 +404,31 @@ pub(crate) fn decode_html_entities(text: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(decoded)
 }
 
+/// The character windows-1252 puts at `byte` in 0x80–0x9F, where Unicode
+/// has control characters.
+fn windows_1252_char(byte: u32) -> Option<u32> {
+    const TABLE: [u32; 32] = [
+        0x20AC, 0x81, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160,
+        0x2039, 0x0152, 0x8D, 0x017D, 0x8F, 0x90, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013,
+        0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x9D, 0x017E, 0x0178,
+    ];
+    (0x80..=0x9F)
+        .contains(&byte)
+        .then(|| TABLE[(byte - 0x80) as usize])
+}
+
 fn html_entity(name: &str) -> Option<char> {
     if let Some(number) = name.strip_prefix('#') {
-        let value = match number.strip_prefix(['x', 'X']) {
-            Some(hex) => u32::from_str_radix(hex, 16).ok()?,
-            None => number.parse().ok()?,
+        let (digits, radix) = match number.strip_prefix(['x', 'X']) {
+            Some(hex) => (hex, 16),
+            None => (number, 10),
         };
+        if digits.is_empty() || !digits.chars().all(|ch| ch.is_digit(radix)) {
+            return None;
+        }
+        let value = u32::from_str_radix(digits, radix).ok()?;
+        // HTML reads 0x80–0x9F as windows-1252, as old documents meant them.
+        let value = windows_1252_char(value).unwrap_or(value);
         return char::from_u32(value).filter(|ch| *ch != '\0');
     }
     Some(match name {

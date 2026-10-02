@@ -220,13 +220,17 @@ pub(crate) fn markdown_diff_row_groups(
 
     for group in &mut groups {
         // A row whose lines are untouched still changed when the `<div align>`
-        // around it did: that line has no row of its own to mark.
-        let realigned = group.old.len() == group.new.len()
-            && group
-                .old
-                .iter()
-                .zip(&group.new)
-                .any(|(old, new)| old.align != new.align);
+        // around it did: that line has no row of its own to mark. Spacers can
+        // move between versions without anything changing, so only real rows
+        // are paired.
+        let real = |rows: &[MarkdownPreviewRow]| {
+            rows.iter()
+                .filter(|row| !matches!(row.kind, MarkdownPreviewRowKind::Spacer))
+                .map(|row| row.align)
+                .collect::<Vec<_>>()
+        };
+        let (old_aligns, new_aligns) = (real(&group.old), real(&group.new));
+        let realigned = old_aligns.len() == new_aligns.len() && old_aligns != new_aligns;
         let changed = realigned
             || group
                 .old

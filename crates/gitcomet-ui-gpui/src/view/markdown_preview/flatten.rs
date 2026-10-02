@@ -125,6 +125,17 @@ impl HtmlBlockBuffer {
     }
 }
 
+/// One thing read from an HTML block, as a range of its buffered text.
+enum HtmlPiece {
+    Tag(HtmlHandling, Range<usize>),
+    Text(Range<usize>),
+    /// `<summary>…</summary>`: the label, and the whole element.
+    Summary {
+        label: Range<usize>,
+        whole: Range<usize>,
+    },
+}
+
 /// A `<p>`, `<div>`, `<center>` or `<hN>` still open.
 struct OpenHtmlContainer {
     kind: HtmlContainerKind,
@@ -150,7 +161,9 @@ struct Flattener<'a> {
     /// Source bytes the gathered row was read from, which is what its line
     /// range reports: a row must not claim the lines of the block around it.
     content: Option<Range<usize>>,
-    styles: Vec<MarkdownInlineStyle>,
+    /// Open inline styles, each marked when an HTML tag opened it, so a stray
+    /// `</b>` cannot end markdown's `**`.
+    styles: Vec<(MarkdownInlineStyle, bool)>,
     links: Vec<Option<SharedString>>,
     /// `<a href>` tags still open, so a stray `</a>` cannot close a markdown
     /// link.
@@ -170,6 +183,14 @@ struct Flattener<'a> {
     /// The row's length when its last byte is a space that block HTML put
     /// after a word, which goes if the row ends there.
     html_trailing_space: Option<usize>,
+    /// How many of `styles` and `links` an HTML block left open. They stay
+    /// open across blocks until their closing tag, as `<a href>` written as a
+    /// block of its own around markdown is; anything above them ends with
+    /// its block.
+    html_floor: (usize, usize),
+    /// An HTML block element just split the row: the space before the next
+    /// word is not part of the new row.
+    trim_next_start: bool,
 }
 
 impl<'a> Flattener<'a> {
@@ -199,6 +220,8 @@ impl<'a> Flattener<'a> {
             html_containers: Vec::new(),
             html_heading: None,
             html_trailing_space: None,
+            html_floor: (0, 0),
+            trim_next_start: false,
         }
     }
 
@@ -280,13 +303,13 @@ impl<'a> Flattener<'a> {
                 }
                 Some(())
             }
-            Event::Html(html) => match self.html_block.as_mut() {
-                Some(block) => {
+            // pulldown only sends block HTML between `HtmlBlock` tags.
+            Event::Html(html) => {
+                if let Some(block) = self.html_block.as_mut() {
                     block.push(&html, range);
-                    Some(())
                 }
-                None => self.html(&html, range, true),
-            },
+                Some(())
+            }
             Event::InlineHtml(html) => self.html(&html, range, false),
             // Math and metadata blocks are not enabled.
             _ => Some(()),
@@ -324,7 +347,8 @@ impl<'a> Flattener<'a> {
                 });
             }
             Tag::HtmlBlock => {
-                self.begin_block(true)?;
+                // Raw HTML continues what HTML before it left open.
+                self.flush_before_block(true)?;
                 self.html_block = Some(HtmlBlockBuffer::default());
             }
             Tag::List(first_number) => {
@@ -385,15 +409,17 @@ impl<'a> Flattener<'a> {
                     table.row = Some((range.start, matches!(tag, Tag::TableHead)));
                 }
             }
-            Tag::Emphasis => self.styles.push(MarkdownInlineStyle::Italic),
-            Tag::Strong => self.styles.push(MarkdownInlineStyle::Bold),
-            Tag::Strikethrough => self.styles.push(MarkdownInlineStyle::Strikethrough),
+            Tag::Emphasis => self.styles.push((MarkdownInlineStyle::Italic, false)),
+            Tag::Strong => self.styles.push((MarkdownInlineStyle::Bold, false)),
+            Tag::Strikethrough => self
+                .styles
+                .push((MarkdownInlineStyle::Strikethrough, false)),
             Tag::Link {
                 link_type,
                 dest_url,
                 ..
             } => {
-                self.styles.push(MarkdownInlineStyle::Link);
+                self.styles.push((MarkdownInlineStyle::Link, false));
                 // An email autolink's destination has no scheme, so it would
                 // read as a file in the repository.
                 self.links.push(if link_type == LinkType::Email {
@@ -434,11 +460,15 @@ impl<'a> Flattener<'a> {
                 if let Some(block) = self.html_block.take() {
                     self.read_html_block(&block)?;
                 }
-                self.end_html_flow(range.end)?;
+                // The row ends with the block, but a `<p>`, `<a>` or `<b>` it
+                // left open does not: the next raw HTML block continues it,
+                // and the next markdown block closes what a browser would.
+                self.end_html_row(range.end)?;
+                self.html_floor = (self.styles.len(), self.links.len());
             }
             TagEnd::BlockQuote(_) => {
+                self.end_html_row(range.end)?;
                 self.end_open_html();
-                self.flush_row(range.end)?;
                 self.quotes.pop();
                 self.pop_container();
             }
@@ -457,15 +487,15 @@ impl<'a> Flattener<'a> {
             }
             TagEnd::List(_) => self.pop_container(),
             TagEnd::Item => {
-                self.end_open_html();
                 // Text a nested block or paragraph has not already emitted —
                 // or a picture, or an empty item's checkbox.
-                self.flush_row(range.end)?;
+                self.end_html_row(range.end)?;
+                self.end_open_html();
                 self.pop_container();
             }
             TagEnd::FootnoteDefinition => {
+                self.end_html_row(range.end)?;
                 self.end_open_html();
-                self.flush_row(range.end)?;
                 self.footnote = None;
                 self.pop_container();
             }
@@ -508,18 +538,13 @@ impl<'a> Flattener<'a> {
             }
             // An HTML formatting tag may be open above the markdown one, so
             // each end removes its own style.
-            TagEnd::Emphasis => {
-                pop_matching_inline_style(&mut self.styles, MarkdownInlineStyle::Italic);
-            }
-            TagEnd::Strong => {
-                pop_matching_inline_style(&mut self.styles, MarkdownInlineStyle::Bold);
-            }
-            TagEnd::Strikethrough => {
-                pop_matching_inline_style(&mut self.styles, MarkdownInlineStyle::Strikethrough);
-            }
+            TagEnd::Emphasis => self.pop_style(MarkdownInlineStyle::Italic, false),
+            TagEnd::Strong => self.pop_style(MarkdownInlineStyle::Bold, false),
+            TagEnd::Strikethrough => self.pop_style(MarkdownInlineStyle::Strikethrough, false),
             TagEnd::Link => {
-                pop_matching_inline_style(&mut self.styles, MarkdownInlineStyle::Link);
+                self.pop_style(MarkdownInlineStyle::Link, false);
                 self.links.pop();
+                self.clamp_html_floor();
             }
             TagEnd::Image => self.close_image(range),
             _ => {}
@@ -542,6 +567,11 @@ impl<'a> Flattener<'a> {
             image.alt.push_str(text);
             return;
         }
+        let text = if std::mem::take(&mut self.trim_next_start) && self.text.is_empty() {
+            text.trim_start_matches(|ch: char| ch.is_ascii_whitespace())
+        } else {
+            text
+        };
         let start = self.text.len();
         if self.in_table_row() {
             // Cells are joined by tabs, so a tab inside one would open a column.
@@ -555,7 +585,7 @@ impl<'a> Flattener<'a> {
         let style = if is_code {
             MarkdownInlineStyle::Code
         } else {
-            resolve_style_stack(&self.styles)
+            resolve_style_stack(self.styles.iter().map(|(style, _)| *style))
         };
         let link_url = current_link_url(&self.links);
         if is_code || style != MarkdownInlineStyle::Normal || link_url.is_some() {
@@ -663,20 +693,19 @@ impl<'a> Flattener<'a> {
                     )?;
                 }
             }
-            HtmlHandling::StartInlineStyle(style) => self.styles.push(style),
-            HtmlHandling::EndInlineStyle(style) => {
-                pop_matching_inline_style(&mut self.styles, style)
-            }
+            HtmlHandling::StartInlineStyle(style) => self.styles.push((style, true)),
+            HtmlHandling::EndInlineStyle(style) => self.pop_style(style, true),
             HtmlHandling::StartLink(destination) => {
-                self.styles.push(MarkdownInlineStyle::Link);
+                self.styles.push((MarkdownInlineStyle::Link, true));
                 self.links.push(destination);
                 self.html_links += 1;
             }
             HtmlHandling::EndLink => {
                 if self.html_links > 0 {
                     self.html_links -= 1;
-                    pop_matching_inline_style(&mut self.styles, MarkdownInlineStyle::Link);
+                    self.pop_style(MarkdownInlineStyle::Link, true);
                     self.links.pop();
+                    self.clamp_html_floor();
                 }
             }
             HtmlHandling::Images(images) => {
@@ -724,7 +753,9 @@ impl<'a> Flattener<'a> {
             HtmlHandling::AppendLiteral => self.push_text(html, range, false),
             // A table row, a heading or a picture's description cannot be
             // split, so a block element there only separates words.
-            HtmlHandling::OpenContainer(..) if self.html_containers_inert() => {
+            HtmlHandling::OpenContainer(..) | HtmlHandling::Rule
+                if self.html_containers_inert() =>
+            {
                 match self.image.as_mut() {
                     Some(image) => push_separator(&mut image.alt),
                     None => push_separator(&mut self.text),
@@ -733,62 +764,152 @@ impl<'a> Flattener<'a> {
             HtmlHandling::CloseContainer(_) if self.html_containers_inert() => {}
             HtmlHandling::OpenContainer(kind, align) => {
                 // A block element starts a row of its own.
-                self.end_html_row(range.start)?;
+                self.split_row_at(range.start)?;
+                // As in HTML, it closes a `<p>` left open, and a heading closes
+                // a heading.
+                self.close_html_container(HtmlContainerKind::Paragraph);
                 if let HtmlContainerKind::Heading(level) = kind {
+                    self.close_html_container(kind);
                     self.html_heading = Some((level, range.start));
                 }
                 if kind.ends_with_its_block() {
                     // The row owns its tags, so a diff of only them marks it.
                     self.note_content(range);
                 }
-                self.html_containers.push(OpenHtmlContainer {
-                    kind,
-                    align,
-                    depth: self.containers.len(),
-                });
+                self.open_html_container(kind, align);
             }
             HtmlHandling::CloseContainer(kind) => {
-                let Some(ix) = self
+                if !self
                     .html_containers
                     .iter()
-                    .rposition(|open| kind.closes(open.kind))
-                else {
+                    .any(|open| kind.closes(open.kind))
+                {
                     return Some(());
-                };
+                }
                 if kind.ends_with_its_block() {
                     self.note_content(range.clone());
                 }
-                self.end_html_row(range.end)?;
-                self.html_containers.truncate(ix);
+                self.split_row_at(range.end)?;
+                self.close_html_container(kind);
+            }
+            HtmlHandling::Rule => {
+                self.split_row_at(range.start)?;
+                self.close_html_container(HtmlContainerKind::Paragraph);
+                let lines = self.line_range(range);
+                let (indent, quotes) = (self.indent_level(), self.blockquote_level());
+                self.push_row(
+                    MarkdownPreviewRowInput::plain(
+                        MarkdownPreviewRowKind::ThematicBreak,
+                        "───",
+                        &[],
+                        lines,
+                        indent,
+                        quotes,
+                    ),
+                    None,
+                    false,
+                )?;
             }
         }
         Some(())
+    }
+
+    /// End the row being read where an HTML block element starts or ends,
+    /// without the space before it; the next row starts at its first word.
+    fn split_row_at(&mut self, at: usize) -> Option<()> {
+        self.trim_row_end();
+        self.end_html_row(at)?;
+        self.trim_next_start = true;
+        Some(())
+    }
+
+    fn open_html_container(&mut self, kind: HtmlContainerKind, align: MarkdownTextAlign) {
+        self.html_containers.push(OpenHtmlContainer {
+            kind,
+            align,
+            depth: self.containers.len(),
+        });
+    }
+
+    /// Close the innermost open container `kind` closes, and any inside it.
+    fn close_html_container(&mut self, kind: HtmlContainerKind) {
+        if let Some(ix) = self
+            .html_containers
+            .iter()
+            .rposition(|open| kind.closes(open.kind))
+        {
+            self.html_containers.truncate(ix);
+        }
     }
 
     /// Read a buffered HTML block tag by tag, as a browser would, when the
     /// preview knows every tag in it; otherwise line by line, verbatim where
     /// it cannot interpret a line.
     fn read_html_block(&mut self, block: &HtmlBlockBuffer) -> Option<()> {
-        let mut pieces = Vec::new();
-        for token in html_tokens(&block.text) {
-            match token {
-                HtmlToken::Tag(range) => {
-                    let handling = classify_html_tag(&block.text[range.clone()]);
-                    if handling == HtmlHandling::AppendLiteral {
-                        return self.read_html_block_lines(block);
-                    }
-                    pieces.push((Some(handling), range));
+        let tokens: Vec<HtmlToken> = html_tokens(&block.text).collect();
+        let mut pieces = Vec::with_capacity(tokens.len());
+        let mut ix = 0;
+        while let Some(token) = tokens.get(ix) {
+            ix += 1;
+            let range = match token {
+                HtmlToken::Text(range) => {
+                    pieces.push(HtmlPiece::Text(range.clone()));
+                    continue;
                 }
-                HtmlToken::Text(range) => pieces.push((None, range)),
+                HtmlToken::Tag(range) => range.clone(),
+            };
+            let handling = classify_html_tag(&block.text[range.clone()]);
+            if handling != HtmlHandling::AppendLiteral {
+                pieces.push(HtmlPiece::Tag(handling, range));
+                continue;
             }
+            // A `<summary>` label is read whole, as markdown; any other tag
+            // the preview does not know leaves the block to be shown as written.
+            let lower = block.text[range.clone()].to_ascii_lowercase();
+            let close = is_html_open_tag(&lower, "summary")
+                .then(|| {
+                    tokens[ix..].iter().position(|token| {
+                        matches!(token, HtmlToken::Tag(tag)
+                            if is_html_close_tag(&block.text[tag.clone()].to_ascii_lowercase(), "summary"))
+                    })
+                })
+                .flatten();
+            let Some(close) = close else {
+                return self.read_html_block_lines(block);
+            };
+            let HtmlToken::Tag(close_range) = &tokens[ix + close] else {
+                return self.read_html_block_lines(block);
+            };
+            pieces.push(HtmlPiece::Summary {
+                label: range.end..close_range.start,
+                whole: range.start..close_range.end,
+            });
+            ix += close + 1;
         }
-        for (handling, range) in pieces {
-            let text = &block.text[range.clone()];
-            match handling {
-                Some(handling) => {
-                    self.apply_html(handling, text, block.source_range(range), false)?;
+        for piece in pieces {
+            match piece {
+                HtmlPiece::Tag(handling, range) => {
+                    let source = block.source_range(range.clone());
+                    // A tag owns its line, so a diff that only adds or drops
+                    // one still marks the row it shapes.
+                    if matches!(
+                        handling,
+                        HtmlHandling::StartInlineStyle(_)
+                            | HtmlHandling::EndInlineStyle(_)
+                            | HtmlHandling::StartLink(_)
+                            | HtmlHandling::EndLink
+                            | HtmlHandling::HardBreak
+                    ) {
+                        self.note_content(source.clone());
+                    }
+                    self.apply_html(handling, &block.text[range], source, false)?;
                 }
-                None => {
+                HtmlPiece::Summary { label, whole } => {
+                    let summary = HtmlHandling::DetailsSummary(block.text[label].to_owned());
+                    self.apply_html(summary, "", block.source_range(whole), false)?;
+                }
+                HtmlPiece::Text(range) => {
+                    let text = &block.text[range.clone()];
                     // The words' own source, not the whitespace around them.
                     let lead = text.len() - text.trim_ascii_start().len();
                     let end = range.start + text.trim_ascii_end().len();
@@ -801,35 +922,59 @@ impl<'a> Flattener<'a> {
     }
 
     /// A block holding a tag the preview does not know, line by line: a line
-    /// that is one tag acts as it, anything else is shown verbatim. The
-    /// containers a verbatim line opens or closes still count, or one closed
-    /// there would leak its `align` into the rest of the document.
+    /// that is one tag acts as it, anything else is shown verbatim.
+    ///
+    /// The containers verbatim lines open and close still count, or one
+    /// closed there would leak its `align` into the rest of the document.
+    /// They are read from whole tags across the block, so one inside a
+    /// comment or an attribute value does not count; a line's opening tags
+    /// take effect before its content and its closing tags after.
     fn read_html_block_lines(&mut self, block: &HtmlBlockBuffer) -> Option<()> {
+        // `<script>`, `<pre>` and the like hold text, not markup.
+        let raw_text = is_raw_text_html(&block.text);
+        let containers: Vec<_> = if raw_text {
+            Vec::new()
+        } else {
+            html_container_tags(&block.text).collect()
+        };
+        let comments: Vec<Range<usize>> = html_tokens(&block.text)
+            .filter_map(|token| match token {
+                HtmlToken::Tag(tag) if block.text[tag.clone()].starts_with("<!--") => Some(tag),
+                _ => None,
+            })
+            .collect();
         for (text, source) in &block.lines {
             let line = &block.text[text.clone()];
-            let handling = classify_supported_html(line);
+            let commented = line
+                .char_indices()
+                .filter(|(_, ch)| !ch.is_ascii_whitespace())
+                .all(|(at, _)| {
+                    comments
+                        .iter()
+                        .any(|comment| comment.contains(&(text.start + at)))
+                });
+            let handling = if commented {
+                HtmlHandling::Ignore
+            } else if raw_text {
+                HtmlHandling::AppendLiteral
+            } else {
+                classify_supported_html(line)
+            };
             let single = matches!(
                 handling,
                 HtmlHandling::OpenContainer(..) | HtmlHandling::CloseContainer(_)
             );
-            self.apply_html(handling, line, source.clone(), true)?;
-            if single {
-                continue;
-            }
-            for (kind, align, closing) in html_container_tags(line) {
-                if !closing {
-                    self.html_containers.push(OpenHtmlContainer {
-                        kind,
-                        align,
-                        depth: self.containers.len(),
-                    });
-                } else if let Some(ix) = self
-                    .html_containers
+            let on_line = || {
+                containers
                     .iter()
-                    .rposition(|open| kind.closes(open.kind))
-                {
-                    self.html_containers.truncate(ix);
-                }
+                    .filter(|(tag, ..)| !single && text.contains(&tag.start))
+            };
+            for (_, kind, align, _) in on_line().filter(|(.., closing)| !closing) {
+                self.open_html_container(*kind, *align);
+            }
+            self.apply_html(handling, line, source.clone(), true)?;
+            for (_, kind, ..) in on_line().filter(|(.., closing)| *closing) {
+                self.close_html_container(*kind);
             }
         }
         Some(())
@@ -887,7 +1032,9 @@ impl<'a> Flattener<'a> {
     fn end_html_row(&mut self, at: usize) -> Option<()> {
         match self.html_heading.take() {
             Some((level, start)) => {
-                self.trim_html_trailing_space();
+                // A heading never ends in a space; a `<br>` before its close
+                // would otherwise leave one.
+                self.trim_row_end();
                 if self.text.is_empty() && self.images.is_empty() {
                     self.clear_row();
                     return Some(());
@@ -898,16 +1045,63 @@ impl<'a> Flattener<'a> {
         }
     }
 
-    /// What HTML left open ends with the block it is in, as on GitHub: a
-    /// `<p>` or `<hN>`, formatting, links. Markdown's own are closed by now;
-    /// `<div>` and `<center>` can span blocks.
+    /// What HTML left open inside a markdown block ends with it: a `<p>` or
+    /// `<hN>`, formatting, links. Markdown's own are closed by now; what an
+    /// HTML block of its own left open (`html_floor`) and `<div>`/`<center>`
+    /// carry on.
     fn end_open_html(&mut self) {
         self.html_heading = None;
+        self.close_html_paragraphs();
+        let (styles, links) = self.html_floor;
+        self.styles.truncate(styles);
+        self.links.truncate(links);
+        self.html_links = self.html_links.min(self.links.len());
+    }
+
+    /// A markdown block opening closes a `<p>` or `<hN>` left open, as its own
+    /// element would in HTML.
+    fn close_html_paragraphs(&mut self) {
         self.html_containers
             .retain(|open| !open.kind.ends_with_its_block());
-        self.styles.clear();
-        self.links.clear();
-        self.html_links = 0;
+    }
+
+    /// Remove the innermost open `style`, of markdown or of HTML as
+    /// `from_html` says; a closing tag of one cannot end the other.
+    fn pop_style(&mut self, style: MarkdownInlineStyle, from_html: bool) {
+        if let Some(ix) = self
+            .styles
+            .iter()
+            .rposition(|open| *open == (style, from_html))
+        {
+            self.styles.remove(ix);
+        }
+        self.clamp_html_floor();
+    }
+
+    fn clamp_html_floor(&mut self) {
+        let (styles, links) = self.html_floor;
+        self.html_floor = (styles.min(self.styles.len()), links.min(self.links.len()));
+    }
+
+    /// Drop the whitespace the row ends in, keeping spans and pictures on
+    /// the characters they cover.
+    fn trim_row_end(&mut self) {
+        let len = self
+            .text
+            .trim_end_matches(|ch: char| ch.is_ascii_whitespace())
+            .len();
+        if len == self.text.len() {
+            return;
+        }
+        self.text.truncate(len);
+        self.html_trailing_space = None;
+        self.spans.retain_mut(|span| {
+            span.byte_range.end = span.byte_range.end.min(len);
+            span.byte_range.start < span.byte_range.end
+        });
+        for image in &mut self.images {
+            image.byte_offset = image.byte_offset.min(len);
+        }
     }
 
     fn trim_html_trailing_space(&mut self) {
@@ -941,14 +1135,24 @@ impl<'a> Flattener<'a> {
     /// so it becomes that item's row first. An item holding only a checkbox
     /// emits it here too — unless the block is the paragraph that will carry
     /// it.
+    ///
+    /// A markdown block also closes a `<p>` or `<hN>` HTML left open.
     fn begin_block(&mut self, claim_task: bool) -> Option<()> {
+        self.flush_before_block(claim_task)?;
+        self.close_html_paragraphs();
+        self.trim_next_start = false;
+        Some(())
+    }
+
+    fn flush_before_block(&mut self, claim_task: bool) -> Option<()> {
         let task_waiting = claim_task
             && self.innermost_text_container().is_some_and(
                 |container| matches!(container, Container::Item(item) if item.task.is_some()),
             );
         if !self.text.is_empty() || !self.images.is_empty() || task_waiting {
             let at = self.content.as_ref().map_or(0, |content| content.end);
-            self.flush_row(at)?;
+            // A `<hN>` opened inside the item ends here, as its heading.
+            self.end_html_row(at)?;
         }
         Some(())
     }

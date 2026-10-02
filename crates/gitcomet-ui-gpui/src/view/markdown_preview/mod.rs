@@ -295,7 +295,9 @@ impl MarkdownPreviewRow {
 pub(super) const MARKDOWN_PREVIEW_IMAGE_DEFAULT_HEIGHT_PX: u32 = 224;
 
 /// Combine the inline style stack into a single effective style.
-fn resolve_style_stack(stack: &[MarkdownInlineStyle]) -> MarkdownInlineStyle {
+fn resolve_style_stack(
+    stack: impl IntoIterator<Item = MarkdownInlineStyle>,
+) -> MarkdownInlineStyle {
     let mut has_bold = false;
     let mut has_italic = false;
     let mut has_strikethrough = false;
@@ -303,7 +305,7 @@ fn resolve_style_stack(stack: &[MarkdownInlineStyle]) -> MarkdownInlineStyle {
     let mut has_code = false;
     let mut has_underline = false;
 
-    for &s in stack {
+    for s in stack {
         match s {
             MarkdownInlineStyle::Bold => has_bold = true,
             MarkdownInlineStyle::Italic => has_italic = true,

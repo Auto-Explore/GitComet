@@ -1636,18 +1636,36 @@ fn render_row_line(
 
     let aligned = gpui_text_align(row.align).is_some();
     let alone = row.text.is_empty();
+    // A logo of a declared size beside aligned text stays on one line with
+    // it, the two moving as a group and the text wrapping beside it.
+    // Anything else wraps like words, so a row of badges stays in the column.
+    let beside_logo = aligned && !alone && trailing().next().is_none() && {
+        let mut pictures = leading();
+        matches!(
+            (pictures.next(), pictures.next()),
+            (Some(logo), None) if logo.image.width_px.is_some()
+        )
+    };
     let mut line = div()
         .flex()
-        // Pictures wrap like words. Aligned text beside one hugs its words so
-        // the two move as a group, so it is the text that wraps, beside it.
-        .when(!aligned || alone, |line| line.flex_wrap())
+        .when(!beside_logo, |line| line.flex_wrap())
         .items_center()
         .gap(scaled(MARKDOWN_PREVIEW_INLINE_IMAGE_GAP_PX, context))
         .flex_1()
         .min_w(px(0.0));
     line = markdown_preview_justify(line, row.align);
+    // Only a picture inside a sentence is held to the line's height; one
+    // before or after the words is drawn at its own size.
+    let own_size = |inline: &MarkdownInlineImage| {
+        inline.byte_offset == 0 || inline.byte_offset >= row.text.len()
+    };
     for inline in leading() {
-        line = line.child(render_inline_image(row_ix, inline, alone, context));
+        line = line.child(render_inline_image(
+            row_ix,
+            inline,
+            own_size(inline),
+            context,
+        ));
     }
     // A row of nothing but pictures still has to paint its (empty) text: that
     // element is what registers the row's hit-test box, and without one a drag
@@ -1663,7 +1681,12 @@ fn render_row_line(
         };
     }
     for inline in trailing() {
-        line = line.child(render_inline_image(row_ix, inline, alone, context));
+        line = line.child(render_inline_image(
+            row_ix,
+            inline,
+            own_size(inline),
+            context,
+        ));
     }
     line.into_any_element()
 }
@@ -1671,18 +1694,22 @@ fn render_row_line(
 fn render_inline_image(
     row_ix: usize,
     inline: &MarkdownInlineImage,
-    alone: bool,
+    own_size: bool,
     context: &MarkdownDocumentContext,
 ) -> AnyElement {
-    let image = div()
-        .flex_none()
-        .child(crate::view::rows::markdown_preview_inline_image(
-            inline,
-            alone,
-            context.theme,
-            context.ui_scale_percent,
-            pictures(context),
-        ));
+    // The wrappers are held to the line too: the picture's own `max_w_full`
+    // resolves against them, so unbounded they would let it overflow.
+    let image =
+        div()
+            .flex_none()
+            .max_w_full()
+            .child(crate::view::rows::markdown_preview_inline_image(
+                inline,
+                own_size,
+                context.theme,
+                context.ui_scale_percent,
+                pictures(context),
+            ));
 
     // A picture wrapped in a link opens the same menu its text would.
     let (Some(view), Some(url)) = (context.view.clone(), inline.link_url.clone()) else {
@@ -1705,6 +1732,7 @@ fn render_inline_image(
         // The wrapper stands where the picture stood, so it keeps the picture's
         // sizing in the line it sits on.
         .flex_none()
+        .max_w_full()
         .on_children_prepainted(move |children_bounds, _window, _cx| {
             record_bounds.set(children_bounds.first().copied());
         })
@@ -1823,7 +1851,8 @@ fn render_row_text(
             Arc::clone(&styled.highlights),
         )
         // Inline code is set in the editor font; the prose around it is not.
-        .font_family_ranges(code_ranges, context.editor_font_family.clone()),
+        .font_family_ranges(code_ranges, context.editor_font_family.clone())
+        .text_align(aligned.unwrap_or_default()),
     )
     .into_any_element()
 }

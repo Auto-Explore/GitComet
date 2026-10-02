@@ -940,12 +940,7 @@ fn an_aligned_html_picture_moves_across_the_document(cx: &mut gpui::TestAppConte
         test_png_bytes(40, 20).as_slice(),
     )
     .expect("write the picture the document points at");
-    for _ in 0..3 {
-        cx.update(|window, app| {
-            let _ = window.draw(app);
-        });
-        cx.run_until_parked();
-    }
+    draw_frames(cx, 3);
 
     let column = cx
         .debug_bounds(leaked_selector(format!(
@@ -1002,12 +997,7 @@ fn centred_text_beside_a_logo_wraps_inside_the_pane(cx: &mut gpui::TestAppContex
         test_png_bytes(24, 24).as_slice(),
     )
     .expect("write the picture the document points at");
-    for _ in 0..3 {
-        cx.update(|window, app| {
-            let _ = window.draw(app);
-        });
-        cx.run_until_parked();
-    }
+    draw_frames(cx, 3);
 
     let bounds = |cx: &mut gpui::VisualTestContext, selector: String| {
         cx.debug_bounds(leaked_selector(selector.clone()))
@@ -1086,12 +1076,7 @@ fn pictures_alone_on_a_row_keep_their_own_size(cx: &mut gpui::TestAppContext) {
         test_png_bytes(120, 80).as_slice(),
     )
     .expect("write the picture the document points at");
-    for _ in 0..3 {
-        cx.update(|window, app| {
-            let _ = window.draw(app);
-        });
-        cx.run_until_parked();
-    }
+    draw_frames(cx, 3);
 
     for offset in fixture.picture_offsets() {
         let picture = cx
@@ -1129,12 +1114,7 @@ fn a_centred_row_of_badges_is_centred_exactly(cx: &mut gpui::TestAppContext) {
         test_png_bytes(40, 20).as_slice(),
     )
     .expect("write the picture the document points at");
-    for _ in 0..3 {
-        cx.update(|window, app| {
-            let _ = window.draw(app);
-        });
-        cx.run_until_parked();
-    }
+    draw_frames(cx, 3);
 
     let column = cx
         .debug_bounds(leaked_selector(format!(
@@ -1157,6 +1137,180 @@ fn a_centred_row_of_badges_is_centred_exactly(cx: &mut gpui::TestAppContext) {
         ((left + right) / 2.0 - column.center().x).abs() <= px(0.5),
         "badges {badges:?} centred in {column:?}"
     );
+
+    fixture.cleanup();
+}
+
+/// Open `source` beside the PNGs it names, drawn until they decode, and
+/// return the fixture and the column a full-width paragraph spans. `source`
+/// must start with a `Body.` paragraph.
+fn open_with_pictures(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::super::GitCometView>,
+    repo_id: u64,
+    name: &str,
+    source: &str,
+    pictures: &[(&str, u32, u32)],
+) -> (RenderedPreviewFixture, Bounds<Pixels>) {
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        view,
+        gitcomet_state::model::RepoId(repo_id),
+        name,
+        source,
+    );
+    for (file, width, height) in pictures {
+        std::fs::write(
+            fixture.workdir.join("docs").join(file),
+            test_png_bytes(*width, *height).as_slice(),
+        )
+        .expect("write the picture the document points at");
+    }
+    draw_frames(cx, 3);
+    let column = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_row_box_{}",
+            fixture.row_ix("Body.")
+        )))
+        .expect("the paragraph's row spans the column");
+    (fixture, column)
+}
+
+fn inline_pictures(
+    cx: &mut gpui::VisualTestContext,
+    fixture: &RenderedPreviewFixture,
+) -> Vec<Bounds<Pixels>> {
+    fixture
+        .picture_offsets()
+        .into_iter()
+        .map(|offset| {
+            cx.debug_bounds(leaked_selector(format!(
+                "markdown_preview_inline_image_{offset}"
+            )))
+            .expect("the picture is drawn")
+        })
+        .collect()
+}
+
+fn assert_inside(column: Bounds<Pixels>, picture: Bounds<Pixels>) {
+    assert!(
+        picture.left() >= column.left() - px(0.5) && picture.right() <= column.right() + px(0.5),
+        "picture {picture:?} stays inside the column {column:?}"
+    );
+}
+
+#[gpui::test]
+fn an_aligned_label_with_many_badges_wraps_inside_the_column(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let badges = "<img src=\"b.png\" width=\"300\" height=\"20\">".repeat(8);
+    let (fixture, column) = open_with_pictures(
+        cx,
+        &view,
+        146,
+        "markdown_aligned_label_badges",
+        &format!("Body.\n\n<p align=\"center\">Sponsors: {badges}</p>\n"),
+        &[("b.png", 300, 20)],
+    );
+    for picture in inline_pictures(cx, &fixture) {
+        assert_inside(column, picture);
+    }
+    let label = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_text_box_{}",
+            fixture.row_ix("Sponsors:")
+        )))
+        .expect("the label is drawn");
+    assert!(
+        label.size.width > px(20.0),
+        "the label keeps its width: {label:?}"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn pictures_alone_on_a_row_stay_inside_the_column(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let (fixture, column) = open_with_pictures(
+        cx,
+        &view,
+        147,
+        "markdown_wide_picture_row",
+        "Body.\n\n<img src=\"big.png\">\n<img src=\"big.png\">\n",
+        &[("big.png", 1600, 1000)],
+    );
+    for picture in inline_pictures(cx, &fixture) {
+        assert_inside(column, picture);
+        assert!(
+            (picture.size.height - picture.size.width * (1000.0 / 1600.0)).abs() <= px(2.0),
+            "a clamped picture keeps its shape: {picture:?}"
+        );
+    }
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn a_picture_written_before_its_caption_keeps_its_size(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let (fixture, column) = open_with_pictures(
+        cx,
+        &view,
+        148,
+        "markdown_picture_before_caption",
+        "Body.\n\n<p align=\"center\">\n  <img src=\"shot.png\">\n  Caption text\n</p>\n",
+        &[("shot.png", 400, 200)],
+    );
+    let [picture] = inline_pictures(cx, &fixture)[..] else {
+        panic!("one picture");
+    };
+    assert_inside(column, picture);
+    assert!(
+        (picture.size.height - px(200.0)).abs() <= px(0.5),
+        "a picture before its caption is drawn at its own size: {picture:?}"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn a_centred_picture_wider_than_the_column_stays_inside_it(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let (fixture, column) = open_with_pictures(
+        cx,
+        &view,
+        149,
+        "markdown_wide_centred_picture",
+        "Body.\n\n<p align=\"center\"><img src=\"wide.png\" width=\"2000\" alt=\"wide\"></p>\n",
+        &[("wide.png", 2000, 100)],
+    );
+    let picture = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_block_image_{}",
+            fixture.row_ix("wide")
+        )))
+        .expect("the picture is drawn once it has decoded");
+    assert_inside(column, picture);
 
     fixture.cleanup();
 }

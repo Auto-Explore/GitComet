@@ -3783,7 +3783,10 @@ fn a_br_after_a_logo_puts_the_text_under_it() {
 #[test]
 fn entities_in_block_html_text_are_decoded() {
     let doc = parse("<p>Fish &amp; chips &lt;3 &#169; &#xA9; &bogus; x&nbsp;y</p>\n");
-    assert_eq!(row_texts(&doc), vec!["Fish & chips <3 © © &bogus; x\u{a0}y"]);
+    assert_eq!(
+        row_texts(&doc),
+        vec!["Fish & chips <3 © © &bogus; x\u{a0}y"]
+    );
 }
 
 #[test]
@@ -4047,7 +4050,10 @@ fn hr_and_summary_do_not_send_a_block_back_to_raw_tags() {
         "<p align=\"center\">\n<img src=\"a.png\">\n</p>\n<h1 align=\"center\">Project</h1>\n<hr>\n",
     );
     assert_no_tags_shown(&doc);
-    assert_eq!(row_with_text(&doc, "Project").align, MarkdownTextAlign::Center);
+    assert_eq!(
+        row_with_text(&doc, "Project").align,
+        MarkdownTextAlign::Center
+    );
     assert!(
         doc.rows
             .iter()
