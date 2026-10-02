@@ -212,6 +212,9 @@ pub struct ProductBranding {
     /// light themes.
     pub splash_backdrop_dark_png: Option<&'static [u8]>,
     pub splash_backdrop_light_png: Option<&'static [u8]>,
+    /// The line under the product name on the Home screen; `None` shows
+    /// none. GitComet's identity sets its own.
+    pub tagline: Option<&'static str>,
 }
 
 impl ProductBranding {
@@ -224,6 +227,7 @@ impl ProductBranding {
             mark_svg: None,
             splash_backdrop_dark_png: None,
             splash_backdrop_light_png: None,
+            tagline: None,
         }
     }
 
@@ -239,6 +243,11 @@ impl ProductBranding {
 
     pub const fn with_logo_svg(mut self, svg: &'static [u8]) -> Self {
         self.logo_svg = Some(svg);
+        self
+    }
+
+    pub const fn with_tagline(mut self, tagline: &'static str) -> Self {
+        self.tagline = Some(tagline);
         self
     }
 
@@ -335,7 +344,7 @@ impl ProductIdentity {
                 owner: Cow::Borrowed("Auto-Explore"),
                 repo: Cow::Borrowed("GitComet"),
             },
-            branding: ProductBranding::new(),
+            branding: ProductBranding::new().with_tagline("Fastest Open Source Git GUI"),
             hidden_ref_prefixes: &["refs/pull/", "refs/changes/", "refs/notes/"],
             overrides: StaticOverrides::EMPTY,
         }
@@ -779,6 +788,11 @@ mod tests {
             Some("MIT")
         );
         let branding = identity.branding();
+        assert_eq!(
+            branding.tagline, None,
+            "another product shows no GitComet tagline"
+        );
+        assert!(ProductIdentity::gitcomet().branding().tagline.is_some());
         assert_eq!(branding.logo_svg, Some(&b"<svg/>"[..]));
         assert_eq!(branding.mark_svg, Some(&b"<svg>mark</svg>"[..]));
         assert_eq!(branding.splash_backdrop_dark_png, Some(&b"dark"[..]));

@@ -807,14 +807,19 @@ impl GitCometView {
                                             .child(crate::view::product_name()),
                                     ),
                             )
-                            .child(
-                                div()
-                                    .id("home_tagline")
-                                    .debug_selector(|| "home_tagline".to_string())
-                                    .mt(scaled_px(-8.0))
-                                    .text_size(theme.ui_text(14.0))
-                                    .text_color(colors.muted)
-                                    .child("Fastest Open Source Git GUI"),
+                            .when_some(
+                                gitcomet_core::identity::current().branding().tagline,
+                                |home, tagline| {
+                                    home.child(
+                                        div()
+                                            .id("home_tagline")
+                                            .debug_selector(|| "home_tagline".to_string())
+                                            .mt(scaled_px(-8.0))
+                                            .text_size(theme.ui_text(14.0))
+                                            .text_color(colors.muted)
+                                            .child(tagline),
+                                    )
+                                },
                             )
                             .child(
                                 div()

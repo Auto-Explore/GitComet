@@ -519,6 +519,11 @@ Since then:
   Git" row and a bench fixture's tab). Closing a repository tab still
   discards its unsaved editor buffers without asking; an ignored test
   (`closing_a_repository_tab_prompts_for_its_unsaved_edits`) reproduces it.
+- Found running the example: Home's tagline was GitComet's literal ("Fastest
+  Open Source Git GUI") under any product's name. It is now
+  `ProductBranding::with_tagline`, set by GitComet's identity only; another
+  product shows its own or none. Contributed sidebar sections and rows take
+  the built-in rows' text size instead of the window default.
 
 ## History find (#532)
 

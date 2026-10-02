@@ -34,6 +34,10 @@ fn the_examples_artwork_and_names_replace_gitcomets() {
         let served = assets.load(path).expect("load").expect("served");
         assert_eq!(Some(served.as_ref()), bytes, "{path}");
     }
+    assert_eq!(
+        gitcomet_core::identity::current().branding().tagline,
+        Some("Code review on any Git repository")
+    );
     assert!(branding.splash_backdrop_dark_png.is_some());
     assert!(branding.splash_backdrop_light_png.is_some());
 

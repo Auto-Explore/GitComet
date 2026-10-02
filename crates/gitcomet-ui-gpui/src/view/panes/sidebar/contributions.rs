@@ -157,6 +157,9 @@ impl SidebarPaneView {
             .flex()
             .items_center()
             .gap_2()
+            // Sized like the built-in section headers and rows.
+            .text_size(self.theme.ui_text(14.0))
+            .font_weight(gpui::FontWeight::MEDIUM)
             .child(if collapsed { "▸" } else { "▾" })
             .child(title)
             .control_interaction(
@@ -209,6 +212,7 @@ impl SidebarPaneView {
             .flex()
             .items_center()
             .gap_2()
+            .text_size(self.theme.ui_text(14.0))
             .when_some(data.icon.clone(), |row, icon| {
                 // `svg()` is a mask in the text colour; without one it paints nothing.
                 row.child(

@@ -16,6 +16,7 @@ pub const EXECUTABLE_NAME: &str = "comet-example";
 
 /// The example's own artwork, so no GitComet artwork shows.
 pub const BRANDING: ProductBranding = ProductBranding::new()
+    .with_tagline("Code review on any Git repository")
     .with_app_icon_png(include_bytes!("../assets/brand/app-icon.png"))
     .with_window_icon_png(include_bytes!("../assets/brand/window-icon.png"))
     .with_logo_svg(include_bytes!("../assets/brand/logo.svg"))
