@@ -30,6 +30,7 @@ pub mod interaction;
 pub mod interaction_paint;
 pub mod linux_gui_env;
 pub mod menu;
+pub mod menu_placement;
 mod minimap;
 pub mod press_gesture;
 pub mod rope;

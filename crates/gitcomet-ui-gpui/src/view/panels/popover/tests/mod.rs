@@ -53,6 +53,7 @@ mod file_actions;
 mod file_history;
 mod interaction;
 mod layout;
+mod menu_placement;
 mod mergetool_settings;
 mod picker;
 mod refs;

@@ -2525,12 +2525,31 @@ impl PopoverHost {
             .map(Into::into)
     }
 
-    fn scroll_context_menu_selection(&self, window: &mut Window, cx: &mut gpui::Context<Self>) {
-        if let Some(anchor) = self
+    /// Scrolls the least that fully shows the selected row, counting the area
+    /// under a visible scroll arrow as hidden. Reads the extents recorded in the
+    /// last prepaint; navigation does not change the rows, so they still hold.
+    fn scroll_context_menu_selection(&self, cx: &mut gpui::Context<Self>) {
+        let Some((top, height)) = self
             .context_menu_selected_ix
-            .and_then(|ix| self.context_menu_scroll_anchors.get(ix))
-        {
-            anchor.scroll_to(window, cx);
+            .and_then(|ix| self.context_menu_row_extents.borrow().get(ix).copied())
+            .flatten()
+        else {
+            return;
+        };
+        let scroll = &self.context_menu_scroll;
+        let offset = scroll.offset();
+        let current = -offset.y;
+        let edge = super::popover_ui_scale(cx).px(components::MENU_SCROLL_ARROW_HEIGHT_PX);
+        let target = crate::kit::menu_placement::reveal_scroll(
+            top,
+            top + height,
+            scroll.bounds().size.height,
+            scroll.max_offset().y,
+            current,
+            edge,
+        );
+        if target != current {
+            scroll.set_offset(point(offset.x, -target));
         }
     }
 
@@ -2545,17 +2564,17 @@ impl PopoverHost {
         let model = self
             .context_menu_model(&kind, cx)
             .unwrap_or_else(|| ContextMenuModel::new(vec![]));
-        self.context_menu_scroll_anchors
-            .resize_with(model.items.len(), || {
-                gpui::ScrollAnchor::for_handle(self.context_menu_scroll.clone())
-            });
-        let scroll_anchors = self.context_menu_scroll_anchors.clone();
+        self.context_menu_row_extents
+            .borrow_mut()
+            .resize(model.items.len(), None);
+        let row_extents = self.context_menu_row_extents.clone();
+        let menu_scroll = self.context_menu_scroll.clone();
         let model_for_keys = model.clone();
         let model_for_mouse = model.clone();
         let tooltip_host = self.tooltip_host.clone();
         let entry_tooltips = model.entry_tooltips.clone();
         let entry_debug_selectors = model.entry_debug_selectors.clone();
-        let groups = model.groups.clone();
+        let slots = context_menu_slots(model.items.len(), &model.groups);
         let shortcut_keycaps = model.shortcut_keycaps;
 
         let focus = self.context_menu_focus_handle.clone();
@@ -2593,6 +2612,7 @@ impl PopoverHost {
             )
             .on_key_down(
                 cx.listener(move |this, e: &gpui::KeyDownEvent, window, cx| {
+                    this.latch_context_menu_placement();
                     let key = e.keystroke.key.as_str();
                     let mods = e.keystroke.modifiers;
                     if mods.control || mods.platform || mods.alt || mods.function {
@@ -2633,7 +2653,7 @@ impl PopoverHost {
                             let next =
                                 model_for_keys.next_selectable(this.context_menu_selected_ix, -1);
                             this.context_menu_selected_ix = next;
-                            this.scroll_context_menu_selection(window, cx);
+                            this.scroll_context_menu_selection(cx);
                             cx.notify();
                         }
                         "down" => {
@@ -2641,7 +2661,7 @@ impl PopoverHost {
                             let next =
                                 model_for_keys.next_selectable(this.context_menu_selected_ix, 1);
                             this.context_menu_selected_ix = next;
-                            this.scroll_context_menu_selection(window, cx);
+                            this.scroll_context_menu_selection(cx);
                             cx.notify();
                         }
                         "tab" => {
@@ -2649,19 +2669,19 @@ impl PopoverHost {
                             let direction = if mods.shift { -1 } else { 1 };
                             this.context_menu_selected_ix = model_for_keys
                                 .next_selectable(this.context_menu_selected_ix, direction);
-                            this.scroll_context_menu_selection(window, cx);
+                            this.scroll_context_menu_selection(cx);
                             cx.notify();
                         }
                         "home" => {
                             cx.stop_propagation();
                             this.context_menu_selected_ix = model_for_keys.first_selectable();
-                            this.scroll_context_menu_selection(window, cx);
+                            this.scroll_context_menu_selection(cx);
                             cx.notify();
                         }
                         "end" => {
                             cx.stop_propagation();
                             this.context_menu_selected_ix = model_for_keys.last_selectable();
-                            this.scroll_context_menu_selection(window, cx);
+                            this.scroll_context_menu_selection(cx);
                             cx.notify();
                         }
                         "enter" | "space" => {
@@ -2688,6 +2708,15 @@ impl PopoverHost {
                     }
                 }),
             )
+            .on_children_prepainted({
+                let slots = slots.clone();
+                record_row_extents(row_extents.clone(), menu_scroll.clone(), move |child| {
+                    match slots.get(child) {
+                        Some(MenuSlot::Row(ix)) => Some(*ix),
+                        _ => None,
+                    }
+                })
+            })
             .children(group_context_menu_rows(
                 model
                     .items
@@ -2827,7 +2856,6 @@ impl PopoverHost {
                             .disabled(disabled)
                             .tooltip_host(tooltip_host.clone())
                             .render(theme, ui_scale, cx)
-                            .anchor_scroll(scroll_anchors.get(ix).cloned())
                             .debug_selector(move || debug_selector.clone());
 
                             row.on_mouse_move(cx.listener(
@@ -2869,46 +2897,103 @@ impl PopoverHost {
                             .into_any_element()
                         }
                     }),
-                &groups,
+                &slots,
                 theme,
                 ui_scale,
+                &row_extents,
+                &menu_scroll,
             ))
+    }
+}
+
+/// Content-space `(top, height)` of each menu row from the last prepaint.
+pub(super) type RowExtents = Rc<std::cell::RefCell<Vec<Option<(Pixels, Pixels)>>>>;
+
+/// A direct child of the menu column: one row, or one group block of rows.
+#[derive(Clone, Debug, PartialEq)]
+enum MenuSlot {
+    Row(usize),
+    Group(std::ops::Range<usize>),
+}
+
+/// How `len` rows lay out once each model group is wrapped in one block. A
+/// group that runs past the last row stays unwrapped.
+fn context_menu_slots(len: usize, groups: &[std::ops::Range<usize>]) -> Vec<MenuSlot> {
+    let mut slots = Vec::new();
+    let mut groups = groups.iter().filter(|range| !range.is_empty()).peekable();
+    let mut block_start = None;
+    for ix in 0..len {
+        let Some(range) = groups.peek().filter(|range| range.start <= ix) else {
+            slots.push(MenuSlot::Row(ix));
+            continue;
+        };
+        let start = *block_start.get_or_insert(ix);
+        if ix + 1 == range.end {
+            slots.push(MenuSlot::Group(start..ix + 1));
+            block_start = None;
+            groups.next();
+        }
+    }
+    if let Some(start) = block_start {
+        slots.extend((start..len).map(MenuSlot::Row));
+    }
+    slots
+}
+
+/// Records the content-space extents of a column's children; `row_of` maps a
+/// child index to the menu row it is, if it is one.
+pub(super) fn record_row_extents(
+    extents: RowExtents,
+    scroll: ScrollHandle,
+    row_of: impl Fn(usize) -> Option<usize> + 'static,
+) -> impl Fn(Vec<Bounds<Pixels>>, &mut Window, &mut gpui::App) + 'static {
+    move |bounds, _window, _cx| {
+        let content_top = scroll.bounds().top() + scroll.offset().y;
+        let mut extents = extents.borrow_mut();
+        for (child, bounds) in bounds.iter().enumerate() {
+            if let Some(slot) = row_of(child).and_then(|ix| extents.get_mut(ix)) {
+                *slot = Some((bounds.top() - content_top, bounds.size.height));
+            }
+        }
     }
 }
 
 /// Wrap each model group's rows in one tinted block; other rows pass through.
 fn group_context_menu_rows(
     rows: impl Iterator<Item = AnyElement>,
-    groups: &[std::ops::Range<usize>],
+    slots: &[MenuSlot],
     theme: AppTheme,
     ui_scale: crate::ui_scale::UiScale,
+    extents: &RowExtents,
+    scroll: &ScrollHandle,
 ) -> Vec<AnyElement> {
-    let mut out = Vec::new();
-    let mut groups = groups.iter().filter(|range| !range.is_empty()).peekable();
-    let mut block = Vec::new();
+    let mut rows: Vec<Option<AnyElement>> = rows.map(Some).collect();
+    let mut take = |ix: usize| rows[ix].take().expect("each menu row is placed once");
     let mut previous_end = None;
-    for (ix, row) in rows.enumerate() {
-        let Some(range) = groups.peek().filter(|range| range.start <= ix) else {
-            out.push(row);
-            continue;
-        };
-        block.push(row);
-        if ix + 1 == range.end {
-            let start = range.start;
-            // Neighbouring blocks would merge into one tint without a gap.
-            let spaced = previous_end == Some(start);
-            previous_end = Some(range.end);
-            groups.next();
-            out.push(
-                components::context_menu_group(theme, ui_scale, spaced)
-                    .id(("context_menu_group", start))
-                    .debug_selector(move || format!("context_menu_group_{start}"))
-                    .children(block.drain(..))
-                    .into_any_element(),
-            );
+    let mut out = Vec::with_capacity(slots.len());
+    for slot in slots {
+        match slot {
+            MenuSlot::Row(ix) => out.push(take(*ix)),
+            MenuSlot::Group(range) => {
+                let start = range.start;
+                // Neighbouring blocks would merge into one tint without a gap.
+                let spaced = previous_end == Some(start);
+                previous_end = Some(range.end);
+                out.push(
+                    components::context_menu_group(theme, ui_scale, spaced)
+                        .on_children_prepainted(record_row_extents(
+                            extents.clone(),
+                            scroll.clone(),
+                            move |child| Some(start + child),
+                        ))
+                        .id(("context_menu_group", start))
+                        .debug_selector(move || format!("context_menu_group_{start}"))
+                        .children(range.clone().map(&mut take))
+                        .into_any_element(),
+                );
+            }
         }
     }
-    out.extend(block);
     out
 }
 

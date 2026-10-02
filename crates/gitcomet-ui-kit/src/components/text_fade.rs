@@ -76,10 +76,15 @@ impl FadingText {
                 child: Some(div().flex_shrink_0().child(self.text).into_any_element()),
                 overflowing: Rc::clone(&self.overflowing),
             })
-            .child(PaintedWhen {
-                child: Some(fade.into_any_element()),
-                visible: self.overflowing,
-            })
+            // The probe sets the flag during prepaint and siblings prepaint
+            // in order, so the fade acts on this frame's measurement.
+            .child(super::painted_when(
+                {
+                    let overflowing = self.overflowing;
+                    move || overflowing.get()
+                },
+                fade,
+            ))
     }
 
     #[cfg(test)]
@@ -187,77 +192,6 @@ impl Element for OverflowProbe {
 }
 
 impl IntoElement for OverflowProbe {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
-/// Draws its child only while the flag is set. The probe beside it sets that
-/// flag during prepaint, and siblings prepaint in order, so the fade acts on
-/// the measurement taken for the text next to it in the same frame.
-struct PaintedWhen {
-    child: Option<AnyElement>,
-    visible: Rc<Cell<bool>>,
-}
-
-impl Element for PaintedWhen {
-    type RequestLayoutState = AnyElement;
-    type PrepaintState = bool;
-
-    fn id(&self) -> Option<ElementId> {
-        None
-    }
-
-    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
-        None
-    }
-
-    fn request_layout(
-        &mut self,
-        _global_id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> (LayoutId, Self::RequestLayoutState) {
-        let mut child = self.child.take().expect("conditional child");
-        (child.request_layout(window, cx), child)
-    }
-
-    fn prepaint(
-        &mut self,
-        _global_id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        _bounds: Bounds<gpui::Pixels>,
-        child: &mut Self::RequestLayoutState,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Self::PrepaintState {
-        let visible = self.visible.get();
-        if visible {
-            child.prepaint(window, cx);
-        }
-        visible
-    }
-
-    fn paint(
-        &mut self,
-        _global_id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        _bounds: Bounds<gpui::Pixels>,
-        child: &mut Self::RequestLayoutState,
-        visible: &mut Self::PrepaintState,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        if *visible {
-            child.paint(window, cx);
-        }
-    }
-}
-
-impl IntoElement for PaintedWhen {
     type Element = Self;
 
     fn into_element(self) -> Self::Element {

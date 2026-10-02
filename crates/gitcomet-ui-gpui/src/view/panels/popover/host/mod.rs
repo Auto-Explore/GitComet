@@ -881,9 +881,11 @@ impl PopoverHost {
             prompt_tab_wrap_end_focus_handle,
             context_menu_selected_ix: None,
             context_menu_scroll: ScrollHandle::new(),
+            context_menu_placement: Default::default(),
+            context_menu_arrows: Default::default(),
             pin_menu_entries: None,
             pin_menu_scroll: UniformListScrollHandle::default(),
-            context_menu_scroll_anchors: Vec::new(),
+            context_menu_row_extents: Default::default(),
             expanded_history_ref: None,
             repo_picker_selected_index: None,
             repo_picker_search_query: String::new(),
@@ -903,6 +905,11 @@ impl PopoverHost {
             repo_picker_sort: repo_picker::RepoPickerSort::default(),
             repo_picker_sort_menu_open: false,
             picker_row_menu: None,
+            picker_row_menu_scroll: ScrollHandle::new(),
+            picker_row_menu_placement: Default::default(),
+            picker_row_menu_arrows: Default::default(),
+            picker_row_menu_rows: Default::default(),
+            picker_row_menu_revealed: Default::default(),
             branch_picker_selected_index: None,
             upstream_picker_selected_index: None,
             worktree_picker_selected_index: None,
@@ -1348,7 +1355,9 @@ impl PopoverHost {
         self.cancel_tag_push_previews();
         self.push_upstream_tag_mode = None;
         self.context_menu_scroll.set_offset(point(px(0.0), px(0.0)));
-        self.context_menu_scroll_anchors.clear();
+        self.context_menu_row_extents.borrow_mut().clear();
+        self.context_menu_placement.borrow_mut().reset();
+        self.context_menu_arrows.reset();
         self.pin_menu_entries = None;
         self.context_menu_selected_ix = None;
         self.expanded_history_ref = None;
@@ -1828,7 +1837,9 @@ impl PopoverHost {
         self.cancel_tag_push_previews();
         self.push_upstream_tag_mode = None;
         self.context_menu_scroll.set_offset(point(px(0.0), px(0.0)));
-        self.context_menu_scroll_anchors.clear();
+        self.context_menu_row_extents.borrow_mut().clear();
+        self.context_menu_placement.borrow_mut().reset();
+        self.context_menu_arrows.reset();
         self.pin_menu_entries = None;
         self.context_menu_selected_ix = None;
         self.expanded_history_ref = None;
