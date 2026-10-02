@@ -32,6 +32,7 @@ mod force_push_confirm;
 mod force_remove_worktree_confirm;
 mod hook_activity;
 mod interactive_cherry_pick_confirm;
+mod menu_layer;
 mod merge_abort_confirm;
 mod merge_commit_confirm;
 pub(in crate::view) mod picker_nav;
@@ -257,9 +258,16 @@ pub(in super::super) struct PopoverHost {
     prompt_tab_wrap_end_focus_handle: FocusHandle,
     context_menu_selected_ix: Option<usize>,
     context_menu_scroll: ScrollHandle,
+    /// Where the open context menu sits, measured and resolved each frame by
+    /// the kit's `menu_placement` element.
+    context_menu_placement: Rc<std::cell::RefCell<crate::kit::menu_placement::MenuPlacementState>>,
+    context_menu_arrows: menu_layer::MenuArrows,
     pin_menu_entries: Option<(RepoId, bool, PinMenuEntries)>,
     pin_menu_scroll: UniformListScrollHandle,
-    context_menu_scroll_anchors: Vec<gpui::ScrollAnchor>,
+    /// Content-space `(top, height)` of each context menu row from the last
+    /// prepaint, indexed like the model's items: what keyboard navigation
+    /// scrolls into view.
+    context_menu_row_extents: context_menu::RowExtents,
     expanded_history_ref: Option<HistoryMenuRef>,
     repo_picker_selected_index: Option<usize>,
     /// Last trimmed query handled by the repository picker. Kept separately
@@ -287,6 +295,14 @@ pub(in super::super) struct PopoverHost {
     /// Repository row whose context menu floats over the picker, and the window
     /// position it was invoked at. The picker stays open underneath it.
     picker_row_menu: Option<picker_row_menu::PickerRowMenu>,
+    /// The open row menu's scroll area, placement, arrows, row extents (by
+    /// keyboard index) and the selection last scrolled into view.
+    picker_row_menu_scroll: ScrollHandle,
+    picker_row_menu_placement:
+        Rc<std::cell::RefCell<crate::kit::menu_placement::MenuPlacementState>>,
+    picker_row_menu_arrows: menu_layer::MenuArrows,
+    picker_row_menu_rows: context_menu::RowExtents,
+    picker_row_menu_revealed: std::cell::Cell<Option<usize>>,
     branch_picker_selected_index: Option<usize>,
     upstream_picker_selected_index: Option<usize>,
     worktree_picker_selected_index: Option<usize>,

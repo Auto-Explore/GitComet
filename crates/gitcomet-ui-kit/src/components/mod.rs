@@ -9,6 +9,7 @@ mod interactive_row;
 mod interstitial;
 mod modal;
 mod navigation;
+mod painted_when;
 mod panel_tab;
 mod picker_prompt;
 mod quick_search_bar;
@@ -40,8 +41,9 @@ pub use containers::{
 #[cfg(any(test, feature = "test-support"))]
 pub use containers::{panel, pill};
 pub use context_menu::{
-    ContextMenuEntry, ContextMenuIconSlot, ContextMenuText, context_menu, context_menu_description,
-    context_menu_group, context_menu_header, context_menu_icon_path, context_menu_label,
+    ContextMenuEntry, ContextMenuIconSlot, ContextMenuText, MENU_SCROLL_ARROW_HEIGHT_PX,
+    MenuScrollDirection, context_menu, context_menu_description, context_menu_group,
+    context_menu_header, context_menu_icon_path, context_menu_label, context_menu_scroll_arrow,
     context_menu_separator,
 };
 pub use diff_stat::{diff_stat, diff_stat_optional};
@@ -51,6 +53,7 @@ pub use modal::{modal_scrim, modal_surface, popover_surface};
 pub use navigation::{
     NavTab, navigation_tab, navigation_tab_metrics, navigation_tab_strip, selectable_field,
 };
+pub use painted_when::{PaintedWhen, painted_when};
 pub use panel_tab::{on_nested_control_click, panel_tab, panel_tab_close, panel_tab_text_color};
 /// Public field type of [`PickerPromptLayout::headers`], carried out of the
 /// private module with it so a caller can name what that field hands them

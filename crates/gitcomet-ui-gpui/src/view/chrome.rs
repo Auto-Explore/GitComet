@@ -203,14 +203,48 @@ pub(in crate::view) fn show_titlebar_secondary_menu<T: 'static>(
 }
 
 pub(in crate::view) fn window_top_left_corner(window: &Window) -> Point<Pixels> {
-    let inset = window.client_inset().unwrap_or(px(0.0));
-    match window.window_decorations() {
-        Decorations::Client { tiling } => point(
-            if tiling.left { px(0.0) } else { inset },
-            if tiling.top { px(0.0) } else { inset },
-        ),
-        Decorations::Server => point(px(0.0), px(0.0)),
+    window_surface_bounds(window).origin
+}
+
+/// The shadow band the client-side frame pads around the window surface, per
+/// side: `inset` on every edge the compositor has not tiled, nothing for a
+/// native or suppressed frame. `window_frame` pads by it and popovers fit
+/// inside it.
+pub(in crate::view) fn frame_insets(
+    decorations: Decorations,
+    inset: Pixels,
+) -> gpui::Edges<Pixels> {
+    match decorations {
+        Decorations::Client { tiling } if !should_suppress_window_frame(decorations) => {
+            let side = |tiled: bool| if tiled { px(0.0) } else { inset };
+            gpui::Edges {
+                top: side(tiling.top),
+                right: side(tiling.right),
+                bottom: side(tiling.bottom),
+                left: side(tiling.left),
+            }
+        }
+        _ => gpui::Edges::default(),
     }
+}
+
+/// The visible window surface in window coordinates. Size and place things
+/// against this, never `window_bounds()`: that is the restore size while the
+/// window is maximized or fullscreen, and it includes the shadow band.
+pub(in crate::view) fn window_surface_bounds(window: &Window) -> Bounds<Pixels> {
+    let insets = frame_insets(
+        window.window_decorations(),
+        window.client_inset().unwrap_or(px(0.0)),
+    );
+    let viewport = window.viewport_size();
+    let top_left = point(insets.left, insets.top);
+    Bounds::from_corners(
+        top_left,
+        point(
+            (viewport.width - insets.right).max(top_left.x),
+            (viewport.height - insets.bottom).max(top_left.y),
+        ),
+    )
 }
 
 pub(super) fn titlebar_control_button(
@@ -1037,19 +1071,15 @@ pub(crate) fn window_frame(
     ui_scale_percent: u32,
 ) -> AnyElement {
     let suppress_frame = should_suppress_window_frame(decorations);
-    let frame_inset = window_frame_visual_inset(ui_scale_percent);
-    let mut outer = div()
+    let insets = frame_insets(decorations, window_frame_visual_inset(ui_scale_percent));
+    let outer = div()
         .id("window_frame")
         .size_full()
-        .bg(gpui::rgba(0x00000000));
-
-    if !suppress_frame && let Decorations::Client { tiling } = decorations {
-        outer = outer
-            .when(!tiling.top, |d| d.pt(frame_inset))
-            .when(!tiling.bottom, |d| d.pb(frame_inset))
-            .when(!tiling.left, |d| d.pl(frame_inset))
-            .when(!tiling.right, |d| d.pr(frame_inset));
-    }
+        .bg(gpui::rgba(0x00000000))
+        .pt(insets.top)
+        .pb(insets.bottom)
+        .pl(insets.left)
+        .pr(insets.right);
 
     let mut inner = div()
         .id("window_surface")
@@ -1212,6 +1242,36 @@ mod tests {
             })
             .is_ok()
         );
+    }
+
+    /// Popovers fit inside the same padding the frame draws, so the two can
+    /// only agree if a tiled edge loses its shadow band in both.
+    #[test]
+    fn frame_insets_pad_only_the_untiled_edges_of_a_client_frame() {
+        let inset = px(10.0);
+        assert_eq!(
+            frame_insets(Decorations::Server, inset),
+            gpui::Edges::default()
+        );
+        for bits in 0..16u8 {
+            let tiling = gpui::Tiling {
+                top: bits & 1 != 0,
+                left: bits & 2 != 0,
+                right: bits & 4 != 0,
+                bottom: bits & 8 != 0,
+            };
+            let side = |tiled: bool| if tiled { px(0.0) } else { inset };
+            assert_eq!(
+                frame_insets(Decorations::Client { tiling }, inset),
+                gpui::Edges {
+                    top: side(tiling.top),
+                    right: side(tiling.right),
+                    bottom: side(tiling.bottom),
+                    left: side(tiling.left),
+                },
+                "{tiling:?}"
+            );
+        }
     }
 
     #[test]

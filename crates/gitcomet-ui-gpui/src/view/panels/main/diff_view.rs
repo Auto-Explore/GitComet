@@ -658,11 +658,7 @@ impl MainPaneView {
                     handled = true;
                 }
                 "d" if !mods.shift => {
-                    let bounds = window.window_bounds().get_bounds();
-                    let anchor = point(
-                        (bounds.size.width * 0.5).max(px(64.0)),
-                        (bounds.size.height * 0.25).max(px(24.0)),
-                    );
+                    let anchor = crate::view::conflict_markers::centered_dialog_anchor(window);
                     self.open_popover_at(
                         PopoverKind::DiscardChangesConfirm {
                             repo_id,
@@ -729,11 +725,7 @@ impl MainPaneView {
             if let Some(path) = path {
                 match key {
                     "h" if !mods.shift => {
-                        let bounds = window.window_bounds().get_bounds();
-                        let anchor = point(
-                            (bounds.size.width * 0.5).max(px(64.0)),
-                            (bounds.size.height * 0.25).max(px(24.0)),
-                        );
+                        let anchor = crate::view::conflict_markers::centered_dialog_anchor(window);
                         self.open_popover_at(
                             PopoverKind::FileHistory {
                                 repo_id,

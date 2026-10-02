@@ -105,58 +105,91 @@ mod tests {
         );
     }
 
+    /// Visits every non-test line under `dir` as `(path, 1-based line, text)`,
+    /// skipping test files, test modules and benchmarks.
+    fn production_lines(
+        dir: &std::path::Path,
+        visit: &mut dyn FnMut(&std::path::Path, usize, &str),
+    ) {
+        for entry in std::fs::read_dir(dir).expect("read src") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                if path
+                    .file_name()
+                    .is_some_and(|name| name == "tests" || name == "benchmarks")
+                {
+                    continue;
+                }
+                production_lines(&path, visit);
+                continue;
+            }
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            if !name.ends_with(".rs") || name.ends_with("tests.rs") || name == "smoke_tests.rs" {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).expect("read source");
+            // Stop at the inline test module. Any other `#[cfg(test)]` marks a
+            // single item (a test-only field, helper or `mod tests;`), and
+            // production code continues after it.
+            let lines: Vec<&str> = source.lines().collect();
+            for (ix, line) in lines.iter().enumerate() {
+                let opens_test_module = line.starts_with("#[cfg(test)]")
+                    && lines.get(ix + 1).is_some_and(|next| {
+                        next.starts_with("mod ") && next.trim_end().ends_with('{')
+                    });
+                if opens_test_module {
+                    break;
+                }
+                visit(&path, ix + 1, line);
+            }
+        }
+    }
+
     /// A theme built here carries the default `Appearance`, so any render path
     /// that constructs one silently sizes itself for a 13px editor font and a
     /// Compact density. Rendering code must take the caller's theme.
     #[test]
     fn render_code_never_builds_its_own_theme() {
-        fn walk(dir: &std::path::Path, offenders: &mut Vec<String>) {
-            for entry in std::fs::read_dir(dir).expect("read src") {
-                let path = entry.expect("dir entry").path();
-                if path.is_dir() {
-                    if path
-                        .file_name()
-                        .is_some_and(|name| name == "tests" || name == "benchmarks")
-                    {
-                        continue;
-                    }
-                    walk(&path, offenders);
-                    continue;
-                }
-                let name = path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                if !name.ends_with(".rs")
-                    || name.ends_with("tests.rs")
-                    || name == "theme.rs"
-                    || name == "smoke_tests.rs"
-                    // TextInput's constructor supplies a default until set_theme is called.
-                    // Match path components before formatting platform-specific diagnostics.
-                    || path.ends_with(std::path::Path::new("kit/text_input/editing.rs"))
-                {
-                    continue;
-                }
-                let source = std::fs::read_to_string(&path).expect("read source");
-                let production = match source.find("#[cfg(test)]") {
-                    Some(cut) => &source[..cut],
-                    None => &source[..],
-                };
-                for (ix, line) in production.lines().enumerate() {
-                    if line.contains("AppTheme::gitcomet_") {
-                        offenders.push(format!("{}:{}", path.display(), ix + 1));
-                    }
-                }
-            }
-        }
-
         let mut offenders = Vec::new();
-        walk(std::path::Path::new("src"), &mut offenders);
+        production_lines(std::path::Path::new("src"), &mut |path, line_no, line| {
+            if path.ends_with("theme.rs")
+                // TextInput's constructor supplies a default until set_theme is called.
+                // Match path components before formatting platform-specific diagnostics.
+                || path.ends_with(std::path::Path::new("kit/text_input/editing.rs"))
+            {
+                return;
+            }
+            if line.contains("AppTheme::gitcomet_") {
+                offenders.push(format!("{}:{line_no}", path.display()));
+            }
+        });
 
         assert!(
             offenders.is_empty(),
             "these must take the theme they are handed: {offenders:?}"
+        );
+    }
+
+    /// `window_bounds()` reports the *restore* size while the window is
+    /// maximized or fullscreen, and includes the client-side shadow band, so
+    /// anything sized or placed from it misfits the visible window. Views use
+    /// `chrome::window_surface_bounds`.
+    #[test]
+    fn view_code_sizes_against_the_visible_surface_not_restore_bounds() {
+        let mut offenders = Vec::new();
+        production_lines(&src_dir().join("view"), &mut |path, line_no, line| {
+            if line.contains(".window_bounds()") {
+                offenders.push(format!("{}:{line_no}", path.display()));
+            }
+        });
+
+        assert!(
+            offenders.is_empty(),
+            "use chrome::window_surface_bounds instead: {offenders:#?}"
         );
     }
 }
