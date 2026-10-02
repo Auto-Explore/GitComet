@@ -865,6 +865,22 @@ fn make_stale_unlocked_file(repo: &Path) {
     git(repo, &["annex", "get", "-q", "big.bin"]);
     fs::remove_file(repo.join(".git/index.lock")).unwrap();
     assert_eq!(fs::metadata(repo.join("big.bin")).unwrap().len(), 4096);
+    wait_out_racy_second(&repo.join("big.bin"));
+}
+
+/// Returns once an index written from now on is newer than `path` in whole
+/// seconds. gix compares an entry sharing the index's second by content, and
+/// status strips the annex filter, so a restaged unlocked file would still
+/// read as modified. `get` keeps the content's first mtime, so fast runners
+/// restage within that second.
+#[cfg(unix)]
+fn wait_out_racy_second(path: &Path) {
+    let mtime = filetime::FileTime::from_last_modification_time(&fs::metadata(path).unwrap());
+    // The margin covers the file clock lagging the wall clock.
+    let past = filetime::FileTime::from_unix_time(mtime.unix_seconds() + 1, 50_000_000);
+    while filetime::FileTime::now() < past {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 }
 
 #[cfg(unix)]

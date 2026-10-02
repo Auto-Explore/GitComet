@@ -2247,17 +2247,25 @@ mod tests {
             (len, slice_len)
         });
 
-        let ((shared_len, shared_slice_len), shared_metrics) = measure_allocations(|| {
-            let mut len = 0usize;
-            let mut slice_len = 0usize;
-            for _ in 0..iterations as usize {
-                let line = worktree_preview_materialized_line_raw_text(&source, 0..source.len());
-                len = len.wrapping_add(line.len());
-                slice_len =
-                    slice_len.wrapping_add(line.slice_bytes(0..16).map_or(0, |slice| slice.len()));
-            }
-            (len, slice_len)
-        });
+        // `measure_allocations` watches a process-global allocator, so a
+        // parallel test can only ever inflate a sample: keep the smallest.
+        let ((shared_len, shared_slice_len), shared_metrics) = (0..3)
+            .map(|_| {
+                measure_allocations(|| {
+                    let mut len = 0usize;
+                    let mut slice_len = 0usize;
+                    for _ in 0..iterations as usize {
+                        let line =
+                            worktree_preview_materialized_line_raw_text(&source, 0..source.len());
+                        len = len.wrapping_add(line.len());
+                        slice_len = slice_len
+                            .wrapping_add(line.slice_bytes(0..16).map_or(0, |slice| slice.len()));
+                    }
+                    (len, slice_len)
+                })
+            })
+            .min_by_key(|(_, metrics)| metrics.alloc_bytes)
+            .expect("at least one sample");
 
         assert_eq!(copied_len, source.len() * iterations as usize);
         assert_eq!(copied_slice_len, 16 * iterations as usize);
