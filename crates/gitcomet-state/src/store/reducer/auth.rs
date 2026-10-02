@@ -430,39 +430,9 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
 }
 
 fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> Vec<Effect> {
-    let Some(first) = effects.first_mut() else {
-        return effects;
-    };
-
-    match first {
-        Effect::CloneRepo { auth: slot, .. }
-        | Effect::AddSubmodule { auth: slot, .. }
-        | Effect::UpdateSubmodules { auth: slot, .. }
-        | Effect::LoadSubmodule { auth: slot, .. }
-        | Effect::Commit { auth: slot, .. }
-        | Effect::CommitAmend { auth: slot, .. }
-        | Effect::SafePushAfterCommit { auth: slot, .. }
-        | Effect::FetchAll { auth: slot, .. }
-        | Effect::FetchRefspecs { auth: slot, .. }
-        | Effect::Pull { auth: slot, .. }
-        | Effect::PullBranch { auth: slot, .. }
-        | Effect::PushWithTags { auth: slot, .. }
-        | Effect::Push { auth: slot, .. }
-        | Effect::PushAfterCommit { auth: slot, .. }
-        | Effect::ForcePush { auth: slot, .. }
-        | Effect::ForcePushWithLease { auth: slot, .. }
-        | Effect::PushSetUpstream { auth: slot, .. }
-        | Effect::DeleteRemoteBranch { auth: slot, .. }
-        | Effect::DeleteRemoteBranches { auth: slot, .. }
-        | Effect::PushTag { auth: slot, .. }
-        | Effect::DeleteRemoteTag { auth: slot, .. }
-        | Effect::RebaseContinue { auth: slot, .. }
-        | Effect::RevertCommit { auth: slot, .. } => {
-            *slot = Some(auth);
-        }
-        _ => {}
+    if let Some(slot) = effects.first_mut().and_then(Effect::git_auth_slot) {
+        *slot = Some(auth);
     }
-
     effects
 }
 
@@ -592,6 +562,7 @@ pub(super) fn commit_finished(
     state: &mut AppState,
     repo_id: RepoId,
     result: Result<CommitOperationOutcome, Error>,
+    amend: bool,
 ) -> Vec<Effect> {
     let pending_commit = state
         .repos
@@ -607,55 +578,8 @@ pub(super) fn commit_finished(
         .as_ref()
         .err()
         .and_then(|error| auth_prompt_for_commit(repo_id, pending_commit.clone(), error));
-    let commit_result = result.map(|_| ());
-    let mut effects = actions_emit_effects::commit_finished(state, repo_id, commit_result);
-    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        repo_state.pending.commit_retry = None;
-    }
-    if let Some(prompt) = auth_prompt {
-        clear_staged_git_auth_env();
-        state.auth_prompt = Some(prompt);
-    }
-    if push_after_commit && let Some(push) = annex_takeover(repos, state, repo_id, false) {
-        effects.extend(push);
-    } else if push_after_commit
-        && let (Some(outcome), Some(pending_commit)) = (outcome, pending_commit)
-    {
-        effects.extend(actions_emit_effects::safe_push_after_commit(
-            repo_id,
-            SafePushAfterCommitContext {
-                amend: pending_commit.amend,
-                local_branch: outcome.local_branch,
-                pre_head: outcome.pre_head,
-                post_head: outcome.post_head,
-            },
-        ));
-    }
-    effects
-}
-
-pub(super) fn commit_amend_finished(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
-    state: &mut AppState,
-    repo_id: RepoId,
-    result: Result<CommitOperationOutcome, Error>,
-) -> Vec<Effect> {
-    let pending_commit = state
-        .repos
-        .iter()
-        .find(|r| r.id == repo_id)
-        .and_then(|r| r.pending.commit_retry.clone());
-    let outcome = result.as_ref().ok().cloned();
-    let push_after_commit = outcome.is_some()
-        && pending_commit
-            .as_ref()
-            .is_some_and(|pending| pending.push_after_commit);
-    let auth_prompt = result
-        .as_ref()
-        .err()
-        .and_then(|error| auth_prompt_for_commit(repo_id, pending_commit.clone(), error));
-    let commit_result = result.map(|_| ());
-    let mut effects = actions_emit_effects::commit_amend_finished(state, repo_id, commit_result);
+    let mut effects =
+        actions_emit_effects::commit_finished(state, repo_id, result.map(|_| ()), amend);
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.pending.commit_retry = None;
     }

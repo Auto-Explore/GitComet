@@ -550,29 +550,6 @@ impl LargeFileCommand {
         )
     }
 
-    /// Talks to a server, so it may need credentials.
-    pub fn uses_network(&self) -> bool {
-        matches!(
-            self,
-            Self::LfsPull { .. }
-                | Self::LfsFetchForDiff { .. }
-                | Self::LfsFetchAll
-                | Self::LfsPushAll { .. }
-                | Self::LfsLock { .. }
-                | Self::LfsUnlock { .. }
-                | Self::AnnexGet { .. }
-                | Self::AnnexGetKeys { .. }
-                | Self::AnnexDrop { .. }
-                | Self::AnnexCopy { .. }
-                | Self::AnnexMove { .. }
-                | Self::AnnexPull { .. }
-                | Self::AnnexPush { .. }
-                | Self::AnnexSync { .. }
-                | Self::AnnexEnableRemote { .. }
-                | Self::AnnexInitRemote { .. }
-        )
-    }
-
     /// Fetches and merges remote changes into the checkout.
     pub fn pulls(&self) -> bool {
         matches!(self, Self::AnnexPull { .. } | Self::AnnexSync { .. })
@@ -709,10 +686,8 @@ mod command_tests {
     }
 
     #[test]
-    fn network_and_lock_classification() {
-        assert!(LargeFileCommand::LfsFetchAll.uses_network());
-        assert!(!LargeFileCommand::LfsPrune.uses_network());
-        let lock = LargeFileCommand::LfsLock { paths: vec![] };
-        assert!(lock.uses_network() && lock.changes_locks());
+    fn lock_classification() {
+        assert!(LargeFileCommand::LfsLock { paths: vec![] }.changes_locks());
+        assert!(!LargeFileCommand::LfsPrune.changes_locks());
     }
 }

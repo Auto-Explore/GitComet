@@ -1370,23 +1370,15 @@ fn reduce_inner(
             }
             Vec::new()
         }
-        Msg::LoadAnnexUnused { repo_id } => {
-            match state.repos.iter_mut().find(|repo| repo.id == repo_id) {
-                Some(repo) => {
-                    repo.set_annex_unused(Loadable::Loading);
-                    vec![Effect::LoadAnnexUnused { repo_id }]
-                }
-                None => Vec::new(),
-            }
-        }
+        Msg::LoadAnnexUnused { repo_id } => state
+            .repos
+            .iter_mut()
+            .find(|repo| repo.id == repo_id)
+            .and_then(effects::request_annex_unused_effect)
+            .into_iter()
+            .collect(),
         Msg::Internal(crate::msg::InternalMsg::AnnexUnusedLoaded { repo_id, result }) => {
-            if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
-                repo.set_annex_unused(match result {
-                    Ok(unused) => Loadable::Ready(Arc::new(unused)),
-                    Err(error) => Loadable::Error(error.to_string()),
-                });
-            }
-            Vec::new()
+            effects::annex_unused_loaded(state, repo_id, result)
         }
         Msg::LoadLfsLocks { repo_id } => state
             .repos
@@ -2164,10 +2156,10 @@ fn reduce_inner(
             result,
         ),
         Msg::Internal(crate::msg::InternalMsg::CommitFinished { repo_id, result }) => {
-            auth::commit_finished(repos, state, repo_id, result)
+            auth::commit_finished(repos, state, repo_id, result, false)
         }
         Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished { repo_id, result }) => {
-            auth::commit_amend_finished(repos, state, repo_id, result)
+            auth::commit_finished(repos, state, repo_id, result, true)
         }
         Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
             repo_id,

@@ -140,6 +140,8 @@ pub(super) fn may_transfer_lfs_content(cmd: &Command) -> bool {
                 | "stash"
                 | "cherry-pick"
                 | "revert"
+                | "worktree"
+                | "submodule"
         )
     )
 }

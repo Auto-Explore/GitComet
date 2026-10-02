@@ -129,8 +129,7 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
             if let Some(repo) = repo_for_popover(state, popover) {
                 hash_repo_for_popover(repo, popover, &mut hasher);
                 if matches!(popover, PopoverKind::PullPicker | PopoverKind::PushPicker) {
-                    repo.annex_takes_over_pull_push(&state.large_file_settings)
-                        .hash(&mut hasher);
+                    hash_large_file_picker_entries(state, repo, &mut hasher);
                 }
             } else {
                 state.active_repo.hash(&mut hasher);
@@ -139,6 +138,19 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
     }
 
     hasher.finish()
+}
+
+/// Pull and Push list LFS and git-annex entries built from the support
+/// summary, the installed tools, the settings and the running pull or push.
+fn hash_large_file_picker_entries(state: &AppState, repo: &RepoState, hasher: &mut FxHasher) {
+    let settings = &state.large_file_settings;
+    repo.annex_takes_over_pull_push(settings).hash(hasher);
+    settings.annex_sync_content.hash(hasher);
+    repo.large_file_support_rev.hash(hasher);
+    state.large_file_tools.git_lfs.is_not_found().hash(hasher);
+    state.large_file_tools.git_annex.is_not_found().hash(hasher);
+    (repo.push_in_flight > 0).hash(hasher);
+    (repo.worktree_pull_in_flight > 0).hash(hasher);
 }
 
 fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'a RepoState> {
@@ -1356,6 +1368,52 @@ mod tests {
             state.repos[0].large_file_support = Loadable::Loading;
             state.large_file_settings.annex_pull_push = false;
             assert_ne!(detected, notify_fingerprint(&state, &popover));
+        }
+    }
+
+    /// The LFS and git-annex entries under Pull and Push come from the support
+    /// summary, the installed tools and the running pull or push. An open
+    /// menu must repaint when any of them changes.
+    #[test]
+    fn pull_and_push_picker_fingerprints_follow_large_file_entries() {
+        use gitcomet_core::large_file_tools::ToolAvailability;
+        for popover in [PopoverKind::PullPicker, PopoverKind::PushPicker] {
+            let repo_id = RepoId(9);
+            let repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: "/tmp/repo".into(),
+                },
+            );
+            let mut state = AppState {
+                active_repo: Some(repo_id),
+                repos: vec![repo],
+                ..AppState::test_default()
+            };
+            let mut previous = notify_fingerprint(&state, &popover);
+            let mut assert_changed = |state: &AppState, what: &str| {
+                let next = notify_fingerprint(state, &popover);
+                assert_ne!(previous, next, "{popover:?}: {what}");
+                previous = next;
+            };
+
+            let mut support = gitcomet_core::large_files::LargeFileSupport::default();
+            support.annex.uuid = Some("u".into());
+            state.repos[0].large_file_support = Loadable::Ready(Arc::new(support));
+            state.repos[0].large_file_support_rev += 1;
+            assert_changed(&state, "support loaded");
+            state.large_file_tools.git_annex = ToolAvailability::NotFound {
+                detail: String::new(),
+            };
+            assert_changed(&state, "git-annex missing");
+            state.large_file_tools.git_lfs = ToolAvailability::NotFound {
+                detail: String::new(),
+            };
+            assert_changed(&state, "git-lfs missing");
+            state.repos[0].push_in_flight = 1;
+            assert_changed(&state, "push started");
+            state.repos[0].worktree_pull_in_flight = 1;
+            assert_changed(&state, "pull started");
         }
     }
 

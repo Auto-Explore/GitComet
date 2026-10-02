@@ -1386,3 +1386,48 @@ fn unused_listing_loads_on_request_and_reloads_after_content_moves() {
     );
     assert!(!reloads(&effects), "no content moved: {effects:?}");
 }
+
+/// Every `git annex unused` run rewrites the numbering files `dropunused`
+/// reads, so scans never overlap: a request during one replays after it, and
+/// the older result is not shown in the meantime.
+#[test]
+fn unused_scans_never_overlap() {
+    let (mut repos, id_alloc, mut state, repo_id) = large_file_fixture();
+    let listing = |key: &str| gitcomet_core::large_files::AnnexUnused {
+        entries: vec![gitcomet_core::large_files::AnnexUnusedEntry {
+            number: 1,
+            key: key.into(),
+            kind: gitcomet_core::large_files::AnnexUnusedKind::Unused,
+        }],
+    };
+    macro_rules! send {
+        ($msg:expr) => {
+            reduce(&mut repos, &id_alloc, &mut state, $msg)
+        };
+    }
+    let scans = |effects: &[Effect]| {
+        effects
+            .iter()
+            .filter(|e| matches!(e, Effect::LoadAnnexUnused { .. }))
+            .count()
+    };
+    assert_eq!(scans(&send!(Msg::LoadAnnexUnused { repo_id })), 1);
+    assert_eq!(
+        scans(&send!(Msg::LoadAnnexUnused { repo_id })),
+        0,
+        "one scan at a time"
+    );
+    let loaded = |key: &str| {
+        Msg::Internal(crate::msg::InternalMsg::AnnexUnusedLoaded {
+            repo_id,
+            result: Ok(listing(key)),
+        })
+    };
+    assert_eq!(scans(&send!(loaded("SHA256E-s1--older"))), 1, "replayed");
+    assert!(matches!(state.repos[0].annex_unused, Loadable::Loading));
+    assert_eq!(scans(&send!(loaded("SHA256E-s1--newer"))), 0);
+    assert!(matches!(
+        &state.repos[0].annex_unused,
+        Loadable::Ready(unused) if unused.entries[0].key == "SHA256E-s1--newer"
+    ));
+}

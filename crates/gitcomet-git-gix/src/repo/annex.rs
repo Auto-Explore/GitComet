@@ -2,7 +2,7 @@
 //! numcopies checks and special remotes all apply.
 
 use crate::util::{
-    git_command_failed_error, run_git_background_capture, run_git_background_output,
+    git_command_failed_error, run_git_background_capture_until_done, run_git_background_output,
     run_git_parsed_stdout_until_done, run_git_with_output, run_git_with_output_until_done,
     validate_ref_like_arg,
 };
@@ -316,48 +316,20 @@ struct SpecialRemote {
 
 /// Special remotes by uuid from `remote.log` lines
 /// (`<uuid> name=usb type=directory … timestamp=<n>s`); the newest line per
-/// uuid wins. `type=git` remotes are git repositories.
+/// uuid wins, as for the other logs. `type=git` remotes are git repositories.
 fn parse_remote_log(text: &str) -> FxHashMap<String, SpecialRemote> {
-    let mut newest: FxHashMap<String, (u64, SpecialRemote)> = FxHashMap::default();
-    for line in text.lines() {
-        let mut fields = line.split_whitespace();
-        let Some(uuid) = fields.next() else { continue };
-        let mut special_type = None;
-        let mut name = None;
-        let mut timestamp = 0u64;
-        for field in fields {
-            if let Some(value) = field.strip_prefix("type=") {
-                special_type = Some(value);
-            } else if let Some(value) = field.strip_prefix("name=") {
-                name = Some(value.to_string());
-            } else if let Some(value) = field.strip_prefix("timestamp=") {
-                // Fractional seconds (`1790075913.5s`) only matter for ties.
-                timestamp = value
-                    .trim_end_matches('s')
-                    .split('.')
-                    .next()
-                    .and_then(|secs| secs.parse().ok())
-                    .unwrap_or(0);
-            }
-        }
-        let Some(special_type) = special_type else {
-            continue;
-        };
-        if newest
-            .get(uuid)
-            .is_none_or(|(existing, _)| timestamp >= *existing)
-        {
-            let special = SpecialRemote {
-                name,
-                special_type: special_type.to_string(),
-            };
-            newest.insert(uuid.to_string(), (timestamp, special));
-        }
-    }
-    newest
+    newest_per_uuid(text)
         .into_iter()
-        .filter(|(_, (_, special))| special.special_type != "git")
-        .map(|(uuid, (_, special))| (uuid, special))
+        .filter_map(|(uuid, fields)| {
+            let field = |key: &str| {
+                fields
+                    .split_whitespace()
+                    .find_map(|field| field.strip_prefix(key))
+            };
+            let special_type = field("type=").filter(|kind| *kind != "git")?.to_string();
+            let name = field("name=").map(str::to_string);
+            Some((uuid, SpecialRemote { name, special_type }))
+        })
         .collect()
 }
 
@@ -812,9 +784,26 @@ impl super::GixRepo {
             }
             C::AnnexLeaveAdjusted { base } => {
                 validate_ref_like_arg(base, "branch")?;
+                // Commits made on the adjusted branch reach the base branch
+                // only when git-annex propagates them; a local sync does that.
+                let synced = self.run_annex_plain(
+                    &[
+                        "sync",
+                        "--no-pull",
+                        "--no-push",
+                        "--no-content",
+                        "--no-commit",
+                    ],
+                    &[],
+                    "git annex sync",
+                )?;
                 let mut cmd = self.git_workdir_cmd();
                 cmd.args(["checkout", base.as_str()]);
-                run_git_with_output_until_done(cmd, "git checkout")
+                let checked_out = run_git_with_output_until_done(cmd, "git checkout")?;
+                Ok(super::lfs::combine(
+                    "git checkout",
+                    vec![synced, checked_out],
+                ))
             }
             C::AnnexEnableRemote { name, params } => {
                 validate_name(name, "remote")?;
@@ -967,11 +956,41 @@ impl super::GixRepo {
         })
     }
 
+    /// Right after git-annex (re)builds an adjusted branch, HEAD is its own
+    /// adjustment commit on top of `refs/basis/<branch>`. Amending it folds the
+    /// change into the adjustment, which git-annex never propagates.
+    pub(super) fn refuse_amending_annex_adjustment(&self) -> Result<()> {
+        let repo = self.repo();
+        let Some(head) = repo.head_name().ok().flatten() else {
+            return Ok(());
+        };
+        let branch = head.shorten().to_string();
+        if gitcomet_core::annex::adjusted_branch(&branch).is_none() {
+            return Ok(());
+        }
+        let basis = repo
+            .try_find_reference(format!("refs/basis/{branch}").as_str())
+            .ok()
+            .flatten()
+            .and_then(|mut basis| basis.peel_to_id().ok())
+            .map(|id| id.detach());
+        let parent = repo
+            .head_commit()
+            .ok()
+            .and_then(|commit| commit.parent_ids().next().map(|id| id.detach()));
+        if basis.is_some() && basis == parent {
+            return Err(backend(
+                "HEAD is git-annex's adjusted branch commit; git-annex would never carry an amended version of it to the base branch. Make a new commit instead.",
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) fn annex_unused_impl(
         &self,
         cancellation: &CancellationToken,
     ) -> Result<AnnexUnused> {
-        parse_unused(&run_git_background_capture(
+        parse_unused(&run_git_background_capture_until_done(
             self.git_annex(&["unused", "--json"]),
             "git annex unused",
             cancellation,
@@ -1101,6 +1120,18 @@ mod tests {
         assert_eq!(types["u2"].name.as_deref(), Some("cloud"));
         assert!(!types.contains_key("u3"), "type=git is a git repository");
         assert!(!types.contains_key("u4"));
+    }
+
+    /// Two changes within one second are ordered by their fractional part,
+    /// not by line position (the union-merged branch and journal interleave).
+    #[test]
+    fn remote_log_orders_by_fractional_timestamps() {
+        let types = parse_remote_log(
+            "u1 name=a type=rsync timestamp=100.9s\n\
+             u1 name=b type=directory timestamp=100.1s\n",
+        );
+        assert_eq!(types["u1"].special_type, "rsync");
+        assert_eq!(types["u1"].name.as_deref(), Some("a"));
     }
 
     #[test]

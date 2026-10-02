@@ -49,14 +49,13 @@ pub struct TransferProgress {
 impl TransferProgress {
     /// One line for activity rows: `LFS download 3/10 files · 12 MB of 40 MB`,
     /// or for git-annex, which reports one file at a time,
-    /// `annex get big.bin · 12 MB of 40 MB`.
+    /// `annex get big.bin · 12 MB of 40 MB`. A total of 0 means unknown.
     pub fn summary(&self) -> String {
         use crate::text_utils::human_readable_bytes;
-        let bytes = format!(
-            "{} of {}",
-            human_readable_bytes(self.bytes_done),
-            human_readable_bytes(self.bytes_total)
-        );
+        let mut bytes = human_readable_bytes(self.bytes_done);
+        if self.bytes_total > 0 {
+            bytes = format!("{bytes} of {}", human_readable_bytes(self.bytes_total));
+        }
         if let Some(command) = self.direction.strip_prefix("annex ") {
             return format!("annex {command} {} · {bytes}", self.name);
         }
@@ -218,6 +217,25 @@ pub fn current() -> Option<GitOperationContext> {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    /// git-annex leaves out `total-size` when a key's size is unknown; the
+    /// summary must not claim a total of "0 B".
+    #[test]
+    fn transfer_summary_omits_an_unknown_total() {
+        let progress = |direction: &str| TransferProgress {
+            direction: direction.into(),
+            files_done: 1,
+            files_total: 2,
+            bytes_done: 12_000_000,
+            bytes_total: 0,
+            name: "big.bin".into(),
+        };
+        assert_eq!(progress("annex get").summary(), "annex get big.bin · 12 MB");
+        assert_eq!(
+            progress("download").summary(),
+            "LFS download 1/2 files · 12 MB"
+        );
+    }
 
     #[test]
     fn attach_restores_the_previous_context() {

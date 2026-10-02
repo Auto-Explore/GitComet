@@ -28,32 +28,6 @@ fn setup_open_repo(
     (repos, state)
 }
 
-fn effect_git_auth(effect: &Effect) -> Option<&StagedGitAuth> {
-    match effect {
-        Effect::CloneRepo { auth, .. }
-        | Effect::AddSubmodule { auth, .. }
-        | Effect::UpdateSubmodules { auth, .. }
-        | Effect::Commit { auth, .. }
-        | Effect::CommitAmend { auth, .. }
-        | Effect::SafePushAfterCommit { auth, .. }
-        | Effect::FetchAll { auth, .. }
-        | Effect::FetchRefspecs { auth, .. }
-        | Effect::Pull { auth, .. }
-        | Effect::PullBranch { auth, .. }
-        | Effect::PushWithTags { auth, .. }
-        | Effect::Push { auth, .. }
-        | Effect::PushAfterCommit { auth, .. }
-        | Effect::ForcePush { auth, .. }
-        | Effect::ForcePushWithLease { auth, .. }
-        | Effect::PushSetUpstream { auth, .. }
-        | Effect::DeleteRemoteBranch { auth, .. }
-        | Effect::DeleteRemoteBranches { auth, .. }
-        | Effect::PushTag { auth, .. }
-        | Effect::DeleteRemoteTag { auth, .. } => auth.as_ref(),
-        _ => None,
-    }
-}
-
 #[test]
 fn review_busy_annex_auth_retry_keeps_credentials_until_push_runs() {
     use gitcomet_core::large_files::LargeFileCommand as C;
@@ -106,6 +80,68 @@ fn review_busy_annex_auth_retry_keeps_credentials_until_push_runs() {
         .expect("the queued retry must keep its credentials");
     assert_eq!(auth.username.as_deref(), Some("alice"));
     assert_eq!(auth.secret, "test-token");
+    clear_staged_git_auth();
+}
+
+/// With nothing busy to queue behind, a large-file retry runs at once; the
+/// immediate effect must carry the credentials the user just typed.
+#[test]
+fn large_file_auth_retry_runs_with_the_submitted_credentials() {
+    use gitcomet_core::large_files::LargeFileCommand as C;
+    let _lock = super::staged_auth_test_lock();
+    let context = gitcomet_core::services::SafePushAfterCommitContext {
+        amend: false,
+        local_branch: Some("adjusted/main(unlocked)".into()),
+        pre_head: None,
+        post_head: None,
+    };
+    for (operation, expected) in [
+        (
+            AuthRetryOperation::RepoCommand {
+                repo_id: RepoId(1),
+                command: RepoCommandKind::LargeFile {
+                    command: C::LfsFetchAll,
+                },
+            },
+            C::LfsFetchAll,
+        ),
+        (
+            AuthRetryOperation::SafePushAfterCommit {
+                repo_id: RepoId(1),
+                context,
+            },
+            C::AnnexPush { content: false },
+        ),
+    ] {
+        clear_staged_git_auth();
+        let (mut repos, mut state) = setup_open_repo(RepoId(1), "/tmp/repo");
+        let mut support = gitcomet_core::large_files::LargeFileSupport::default();
+        support.annex.uuid = Some("here".into());
+        state.repos[0].large_file_support = Loadable::Ready(Arc::new(support));
+        state.repos[0].head_branch = Loadable::Ready("adjusted/main(unlocked)".into());
+        state.auth_prompt = Some(AuthPromptState {
+            kind: AuthPromptKind::UsernamePassword,
+            reason: "auth required".into(),
+            operation,
+        });
+        let effects = reduce(
+            &mut repos,
+            &AtomicU64::new(1),
+            &mut state,
+            Msg::SubmitAuthPrompt {
+                username: Some("alice".into()),
+                secret: "test-token".into(),
+            },
+        );
+        let auth = effects
+            .iter()
+            .find(|effect| matches!(effect, Effect::RunLargeFileCommand { command, .. } if *command == expected))
+            .unwrap_or_else(|| panic!("expected {expected:?}: {effects:?}"))
+            .git_auth()
+            .unwrap_or_else(|| panic!("{expected:?} must carry the credentials"));
+        assert_eq!(auth.username.as_deref(), Some("alice"));
+        assert_eq!(auth.secret, "test-token");
+    }
     clear_staged_git_auth();
 }
 
@@ -565,7 +601,9 @@ fn submit_auth_prompt_replays_repo_command_and_stages_trimmed_credentials() {
     assert!(state.auth_prompt.is_none());
     assert_eq!(state.repos[0].push_in_flight, 1);
 
-    let staged = effect_git_auth(&effects[0]).expect("staged auth should be present");
+    let staged = effects[0]
+        .git_auth()
+        .expect("staged auth should be present");
     assert_eq!(staged.kind, GitAuthKind::UsernamePassword);
     assert_eq!(staged.username.as_deref(), Some("alice"));
     assert_eq!(staged.secret, "token-123");
@@ -614,7 +652,9 @@ fn submit_auth_prompt_stages_credentials_for_a_batch_remote_branch_delete() {
         }] if remote == "origin" && branches.len() == 2
     ));
 
-    let staged = effect_git_auth(&effects[0]).expect("staged auth should be present");
+    let staged = effects[0]
+        .git_auth()
+        .expect("staged auth should be present");
     assert_eq!(staged.kind, GitAuthKind::UsernamePassword);
     assert_eq!(staged.username.as_deref(), Some("alice"));
     assert_eq!(staged.secret, "token-123");
@@ -656,7 +696,9 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
             ..
         }] if message == "first"
     ));
-    let commit_auth = effect_git_auth(&commit_effects[0]).expect("commit auth should be present");
+    let commit_auth = commit_effects[0]
+        .git_auth()
+        .expect("commit auth should be present");
     assert_eq!(commit_auth.kind, GitAuthKind::Passphrase);
     assert_eq!(commit_auth.secret, "passphrase");
     assert_eq!(
@@ -695,7 +737,9 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
             ..
         }] if message == "second"
     ));
-    let amend_auth = effect_git_auth(&amend_effects[0]).expect("amend auth should be present");
+    let amend_auth = amend_effects[0]
+        .git_auth()
+        .expect("amend auth should be present");
     assert_eq!(amend_auth.kind, GitAuthKind::Passphrase);
     assert_eq!(amend_auth.secret, "passphrase");
     assert_eq!(
@@ -749,7 +793,9 @@ fn submit_auth_prompt_replays_safe_push_after_commit() {
             ..
         }] if emitted == &context
     ));
-    let auth = effect_git_auth(&effects[0]).expect("safe push auth should be present");
+    let auth = effects[0]
+        .git_auth()
+        .expect("safe push auth should be present");
     assert_eq!(auth.kind, GitAuthKind::Passphrase);
     assert_eq!(auth.secret, "passphrase");
 }
@@ -792,7 +838,7 @@ fn submit_auth_prompt_replays_clone_operation() {
         }] if effect_url == &url && effect_dest == &dest
     ));
     assert!(state.auth_prompt.is_none());
-    let staged = effect_git_auth(&effects[0]).expect("clone auth should be present");
+    let staged = effects[0].git_auth().expect("clone auth should be present");
     assert_eq!(staged.kind, GitAuthKind::Passphrase);
     assert_eq!(staged.secret, "passphrase");
 }
@@ -833,7 +879,9 @@ fn submit_auth_prompt_host_verification_replays_repo_command_and_stages_confirma
     ));
     assert!(state.auth_prompt.is_none());
 
-    let staged = effect_git_auth(&effects[0]).expect("staged auth should be present");
+    let staged = effects[0]
+        .git_auth()
+        .expect("staged auth should be present");
     assert_eq!(staged.kind, GitAuthKind::HostVerification);
     assert_eq!(staged.secret, "yes");
 }
@@ -1203,7 +1251,7 @@ fn tag_push_auth_retry_preserves_mode_destination_and_upstream_choice() {
         assert!(
             matches!(effects.as_slice(), [Effect::PushWithTags { request: retry, .. }] if retry == &request)
         );
-        assert_eq!(effect_git_auth(&effects[0]).unwrap().secret, "test-token");
+        assert_eq!(effects[0].git_auth().unwrap().secret, "test-token");
         assert_eq!(state.repos[0].push_in_flight, 1);
         assert!(state.auth_prompt.is_none());
     }
@@ -1346,6 +1394,6 @@ fn submit_auth_prompt_replays_a_refspec_fetch() {
         [Effect::FetchRefspecs { remote, refspecs, .. }]
             if remote == "origin" && refspecs == &["+refs/pull/7/head:refs/remotes/origin/pr/7"]
     ));
-    assert!(effect_git_auth(&effects[0]).is_some());
+    assert!(effects[0].git_auth().is_some());
     assert_eq!(state.repos[0].pull_in_flight, 1);
 }

@@ -70,6 +70,9 @@ impl RepoLoadsInFlight {
     pub const LARGE_FILE_SUPPORT: u32 = 1 << 20;
     /// Git LFS lock list; a server round trip, loaded only on demand.
     pub const LFS_LOCKS: u32 = 1 << 21;
+    /// `git annex unused`: one scan at a time, as every run rewrites the
+    /// numbering that `dropunused` reads.
+    pub const ANNEX_UNUSED: u32 = 1 << 22;
     const PRIMARY_REFRESH_FLAGS: u32 = Self::HEAD_BRANCH
         | Self::UPSTREAM_DIVERGENCE
         | Self::REBASE_STATE

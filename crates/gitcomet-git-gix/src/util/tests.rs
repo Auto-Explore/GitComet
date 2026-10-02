@@ -707,8 +707,8 @@ fn chatty_command_outlives_a_silence_deadline_shorter_than_its_runtime() {
 }
 
 /// git-lfs prints nothing without a TTY, so its progress file is the only
-/// sign of life. A checkout can bring LFS into a repository whose current
-/// commit has none, so it must be monitored all the same.
+/// sign of life. A checkout (or a new worktree's) can bring LFS into a
+/// repository whose current commit has none, so it is monitored all the same.
 #[cfg(unix)]
 #[test]
 fn checkout_that_brings_in_lfs_stays_alive_through_its_progress_file() {
@@ -742,16 +742,36 @@ fn checkout_that_brings_in_lfs_stays_alive_through_its_progress_file() {
         workdir.to_path_buf(),
         gix::open(workdir).unwrap().into_sync(),
     );
-    let mut cmd = repo.git_workdir_cmd();
-    cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .args(["checkout", "-q", "assets"]);
-    run_command_with_timeout(cmd, "git checkout", Duration::from_millis(600), None)
-        .expect("progress lines keep the smudging checkout alive");
-    assert_eq!(
-        std::fs::read_to_string(workdir.join("a.bin")).unwrap(),
-        "content\n"
-    );
+    let worktree = dir.path().join("wt");
+    let worktree_arg = worktree.to_str().unwrap();
+    for (label, args, checked_out) in [
+        (
+            "git worktree add",
+            vec!["worktree", "add", "-q", "--detach", worktree_arg, "assets"],
+            worktree.as_path(),
+        ),
+        ("git checkout", vec!["checkout", "-q", "assets"], workdir),
+    ] {
+        let mut cmd = repo.git_workdir_cmd();
+        cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .args(&args);
+        run_command_with_timeout(cmd, label, Duration::from_millis(600), None)
+            .unwrap_or_else(|e| panic!("progress lines keep `{label}` alive: {e}"));
+        assert_eq!(
+            std::fs::read_to_string(checked_out.join("a.bin")).unwrap(),
+            "content\n"
+        );
+    }
+}
+
+#[test]
+fn submodule_and_worktree_checkouts_may_transfer_lfs_content() {
+    for args in [["submodule", "update"], ["worktree", "add"]] {
+        let mut cmd = Command::new("git");
+        cmd.args(args);
+        assert!(may_transfer_lfs_content(&cmd), "{args:?}");
+    }
 }
 
 #[test]

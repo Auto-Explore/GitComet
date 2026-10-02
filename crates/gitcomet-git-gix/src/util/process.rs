@@ -41,6 +41,13 @@ pub(super) fn configure_non_interactive_git(cmd: &mut Command) {
     cmd.stdin(Stdio::null());
 }
 
+/// For reads nobody is waiting on: credential helpers may answer from stored
+/// credentials but must not open a sign-in dialog. Call before the subcommand.
+pub(crate) fn credentials_without_prompts(cmd: &mut Command) {
+    cmd.args(["-c", "credential.interactive=false"]);
+    cmd.env("GCM_INTERACTIVE", "Never");
+}
+
 pub(crate) fn install_test_git_command_environment(env: TestGitCommandEnvironment) {
     if let Some(existing) = TEST_GIT_COMMAND_ENVIRONMENT.get() {
         assert_eq!(
@@ -547,7 +554,26 @@ pub(crate) fn run_git_background_capture(
     label: &str,
     cancellation: &CancellationToken,
 ) -> Result<String> {
-    let output = run_git_background_output(cmd, label, cancellation)?;
+    background_capture(cmd, label, git_command_timeout(), cancellation)
+}
+
+/// A background read that prints nothing until it is done (`git annex
+/// unused` scans every ref first): cancellable, but no silence deadline.
+pub(crate) fn run_git_background_capture_until_done(
+    cmd: Command,
+    label: &str,
+    cancellation: &CancellationToken,
+) -> Result<String> {
+    background_capture(cmd, label, Duration::MAX, cancellation)
+}
+
+fn background_capture(
+    cmd: Command,
+    label: &str,
+    timeout: Duration,
+    cancellation: &CancellationToken,
+) -> Result<String> {
+    let output = run_command_with_timeout_auth(cmd, label, timeout, Some(cancellation), false)?;
     if !output.status.success() {
         return Err(git_command_failed_error(label, output));
     }

@@ -345,6 +345,53 @@ fn annex_locked_and_unlocked_rows_are_recognised() {
     );
 }
 
+/// With `core.symlinks=false` (Windows, crippled filesystems) git checks a
+/// locked annexed file out as a plain file holding its link text. That file
+/// is the pointer, not the content.
+#[test]
+fn annex_link_text_in_a_plain_worktree_file_is_a_pointer() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    git(&repo, &["config", "core.symlinks", "false"]);
+    git(
+        &repo,
+        &[
+            "config",
+            "annex.uuid",
+            "0d8f0d6e-3b77-4a0e-9b1a-7b0e1f2d3c4b",
+        ],
+    );
+    let link_target = format!(".git/annex/objects/{ANNEX_KEY_MIXED_DIR}/{ANNEX_KEY}/{ANNEX_KEY}");
+    fs::write(repo.join("locked.bin"), &link_target).unwrap();
+    let blob = git(&repo, &["hash-object", "-w", "locked.bin"]);
+    git(
+        &repo,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("120000,{},locked.bin", blob.trim()),
+        ],
+    );
+
+    let opened = GixBackend.open(&repo).unwrap();
+    let status = RepoStatus {
+        staged: Default::default(),
+        unstaged: vec![row("locked.bin", FileStatusKind::Modified)].into(),
+    };
+    let files = opened
+        .uncommitted_large_files_for_status_cancellable(&status, &CancellationToken::new())
+        .unwrap();
+    let state = &files.unstaged[Path::new("locked.bin")];
+    assert!(
+        matches!(state.pointer, LargeFilePointer::Annex(_)),
+        "{state:?}"
+    );
+    assert_eq!(state.worktree, Some(LargeFileWorktree::Pointer));
+    assert!(state.content_missing());
+}
+
 fn source_text(source: Option<&gitcomet_core::domain::FileDiffTextSource>) -> Option<String> {
     source.map(|source| fs::read_to_string(&source.path).expect("readable diff source"))
 }
@@ -966,6 +1013,36 @@ fn clone_lfs_history(root: &Path) -> (PathBuf, String) {
     );
     configure_lfs_filters(&clone);
     (clone, middle)
+}
+
+/// "Fetch LFS objects for all refs" stores every version the history names
+/// and leaves the checkout alone.
+#[test]
+fn lfs_fetch_all_stores_every_version_without_checkout() {
+    if !git_lfs_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, middle) = clone_lfs_history(dir.path());
+    let checkout = fs::read(repo.join("a.bin")).unwrap();
+    run_lfs(
+        &repo,
+        gitcomet_core::large_files::LargeFileCommand::LfsFetchAll,
+    );
+    for rev in ["HEAD", middle.as_str(), "HEAD~2"] {
+        let pointer = git(&repo, &["show", &format!("{rev}:a.bin")]);
+        let oid = pointer
+            .lines()
+            .find_map(|line| line.strip_prefix("oid sha256:"))
+            .unwrap_or_else(|| panic!("{rev}:a.bin is not a pointer: {pointer}"));
+        let object = repo
+            .join(".git/lfs/objects")
+            .join(&oid[..2])
+            .join(&oid[2..4])
+            .join(oid);
+        assert!(object.is_file(), "{rev}'s version was not fetched");
+    }
+    assert_eq!(fs::read(repo.join("a.bin")).unwrap(), checkout);
 }
 
 #[test]
@@ -1600,6 +1677,47 @@ fn lfs_lock_listing_does_not_consume_credentials_staged_for_a_command() {
     let pending = take_staged_git_auth()
         .expect("the lock listing must leave the retried command's credentials staged");
     assert_eq!(pending.username.as_deref(), Some("alice"));
+}
+
+/// The lock list loads in the background when a repository opens. Stored
+/// credentials may answer it, but a helper must not open a sign-in dialog.
+#[cfg(unix)]
+#[test]
+fn lfs_lock_listing_asks_credential_helpers_not_to_prompt() {
+    if !git_lfs_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    init_lfs_repo(&repo);
+    // `access=basic` makes git-lfs ask for credentials before connecting,
+    // so no server is needed (port 9 refuses the connection).
+    let url = "http://127.0.0.1:9/repo.git/info/lfs";
+    git(&repo, &["config", "lfs.url", url]);
+    git(&repo, &["config", &format!("lfs.{url}.access"), "basic"]);
+    let marker = dir.path().join("helper-calls");
+    git(
+        &repo,
+        &[
+            "config",
+            "credential.helper",
+            &format!(
+                "!f() {{ echo \"interactive=$(git config --get credential.interactive) gcm=$GCM_INTERACTIVE\" >> '{}'; }}; f",
+                marker.display()
+            ),
+        ],
+    );
+    let _ = GixBackend
+        .open(&repo)
+        .unwrap()
+        .lfs_locks_cancellable(&CancellationToken::new());
+    let calls = fs::read_to_string(&marker).expect("git-lfs asks the helper for credentials");
+    assert!(
+        calls
+            .lines()
+            .all(|line| line == "interactive=false gcm=Never"),
+        "{calls}"
+    );
 }
 
 /// Commit rows read every small blob to test for a pointer, which was most
@@ -2249,4 +2367,302 @@ fn lfs_silent_commands_announce_activity_and_can_be_cancelled() {
             }
         },
     );
+}
+
+/// A binary committed raw while `.gitattributes` already routes it through
+/// LFS (git-lfs: "should have been a pointer"). GitComet reports it as git
+/// does, never shows pointer text as its content, and staging it converts it.
+#[test]
+fn raw_file_committed_under_an_lfs_rule_matches_git_and_stages_as_a_pointer() {
+    if !git_lfs_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let content = vec![0x5au8; 4096];
+    fs::write(
+        repo.join(".gitattributes"),
+        "*.bin filter=lfs diff=lfs merge=lfs -text\n",
+    )
+    .unwrap();
+    fs::write(repo.join("raw.bin"), &content).unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "raw under an lfs rule"]);
+    configure_lfs_filters(&repo);
+    fs::remove_file(repo.join("raw.bin")).unwrap();
+    git(&repo, &["checkout", "--", "raw.bin"]);
+
+    let (rows, opened) = status(&repo);
+    assert_eq!(git(&repo, &["status", "--porcelain"]), " M raw.bin\n");
+    assert_eq!(
+        rows.unstaged.as_ref(),
+        &[row("raw.bin", FileStatusKind::Modified)]
+    );
+    let head = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let details = opened
+        .commit_details(&gitcomet_core::domain::CommitId(head.into()))
+        .unwrap();
+    assert!(
+        details.files.iter().all(|file| file.large_file.is_none()),
+        "a raw blob is not a pointer: {:?}",
+        details.files
+    );
+    let diff = opened
+        .diff_file_text(&unstaged("raw.bin"))
+        .unwrap()
+        .expect("the modified row has a diff");
+    for side in [diff.old_source.as_ref(), diff.new_source.as_ref()] {
+        let path = &side.expect("both sides exist").path;
+        assert_eq!(fs::read(path).unwrap(), content, "never pointer text");
+    }
+
+    opened.stage(&[Path::new("raw.bin")]).unwrap();
+    assert!(git(&repo, &["show", ":raw.bin"]).starts_with("version https://git-lfs"));
+    let (rows, opened) = status(&repo);
+    let files = opened
+        .uncommitted_large_files_for_status_cancellable(&rows, &CancellationToken::new())
+        .unwrap();
+    assert!(files.staged[Path::new("raw.bin")].pointer.is_lfs());
+}
+
+/// A minimal Git LFS locking API (`/locks`, `/locks/verify`,
+/// `/locks/:id/unlock`) on 127.0.0.1. Every request acts as user `tester`;
+/// `seed` adds locks held by other users.
+struct LockServer {
+    url: String,
+    locks: std::sync::Arc<std::sync::Mutex<Vec<(String, String, String)>>>,
+}
+
+impl LockServer {
+    fn start(seed: &[(&str, &str)]) -> Self {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!(
+            "http://{}/repo.git/info/lfs",
+            listener.local_addr().unwrap()
+        );
+        let locks = std::sync::Arc::new(std::sync::Mutex::new(
+            seed.iter()
+                .enumerate()
+                .map(|(ix, (path, owner))| {
+                    (format!("seed{ix}"), path.to_string(), owner.to_string())
+                })
+                .collect::<Vec<_>>(),
+        ));
+        let shared = locks.clone();
+        std::thread::spawn(move || {
+            let mut next_id = 0;
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut request = Vec::new();
+                let mut buf = [0u8; 4096];
+                let header_end = loop {
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    if n == 0 {
+                        break None;
+                    }
+                    request.extend_from_slice(&buf[..n]);
+                    if let Some(at) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break Some(at + 4);
+                    }
+                };
+                let Some(header_end) = header_end else {
+                    continue;
+                };
+                let head = String::from_utf8_lossy(&request[..header_end]).to_string();
+                let length = head
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())?
+                    })
+                    .unwrap_or(0);
+                while request.len() < header_end + length {
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buf[..n]);
+                }
+                let body: serde_json::Value =
+                    serde_json::from_slice(&request[header_end..]).unwrap_or_default();
+                let mut parts = head.split_whitespace();
+                let (method, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+                let (route, query) = target.split_once('?').unwrap_or((target, ""));
+                let route = route.split("/info/lfs").nth(1).unwrap_or("");
+                let json = |(id, path, owner): &(String, String, String)| serde_json::json!({"id": id, "path": path, "locked_at": "2026-10-01T00:00:00Z", "owner": {"name": owner}});
+                let mut locks = shared.lock().unwrap();
+                let (status, reply) = match (method, route) {
+                    ("POST", "/locks") => {
+                        let path = body["path"].as_str().unwrap_or_default().to_string();
+                        match locks.iter().find(|lock| lock.1 == path) {
+                            Some(lock) => (
+                                409,
+                                serde_json::json!({"lock": json(lock), "message": "already created lock"}),
+                            ),
+                            None => {
+                                next_id += 1;
+                                let lock = (next_id.to_string(), path, "tester".to_string());
+                                let reply = serde_json::json!({"lock": json(&lock)});
+                                locks.push(lock);
+                                (201, reply)
+                            }
+                        }
+                    }
+                    ("GET", "/locks") => {
+                        let wanted = query
+                            .split('&')
+                            .find_map(|pair| pair.strip_prefix("path="))
+                            .map(|path| {
+                                path.replace("%2F", "/")
+                                    .replace("+", " ")
+                                    .replace("%20", " ")
+                            });
+                        let listed: Vec<_> = locks
+                            .iter()
+                            .filter(|lock| wanted.as_ref().is_none_or(|path| &lock.1 == path))
+                            .map(json)
+                            .collect();
+                        (200, serde_json::json!({"locks": listed, "next_cursor": ""}))
+                    }
+                    ("POST", "/locks/verify") => {
+                        let (ours, theirs): (Vec<_>, Vec<_>) =
+                            locks.iter().partition(|lock| lock.2 == "tester");
+                        let ours: Vec<_> = ours.into_iter().map(json).collect();
+                        let theirs: Vec<_> = theirs.into_iter().map(json).collect();
+                        (
+                            200,
+                            serde_json::json!({"ours": ours, "theirs": theirs, "next_cursor": ""}),
+                        )
+                    }
+                    ("POST", route)
+                        if route.starts_with("/locks/") && route.ends_with("/unlock") =>
+                    {
+                        let id = &route["/locks/".len()..route.len() - "/unlock".len()];
+                        let force = body["force"].as_bool().unwrap_or(false);
+                        match locks.iter().position(|lock| lock.0 == id) {
+                            None => (404, serde_json::json!({"message": "no such lock"})),
+                            Some(ix) if locks[ix].2 != "tester" && !force => (
+                                403,
+                                serde_json::json!({"message": format!("lock is owned by {}", locks[ix].2)}),
+                            ),
+                            Some(ix) => (200, serde_json::json!({"lock": json(&locks.remove(ix))})),
+                        }
+                    }
+                    _ => (404, serde_json::json!({"message": "not found"})),
+                };
+                drop(locks);
+                let reply = reply.to_string();
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/vnd.git-lfs+json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+            }
+        });
+        Self { url, locks }
+    }
+
+    fn held(&self) -> Vec<(String, String)> {
+        let mut held: Vec<_> = self
+            .locks
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, path, owner)| (path.clone(), owner.clone()))
+            .collect();
+        held.sort();
+        held
+    }
+}
+
+/// Lock, list and unlock against a real (local) LFS locking server: your own
+/// lock unlocks normally, someone else's only with force.
+#[test]
+fn lfs_lock_list_and_unlock_against_a_lock_server() {
+    use gitcomet_core::large_files::LargeFileCommand as C;
+    if !git_lfs_available() {
+        return;
+    }
+    let server = LockServer::start(&[("theirs.psd", "alice")]);
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    init_lfs_repo(&repo);
+    for name in ["ours.psd", "theirs.psd"] {
+        fs::write(repo.join(name), format!("{name} pixels\n")).unwrap();
+    }
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "art"]);
+    git(&repo, &["config", "lfs.url", &server.url]);
+    let opened = GixBackend.open(&repo).unwrap();
+    let listed = || {
+        let mut locks: Vec<_> = opened
+            .lfs_locks_cancellable(&CancellationToken::new())
+            .unwrap()
+            .into_iter()
+            .map(|lock| {
+                (
+                    lock.path.display().to_string(),
+                    lock.owner.unwrap_or_default(),
+                )
+            })
+            .collect();
+        locks.sort();
+        locks
+    };
+    let held = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(p, o)| (p.to_string(), o.to_string()))
+            .collect()
+    };
+    assert_eq!(listed(), held(&[("theirs.psd", "alice")]));
+
+    run_lfs(
+        &repo,
+        C::LfsLock {
+            paths: vec!["ours.psd".into()],
+        },
+    );
+    assert_eq!(
+        server.held(),
+        held(&[("ours.psd", "tester"), ("theirs.psd", "alice")])
+    );
+    assert_eq!(listed(), server.held(), "the listing shows the new lock");
+
+    run_lfs(
+        &repo,
+        C::LfsUnlock {
+            paths: vec!["ours.psd".into()],
+            force: false,
+        },
+    );
+    assert_eq!(server.held(), held(&[("theirs.psd", "alice")]));
+    #[cfg(unix)]
+    assert!(
+        fs::metadata(repo.join("ours.psd"))
+            .unwrap()
+            .permissions()
+            .readonly(),
+        "a lockable file is read-only again once unlocked"
+    );
+
+    opened
+        .run_large_file_command(&C::LfsUnlock {
+            paths: vec!["theirs.psd".into()],
+            force: false,
+        })
+        .expect_err("someone else's lock needs force");
+    assert_eq!(server.held(), held(&[("theirs.psd", "alice")]));
+    run_lfs(
+        &repo,
+        C::LfsUnlock {
+            paths: vec!["theirs.psd".into()],
+            force: true,
+        },
+    );
+    assert!(server.held().is_empty());
+    assert!(listed().is_empty());
 }

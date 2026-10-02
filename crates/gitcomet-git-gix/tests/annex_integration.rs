@@ -320,6 +320,114 @@ fn unlocked_commit_diff_reads_content_from_the_annex() {
     assert_eq!(text(diff.new_source.as_ref()), "second version\n");
 }
 
+/// "Add to git-annex" annexes an untracked file as a staged, locked link;
+/// Unlock and Lock switch it between an editable file and that link; Move
+/// leaves the content only on the remote.
+#[cfg(unix)]
+#[test]
+fn add_unlock_lock_and_move_to_a_remote() {
+    require_annex!();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_annex_repo(dir.path());
+    let name = "media/new clip.bin";
+    let content = vec![3u8; 2048];
+    fs::create_dir_all(repo.join("media")).unwrap();
+    fs::write(repo.join(name), &content).unwrap();
+    let is_link = || {
+        fs::symlink_metadata(repo.join(name))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    };
+
+    run(&repo, LargeFileCommand::AnnexAdd { paths: paths(name) }).unwrap();
+    assert_eq!(
+        git(&repo, &["diff", "--cached", "--name-only"]).trim(),
+        name
+    );
+    assert!(is_link(), "added locked");
+    assert!(git(&repo, &["annex", "find", "--in=here"]).contains(name));
+    git(&repo, &["commit", "-qm", "add clip"]);
+
+    run(&repo, LargeFileCommand::AnnexUnlock { paths: paths(name) }).unwrap();
+    assert!(!is_link(), "unlocked files are regular files");
+    assert!(
+        !fs::metadata(repo.join(name))
+            .unwrap()
+            .permissions()
+            .readonly()
+    );
+    assert_eq!(fs::read(repo.join(name)).unwrap(), content);
+
+    run(&repo, LargeFileCommand::AnnexLock { paths: paths(name) }).unwrap();
+    assert!(is_link(), "locked again");
+    assert_eq!(fs::read(repo.join(name)).unwrap(), content);
+    assert_eq!(git(&repo, &["status", "--porcelain"]), "", "back to HEAD");
+
+    run(
+        &repo,
+        LargeFileCommand::AnnexMove {
+            paths: paths(name),
+            to: "backup".into(),
+        },
+    )
+    .unwrap();
+    assert!(!git(&repo, &["annex", "find", "--in=here"]).contains(name));
+    assert!(git(&repo, &["annex", "find", "--in=backup"]).contains(name));
+    assert!(!repo.join(name).exists(), "the link now dangles");
+}
+
+/// A hide-missing adjusted branch leaves files without local content out of
+/// the checkout; leaving it brings them back.
+#[cfg(unix)]
+#[test]
+fn hide_missing_adjusted_branch_hides_files_without_content() {
+    require_annex!();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_annex_repo(dir.path());
+    let base = git(&repo, &["branch", "--show-current"]).trim().to_string();
+    fs::write(repo.join("kept.bin"), vec![5u8; 1024]).unwrap();
+    git(&repo, &["annex", "add", "-q", "kept.bin"]);
+    git(&repo, &["commit", "-qm", "add kept.bin"]);
+    run(
+        &repo,
+        LargeFileCommand::AnnexMove {
+            paths: paths("big.bin"),
+            to: "backup".into(),
+        },
+    )
+    .unwrap();
+
+    run(
+        &repo,
+        LargeFileCommand::AnnexAdjust {
+            mode: AnnexAdjustMode::HideMissing,
+        },
+    )
+    .unwrap();
+    let head = git(&repo, &["branch", "--show-current"]);
+    assert_eq!(
+        gitcomet_core::annex::adjusted_branch(head.trim()),
+        Some((base.as_str(), "hidemissing"))
+    );
+    assert!(
+        fs::symlink_metadata(repo.join("big.bin")).is_err(),
+        "hidden"
+    );
+    assert_eq!(fs::read(repo.join("kept.bin")).unwrap(), vec![5u8; 1024]);
+
+    run(
+        &repo,
+        LargeFileCommand::AnnexLeaveAdjusted { base: base.clone() },
+    )
+    .unwrap();
+    assert_eq!(git(&repo, &["branch", "--show-current"]).trim(), base);
+    assert!(
+        fs::symlink_metadata(repo.join("big.bin")).is_ok(),
+        "the link is back, still without content"
+    );
+}
+
 #[test]
 fn adjust_and_leave_adjusted_branch() {
     require_annex!();
@@ -339,12 +447,59 @@ fn adjust_and_leave_adjusted_branch() {
         Some((base.as_str(), "unlocked"))
     );
 
+    // A commit made on the adjusted branch reaches the base branch only when
+    // git-annex propagates it; leaving must not strand it.
+    fs::write(repo.join("notes.txt"), "made while adjusted\n").unwrap();
+    git(&repo, &["add", "notes.txt"]);
+    git(&repo, &["commit", "-qm", "adjusted commit"]);
+
     run(
         &repo,
         LargeFileCommand::AnnexLeaveAdjusted { base: base.clone() },
     )
     .unwrap();
     assert_eq!(git(&repo, &["branch", "--show-current"]).trim(), base);
+    assert_eq!(
+        git(&repo, &["log", "-1", "--format=%s"]).trim(),
+        "adjusted commit"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("notes.txt")).unwrap(),
+        "made while adjusted\n"
+    );
+}
+
+/// After a sync, HEAD of an adjusted branch is git-annex's own adjustment
+/// commit. Amending it folds the change into the adjustment, which git-annex
+/// never propagates to the base branch, so the amend is refused.
+#[test]
+fn amending_the_adjustment_commit_is_refused() {
+    require_annex!();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_annex_repo(dir.path());
+    run(
+        &repo,
+        LargeFileCommand::AnnexAdjust {
+            mode: AnnexAdjustMode::Unlock,
+        },
+    )
+    .unwrap();
+    let head = git(&repo, &["rev-parse", "HEAD"]);
+    fs::write(repo.join("notes.txt"), "one\n").unwrap();
+    git(&repo, &["add", "notes.txt"]);
+    let error = open(&repo)
+        .commit_amend("rewritten")
+        .expect_err("amending the adjustment commit loses the change");
+    assert!(error.to_string().contains("adjusted branch"), "{error}");
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]), head);
+
+    // A commit of the user's own, not yet propagated, can still be amended.
+    open(&repo).commit("one").unwrap();
+    open(&repo).commit_amend("one, reworded").unwrap();
+    assert_eq!(
+        git(&repo, &["log", "-1", "--format=%s"]).trim(),
+        "one, reworded"
+    );
 }
 
 #[test]
@@ -1751,6 +1906,12 @@ fn escaped_annex_keys_resolve_unlocked_content_and_download_by_key() {
 
 #[cfg(unix)]
 fn with_annex_shim(name: &str, script: &str, test: impl FnOnce(&Path)) {
+    with_annex_shim_env(name, script, &[], test);
+}
+
+/// [`with_annex_shim`] with extra environment for the child process.
+#[cfg(unix)]
+fn with_annex_shim_env(name: &str, script: &str, env: &[(&str, &str)], test: impl FnOnce(&Path)) {
     if let Some(root) = std::env::var_os("GITCOMET_ANNEX_TEST_ROOT") {
         test(Path::new(&root));
         return;
@@ -1759,12 +1920,88 @@ fn with_annex_shim(name: &str, script: &str, test: impl FnOnce(&Path)) {
     let bin = dir.path().join("bin");
     fs::create_dir(&bin).unwrap();
     write_script(&bin.join("git-annex"), script);
-    in_child(
-        name,
-        &[
-            ("PATH", path_with(&bin)),
-            ("GITCOMET_ANNEX_TEST_ROOT", dir.path().as_os_str().into()),
-        ],
+    let mut child_env = vec![
+        ("PATH", path_with(&bin)),
+        ("GITCOMET_ANNEX_TEST_ROOT", dir.path().as_os_str().into()),
+    ];
+    child_env.extend(env.iter().map(|(key, value)| (*key, (*value).into())));
+    in_child(name, &child_env);
+}
+
+/// `git annex unused` prints nothing until it has scanned every ref, so the
+/// background listing must not be cut off by the silence deadline.
+#[cfg(unix)]
+#[test]
+fn unused_listing_outlives_the_silence_deadline() {
+    const SCRIPT: &str = r#"#!/bin/sh
+sleep 3
+printf '{"command":"unused","unused-list":{"1":"WORM-s1-m1--old"},"success":true}\n'
+"#;
+    with_annex_shim_env(
+        "unused_listing_outlives_the_silence_deadline",
+        SCRIPT,
+        &[("GITCOMET_GIT_COMMAND_TIMEOUT_SECS", "1")],
+        |repo| {
+            git(repo, &["init", "-q"]);
+            let listed = open(repo)
+                .annex_unused_cancellable(&CancellationToken::new())
+                .unwrap_or_else(|e| panic!("silent scan was cut off: {e}"));
+            assert_eq!(listed.entries.len(), 1);
+        },
+    );
+}
+
+/// The webapp serves until it is stopped, so starting it must return at once
+/// and Stop must end it. A shim stands in: the real webapp opens a browser.
+#[cfg(unix)]
+#[test]
+fn webapp_starts_in_the_background_until_the_assistant_stops() {
+    const SCRIPT: &str = r#"#!/bin/sh
+root="$GITCOMET_ANNEX_TEST_ROOT"
+echo "$*" >> "$root/calls"
+case "$*" in
+  webapp) while [ ! -e "$root/stopped" ]; do sleep 0.05; done; touch "$root/webapp-exited" ;;
+  "assistant --stop") touch "$root/stopped" ;;
+esac
+"#;
+    with_annex_shim(
+        "webapp_starts_in_the_background_until_the_assistant_stops",
+        SCRIPT,
+        |root| {
+            use std::time::{Duration, Instant};
+            let wait_for = |file: &str| {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while !root.join(file).exists() {
+                    assert!(Instant::now() < deadline, "{file} never appeared");
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            };
+            let repo = root.join("repo");
+            fs::create_dir_all(&repo).unwrap();
+            git(&repo, &["init", "-q"]);
+            let opened = open(&repo);
+            let started = Instant::now();
+            opened
+                .run_large_file_command(&LargeFileCommand::AnnexWebapp)
+                .unwrap();
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "the start must not wait for the webapp"
+            );
+            wait_for("calls");
+            assert!(!root.join("webapp-exited").exists(), "still serving");
+
+            opened
+                .run_large_file_command(&LargeFileCommand::AnnexStopAssistant)
+                .unwrap();
+            wait_for("webapp-exited");
+            let calls = fs::read_to_string(root.join("calls")).unwrap();
+            assert!(calls.lines().any(|line| line == "webapp"), "{calls}");
+            assert!(
+                calls.lines().any(|line| line == "assistant --stop"),
+                "{calls}"
+            );
+        },
     );
 }
 

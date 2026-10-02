@@ -2575,6 +2575,39 @@ pub(super) fn lfs_locks_loaded(
     effects
 }
 
+/// Starts a `git annex unused` scan, or queues one replay behind a running scan.
+pub(super) fn request_annex_unused_effect(repo_state: &mut RepoState) -> Option<Effect> {
+    repo_state.set_annex_unused(Loadable::Loading);
+    repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::ANNEX_UNUSED)
+        .then_some(Effect::LoadAnnexUnused {
+            repo_id: repo_state.id,
+        })
+}
+
+pub(super) fn annex_unused_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    result: std::result::Result<gitcomet_core::large_files::AnnexUnused, Error>,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    // A queued rescan supersedes this result; stay Loading until it lands.
+    if repo_state
+        .loads_in_flight
+        .finish(RepoLoadsInFlight::ANNEX_UNUSED)
+    {
+        return vec![Effect::LoadAnnexUnused { repo_id }];
+    }
+    repo_state.set_annex_unused(match result {
+        Ok(unused) => Loadable::Ready(Arc::new(unused)),
+        Err(error) => Loadable::Error(error.to_string()),
+    });
+    Vec::new()
+}
+
 /// Ask for repository-level LFS/annex facts, coalescing with a running load.
 pub(super) fn request_large_file_support_effect(repo_state: &mut RepoState) -> Option<Effect> {
     repo_state

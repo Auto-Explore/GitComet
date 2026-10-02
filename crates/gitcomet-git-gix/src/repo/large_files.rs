@@ -768,10 +768,11 @@ impl super::GixRepo {
             };
             return Some((classified, worktree));
         }
+        // A plain file can hold link text too (`core.symlinks=false`).
         if metadata.is_file()
             && metadata.len() <= MAX_POINTER_BYTES
             && let Some(bytes) = read_pointer_candidate(&full)
-            && let Some(classified) = classify_bytes(&bytes, false)
+            && let Some(classified) = classify_git_form(&bytes)
         {
             return Some((classified, LargeFileWorktree::Pointer));
         }

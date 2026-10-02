@@ -18,7 +18,7 @@ fn paths_arg_error(what: &str) -> Error {
 }
 
 /// Join the outputs of a multi-step command into one log entry.
-fn combine(label: &str, outputs: Vec<CommandOutput>) -> CommandOutput {
+pub(super) fn combine(label: &str, outputs: Vec<CommandOutput>) -> CommandOutput {
     let join = |pick: fn(&CommandOutput) -> &str| {
         outputs
             .iter()
@@ -216,7 +216,7 @@ impl super::GixRepo {
         }
         // Positional refs work on git-lfs versions before 3.8 (--stdin does
         // not). Match git-lfs's default download-remote precedence.
-        let repo = self.reopen_repo()?;
+        let repo = self.repo_with_current_config()?;
         let config = repo.config_snapshot();
         let branch_remote = repo.head_name().ok().flatten().and_then(|head| {
             config
@@ -351,13 +351,12 @@ impl super::GixRepo {
     }
 
     /// Loads on its own when lockable patterns exist, so it runs as a
-    /// background read: a server that needs credentials simply fails.
+    /// background read: stored credentials may answer, but nothing prompts.
     pub(super) fn lfs_locks_impl(&self, cancellation: &CancellationToken) -> Result<Vec<LfsLock>> {
-        let json = run_git_background_capture(
-            self.git_lfs(&["locks", "--json"]),
-            "git lfs locks --json",
-            cancellation,
-        )?;
+        let mut cmd = self.git_workdir_cmd();
+        crate::util::credentials_without_prompts(&mut cmd);
+        cmd.args(["lfs", "locks", "--json"]);
+        let json = run_git_background_capture(cmd, "git lfs locks --json", cancellation)?;
         parse_lfs_locks_json(&json)
     }
 }

@@ -959,45 +959,14 @@ pub(super) fn invalidate_loaded_blame(repo_state: &mut RepoState) {
     }
 }
 
+/// Completion handling for `Msg::CommitFinished` / `Msg::CommitAmendFinished`.
 pub(super) fn commit_finished(
     state: &mut AppState,
     repo_id: RepoId,
     result: std::result::Result<(), Error>,
+    amend: bool,
 ) -> Vec<Effect> {
-    commit_completion_finished(state, repo_id, result, CommitCompletionKind::Commit)
-}
-
-pub(super) fn commit_amend_finished(
-    state: &mut AppState,
-    repo_id: RepoId,
-    result: std::result::Result<(), Error>,
-) -> Vec<Effect> {
-    commit_completion_finished(state, repo_id, result, CommitCompletionKind::Amend)
-}
-
-#[derive(Clone, Copy)]
-enum CommitCompletionKind {
-    Commit,
-    Amend,
-}
-
-impl CommitCompletionKind {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Commit => "Commit",
-            Self::Amend => "Amend",
-        }
-    }
-}
-
-/// Shared completion handling for `Msg::CommitFinished` / `Msg::CommitAmendFinished`.
-fn commit_completion_finished(
-    state: &mut AppState,
-    repo_id: RepoId,
-    result: std::result::Result<(), Error>,
-    kind: CommitCompletionKind,
-) -> Vec<Effect> {
-    let label = kind.label();
+    let label = if amend { "Amend" } else { "Commit" };
     let mut succeeded = false;
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
@@ -1529,8 +1498,7 @@ pub(super) fn repo_command_finished(
     if matches!(&command, RepoCommandKind::LargeFile { command } if command.is_annex() && command.changes_object_store())
         && !matches!(repo_state.annex_unused, Loadable::NotLoaded)
     {
-        repo_state.set_annex_unused(Loadable::Loading);
-        extra_effects.push(Effect::LoadAnnexUnused { repo_id });
+        extra_effects.extend(super::effects::request_annex_unused_effect(repo_state));
     }
     // Lock and unlock change server state the rows show.
     if matches!(&command, RepoCommandKind::LargeFile { command } if command.changes_locks())
