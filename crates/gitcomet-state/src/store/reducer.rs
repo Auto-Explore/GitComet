@@ -500,6 +500,13 @@ pub(super) fn reduce(
     state: &mut AppState,
     msg: Msg,
 ) -> Vec<Effect> {
+    // History shows the repository's own worktree; a linked worktree's file
+    // belongs to a hosted session, never to History's selection.
+    if let Msg::SelectDiff { target, .. } = &msg
+        && target.worktree().is_some()
+    {
+        return Vec::new();
+    }
     let reconcile = !matches!(
         msg,
         Msg::GlobalNavBack { .. } | Msg::GlobalNavForward { .. }

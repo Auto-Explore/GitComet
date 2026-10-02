@@ -209,6 +209,7 @@ impl DiffPaneView {
                     },
                     self.options.policy,
                 );
+                pane_store.set_linked(pane_store.shows_linked_worktree(&store.snapshot()));
                 pane_store.snapshot()
             }
             PaneSource::Snapshot(snapshot) => {
@@ -312,6 +313,8 @@ impl DiffPaneView {
 
     fn sync_renderer(&mut self, state: Arc<AppState>, cx: &mut gpui::Context<Self>) {
         if let (Some(renderer), Some(model)) = (&self.renderer, &self.renderer_model) {
+            let linked = renderer.read(cx).store.shows_linked_worktree(&state);
+            renderer.update(cx, |pane, _| pane.store.set_linked(linked));
             let state = renderer.read(cx).store.project(state);
             model.update(cx, |model, cx| model.set_state(state, cx));
         }
@@ -840,6 +843,33 @@ impl DiffPaneView {
     #[cfg(test)]
     pub(crate) fn view_id(&self) -> u64 {
         self.view_id.0
+    }
+
+    /// Whether the renderer offers line staging and editing for its file.
+    #[cfg(test)]
+    pub(crate) fn renderer_offers(&self, cx: &App) -> Option<(bool, bool)> {
+        let renderer = self.renderer.as_ref()?.read(cx);
+        Some((
+            renderer.diff_stage_gutter_area().is_some(),
+            renderer.editable_path_for_current_target().is_some(),
+        ))
+    }
+
+    /// The checkout the renderer resolves the file's paths against.
+    #[cfg(test)]
+    pub(crate) fn renderer_workdir(&self, cx: &App) -> Option<std::path::PathBuf> {
+        let renderer = self.renderer.as_ref()?.read(cx);
+        renderer
+            .rendered_diff_workdir()
+            .map(std::path::Path::to_path_buf)
+    }
+
+    /// Sends `msg` the way the renderer's own controls would.
+    #[cfg(test)]
+    pub(crate) fn renderer_dispatch(&self, msg: Msg, cx: &App) {
+        if let Some(renderer) = &self.renderer {
+            renderer.read(cx).store.dispatch(msg);
+        }
     }
 
     #[cfg(test)]

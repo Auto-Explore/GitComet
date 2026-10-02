@@ -2440,10 +2440,7 @@ mod tests {
             resume_from: None,
             resume_token: None,
         };
-        let diff_target = DiffTarget::WorkingTree {
-            path: PathBuf::from("file.txt"),
-            area: DiffArea::Staged,
-        };
+        let diff_target = DiffTarget::working_tree(PathBuf::from("file.txt"), DiffArea::Staged);
         let path = Path::new("file.txt");
 
         // The three defaults that deliberately succeed: absence of an upstream,

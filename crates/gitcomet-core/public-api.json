@@ -4971,6 +4971,35 @@
                         },
                         "deprecation": null,
                         "name": "area"
+                      },
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": {
+                                "angle_bracketed": {
+                                  "args": [
+                                    {
+                                      "type": {
+                                        "resolved_path": {
+                                          "args": null,
+                                          "path": "std::path::PathBuf",
+                                          "type_path": "std::path::PathBuf"
+                                        }
+                                      }
+                                    }
+                                  ],
+                                  "constraints": []
+                                }
+                              },
+                              "path": "Option",
+                              "type_path": "core::option::Option"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "worktree"
                       }
                     ],
                     "has_stripped_fields": false
@@ -5352,6 +5381,113 @@
             },
             "deprecation": null,
             "name": "working_tree"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "generic": "Self"
+                      }
+                    ],
+                    [
+                      "worktree",
+                      {
+                        "resolved_path": {
+                          "args": null,
+                          "path": "PathBuf",
+                          "type_path": "std::path::PathBuf"
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "in_worktree"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "generic": "Self"
+                          }
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "borrowed_ref": {
+                                  "is_mutable": false,
+                                  "lifetime": null,
+                                  "type": {
+                                    "resolved_path": {
+                                      "args": null,
+                                      "path": "std::path::Path",
+                                      "type_path": "std::path::Path"
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "worktree"
           },
           {
             "attrs": [],
@@ -17394,6 +17530,53 @@
     },
     "deprecation": null,
     "name": "is_uncommitted_commit_id"
+  },
+  "gitcomet_core::domain::normalize_worktree_path": {
+    "attrs": [],
+    "definition": {
+      "function": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "header": {
+          "abi": "Rust",
+          "is_async": false,
+          "is_const": false,
+          "is_unsafe": false
+        },
+        "sig": {
+          "inputs": [
+            [
+              "path",
+              {
+                "borrowed_ref": {
+                  "is_mutable": false,
+                  "lifetime": null,
+                  "type": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "std::path::Path",
+                      "type_path": "std::path::Path"
+                    }
+                  }
+                }
+              }
+            ]
+          ],
+          "is_c_variadic": false,
+          "output": {
+            "resolved_path": {
+              "args": null,
+              "path": "std::path::PathBuf",
+              "type_path": "std::path::PathBuf"
+            }
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "name": "normalize_worktree_path"
   },
   "gitcomet_core::identity::IdentityError": {
     "attrs": [],

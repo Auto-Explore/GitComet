@@ -495,6 +495,21 @@ Since then:
   product's name ("<Product> Dark"). The example ships neutral artwork and
   an integration test (`gitcomet-extension-example-app/tests/branding.rs`)
   proving every brand path serves it and no asset path names GitComet.
+- A linked worktree is a change source: `ChangeSource::linked_worktree(path,
+  area, include_untracked)` lists its changes, and each file's target is
+  `DiffTarget::working_tree(..).in_worktree(path)` (`worktree()` reads it
+  back; equality compares it). Sessions and lists on it load through the
+  worktree's cached repository handle, after checking the path is one of
+  the repository's linked worktrees (else every requested part answers with
+  an error). They reload on that worktree's `WorktreeExternallyChanged`
+  (the extension's `watch_worktree` lease), and main-worktree changes no
+  longer reload them. Staging and saving act on the main checkout, so a
+  pane on a linked file offers neither and refuses both in its handlers
+  (checked against the live session); its projection resolves previews and
+  the editor's paths against the linked checkout and hides the main
+  checkout's status, and the renderer's own working-tree retargets stay in
+  the linked worktree. History ignores a linked `SelectDiff`. The example's
+  Changes view can list a linked worktree.
 
 ## History find (#532)
 

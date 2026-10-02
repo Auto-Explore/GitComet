@@ -198,7 +198,7 @@ pub(super) fn repo_externally_changed(
     }
     let session_reloads =
         if change.worktree || change.index || change.git_state || change.text_attributes {
-            super::diff_session::reload_worktree_sessions(repo_state, &change)
+            super::diff_session::reload_worktree_sessions(repo_state, &change, None)
         } else {
             Vec::new()
         };

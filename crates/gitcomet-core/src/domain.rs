@@ -735,7 +735,12 @@ pub const EMPTY_TREE_ID: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 #[derive(Clone, Debug)]
 pub enum DiffTarget {
     #[non_exhaustive]
-    WorkingTree { path: PathBuf, area: DiffArea },
+    WorkingTree {
+        path: PathBuf,
+        area: DiffArea,
+        /// A linked worktree the path is in; `None` is the repository's own.
+        worktree: Option<PathBuf>,
+    },
     #[non_exhaustive]
     Commit {
         commit_id: CommitId,
@@ -761,12 +766,17 @@ impl PartialEq for DiffTarget {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (
-                Self::WorkingTree { path, area },
+                Self::WorkingTree {
+                    path,
+                    area,
+                    worktree,
+                },
                 Self::WorkingTree {
                     path: other_path,
                     area: other_area,
+                    worktree: other_worktree,
                 },
-            ) => path == other_path && area == other_area,
+            ) => path == other_path && area == other_area && worktree == other_worktree,
             (
                 Self::Commit {
                     commit_id, path, ..
@@ -801,7 +811,29 @@ impl Eq for DiffTarget {}
 impl DiffTarget {
     /// A working-tree file in `area` (unstaged or staged).
     pub fn working_tree(path: PathBuf, area: DiffArea) -> Self {
-        Self::WorkingTree { path, area }
+        Self::WorkingTree {
+            path,
+            area,
+            worktree: None,
+        }
+    }
+
+    /// The same working-tree file in the linked worktree at `worktree`;
+    /// other targets are unchanged.
+    pub fn in_worktree(mut self, worktree: PathBuf) -> Self {
+        if let Self::WorkingTree { worktree: slot, .. } = &mut self {
+            *slot = Some(normalize_worktree_path(&worktree));
+        }
+        self
+    }
+
+    /// The linked worktree a working-tree target reads, if not the
+    /// repository's own.
+    pub fn worktree(&self) -> Option<&std::path::Path> {
+        match self {
+            Self::WorkingTree { worktree, .. } => worktree.as_deref(),
+            Self::Commit { .. } | Self::CommitRange { .. } => None,
+        }
     }
 
     /// What `commit_id` changed, in one file or all of them.
@@ -871,6 +903,13 @@ impl DiffTarget {
             Self::Commit { path, .. } | Self::CommitRange { path, .. } => path.as_deref(),
         }
     }
+}
+
+/// A worktree path as targets, sessions and watches compare it: lexical
+/// (no `.` components or trailing separator), so equal spellings match
+/// without touching the file system.
+pub fn normalize_worktree_path(path: &std::path::Path) -> PathBuf {
+    path.components().collect()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1806,6 +1845,25 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     #[test]
+    fn working_tree_targets_name_their_worktree() {
+        let main = DiffTarget::working_tree("a.rs".into(), DiffArea::Unstaged);
+        let linked = main.clone().in_worktree("/repos/feature/./".into());
+        assert_eq!(
+            linked.worktree(),
+            Some(std::path::Path::new("/repos/feature"))
+        );
+        assert_eq!(main.worktree(), None);
+        assert_ne!(main, linked, "the same file in another worktree differs");
+        assert_eq!(
+            linked,
+            main.clone().in_worktree("/repos/feature".into()),
+            "spellings of one path agree"
+        );
+        let commit = DiffTarget::commit(CommitId("abc".into()), Some("a.rs".into()));
+        assert_eq!(commit.clone().in_worktree("/repos/feature".into()), commit);
+    }
+
+    #[test]
     fn review_truncated_hunk_context_does_not_change_side_encoding() {
         let patch = b"@@ -1 +1 @@ function \xc3\n-\xc3\xa4\n+\xc3\xb6\n";
         assert_eq!(DiffSectionFormats::sniff(patch), DiffSectionFormats::UTF_8);
@@ -1860,10 +1918,7 @@ mod tests {
 
     #[test]
     fn unified_reader_matches_string_parser() {
-        let target = DiffTarget::WorkingTree {
-            path: PathBuf::from("src/main.rs"),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree(PathBuf::from("src/main.rs"), DiffArea::Unstaged);
         let unified = "\
 diff --git a/src/main.rs b/src/main.rs\n\
 index 1111111..2222222 100644\n\
@@ -1889,10 +1944,7 @@ index 1111111..2222222 100644\n\
 
     #[test]
     fn unified_reader_trims_crlf_line_endings() {
-        let target = DiffTarget::WorkingTree {
-            path: PathBuf::from("README.md"),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree(PathBuf::from("README.md"), DiffArea::Unstaged);
         let unified = "\
 @@ -1 +1 @@\r\n\
 -old\r\n\
@@ -1907,10 +1959,7 @@ index 1111111..2222222 100644\n\
     }
 
     fn target(path: &str) -> DiffTarget {
-        DiffTarget::WorkingTree {
-            path: PathBuf::from(path),
-            area: DiffArea::Unstaged,
-        }
+        DiffTarget::working_tree(PathBuf::from(path), DiffArea::Unstaged)
     }
 
     #[test]
@@ -2001,10 +2050,7 @@ index 1111111..2222222 100644\n\
 
     #[test]
     fn unified_reader_handles_small_buffer_chunks_without_extra_newline_bytes() {
-        let target = DiffTarget::WorkingTree {
-            path: PathBuf::from("src/lib.rs"),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree(PathBuf::from("src/lib.rs"), DiffArea::Unstaged);
         let unified = "\
 diff --git a/src/lib.rs b/src/lib.rs\r\n\
 @@ -1,2 +1,2 @@\r\n\
@@ -2032,10 +2078,7 @@ diff --git a/src/lib.rs b/src/lib.rs\r\n\
 
     #[test]
     fn unified_reader_lines_share_backing_storage() {
-        let target = DiffTarget::WorkingTree {
-            path: PathBuf::from("README.md"),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree(PathBuf::from("README.md"), DiffArea::Unstaged);
         let unified = "\
 @@ -1 +1 @@\n\
 -old\n\
@@ -2107,10 +2150,7 @@ diff --git a/src/lib.rs b/src/lib.rs\r\n\
 
     #[test]
     fn truncated_diffs_end_with_a_notice_row() {
-        let target = DiffTarget::WorkingTree {
-            path: PathBuf::from("a.txt"),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree(PathBuf::from("a.txt"), DiffArea::Unstaged);
         let diff =
             Diff::from_unified_reader_with_limits(target, Cursor::new(b"aa\nbb\ncc\n"), 100, 2)
                 .unwrap();
@@ -2139,10 +2179,7 @@ diff --git a/src/lib.rs b/src/lib.rs\r\n\
 
     #[test]
     fn paged_provider_loads_pages_on_demand() {
-        let target = DiffTarget::WorkingTree {
-            path: PathBuf::from("src/lib.rs"),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree(PathBuf::from("src/lib.rs"), DiffArea::Unstaged);
         let unified = "\
 diff --git a/src/lib.rs b/src/lib.rs\n\
 @@ -1,4 +1,4 @@\n\
@@ -2214,10 +2251,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n\
 
     #[test]
     fn diff_from_unified_classifies_lines() {
-        let target = DiffTarget::WorkingTree {
-            path: PathBuf::from("a.txt"),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree(PathBuf::from("a.txt"), DiffArea::Unstaged);
 
         let text = "\
 diff --git a/a.txt b/a.txt
@@ -2240,10 +2274,7 @@ index 0000000..1111111 100644
 
     #[test]
     fn diff_from_unified_treats_three_dash_content_as_removed_line() {
-        let target = DiffTarget::WorkingTree {
-            path: PathBuf::from("a.txt"),
-            area: DiffArea::Unstaged,
-        };
+        let target = DiffTarget::working_tree(PathBuf::from("a.txt"), DiffArea::Unstaged);
 
         let diff = Diff::from_unified(
             target,

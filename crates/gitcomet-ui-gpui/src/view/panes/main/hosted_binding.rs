@@ -219,7 +219,7 @@ impl MainPaneView {
         annotations: Arc<DiffAnnotations>,
         insets: Arc<[DiffInset]>,
     ) {
-        self.store.policy = options.policy;
+        self.store.set_policy(options.policy);
         self.diff_show_line_numbers = options.policy.line_numbers;
         let reset = self
             .hosted_decor

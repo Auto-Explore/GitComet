@@ -7,14 +7,15 @@
 //! selection can be given a note shown under it, and clicking the note
 //! removes it. The current pane can pop out into a window of its own and
 //! comes back when that window closes. Its action-bar context names the
-//! comparison and marks the repository reviewed.
+//! comparison and marks the repository reviewed. When the repository has
+//! linked worktrees, the list can show one of them instead (read-only).
 
 use gitcomet_core::domain::{CommitId, DiffTarget};
 use gitcomet_extension_api::{
     ChangeSource, DiffAnnotation, DiffAnnotations, DiffInset, DiffLegendItem, DiffLineRange,
     DiffLineSide, DiffPane, DiffPaneOptions, DiffPanePolicy, DiffSelectionAction, FileList,
     FileListFilterChip, FileListGroups, FileListMarks, FileListMode, FileListVisible, HostedAction,
-    PopOutWindow, RepositoryViewContext, RowGlyph, RowMark,
+    PopOutWindow, RepositoryViewContext, RepositoryWatch, RowGlyph, RowMark,
 };
 use gitcomet_ui_kit::components::Button;
 use gitcomet_ui_kit::gpui::prelude::*;
@@ -67,6 +68,13 @@ pub struct ChangesView {
     next_note: u64,
     /// The window the current pane is shown in instead of here.
     popped: Option<PopOutWindow>,
+    /// The linked worktree the list shows, watched while it does.
+    linked: Option<(PathBuf, Option<RepositoryWatch>)>,
+}
+
+/// This view's comparison: the working tree against HEAD.
+fn head_comparison() -> ChangeSource {
+    ChangeSource::comparison(CommitId("HEAD".into()), None, Default::default())
 }
 
 impl ChangesView {
@@ -76,7 +84,7 @@ impl ChangesView {
             .window
             .create_file_list(
                 &context.repository,
-                ChangeSource::comparison(CommitId("HEAD".into()), None, Default::default()),
+                head_comparison(),
                 move |_, target, cx| {
                     let _ = view.update(cx, |this, cx| this.show(target, cx));
                 },
@@ -99,7 +107,58 @@ impl ChangesView {
             notes: Vec::new(),
             next_note: 0,
             popped: None,
+            linked: None,
         }
+    }
+
+    /// The repository's linked worktrees, as the host last listed them.
+    fn linked_worktrees(&self, cx: &App) -> Vec<PathBuf> {
+        let Ok(state) = self.context.window.state(cx) else {
+            return Vec::new();
+        };
+        let repository = &self.context.repository;
+        state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repository.repo_id())
+            .and_then(|repo| repo.worktrees.ready().cloned())
+            .map(|worktrees| {
+                worktrees
+                    .iter()
+                    .map(|worktree| worktree.path.clone())
+                    .filter(|path| path != repository.workdir())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Lists `worktree`'s changes (`None`: this worktree's), clearing flags,
+    /// which name files of the worktree they were set in.
+    pub fn show_worktree(&mut self, worktree: Option<PathBuf>, cx: &mut Context<Self>) {
+        let Ok(list) = &self.list else {
+            return;
+        };
+        let source = match &worktree {
+            Some(path) => ChangeSource::linked_worktree(
+                path.clone(),
+                gitcomet_core::domain::DiffArea::Unstaged,
+                true,
+            ),
+            None => head_comparison(),
+        };
+        list.set_source(source, cx);
+        self.linked = worktree.map(|path| {
+            let watch = self
+                .context
+                .window
+                .watch_worktree(&self.context.repository, &path, cx)
+                .ok();
+            (path, watch)
+        });
+        self.flags.clear();
+        self.flags_revision += 1;
+        self.mark_flagged_files(cx);
+        cx.notify();
     }
 
     pub fn popped(&self) -> Option<&PopOutWindow> {
@@ -339,6 +398,39 @@ impl Render for ChangesView {
             Ok(list) => div().size_full().child(list.view()),
             Err(error) => div().p_3().child(error.clone()),
         };
+        let linked = self.linked_worktrees(cx);
+        let shown = self.linked.as_ref().map(|(path, _)| path.clone());
+        let worktrees = (!linked.is_empty()).then(|| {
+            let entries = std::iter::once((
+                "example_changes_worktree_main".to_string(),
+                SharedString::from("This worktree"),
+                None,
+            ))
+            .chain(linked.into_iter().enumerate().map(|(ix, path)| {
+                let name = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                (
+                    format!("example_changes_worktree_{ix}"),
+                    SharedString::from(name),
+                    Some(path),
+                )
+            }));
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .p_1()
+                .children(entries.map(|(id, label, path)| {
+                    let selected = shown == path;
+                    Button::new(id, label).selected(selected).on_click(
+                        theme,
+                        cx,
+                        move |this, _, _, cx| this.show_worktree(path.clone(), cx),
+                    )
+                }))
+        });
         div()
             .id("example_changes_view")
             .debug_selector(|| "example_changes_view".to_string())
@@ -349,9 +441,12 @@ impl Render for ChangesView {
                 div()
                     .w(px(240.0))
                     .h_full()
+                    .flex()
+                    .flex_col()
                     .border_r_1()
                     .border_color(theme.colors.stroke.subtle)
-                    .child(list),
+                    .children(worktrees)
+                    .child(div().flex_1().min_h_0().child(list)),
             )
             .child(
                 div()

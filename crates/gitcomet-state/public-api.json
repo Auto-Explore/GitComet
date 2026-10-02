@@ -304,6 +304,63 @@
             "name": "Worktree"
           },
           {
+            "attrs": [
+              "non_exhaustive"
+            ],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "struct": {
+                    "fields": [
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "std::path::PathBuf",
+                              "type_path": "std::path::PathBuf"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "path"
+                      },
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "gitcomet_core::domain::DiffArea",
+                              "type_path": "gitcomet_core::domain::DiffArea"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "area"
+                      },
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "primitive": "bool"
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "include_untracked"
+                      }
+                    ],
+                    "has_stripped_fields": false
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "LinkedWorktree"
+          },
+          {
             "attrs": [],
             "definition": {
               "variant": {
@@ -676,6 +733,123 @@
                 "sig": {
                   "inputs": [
                     [
+                      "path",
+                      {
+                        "resolved_path": {
+                          "args": null,
+                          "path": "PathBuf",
+                          "type_path": "std::path::PathBuf"
+                        }
+                      }
+                    ],
+                    [
+                      "area",
+                      {
+                        "resolved_path": {
+                          "args": null,
+                          "path": "DiffArea",
+                          "type_path": "gitcomet_core::domain::DiffArea"
+                        }
+                      }
+                    ],
+                    [
+                      "include_untracked",
+                      {
+                        "primitive": "bool"
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "linked_worktree"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "generic": "Self"
+                          }
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "borrowed_ref": {
+                                  "is_mutable": false,
+                                  "lifetime": null,
+                                  "type": {
+                                    "resolved_path": {
+                                      "args": null,
+                                      "path": "std::path::Path",
+                                      "type_path": "std::path::Path"
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "linked_path"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
                       "self",
                       {
                         "borrowed_ref": {
@@ -1021,6 +1195,70 @@
         "is_synthetic": false,
         "is_unsafe": false,
         "items": [
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "generic": "Self"
+                          }
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "borrowed_ref": {
+                                  "is_mutable": false,
+                                  "lifetime": null,
+                                  "type": {
+                                    "resolved_path": {
+                                      "args": null,
+                                      "path": "std::path::Path",
+                                      "type_path": "std::path::Path"
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "worktree"
+          },
           {
             "attrs": [],
             "definition": {
@@ -2870,6 +3108,35 @@
                         },
                         "deprecation": null,
                         "name": "source"
+                      },
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": {
+                                "angle_bracketed": {
+                                  "args": [
+                                    {
+                                      "type": {
+                                        "resolved_path": {
+                                          "args": null,
+                                          "path": "std::path::PathBuf",
+                                          "type_path": "std::path::PathBuf"
+                                        }
+                                      }
+                                    }
+                                  ],
+                                  "constraints": []
+                                }
+                              },
+                              "path": "Option",
+                              "type_path": "core::option::Option"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "worktree"
                       }
                     ],
                     "has_stripped_fields": false
@@ -2961,6 +3228,90 @@
           "path": "Debug",
           "type_path": "core::fmt::Debug"
         }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "DiffSessionWork",
+            "type_path": "gitcomet_state::diff_session::DiffSessionWork"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "generic": "Self"
+                          }
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "borrowed_ref": {
+                                  "is_mutable": false,
+                                  "lifetime": null,
+                                  "type": {
+                                    "resolved_path": {
+                                      "args": null,
+                                      "path": "std::path::Path",
+                                      "type_path": "std::path::Path"
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "linked_path"
+          }
+        ],
+        "trait": null
       }
     ],
     "name": "DiffSessionWork"
