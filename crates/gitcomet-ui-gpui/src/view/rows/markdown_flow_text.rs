@@ -229,14 +229,12 @@ fn split_markdown_flow_highlight_layers(
 struct MarkdownFlowVisualLine {
     /// Its bytes in the unwrapped layout.
     range: Range<usize>,
-    /// How far `align` moves it right of the box's left edge.
+    /// How far alignment moved it right of the box's left edge.
     shift: Pixels,
 }
 
-/// The visual lines a row's text wraps into, each placed the way `gpui`
-/// paints it under `align` in a box `width` wide (`aligned_origin_x` in its
-/// `line.rs`). `gpui` hit-tests as if every line started at the left, so
-/// whatever turns positions into offsets has to apply the same shift.
+/// The visual lines a row's text wraps into, each shifted as `gpui` painted
+/// it under `align` in a box `width` wide.
 ///
 /// `None` when a wrap boundary names a glyph that is not there: every later
 /// line is placed from the boundaries before it, so skipping one would put
@@ -247,43 +245,40 @@ fn markdown_flow_visual_lines(
     width: Pixels,
 ) -> Option<Vec<MarkdownFlowVisualLine>> {
     let unwrapped = &line.unwrapped_layout;
-    // Each boundary's byte offset and x in the unwrapped layout.
-    let mut edges = Vec::with_capacity(line.wrap_boundaries().len() + 2);
-    edges.push((0usize, px(0.0)));
+    // Each line's first byte in the unwrapped layout.
+    let mut starts = Vec::with_capacity(line.wrap_boundaries().len() + 2);
+    starts.push(0usize);
     for boundary in line.wrap_boundaries() {
         let glyph = unwrapped
             .runs
             .get(boundary.run_ix)
             .and_then(|run| run.glyphs.get(boundary.glyph_ix))?;
-        edges.push((glyph.index, glyph.position.x));
+        starts.push(glyph.index);
     }
-    edges.push((unwrapped.len, unwrapped.width));
+    starts.push(unwrapped.len);
 
     Some(
-        edges
+        starts
             .windows(2)
-            .map(|edge| {
-                let ((start, start_x), (end, end_x)) = (edge[0], edge[1]);
-                let line_width = end_x - start_x;
-                let shift = match align {
-                    gpui::TextAlign::Left => px(0.0),
-                    gpui::TextAlign::Center => (width - line_width) / 2.0,
-                    gpui::TextAlign::Right => width - line_width,
-                };
-                MarkdownFlowVisualLine {
-                    range: start..end,
-                    shift,
-                }
+            .enumerate()
+            .map(|(line_ix, edge)| MarkdownFlowVisualLine {
+                range: edge[0]..edge[1],
+                shift: line.wrapped_line_offset(line_ix, align, width),
             })
             .collect(),
     )
 }
 
-/// The rectangles a byte range covers, in window coordinates.
+/// The rectangles a byte range covers, in window coordinates, for text
+/// painted under `align`.
 ///
 /// A wrapped row's selection is not one box: each visual line contributes the
 /// slice of the range that falls inside it, measured against the unwrapped
 /// layout the wrap boundaries index into.
+///
+/// `gpui` records the alignment as it paints the glyphs, so after paint
+/// `layout.text_align()` is it; a caller painting beneath the glyphs reads it
+/// from the window instead.
 pub(in crate::view) fn markdown_flow_range_rects(
     layout: &gpui::TextLayout,
     align: gpui::TextAlign,
@@ -320,30 +315,6 @@ pub(in crate::view) fn markdown_flow_range_rects(
         ));
     }
     rects
-}
-
-/// The offset under `position`, against text painted under `align`: `Err`
-/// is the clamp to the nearest boundary, as `TextLayout::index_for_position`
-/// gives it.
-pub(in crate::view) fn markdown_flow_index_for_position(
-    layout: &gpui::TextLayout,
-    align: gpui::TextAlign,
-    position: Point<Pixels>,
-) -> Result<usize, usize> {
-    if align == gpui::TextAlign::Left {
-        return layout.index_for_position(position);
-    }
-    let bounds = layout.bounds();
-    let shift = layout
-        .line_layout_for_index(0)
-        .and_then(|line| markdown_flow_visual_lines(&line, align, bounds.size.width))
-        .and_then(|lines| {
-            let visual_ix = ((position.y - bounds.top()) / layout.line_height()).floor();
-            let visual_ix = (visual_ix.max(0.0) as usize).min(lines.len().saturating_sub(1));
-            lines.get(visual_ix).map(|line| line.shift)
-        })
-        .unwrap_or_default();
-    layout.index_for_position(point(position.x - shift, position.y))
 }
 
 /// Offset in tab-expanded text for an offset in the raw text.
@@ -599,8 +570,8 @@ impl gpui::Element for MarkdownFlowText {
         // computing. The virtualized list this renderer replaced built nothing
         // for such a row at all.
         let on_screen = markdown_flow_row_is_near_viewport(bounds, window);
-        // The glyphs below are painted under the inherited alignment; the
-        // selection and hit testing have to place them the same way.
+        // The glyphs are painted under the inherited alignment, after these
+        // layers; place the layers the same way.
         let align = window.text_style().text_align;
         let layout = self
             .layout
@@ -655,7 +626,6 @@ impl gpui::Element for MarkdownFlowText {
                             tab_width: self.tab_width,
                             layout,
                             untabbed: None,
-                            align,
                         }),
                         cells: Vec::new(),
                     },
@@ -685,7 +655,6 @@ impl gpui::Element for MarkdownFlowText {
                         tab_width: self.tab_width,
                         layout,
                         untabbed,
-                        align,
                     }),
                     cells: Vec::new(),
                 },
@@ -741,7 +710,6 @@ mod tests {
             tab_width,
             layout: gpui::TextLayout::default(),
             untabbed: Some("\tlet x = 1;".into()),
-            align: gpui::TextAlign::Left,
         });
         for hit in hits {
             assert_eq!(hit.painted_offset(1), hit.tab_width);

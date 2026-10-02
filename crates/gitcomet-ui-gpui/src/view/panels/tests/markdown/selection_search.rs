@@ -2504,9 +2504,9 @@ fn searching_the_merge_tool_preview_scrolls_the_column_holding_the_match(
 
 #[gpui::test]
 fn aligned_rows_are_highlighted_where_their_lines_are_painted(cx: &mut gpui::TestAppContext) {
-    // `gpui` centres each wrapped line as it paints but hit-tests as if every
-    // line started at the left, so a selection drawn from the layout alone
-    // sat beside the text it covered.
+    // The highlight is drawn beneath the glyphs, before `gpui` records the
+    // alignment it paints them with; read from the layout then, it sat at the
+    // left of centred text.
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -2547,11 +2547,27 @@ fn aligned_rows_are_highlighted_where_their_lines_are_painted(cx: &mut gpui::Tes
 
     let (text, rects) = highlighted(fixture.row_ix(long.trim_end()));
     assert!(rects.len() >= 3, "the paragraph wraps: {rects:?}");
-    for rect in &rects {
+    // A line is centred on its words; the space it wrapped at hangs past its
+    // right edge, so a selected line ends one space beyond the centred span.
+    let (last, wrapped) = rects.split_last().expect("rects");
+    let (left, right) = gaps(text, *last);
+    assert!(
+        (left - right).abs() <= px(1.0) && left > px(0.0),
+        "the last line is highlighted centred: rect={last:?} text={text:?}"
+    );
+    let space = {
+        let (left, right) = gaps(text, wrapped[0]);
+        left - right
+    };
+    assert!(
+        space > px(1.0) && space < px(20.0),
+        "a wrapped line overhangs by one space: {space:?}"
+    );
+    for rect in wrapped {
         let (left, right) = gaps(text, *rect);
         assert!(
-            (left - right).abs() <= px(1.0) && left >= px(-0.5),
-            "every wrapped line is highlighted centred: rect={rect:?} text={text:?}"
+            (left - right - space).abs() <= px(1.0) && left > px(0.0),
+            "every wrapped line is centred on its words: rect={rect:?} text={text:?}"
         );
     }
 

@@ -1182,8 +1182,7 @@ pub(in crate::view) use self::markdown_flow_text::{
     take_markdown_flow_texts_built_for_tests,
 };
 pub(in crate::view) use self::markdown_flow_text::{
-    markdown_flow_index_for_position, markdown_flow_painted_offset, markdown_flow_range_rects,
-    markdown_flow_row_offset,
+    markdown_flow_painted_offset, markdown_flow_range_rects, markdown_flow_row_offset,
 };
 pub(in crate::view) use self::sidebar::active_worktree_paths_by_branch;
 pub(in crate::view) use self::sidebar::listed_worktree_paths_by_branch;

@@ -309,14 +309,11 @@ impl MainPaneView {
             // A wrapped row spans several visual lines, so the click resolves
             // against the layout it was painted with; `Err` is the clamp to the
             // nearest boundary, which is what a drag past the text wants.
-            let (painted_offset, past_painted_text) = match rows::markdown_flow_index_for_position(
-                &wrapped.layout,
-                wrapped.align,
-                position,
-            ) {
-                Ok(offset) => (offset, false),
-                Err(offset) => (offset, true),
-            };
+            let (painted_offset, past_painted_text) =
+                match wrapped.layout.index_for_position(position) {
+                    Ok(offset) => (offset, false),
+                    Err(offset) => (offset, true),
+                };
             return Some(DiffTextHit {
                 pos: DiffTextPos {
                     source_visible_ix: hitbox.source_visible_ix,
@@ -405,7 +402,7 @@ impl MainPaneView {
             // range that starts a line would otherwise begin on the previous one.
             let rects = rows::markdown_flow_range_rects(
                 &wrapped.layout,
-                wrapped.align,
+                wrapped.layout.text_align(),
                 wrapped.painted_offset(start),
                 wrapped.painted_offset(end),
             );
