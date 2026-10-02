@@ -86,7 +86,7 @@ pub(super) fn panel(
                         scaled_px(14.0),
                     ))
                     .on_click(theme, cx, |_this, _e, _window, cx| {
-                        cx.open_url(SUBMODULE_TRUST_CVE_URL);
+                        crate::view::platform_open::open_url_later(SUBMODULE_TRUST_CVE_URL, cx);
                     }),
             ),
         );

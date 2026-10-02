@@ -1111,7 +1111,7 @@ index 1111111..2222222 100644
     });
 
     cx.update(|_window, app| {
-        crate::app::set_app_ui_scale_percent(app, 200);
+        crate::ui_scale::set_default(app, 200);
     });
     draw_and_drain_test_window(cx);
     let zoomed_columns = cx.update(|_window, app| {
@@ -1129,7 +1129,7 @@ index 1111111..2222222 100644
     );
 
     cx.update(|_window, app| {
-        crate::app::set_app_ui_scale_percent(app, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT);
+        crate::ui_scale::set_default(app, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT);
         let mut appearance = crate::appearance::current(app);
         appearance.editor_font_size_px = 26;
         app.set_global(appearance);

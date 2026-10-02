@@ -2,26 +2,37 @@
 //!
 //! It registers one of every contribution through the public API only:
 //! repository views (one of them hosting diff panes and a file list, see
-//! [`crate::changes`]), a status item, a settings page, commands with a key
-//! binding and menu entries, an asset, a repository-entry gate, a close
-//! guard, and a hosted dialog. Review counts are per window and saved in
-//! that window's workspace, so they survive a restart.
+//! [`crate::changes`]), a bottom panel, a details tab, a sidebar section and
+//! sidebar rows, a history annotator, a status item, the edition strip and
+//! title-bar brand, a settings page, commands with a key binding and menu
+//! entries, an asset, a window gate, a repository-entry gate, a close guard,
+//! and a hosted dialog. Review counts are per window and saved in that
+//! window's workspace, so they survive a restart.
 
 use crate::review_counter::ReviewCounter;
+use gitcomet_core::domain::Commit;
+use gitcomet_core::identity::WindowKind;
 use gitcomet_extension_api::{
-    BottomPanelDescriptor, CloseDecision, CloseRequest, CloseScope, CommandContext,
-    CommandDescriptor, DetailsTabDescriptor, EntryOrigin, Extension, ExtensionId, GateDecision,
-    MenuLocation, Registrar, RepositoryEntryRequest, RepositoryViewContext,
-    RepositoryViewDescriptor, SettingsPageDescriptor, SidebarSectionDescriptor,
-    StatusItemDescriptor, WindowHost,
+    BottomPanelDescriptor, ChromeDescriptor, CloseDecision, CloseRequest, CloseScope,
+    CommandContext, CommandDescriptor, DetailsTabDescriptor, DialogHandle, EntryOrigin, Extension,
+    ExtensionId, GateDecision, HistoryAnnotator, HistoryRowAnnotation, HostedAction,
+    HostedMenuItem, MenuLocation, NotificationKind, Registrar, RepositoryEntryRequest,
+    RepositoryViewContext, RepositoryViewDescriptor, RowGlyph, RowMark, SettingsPageContext,
+    SettingsPageDescriptor, ShellEvent, SidebarProvider, SidebarRow, SidebarSectionDescriptor,
+    SidebarSectionRows, SlotSignal, StatusItemDescriptor, WindowExtension, WindowGateDescriptor,
+    WindowHost,
 };
 use gitcomet_ui_kit::components::{Button, ButtonStyle};
 use gitcomet_ui_kit::gpui::prelude::*;
-use gitcomet_ui_kit::gpui::{AnyView, App, Context, Entity, Global, Window, WindowId, div};
+use gitcomet_ui_kit::gpui::{
+    AnyView, App, Context, Entity, Global, Window, WindowId, div, rgb_to_hsla, svg,
+};
 use gitcomet_ui_kit::theme::AppTheme;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::LazyLock;
 
 pub const EXTENSION_ID: &str = "com.example.review";
 /// A repository holding this file cannot be opened: the example's gate.
@@ -31,8 +42,43 @@ pub const ICON_PATH: &str = "extensions/com.example.review/icons/review.svg";
 
 const ICON_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M2 8l4 4 8-8" stroke="currentColor" fill="none" stroke-width="2"/></svg>"#;
 
+/// The Changes list's flag glyph, served at
+/// `extensions/com.example.review/icons/flag.svg`.
+pub const FLAG_ICON_PATH: &str = "extensions/com.example.review/icons/flag.svg";
+
+const FLAG_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M3 15V2h9l-2 3 2 3H3" stroke="currentColor" fill="none" stroke-width="1.5" stroke-linejoin="round"/></svg>"#;
+
 /// The bottom panel listing this repository's reviews.
 pub const REVIEW_LOG_PANEL: &str = "review-log";
+
+/// Where the settings page's documentation link goes.
+pub const DOCS_URL: &str = "https://example.com/comet-example/docs";
+
+/// Set to `1` to open every window behind the example's gate.
+pub const GATE_ENV: &str = "COMET_EXAMPLE_GATE";
+
+/// The gate's revision. One per process is enough: the flag itself is per App.
+static GATE_SIGNAL: LazyLock<SlotSignal> = LazyLock::new(SlotSignal::default);
+
+struct Gate(bool);
+
+impl Global for Gate {}
+
+/// Whether windows show the gate: [`GATE_ENV`] until [`set_gated`] says
+/// otherwise (tests cannot set environment variables).
+pub fn is_gated(cx: &App) -> bool {
+    cx.try_global::<Gate>().map_or_else(
+        || std::env::var_os(GATE_ENV).is_some_and(|value| value == "1"),
+        |gate| gate.0,
+    )
+}
+
+/// Raises or lifts the gate in every window.
+pub fn set_gated(gated: bool, cx: &mut App) {
+    cx.set_global(Gate(gated));
+    GATE_SIGNAL.bump();
+    cx.refresh_windows();
+}
 
 pub fn extension_id() -> ExtensionId {
     ExtensionId::new(EXTENSION_ID).expect("the example id is valid")
@@ -155,6 +201,31 @@ impl Render for ReviewView {
                         mark_reviewed(&window, &workdir, cx);
                     }),
             )
+            .child(Button::new("example_review_more", "More").on_click(
+                theme,
+                cx,
+                |this, event, _, cx| this.open_more(event.position(), cx),
+            ))
+    }
+}
+
+impl ReviewView {
+    /// A menu of the view's actions, with the extension's own icon.
+    fn open_more(
+        &self,
+        anchor: gitcomet_ui_kit::gpui::Point<gitcomet_ui_kit::gpui::Pixels>,
+        cx: &mut App,
+    ) {
+        let window = self.context.window.clone();
+        let workdir = self.context.repository.workdir().to_path_buf();
+        let mark = HostedAction::new("Mark reviewed", move |cx| {
+            mark_reviewed(&window, &workdir, cx)
+        });
+        let _ = self.context.window.open_menu(
+            anchor,
+            vec![HostedMenuItem::action(mark).with_icon(ICON_PATH)],
+            cx,
+        );
     }
 }
 
@@ -292,15 +363,16 @@ impl Render for ReviewStatus {
     }
 }
 
-/// The settings page: whether closing an unreviewed repository asks first.
+/// The settings page: whether closing an unreviewed repository asks first,
+/// and a reset that asks before it forgets anything.
 pub struct ReviewSettings {
-    theme: AppTheme,
+    context: SettingsPageContext,
     reviews: Entity<Reviews>,
 }
 
 impl Render for ReviewSettings {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
+        let theme = self.context.theme;
         let enabled = self.reviews.read(cx).confirm_close_unreviewed;
         let label = if enabled {
             "Ask before closing unreviewed repositories: on"
@@ -311,21 +383,110 @@ impl Render for ReviewSettings {
             .id("example_review_settings")
             .debug_selector(|| "example_review_settings".to_string())
             .p_2()
-            .child(Button::new("example_review_settings_toggle", label).on_click(
-                theme,
-                cx,
-                |this, _, _, cx| {
-                    this.reviews.update(cx, |reviews, cx| {
-                        reviews.confirm_close_unreviewed = !reviews.confirm_close_unreviewed;
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                Button::new("example_review_settings_toggle", label).on_click(
+                    theme,
+                    cx,
+                    |this, _, _, cx| {
+                        this.reviews.update(cx, |reviews, cx| {
+                            reviews.confirm_close_unreviewed = !reviews.confirm_close_unreviewed;
+                            cx.notify();
+                        });
+                        let enabled = this.reviews.read(cx).confirm_close_unreviewed;
+                        let value = serde_json::json!({ "confirm_close_unreviewed": enabled });
+                        let _ = gitcomet_extension_api::storage::save(&extension_id(), Some(value));
+                        let message = if enabled {
+                            "Closing an unreviewed repository will ask first"
+                        } else {
+                            "Unreviewed repositories close without asking"
+                        };
+                        let _ = this.context.host.toast(
+                            NotificationKind::Success,
+                            message,
+                            Vec::new(),
+                            cx,
+                        );
                         cx.notify();
-                    });
-                    let value = serde_json::json!({
-                        "confirm_close_unreviewed": this.reviews.read(cx).confirm_close_unreviewed,
-                    });
-                    let _ = gitcomet_extension_api::storage::save(&extension_id(), Some(value));
-                    cx.notify();
-                },
-            ))
+                    },
+                ),
+            )
+            .child(
+                Button::new("example_review_reset", "Reset review counts…").on_click(
+                    theme,
+                    cx,
+                    |this, _, _, cx| confirm_reset(&this.context.host, this.context.theme, cx),
+                ),
+            )
+            .child(
+                Button::new("example_review_docs", "Documentation").on_click(
+                    theme,
+                    cx,
+                    |this, _, _, cx| {
+                        let _ = this.context.host.open_url(DOCS_URL, cx);
+                    },
+                ),
+            )
+    }
+}
+
+/// Asks in a hosted dialog before forgetting every window's counts.
+fn confirm_reset(host: &WindowHost, theme: AppTheme, cx: &mut App) {
+    let handle: Rc<RefCell<Option<DialogHandle>>> = Rc::default();
+    let shared = Rc::clone(&handle);
+    let window = host.clone();
+    let opened = host.open_dialog(
+        "Reset review counts?",
+        move |_, cx| -> AnyView {
+            cx.new(|_| ResetConfirm {
+                theme,
+                window,
+                handle: shared,
+            })
+            .into()
+        },
+        cx,
+    );
+    *handle.borrow_mut() = opened.ok();
+}
+
+/// The reset confirmation's body.
+struct ResetConfirm {
+    theme: AppTheme,
+    window: WindowHost,
+    handle: Rc<RefCell<Option<DialogHandle>>>,
+}
+
+impl Render for ResetConfirm {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("example_reset_confirm")
+            .debug_selector(|| "example_reset_confirm".to_string())
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child("Every window forgets how often its repositories were reviewed.")
+            .child(
+                Button::new("example_reset_confirm_button", "Reset")
+                    .style(ButtonStyle::Danger)
+                    .on_click(self.theme, cx, |this, _, _, cx| {
+                        reviews(cx).update(cx, |reviews, cx| {
+                            reviews.counts.values_mut().for_each(BTreeMap::clear);
+                            cx.notify();
+                        });
+                        if let Some(handle) = this.handle.borrow_mut().take() {
+                            handle.close(cx);
+                        }
+                        let _ = this.window.toast(
+                            NotificationKind::Success,
+                            "Review counts reset",
+                            Vec::new(),
+                            cx,
+                        );
+                    }),
+            )
     }
 }
 
@@ -367,6 +528,119 @@ fn close_guard(request: &CloseRequest, cx: &App) -> CloseDecision {
     }
 }
 
+/// The gate: the product is locked until someone continues.
+pub struct GateView {
+    window: WindowHost,
+}
+
+impl Render for GateView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.window.theme(cx);
+        div()
+            .id("example_gate")
+            .debug_selector(|| "example_gate".to_string())
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .bg(theme.colors.surface.canvas)
+            .text_color(theme.colors.foreground.primary)
+            .child(format!("{} is locked", crate::DISPLAY_NAME))
+            .child(
+                Button::new("example_gate_continue", "Continue")
+                    .style(ButtonStyle::Filled)
+                    .on_click(theme, cx, |_, _, _, cx| set_gated(false, cx)),
+            )
+    }
+}
+
+/// The edition strip: replaces the status bar's default product row.
+pub struct EditionStrip {
+    window: WindowHost,
+}
+
+impl Render for EditionStrip {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.window.theme(cx);
+        div()
+            .id("example_edition_strip")
+            .debug_selector(|| "example_edition_strip".to_string())
+            .px_2()
+            .text_size(theme.ui_text(12.0))
+            .text_color(theme.colors.foreground.secondary)
+            .child(format!(
+                "{} {} · Example edition",
+                crate::DISPLAY_NAME,
+                gitcomet_core::identity::current().version()
+            ))
+    }
+}
+
+/// The title-bar brand: the example's mark beside the title.
+pub struct TitleBrand {
+    window: WindowHost,
+}
+
+impl Render for TitleBrand {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.window.theme(cx);
+        div()
+            .id("example_title_brand")
+            .debug_selector(|| "example_title_brand".to_string())
+            .flex()
+            .items_center()
+            .gap_1()
+            .text_size(theme.ui_text(12.0))
+            .text_color(theme.colors.foreground.secondary)
+            .child(
+                svg()
+                    .path(ICON_PATH)
+                    .size(theme.ui_text(12.0))
+                    .text_color(theme.colors.accent.solid),
+            )
+            .child("Example")
+    }
+}
+
+/// Marks commits whose summary mentions a review.
+fn annotate(context: &RepositoryViewContext, commit: &Commit, cx: &App) -> HistoryRowAnnotation {
+    let accent = rgb_to_hsla(context.window.theme(cx).colors.accent.solid);
+    match review_mark(commit, accent) {
+        Some(mark) => HistoryRowAnnotation::default().with_trailing(mark),
+        None => HistoryRowAnnotation::default(),
+    }
+}
+
+fn review_mark(commit: &Commit, color: gitcomet_ui_kit::gpui::Hsla) -> Option<RowMark> {
+    commit.summary.to_lowercase().contains("review").then(|| {
+        RowMark::new(color)
+            .with_glyph(RowGlyph::Icon(ICON_PATH.into()))
+            .with_label("review")
+    })
+}
+
+/// The sidebar rows: one action marking the repository reviewed.
+fn sidebar_rows(context: &RepositoryViewContext, _cx: &App) -> Vec<SidebarSectionRows> {
+    let window = context.window.clone();
+    let workdir = context.repository.workdir().to_path_buf();
+    vec![SidebarSectionRows::new(
+        "example-review-actions",
+        "Review actions",
+        vec![
+            SidebarRow::new(
+                "mark-reviewed",
+                "Mark reviewed",
+                HostedAction::new("Mark reviewed", move |cx| {
+                    mark_reviewed(&window, &workdir, cx)
+                }),
+            )
+            .with_icon(ICON_PATH),
+        ],
+    )]
+}
+
 fn show_summary(context: CommandContext, _window: &mut Window, cx: &mut App) {
     let total = reviews(cx).read(cx).window_total(context.window.id());
     let theme = context.window.theme(cx);
@@ -384,6 +658,23 @@ fn show_summary(context: CommandContext, _window: &mut Window, cx: &mut App) {
     );
 }
 
+/// One main window's share of the model: its counts leave with the window.
+struct ReviewWindow {
+    reviews: Entity<Reviews>,
+}
+
+impl WindowExtension for ReviewWindow {
+    fn on_event(&mut self, event: &ShellEvent, host: &WindowHost, cx: &mut App) {
+        if matches!(event, ShellEvent::WindowClosed) {
+            let window_id = host.id();
+            self.reviews.update(cx, |reviews, cx| {
+                reviews.counts.remove(&window_id);
+                cx.notify();
+            });
+        }
+    }
+}
+
 pub struct ReviewExtension;
 
 impl Extension for ReviewExtension {
@@ -395,144 +686,139 @@ impl Extension for ReviewExtension {
         registrar
             .repository_view(
                 "review",
-                RepositoryViewDescriptor {
-                    navigation: None,
-                    title: "Review".into(),
-                    icon: ICON_PATH.into(),
-                    build: Rc::new(|context, _window, cx| {
-                        cx.new(|cx| ReviewView::new(context, cx)).into()
-                    }),
-                },
+                RepositoryViewDescriptor::new("Review", ICON_PATH, |context, _window, cx| {
+                    cx.new(|cx| ReviewView::new(context, cx)).into()
+                }),
             )
             .repository_view(
                 "changes",
-                RepositoryViewDescriptor {
-                    navigation: None,
-                    title: "Changes".into(),
-                    icon: ICON_PATH.into(),
-                    build: Rc::new(|context, _window, cx| {
-                        cx.new(|cx| crate::changes::ChangesView::new(context, cx))
-                            .into()
-                    }),
-                },
+                RepositoryViewDescriptor::new("Changes", ICON_PATH, |context, _window, cx| {
+                    cx.new(|cx| crate::changes::ChangesView::new(context, cx))
+                        .into()
+                })
+                .with_action_bar(|context, _window, cx| {
+                    cx.new(|cx| crate::changes::ChangesActions::new(context, cx))
+                        .into()
+                }),
             )
             .bottom_panel(
                 REVIEW_LOG_PANEL,
-                BottomPanelDescriptor {
-                    title: "Review Log".into(),
-                    icon: ICON_PATH.into(),
-                    build: Rc::new(|context, _window, cx| {
-                        cx.new(|cx| ReviewLog::new(context, cx)).into()
-                    }),
-                },
+                BottomPanelDescriptor::new("Review Log", ICON_PATH, |context, _window, cx| {
+                    cx.new(|cx| ReviewLog::new(context, cx)).into()
+                }),
             )
             .details_tab(
                 "review-details",
-                DetailsTabDescriptor {
-                    title: "Review".into(),
-                    build: Rc::new(|context, _window, cx| {
-                        cx.new(|cx| ReviewCount::new(context, "example_review_details", cx))
-                            .into()
-                    }),
-                },
+                DetailsTabDescriptor::new("Review", |context, _window, cx| {
+                    cx.new(|cx| ReviewCount::new(context, "example_review_details", cx))
+                        .into()
+                })
+                .with_icon(ICON_PATH),
             )
             .sidebar_section(
                 "review-sidebar",
-                SidebarSectionDescriptor {
-                    title: "Review".into(),
-                    build: Rc::new(|context, _window, cx| {
-                        cx.new(|cx| ReviewCount::new(context, "example_review_sidebar", cx))
-                            .into()
-                    }),
-                },
+                SidebarSectionDescriptor::new("Review", |context, _window, cx| {
+                    cx.new(|cx| ReviewCount::new(context, "example_review_sidebar", cx))
+                        .into()
+                }),
             )
             .status_item(
                 "review-status",
-                StatusItemDescriptor {
-                    view: None,
-                    build: Rc::new(|window, _, cx| {
-                        cx.new(|cx| ReviewStatus::new(window, cx)).into()
-                    }),
-                },
+                StatusItemDescriptor::new(|window, _, cx| {
+                    cx.new(|cx| ReviewStatus::new(window, cx)).into()
+                }),
             )
             .settings_page(
                 "review-settings",
-                SettingsPageDescriptor {
-                    title: "Review".into(),
-                    icon: ICON_PATH.into(),
-                    keywords: "review unreviewed close confirm".into(),
-                    build: Rc::new(|theme, _, cx| {
-                        let reviews = reviews(cx);
-                        cx.new(|_| ReviewSettings { theme, reviews }).into()
-                    }),
-                },
+                SettingsPageDescriptor::new("Review", ICON_PATH, |context, _, cx| {
+                    let reviews = reviews(cx);
+                    cx.new(|_| ReviewSettings { context, reviews }).into()
+                })
+                .with_keywords("review unreviewed close confirm reset"),
             )
             .command(
                 "mark-reviewed",
-                CommandDescriptor {
-                    label: "Mark Repository Reviewed".into(),
-                    category: "Review".into(),
-                    keywords: "review approve".into(),
-                    requires_repository: true,
-                    run: Rc::new(|context, _window, cx| {
+                CommandDescriptor::new(
+                    "Mark Repository Reviewed",
+                    "Review",
+                    |context, _window, cx| {
                         if let Some(repository) = &context.repository {
                             mark_reviewed(&context.window, repository.workdir(), cx);
                         }
-                    }),
-                },
+                    },
+                )
+                .with_keywords("review approve")
+                .requiring_repository(),
             )
             .command(
                 "show-summary",
-                CommandDescriptor {
-                    label: "Show Review Summary".into(),
-                    category: "Review".into(),
-                    keywords: "review count".into(),
-                    requires_repository: false,
-                    run: Rc::new(show_summary),
-                },
+                CommandDescriptor::new("Show Review Summary", "Review", show_summary)
+                    .with_keywords("review count"),
             )
             .command(
                 "toggle-review-log",
-                CommandDescriptor {
-                    label: "Toggle Review Log".into(),
-                    category: "Review".into(),
-                    keywords: "review log panel".into(),
-                    requires_repository: true,
-                    run: Rc::new(toggle_review_log),
-                },
+                CommandDescriptor::new("Toggle Review Log", "Review", toggle_review_log)
+                    .with_keywords("review log panel")
+                    .requiring_repository(),
             )
             .key_binding("secondary-alt-r", "mark-reviewed", None)
             .menu_item(MenuLocation::Application, "show-summary")
             .menu_item(MenuLocation::RepositoryTab, "mark-reviewed")
             .asset("icons/review.svg", ICON_SVG)
+            .asset("icons/flag.svg", FLAG_SVG)
             .repository_entry_gate("deny-marker", Rc::new(gate))
             .close_guard("unreviewed", Rc::new(close_guard))
-            .on_window_opened(|window, cx| {
-                // Restore this window's saved counts; drop them when it closes.
-                let counts = saved_counts(&window, cx);
-                let window_id = window.id();
-                let model = reviews(cx);
-                model.update(cx, |reviews, cx| {
-                    reviews.counts.insert(window_id, counts);
-                    cx.notify();
-                });
-                if let Some(value) = gitcomet_extension_api::storage::load(&extension_id())
-                    && let Some(enabled) = value
-                        .get("confirm_close_unreviewed")
-                        .and_then(|value| value.as_bool())
-                {
-                    model.update(cx, |reviews, _| reviews.confirm_close_unreviewed = enabled);
-                }
-                cx.on_window_closed(move |cx, closed| {
-                    if closed == window_id {
-                        model.update(cx, |reviews, cx| {
-                            reviews.counts.remove(&window_id);
-                            cx.notify();
-                        });
-                    }
-                })
-                .detach();
-            });
+            .window_gate(
+                "locked",
+                WindowGateDescriptor::new(
+                    GATE_SIGNAL.clone(),
+                    |_, cx| is_gated(cx),
+                    |window, _, cx| cx.new(|_| GateView { window }).into(),
+                ),
+            )
+            .edition_strip(
+                "edition",
+                ChromeDescriptor::new(|window, _, cx| cx.new(|_| EditionStrip { window }).into()),
+            )
+            .title_bar_brand(
+                "brand",
+                ChromeDescriptor::new(|window, _, cx| cx.new(|_| TitleBrand { window }).into()),
+            )
+            .history_annotator(
+                "review-mentions",
+                HistoryAnnotator::new(SlotSignal::default(), annotate),
+            )
+            .sidebar_provider(
+                "review-actions",
+                SidebarProvider::new(SlotSignal::default(), sidebar_rows),
+            );
+    }
+
+    /// Restores a main window's saved counts; they leave with the window.
+    fn window_opened(
+        &self,
+        host: WindowHost,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> Option<Box<dyn WindowExtension>> {
+        if host.kind() != WindowKind::Main {
+            return None;
+        }
+        let counts = saved_counts(&host, cx);
+        let window_id = host.id();
+        let model = reviews(cx);
+        model.update(cx, |reviews, cx| {
+            reviews.counts.insert(window_id, counts);
+            cx.notify();
+        });
+        if let Some(value) = gitcomet_extension_api::storage::load(&extension_id())
+            && let Some(enabled) = value
+                .get("confirm_close_unreviewed")
+                .and_then(|value| value.as_bool())
+        {
+            model.update(cx, |reviews, _| reviews.confirm_close_unreviewed = enabled);
+        }
+        Some(Box::new(ReviewWindow { reviews: model }))
     }
 }
 
@@ -558,7 +844,25 @@ mod tests {
         assert_eq!(registry.asset(ICON_PATH), Some(ICON_SVG));
         assert_eq!(registry.entry_gates().len(), 1);
         assert_eq!(registry.close_guards().len(), 1);
-        assert_eq!(registry.window_opened().len(), 1);
+        assert_eq!(registry.window_gates().len(), 1);
+        assert!(registry.edition_strip().is_some());
+        assert!(registry.title_bar_brand().is_some());
+        assert_eq!(registry.history_annotators().len(), 1);
+        assert_eq!(registry.sidebar_providers().len(), 1);
+    }
+
+    #[test]
+    fn history_rows_mentioning_a_review_are_marked() {
+        let commit = |summary: &str| Commit {
+            id: gitcomet_core::domain::CommitId("c0ffee".into()),
+            parent_ids: Default::default(),
+            summary: summary.into(),
+            author: "A".into(),
+            time: std::time::SystemTime::UNIX_EPOCH,
+        };
+        let color = gitcomet_ui_kit::gpui::red();
+        assert!(review_mark(&commit("Review the parser"), color).is_some());
+        assert!(review_mark(&commit("Fix the parser"), color).is_none());
     }
 
     #[test]

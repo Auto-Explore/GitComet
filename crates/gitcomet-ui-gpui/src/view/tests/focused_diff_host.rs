@@ -1,5 +1,48 @@
 use super::*;
-use gitcomet_extension_api::DiffLayout;
+use gitcomet_extension_api::{DiffLayout, Registry};
+use std::sync::atomic::{AtomicI32, Ordering};
+
+/// A focused mergetool window on a repository that need not exist; its exit
+/// code lands in `exit_code`.
+fn mergetool(
+    cx: &mut gpui::TestAppContext,
+    exit_code: Arc<AtomicI32>,
+) -> (Entity<GitCometView>, &mut gpui::VisualTestContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    store.replace_snapshot_for_test(Arc::new(AppState {
+        git_runtime: available_git_runtime_state(),
+        ..AppState::test_default()
+    }));
+    let config = GitCometViewConfig {
+        view_mode: GitCometViewMode::FocusedMergetool,
+        focused_mergetool: Some(FocusedMergetoolViewConfig {
+            repo_path: PathBuf::from("/tmp/focused-mergetool-host-repo"),
+            conflicted_file_path: PathBuf::from("conflicted.txt"),
+            labels: FocusedMergetoolLabels {
+                local: "LOCAL".to_string(),
+                remote: "REMOTE".to_string(),
+                base: "BASE".to_string(),
+            },
+        }),
+        focused_mergetool_exit_code: Some(exit_code),
+        ..GitCometViewConfig::default()
+    };
+    cx.add_window_view(|window, cx| {
+        GitCometView::new_with_config(store, events, config, window, cx)
+    })
+}
+
+fn install_example_registry(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        crate::view::extension_host::install_registry(
+            Registry::build(vec![Box::new(
+                gitcomet_extension_example::review::ReviewExtension,
+            )])
+            .unwrap(),
+            cx,
+        )
+    });
+}
 
 fn focused(
     cx: &mut gpui::TestAppContext,
@@ -134,7 +177,11 @@ fn focused_diff_close_runs_extension_guards(cx: &mut gpui::TestAppContext) {
             PopoverPromptDismiss,
             Some("PopoverPrompt"),
         )]);
-        crate::view::extension_host::install(Registry::build(vec![Box::new(Guard)]).unwrap(), cx)
+        // What a focused launch installs: the registry without commands.
+        crate::view::extension_host::install_registry(
+            Registry::build(vec![Box::new(Guard)]).unwrap(),
+            cx,
+        )
     });
     let (view, cx) = focused(cx, true);
     cx.run_until_parked();
@@ -173,4 +220,103 @@ fn focused_diff_close_runs_extension_guards(cx: &mut gpui::TestAppContext) {
                 .is_open(app)
         )
     });
+}
+
+/// Window gates come first in every root, focused tools included: the
+/// windows Git itself opens are gated like the main one.
+#[gpui::test]
+fn extension_gates_cover_focused_diff_and_mergetool_roots(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    install_example_registry(cx);
+    cx.update(|cx| gitcomet_extension_example::review::set_gated(true, cx));
+    {
+        let (_view, cx) = focused(cx, true);
+        cx.run_until_parked();
+        test_support::redraw(cx);
+        assert!(cx.debug_bounds("example_gate").is_some(), "focused diff");
+    }
+    let (view, cx) = mergetool(cx, Arc::new(AtomicI32::new(0)));
+    cx.run_until_parked();
+    test_support::redraw(cx);
+    assert!(
+        cx.debug_bounds("example_gate").is_some(),
+        "focused mergetool"
+    );
+    cx.update(|_, app| {
+        assert_eq!(
+            view.read(app)
+                .extension_window
+                .as_ref()
+                .unwrap()
+                .host()
+                .kind(),
+            gitcomet_core::identity::WindowKind::FocusedMergetool
+        );
+        assert!(
+            crate::view::extension_host::palette_entries(app).is_empty(),
+            "focused tools offer no extension commands"
+        );
+    });
+}
+
+/// Cancelling the focused mergetool asks the close guards first, like closing
+/// its window; confirming exits as cancelled.
+#[gpui::test]
+fn cancelling_the_focused_mergetool_runs_the_close_guards(cx: &mut gpui::TestAppContext) {
+    use gitcomet_extension_api::*;
+    let _guard = crate::test_support::lock_visual_test();
+    struct Guard;
+    impl Extension for Guard {
+        fn id(&self) -> ExtensionId {
+            ExtensionId::new("com.example.mergetool-guard").unwrap()
+        }
+        fn register(&self, r: &mut Registrar) {
+            r.close_guard(
+                "pending",
+                std::rc::Rc::new(|request, _| {
+                    assert_eq!(request.scope, CloseScope::Window);
+                    assert_eq!(
+                        request.window.kind(),
+                        gitcomet_core::identity::WindowKind::FocusedMergetool
+                    );
+                    CloseDecision::Confirm {
+                        reason: "A merge note is unsaved.".into(),
+                    }
+                }),
+            );
+        }
+    }
+    cx.update(|cx| {
+        crate::view::extension_host::install_registry(
+            Registry::build(vec![Box::new(Guard)]).unwrap(),
+            cx,
+        )
+    });
+    let exit_code = Arc::new(AtomicI32::new(-7));
+    let (view, cx) = mergetool(cx, Arc::clone(&exit_code));
+    cx.run_until_parked();
+    test_support::redraw(cx);
+    let (host, main_pane) = cx.update(|_, app| {
+        let view = view.read(app);
+        (
+            view.extension_window.as_ref().unwrap().host(),
+            view.main_pane.clone(),
+        )
+    });
+    cx.update(|window, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.close_diff_or_cancel(RepoId(1), window, cx)
+        })
+    });
+    cx.run_until_parked();
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("close_guard_reasons").is_some());
+    assert_eq!(exit_code.load(Ordering::SeqCst), 1, "cancelled");
+    cx.update(|_, app| assert!(host.is_open(app), "the guard holds the window"));
+
+    click_debug_selector(cx, "close_guard_confirm");
+    cx.run_until_parked();
+    cx.cx
+        .update(|app| assert!(!host.is_open(app), "confirming closes it"));
+    assert_eq!(exit_code.load(Ordering::SeqCst), 1);
 }

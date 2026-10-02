@@ -68,8 +68,8 @@ impl SettingsWindowView {
         let ui_scale_row = self
             .summary_row(
                 "settings_window_ui_scale",
-                "UI scale",
-                ui_scale::label(self.ui_scale_percent).into(),
+                "Default UI scale",
+                ui_scale::label(self.default_ui_scale_percent).into(),
                 self.expanded_section == Some(SettingsSection::UiScale),
                 theme,
             )
@@ -233,7 +233,7 @@ impl SettingsWindowView {
                                 false,
                                 controls::ControlActivation::Action,
                                 move |_, _, cx| {
-                                    cx.open_url(&url);
+                                    crate::view::platform_open::open_url_later(&url, cx);
                                 },
                             ),
                         )
@@ -246,7 +246,6 @@ impl SettingsWindowView {
             let mut detail = self.detail_container("settings_window_ui_scale_container", theme);
             for percent in ui_scale::UI_SCALE_PRESETS.iter().copied() {
                 let detail_text = match percent {
-                    ui_scale::DEFAULT_UI_SCALE_PERCENT => Some("Default scale".into()),
                     80 | 90 => Some("Fit more on screen".into()),
                     110 | 125 | 150 => Some("Larger controls and text".into()),
                     _ => None,
@@ -256,7 +255,7 @@ impl SettingsWindowView {
                         format!("settings_window_ui_scale_{percent}"),
                         ui_scale::label(percent),
                         detail_text,
-                        self.ui_scale_percent == percent,
+                        self.default_ui_scale_percent == percent,
                         theme,
                     )
                     .on_activate(
@@ -275,7 +274,10 @@ impl SettingsWindowView {
                         .pb_1()
                         .text_size(theme.ui_text(12.0))
                         .text_color(theme.colors.foreground.secondary)
-                        .child("Shortcut: Ctrl/Cmd +, -, and 0."),
+                        .child(
+                            "New windows open at this scale. Zoom one window with Ctrl/Cmd +, -, \
+                             and 0, or the zoom button in its status bar.",
+                        ),
                 ),
             );
         }
@@ -2334,7 +2336,7 @@ impl SettingsWindowView {
                     false,
                     controls::ControlActivation::Action,
                     move |_, _, cx| {
-                        cx.open_url(&url);
+                        crate::view::platform_open::open_url_later(&url, cx);
                     },
                 ),
             );
@@ -2357,7 +2359,7 @@ impl SettingsWindowView {
                         false,
                         controls::ControlActivation::Action,
                         move |_, _, cx| {
-                            cx.open_url(&url);
+                            crate::view::platform_open::open_url_later(&url, cx);
                         },
                     ),
                 )
@@ -2374,7 +2376,7 @@ impl SettingsWindowView {
                             false,
                             controls::ControlActivation::Action,
                             move |_, _, cx| {
-                                cx.open_url(url);
+                                crate::view::platform_open::open_url_later(url, cx);
                             },
                         ),
                 )
@@ -2391,7 +2393,7 @@ impl SettingsWindowView {
                         false,
                         controls::ControlActivation::Action,
                         move |_, _, cx| {
-                            cx.open_url(&license.url);
+                            crate::view::platform_open::open_url_later(&license.url, cx);
                         },
                     ),
                 )
@@ -2415,7 +2417,7 @@ impl SettingsWindowView {
                         false,
                         controls::ControlActivation::Action,
                         move |_, _, cx| {
-                            cx.open_url(url);
+                            crate::view::platform_open::open_url_later(url, cx);
                         },
                     ),
                 )

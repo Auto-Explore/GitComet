@@ -158,7 +158,7 @@ fn tinted_rows_lay_out_like_plain_rows_and_hidden_ones_go_with_the_setting(
     let (view, cx) = sidebar_window(cx, visibility_state(true));
     for scale in [100, 150] {
         cx.update(|window, app| {
-            ui_scale::set_current(app, scale);
+            ui_scale::set_default(app, scale);
             ui_scale::apply_to_window(window, scale);
             window.refresh();
         });

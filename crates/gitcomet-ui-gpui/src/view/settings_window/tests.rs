@@ -430,6 +430,10 @@ fn settings_window_options_request_client_chrome_and_resize_behavior() {
         "settings window should request client-side decorations"
     );
     assert!(
+        options.icon.is_some(),
+        "settings window carries the product's window icon"
+    );
+    assert!(
         options.is_movable,
         "settings window should remain movable with custom chrome"
     );
@@ -3513,6 +3517,81 @@ fn appearance_sizes_apply_live_to_every_main_window_and_keep_ui_scale_independen
         .unwrap();
 }
 
+#[gpui::test]
+fn zoom_is_per_window_and_the_default_moves_only_unzoomed_windows(cx: &mut gpui::TestAppContext) {
+    let _guard = lock_visual_test();
+    let (first_store, first_events) = AppStore::new_test(Arc::new(TestBackend));
+    let (first, first_cx) = cx.add_window_view(|window, cx| {
+        GitCometView::new(first_store, first_events, None, window, cx)
+    });
+    let first_window = first_cx.window_handle();
+    first_cx.update(|_, app| open_settings_window(app));
+    first_cx.run_until_parked();
+    let settings = first_cx.update(|_, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .unwrap()
+    });
+    let (second_store, second_events) = AppStore::new_test(Arc::new(TestBackend));
+    let (second, cx) = cx.add_window_view(|window, cx| {
+        GitCometView::new(second_store, second_events, None, window, cx)
+    });
+    let second_window = cx.window_handle();
+
+    let scales = |cx: &mut gpui::VisualTestContext| {
+        (
+            first.read_with(cx, |view, _| view.ui_scale_percent),
+            second.read_with(cx, |view, _| view.ui_scale_percent),
+        )
+    };
+    // What a window's own reads resolve to, and its rem size.
+    let window_scale = |cx: &mut gpui::VisualTestContext, handle: gpui::AnyWindowHandle| {
+        handle
+            .update(cx, |_, window, app| {
+                assert_eq!(
+                    window.rem_size(),
+                    crate::ui_scale::rem_size_for_percent(crate::ui_scale::current(app).percent)
+                );
+                crate::ui_scale::current(app).percent
+            })
+            .unwrap()
+    };
+    let set_zoom = |cx: &mut gpui::VisualTestContext, percent: Option<u32>| {
+        gpui::TestAppContext::update(cx, |app| {
+            crate::app::set_window_ui_scale_percent(app, first_window.window_id(), percent);
+        });
+        cx.run_until_parked();
+    };
+
+    set_zoom(cx, Some(125));
+    assert_eq!(scales(cx), (125, 100), "only the zoomed window changes");
+    assert_eq!(window_scale(cx, first_window), 125);
+    assert_eq!(window_scale(cx, second_window), 100);
+
+    // A new default moves windows without their own zoom, Settings included.
+    settings
+        .update(cx, |settings, window, cx| {
+            settings.set_ui_scale_percent(110, window, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(scales(cx), (125, 110), "the zoomed window keeps its zoom");
+    assert_eq!(window_scale(cx, second_window), 110);
+    settings
+        .update(cx, |settings, _, _| {
+            assert_eq!(settings.default_ui_scale_percent, 110);
+            assert_eq!(settings.ui_scale_percent, 110);
+            assert_eq!(settings.preference_settings().ui_scale_percent, Some(110));
+        })
+        .unwrap();
+
+    // Resetting returns the window to the default.
+    set_zoom(cx, None);
+    assert_eq!(scales(cx), (110, 110));
+    assert_eq!(window_scale(cx, first_window), 110);
+}
+
 #[test]
 fn density_and_font_geometry_remain_independent_across_scales() {
     for percent in [80, 100, 125, 200] {
@@ -4164,6 +4243,56 @@ fn settings_pages_are_listed_and_built_only_when_selected(cx: &mut gpui::TestApp
     assert!(cx.debug_bounds("settings_window_general").is_some());
 }
 
+/// A settings page gets the window's host: its reset opens a hosted dialog,
+/// confirming closes it, and its toasts keep their kind.
+#[gpui::test]
+fn settings_pages_open_dialogs_and_toasts_through_their_host(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    cx.update(|app| {
+        let registry = gitcomet_extension_api::Registry::build(vec![Box::new(
+            gitcomet_extension_example::review::ReviewExtension,
+        )])
+        .expect("valid registration");
+        crate::view::extension_host::install(registry, app);
+    });
+    let (settings, cx) = cx.add_window_view(SettingsWindowView::new);
+    crate::view::test_support::redraw(cx);
+    let nav = "settings_window_nav_extension_com.example.review/review-settings";
+    let center = cx.debug_bounds(nav).unwrap().center();
+    cx.simulate_click(center, gpui::Modifiers::default());
+    crate::view::test_support::redraw(cx);
+
+    let reset = cx.debug_bounds("example_review_reset").unwrap().center();
+    cx.simulate_click(reset, gpui::Modifiers::default());
+    cx.run_until_parked();
+    crate::view::test_support::redraw(cx);
+    assert!(cx.debug_bounds("settings_hosted_dialog").is_some());
+    assert!(cx.debug_bounds("example_reset_confirm").is_some());
+
+    let confirm = cx
+        .debug_bounds("example_reset_confirm_button")
+        .unwrap()
+        .center();
+    cx.simulate_click(confirm, gpui::Modifiers::default());
+    cx.run_until_parked();
+    crate::view::test_support::redraw(cx);
+    assert!(cx.debug_bounds("settings_hosted_dialog").is_none());
+    assert!(cx.debug_bounds("settings_notice").is_some());
+
+    let host = cx.update(|_, app| settings.read(app).extension_window.as_ref().unwrap().host());
+    cx.update(|_, app| {
+        host.report_error("Could not reach the server", Vec::new(), app)
+            .unwrap()
+    });
+    cx.run_until_parked();
+    crate::view::test_support::redraw(cx);
+    cx.update(|_, app| {
+        let (kind, message, _) = settings.read(app).extension_notice.clone().unwrap();
+        assert_eq!(kind, gitcomet_extension_api::NotificationKind::Error);
+        assert_eq!(message.as_ref(), "Could not reach the server");
+    });
+}
+
 #[gpui::test]
 fn settings_extensions_have_a_host_revisioned_gates_and_window_lifetime(
     cx: &mut gpui::TestAppContext,
@@ -4197,15 +4326,15 @@ fn settings_extensions_have_a_host_revisioned_gates_and_window_lifetime(
             let calls = self.calls.clone();
             r.window_gate(
                 "gate",
-                WindowGateDescriptor {
-                    signal: self.signal.clone(),
-                    active: Rc::new(move |host, _| {
+                WindowGateDescriptor::new(
+                    self.signal.clone(),
+                    move |host, _| {
                         assert_eq!(host.kind(), gitcomet_core::identity::WindowKind::Settings);
                         calls.set(calls.get() + 1);
                         active.get()
-                    }),
-                    build: Rc::new(|_, _, cx| cx.new(|_| gpui::Empty).into()),
-                },
+                    },
+                    |_, _, cx| cx.new(|_| gpui::Empty).into(),
+                ),
             );
         }
         fn window_opened(

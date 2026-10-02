@@ -1,5 +1,6 @@
 //! Runs diff-session loads with the same backend readers as the selected
-//! diff, under the session's own token (a child of the repository's).
+//! diff, under the session's own token (a child of the repository's). Work
+//! on a linked worktree reads through that worktree's cached handle.
 
 use super::*;
 use crate::diff_session::{
@@ -9,6 +10,7 @@ use crate::diff_session::{
 pub(super) fn schedule(
     executor: &TaskExecutor,
     repos: &util::RepoMap,
+    backend: Arc<dyn GitBackend>,
     msg_tx: StoreWorkerSender,
     work: DiffSessionEffect,
     parent: CancellationToken,
@@ -21,6 +23,25 @@ pub(super) fn schedule(
         work.repo_id,
         msg_tx,
         move |repo, tx| {
+            let repo = match work.work.linked_path() {
+                None => repo,
+                Some(path) => match repo_load::linked_worktree_handle(
+                    backend.as_ref(),
+                    work.repo_id,
+                    repo.as_ref(),
+                    path,
+                ) {
+                    Ok(linked) => linked,
+                    Err(error) => {
+                        // Every part asked for is answered, or the session
+                        // stays loading.
+                        for reply in work.failed(error) {
+                            util::send_or_log(&tx, Msg::DiffSession(reply));
+                        }
+                        return;
+                    }
+                },
+            };
             let DiffSessionEffect {
                 repo_id,
                 view,
@@ -89,6 +110,11 @@ pub(super) fn schedule(
                         crate::diff_session::ChangeSource::Worktree {
                             area,
                             include_untracked,
+                        }
+                        | crate::diff_session::ChangeSource::LinkedWorktree {
+                            area,
+                            include_untracked,
+                            ..
                         } => {
                             let status = match area {
                                 gitcomet_core::domain::DiffArea::Staged => {
@@ -120,7 +146,7 @@ pub(super) fn schedule(
                         }),
                     );
                 }
-                DiffSessionWork::Blame { path, source } => {
+                DiffSessionWork::Blame { path, source, .. } => {
                     send(DiffSessionContent::Blame(
                         cancellation
                             .check_cancelled()
@@ -178,7 +204,14 @@ mod tests {
             },
             cancellation: CancellationToken::new(),
         };
-        schedule(&executor, &repos, msg_tx, work, parent);
+        schedule(
+            &executor,
+            &repos,
+            Arc::new(crate::store::tests::FailingBackend),
+            msg_tx,
+            work,
+            parent,
+        );
 
         fn cancelled<T>(result: &gitcomet_core::services::Result<T>) -> bool {
             matches!(result, Err(error) if matches!(error.kind(), ErrorKind::Cancelled))
@@ -206,5 +239,93 @@ mod tests {
             }
         }
         assert_eq!(parts, ["attributes", "patch", "file_text", "image"]);
+    }
+
+    /// Work on a path that is not one of the repository's linked worktrees
+    /// never reaches a reader, and still answers every part it asked for.
+    #[test]
+    fn work_outside_the_linked_worktrees_answers_every_part_with_an_error() {
+        let executor = super::super::super::executor::TaskExecutor::new(1);
+        let repo_id = RepoId(1);
+        let mut repos: util::RepoMap = Default::default();
+        repos.insert(
+            repo_id,
+            Arc::new(crate::store::tests::DummyRepo::new(
+                "/tmp/diff-session-main",
+            )),
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        let msg_tx =
+            super::super::super::worker_channel::StoreWorkerSender::for_test_msg_sender(tx);
+        let target = DiffTarget::working_tree("a.rs".into(), DiffArea::Unstaged)
+            .in_worktree("/tmp/not-a-worktree".into());
+        let content = DiffSessionEffect {
+            repo_id,
+            view: DiffViewId::next(),
+            lifetime: 1,
+            generation: 1,
+            work: DiffSessionWork::Content {
+                target,
+                encoding: None,
+                patch: true,
+                file_text: true,
+                image: false,
+            },
+            cancellation: CancellationToken::new(),
+        };
+        let changes = DiffSessionEffect {
+            work: DiffSessionWork::Changes {
+                source: crate::diff_session::ChangeSource::linked_worktree(
+                    "/tmp/not-a-worktree".into(),
+                    DiffArea::Unstaged,
+                    true,
+                ),
+            },
+            ..content.clone()
+        };
+        for work in [content, changes] {
+            schedule(
+                &executor,
+                &repos,
+                Arc::new(crate::store::tests::FailingBackend),
+                msg_tx.clone(),
+                work,
+                CancellationToken::new(),
+            );
+        }
+        let mut parts = Vec::new();
+        while let Ok(msg) = rx.recv_timeout(std::time::Duration::from_secs(10)) {
+            parts.push(match msg {
+                Msg::DiffSession(Event::Loaded {
+                    content: DiffSessionContent::Attributes(result),
+                    ..
+                }) => ("attributes", result.is_err()),
+                Msg::DiffSession(Event::Loaded {
+                    content: DiffSessionContent::Patch(result),
+                    ..
+                }) => ("patch", result.is_err()),
+                Msg::DiffSession(Event::Loaded {
+                    content: DiffSessionContent::FileText(result),
+                    ..
+                }) => ("file_text", result.is_err()),
+                Msg::DiffSession(Event::ChangesLoaded { result, .. }) => {
+                    ("changes", result.is_err())
+                }
+                other => panic!("unexpected reply {other:?}"),
+            });
+            if parts.len() == 4 {
+                break;
+            }
+        }
+        parts.sort();
+        assert_eq!(
+            parts,
+            [
+                ("attributes", true),
+                ("changes", true),
+                ("file_text", true),
+                ("patch", true)
+            ]
+        );
     }
 }

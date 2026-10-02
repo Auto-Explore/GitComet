@@ -5078,3 +5078,52 @@ fn file_editor_saves_stay_paused_until_rename_retargets_the_unsaved_buffer(
         "// retained edit\nfn original() {}\n"
     );
 }
+
+/// Closing a repository's tab must not drop its editor's unsaved edits: the
+/// tab-close path should ask like closing the window does. It does not yet
+/// (`prune_orphaned_file_editor_stash` documents the gap); the fix needs the
+/// unsaved-edits action scoped to several repositories.
+#[gpui::test]
+#[ignore = "known gap: closing a repository tab discards its unsaved edits"]
+async fn closing_a_repository_tab_prompts_for_its_unsaved_edits(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(963);
+    let workdir = unique_workdir("file_editor_close_dirty_repo");
+    let file = std::path::PathBuf::from("a.rs");
+    std::fs::write(workdir.join(&file), "fn a() {}\n").expect("write fixture");
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, editor_state(repo_id, &workdir, &file), cx);
+            this.main_pane.update(cx, |pane, cx| {
+                pane.auto_save_file_edits = false;
+                pane.ensure_file_editor_loaded(cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    cx.update(|_window, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.file_editor_input.update(cx, |input, cx| {
+                input.replace_utf8_range(0..0, "// unsaved\n", cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.request_close_repos(vec![repo_id], None, cx);
+            let prompt = this
+                .pending_unsaved_file_edits_prompt
+                .as_ref()
+                .expect("closing a dirty repository's tab must queue the unsaved-edits prompt");
+            assert_eq!(prompt.files.len(), 1);
+        });
+    });
+    let _ = std::fs::remove_dir_all(&workdir);
+}

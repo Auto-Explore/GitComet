@@ -594,9 +594,12 @@ pub(super) fn run_windowed_app(
             .detach();
         }
 
+        // Every window kind runs extension gates, guards, and window hooks;
+        // only main windows offer extension commands.
+        crate::view::extension_host::install_registry(extensions, cx);
         if launch.view_config.view_mode == GitCometViewMode::Normal {
             // Before the host's keys, so a chord both claim stays the host's.
-            crate::view::extension_host::install(extensions, cx);
+            crate::view::extension_host::install_bindings(cx);
             bind_app_keys(cx);
             install_app_actions(cx, Arc::clone(&backend));
             if let Some(browser_requests) = browser_requests {
@@ -797,6 +800,7 @@ pub(super) fn open_gitcomet_window(
                 app_id: Some(app_id),
                 display_id,
                 window_decorations: Some(WindowDecorations::Client),
+                icon: crate::assets::window_icon(),
                 is_movable: true,
                 is_resizable: true,
                 ..Default::default()
@@ -877,48 +881,63 @@ pub(crate) fn with_main_window_background(mut options: WindowOptions) -> WindowO
     options
 }
 
-pub(super) fn current_or_default_ui_scale_percent(cx: &mut App) -> u32 {
-    let current = ui_scale::current(cx);
-    if current.initialized {
-        current.percent
-    } else {
-        ui_scale::DEFAULT_UI_SCALE_PERCENT
-    }
-}
-
-pub(super) fn apply_ui_scale_to_open_windows(cx: &mut App, percent: u32) {
-    for handle in cx.windows() {
-        let _ = handle.update(cx, |root_view, window, cx| {
-            let root_view = match root_view.downcast::<GitCometView>() {
-                Ok(view) => {
-                    view.update(cx, |view, cx| {
-                        view.apply_ui_scale_percent(percent, window, cx);
-                    });
-                    return;
-                }
-                Err(root_view) => root_view,
-            };
-
-            if let Ok(view) = root_view.downcast::<SettingsWindowView>() {
+fn apply_ui_scale_to_window(cx: &mut App, handle: AnyWindowHandle, percent: u32) {
+    let _ = handle.update(cx, |root_view, window, cx| {
+        let root_view = match root_view.downcast::<GitCometView>() {
+            Ok(view) => {
                 view.update(cx, |view, cx| {
                     view.apply_ui_scale_percent(percent, window, cx);
                 });
                 return;
             }
+            Err(root_view) => root_view,
+        };
 
+        if let Ok(view) = root_view.downcast::<SettingsWindowView>() {
+            view.update(cx, |view, cx| {
+                view.apply_ui_scale_percent(percent, window, cx);
+            });
+            return;
+        }
+
+        // A pop-out: its views read the scale while rendering, so redraw.
+        if window.rem_size() != ui_scale::rem_size_for_percent(percent) {
             ui_scale::apply_to_window(window, percent);
+            window.refresh();
+        }
+    });
+}
+
+/// Moves every window to its scale: its own zoom, its main window's (for a
+/// pop-out), or the default.
+pub(crate) fn apply_ui_scale_to_windows(cx: &mut App) {
+    for handle in cx.windows() {
+        let percent = ui_scale::percent_for_window(cx, handle.window_id());
+        apply_ui_scale_to_window(cx, handle, percent);
+    }
+}
+
+/// Zooms one window; `None` returns it to the default UI scale. Call it
+/// deferred: a window cannot be updated while it is mid-update.
+pub(crate) fn set_window_ui_scale_percent(cx: &mut App, window_id: WindowId, percent: Option<u32>) {
+    ui_scale::set_window_percent(cx, window_id, percent);
+    apply_ui_scale_to_windows(cx);
+    // Its footer shows whether it has its own zoom, which can change while
+    // the percent does not.
+    for handle in cx.windows() {
+        let _ = handle.update(cx, |root_view, _, cx| {
+            if let Ok(view) = root_view.downcast::<GitCometView>() {
+                view.update(cx, |view, cx| view.refresh_zoom_indicator(cx));
+            }
         });
     }
 }
 
-pub(crate) fn set_app_ui_scale_percent(cx: &mut App, percent: u32) {
-    let current = ui_scale::current(cx);
-    let next = ui_scale::set_current(cx, percent);
-    if current.initialized && current.percent == next.percent {
-        return;
-    }
-
-    apply_ui_scale_to_open_windows(cx, next.percent);
+/// The window a zoom shortcut acts on: the one dispatching it, else the
+/// focused one (the macOS menu bar dispatches outside any window).
+pub(crate) fn zoom_target_window(cx: &App) -> Option<WindowId> {
+    cx.current_window_id()
+        .or_else(|| cx.active_window().map(|window| window.window_id()))
 }
 
 #[cfg(target_os = "macos")]

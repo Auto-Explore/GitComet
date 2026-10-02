@@ -28,6 +28,8 @@ pub enum GitFailureId {
     ApplyChangeCommitFailed,
     UntrackedRestoreConflict,
     WorktreeWouldBeOverwritten,
+    /// A pull or merge left a merge or rebase in progress with unmerged paths.
+    StoppedAtConflicts,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

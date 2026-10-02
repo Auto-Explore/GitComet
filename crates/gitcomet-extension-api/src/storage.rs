@@ -12,6 +12,7 @@ use std::fmt;
 pub use gitcomet_state::session::MAX_EXTENSION_NAMESPACE_BYTES as MAX_NAMESPACE_BYTES;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StorageError {
     /// The value serializes to more than [`MAX_NAMESPACE_BYTES`].
     TooLarge { bytes: usize },

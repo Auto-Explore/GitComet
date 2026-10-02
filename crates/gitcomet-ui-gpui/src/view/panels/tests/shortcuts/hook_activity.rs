@@ -701,12 +701,12 @@ fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
     let activity_bounds = cx
         .debug_bounds("bottom_hook_activity")
         .expect("expected Git hook Activity button");
-    let brand_bounds = cx
-        .debug_bounds("bottom_status_bar_brand")
-        .expect("expected bottom status bar branding chip");
+    let zoom_bounds = cx
+        .debug_bounds("bottom_status_bar_zoom")
+        .expect("expected bottom status bar zoom button");
     assert!(
-        activity_bounds.right() <= brand_bounds.left(),
-        "the Activity button must sit at the end of the toggle group, before branding"
+        activity_bounds.right() <= zoom_bounds.left(),
+        "the Activity button must sit immediately before zoom"
     );
 
     let mut repo_with_hook = repo.clone();

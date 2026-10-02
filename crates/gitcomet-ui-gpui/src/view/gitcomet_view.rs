@@ -347,9 +347,18 @@ impl GitCometView {
                     let _ = win.update(cx, |_root, win, _cx| win.toggle_fullscreen());
                 }
             }),
-            "increase-ui-scale" => cx.defer(|cx| cx.dispatch_action(&IncreaseUiScale)),
-            "decrease-ui-scale" => cx.defer(|cx| cx.dispatch_action(&DecreaseUiScale)),
-            "reset-ui-scale" => cx.defer(|cx| cx.dispatch_action(&ResetUiScale)),
+            "increase-ui-scale" | "decrease-ui-scale" | "reset-ui-scale" => {
+                let action: Box<dyn gpui::Action> = match command_id {
+                    "increase-ui-scale" => Box::new(IncreaseUiScale),
+                    "decrease-ui-scale" => Box::new(DecreaseUiScale),
+                    _ => Box::new(ResetUiScale),
+                };
+                // Zoom is per window: dispatch in the window that ran the command.
+                match window {
+                    Some(window) => window.dispatch_action(action, cx),
+                    None => cx.defer(move |cx| cx.dispatch_action(action.as_ref())),
+                }
+            }
             "close-window" => cx.defer(|cx| cx.dispatch_action(&CloseWindow)),
             "locate-file-in-explorer" => self.locate_open_file_in_explorer(cx),
             "open-repository" => cx.defer(|cx| cx.dispatch_action(&OpenRepository)),
@@ -1132,10 +1141,9 @@ impl GitCometView {
         let mut ui_preferences = UiPreferences::from_session(&ui_session);
         crate::session_ui::initialize_appearance(&ui_session, cx);
         ui_preferences.appearance.metrics = crate::appearance::current(cx);
-        let ui_scale = crate::session_ui::ui_scale(&ui_session, cx);
-        // The application-wide scale may already have been initialized by
-        // another window. Keep the shared runtime preferences aligned with the
-        // value every view will actually render with.
+        crate::session_ui::ui_scale(&ui_session, cx);
+        // This window's scale: the default, unless the window has its own zoom.
+        let ui_scale = crate::ui_scale::current(cx);
         ui_preferences.appearance.ui_scale_percent = ui_scale.percent;
         let _font_preferences = crate::session_ui::font_preferences(window, &ui_session, cx);
         if should_seed_initial_repository_from_session(
@@ -2024,6 +2032,11 @@ impl GitCometView {
         self.auth_prompt_secret_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         cx.notify();
+    }
+
+    /// The footer's zoom button shows whether this window has its own zoom.
+    pub(crate) fn refresh_zoom_indicator(&mut self, cx: &mut gpui::Context<Self>) {
+        self.bottom_status_bar.update(cx, |_bar, cx| cx.notify());
     }
 
     pub(super) fn notify_font_preferences_changed(&mut self, cx: &mut gpui::Context<Self>) {

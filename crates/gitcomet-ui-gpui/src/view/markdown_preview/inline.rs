@@ -19,15 +19,23 @@ pub(crate) fn parse_inline_markdown_fragment(source: &str) -> (String, Vec<Markd
                 span_stack.push(MarkdownInlineStyle::Link);
                 link_stack.push(offered_link_destination(dest_url.as_ref()));
             }
+            // An HTML formatting tag may be open above the markdown one, so
+            // each end removes its own style.
             Event::End(TagEnd::Link) => {
-                span_stack.pop();
+                pop_matching_inline_style(&mut span_stack, MarkdownInlineStyle::Link);
                 link_stack.pop();
             }
-            Event::End(TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough) => {
-                span_stack.pop();
+            Event::End(TagEnd::Strong) => {
+                pop_matching_inline_style(&mut span_stack, MarkdownInlineStyle::Bold);
+            }
+            Event::End(TagEnd::Emphasis) => {
+                pop_matching_inline_style(&mut span_stack, MarkdownInlineStyle::Italic);
+            }
+            Event::End(TagEnd::Strikethrough) => {
+                pop_matching_inline_style(&mut span_stack, MarkdownInlineStyle::Strikethrough);
             }
             Event::Text(cow) => {
-                let style = resolve_style_stack(&span_stack);
+                let style = resolve_style_stack(span_stack.iter().copied());
                 let link_url = current_link_url(&link_stack);
                 let start = text_buf.len();
                 text_buf.push_str(&cow);
@@ -108,6 +116,13 @@ pub(crate) fn parse_inline_markdown_fragment(source: &str) -> (String, Vec<Markd
                     }
                     HtmlHandling::AppendLiteral => {
                         text_buf.push_str(&strip_generic_html_tags(cow.as_ref()));
+                    }
+                    HtmlHandling::OpenContainer(..)
+                    | HtmlHandling::CloseContainer(_)
+                    | HtmlHandling::Rule => {
+                        if !text_buf.is_empty() {
+                            text_buf.push(' ');
+                        }
                     }
                 }
             }
@@ -203,6 +218,7 @@ pub(crate) fn push_row(
         table: None,
         task: decoration.task,
         continues_item: decoration.continues_item,
+        align: decoration.align,
     });
 
     (rows.len() <= MAX_PREVIEW_ROWS).then_some(())

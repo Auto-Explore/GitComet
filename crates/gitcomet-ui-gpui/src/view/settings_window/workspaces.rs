@@ -118,6 +118,12 @@ impl SettingsWindowView {
                         format!("settings_window_workspace_color_{}", label.to_lowercase());
                     let debug_selector = selector.clone();
                     let selected = current == color;
+                    // Default and Blue share a dot; only Blue tints the bar.
+                    let tooltip: SharedString = if color.is_none() {
+                        "Default (no title-bar tint)".into()
+                    } else {
+                        label.into()
+                    };
                     div()
                         .id(SharedString::from(selector))
                         .debug_selector(move || debug_selector.clone())
@@ -135,8 +141,9 @@ impl SettingsWindowView {
                             div()
                                 .size_full()
                                 .rounded_full()
-                                .bg(crate::view::chrome::workspace_color(color, theme)),
+                                .bg(crate::view::chrome::workspace_color(color)),
                         )
+                        .gitcomet_tooltip(theme, tooltip)
                         .control_interaction(
                             crate::view::components::InteractionStyle::new(theme),
                             crate::view::components::InteractionState::default(),

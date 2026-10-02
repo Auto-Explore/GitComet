@@ -18,36 +18,22 @@ impl Extension for Providers {
         let sidebar = self.sidebar.clone();
         r.sidebar_provider(
             "files",
-            SidebarProvider {
-                signal: self.signal.clone(),
-                sections: Rc::new(move |_, _| {
-                    sidebar.set(sidebar.get() + 1);
-                    vec![SidebarSectionRows {
-                        id: "files".into(),
-                        title: "Files".into(),
-                        rows: Vec::new(),
-                        files: Some(SidebarFileSet {
-                            paths: vec![PathBuf::from("example.rs")].into(),
-                            open: Rc::new(|_, _| {}),
-                        }),
-                    }]
-                }),
-            },
+            SidebarProvider::new(self.signal.clone(), move |_, _| {
+                sidebar.set(sidebar.get() + 1);
+                vec![
+                    SidebarSectionRows::new("files", "Files", Vec::new()).with_files(
+                        SidebarFileSet::new(vec![PathBuf::from("example.rs")], |_, _| {}),
+                    ),
+                ]
+            }),
         );
         let history = self.history.clone();
         r.history_annotator(
             "marks",
-            HistoryAnnotator {
-                signal: self.signal.clone(),
-                annotate: Rc::new(move |_, _, _| {
-                    history.set(history.get() + 1);
-                    HistoryRowAnnotation {
-                        opacity: 0.5,
-                        ..Default::default()
-                    }
-                }),
-                scope_header: None,
-            },
+            HistoryAnnotator::new(self.signal.clone(), move |_, _, _| {
+                history.set(history.get() + 1);
+                HistoryRowAnnotation::default().with_opacity(0.5)
+            }),
         );
     }
 }

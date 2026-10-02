@@ -65,6 +65,7 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::ChangeTrackingSettings
+        | PopoverKind::UiScalePicker
         | PopoverKind::AppMenu
         | PopoverKind::AddRepoMenu => {
             // Mostly local UI state; depend only on whether a repo is active/open.
@@ -148,6 +149,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::ChangeTrackingSettings
+        | PopoverKind::UiScalePicker
         | PopoverKind::Hosted { .. }
         | PopoverKind::ErrorDetails { .. }
         | PopoverKind::FilesystemConflict(_)
@@ -516,6 +518,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::ChangeTrackingSettings
+        | PopoverKind::UiScalePicker
         | PopoverKind::ConflictResolverInputRowMenu { .. }
         | PopoverKind::ConflictResolverChunkMenu { .. }
         | PopoverKind::ConflictResolverOutputMenu { .. }
@@ -626,6 +629,7 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             id.hash(hasher);
         }
         PopoverKind::ChangeTrackingSettings => 66u8.hash(hasher),
+        PopoverKind::UiScalePicker => 117u8.hash(hasher),
         PopoverKind::DiffContentModeSettings => 67u8.hash(hasher),
         PopoverKind::TextFormatMenu { section } => {
             105u8.hash(hasher);

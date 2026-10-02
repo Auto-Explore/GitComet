@@ -37,7 +37,7 @@ pub(in crate::store) fn snapshot_with_commit(
 /// never call through to Git.
 pub(in crate::store) type DummyRepo = UnconfiguredRepository;
 
-struct FailingBackend;
+pub(in crate::store) struct FailingBackend;
 
 impl GitBackend for FailingBackend {
     fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {

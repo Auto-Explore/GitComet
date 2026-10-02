@@ -95,7 +95,7 @@ fn secondary_action_label(density: ActionBarDensity, label: &'static str) -> &'s
 
 pub(in super::super) fn action_bar_height<C>(cx: &mut C) -> Pixels
 where
-    C: gpui::BorrowAppContext,
+    C: std::borrow::BorrowMut<gpui::App>,
 {
     crate::ui_scale::UiScale::current(cx).row_height(ACTION_BAR_HEIGHT_PX, 44.0)
 }
@@ -234,10 +234,13 @@ fn push_tooltip_text(push_count: usize, tracking_branch_name: Option<&str>) -> S
 }
 
 pub(in super::super) struct ActionBarView {
+    /// Set while an extension's repository view is selected.
     extension_navigation: Option<(
         gitcomet_extension_api::RepositoryViewContext,
         Option<gitcomet_extension_api::ViewNavigation>,
     )>,
+    /// That view's action-bar context.
+    extension_slot: Option<gpui::AnyView>,
     store: Arc<AppStore>,
     state: Arc<AppState>,
     theme: AppTheme,
@@ -300,6 +303,7 @@ impl ActionBarView {
 
         Self {
             extension_navigation: None,
+            extension_slot: None,
             store,
             state,
             theme,
@@ -323,12 +327,14 @@ impl ActionBarView {
             gitcomet_extension_api::RepositoryViewContext,
             Option<gitcomet_extension_api::ViewNavigation>,
         )>,
+        slot: Option<gpui::AnyView>,
         cx: &mut gpui::Context<Self>,
     ) {
         if self.extension_navigation.is_none() && navigation.is_none() {
             return;
         }
         self.extension_navigation = navigation;
+        self.extension_slot = slot;
         cx.notify();
     }
 
@@ -1107,6 +1113,120 @@ impl Render for ActionBarView {
             .child(pull)
             .child(push);
 
+        let left_group = div()
+            .debug_selector(|| "left_action_group".to_string())
+            .flex()
+            .items_center()
+            .gap(action_group_gap)
+            .flex_1()
+            .min_w(px(0.0))
+            .overflow_hidden()
+            .child(global_nav);
+        // A selected extension view brings its own context; History's branch,
+        // tracking and merge controls stay with History.
+        let left_group = if self.extension_navigation.is_some() {
+            left_group.children(self.extension_slot.clone().map(|slot| {
+                div()
+                    .debug_selector(|| "extension_action_bar".to_string())
+                    .flex()
+                    .items_center()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .child(slot)
+            }))
+        } else {
+            left_group
+                .children(worktree_badge)
+                .child(tracking_actions)
+                .children(historical_badge)
+                .when(is_merging, |d| {
+                    d.child(
+                        div()
+                            .debug_selector(|| "merge_controls".to_string())
+                            .flex()
+                            .flex_none()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_size(theme.ui_text(12.0))
+                                    .text_color(theme.colors.status.warning.foreground)
+                                    .font_weight(FontWeight::BOLD)
+                                    .child("MERGING"),
+                            )
+                            .child(
+                                components::Button::new("abort_merge", merge_abort_label)
+                                    .style(components::ButtonStyle::Danger)
+                                    .on_click(theme, cx, |this, e: &ClickEvent, window, cx| {
+                                        if let Some(repo_id) = this.active_repo_id() {
+                                            this.open_popover_at(
+                                                PopoverKind::MergeAbortConfirm { repo_id },
+                                                e.position(),
+                                                window,
+                                                cx,
+                                            );
+                                        }
+                                    }),
+                            ),
+                    )
+                })
+                .when_some(sequencer_banner.filter(|_| !is_merging), |d, banner| {
+                    d.child(
+                        div()
+                            .flex()
+                            .flex_none()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_size(theme.ui_text(12.0))
+                                    .text_color(theme.colors.status.warning.foreground)
+                                    .font_weight(FontWeight::BOLD)
+                                    .child(banner.label),
+                            )
+                            .child(
+                                components::Button::new(banner.abort_id, "Abort")
+                                    .style(components::ButtonStyle::Danger)
+                                    .disabled(sequencer_step_busy)
+                                    .on_click(theme, cx, |this, e: &ClickEvent, window, cx| {
+                                        if let Some(repo_id) = this.active_repo_id() {
+                                            this.open_popover_at(
+                                                PopoverKind::MergeAbortConfirm { repo_id },
+                                                e.position(),
+                                                window,
+                                                cx,
+                                            );
+                                        }
+                                    })
+                                    .when(sequencer_step_busy, |button| {
+                                        button
+                                            .gitcomet_tooltip(theme, SEQUENCER_BUSY_TOOLTIP.into())
+                                    }),
+                            )
+                            .child(
+                                components::Button::new(banner.continue_id, "Continue")
+                                    .style(components::ButtonStyle::Outlined)
+                                    .disabled(rebase_has_unstaged_conflicts || sequencer_step_busy)
+                                    .on_click(theme, cx, |this, _e, _w, _cx| {
+                                        if let Some(repo_id) = this.active_repo_id() {
+                                            this.store.dispatch(Msg::RebaseContinue { repo_id });
+                                        }
+                                    })
+                                    .gitcomet_tooltip(
+                                        theme,
+                                        if sequencer_step_busy {
+                                            SEQUENCER_BUSY_TOOLTIP.into()
+                                        } else if rebase_has_unstaged_conflicts {
+                                            "Resolve all conflicts before continuing".into()
+                                        } else {
+                                            banner.continue_tooltip.into()
+                                        },
+                                    ),
+                            ),
+                    )
+                })
+        };
+
         div()
             .debug_selector(|| "action_bar".to_string())
             .w_full()
@@ -1117,111 +1237,7 @@ impl Render for ActionBarView {
             .justify_between()
             .px(action_bar_padding_x)
             .bg(theme.colors.surface.chrome)
-            .child(
-                div()
-                    .debug_selector(|| "left_action_group".to_string())
-                    .flex()
-                    .items_center()
-                    .gap(action_group_gap)
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .overflow_hidden()
-                    .child(global_nav)
-                    .children(worktree_badge)
-                    .child(tracking_actions)
-                    .children(historical_badge)
-                    .when(is_merging, |d| {
-                        d.child(
-                            div()
-                                .debug_selector(|| "merge_controls".to_string())
-                                .flex()
-                                .flex_none()
-                                .items_center()
-                                .gap_1()
-                                .child(
-                                    div()
-                                        .text_size(theme.ui_text(12.0))
-                                        .text_color(theme.colors.status.warning.foreground)
-                                        .font_weight(FontWeight::BOLD)
-                                        .child("MERGING"),
-                                )
-                                .child(
-                                    components::Button::new("abort_merge", merge_abort_label)
-                                        .style(components::ButtonStyle::Danger)
-                                        .on_click(theme, cx, |this, e: &ClickEvent, window, cx| {
-                                            if let Some(repo_id) = this.active_repo_id() {
-                                                this.open_popover_at(
-                                                    PopoverKind::MergeAbortConfirm { repo_id },
-                                                    e.position(),
-                                                    window,
-                                                    cx,
-                                                );
-                                            }
-                                        }),
-                                ),
-                        )
-                    })
-                    .when_some(sequencer_banner.filter(|_| !is_merging), |d, banner| {
-                        d.child(
-                            div()
-                                .flex()
-                                .flex_none()
-                                .items_center()
-                                .gap_1()
-                                .child(
-                                    div()
-                                        .text_size(theme.ui_text(12.0))
-                                        .text_color(theme.colors.status.warning.foreground)
-                                        .font_weight(FontWeight::BOLD)
-                                        .child(banner.label),
-                                )
-                                .child(
-                                    components::Button::new(banner.abort_id, "Abort")
-                                        .style(components::ButtonStyle::Danger)
-                                        .disabled(sequencer_step_busy)
-                                        .on_click(theme, cx, |this, e: &ClickEvent, window, cx| {
-                                            if let Some(repo_id) = this.active_repo_id() {
-                                                this.open_popover_at(
-                                                    PopoverKind::MergeAbortConfirm { repo_id },
-                                                    e.position(),
-                                                    window,
-                                                    cx,
-                                                );
-                                            }
-                                        })
-                                        .when(sequencer_step_busy, |button| {
-                                            button.gitcomet_tooltip(
-                                                theme,
-                                                SEQUENCER_BUSY_TOOLTIP.into(),
-                                            )
-                                        }),
-                                )
-                                .child(
-                                    components::Button::new(banner.continue_id, "Continue")
-                                        .style(components::ButtonStyle::Outlined)
-                                        .disabled(
-                                            rebase_has_unstaged_conflicts || sequencer_step_busy,
-                                        )
-                                        .on_click(theme, cx, |this, _e, _w, _cx| {
-                                            if let Some(repo_id) = this.active_repo_id() {
-                                                this.store
-                                                    .dispatch(Msg::RebaseContinue { repo_id });
-                                            }
-                                        })
-                                        .gitcomet_tooltip(
-                                            theme,
-                                            if sequencer_step_busy {
-                                                SEQUENCER_BUSY_TOOLTIP.into()
-                                            } else if rebase_has_unstaged_conflicts {
-                                                "Resolve all conflicts before continuing".into()
-                                            } else {
-                                                banner.continue_tooltip.into()
-                                            },
-                                        ),
-                                ),
-                        )
-                    }),
-            )
+            .child(left_group)
             .child(
                 div()
                     .debug_selector(|| "right_action_group".to_string())

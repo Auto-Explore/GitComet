@@ -1,4 +1,5 @@
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum CopySource {
     CommitDetailsDiff,
     CommitRangeDiff,
@@ -14,10 +15,12 @@ pub enum CopySource {
     ErrorDetails,
     ContextMenu,
     EnvironmentDetails,
+    /// A copy an extension makes.
+    Extension,
 }
 
 impl CopySource {
-    #[cfg(all(target_os = "linux", not(test)))]
+    #[cfg(target_os = "linux")]
     fn as_str(self) -> &'static str {
         match self {
             Self::CommitDetailsDiff => "commit-details-diff",
@@ -34,8 +37,15 @@ impl CopySource {
             Self::ErrorDetails => "error-details",
             Self::ContextMenu => "context-menu",
             Self::EnvironmentDetails => "environment-details",
+            Self::Extension => "extension",
         }
     }
+}
+
+/// Live runs only: a dependent's tests must not probe the desktop or write
+/// into the real crash directory.
+fn copy_diagnostics_enabled() -> bool {
+    cfg!(target_os = "linux") && crate::ui_runtime::current().uses_clipboard_diagnostics()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -129,7 +139,7 @@ pub fn write_files_owned<T: 'static>(
     let item = gpui::ClipboardItem {
         entries: vec![gpui::ClipboardEntry::Files(files.clone())],
     };
-    #[cfg(all(target_os = "linux", not(test)))]
+    #[cfg(target_os = "linux")]
     if clipboard_backend() == ClipboardBackend::X11 {
         if let Err(error) = gpui_platform::write_files_to_x11_clipboard(&files) {
             eprintln!("Could not copy files: {error}");
@@ -138,7 +148,7 @@ pub fn write_files_owned<T: 'static>(
     } else {
         cx.write_to_clipboard(item.clone());
     }
-    #[cfg(not(all(target_os = "linux", not(test))))]
+    #[cfg(not(target_os = "linux"))]
     cx.write_to_clipboard(item.clone());
     FILE_CLIPBOARD.with(|owned| {
         *owned.borrow_mut() = Some((
@@ -157,7 +167,7 @@ pub fn write_files_owned<T: 'static>(
 pub fn read_files<T: 'static>(cx: &gpui::Context<T>) -> Option<FilePayload> {
     #[cfg(any(test, feature = "test-support"))]
     FILE_CLIPBOARD_READS.with(|reads| reads.set(reads.get() + 1));
-    #[cfg(all(target_os = "linux", not(test)))]
+    #[cfg(target_os = "linux")]
     let item = if clipboard_backend() == ClipboardBackend::X11 {
         gpui_platform::read_files_from_x11_clipboard().map(|files| gpui::ClipboardItem {
             entries: vec![gpui::ClipboardEntry::Files(files)],
@@ -165,7 +175,7 @@ pub fn read_files<T: 'static>(cx: &gpui::Context<T>) -> Option<FilePayload> {
     } else {
         cx.read_from_clipboard()
     };
-    #[cfg(not(all(target_os = "linux", not(test))))]
+    #[cfg(not(target_os = "linux"))]
     let item = cx.read_from_clipboard();
     FILE_CLIPBOARD.with(|owned| {
         let mut owned = owned.borrow_mut();
@@ -338,8 +348,11 @@ fn select_clipboard_backend(
     }
 }
 
-#[cfg(all(target_os = "linux", not(test)))]
+#[cfg(target_os = "linux")]
 fn clipboard_backend() -> ClipboardBackend {
+    if !copy_diagnostics_enabled() {
+        return ClipboardBackend::Gpui;
+    }
     let environment = crate::linux_gui_env::LinuxGuiEnvironment::detect();
     select_clipboard_backend(
         environment.is_wsl,
@@ -348,13 +361,16 @@ fn clipboard_backend() -> ClipboardBackend {
     )
 }
 
-#[cfg(not(all(target_os = "linux", not(test))))]
+#[cfg(not(target_os = "linux"))]
 fn clipboard_backend() -> ClipboardBackend {
     ClipboardBackend::Gpui
 }
 
-#[cfg(all(target_os = "linux", not(test)))]
+#[cfg(target_os = "linux")]
 fn write_copy_diagnostic(source: CopySource, text_len: usize, backend: ClipboardBackend) {
+    if !copy_diagnostics_enabled() {
+        return;
+    }
     if let Err(err) = write_copy_diagnostic_inner(source, text_len, backend) {
         eprintln!(
             "Failed to write {} copy crash diagnostics: {err}",
@@ -363,7 +379,7 @@ fn write_copy_diagnostic(source: CopySource, text_len: usize, backend: Clipboard
     }
 }
 
-#[cfg(all(target_os = "linux", not(test)))]
+#[cfg(target_os = "linux")]
 fn write_copy_diagnostic_inner(
     source: CopySource,
     text_len: usize,
@@ -393,7 +409,7 @@ fn write_copy_diagnostic_inner(
     )
 }
 
-#[cfg(all(target_os = "linux", not(test)))]
+#[cfg(target_os = "linux")]
 fn env_value(name: &str) -> String {
     std::env::var(name)
         .ok()
@@ -401,10 +417,10 @@ fn env_value(name: &str) -> String {
         .unwrap_or_else(|| "<unset>".to_string())
 }
 
-#[cfg(not(all(target_os = "linux", not(test))))]
+#[cfg(not(target_os = "linux"))]
 fn write_copy_diagnostic(_source: CopySource, _text_len: usize, _backend: ClipboardBackend) {}
 
-#[cfg(all(target_os = "linux", not(test)))]
+#[cfg(target_os = "linux")]
 fn write_text_to_x11(text: &str) {
     thread_local! {
         static X11_CLIPBOARD: std::cell::RefCell<Option<x11_clipboard::Clipboard>> =
@@ -446,7 +462,7 @@ fn replace_clipboard_owner<Clipboard, Error>(
     Ok(())
 }
 
-#[cfg(not(all(target_os = "linux", not(test))))]
+#[cfg(not(target_os = "linux"))]
 fn write_text_to_x11(_text: &str) {
     unreachable!("the X11 clipboard backend is only selected on Linux")
 }
@@ -454,8 +470,23 @@ fn write_text_to_x11(_text: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        ClipboardBackend, PasteReceipt, replace_clipboard_owner, select_clipboard_backend,
+        ClipboardBackend, PasteReceipt, clipboard_backend, copy_diagnostics_enabled,
+        replace_clipboard_owner, select_clipboard_backend,
     };
+    use crate::ui_runtime::{UiRuntime, with_override};
+
+    /// The switch is the runtime, not `cfg(test)`, which a dependent's tests
+    /// never see: deterministic runs neither probe the desktop nor log.
+    #[test]
+    fn only_live_runs_probe_the_platform_clipboard_or_log_copies() {
+        with_override(UiRuntime::deterministic(), || {
+            assert!(!copy_diagnostics_enabled());
+            assert_eq!(clipboard_backend(), ClipboardBackend::Gpui);
+        });
+        with_override(UiRuntime::live(), || {
+            assert_eq!(copy_diagnostics_enabled(), cfg!(target_os = "linux"));
+        });
+    }
 
     #[test]
     fn wslg_all_copy_paths_exclusively_use_x11() {

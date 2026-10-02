@@ -441,7 +441,7 @@ fn app_menu_disables_update_check_when_environment_override_is_present(
 }
 
 #[gpui::test]
-fn app_menu_zoom_in_raises_the_app_wide_scale(cx: &mut gpui::TestAppContext) {
+fn app_menu_zoom_in_zooms_only_this_window(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (_view, cx) = open_app_menu(cx);
     cx.update(|window, app| {
@@ -451,7 +451,7 @@ fn app_menu_zoom_in_raises_the_app_wide_scale(cx: &mut gpui::TestAppContext) {
     for selector in [
         "app_menu_zoom_in",
         "app_menu_zoom_out",
-        "app_menu_actual_size",
+        "app_menu_reset_zoom",
     ] {
         assert!(cx.debug_bounds(selector).is_some(), "expected {selector}");
     }
@@ -464,10 +464,20 @@ fn app_menu_zoom_in_raises_the_app_wide_scale(cx: &mut gpui::TestAppContext) {
     cx.simulate_click(center, gpui::Modifiers::default());
     cx.run_until_parked();
 
-    let after = cx.update(|_window, app| crate::ui_scale::current(app).percent);
+    let (after, own_zoom, default) = cx.update(|window, app| {
+        (
+            crate::ui_scale::current(app).percent,
+            crate::ui_scale::window_override(app, window.window_handle().window_id()),
+            crate::ui_scale::default_percent(app),
+        )
+    });
     assert!(
         after > before,
         "Zoom In should raise the scale ({before}% -> {after}%)"
     );
-    cx.update(|_window, app| crate::ui_scale::set_current(app, before));
+    assert_eq!(own_zoom, Some(after), "the zoom belongs to this window");
+    assert_eq!(default, before, "the default UI scale is untouched");
+    cx.update(|window, app| {
+        crate::ui_scale::set_window_percent(app, window.window_handle().window_id(), None);
+    });
 }

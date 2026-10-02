@@ -36,9 +36,17 @@ impl SettingsWindowView {
         let Some((_, page)) = self.extension_pages.get(index) else {
             return;
         };
+        // Pages exist only with a registry, and so does the window's host.
+        let Some(host) = self.extension_window.as_ref().map(|e| e.host()) else {
+            return;
+        };
         let build = Rc::clone(&page.build);
         crate::view::perf::extension_dispatch();
-        let view = build(self.theme, window, cx);
+        let view = build(
+            gitcomet_extension_api::SettingsPageContext::new(host, self.theme),
+            window,
+            cx,
+        );
         self.extension_page = Some((index, view));
         self.set_expanded_section(None, cx);
         self.settings_window_scroll

@@ -16,10 +16,10 @@ pub(in crate::view) enum AppMenuAction {
     OpenRemoteInBrowser,
     Settings,
     OpenWorkspace,
-    /// Zoom is app-wide, so it lives in the menu rather than a window's footer.
+    /// Zoom this window; its footer zoom button offers the presets.
     ZoomIn,
     ZoomOut,
-    ActualSize,
+    ResetZoom,
     OpenInCodeEditor {
         path: Option<std::path::PathBuf>,
     },
@@ -376,6 +376,10 @@ pub(in crate::view) enum ContextMenuAction {
     },
     SetChangeTrackingView {
         view: ChangeTrackingView,
+    },
+    /// This window's zoom; `None` follows the default UI scale.
+    SetUiScale {
+        percent: Option<u32>,
     },
     SetCommitAmendEnabled {
         enabled: bool,

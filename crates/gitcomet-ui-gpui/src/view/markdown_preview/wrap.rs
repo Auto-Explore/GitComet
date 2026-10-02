@@ -209,6 +209,7 @@ pub(crate) struct MarkdownPreviewRowDecoration {
     pub(crate) starts_alert: bool,
     pub(crate) task: Option<MarkdownTaskMarker>,
     pub(crate) continues_item: bool,
+    pub(crate) align: MarkdownTextAlign,
 }
 
 /// A row's styled text for the theme it was last drawn with.

@@ -1635,7 +1635,7 @@ fn review_regression_closing_immediately_flushes_the_current_workspace_layout(
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     cx.update(|app| {
         crate::workspaces::initialize_for_test(app, Vec::new());
-        ui_scale::set_current(app, 100);
+        ui_scale::set_default(app, 100);
     });
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -3734,4 +3734,35 @@ fn repository_paths_from_open_urls_filters_non_file_urls_and_dedups() {
         paths,
         vec![normalize_repository_open_path(PathBuf::from("/tmp/repo"))]
     );
+}
+
+/// A root view that is neither a main nor a Settings window, like a pop-out.
+struct RenderCounter(std::rc::Rc<std::cell::Cell<usize>>);
+
+impl gpui::Render for RenderCounter {
+    fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl gpui::IntoElement {
+        self.0.set(self.0.get() + 1);
+        gpui::Empty
+    }
+}
+
+#[gpui::test]
+fn zooming_a_plain_window_redraws_it(cx: &mut gpui::TestAppContext) {
+    let renders = std::rc::Rc::new(std::cell::Cell::new(0));
+    let window = cx.add_window({
+        let renders = renders.clone();
+        move |_, _| RenderCounter(renders)
+    });
+    cx.run_until_parked();
+    let before = renders.get();
+
+    cx.update(|app| set_window_ui_scale_percent(app, window.window_id(), Some(150)));
+    cx.run_until_parked();
+
+    window
+        .update(cx, |_, window, _| {
+            assert_eq!(window.rem_size(), ui_scale::rem_size_for_percent(150));
+        })
+        .unwrap();
+    assert!(renders.get() > before, "the zoomed window must redraw");
 }

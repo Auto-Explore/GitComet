@@ -122,5 +122,19 @@ pub(super) fn worktree_changed(
         effects
             .extend(super::diff_selection::refresh_inline_submodule_selected_diff(state, repo_id));
     }
+    // Hosted sessions and lists reading this linked worktree.
+    let linked = gitcomet_core::domain::normalize_worktree_path(&path);
+    if let Some(repo) = state
+        .repos
+        .iter_mut()
+        .find(|repo| repo.id == repo_id && repo.lifetime() == lifetime)
+        && (change.worktree || change.index || change.git_state || change.text_attributes)
+    {
+        effects.extend(super::diff_session::reload_worktree_sessions(
+            repo,
+            &change,
+            Some(&linked),
+        ));
+    }
     effects
 }

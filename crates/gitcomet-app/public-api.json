@@ -1,0 +1,4418 @@
+{
+  "gitcomet_app::App": {
+    "attrs": [],
+    "definition": {
+      "struct": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "kind": {
+          "tuple": [
+            null
+          ]
+        }
+      }
+    },
+    "deprecation": null,
+    "impls": [
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "App",
+            "type_path": "gitcomet_app::App"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Default",
+          "type_path": "core::default::Default"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "App",
+            "type_path": "gitcomet_app::App"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "new"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "generic": "Self"
+                      }
+                    ],
+                    [
+                      "identity",
+                      {
+                        "resolved_path": {
+                          "args": null,
+                          "path": "ProductIdentity",
+                          "type_path": "gitcomet_core::identity::ProductIdentity"
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "identity"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [
+                    {
+                      "kind": {
+                        "type": {
+                          "bounds": [
+                            {
+                              "trait_bound": {
+                                "generic_params": [],
+                                "modifier": "none",
+                                "trait": {
+                                  "args": {
+                                    "parenthesized": {
+                                      "inputs": [
+                                        {
+                                          "borrowed_ref": {
+                                            "is_mutable": false,
+                                            "lifetime": null,
+                                            "type": {
+                                              "resolved_path": {
+                                                "args": null,
+                                                "path": "AppMode",
+                                                "type_path": "gitcomet_app::AppMode"
+                                              }
+                                            }
+                                          }
+                                        }
+                                      ],
+                                      "output": {
+                                        "resolved_path": {
+                                          "args": {
+                                            "angle_bracketed": {
+                                              "args": [
+                                                {
+                                                  "type": {
+                                                    "tuple": []
+                                                  }
+                                                },
+                                                {
+                                                  "type": {
+                                                    "resolved_path": {
+                                                      "args": null,
+                                                      "path": "String",
+                                                      "type_path": "alloc::string::String"
+                                                    }
+                                                  }
+                                                }
+                                              ],
+                                              "constraints": []
+                                            }
+                                          },
+                                          "path": "Result",
+                                          "type_path": "core::result::Result"
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "path": "FnOnce",
+                                  "type_path": "core::ops::function::FnOnce"
+                                }
+                              }
+                            },
+                            {
+                              "outlives": "'static"
+                            }
+                          ],
+                          "default": null,
+                          "is_synthetic": true
+                        }
+                      },
+                      "name": "impl FnOnce(&AppMode) -> Result<(), String> + 'static"
+                    }
+                  ],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "generic": "Self"
+                      }
+                    ],
+                    [
+                      "prepare",
+                      {
+                        "impl_trait": [
+                          {
+                            "trait_bound": {
+                              "generic_params": [],
+                              "modifier": "none",
+                              "trait": {
+                                "args": {
+                                  "parenthesized": {
+                                    "inputs": [
+                                      {
+                                        "borrowed_ref": {
+                                          "is_mutable": false,
+                                          "lifetime": null,
+                                          "type": {
+                                            "resolved_path": {
+                                              "args": null,
+                                              "path": "AppMode",
+                                              "type_path": "gitcomet_app::AppMode"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    ],
+                                    "output": {
+                                      "resolved_path": {
+                                        "args": {
+                                          "angle_bracketed": {
+                                            "args": [
+                                              {
+                                                "type": {
+                                                  "tuple": []
+                                                }
+                                              },
+                                              {
+                                                "type": {
+                                                  "resolved_path": {
+                                                    "args": null,
+                                                    "path": "String",
+                                                    "type_path": "alloc::string::String"
+                                                  }
+                                                }
+                                              }
+                                            ],
+                                            "constraints": []
+                                          }
+                                        },
+                                        "path": "Result",
+                                        "type_path": "core::result::Result"
+                                      }
+                                    }
+                                  }
+                                },
+                                "path": "FnOnce",
+                                "type_path": "core::ops::function::FnOnce"
+                              }
+                            }
+                          },
+                          {
+                            "outlives": "'static"
+                          }
+                        ]
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "on_prepare"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "generic": "Self"
+                      }
+                    ],
+                    [
+                      "backend",
+                      {
+                        "resolved_path": {
+                          "args": {
+                            "angle_bracketed": {
+                              "args": [
+                                {
+                                  "type": {
+                                    "dyn_trait": {
+                                      "lifetime": null,
+                                      "traits": [
+                                        {
+                                          "generic_params": [],
+                                          "trait": {
+                                            "args": null,
+                                            "path": "gitcomet_core::services::GitBackend",
+                                            "type_path": "gitcomet_core::services::GitBackend"
+                                          }
+                                        }
+                                      ]
+                                    }
+                                  }
+                                }
+                              ],
+                              "constraints": []
+                            }
+                          },
+                          "path": "std::sync::Arc",
+                          "type_path": "alloc::sync::Arc"
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "backend"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "generic": "Self"
+                      }
+                    ],
+                    [
+                      "options",
+                      {
+                        "resolved_path": {
+                          "args": null,
+                          "path": "gitcomet_core::services::RepositoryOptions",
+                          "type_path": "gitcomet_core::services::RepositoryOptions"
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "repository_options"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [
+                    {
+                      "kind": {
+                        "type": {
+                          "bounds": [
+                            {
+                              "trait_bound": {
+                                "generic_params": [],
+                                "modifier": "none",
+                                "trait": {
+                                  "args": {
+                                    "angle_bracketed": {
+                                      "args": [
+                                        {
+                                          "type": {
+                                            "resolved_path": {
+                                              "args": null,
+                                              "path": "String",
+                                              "type_path": "alloc::string::String"
+                                            }
+                                          }
+                                        }
+                                      ],
+                                      "constraints": []
+                                    }
+                                  },
+                                  "path": "Into",
+                                  "type_path": "core::convert::Into"
+                                }
+                              }
+                            }
+                          ],
+                          "default": null,
+                          "is_synthetic": true
+                        }
+                      },
+                      "name": "impl Into<String>"
+                    }
+                  ],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "generic": "Self"
+                      }
+                    ],
+                    [
+                      "about",
+                      {
+                        "impl_trait": [
+                          {
+                            "trait_bound": {
+                              "generic_params": [],
+                              "modifier": "none",
+                              "trait": {
+                                "args": {
+                                  "angle_bracketed": {
+                                    "args": [
+                                      {
+                                        "type": {
+                                          "resolved_path": {
+                                            "args": null,
+                                            "path": "String",
+                                            "type_path": "alloc::string::String"
+                                          }
+                                        }
+                                      }
+                                    ],
+                                    "constraints": []
+                                  }
+                                },
+                                "path": "Into",
+                                "type_path": "core::convert::Into"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "about"
+          },
+          {
+            "attrs": [
+              {
+                "other": "#[attr = CfgTrace([NameValue { name: \"feature\", value: Some(\"ui-gpui-runtime\"), span: crates/gitcomet-app/src/lib.rs:203:11: 203:38 (#0) }])]"
+              }
+            ],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [
+                    {
+                      "kind": {
+                        "type": {
+                          "bounds": [
+                            {
+                              "trait_bound": {
+                                "generic_params": [],
+                                "modifier": "none",
+                                "trait": {
+                                  "args": null,
+                                  "path": "gitcomet_extension_api::Extension",
+                                  "type_path": "gitcomet_extension_api::Extension"
+                                }
+                              }
+                            }
+                          ],
+                          "default": null,
+                          "is_synthetic": true
+                        }
+                      },
+                      "name": "impl gitcomet_extension_api::Extension"
+                    }
+                  ],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "generic": "Self"
+                      }
+                    ],
+                    [
+                      "extension",
+                      {
+                        "impl_trait": [
+                          {
+                            "trait_bound": {
+                              "generic_params": [],
+                              "modifier": "none",
+                              "trait": {
+                                "args": null,
+                                "path": "gitcomet_extension_api::Extension",
+                                "type_path": "gitcomet_extension_api::Extension"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "extension"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "generic": "Self"
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "primitive": "never"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "run"
+          }
+        ],
+        "trait": null
+      }
+    ],
+    "name": "App"
+  },
+  "gitcomet_app::AppLaunch": {
+    "attrs": [],
+    "definition": {
+      "struct": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "kind": {
+          "plain": {
+            "fields": [],
+            "has_stripped_fields": true
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "impls": [
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "AppLaunch",
+            "type_path": "gitcomet_app::AppLaunch"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "identity",
+                      {
+                        "resolved_path": {
+                          "args": null,
+                          "path": "ProductIdentity",
+                          "type_path": "gitcomet_core::identity::ProductIdentity"
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "new"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "gitcomet"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "generic": "Self"
+                      }
+                    ],
+                    [
+                      "identity",
+                      {
+                        "resolved_path": {
+                          "args": null,
+                          "path": "ProductIdentity",
+                          "type_path": "gitcomet_core::identity::ProductIdentity"
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "identity"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [
+                    {
+                      "kind": {
+                        "type": {
+                          "bounds": [
+                            {
+                              "trait_bound": {
+                                "generic_params": [],
+                                "modifier": "none",
+                                "trait": {
+                                  "args": {
+                                    "angle_bracketed": {
+                                      "args": [
+                                        {
+                                          "type": {
+                                            "resolved_path": {
+                                              "args": null,
+                                              "path": "String",
+                                              "type_path": "alloc::string::String"
+                                            }
+                                          }
+                                        }
+                                      ],
+                                      "constraints": []
+                                    }
+                                  },
+                                  "path": "Into",
+                                  "type_path": "core::convert::Into"
+                                }
+                              }
+                            }
+                          ],
+                          "default": null,
+                          "is_synthetic": true
+                        }
+                      },
+                      "name": "impl Into<String>"
+                    }
+                  ],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "generic": "Self"
+                      }
+                    ],
+                    [
+                      "about",
+                      {
+                        "impl_trait": [
+                          {
+                            "trait_bound": {
+                              "generic_params": [],
+                              "modifier": "none",
+                              "trait": {
+                                "args": {
+                                  "angle_bracketed": {
+                                    "args": [
+                                      {
+                                        "type": {
+                                          "resolved_path": {
+                                            "args": null,
+                                            "path": "String",
+                                            "type_path": "alloc::string::String"
+                                          }
+                                        }
+                                      }
+                                    ],
+                                    "constraints": []
+                                  }
+                                },
+                                "path": "Into",
+                                "type_path": "core::convert::Into"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "about"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [
+                    {
+                      "kind": {
+                        "type": {
+                          "bounds": [
+                            {
+                              "trait_bound": {
+                                "generic_params": [],
+                                "modifier": "none",
+                                "trait": {
+                                  "args": {
+                                    "parenthesized": {
+                                      "inputs": [
+                                        {
+                                          "borrowed_ref": {
+                                            "is_mutable": false,
+                                            "lifetime": null,
+                                            "type": {
+                                              "resolved_path": {
+                                                "args": null,
+                                                "path": "AppMode",
+                                                "type_path": "gitcomet_app::AppMode"
+                                              }
+                                            }
+                                          }
+                                        }
+                                      ],
+                                      "output": {
+                                        "resolved_path": {
+                                          "args": {
+                                            "angle_bracketed": {
+                                              "args": [
+                                                {
+                                                  "type": {
+                                                    "tuple": []
+                                                  }
+                                                },
+                                                {
+                                                  "type": {
+                                                    "resolved_path": {
+                                                      "args": null,
+                                                      "path": "String",
+                                                      "type_path": "alloc::string::String"
+                                                    }
+                                                  }
+                                                }
+                                              ],
+                                              "constraints": []
+                                            }
+                                          },
+                                          "path": "Result",
+                                          "type_path": "core::result::Result"
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "path": "FnOnce",
+                                  "type_path": "core::ops::function::FnOnce"
+                                }
+                              }
+                            },
+                            {
+                              "outlives": "'static"
+                            }
+                          ],
+                          "default": null,
+                          "is_synthetic": true
+                        }
+                      },
+                      "name": "impl FnOnce(&AppMode) -> Result<(), String> + 'static"
+                    }
+                  ],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "generic": "Self"
+                      }
+                    ],
+                    [
+                      "prepare",
+                      {
+                        "impl_trait": [
+                          {
+                            "trait_bound": {
+                              "generic_params": [],
+                              "modifier": "none",
+                              "trait": {
+                                "args": {
+                                  "parenthesized": {
+                                    "inputs": [
+                                      {
+                                        "borrowed_ref": {
+                                          "is_mutable": false,
+                                          "lifetime": null,
+                                          "type": {
+                                            "resolved_path": {
+                                              "args": null,
+                                              "path": "AppMode",
+                                              "type_path": "gitcomet_app::AppMode"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    ],
+                                    "output": {
+                                      "resolved_path": {
+                                        "args": {
+                                          "angle_bracketed": {
+                                            "args": [
+                                              {
+                                                "type": {
+                                                  "tuple": []
+                                                }
+                                              },
+                                              {
+                                                "type": {
+                                                  "resolved_path": {
+                                                    "args": null,
+                                                    "path": "String",
+                                                    "type_path": "alloc::string::String"
+                                                  }
+                                                }
+                                              }
+                                            ],
+                                            "constraints": []
+                                          }
+                                        },
+                                        "path": "Result",
+                                        "type_path": "core::result::Result"
+                                      }
+                                    }
+                                  }
+                                },
+                                "path": "FnOnce",
+                                "type_path": "core::ops::function::FnOnce"
+                              }
+                            }
+                          },
+                          {
+                            "outlives": "'static"
+                          }
+                        ]
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "on_prepare"
+          },
+          {
+            "attrs": [
+              {
+                "other": "#[attr = CfgTrace([NameValue { name: \"feature\", value: Some(\"ui-gpui-runtime\"), span: crates/gitcomet-app/src/lib.rs:111:11: 111:38 (#0) }])]"
+              }
+            ],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [
+                    {
+                      "kind": {
+                        "type": {
+                          "bounds": [
+                            {
+                              "trait_bound": {
+                                "generic_params": [],
+                                "modifier": "none",
+                                "trait": {
+                                  "args": null,
+                                  "path": "gitcomet_extension_api::Extension",
+                                  "type_path": "gitcomet_extension_api::Extension"
+                                }
+                              }
+                            }
+                          ],
+                          "default": null,
+                          "is_synthetic": true
+                        }
+                      },
+                      "name": "impl gitcomet_extension_api::Extension"
+                    }
+                  ],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "generic": "Self"
+                      }
+                    ],
+                    [
+                      "extension",
+                      {
+                        "impl_trait": [
+                          {
+                            "trait_bound": {
+                              "generic_params": [],
+                              "modifier": "none",
+                              "trait": {
+                                "args": null,
+                                "path": "gitcomet_extension_api::Extension",
+                                "type_path": "gitcomet_extension_api::Extension"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "extension"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "generic": "Self"
+                      }
+                    ],
+                    [
+                      "options",
+                      {
+                        "resolved_path": {
+                          "args": null,
+                          "path": "gitcomet_core::services::RepositoryOptions",
+                          "type_path": "gitcomet_core::services::RepositoryOptions"
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "repository_options"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "generic": "Self"
+                      }
+                    ],
+                    [
+                      "backend",
+                      {
+                        "resolved_path": {
+                          "args": {
+                            "angle_bracketed": {
+                              "args": [
+                                {
+                                  "type": {
+                                    "dyn_trait": {
+                                      "lifetime": null,
+                                      "traits": [
+                                        {
+                                          "generic_params": [],
+                                          "trait": {
+                                            "args": null,
+                                            "path": "gitcomet_core::services::GitBackend",
+                                            "type_path": "gitcomet_core::services::GitBackend"
+                                          }
+                                        }
+                                      ]
+                                    }
+                                  }
+                                }
+                              ],
+                              "constraints": []
+                            }
+                          },
+                          "path": "std::sync::Arc",
+                          "type_path": "alloc::sync::Arc"
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "backend"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "generic": "Self"
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "primitive": "i32"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "run"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "generic": "Self"
+                      }
+                    ],
+                    [
+                      "args",
+                      {
+                        "resolved_path": {
+                          "args": {
+                            "angle_bracketed": {
+                              "args": [
+                                {
+                                  "type": {
+                                    "resolved_path": {
+                                      "args": null,
+                                      "path": "OsString",
+                                      "type_path": "std::ffi::os_str::OsString"
+                                    }
+                                  }
+                                }
+                              ],
+                              "constraints": []
+                            }
+                          },
+                          "path": "Vec",
+                          "type_path": "alloc::vec::Vec"
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "primitive": "i32"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "run_with_args"
+          }
+        ],
+        "trait": null
+      }
+    ],
+    "name": "AppLaunch"
+  },
+  "gitcomet_app::AppMode": {
+    "attrs": [
+      "non_exhaustive"
+    ],
+    "definition": {
+      "enum": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "has_stripped_variants": false,
+        "variants": [
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "struct": {
+                    "fields": [
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "resolved_path": {
+                              "args": {
+                                "angle_bracketed": {
+                                  "args": [
+                                    {
+                                      "type": {
+                                        "resolved_path": {
+                                          "args": null,
+                                          "path": "std::path::PathBuf",
+                                          "type_path": "std::path::PathBuf"
+                                        }
+                                      }
+                                    }
+                                  ],
+                                  "constraints": []
+                                }
+                              },
+                              "path": "Option",
+                              "type_path": "core::option::Option"
+                            }
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "path"
+                      }
+                    ],
+                    "has_stripped_fields": false
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "Browser"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "tuple": [
+                    {
+                      "attrs": [],
+                      "definition": {
+                        "struct_field": {
+                          "resolved_path": {
+                            "args": null,
+                            "path": "DifftoolConfig",
+                            "type_path": "gitcomet_app::cli::DifftoolConfig"
+                          }
+                        }
+                      },
+                      "deprecation": null,
+                      "name": "0"
+                    }
+                  ]
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "Difftool"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "tuple": [
+                    {
+                      "attrs": [],
+                      "definition": {
+                        "struct_field": {
+                          "resolved_path": {
+                            "args": null,
+                            "path": "MergetoolConfig",
+                            "type_path": "gitcomet_app::cli::MergetoolConfig"
+                          }
+                        }
+                      },
+                      "deprecation": null,
+                      "name": "0"
+                    }
+                  ]
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "Mergetool"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "struct": {
+                    "fields": [
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "primitive": "bool"
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "dry_run"
+                      },
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "primitive": "bool"
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "local"
+                      }
+                    ],
+                    "has_stripped_fields": false
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "Setup"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "struct": {
+                    "fields": [
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "primitive": "bool"
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "dry_run"
+                      },
+                      {
+                        "attrs": [],
+                        "definition": {
+                          "struct_field": {
+                            "primitive": "bool"
+                          }
+                        },
+                        "deprecation": null,
+                        "name": "local"
+                      }
+                    ],
+                    "has_stripped_fields": false
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "Uninstall"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "tuple": [
+                    {
+                      "attrs": [],
+                      "definition": {
+                        "struct_field": {
+                          "resolved_path": {
+                            "args": null,
+                            "path": "ExtractMergeFixturesConfig",
+                            "type_path": "gitcomet_app::cli::ExtractMergeFixturesConfig"
+                          }
+                        }
+                      },
+                      "deprecation": null,
+                      "name": "0"
+                    }
+                  ]
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "ExtractMergeFixtures"
+          }
+        ]
+      }
+    },
+    "deprecation": null,
+    "impls": [
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "AppMode",
+            "type_path": "gitcomet_app::AppMode"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Clone",
+          "type_path": "core::clone::Clone"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "AppMode",
+            "type_path": "gitcomet_app::AppMode"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Debug",
+          "type_path": "core::fmt::Debug"
+        }
+      }
+    ],
+    "name": "AppMode"
+  },
+  "gitcomet_app::CliOutcome": {
+    "attrs": [],
+    "definition": {
+      "enum": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "has_stripped_variants": false,
+        "variants": [
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "tuple": [
+                    {
+                      "attrs": [],
+                      "definition": {
+                        "struct_field": {
+                          "resolved_path": {
+                            "args": null,
+                            "path": "AppMode",
+                            "type_path": "gitcomet_app::AppMode"
+                          }
+                        }
+                      },
+                      "deprecation": null,
+                      "name": "0"
+                    }
+                  ]
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "Run"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "tuple": [
+                    {
+                      "attrs": [],
+                      "definition": {
+                        "struct_field": {
+                          "resolved_path": {
+                            "args": null,
+                            "path": "Informational",
+                            "type_path": "gitcomet_app::cli::Informational"
+                          }
+                        }
+                      },
+                      "deprecation": null,
+                      "name": "0"
+                    }
+                  ]
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "Inform"
+          }
+        ]
+      }
+    },
+    "deprecation": null,
+    "impls": [
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "CliOutcome",
+            "type_path": "gitcomet_app::CliOutcome"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Debug",
+          "type_path": "core::fmt::Debug"
+        }
+      }
+    ],
+    "name": "CliOutcome"
+  },
+  "gitcomet_app::ProductIdentity": {
+    "reexport": "gitcomet_core::identity::ProductIdentity"
+  },
+  "gitcomet_app::cli::AppMode": {
+    "reexport": "gitcomet_app::AppMode"
+  },
+  "gitcomet_app::cli::Cli": {
+    "attrs": [],
+    "definition": {
+      "struct": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "kind": {
+          "plain": {
+            "fields": [
+              {
+                "attrs": [
+                  {
+                    "other": "#[command(subcommand)]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "Command",
+                                  "type_path": "gitcomet_app::cli::Command"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "command"
+              },
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(global = false)]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "std::path::PathBuf",
+                                  "type_path": "std::path::PathBuf"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "path"
+              }
+            ],
+            "has_stripped_fields": false
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "impls": [
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "Cli",
+            "type_path": "gitcomet_app::cli::Cli"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Args",
+          "type_path": "clap_builder::derive::Args"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "Cli",
+            "type_path": "gitcomet_app::cli::Cli"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "CommandFactory",
+          "type_path": "clap_builder::derive::CommandFactory"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "Cli",
+            "type_path": "gitcomet_app::cli::Cli"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Debug",
+          "type_path": "core::fmt::Debug"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "Cli",
+            "type_path": "gitcomet_app::cli::Cli"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "FromArgMatches",
+          "type_path": "clap_builder::derive::FromArgMatches"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "Cli",
+            "type_path": "gitcomet_app::cli::Cli"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Parser",
+          "type_path": "clap_builder::derive::Parser"
+        }
+      }
+    ],
+    "name": "Cli"
+  },
+  "gitcomet_app::cli::CliOutcome": {
+    "reexport": "gitcomet_app::CliOutcome"
+  },
+  "gitcomet_app::cli::Command": {
+    "attrs": [],
+    "definition": {
+      "enum": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "has_stripped_variants": false,
+        "variants": [
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "tuple": [
+                    {
+                      "attrs": [],
+                      "definition": {
+                        "struct_field": {
+                          "resolved_path": {
+                            "args": null,
+                            "path": "DifftoolArgs",
+                            "type_path": "gitcomet_app::cli::DifftoolArgs"
+                          }
+                        }
+                      },
+                      "deprecation": null,
+                      "name": "0"
+                    }
+                  ]
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "Difftool"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "tuple": [
+                    {
+                      "attrs": [],
+                      "definition": {
+                        "struct_field": {
+                          "resolved_path": {
+                            "args": null,
+                            "path": "MergetoolArgs",
+                            "type_path": "gitcomet_app::cli::MergetoolArgs"
+                          }
+                        }
+                      },
+                      "deprecation": null,
+                      "name": "0"
+                    }
+                  ]
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "Mergetool"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "tuple": [
+                    {
+                      "attrs": [],
+                      "definition": {
+                        "struct_field": {
+                          "resolved_path": {
+                            "args": null,
+                            "path": "SetupArgs",
+                            "type_path": "gitcomet_app::cli::SetupArgs"
+                          }
+                        }
+                      },
+                      "deprecation": null,
+                      "name": "0"
+                    }
+                  ]
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "Setup"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "tuple": [
+                    {
+                      "attrs": [],
+                      "definition": {
+                        "struct_field": {
+                          "resolved_path": {
+                            "args": null,
+                            "path": "UninstallArgs",
+                            "type_path": "gitcomet_app::cli::UninstallArgs"
+                          }
+                        }
+                      },
+                      "deprecation": null,
+                      "name": "0"
+                    }
+                  ]
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "Uninstall"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "variant": {
+                "discriminant": null,
+                "kind": {
+                  "tuple": [
+                    {
+                      "attrs": [],
+                      "definition": {
+                        "struct_field": {
+                          "resolved_path": {
+                            "args": null,
+                            "path": "ExtractMergeFixturesArgs",
+                            "type_path": "gitcomet_app::cli::ExtractMergeFixturesArgs"
+                          }
+                        }
+                      },
+                      "deprecation": null,
+                      "name": "0"
+                    }
+                  ]
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "ExtractMergeFixtures"
+          }
+        ]
+      }
+    },
+    "deprecation": null,
+    "impls": [
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "Command",
+            "type_path": "gitcomet_app::cli::Command"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Debug",
+          "type_path": "core::fmt::Debug"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "Command",
+            "type_path": "gitcomet_app::cli::Command"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "FromArgMatches",
+          "type_path": "clap_builder::derive::FromArgMatches"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "Command",
+            "type_path": "gitcomet_app::cli::Command"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Subcommand",
+          "type_path": "clap_builder::derive::Subcommand"
+        }
+      }
+    ],
+    "name": "Command"
+  },
+  "gitcomet_app::cli::DEFAULT_ABOUT": {
+    "attrs": [],
+    "definition": {
+      "constant": {
+        "const": {
+          "expr": "\"Git GUI built with GPUI\"",
+          "is_literal": true,
+          "value": null
+        },
+        "type": {
+          "borrowed_ref": {
+            "is_mutable": false,
+            "lifetime": null,
+            "type": {
+              "primitive": "str"
+            }
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "name": "DEFAULT_ABOUT"
+  },
+  "gitcomet_app::cli::DifftoolArgs": {
+    "attrs": [],
+    "definition": {
+      "struct": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "kind": {
+          "plain": {
+            "fields": [
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long)]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "std::path::PathBuf",
+                                  "type_path": "std::path::PathBuf"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "local"
+              },
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long)]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "std::path::PathBuf",
+                                  "type_path": "std::path::PathBuf"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "remote"
+              },
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long)]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "String",
+                                  "type_path": "alloc::string::String"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "path"
+              },
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long)]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "String",
+                                  "type_path": "alloc::string::String"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "label_left"
+              },
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long)]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "String",
+                                  "type_path": "alloc::string::String"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "label_right"
+              },
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long)]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "primitive": "bool"
+                  }
+                },
+                "deprecation": null,
+                "name": "gui"
+              }
+            ],
+            "has_stripped_fields": false
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "impls": [
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "DifftoolArgs",
+            "type_path": "gitcomet_app::cli::DifftoolArgs"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Args",
+          "type_path": "clap_builder::derive::Args"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "DifftoolArgs",
+            "type_path": "gitcomet_app::cli::DifftoolArgs"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Debug",
+          "type_path": "core::fmt::Debug"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "DifftoolArgs",
+            "type_path": "gitcomet_app::cli::DifftoolArgs"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "FromArgMatches",
+          "type_path": "clap_builder::derive::FromArgMatches"
+        }
+      }
+    ],
+    "name": "DifftoolArgs"
+  },
+  "gitcomet_app::cli::DifftoolConfig": {
+    "attrs": [],
+    "definition": {
+      "struct": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "kind": {
+          "plain": {
+            "fields": [
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "std::path::PathBuf",
+                      "type_path": "std::path::PathBuf"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "local"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "std::path::PathBuf",
+                      "type_path": "std::path::PathBuf"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "remote"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "String",
+                                  "type_path": "alloc::string::String"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "display_path"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "String",
+                                  "type_path": "alloc::string::String"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "label_left"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "String",
+                                  "type_path": "alloc::string::String"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "label_right"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "primitive": "bool"
+                  }
+                },
+                "deprecation": null,
+                "name": "gui"
+              }
+            ],
+            "has_stripped_fields": false
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "impls": [
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "DifftoolConfig",
+            "type_path": "gitcomet_app::cli::DifftoolConfig"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Clone",
+          "type_path": "core::clone::Clone"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "DifftoolConfig",
+            "type_path": "gitcomet_app::cli::DifftoolConfig"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Debug",
+          "type_path": "core::fmt::Debug"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "DifftoolConfig",
+            "type_path": "gitcomet_app::cli::DifftoolConfig"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Eq",
+          "type_path": "core::cmp::Eq"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "DifftoolConfig",
+            "type_path": "gitcomet_app::cli::DifftoolConfig"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "PartialEq",
+          "type_path": "core::cmp::PartialEq"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "DifftoolConfig",
+            "type_path": "gitcomet_app::cli::DifftoolConfig"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "StructuralPartialEq",
+          "type_path": "core::marker::StructuralPartialEq"
+        }
+      }
+    ],
+    "name": "DifftoolConfig"
+  },
+  "gitcomet_app::cli::ExtractMergeFixturesArgs": {
+    "attrs": [],
+    "definition": {
+      "struct": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "kind": {
+          "plain": {
+            "fields": [
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long, default_value = \".\")]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "std::path::PathBuf",
+                      "type_path": "std::path::PathBuf"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "repo"
+              },
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long)]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "std::path::PathBuf",
+                      "type_path": "std::path::PathBuf"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "out"
+              },
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long, default_value_t = 20)]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "primitive": "usize"
+                  }
+                },
+                "deprecation": null,
+                "name": "max_merges"
+              },
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long, default_value_t = 5)]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "primitive": "usize"
+                  }
+                },
+                "deprecation": null,
+                "name": "max_files_per_merge"
+              }
+            ],
+            "has_stripped_fields": false
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "impls": [
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ExtractMergeFixturesArgs",
+            "type_path": "gitcomet_app::cli::ExtractMergeFixturesArgs"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Args",
+          "type_path": "clap_builder::derive::Args"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ExtractMergeFixturesArgs",
+            "type_path": "gitcomet_app::cli::ExtractMergeFixturesArgs"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Debug",
+          "type_path": "core::fmt::Debug"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ExtractMergeFixturesArgs",
+            "type_path": "gitcomet_app::cli::ExtractMergeFixturesArgs"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "FromArgMatches",
+          "type_path": "clap_builder::derive::FromArgMatches"
+        }
+      }
+    ],
+    "name": "ExtractMergeFixturesArgs"
+  },
+  "gitcomet_app::cli::ExtractMergeFixturesConfig": {
+    "attrs": [],
+    "definition": {
+      "struct": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "kind": {
+          "plain": {
+            "fields": [
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "std::path::PathBuf",
+                      "type_path": "std::path::PathBuf"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "repo"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "std::path::PathBuf",
+                      "type_path": "std::path::PathBuf"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "output_dir"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "primitive": "usize"
+                  }
+                },
+                "deprecation": null,
+                "name": "max_merges"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "primitive": "usize"
+                  }
+                },
+                "deprecation": null,
+                "name": "max_files_per_merge"
+              }
+            ],
+            "has_stripped_fields": false
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "impls": [
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ExtractMergeFixturesConfig",
+            "type_path": "gitcomet_app::cli::ExtractMergeFixturesConfig"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Clone",
+          "type_path": "core::clone::Clone"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ExtractMergeFixturesConfig",
+            "type_path": "gitcomet_app::cli::ExtractMergeFixturesConfig"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Debug",
+          "type_path": "core::fmt::Debug"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ExtractMergeFixturesConfig",
+            "type_path": "gitcomet_app::cli::ExtractMergeFixturesConfig"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Eq",
+          "type_path": "core::cmp::Eq"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ExtractMergeFixturesConfig",
+            "type_path": "gitcomet_app::cli::ExtractMergeFixturesConfig"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "PartialEq",
+          "type_path": "core::cmp::PartialEq"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "ExtractMergeFixturesConfig",
+            "type_path": "gitcomet_app::cli::ExtractMergeFixturesConfig"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "StructuralPartialEq",
+          "type_path": "core::marker::StructuralPartialEq"
+        }
+      }
+    ],
+    "name": "ExtractMergeFixturesConfig"
+  },
+  "gitcomet_app::cli::Informational": {
+    "attrs": [],
+    "definition": {
+      "struct": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "kind": {
+          "tuple": [
+            null
+          ]
+        }
+      }
+    },
+    "deprecation": null,
+    "impls": [
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "Informational",
+            "type_path": "gitcomet_app::cli::Informational"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Debug",
+          "type_path": "core::fmt::Debug"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "Informational",
+            "type_path": "gitcomet_app::cli::Informational"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "generic": "Self"
+                          }
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "String",
+                      "type_path": "alloc::string::String"
+                    }
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "text"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "generic": "Self"
+                          }
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "tuple": []
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "std::io::Result",
+                      "type_path": "core::io::error::Result"
+                    }
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "print"
+          },
+          {
+            "attrs": [],
+            "definition": {
+              "function": {
+                "generics": {
+                  "params": [],
+                  "where_predicates": []
+                },
+                "header": {
+                  "abi": "Rust",
+                  "is_async": false,
+                  "is_const": false,
+                  "is_unsafe": false
+                },
+                "sig": {
+                  "inputs": [
+                    [
+                      "self",
+                      {
+                        "borrowed_ref": {
+                          "is_mutable": false,
+                          "lifetime": null,
+                          "type": {
+                            "generic": "Self"
+                          }
+                        }
+                      }
+                    ]
+                  ],
+                  "is_c_variadic": false,
+                  "output": {
+                    "primitive": "i32"
+                  }
+                }
+              }
+            },
+            "deprecation": null,
+            "name": "exit_code"
+          }
+        ],
+        "trait": null
+      }
+    ],
+    "name": "Informational"
+  },
+  "gitcomet_app::cli::MergetoolArgs": {
+    "attrs": [],
+    "definition": {
+      "struct": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "kind": {
+          "plain": {
+            "fields": [
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long, short = 'o', visible_aliases = [\"output\", \"out\"])]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "std::path::PathBuf",
+                                  "type_path": "std::path::PathBuf"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "merged"
+              },
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long)]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "std::path::PathBuf",
+                                  "type_path": "std::path::PathBuf"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "local"
+              },
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long)]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "std::path::PathBuf",
+                                  "type_path": "std::path::PathBuf"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "remote"
+              },
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long)]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "std::path::PathBuf",
+                                  "type_path": "std::path::PathBuf"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "base"
+              },
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long, visible_alias = \"L1\")]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "String",
+                                  "type_path": "alloc::string::String"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "label_base"
+              },
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long, visible_alias = \"L2\")]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "String",
+                                  "type_path": "alloc::string::String"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "label_local"
+              },
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long, visible_alias = \"L3\")]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "String",
+                                  "type_path": "alloc::string::String"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "label_remote"
+              },
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long, value_name = \"STYLE\")]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "String",
+                                  "type_path": "alloc::string::String"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "conflict_style"
+              },
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long, value_name = \"ALGORITHM\")]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "String",
+                                  "type_path": "alloc::string::String"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "diff_algorithm"
+              },
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long, value_name = \"N\")]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "primitive": "usize"
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "marker_size"
+              },
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long, visible_alias = \"auto-merge\")]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "primitive": "bool"
+                  }
+                },
+                "deprecation": null,
+                "name": "auto"
+              },
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long)]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "primitive": "bool"
+                  }
+                },
+                "deprecation": null,
+                "name": "gui"
+              }
+            ],
+            "has_stripped_fields": false
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "impls": [
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "MergetoolArgs",
+            "type_path": "gitcomet_app::cli::MergetoolArgs"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Args",
+          "type_path": "clap_builder::derive::Args"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "MergetoolArgs",
+            "type_path": "gitcomet_app::cli::MergetoolArgs"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Debug",
+          "type_path": "core::fmt::Debug"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "MergetoolArgs",
+            "type_path": "gitcomet_app::cli::MergetoolArgs"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "FromArgMatches",
+          "type_path": "clap_builder::derive::FromArgMatches"
+        }
+      }
+    ],
+    "name": "MergetoolArgs"
+  },
+  "gitcomet_app::cli::MergetoolConfig": {
+    "attrs": [],
+    "definition": {
+      "struct": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "kind": {
+          "plain": {
+            "fields": [
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "std::path::PathBuf",
+                      "type_path": "std::path::PathBuf"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "merged"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "std::path::PathBuf",
+                      "type_path": "std::path::PathBuf"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "local"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "std::path::PathBuf",
+                      "type_path": "std::path::PathBuf"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "remote"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "std::path::PathBuf",
+                                  "type_path": "std::path::PathBuf"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "base"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "String",
+                                  "type_path": "alloc::string::String"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "label_base"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "String",
+                                  "type_path": "alloc::string::String"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "label_local"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": {
+                        "angle_bracketed": {
+                          "args": [
+                            {
+                              "type": {
+                                "resolved_path": {
+                                  "args": null,
+                                  "path": "String",
+                                  "type_path": "alloc::string::String"
+                                }
+                              }
+                            }
+                          ],
+                          "constraints": []
+                        }
+                      },
+                      "path": "Option",
+                      "type_path": "core::option::Option"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "label_remote"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "gitcomet_core::merge::ConflictStyle",
+                      "type_path": "gitcomet_core::merge::ConflictStyle"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "conflict_style"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "resolved_path": {
+                      "args": null,
+                      "path": "gitcomet_core::merge::DiffAlgorithm",
+                      "type_path": "gitcomet_core::merge::DiffAlgorithm"
+                    }
+                  }
+                },
+                "deprecation": null,
+                "name": "diff_algorithm"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "primitive": "usize"
+                  }
+                },
+                "deprecation": null,
+                "name": "marker_size"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "primitive": "bool"
+                  }
+                },
+                "deprecation": null,
+                "name": "auto"
+              },
+              {
+                "attrs": [],
+                "definition": {
+                  "struct_field": {
+                    "primitive": "bool"
+                  }
+                },
+                "deprecation": null,
+                "name": "gui"
+              }
+            ],
+            "has_stripped_fields": false
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "impls": [
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "MergetoolConfig",
+            "type_path": "gitcomet_app::cli::MergetoolConfig"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Clone",
+          "type_path": "core::clone::Clone"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "MergetoolConfig",
+            "type_path": "gitcomet_app::cli::MergetoolConfig"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Debug",
+          "type_path": "core::fmt::Debug"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "MergetoolConfig",
+            "type_path": "gitcomet_app::cli::MergetoolConfig"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Eq",
+          "type_path": "core::cmp::Eq"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "MergetoolConfig",
+            "type_path": "gitcomet_app::cli::MergetoolConfig"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "PartialEq",
+          "type_path": "core::cmp::PartialEq"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "MergetoolConfig",
+            "type_path": "gitcomet_app::cli::MergetoolConfig"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "StructuralPartialEq",
+          "type_path": "core::marker::StructuralPartialEq"
+        }
+      }
+    ],
+    "name": "MergetoolConfig"
+  },
+  "gitcomet_app::cli::SetupArgs": {
+    "attrs": [],
+    "definition": {
+      "struct": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "kind": {
+          "plain": {
+            "fields": [
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long)]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "primitive": "bool"
+                  }
+                },
+                "deprecation": null,
+                "name": "dry_run"
+              },
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long)]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "primitive": "bool"
+                  }
+                },
+                "deprecation": null,
+                "name": "local"
+              }
+            ],
+            "has_stripped_fields": false
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "impls": [
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "SetupArgs",
+            "type_path": "gitcomet_app::cli::SetupArgs"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Args",
+          "type_path": "clap_builder::derive::Args"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "SetupArgs",
+            "type_path": "gitcomet_app::cli::SetupArgs"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Debug",
+          "type_path": "core::fmt::Debug"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "SetupArgs",
+            "type_path": "gitcomet_app::cli::SetupArgs"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "FromArgMatches",
+          "type_path": "clap_builder::derive::FromArgMatches"
+        }
+      }
+    ],
+    "name": "SetupArgs"
+  },
+  "gitcomet_app::cli::UninstallArgs": {
+    "attrs": [],
+    "definition": {
+      "struct": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "kind": {
+          "plain": {
+            "fields": [
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long)]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "primitive": "bool"
+                  }
+                },
+                "deprecation": null,
+                "name": "dry_run"
+              },
+              {
+                "attrs": [
+                  {
+                    "other": "#[arg(long)]"
+                  }
+                ],
+                "definition": {
+                  "struct_field": {
+                    "primitive": "bool"
+                  }
+                },
+                "deprecation": null,
+                "name": "local"
+              }
+            ],
+            "has_stripped_fields": false
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "impls": [
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "UninstallArgs",
+            "type_path": "gitcomet_app::cli::UninstallArgs"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Args",
+          "type_path": "clap_builder::derive::Args"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "UninstallArgs",
+            "type_path": "gitcomet_app::cli::UninstallArgs"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "Debug",
+          "type_path": "core::fmt::Debug"
+        }
+      },
+      {
+        "blanket_impl": null,
+        "for": {
+          "resolved_path": {
+            "args": null,
+            "path": "UninstallArgs",
+            "type_path": "gitcomet_app::cli::UninstallArgs"
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "is_negative": false,
+        "is_synthetic": false,
+        "is_unsafe": false,
+        "items": [],
+        "trait": {
+          "args": null,
+          "path": "FromArgMatches",
+          "type_path": "clap_builder::derive::FromArgMatches"
+        }
+      }
+    ],
+    "name": "UninstallArgs"
+  },
+  "gitcomet_app::cli::exit_code::CANCELED": {
+    "reexport": "gitcomet_app::exit_code::CANCELED"
+  },
+  "gitcomet_app::cli::exit_code::ERROR": {
+    "reexport": "gitcomet_app::exit_code::ERROR"
+  },
+  "gitcomet_app::cli::exit_code::SUCCESS": {
+    "reexport": "gitcomet_app::exit_code::SUCCESS"
+  },
+  "gitcomet_app::cli::parse_cli": {
+    "attrs": [],
+    "definition": {
+      "function": {
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "header": {
+          "abi": "Rust",
+          "is_async": false,
+          "is_const": false,
+          "is_unsafe": false
+        },
+        "sig": {
+          "inputs": [
+            [
+              "args",
+              {
+                "resolved_path": {
+                  "args": {
+                    "angle_bracketed": {
+                      "args": [
+                        {
+                          "type": {
+                            "resolved_path": {
+                              "args": null,
+                              "path": "std::ffi::OsString",
+                              "type_path": "std::ffi::os_str::OsString"
+                            }
+                          }
+                        }
+                      ],
+                      "constraints": []
+                    }
+                  },
+                  "path": "Vec",
+                  "type_path": "alloc::vec::Vec"
+                }
+              }
+            ],
+            [
+              "about",
+              {
+                "borrowed_ref": {
+                  "is_mutable": false,
+                  "lifetime": null,
+                  "type": {
+                    "primitive": "str"
+                  }
+                }
+              }
+            ]
+          ],
+          "is_c_variadic": false,
+          "output": {
+            "resolved_path": {
+              "args": {
+                "angle_bracketed": {
+                  "args": [
+                    {
+                      "type": {
+                        "resolved_path": {
+                          "args": null,
+                          "path": "CliOutcome",
+                          "type_path": "gitcomet_app::CliOutcome"
+                        }
+                      }
+                    },
+                    {
+                      "type": {
+                        "resolved_path": {
+                          "args": null,
+                          "path": "String",
+                          "type_path": "alloc::string::String"
+                        }
+                      }
+                    }
+                  ],
+                  "constraints": []
+                }
+              },
+              "path": "Result",
+              "type_path": "core::result::Result"
+            }
+          }
+        }
+      }
+    },
+    "deprecation": null,
+    "name": "parse_cli"
+  },
+  "gitcomet_app::exit_code::CANCELED": {
+    "attrs": [],
+    "definition": {
+      "constant": {
+        "const": {
+          "expr": "1",
+          "is_literal": true,
+          "value": "1i32"
+        },
+        "type": {
+          "primitive": "i32"
+        }
+      }
+    },
+    "deprecation": null,
+    "name": "CANCELED"
+  },
+  "gitcomet_app::exit_code::ERROR": {
+    "attrs": [],
+    "definition": {
+      "constant": {
+        "const": {
+          "expr": "2",
+          "is_literal": true,
+          "value": "2i32"
+        },
+        "type": {
+          "primitive": "i32"
+        }
+      }
+    },
+    "deprecation": null,
+    "name": "ERROR"
+  },
+  "gitcomet_app::exit_code::SUCCESS": {
+    "attrs": [],
+    "definition": {
+      "constant": {
+        "const": {
+          "expr": "0",
+          "is_literal": true,
+          "value": "0i32"
+        },
+        "type": {
+          "primitive": "i32"
+        }
+      }
+    },
+    "deprecation": null,
+    "name": "SUCCESS"
+  },
+  "gitcomet_app::extension_api": {
+    "reexport": "gitcomet_extension_api"
+  }
+}

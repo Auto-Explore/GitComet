@@ -767,7 +767,7 @@ fn explorer_inline_editor_fits_rows_and_focus_does_not_shift_labels(cx: &mut gpu
     for scale in [80, 100, 150, 200] {
         let state = explorer_state();
         cx.update(|window, app| {
-            ui_scale::set_current(app, scale);
+            ui_scale::set_default(app, scale);
             ui_scale::apply_to_window(window, scale);
             pane.update(app, |pane, _| pane.explorer_name_edit = None);
             view.update(app, |view, cx| {

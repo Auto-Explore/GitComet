@@ -305,7 +305,7 @@ impl MainPaneView {
                 && let Some(repo_id) = self.active_repo_id()
             {
                 self.clear_status_multi_selection(repo_id, cx);
-                self.clear_diff_selection_or_exit(repo_id, cx);
+                self.close_diff_or_cancel(repo_id, window, cx);
                 handled = true;
             }
         }
@@ -2284,9 +2284,9 @@ impl MainPaneView {
                             .debug_selector(|| "diff_close_icon".to_string()),
                         )
                         .style(components::ButtonStyle::Transparent)
-                        .on_click(theme, cx, move |this, _e, _w, cx| {
+                        .on_click(theme, cx, move |this, _e, window, cx| {
                             this.clear_status_multi_selection(repo_id, cx);
-                            this.clear_diff_selection_or_exit(repo_id, cx);
+                            this.close_diff_or_cancel(repo_id, window, cx);
                             cx.notify();
                         })
                         .debug_selector(|| "diff_close".to_string())
