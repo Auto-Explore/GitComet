@@ -7,7 +7,7 @@ use crate::msg::{ConflictAutosolveMode, ConflictAutosolveStats, Effect, RepoComm
 #[cfg(test)]
 use gitcomet_core::domain::Upstream;
 use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, FileStatusKind, SignatureFormats};
-use gitcomet_core::error::{Error, ErrorKind, GitFailure};
+use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::services::CommandOutput;
 use rustc_hash::FxHashSet;
 use smallvec::{Array, SmallVec};
@@ -1398,7 +1398,14 @@ fn summarize_command(
         if let Some(error) = error
             && let Some((git_command, details)) = try_format_git_backend_error(error)
         {
-            return (git_command, format!("{label} failed:\n\n{details}"));
+            // A pull or merge that stopped at conflicts did its job; say so.
+            let outcome = if matches!(error.kind(), ErrorKind::Git(failure) if failure.id() == GitFailureId::StoppedAtConflicts)
+            {
+                "stopped at conflicts"
+            } else {
+                "failed"
+            };
+            return (git_command, format!("{label} {outcome}:\n\n{details}"));
         }
 
         return (

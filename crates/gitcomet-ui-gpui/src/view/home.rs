@@ -631,16 +631,17 @@ impl GitCometView {
 
         let theme = self.theme;
         let scaled_px = crate::ui_scale::scaler(self.ui_scale_percent);
-        let colors = self.splash_palette();
+        let colors = theme.colors.interstitial;
+        let cta_scale = crate::ui_scale::UiScale::from_percent(self.ui_scale_percent);
         let query = self.home_search_query.trim().to_lowercase();
 
-        let open_button = Self::splash_cta_button(
-            theme,
+        let open_button = components::interstitial_cta_button(
             "home_open_repo",
             "Open Repository",
             "icons/folder.svg",
-            colors.primary,
-            self.ui_scale_percent,
+            true,
+            theme,
+            cta_scale,
         )
         .gitcomet_tooltip(theme, "Open an existing repository".into())
         .on_activate(
@@ -653,13 +654,13 @@ impl GitCometView {
             let last_bounds: Rc<RefCell<Option<Bounds<Pixels>>>> = Rc::new(RefCell::new(None));
             let last_bounds_for_prepaint = Rc::clone(&last_bounds);
             let last_bounds_for_click = Rc::clone(&last_bounds);
-            let button = Self::splash_cta_button(
-                theme,
+            let button = components::interstitial_cta_button(
                 "home_clone_repo",
                 "Clone Repository",
                 "icons/cloud.svg",
-                colors.secondary,
-                self.ui_scale_percent,
+                false,
+                theme,
+                cta_scale,
             )
             .gitcomet_tooltip(theme, "Clone a repository from a URL".into())
             .on_activate(
@@ -681,13 +682,13 @@ impl GitCometView {
         };
 
         let init_button = (!self.blocks_repository_management_actions()).then(|| {
-            Self::splash_cta_button(
-                theme,
+            components::interstitial_cta_button(
                 "home_init_repo",
                 "Initialize Repository",
                 "icons/git_branch.svg",
-                colors.secondary,
-                self.ui_scale_percent,
+                false,
+                theme,
+                cta_scale,
             )
             .gitcomet_tooltip(theme, "Create a new repository in a folder".into())
             .on_activate(
@@ -806,14 +807,19 @@ impl GitCometView {
                                             .child(crate::view::product_name()),
                                     ),
                             )
-                            .child(
-                                div()
-                                    .id("home_tagline")
-                                    .debug_selector(|| "home_tagline".to_string())
-                                    .mt(scaled_px(-8.0))
-                                    .text_size(theme.ui_text(14.0))
-                                    .text_color(colors.muted)
-                                    .child("Fastest Open Source Git GUI"),
+                            .when_some(
+                                gitcomet_core::identity::current().branding().tagline,
+                                |home, tagline| {
+                                    home.child(
+                                        div()
+                                            .id("home_tagline")
+                                            .debug_selector(|| "home_tagline".to_string())
+                                            .mt(scaled_px(-8.0))
+                                            .text_size(theme.ui_text(14.0))
+                                            .text_color(colors.muted)
+                                            .child(tagline),
+                                    )
+                                },
                             )
                             .child(
                                 div()

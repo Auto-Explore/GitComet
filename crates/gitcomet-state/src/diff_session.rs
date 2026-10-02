@@ -95,6 +95,11 @@ impl DiffSession {
         self.cancellation.clone()
     }
 
+    /// The linked worktree the target reads; `None` is the repository's own.
+    pub fn worktree(&self) -> Option<&std::path::Path> {
+        self.target.worktree()
+    }
+
     /// Whether the target follows the working tree, so external edits
     /// reload it.
     pub fn follows_worktree(&self) -> bool {
@@ -149,15 +154,25 @@ pub(crate) struct DiffSessionLoads {
 
 /// Where a hosted file list's changes come from.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum ChangeSource {
     /// Changes in this repository's index or working directory.
+    #[non_exhaustive]
     Worktree {
+        area: DiffArea,
+        include_untracked: bool,
+    },
+    /// Changes in one of this repository's linked worktrees.
+    #[non_exhaustive]
+    LinkedWorktree {
+        path: PathBuf,
         area: DiffArea,
         include_untracked: bool,
     },
     /// What a commit changed, against its first parent.
     Commit(CommitId),
     /// `from` to `to` (the working tree when `None`).
+    #[non_exhaustive]
     Comparison {
         from: CommitId,
         to: Option<CommitId>,
@@ -166,10 +181,42 @@ pub enum ChangeSource {
 }
 
 impl ChangeSource {
+    pub fn worktree(area: DiffArea, include_untracked: bool) -> Self {
+        Self::Worktree {
+            area,
+            include_untracked,
+        }
+    }
+
+    pub fn comparison(from: CommitId, to: Option<CommitId>, options: ComparisonOptions) -> Self {
+        Self::Comparison { from, to, options }
+    }
+
+    /// The linked worktree at `path`; it must be one of the repository's.
+    /// Its files open read-only: staging and saving act on the main checkout.
+    pub fn linked_worktree(path: PathBuf, area: DiffArea, include_untracked: bool) -> Self {
+        Self::LinkedWorktree {
+            path: gitcomet_core::domain::normalize_worktree_path(&path),
+            area,
+            include_untracked,
+        }
+    }
+
+    /// The linked worktree the changes are in; `None` is the repository's own.
+    pub fn linked_path(&self) -> Option<&std::path::Path> {
+        match self {
+            Self::LinkedWorktree { path, .. } => Some(path),
+            Self::Worktree { .. } | Self::Commit(_) | Self::Comparison { .. } => None,
+        }
+    }
+
     /// The diff target for one listed change, carrying its rename source.
     pub fn target_for(&self, change: &CommitFileChange, base: Option<&CommitId>) -> DiffTarget {
         match self {
             Self::Worktree { area, .. } => DiffTarget::working_tree(change.path.clone(), *area),
+            Self::LinkedWorktree { path, area, .. } => {
+                DiffTarget::working_tree(change.path.clone(), *area).in_worktree(path.clone())
+            }
             Self::Commit(id) => DiffTarget::commit_change(id.clone(), change),
             Self::Comparison { from, to, .. } => {
                 DiffTarget::commit_range(base.unwrap_or(from).clone(), to.clone(), None)
@@ -182,7 +229,7 @@ impl ChangeSource {
     pub fn follows_worktree(&self) -> bool {
         matches!(
             self,
-            Self::Comparison { to: None, .. } | Self::Worktree { .. }
+            Self::Comparison { to: None, .. } | Self::Worktree { .. } | Self::LinkedWorktree { .. }
         )
     }
 }
@@ -371,10 +418,23 @@ pub enum DiffSessionWork {
     Blame {
         path: PathBuf,
         source: BlameSource,
+        /// The linked worktree the file is in; `None` is the repository's own.
+        worktree: Option<PathBuf>,
     },
     Changes {
         source: ChangeSource,
     },
+}
+
+impl DiffSessionWork {
+    /// The linked worktree the work reads; `None` is the repository's own.
+    pub fn linked_path(&self) -> Option<&std::path::Path> {
+        match self {
+            Self::Content { target, .. } => target.worktree(),
+            Self::Blame { worktree, .. } => worktree.as_deref(),
+            Self::Changes { source } => source.linked_path(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

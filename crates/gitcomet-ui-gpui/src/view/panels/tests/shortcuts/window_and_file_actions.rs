@@ -1,7 +1,7 @@
 use super::*;
 
 #[gpui::test]
-fn bottom_status_bar_omits_global_zoom_control(cx: &mut gpui::TestAppContext) {
+fn bottom_status_bar_zoom_button_zooms_this_window(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -18,8 +18,142 @@ fn bottom_status_bar_omits_global_zoom_control(cx: &mut gpui::TestAppContext) {
     apply_state(cx, &view, app_state_with_active_repo(repo));
     draw_and_drain_test_window(cx);
 
-    assert!(cx.debug_bounds("bottom_status_bar_zoom").is_none());
-    assert!(cx.debug_bounds("bottom_status_bar_zoom_icon").is_none());
+    // At the default scale the button is just its icon.
+    assert!(cx.debug_bounds("bottom_status_bar_zoom_icon").is_some());
+    let default_button_width = debug_width(cx, "bottom_status_bar_zoom");
+    assert!(
+        default_button_width < 40.0,
+        "expected an icon-only zoom button at the default scale (width={default_button_width})"
+    );
+
+    let open_zoom_menu = |cx: &mut gpui::VisualTestContext| {
+        let bounds = cx
+            .debug_bounds("bottom_status_bar_zoom")
+            .expect("zoom button bounds");
+        cx.simulate_click(bounds.center(), Modifiers::default());
+        draw_and_drain_test_window(cx);
+        assert!(popover_is_open(cx, &view), "expected the zoom menu to open");
+    };
+    let click = |cx: &mut gpui::VisualTestContext, selector: &'static str| {
+        let bounds = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("expected {selector} to be rendered"));
+        cx.simulate_click(bounds.center(), Modifiers::default());
+        draw_and_drain_test_window(cx);
+    };
+
+    open_zoom_menu(cx);
+    assert_context_menu_entry_fills_popover_width(cx, "context_menu_125");
+    click(cx, "context_menu_125");
+
+    let (percent, own_zoom, default) = cx.update(|window, app| {
+        (
+            view.read(app).ui_scale_percent,
+            crate::ui_scale::window_override(app, window.window_handle().window_id()),
+            crate::ui_scale::default_percent(app),
+        )
+    });
+    assert_eq!(percent, 125, "the window takes the chosen zoom");
+    assert_eq!(own_zoom, Some(125), "as its own zoom");
+    assert_eq!(default, 100, "the default UI scale is untouched");
+    assert!(
+        !popover_is_open(cx, &view),
+        "the menu closes after a choice"
+    );
+    let zoomed_button_width = debug_width(cx, "bottom_status_bar_zoom");
+    assert!(
+        zoomed_button_width > default_button_width + 10.0,
+        "a zoomed window shows its percent (default={default_button_width}, zoomed={zoomed_button_width})"
+    );
+
+    open_zoom_menu(cx);
+    click(cx, "context_menu_use_default_100");
+    let (percent, own_zoom) = cx.update(|window, app| {
+        (
+            view.read(app).ui_scale_percent,
+            crate::ui_scale::window_override(app, window.window_handle().window_id()),
+        )
+    });
+    assert_eq!((percent, own_zoom), (100, None), "back on the default");
+}
+
+/// The cached footer shows whether its window has its own zoom, which can
+/// change while the percent does not.
+#[gpui::test]
+fn clearing_a_zoom_equal_to_the_default_rerenders_the_cached_footer(cx: &mut gpui::TestAppContext) {
+    let _cache_guard = crate::view::enable_stable_cached_views_for_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(711);
+    let commit_id = CommitId("1199228833774466".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_cached_footer_zoom",
+        std::process::id()
+    ));
+    apply_state(
+        cx,
+        &view,
+        app_state_with_active_repo(shortcut_fixture_repo(repo_id, &workdir, &commit_id)),
+    );
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    let window_id = cx.update(|window, _| window.window_handle().window_id());
+    let renders = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| view.read(app).bottom_status_bar.read(app).render_count)
+    };
+    let set_zoom = |cx: &mut gpui::VisualTestContext, percent: Option<u32>| {
+        gpui::TestAppContext::update(cx, |app| {
+            crate::app::set_window_ui_scale_percent(app, window_id, percent);
+        });
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    };
+
+    set_zoom(cx, Some(125));
+    // The default catches up with the window's zoom; the window keeps its own.
+    gpui::TestAppContext::update(cx, |app| {
+        crate::ui_scale::set_default(app, 125);
+        crate::app::apply_ui_scale_to_windows(app);
+    });
+    let before = renders(cx);
+    set_zoom(cx, None);
+    assert!(
+        renders(cx) > before,
+        "the footer must drop its percent label ({before} renders before)"
+    );
+    gpui::TestAppContext::update(cx, |app| {
+        crate::ui_scale::set_default(app, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT);
+    });
+}
+
+#[gpui::test]
+fn ui_scale_commands_zoom_the_window_that_runs_them(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|window, app| {
+        crate::app::install_app_shortcuts_for_test(app, Arc::new(TestBackend));
+        let _ = window.draw(app);
+    });
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.execute_command("increase-ui-scale", Some(window), cx);
+        });
+    });
+    cx.run_until_parked();
+
+    let own_zoom = cx.update(|window, app| {
+        crate::ui_scale::window_override(app, window.window_handle().window_id())
+    });
+    assert_eq!(own_zoom, Some(110));
+    cx.update(|window, app| {
+        crate::ui_scale::set_window_percent(app, window.window_handle().window_id(), None);
+    });
 }
 
 /// The bottom bar only exists in full chrome, so every branding test needs an

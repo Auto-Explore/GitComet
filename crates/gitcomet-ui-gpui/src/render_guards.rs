@@ -149,6 +149,45 @@ mod tests {
         }
     }
 
+    /// An `icons/…` path the assets lack draws nothing (`svg()` of a missing
+    /// asset is blank), so every such literal in production code must load.
+    #[test]
+    fn every_icon_path_literal_in_the_crate_loads() {
+        use gpui::AssetSource as _;
+        let mut sources = Vec::new();
+        gitcomet_ui_kit::test_support::rust_sources_under(&src_dir(), &mut sources);
+        let assets = crate::assets::GitCometAssets::default();
+        let mut seen = 0usize;
+        let mut missing = Vec::new();
+        for path in sources {
+            let relative = path
+                .strip_prefix(src_dir())
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            if relative.contains("tests/") || relative.ends_with("tests.rs") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).unwrap();
+            let production = source.split("#[cfg(test)]\nmod tests").next().unwrap_or("");
+            for (start, _) in production.match_indices("\"icons/") {
+                let Some(literal) = production[start + 1..].split('"').next() else {
+                    continue;
+                };
+                // Format strings and directory prefixes are assembled elsewhere.
+                if !literal.ends_with(".svg") || literal.contains('{') {
+                    continue;
+                }
+                seen += 1;
+                if assets.load(literal).ok().flatten().is_none() {
+                    missing.push(format!("{relative}: {literal}"));
+                }
+            }
+        }
+        assert!(seen > 100, "the scan found only {seen} icon paths");
+        assert!(missing.is_empty(), "missing icons:\n{}", missing.join("\n"));
+    }
+
     /// A theme built here carries the default `Appearance`, so any render path
     /// that constructs one silently sizes itself for a 13px editor font and a
     /// Compact density. Rendering code must take the caller's theme.

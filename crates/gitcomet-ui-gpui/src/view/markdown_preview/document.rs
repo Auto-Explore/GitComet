@@ -219,11 +219,24 @@ pub(crate) fn markdown_diff_row_groups(
     }
 
     for group in &mut groups {
-        let changed = group
-            .old
-            .iter()
-            .chain(&group.new)
-            .any(|row| row.change_hint != MarkdownChangeHint::None);
+        // A row whose lines are untouched still changed when the `<div align>`
+        // around it did: that line has no row of its own to mark. Spacers can
+        // move between versions without anything changing, so only real rows
+        // are paired.
+        let real = |rows: &[MarkdownPreviewRow]| {
+            rows.iter()
+                .filter(|row| !matches!(row.kind, MarkdownPreviewRowKind::Spacer))
+                .map(|row| row.align)
+                .collect::<Vec<_>>()
+        };
+        let (old_aligns, new_aligns) = (real(&group.old), real(&group.new));
+        let realigned = old_aligns.len() == new_aligns.len() && old_aligns != new_aligns;
+        let changed = realigned
+            || group
+                .old
+                .iter()
+                .chain(&group.new)
+                .any(|row| row.change_hint != MarkdownChangeHint::None);
         if !changed {
             continue;
         }
@@ -372,6 +385,7 @@ pub(crate) fn markdown_inline_diff_rows_can_merge(
         && old_row.alert_kind == new_row.alert_kind
         && old_row.starts_alert == new_row.starts_alert
         && old_row.continues_item == new_row.continues_item
+        && old_row.align == new_row.align
         && old_row.task.map(|task| task.checked) == new_row.task.map(|task| task.checked)
 }
 

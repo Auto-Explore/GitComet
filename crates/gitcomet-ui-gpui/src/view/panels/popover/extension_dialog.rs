@@ -101,20 +101,22 @@ impl PopoverHost {
         use gitcomet_extension_api::HostedMenuItem;
         let items = items
             .into_iter()
-            .map(|item| match item {
+            .filter_map(|item| match item {
                 HostedMenuItem::Action {
                     action,
                     icon,
                     disabled,
-                } => ContextMenuItem::Entry {
+                    ..
+                } => Some(ContextMenuItem::Entry {
                     label: action.label().clone(),
                     icon,
                     shortcut: None,
                     disabled,
                     action: Box::new(ContextMenuAction::Hosted(action)),
-                },
-                HostedMenuItem::Header(label) => ContextMenuItem::Header(label.into()),
-                HostedMenuItem::Separator => ContextMenuItem::Separator,
+                }),
+                HostedMenuItem::Header(label) => Some(ContextMenuItem::Header(label.into())),
+                HostedMenuItem::Separator => Some(ContextMenuItem::Separator),
+                _ => None,
             })
             .collect();
         self.extension_dialog = Some(ExtensionDialog {

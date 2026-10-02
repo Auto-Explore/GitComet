@@ -177,7 +177,7 @@ pub(super) fn macos_app_menus_with_options(
                 MenuItem::separator(),
                 MenuItem::action("Zoom In", IncreaseUiScale),
                 MenuItem::action("Zoom Out", DecreaseUiScale),
-                MenuItem::action("Actual Size", ResetUiScale),
+                MenuItem::action("Reset Zoom", ResetUiScale),
                 MenuItem::separator(),
                 MenuItem::action("Previous Repository", PreviousRepository),
                 MenuItem::action("Next Repository", NextRepository),

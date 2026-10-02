@@ -3,8 +3,9 @@
 //! An application built on these crates installs its identity once, before
 //! crash logging, the browser-instance broker, or any directory lookup. Every
 //! other caller reads [`current`]; without an installed identity the process is
-//! GitComet. Behavior such as history filtering is not identity: it belongs in
-//! the options of the service it changes.
+//! GitComet. Behavior such as history filtering belongs in the options of the
+//! service it changes; the identity only carries the product's defaults for
+//! them (see [`ProductIdentity::hidden_ref_prefixes`]).
 
 use std::borrow::Cow;
 use std::fmt;
@@ -58,7 +59,11 @@ impl StaticOverrides {
 }
 
 /// Web pages the application points users at. `None` hides the entry point.
+///
+/// The `with_*` builders are `const` for static values; set the fields
+/// directly for strings built at runtime.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ProductLinks {
     pub website: Option<Text>,
     /// The page comparing editions, linked from About and the status bar.
@@ -76,6 +81,66 @@ pub struct ProductLinks {
 }
 
 impl ProductLinks {
+    /// No links.
+    pub const fn new() -> Self {
+        Self {
+            website: None,
+            editions: None,
+            community: None,
+            repository: None,
+            new_issue: None,
+            releases: None,
+            license: None,
+            documentation: None,
+            survey: None,
+        }
+    }
+
+    pub const fn with_website(mut self, url: &'static str) -> Self {
+        put(&mut self.website, Cow::Borrowed(url));
+        self
+    }
+
+    pub const fn with_editions(mut self, url: &'static str) -> Self {
+        put(&mut self.editions, Cow::Borrowed(url));
+        self
+    }
+
+    pub const fn with_community(mut self, url: &'static str) -> Self {
+        put(&mut self.community, Cow::Borrowed(url));
+        self
+    }
+
+    pub const fn with_repository(mut self, url: &'static str) -> Self {
+        put(&mut self.repository, Cow::Borrowed(url));
+        self
+    }
+
+    pub const fn with_new_issue(mut self, url: &'static str) -> Self {
+        put(&mut self.new_issue, Cow::Borrowed(url));
+        self
+    }
+
+    pub const fn with_releases(mut self, url: &'static str) -> Self {
+        put(&mut self.releases, Cow::Borrowed(url));
+        self
+    }
+
+    pub const fn with_documentation(mut self, url: &'static str) -> Self {
+        put(&mut self.documentation, Cow::Borrowed(url));
+        self
+    }
+
+    pub const fn with_license(mut self, license: NamedLink) -> Self {
+        put(&mut self.license, license);
+        self
+    }
+
+    pub const fn with_survey(mut self, survey: SurveyLink) -> Self {
+        put(&mut self.survey, survey);
+        self
+    }
+
     /// A documentation page, e.g. `themes` or `commit-signatures`.
     pub fn documentation_page(&self, page: &str) -> Option<String> {
         let base = self.documentation.as_deref()?.trim_end_matches('/');
@@ -85,28 +150,54 @@ impl ProductLinks {
 
 /// A link shown by name, such as a license.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct NamedLink {
     pub name: Text,
     pub url: Text,
 }
 
+impl NamedLink {
+    pub const fn new(name: Text, url: Text) -> Self {
+        Self { name, url }
+    }
+}
+
 /// A one-off user survey, prompted once per `id`.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SurveyLink {
     pub id: Text,
     pub message: Text,
     pub url: Text,
 }
 
+impl SurveyLink {
+    pub const fn new(id: Text, message: Text, url: Text) -> Self {
+        Self { id, message, url }
+    }
+}
+
 /// Where the update check looks for newer releases.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum UpdateSource {
     Disabled,
-    GitHubReleases { owner: Text, repo: Text },
+    #[non_exhaustive]
+    GitHubReleases {
+        owner: Text,
+        repo: Text,
+    },
+}
+
+impl UpdateSource {
+    pub const fn github_releases(owner: Text, repo: Text) -> Self {
+        Self::GitHubReleases { owner, repo }
+    }
 }
 
 /// Product artwork. `None` uses GitComet's artwork, which the UI embeds.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ProductBranding {
     /// Application icon (PNG, at least 512 px): app bundles and launchers.
     pub app_icon_png: Option<&'static [u8]>,
@@ -114,10 +205,77 @@ pub struct ProductBranding {
     pub window_icon_png: Option<&'static [u8]>,
     /// Logo drawn on the splash and home screens (SVG).
     pub logo_svg: Option<&'static [u8]>,
+    /// The small mark beside the product name in the status bar (SVG),
+    /// drawn in its own colours.
+    pub mark_svg: Option<&'static [u8]>,
+    /// The splash and home backdrops (PNG, about 1000 px wide), for dark and
+    /// light themes.
+    pub splash_backdrop_dark_png: Option<&'static [u8]>,
+    pub splash_backdrop_light_png: Option<&'static [u8]>,
+    /// The line under the product name on the Home screen; `None` shows
+    /// none. GitComet's identity sets its own.
+    pub tagline: Option<&'static str>,
+}
+
+impl ProductBranding {
+    /// GitComet's artwork everywhere.
+    pub const fn new() -> Self {
+        Self {
+            app_icon_png: None,
+            window_icon_png: None,
+            logo_svg: None,
+            mark_svg: None,
+            splash_backdrop_dark_png: None,
+            splash_backdrop_light_png: None,
+            tagline: None,
+        }
+    }
+
+    pub const fn with_app_icon_png(mut self, png: &'static [u8]) -> Self {
+        self.app_icon_png = Some(png);
+        self
+    }
+
+    pub const fn with_window_icon_png(mut self, png: &'static [u8]) -> Self {
+        self.window_icon_png = Some(png);
+        self
+    }
+
+    pub const fn with_logo_svg(mut self, svg: &'static [u8]) -> Self {
+        self.logo_svg = Some(svg);
+        self
+    }
+
+    pub const fn with_tagline(mut self, tagline: &'static str) -> Self {
+        self.tagline = Some(tagline);
+        self
+    }
+
+    pub const fn with_mark_svg(mut self, svg: &'static [u8]) -> Self {
+        self.mark_svg = Some(svg);
+        self
+    }
+
+    pub const fn with_splash_backdrops_png(
+        mut self,
+        dark: &'static [u8],
+        light: &'static [u8],
+    ) -> Self {
+        self.splash_backdrop_dark_png = Some(dark);
+        self.splash_backdrop_light_png = Some(light);
+        self
+    }
+}
+
+/// Replaces `slot` in a `const` builder. The old value is forgotten, not
+/// dropped: const evaluation cannot run destructors.
+const fn put<T>(slot: &mut Option<T>, value: T) {
+    std::mem::forget(slot.replace(value));
 }
 
 /// The kinds of top-level window, each with its own desktop app id.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WindowKind {
     Main,
     FocusedMergetool,
@@ -186,11 +344,7 @@ impl ProductIdentity {
                 owner: Cow::Borrowed("Auto-Explore"),
                 repo: Cow::Borrowed("GitComet"),
             },
-            branding: ProductBranding {
-                app_icon_png: None,
-                window_icon_png: None,
-                logo_svg: None,
-            },
+            branding: ProductBranding::new().with_tagline("Fastest Open Source Git GUI"),
             hidden_ref_prefixes: &["refs/pull/", "refs/changes/", "refs/notes/"],
             overrides: StaticOverrides::EMPTY,
         }
@@ -226,11 +380,7 @@ impl ProductIdentity {
                 survey: None,
             },
             update_source: UpdateSource::Disabled,
-            branding: ProductBranding {
-                app_icon_png: None,
-                window_icon_png: None,
-                logo_svg: None,
-            },
+            branding: ProductBranding::new(),
             hidden_ref_prefixes: &[],
             overrides: StaticOverrides::EMPTY,
         }
@@ -296,11 +446,7 @@ impl ProductIdentity {
                 executable_name,
                 links: ProductLinks::default(),
                 update_source: UpdateSource::Disabled,
-                branding: ProductBranding {
-                    app_icon_png: None,
-                    window_icon_png: None,
-                    logo_svg: None,
-                },
+                branding: ProductBranding::new(),
                 hidden_ref_prefixes: &[],
                 overrides: StaticOverrides::EMPTY,
             },
@@ -431,6 +577,12 @@ impl ProductIdentityBuilder {
 
     pub fn branding(mut self, branding: ProductBranding) -> Self {
         self.identity.branding = branding;
+        self
+    }
+
+    /// Reference namespaces History's all-branches walk leaves out by default.
+    pub fn hidden_ref_prefixes(mut self, prefixes: &'static [&'static str]) -> Self {
+        self.identity.hidden_ref_prefixes = prefixes;
         self
     }
 
@@ -609,6 +761,52 @@ mod tests {
         assert_eq!(identity.version(), "1.2.3");
         assert_eq!(identity.links(), &ProductLinks::default());
         assert_eq!(identity.update_source(), &UpdateSource::Disabled);
+    }
+
+    #[test]
+    fn links_and_branding_build_from_statics() {
+        static LINKS: ProductLinks = ProductLinks::new()
+            .with_website("https://example.com")
+            .with_website("https://example.org")
+            .with_license(NamedLink::new(
+                Cow::Borrowed("MIT"),
+                Cow::Borrowed("https://example.org/license"),
+            ));
+        const BRANDING: ProductBranding = ProductBranding::new()
+            .with_logo_svg(b"<svg/>")
+            .with_mark_svg(b"<svg>mark</svg>")
+            .with_splash_backdrops_png(b"dark", b"light");
+        let identity = ProductIdentity::new("Example", "example", "com.example.app")
+            .with_links(&LINKS)
+            .with_branding(BRANDING);
+        assert_eq!(
+            identity.links().website.as_deref(),
+            Some("https://example.org")
+        );
+        assert_eq!(
+            identity.links().license.as_ref().map(|l| l.name.as_ref()),
+            Some("MIT")
+        );
+        let branding = identity.branding();
+        assert_eq!(
+            branding.tagline, None,
+            "another product shows no GitComet tagline"
+        );
+        assert!(ProductIdentity::gitcomet().branding().tagline.is_some());
+        assert_eq!(branding.logo_svg, Some(&b"<svg/>"[..]));
+        assert_eq!(branding.mark_svg, Some(&b"<svg>mark</svg>"[..]));
+        assert_eq!(branding.splash_backdrop_dark_png, Some(&b"dark"[..]));
+        assert_eq!(branding.splash_backdrop_light_png, Some(&b"light"[..]));
+        assert_eq!(branding.app_icon_png, None);
+    }
+
+    #[test]
+    fn runtime_builder_sets_hidden_ref_prefixes() {
+        let identity = ProductIdentity::builder("X", "x")
+            .hidden_ref_prefixes(&["refs/review/"])
+            .build()
+            .unwrap();
+        assert_eq!(identity.hidden_ref_prefixes(), ["refs/review/"]);
     }
 
     #[test]

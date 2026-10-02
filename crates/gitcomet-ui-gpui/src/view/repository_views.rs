@@ -17,17 +17,23 @@ use gitcomet_extension_api::{
 };
 use std::rc::Rc;
 
-/// A contribution built per repository: its title and builder.
+/// A contribution built per repository: its title, tab icon and builder.
 pub(in crate::view) trait RoutedContribution {
     fn title(&self) -> SharedString;
+    fn icon(&self) -> Option<SharedString>;
     fn builder(&self) -> ViewBuilder<RepositoryViewContext>;
 }
 
 macro_rules! routed_contribution {
-    ($descriptor:ty) => {
+    ($descriptor:ty, |$this:ident| $icon:expr) => {
         impl RoutedContribution for $descriptor {
             fn title(&self) -> SharedString {
                 self.title.clone()
+            }
+
+            fn icon(&self) -> Option<SharedString> {
+                let $this = self;
+                $icon
             }
 
             fn builder(&self) -> ViewBuilder<RepositoryViewContext> {
@@ -37,9 +43,10 @@ macro_rules! routed_contribution {
     };
 }
 
-routed_contribution!(RepositoryViewDescriptor);
-routed_contribution!(DetailsTabDescriptor);
-routed_contribution!(SidebarSectionDescriptor);
+routed_contribution!(RepositoryViewDescriptor, |view| (!view.icon.is_empty())
+    .then(|| view.icon.clone()));
+routed_contribution!(DetailsTabDescriptor, |tab| tab.icon.clone());
+routed_contribution!(SidebarSectionDescriptor, |_section| None);
 
 /// Built views of one contribution kind per repository, and which one each
 /// repository shows (absent: the built-in content).
@@ -47,6 +54,8 @@ pub(in crate::view) struct ViewRouter<D> {
     views: Rc<[(ContributionId, D)]>,
     selected: FxHashMap<std::path::PathBuf, usize>,
     built: FxHashMap<(RepoKey, usize), gpui::AnyView>,
+    /// Repository views' action-bar contexts, built with their views.
+    action_bars: FxHashMap<(RepoKey, usize), gpui::AnyView>,
 }
 
 pub(in crate::view) type RepositoryViewRouter = ViewRouter<RepositoryViewDescriptor>;
@@ -61,6 +70,7 @@ impl<D: RoutedContribution + Clone> ViewRouter<D> {
             views: views.to_vec().into(),
             selected: FxHashMap::default(),
             built: FxHashMap::default(),
+            action_bars: FxHashMap::default(),
         })
     }
 
@@ -70,6 +80,13 @@ impl<D: RoutedContribution + Clone> ViewRouter<D> {
 
     fn titles(&self) -> Vec<SharedString> {
         self.views.iter().map(|(_, view)| view.title()).collect()
+    }
+
+    fn tabs(&self) -> Vec<(SharedString, Option<SharedString>)> {
+        self.views
+            .iter()
+            .map(|(_, view)| (view.title(), view.icon()))
+            .collect()
     }
 
     /// The selected view for `repo`: `None` is the built-in content.
@@ -88,9 +105,15 @@ impl<D: RoutedContribution + Clone> ViewRouter<D> {
         self.built.get(&(repo_key(repo), index)).cloned()
     }
 
+    /// The selected view's action-bar context, if it has one.
+    fn active_action_bar(&self, repo: &RepoState) -> Option<gpui::AnyView> {
+        let index = *self.selected.get(&repo.spec.workdir)?;
+        self.action_bars.get(&(repo_key(repo), index)).cloned()
+    }
+
     /// Forgets views and selections of repositories no longer open.
     pub(in crate::view) fn retain_open(&mut self, state: &AppState) {
-        if self.selected.is_empty() && self.built.is_empty() {
+        if self.selected.is_empty() && self.built.is_empty() && self.action_bars.is_empty() {
             return;
         }
         let open = |key: &RepoKey| {
@@ -102,6 +125,7 @@ impl<D: RoutedContribution + Clone> ViewRouter<D> {
         self.selected
             .retain(|path, _| state.repos.iter().any(|repo| &repo.spec.workdir == path));
         self.built.retain(|(key, _), _| open(key));
+        self.action_bars.retain(|(key, _), _| open(key));
     }
 }
 
@@ -158,8 +182,13 @@ impl GitCometView {
         self.bottom_status_bar
             .update(cx, |bar, cx| bar.set_active_view(active_view, cx));
         let enabled = !self.window_gated && navigation.is_none();
-        self.action_bar
-            .update(cx, |bar, cx| bar.set_extension_navigation(navigation, cx));
+        let slot = navigation.as_ref().and_then(|_| {
+            let repo = self.active_repo()?;
+            self.repository_views.as_ref()?.active_action_bar(repo)
+        });
+        self.action_bar.update(cx, |bar, cx| {
+            bar.set_extension_navigation(navigation, slot, cx)
+        });
         crate::app::set_diff_fallback_enabled(self.window_handle.window_id(), enabled, cx);
     }
 
@@ -295,16 +324,21 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) {
         let key = repo_key(&repo);
-        let (count, current, build) = match area {
+        let (count, current, build, bar_build) = match area {
             RoutedArea::Main => {
                 let Some(router) = self.repository_views.as_ref() else {
                     return;
                 };
-                let build = index
+                let unbuilt = index
                     .filter(|index| router.built(&repo, *index).is_none())
                     .and_then(|index| router.views.get(index))
-                    .map(|(_, view)| view.builder());
-                (router.len(), router.selected(&repo), build)
+                    .map(|(_, view)| view);
+                (
+                    router.len(),
+                    router.selected(&repo),
+                    unbuilt.map(|view| view.builder()),
+                    unbuilt.and_then(|view| view.action_bar.clone()),
+                )
             }
             RoutedArea::Details => {
                 let Some(router) = self.details_tabs.as_ref() else {
@@ -314,7 +348,7 @@ impl GitCometView {
                     .filter(|index| router.built(&repo, *index).is_none())
                     .and_then(|index| router.views.get(index))
                     .map(|(_, view)| view.builder());
-                (router.len(), router.selected(&repo), build)
+                (router.len(), router.selected(&repo), build, None)
             }
         };
         let index = index.filter(|index| *index < count);
@@ -324,13 +358,21 @@ impl GitCometView {
         // Built before the router is borrowed again: the builder may reach
         // the router through the host.
         let built = build.and_then(|build| self.build_routed(build, &repo, window, cx));
-        let (selected, views) = match area {
+        let bar = built
+            .as_ref()
+            .and(bar_build)
+            .and_then(|build| self.build_routed(build, &repo, window, cx));
+        let (selected, views, action_bars) = match area {
             RoutedArea::Main => match self.repository_views.as_mut() {
-                Some(router) => (&mut router.selected, &mut router.built),
+                Some(router) => (
+                    &mut router.selected,
+                    &mut router.built,
+                    Some(&mut router.action_bars),
+                ),
                 None => return,
             },
             RoutedArea::Details => match self.details_tabs.as_mut() {
-                Some(router) => (&mut router.selected, &mut router.built),
+                Some(router) => (&mut router.selected, &mut router.built, None),
                 None => return,
             },
         };
@@ -338,6 +380,9 @@ impl GitCometView {
             Some(index) => {
                 if let Some(view) = built {
                     views.insert((key, index), view);
+                }
+                if let (Some(bar), Some(action_bars)) = (bar, action_bars) {
+                    action_bars.insert((key, index), bar);
                 }
                 if !views.contains_key(&(key, index)) {
                     return;
@@ -356,49 +401,54 @@ impl GitCometView {
     }
 
     /// A strip of navigation tabs: the built-in content first, then each
-    /// contribution.
+    /// contribution with its icon.
     fn routed_strip(
         &self,
         area: RoutedArea,
-        titles: Vec<SharedString>,
+        tabs: Vec<(SharedString, Option<SharedString>)>,
         selected: Option<usize>,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        let (prefix, builtin, builtin_id) = match area {
-            RoutedArea::Main => ("repository_view", "History", "repository_view_history"),
-            RoutedArea::Details => ("details_tab", "Details", "details_tab_details"),
+        let (prefix, builtin_id, builtin, builtin_icon) = match area {
+            RoutedArea::Main => (
+                "repository_view",
+                "repository_view_history",
+                "History",
+                "icons/history.svg",
+            ),
+            RoutedArea::Details => (
+                "details_tab",
+                "details_tab_details",
+                "Details",
+                "icons/side_panel_right.svg",
+            ),
         };
         let theme = self.theme;
         let ui_scale = ui_scale::UiScale::current(cx);
         let strip_id = format!("{prefix}_strip");
         let selector = strip_id.clone();
+        let builtin = (builtin.into(), Some(builtin_icon.into()));
         let mut strip = components::navigation_tab_strip(theme.colors.surface.canvas, ui_scale)
             .id(SharedString::from(strip_id))
             .debug_selector(move || selector.clone())
             .border_b_1()
-            .border_color(theme.colors.stroke.subtle)
-            .child(components::navigation_tab_metrics(
-                components::navigation_tab(builtin_id, builtin, selected.is_none(), None, theme)
-                    .on_click(theme, cx, move |this, _, window, cx| {
-                        this.select_routed_view(area, None, window, cx);
-                    }),
-                theme,
-                ui_scale,
-            ));
-        for (index, title) in titles.into_iter().enumerate() {
-            strip = strip.child(components::navigation_tab_metrics(
-                components::navigation_tab(
-                    format!("{prefix}_{index}"),
-                    title,
-                    selected == Some(index),
-                    None,
-                    theme,
-                )
-                .on_click(theme, cx, move |this, _, window, cx| {
-                    this.select_routed_view(area, Some(index), window, cx);
+            .border_color(theme.colors.stroke.subtle);
+        let entries = std::iter::once((builtin_id.to_string(), builtin, None)).chain(
+            tabs.into_iter()
+                .enumerate()
+                .map(|(index, tab)| (format!("{prefix}_{index}"), tab, Some(index))),
+        );
+        for (id, (title, icon), index) in entries {
+            let mut tab = components::NavTab::new(id, title).selected(selected == index);
+            if let Some(icon) = icon {
+                tab = tab.icon(icon);
+            }
+            strip = strip.child(tab.render(theme, ui_scale).on_activate(
+                false,
+                controls::ControlActivation::ManagedFocus,
+                cx.listener(move |this, _, window, cx| {
+                    this.select_routed_view(area, index, window, cx);
                 }),
-                theme,
-                ui_scale,
             ));
         }
         strip
@@ -417,8 +467,8 @@ impl GitCometView {
         };
         let selected = router.selected(repo);
         let active = router.active_view(repo);
-        let titles = router.titles();
-        let strip = self.routed_strip(RoutedArea::Main, titles, selected, cx);
+        let tabs = router.tabs();
+        let strip = self.routed_strip(RoutedArea::Main, tabs, selected, cx);
         let body = match active {
             Some(view) => div().size_full().child(view).into_any_element(),
             None => history(),
@@ -451,8 +501,8 @@ impl GitCometView {
         };
         let selected = router.selected(repo);
         let active = router.active_view(repo);
-        let titles = router.titles();
-        let strip = self.routed_strip(RoutedArea::Details, titles, selected, cx);
+        let tabs = router.tabs();
+        let strip = self.routed_strip(RoutedArea::Details, tabs, selected, cx);
         let body = match active {
             Some(view) => div().flex_1().min_h(px(0.0)).child(view).into_any_element(),
             None => details(),

@@ -212,6 +212,28 @@
           "foreground": "#e7e8ecff",
           "secondary": "#8b8fa3ff"
         },
+        "interstitial": {
+          "text": "#f6f7fbff",
+          "muted": "#a8b1c6ff",
+          "primary": {
+            "text": "#04172bff",
+            "background": "#5ac1feff",
+            "background_hover": "#72c7ffff",
+            "background_active": "#48b6eeff",
+            "border": "#5ac1feff",
+            "border_hover": "#72c7ffff",
+            "border_active": "#48b6eeff"
+          },
+          "secondary": {
+            "text": "#f6f7fbff",
+            "background": "#ffffff26",
+            "background_hover": "#ffffff33",
+            "background_active": "#ffffff40",
+            "border": "#ffffff47",
+            "border_hover": "#ffffff66",
+            "border_active": "#ffffff80"
+          }
+        },
         "shadow": "#000000ff",
         "graph_lane_palette": null,
         "graph_lane_hues": [

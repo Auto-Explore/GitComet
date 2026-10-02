@@ -13,6 +13,7 @@ pub(super) fn hash_diff_target<H: Hasher>(target: &DiffTarget, hasher: &mut H) {
                 DiffArea::Staged => 0u8.hash(hasher),
                 DiffArea::Unstaged => 1u8.hash(hasher),
             }
+            target.worktree().hash(hasher);
         }
         DiffTarget::Commit {
             commit_id, path, ..

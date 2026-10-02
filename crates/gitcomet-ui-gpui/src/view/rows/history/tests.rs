@@ -40,6 +40,7 @@ fn markdown_row(kind: MarkdownPreviewRowKind) -> MarkdownPreviewRow {
         table: None,
         task: None,
         continues_item: false,
+        align: Default::default(),
     }
 }
 
@@ -284,6 +285,7 @@ fn markdown_preview_row_marker_preserves_ordered_item_number() {
         table: None,
         task: None,
         continues_item: false,
+        align: Default::default(),
     };
 
     assert_eq!(
@@ -314,6 +316,7 @@ fn markdown_preview_row_marker_is_none_for_blockquotes_without_list_items() {
         table: None,
         task: None,
         continues_item: false,
+        align: Default::default(),
     };
 
     assert_eq!(markdown_preview_row_marker(&row), None);
@@ -339,6 +342,7 @@ fn markdown_preview_row_marker_uses_footnote_label_when_present() {
         table: None,
         task: None,
         continues_item: false,
+        align: Default::default(),
     };
 
     assert_eq!(
@@ -369,6 +373,7 @@ fn markdown_preview_row_marker_returns_unordered_bullet_inside_blockquote() {
         table: None,
         task: None,
         continues_item: false,
+        align: Default::default(),
     };
 
     assert_eq!(
@@ -772,6 +777,7 @@ fn markdown_preview_code_rows_reuse_diff_syntax_highlighting() {
         table: None,
         task: None,
         continues_item: false,
+        align: Default::default(),
     };
 
     let dark_highlights =

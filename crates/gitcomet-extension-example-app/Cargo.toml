@@ -18,6 +18,8 @@ gitcomet-core = { workspace = true }
 gitcomet-extension-example = { path = "../gitcomet-extension-example" }
 
 [dev-dependencies]
+gitcomet-ui-gpui = { workspace = true }
+gitcomet-ui-kit = { workspace = true }
 tempfile = { workspace = true }
 
 [[bin]]

@@ -49,6 +49,20 @@ fn open_repository(
     gpui::Entity<GitCometView>,
     &mut gpui::VisualTestContext,
 ) {
+    open_repository_with(cx, Arc::new(TestBackend))
+}
+
+/// [`open_repository`] with `backend` opening any other repository (such
+/// as a linked worktree).
+fn open_repository_with(
+    cx: &mut gpui::TestAppContext,
+    backend: Arc<dyn gitcomet_core::services::GitBackend>,
+) -> (
+    tempfile::TempDir,
+    AppStore,
+    gpui::Entity<GitCometView>,
+    &mut gpui::VisualTestContext,
+) {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
     git(root, &["init", "-q", "-b", "main"]);
@@ -66,7 +80,7 @@ fn open_repository(
 
     install_example(cx);
     let repo = gitcomet_git_gix::GixBackend.open(root).expect("open repo");
-    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(backend);
     // Watching is not under test. Windows reports the `.git/logs` and
     // `.git/hooks` directory timestamps setup left dirty only once a watch
     // exists (NTFS flushes them late), FSEvents replays recent history, and
@@ -153,10 +167,7 @@ fn worktree_lists_respect_the_index_and_untracked_option(cx: &mut gpui::TestAppC
         .map(|(area, include_untracked)| {
             host.create_file_list(
                 &repository,
-                ChangeSource::Worktree {
-                    area,
-                    include_untracked,
-                },
+                ChangeSource::worktree(area, include_untracked),
                 |_, _, _| {},
                 app,
             )
@@ -226,11 +237,11 @@ fn two_panes_and_a_list_change_cancel_and_drop_independently(cx: &mut gpui::Test
         let list = host
             .create_file_list(
                 &repository,
-                ChangeSource::Comparison {
-                    from: gitcomet_core::domain::CommitId("HEAD".into()),
-                    to: None,
-                    options: Default::default(),
-                },
+                ChangeSource::comparison(
+                    gitcomet_core::domain::CommitId("HEAD".into()),
+                    None,
+                    Default::default(),
+                ),
                 move |change, target, _| {
                     *seen.borrow_mut() = Some((change.path.clone(), target));
                 },
@@ -323,11 +334,7 @@ fn retargeting_ignores_old_notifications_and_clears_files_before_loading(
         (host, repository)
     });
     let target = |path: &str| DiffTarget::working_tree(path.into(), DiffArea::Unstaged);
-    let source = ChangeSource::Comparison {
-        from: CommitId("HEAD".into()),
-        to: None,
-        options: Default::default(),
-    };
+    let source = ChangeSource::comparison(CommitId("HEAD".into()), None, Default::default());
     let (seed_pane, seed_list) = cx.update(|_, app| {
         (
             host.create_diff_pane(&repository, target("a.rs"), DiffPaneOptions::default(), app)
@@ -521,6 +528,41 @@ fn the_example_changes_view_shows_picks_in_two_panes(cx: &mut gpui::TestAppConte
         cx.debug_bounds(selector(format!("hosted_diff_{current_id}_markers")))
             .is_some()
     );
+    // The list groups by role and flags the file; its chip shows only it.
+    for part in ["group_Code", "glyph_a.rs"] {
+        assert!(
+            cx.debug_bounds(selector(format!("hosted_file_list_{list_id}_{part}")))
+                .is_some(),
+            "{part}"
+        );
+    }
+    click_debug_selector(cx, selector(format!("file_filter_{list_id}_0")));
+    publish(cx, &view, store.snapshot());
+    assert!(
+        cx.debug_bounds(selector(format!("hosted_file_list_{list_id}_file_b.rs")))
+            .is_none()
+    );
+    click_debug_selector(cx, selector(format!("file_filter_{list_id}_0")));
+    publish(cx, &view, store.snapshot());
+
+    // The flag's own click removes it, and with it the file's flag.
+    click_debug_selector(cx, selector(format!("hosted_diff_{current_id}_gutter_0")));
+    publish(cx, &view, store.snapshot());
+    assert!(cx.update(|_window, app| changes.read(app).flags().is_empty()));
+    assert!(
+        cx.debug_bounds(selector(format!("hosted_file_list_{list_id}_glyph_a.rs")))
+            .is_none()
+    );
+
+    // A note on the selected line goes under it; clicking it removes it.
+    click_debug_selector(cx, selector(format!("hosted_diff_{current_id}_row_0")));
+    publish(cx, &view, store.snapshot());
+    click_debug_selector(cx, selector(format!("hosted_diff_{current_id}_action_0")));
+    publish(cx, &view, store.snapshot());
+    assert_eq!(cx.update(|_window, app| changes.read(app).notes().len()), 1);
+    click_debug_selector(cx, selector(format!("hosted_diff_{current_id}_row_1")));
+    publish(cx, &view, store.snapshot());
+    assert!(cx.update(|_window, app| changes.read(app).notes().is_empty()));
 
     click_debug_selector(
         cx,
@@ -1094,4 +1136,437 @@ fn the_example_pops_its_pane_out_and_back(cx: &mut gpui::TestAppContext) {
     cx.update(|window, _app| window.remove_window());
     cx.run_until_parked();
     assert!(windows(cx).is_empty());
+}
+
+type Clicks = std::rc::Rc<std::cell::RefCell<Vec<(&'static str, DiffLineSide, u32)>>>;
+
+/// A snapshot pane with a clickable note under new line 2 and an annotation
+/// on new line 3, drawn by the shared renderer or by its own rows.
+fn clickable_pane(
+    host: &gitcomet_extension_api::WindowHost,
+    root: Option<gpui::WeakEntity<GitCometView>>,
+    policy: DiffPanePolicy,
+    clicks: &Clicks,
+    app: &mut App,
+) -> (
+    DiffPane,
+    gpui::Entity<crate::view::hosted::diff_pane::DiffPaneView>,
+) {
+    use crate::view::hosted::diff_pane::{DiffPaneView, HostedDiffPane};
+    use gitcomet_extension_api::{DiffAnnotation, DiffAnnotations, DiffInset, HostedAction};
+    let record = |kind: &'static str| {
+        let clicks = clicks.clone();
+        Some(std::rc::Rc::new(move |side, line, _: &mut App| {
+            clicks.borrow_mut().push((kind, side, line))
+        }) as gitcomet_extension_api::DiffGutterAction)
+    };
+    let options = DiffPaneOptions {
+        policy,
+        on_gutter_click: record("gutter"),
+        on_annotation_click: record("annotation"),
+        ..DiffPaneOptions::default()
+    };
+    let snapshot = DiffSnapshot::new("notes.txt", "one\ntwo\nthree\n", "one\nTWO\nthree\n");
+    let entity = app.new(|cx| {
+        let mut pane = DiffPaneView::snapshot(host.clone(), snapshot, options, cx);
+        if let Some(root) = root {
+            pane.attach_root(root);
+        }
+        pane
+    });
+    let pane = DiffPane::new(std::rc::Rc::new(HostedDiffPane {
+        entity: entity.clone(),
+    }));
+    let noted = clicks.clone();
+    pane.set_insets(
+        vec![
+            DiffInset::new(DiffLineSide::New, 2, ["note".into()])
+                .with_action(HostedAction::new("Open note", move |_| {
+                    noted.borrow_mut().push(("inset", DiffLineSide::New, 2))
+                })),
+        ],
+        app,
+    );
+    pane.set_annotations(
+        DiffAnnotations::new().with(
+            DiffLineSide::New,
+            3,
+            DiffAnnotation::new(gpui::red()).with_label("flag"),
+        ),
+        app,
+    );
+    (pane, entity)
+}
+
+/// A note's click runs its action and a click on an annotation runs the
+/// annotation action, in the shared renderer and in the pane's own rows;
+/// other lines' gutters still run the gutter action. A read-only pane runs
+/// no line action, but its notes stay clickable.
+#[gpui::test]
+fn insets_and_annotations_run_their_actions(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    install_example(cx);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, app_cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    publish(app_cx, &view, Arc::new(AppState::test_default()));
+    let host =
+        app_cx.update(|_window, app| view.read(app).extension_window.as_ref().unwrap().host());
+    let root = view.downgrade();
+    let (new2, new3) = ((DiffLineSide::New, 2), (DiffLineSide::New, 3));
+
+    for (renderer, policy) in [
+        (true, DiffPanePolicy::default()),
+        (false, DiffPanePolicy::default()),
+        (true, DiffPanePolicy::read_only()),
+        (false, DiffPanePolicy::read_only()),
+    ] {
+        let clicks = Clicks::default();
+        let (pane, entity) = cx.update(|app| {
+            clickable_pane(&host, renderer.then(|| root.clone()), policy, &clicks, app)
+        });
+        cx.run_until_parked();
+        let view_any = pane.view();
+        let (_holder, cx) = cx.add_window_view(move |_, _| PaneHolder(view_any));
+        for _ in 0..3 {
+            cx.update(|window, app| {
+                let _ = window.draw(app);
+            });
+            cx.run_until_parked();
+        }
+        let (id, shared, rows) = cx.update(|_, app| {
+            let pane = entity.read(app);
+            let rows = if renderer {
+                // Rows: one, two (removed), TWO, the note, three.
+                (3, 2, 4)
+            } else {
+                (
+                    pane.display_row_of_inset(0, 0).unwrap(),
+                    pane.display_row_of_line(new2.0, new2.1).unwrap(),
+                    pane.display_row_of_line(new3.0, new3.1).unwrap(),
+                )
+            };
+            (pane.view_id(), pane.shares_renderer_rows(app), rows)
+        });
+        assert_eq!(shared, renderer);
+        let (note, two, three) = rows;
+        let click = |cx: &mut gpui::VisualTestContext, part: String| {
+            click_with(
+                cx,
+                selector(format!("hosted_diff_{id}_{part}")),
+                Default::default(),
+            );
+            cx.run_until_parked();
+        };
+        click(cx, format!("row_{note}"));
+        click(cx, format!("gutter_{two}"));
+        if renderer {
+            // The lane draws the annotation.
+            click(cx, format!("gutter_{three}"));
+        } else {
+            click(cx, format!("annotation_{three}"));
+            click(cx, format!("annotation_label_{three}"));
+        }
+        let expected: Vec<_> = if policy.line_action {
+            let annotations = if renderer { 1 } else { 2 };
+            [("inset", new2), ("gutter", new2)]
+                .into_iter()
+                .chain(std::iter::repeat_n(("annotation", new3), annotations))
+                .map(|(kind, (side, line))| (kind, side, line))
+                .collect()
+        } else {
+            vec![("inset", new2.0, new2.1)]
+        };
+        assert_eq!(
+            *clicks.borrow(),
+            expected,
+            "renderer: {renderer}, line actions: {}",
+            policy.line_action
+        );
+    }
+}
+
+/// A linked worktree of `root` on a new branch, with `a.rs` edited there.
+fn add_linked_worktree(root: &Path) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let linked = dir.path().join("linked");
+    git(
+        root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "linked",
+            linked.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(linked.join("a.rs"), "linked edit\n").unwrap();
+    (dir, linked)
+}
+
+struct TwoPanes(gpui::AnyView, gpui::AnyView);
+
+impl Render for TwoPanes {
+    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(div().flex_1().child(self.0.clone()))
+            .child(div().flex_1().child(self.1.clone()))
+    }
+}
+
+/// Staging and saving act on the main checkout, so a pane on a linked
+/// worktree's file offers neither, and its handlers refuse both even when
+/// asked directly; the same file in the main worktree offers both.
+#[gpui::test]
+fn a_linked_worktree_pane_offers_and_runs_no_staging_or_editing(cx: &mut gpui::TestAppContext) {
+    use crate::view::hosted::diff_pane::DiffPaneView;
+    use gitcomet_core::domain::{DiffArea, DiffTarget};
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (dir, store, view, app_cx) =
+        open_repository_with(cx, Arc::new(gitcomet_git_gix::GixBackend));
+    let root = dir.path().to_path_buf();
+    let (_linked_dir, linked) = add_linked_worktree(&root);
+    let (host, repository) = app_cx.update(|_window, app| {
+        let host = view.read(app).extension_window.as_ref().unwrap().host();
+        let repository = host.active_repository(app).unwrap().unwrap();
+        (host, repository)
+    });
+    let target = DiffTarget::working_tree("a.rs".into(), DiffArea::Unstaged);
+    let (main, linked_pane) = app_cx.update(|_window, app| {
+        let mut pane = |target| {
+            host.create_diff_pane(&repository, target, DiffPaneOptions::default(), app)
+                .unwrap()
+        };
+        (
+            pane(target.clone()),
+            pane(target.clone().in_worktree(linked.clone())),
+        )
+    });
+    settle(app_cx, &view, &store, "both panes", |cx| {
+        cx.update(|_window, app| !main.is_loading(app) && !linked_pane.is_loading(app))
+    });
+    let entity = |pane: &DiffPane| {
+        pane.view()
+            .downcast::<DiffPaneView>()
+            .unwrap_or_else(|_| panic!("a hosted diff pane"))
+    };
+    let (main_view, linked_view) = (entity(&main), entity(&linked_pane));
+    let views = (main.view(), linked_pane.view());
+    let (_holder, cx) = cx.add_window_view(move |_, _| TwoPanes(views.0, views.1));
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+    let offers = |cx: &mut gpui::VisualTestContext, pane: &gpui::Entity<DiffPaneView>| {
+        cx.update(|_, app| pane.read(app).renderer_offers(app))
+    };
+    assert_eq!(offers(cx, &main_view), Some((true, true)));
+    assert_eq!(offers(cx, &linked_view), Some((false, false)));
+    // Previews and the editor read the linked checkout, not the main one.
+    let workdir = |cx: &mut gpui::VisualTestContext, pane: &gpui::Entity<DiffPaneView>| {
+        cx.update(|_, app| pane.read(app).renderer_workdir(app))
+    };
+    assert_eq!(
+        workdir(cx, &linked_view).map(|path| canonicalize_or_original(path)),
+        Some(canonicalize_or_original(linked.clone()))
+    );
+    assert_eq!(
+        workdir(cx, &main_view).map(|path| canonicalize_or_original(path)),
+        Some(canonicalize_or_original(root.clone()))
+    );
+
+    // Asked directly, the linked pane's handlers drop both requests; a
+    // later request from the main pane shows they had their turn.
+    let repo_id = repository.repo_id();
+    let (saved_tx, saved_rx) = smol::channel::bounded(1);
+    cx.update(|_, app| {
+        linked_view.read(app).renderer_dispatch(
+            Msg::StagePath {
+                repo_id,
+                path: "a.rs".into(),
+            },
+            app,
+        );
+        linked_view.read(app).renderer_dispatch(
+            Msg::SaveWorktreeFile {
+                repo_id,
+                path: "a.rs".into(),
+                contents: "overwritten\n".into(),
+                stage: false,
+                completion: Some(saved_tx),
+            },
+            app,
+        );
+        main_view.read(app).renderer_dispatch(
+            Msg::StagePath {
+                repo_id,
+                path: "b.rs".into(),
+            },
+            app,
+        );
+    });
+    let staged = || {
+        let out = crate::test_support::git(&root, &["diff", "--cached", "--name-only"]);
+        String::from_utf8(out).unwrap().trim().to_string()
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while staged().is_empty() {
+        assert!(Instant::now() < deadline, "the main pane's stage never ran");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(staged(), "b.rs", "the linked pane staged nothing");
+    assert!(
+        matches!(
+            saved_rx.try_recv(),
+            Err(smol::channel::TryRecvError::Closed)
+        ),
+        "the save was dropped, never run"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("a.rs")).unwrap(),
+        numbered("a", 30, Some(3))
+    );
+    assert_eq!(
+        std::fs::read_to_string(linked.join("a.rs")).unwrap(),
+        "linked edit\n"
+    );
+
+    // The renderer's own retargets name the main checkout; the pane keeps
+    // them in its worktree.
+    cx.update(|_, app| {
+        linked_view.read(app).renderer_dispatch(
+            Msg::SelectDiff {
+                repo_id,
+                target: DiffTarget::working_tree("b.rs".into(), DiffArea::Unstaged),
+            },
+            app,
+        )
+    });
+    let view_id = gitcomet_state::diff_session::DiffViewId(
+        cx.update(|_, app| linked_view.read(app).view_id()),
+    );
+    let target = || {
+        store.snapshot().repos[0]
+            .diff_sessions
+            .get(&view_id)
+            .map(|session| session.target.clone())
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while target().and_then(|target| target.file_path().map(Path::to_path_buf))
+        != Some(PathBuf::from("b.rs"))
+    {
+        assert!(Instant::now() < deadline, "the retarget never ran");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        target()
+            .and_then(|target| target.worktree().map(Path::to_path_buf))
+            .map(canonicalize_or_original),
+        Some(canonicalize_or_original(linked))
+    );
+}
+
+/// A list on a linked worktree reloads when that worktree changes, as its
+/// watch reports it.
+#[gpui::test]
+fn a_linked_worktree_list_reloads_when_its_worktree_changes(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::domain::DiffArea;
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (dir, store, view, cx) = open_repository_with(cx, Arc::new(gitcomet_git_gix::GixBackend));
+    let (_linked_dir, linked) = add_linked_worktree(dir.path());
+    let (host, repository) = cx.update(|_window, app| {
+        let host = view.read(app).extension_window.as_ref().unwrap().host();
+        let repository = host.active_repository(app).unwrap().unwrap();
+        (host, repository)
+    });
+    let (list, _watch) = cx.update(|_window, app| {
+        let list = host
+            .create_file_list(
+                &repository,
+                ChangeSource::linked_worktree(linked.clone(), DiffArea::Unstaged, true),
+                |_, _, _| {},
+                app,
+            )
+            .unwrap();
+        let watch = host.watch_worktree(&repository, &linked, app).unwrap();
+        (list, watch)
+    });
+    let listed = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            list.files(app)
+                .into_iter()
+                .map(|file| file.path.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        })
+    };
+    settle(cx, &view, &store, "the linked worktree's changes", |cx| {
+        listed(cx) == ["a.rs"]
+    });
+
+    std::fs::write(linked.join("b.rs"), "linked too\n").unwrap();
+    let mut change = gitcomet_state::msg::RepoExternalChange::worktree();
+    change.paths = gitcomet_state::msg::ChangedPaths::known(vec!["b.rs".into()]);
+    store.dispatch(Msg::WorktreeExternallyChanged {
+        repo_id: repository.repo_id(),
+        lifetime: repository.lifetime(),
+        path: linked.clone(),
+        change,
+    });
+    settle(cx, &view, &store, "the reload", |cx| {
+        listed(cx) == ["a.rs", "b.rs"]
+    });
+}
+
+/// The example's Changes view lists a linked worktree on request: its own
+/// changes, read-only, watched while shown.
+#[gpui::test]
+fn the_example_lists_a_linked_worktree(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (dir, store, view, cx) = open_repository_with(cx, Arc::new(gitcomet_git_gix::GixBackend));
+    let (_linked_dir, linked) = add_linked_worktree(dir.path());
+    let (_list_id, _changes) = open_changes_view(cx, &view, &store);
+    store.dispatch(Msg::LoadWorktrees { repo_id: RepoId(1) });
+    settle(cx, &view, &store, "the worktree buttons", |cx| {
+        cx.debug_bounds("example_changes_worktree_0").is_some()
+    });
+    click_debug_selector(cx, "example_changes_worktree_0");
+    let linked_files = |store: &AppStore| {
+        let snapshot = store.snapshot();
+        let list = snapshot.repos[0].change_lists.values().next()?.clone();
+        list.source.linked_path()?;
+        list.files.ready().map(|files| {
+            files
+                .iter()
+                .map(|file| file.path.clone())
+                .collect::<Vec<_>>()
+        })
+    };
+    settle(cx, &view, &store, "the linked worktree's changes", |_| {
+        linked_files(&store).is_some()
+    });
+    assert_eq!(linked_files(&store), Some(vec![PathBuf::from("a.rs")]));
+    let snapshot = store.snapshot();
+    let source = &snapshot.repos[0]
+        .change_lists
+        .values()
+        .next()
+        .unwrap()
+        .source;
+    assert_eq!(
+        source
+            .linked_path()
+            .map(|path| canonicalize_or_original(path.to_path_buf())),
+        Some(canonicalize_or_original(linked))
+    );
+    assert_eq!(
+        snapshot.worktree_watch_leases.len(),
+        1,
+        "the shown worktree is watched"
+    );
 }

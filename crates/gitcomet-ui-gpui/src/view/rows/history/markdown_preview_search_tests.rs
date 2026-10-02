@@ -31,6 +31,7 @@ fn row(text: &str, spans: Vec<MarkdownInlineSpan>) -> MarkdownPreviewRow {
         table: None,
         task: None,
         continues_item: false,
+        align: Default::default(),
     }
 }
 

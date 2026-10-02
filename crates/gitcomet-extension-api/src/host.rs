@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 /// Why a handle could not do what was asked.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum HostError {
     /// The handle's window has closed.
     WindowClosed,
@@ -24,6 +25,9 @@ pub enum HostError {
     RepositoryClosed,
     /// This window cannot do it (for example a focused mergetool window).
     Unsupported,
+    /// The request itself was refused, such as a URL scheme that may not be
+    /// opened.
+    InvalidRequest(SharedString),
 }
 
 impl fmt::Display for HostError {
@@ -32,6 +36,7 @@ impl fmt::Display for HostError {
             Self::WindowClosed => "the window has closed",
             Self::RepositoryClosed => "the repository has closed",
             Self::Unsupported => "this window does not support the request",
+            Self::InvalidRequest(reason) => reason,
         })
     }
 }
@@ -51,6 +56,7 @@ pub struct RepositoryHandle {
 
 impl RepositoryHandle {
     /// For hosts; extensions receive handles from the host.
+    #[doc(hidden)]
     pub fn new(window: WindowId, repo_id: RepoId, lifetime: u64, workdir: PathBuf) -> Self {
         Self {
             window,
@@ -84,6 +90,7 @@ pub struct DialogHandle {
 }
 
 impl DialogHandle {
+    #[doc(hidden)]
     pub fn new(close: impl FnOnce(&mut App) + 'static) -> Self {
         Self {
             close: Box::new(close),
@@ -111,6 +118,7 @@ pub struct RepositoryWatch {
 
 impl RepositoryWatch {
     /// For hosts: wraps whatever keeps the watch alive.
+    #[doc(hidden)]
     pub fn new(lease: Box<dyn std::any::Any>) -> Self {
         Self { _lease: lease }
     }
@@ -131,6 +139,7 @@ impl Drop for StateSubscription {
 
 /// What the host implements behind a [`WindowHost`]. Every method is weak:
 /// a closed window answers [`HostError::WindowClosed`].
+#[doc(hidden)]
 pub trait WindowHostImpl {
     fn repository_reader(&self) -> crate::RepositoryReader;
     fn kind(&self) -> gitcomet_core::identity::WindowKind;
@@ -289,6 +298,10 @@ pub trait WindowHostImpl {
     /// Shows a transient notification.
     fn notify(&self, message: SharedString, cx: &mut App) -> Result<(), HostError>;
 
+    fn open_url(&self, url: &str, cx: &mut App) -> Result<(), HostError>;
+
+    fn open_path(&self, path: &Path, cx: &mut App) -> Result<(), HostError>;
+
     /// The extension's saved state for this window's workspace.
     fn workspace_state(
         &self,
@@ -312,6 +325,7 @@ pub type WindowContent = Box<dyn FnOnce(&mut Window, &mut App) -> AnyView>;
 pub type OnWindowClosed = Box<dyn FnOnce(&mut App)>;
 
 /// What the host implements behind a [`PopOutWindow`].
+#[doc(hidden)]
 pub trait PopOutImpl {
     fn close(&self, cx: &mut App);
     fn is_open(&self, cx: &App) -> bool;
@@ -323,6 +337,7 @@ pub trait PopOutImpl {
 pub struct PopOutWindow(Rc<dyn PopOutImpl>);
 
 impl PopOutWindow {
+    #[doc(hidden)]
     pub fn new(window: Rc<dyn PopOutImpl>) -> Self {
         Self(window)
     }
@@ -337,10 +352,17 @@ impl PopOutWindow {
 }
 
 /// A weak handle to one window of the host.
+///
+/// A Settings window ([`WindowKind::Settings`](gitcomet_core::identity::WindowKind))
+/// has no repository: its state is empty, and navigation, repository panes
+/// and file lists, bottom panels, watches, `dispatch`, and workspace state
+/// answer [`HostError::Unsupported`]. Dialogs, popovers, menus, toasts,
+/// snapshot panes, pop-out windows, and syntax highlighting work there.
 #[derive(Clone)]
 pub struct WindowHost(Rc<dyn WindowHostImpl>);
 
 impl WindowHost {
+    #[doc(hidden)]
     pub fn new(host: Rc<dyn WindowHostImpl>) -> Self {
         Self(host)
     }
@@ -640,6 +662,19 @@ impl WindowHost {
 
     pub fn notify(&self, message: impl Into<SharedString>, cx: &mut App) -> Result<(), HostError> {
         self.0.notify(message.into(), cx)
+    }
+
+    /// Opens `url` in the default browser once this update ends, off the UI
+    /// thread. Schemes that run code or reach local files are refused with
+    /// [`HostError::InvalidRequest`]; a failed launch is reported in the
+    /// window.
+    pub fn open_url(&self, url: &str, cx: &mut App) -> Result<(), HostError> {
+        self.0.open_url(url, cx)
+    }
+
+    /// Opens `path` with its default application, like [`Self::open_url`].
+    pub fn open_path(&self, path: &Path, cx: &mut App) -> Result<(), HostError> {
+        self.0.open_path(path, cx)
     }
 
     pub fn workspace_state(

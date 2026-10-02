@@ -1128,3 +1128,123 @@ fn session_editor_restores_its_previous_commit_without_changing_history() {
     assert!(state.repos[0].diff_state.diff_target.is_none());
     assert!(!state.repos[0].diff_state.edit_mode);
 }
+
+/// A linked worktree's sessions and lists name it in their loads and reload
+/// only on its own changes; the main worktree's reload only on the main
+/// one's. History ignores a linked selection.
+#[test]
+fn linked_worktree_sessions_reload_on_their_own_worktree_and_leave_history_alone() {
+    use crate::diff_session::ChangeSource;
+    let (mut repos, ids, mut state, repo_id) = setup();
+    let lifetime = state.repos[0].lifetime();
+    let linked = PathBuf::from("/tmp/sessions-linked");
+    let (main_view, linked_view, list_view) =
+        (DiffViewId::next(), DiffViewId::next(), DiffViewId::next());
+    let history_before = (
+        state.repos[0].diff_state.diff_target_rev,
+        state.repos[0].navigation.main_history.entries.len(),
+    );
+    let mut open = |view, target| {
+        reduce(
+            &mut repos,
+            &ids,
+            &mut state,
+            Msg::DiffSession(DiffSessionMsg::Open {
+                repo_id,
+                lifetime,
+                view,
+                target,
+            }),
+        )
+    };
+    open(main_view, worktree("a.rs"));
+    let effects = open(linked_view, worktree("a.rs").in_worktree(linked.clone()));
+    assert_eq!(
+        session_effect(&effects).work.linked_path(),
+        Some(linked.as_path())
+    );
+    let source = ChangeSource::linked_worktree(linked.clone(), DiffArea::Unstaged, true);
+    let effects = reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::OpenChanges {
+            repo_id,
+            lifetime,
+            view: list_view,
+            source: source.clone(),
+        }),
+    );
+    assert_eq!(
+        session_effect(&effects).work.linked_path(),
+        Some(linked.as_path())
+    );
+    let change = gitcomet_core::domain::CommitFileChange::new(
+        "a.rs".into(),
+        gitcomet_core::domain::FileStatusKind::Modified,
+    );
+    assert_eq!(
+        source.target_for(&change, None),
+        worktree("a.rs").in_worktree(linked.clone()),
+        "a listed file opens in the linked worktree"
+    );
+
+    let edit = || RepoExternalChange {
+        paths: crate::msg::ChangedPaths::known(vec!["a.rs".into()]),
+        ..RepoExternalChange::worktree()
+    };
+    let queued = |state: &AppState| {
+        let repo = &state.repos[0];
+        (
+            repo.diff_sessions[&main_view].refresh_queued,
+            repo.diff_sessions[&linked_view].refresh_queued,
+            repo.change_lists[&list_view].refresh_queued,
+        )
+    };
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: edit(),
+        },
+    );
+    assert_eq!(queued(&state), (true, false, false), "the main worktree's");
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::WorktreeExternallyChanged {
+            repo_id,
+            lifetime,
+            // Another spelling of the same worktree.
+            path: linked.join("."),
+            change: edit(),
+        },
+    );
+    assert_eq!(
+        queued(&state),
+        (true, true, true),
+        "and then the linked one's"
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id,
+            target: worktree("a.rs").in_worktree(linked),
+        },
+    );
+    assert!(effects.is_empty());
+    assert_eq!(state.repos[0].diff_state.diff_target, None);
+    assert_eq!(
+        (
+            state.repos[0].diff_state.diff_target_rev,
+            state.repos[0].navigation.main_history.entries.len(),
+        ),
+        history_before
+    );
+}
