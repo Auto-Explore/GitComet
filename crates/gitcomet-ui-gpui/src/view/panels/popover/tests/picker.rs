@@ -1899,7 +1899,7 @@ fn row_menu_labels(
 }
 
 fn open_repo_picker(view: &gpui::Entity<GitCometView>, cx: &mut gpui::VisualTestContext) {
-    cx.update(|window, _| window.activate_window());
+    cx.update(|window, _| window.activate());
     cx.run_until_parked();
     cx.update(|window, app| {
         let _ = window.draw(app);

@@ -179,7 +179,7 @@ struct SmokeView {
 
 impl SmokeView {
     fn new(window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> Self {
-        window.activate_window();
+        window.activate();
         let input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {
@@ -287,7 +287,7 @@ struct TextInputCursorScrollView {
 
 impl TextInputCursorScrollView {
     fn new(window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> Self {
-        window.activate_window();
+        window.activate();
         let scroll_handle = ScrollHandle::new();
         let input = cx.new({
             let scroll_handle = scroll_handle.clone();
@@ -354,7 +354,7 @@ impl gpui::Render for TextInputCursorScrollView {
 
 impl TextInputHostView {
     fn new(window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> Self {
-        window.activate_window();
+        window.activate();
         let input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {

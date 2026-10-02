@@ -32,8 +32,7 @@ pub(super) fn gix_index_stage_object_id_optional(
         ))));
     };
 
-    let index = repo
-        .index_or_load_from_head_or_empty()
+    let index = crate::refs::index_or_load_from_head_or_empty(repo)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
     let path = gix::path::os_str_into_bstr(path.as_os_str())
         .map_err(|_| Error::new(ErrorKind::Unsupported("path is not valid UTF-8")))?;
@@ -106,8 +105,7 @@ pub(super) fn gix_index_conflict_stage_data(
     repo: &gix::Repository,
     path: &Path,
 ) -> Result<ConflictStageData> {
-    let index = repo
-        .index_or_load_from_head_or_empty()
+    let index = crate::refs::index_or_load_from_head_or_empty(repo)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
     let path_key = gix::path::os_str_into_bstr(path.as_os_str())
         .map_err(|_| Error::new(ErrorKind::Unsupported("path is not valid UTF-8")))?;

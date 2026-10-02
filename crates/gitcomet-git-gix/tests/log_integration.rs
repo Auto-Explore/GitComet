@@ -2538,3 +2538,117 @@ fn author_filter_full_page_does_not_advertise_more_without_another_match() {
     assert_eq!(more.commits.len(), 1);
     assert!(more.next_cursor.is_some());
 }
+
+// gix's rev-parse infers the hash kind of a hexadecimal name from its digit
+// count (up to 40 digits is SHA-1), so a name wider than the repository's own
+// digest used to compare hashes of different widths and panic once objects
+// were packed. Such names must fail cleanly, and ordinary abbreviations must
+// keep resolving.
+#[test]
+fn hex_revision_lookup_is_safe_across_object_widths() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    run_git(&repo, &["init", "-b", "main"]);
+    run_git(&repo, &["config", "user.email", "you@example.com"]);
+    run_git(&repo, &["config", "user.name", "You"]);
+    run_git(&repo, &["config", "commit.gpgsign", "false"]);
+    commit_file_at(&repo, "file.txt", "contents", "init", 1);
+    run_git(&repo, &["gc", "-q"]);
+
+    let opened = GixBackend.open(&repo).unwrap();
+    let head = opened.head_commit_id().unwrap().expect("a head commit");
+    assert_eq!(head.as_ref().len(), 40, "fixture must use SHA-1 ids");
+
+    let short = opened
+        .resolve_commit(&CommitId(head.as_ref()[..12].into()))
+        .expect("abbreviated id resolves");
+    assert_eq!(short.id, head);
+    let suffixed = opened
+        .resolve_commit(&CommitId(format!("{}~0", &head.as_ref()[..12]).into()))
+        .expect("suffixed abbreviated id resolves");
+    assert_eq!(suffixed.id, head);
+
+    let shortened = head.as_ref()[..10].to_owned();
+    let described = opened
+        .resolve_commit(&CommitId(format!("v1.0-3-g{shortened}").into()))
+        .expect("short describe form resolves");
+    assert_eq!(described.id, head);
+
+    // A reference named with an over-wide hex run still resolves, with or
+    // without a navigation suffix.
+    let wide_ref = "b".repeat(41);
+    run_git(&repo, &["branch", &wide_ref]);
+    let wide_target = opened
+        .resolve_commit(&CommitId(wide_ref.clone().into()))
+        .expect("over-wide hex reference resolves");
+    assert_eq!(wide_target.id, head);
+    let navigated = opened
+        .resolve_commit(&CommitId(format!("{wide_ref}~0").into()))
+        .expect("over-wide hex reference with a navigation suffix resolves");
+    assert_eq!(navigated.id, head);
+
+    for spec in [
+        format!("{head}a"),
+        format!("{head}aa"),
+        "a".repeat(64),
+        format!("{head}a^{{commit}}"),
+        // gix also decodes hex candidates out of describe forms; an over-wide
+        // candidate used to compare hashes of different widths and panic.
+        format!("v1.0-g{head}a"),
+        format!("{head}a-x"),
+        format!("foo-g{head}a"),
+        format!("v1.0-3-g{head}a"),
+        format!("{head}a..x"),
+        format!("{head}a@.x"),
+        format!("{wide_ref}..{head}a"),
+        format!("{wide_ref}~0..{head}aa"),
+    ] {
+        assert!(
+            opened
+                .resolve_commit(&CommitId(spec.clone().into()))
+                .is_err(),
+            "over-wide hex spec {spec} must fail cleanly"
+        );
+    }
+}
+
+// Specs whose reference name contains a hex run wider than the repository
+// digest must not reach gix's parser, but their suffixes still resolve like
+// git: a `~`/`^` suffix applies to the resolved reference, and `@{n}` reads
+// its reflog.
+#[test]
+fn over_wide_hex_reference_names_resolve_with_suffixes_and_reflogs() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    run_git(&repo, &["init", "-b", "main"]);
+    run_git(&repo, &["config", "user.email", "you@example.com"]);
+    run_git(&repo, &["config", "user.name", "You"]);
+    run_git(&repo, &["config", "commit.gpgsign", "false"]);
+    commit_file_at(&repo, "file.txt", "one\n", "one", 1);
+    commit_file_at(&repo, "file.txt", "two\n", "two", 2);
+
+    let wide = "b".repeat(41);
+    let named = format!("release-{wide}");
+    run_git(&repo, &["branch", &wide]);
+    run_git(&repo, &["branch", &named]);
+    run_git(&repo, &["gc", "-q"]);
+
+    let head = git_stdout(&repo, &["rev-parse", "HEAD"]);
+    let parent = git_stdout(&repo, &["rev-parse", "HEAD~1"]);
+    let opened = GixBackend.open(&repo).unwrap();
+
+    let navigated = opened
+        .resolve_commit(&CommitId(format!("{wide}~1").into()))
+        .expect("over-wide hex reference with ~1 resolves");
+    assert_eq!(navigated.id.as_ref(), parent);
+    let named_navigated = opened
+        .resolve_commit(&CommitId(format!("{named}~1").into()))
+        .expect("named reference containing an over-wide hex run resolves");
+    assert_eq!(named_navigated.id.as_ref(), parent);
+    let reflogged = opened
+        .resolve_commit(&CommitId(format!("{wide}@{{0}}").into()))
+        .expect("over-wide hex reference with a reflog selector resolves");
+    assert_eq!(reflogged.id.as_ref(), head);
+}

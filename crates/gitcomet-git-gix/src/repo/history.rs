@@ -20,12 +20,7 @@ use std::process::Command;
 
 /// Returns the HEAD commit id, or `None` when HEAD is unborn / empty.
 pub(super) fn gix_head_id_or_none(repo: &gix::Repository) -> Result<Option<gix::ObjectId>> {
-    let mut head = repo
-        .head()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix head: {e}"))))?;
-    head.try_peel_to_id()
-        .map(|id| id.map(|id| id.detach()))
-        .map_err(|e| crate::repo::object_store::gix_error("gix head peel", &e))
+    crate::refs::head_oid(repo)
 }
 
 /// Upper bound on the number of commits a single squash may cover; a runaway
@@ -44,7 +39,7 @@ const PERSISTED_CHERRY_PICK_MAINLINE_STAGING: &str = "gitcomet-cherry-pick-mainl
 const MSG_EDITOR_NAME: &str = "gitcomet-msg-editor.sh";
 
 pub(super) fn peel_commit<'r>(repo: &'r gix::Repository, spec: &str) -> Result<gix::Commit<'r>> {
-    repo.rev_parse_single(spec)
+    crate::refs::resolve_required(repo, spec)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}"))))?
         .object()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix commit object {spec}: {e}"))))?
@@ -350,7 +345,7 @@ impl GixRepo {
             return self.run_cherry_pick_step_output(cmd, "git cherry-pick --continue");
         }
 
-        if let Some(operation) = self.operation_in_progress_label() {
+        if let Some(operation) = self.operation_in_progress_label()? {
             return Err(Error::new(ErrorKind::Backend(format!(
                 "cherry-pick: {operation} is in progress; finish or abort it first"
             ))));
@@ -609,11 +604,12 @@ impl GixRepo {
     fn cherry_pick_awaits_commit(&self, id: &CommitId) -> Result<bool> {
         let repo = self.repo();
         let git_dir = repo.path();
-        let Ok(stopped_on) = fs::read_to_string(git_dir.join("CHERRY_PICK_HEAD")) else {
+        let Some(stopped_on) = crate::refs::root_ref(&repo, crate::refs::RootRef::CherryPick)?
+        else {
             return Ok(false);
         };
         let same_commit = match (
-            peel_commit(&repo, stopped_on.trim()),
+            peel_commit(&repo, &stopped_on.to_string()),
             peel_commit(&repo, id.as_ref()),
         ) {
             (Ok(stopped), Ok(requested)) => stopped.id == requested.id,
@@ -686,7 +682,7 @@ impl GixRepo {
         // `--no-commit` checks neither of these itself: it would fold staged
         // work into the revert and ignores another operation's state (a
         // closing `--quit` would even delete a leftover sequence).
-        if let Some(operation) = self.operation_in_progress_label() {
+        if let Some(operation) = self.operation_in_progress_label()? {
             return Err(Error::new(ErrorKind::Backend(format!(
                 "revert: {operation} is in progress; finish or abort it first"
             ))));
@@ -746,11 +742,11 @@ impl GixRepo {
     fn revert_awaits_commit(&self, id: &CommitId) -> Result<bool> {
         let repo = self.repo();
         let git_dir = repo.path();
-        let Ok(stopped_on) = fs::read_to_string(git_dir.join("REVERT_HEAD")) else {
+        let Some(stopped_on) = crate::refs::root_ref(&repo, crate::refs::RootRef::Revert)? else {
             return Ok(false);
         };
         let same_commit = match (
-            peel_commit(&repo, stopped_on.trim()),
+            peel_commit(&repo, &stopped_on.to_string()),
             peel_commit(&repo, id.as_ref()),
         ) {
             (Ok(stopped), Ok(requested)) => stopped.id == requested.id,
@@ -771,7 +767,7 @@ impl GixRepo {
         let mut cmd = self.git_workdir_cmd();
         let single = !self.repo().path().join("sequencer").exists();
         if single
-            && self.revert_head_exists()
+            && self.revert_head_exists()?
             && !self.index_has_conflicts()
             && self.index_matches_head()?
         {
@@ -788,13 +784,13 @@ impl GixRepo {
     /// Like [`Self::run_cherry_pick_step_output`]: a non-zero exit is success
     /// only when the sequence advanced and stopped at a later conflict.
     fn run_revert_step_output(&self, cmd: Command, label: &str) -> Result<CommandOutput> {
-        let marker_before = self.revert_progress_marker();
+        let marker_before = self.revert_progress_marker()?;
         let (output, last) = self.run_revert_auto_skip(cmd, label)?;
         if last.status.success() {
             return Ok(output);
         }
         let paused_after_progress = self.sequencer_state_impl()? == SequencerState::Revert
-            && match (marker_before, self.revert_progress_marker()) {
+            && match (marker_before, self.revert_progress_marker()?) {
                 (None, Some(_)) => self.index_has_conflicts(),
                 (Some(before), Some(after)) => {
                     after.advanced_from(&before) && self.index_has_conflicts()
@@ -824,13 +820,13 @@ impl GixRepo {
         let mut last = run_git_raw_output(cmd, label)?;
         append_raw_output(&mut acc, &last);
         while !last.status.success() && self.revert_stopped_became_empty()? {
-            let marker = self.revert_progress_marker();
+            let marker = self.revert_progress_marker()?;
             let mut skip = self.git_workdir_cmd();
             skip.arg("revert").arg("--skip");
             last = run_git_raw_output(skip, REVERT_SKIP_COMMAND)?;
             append_raw_output(&mut acc, &last);
             // A skip that moved nothing forward would loop forever.
-            if self.revert_progress_marker() == marker {
+            if self.revert_progress_marker()? == marker {
                 break;
             }
         }
@@ -846,7 +842,7 @@ impl GixRepo {
             return Ok(false);
         }
         let Some(stopped_on) = self
-            .revert_progress_marker()
+            .revert_progress_marker()?
             .and_then(|progress| progress.stopped_on)
             .or_else(|| self.pending_revert_todo_commit())
         else {
@@ -886,9 +882,9 @@ impl GixRepo {
     /// The in-progress operation a new pick or revert would collide with.
     /// Matches what git itself reports: a sequencer directory whose todo git
     /// cannot read is not an operation, even though it blocks new sequences.
-    pub(super) fn operation_in_progress_label(&self) -> Option<&'static str> {
+    pub(super) fn operation_in_progress_label(&self) -> Result<Option<&'static str>> {
         use gix::state::InProgress;
-        match self.repo().state() {
+        Ok(match crate::refs::operation_state(&self.repo())? {
             Some(InProgress::Rebase | InProgress::RebaseInteractive) => Some("a rebase"),
             Some(InProgress::ApplyMailbox | InProgress::ApplyMailboxRebase) => {
                 Some("a patch apply")
@@ -897,13 +893,13 @@ impl GixRepo {
             Some(InProgress::Merge) => Some("a merge"),
             Some(InProgress::Revert | InProgress::RevertSequence) => Some("a revert"),
             // gix reports a bisect ahead of REVERT_HEAD.
-            Some(InProgress::Bisect) if self.revert_head_exists() => Some("a revert"),
+            Some(InProgress::Bisect) if self.revert_head_exists()? => Some("a revert"),
             Some(InProgress::Bisect) | None => match self.leftover_sequence_state() {
                 SequencerState::CherryPick => Some("a cherry-pick sequence"),
                 SequencerState::Revert => Some("a revert sequence"),
                 _ => None,
             },
-        }
+        })
     }
 
     /// The commit of the todo's current step. A sequence that stops because a
@@ -922,8 +918,8 @@ impl GixRepo {
     }
 
     /// gix reports a bisect ahead of `REVERT_HEAD`, so probe the file itself.
-    fn revert_head_exists(&self) -> bool {
-        self.repo().path().join("REVERT_HEAD").is_file()
+    fn revert_head_exists(&self) -> Result<bool> {
+        Ok(crate::refs::root_ref(&self.repo(), crate::refs::RootRef::Revert)?.is_some())
     }
 
     /// A cherry-pick or revert sequence outlives its `*_HEAD` when a stopped
@@ -942,11 +938,13 @@ impl GixRepo {
     /// Whether any operation state is on disk that a bare `git reset` (which
     /// clears MERGE_HEAD, CHERRY_PICK_HEAD, REVERT_HEAD and the sequencer)
     /// would silently end.
-    pub(super) fn operation_state_on_disk(&self) -> bool {
+    pub(super) fn operation_state_on_disk(&self) -> Result<bool> {
         let repo = self.repo();
-        !matches!(repo.state(), None | Some(gix::state::InProgress::Bisect))
-            || repo.path().join("REVERT_HEAD").is_file()
-            || repo.path().join("sequencer").exists()
+        Ok(!matches!(
+            crate::refs::operation_state(&repo)?,
+            None | Some(gix::state::InProgress::Bisect)
+        ) || self.revert_head_exists()?
+            || repo.path().join("sequencer").exists())
     }
 
     /// Whether the index records exactly HEAD's tree, gitlinks included.
@@ -970,7 +968,8 @@ impl GixRepo {
         }
         // A plain `git am` is neither a rebase nor a cherry-pick, so the chain
         // below could never continue it.
-        if self.repo().state() == Some(gix::state::InProgress::ApplyMailbox) {
+        if crate::refs::operation_state(&self.repo())? == Some(gix::state::InProgress::ApplyMailbox)
+        {
             let mut cmd = self.git_workdir_cmd();
             cmd.env("GIT_EDITOR", "true");
             cmd.arg("am").arg("--continue");
@@ -1087,7 +1086,7 @@ impl GixRepo {
     /// step; a continue that made no progress (unresolved conflicts, a
     /// failed hook re-running the same step) keeps git's error.
     fn run_cherry_pick_step_output(&self, cmd: Command, label: &str) -> Result<CommandOutput> {
-        let marker_before = self.cherry_pick_progress_marker();
+        let marker_before = self.cherry_pick_progress_marker()?;
         let (output, last) = self.run_cherry_pick_auto_skip(cmd, label)?;
         let still_in_progress = self.cherry_pick_in_progress_impl()?;
         if !still_in_progress {
@@ -1097,7 +1096,7 @@ impl GixRepo {
             return Ok(output);
         }
         let paused_after_progress = still_in_progress
-            && match (marker_before, self.cherry_pick_progress_marker()) {
+            && match (marker_before, self.cherry_pick_progress_marker()?) {
                 // The command started a cherry-pick and paused at a conflict.
                 (None, Some(_)) => self.index_has_conflicts(),
                 // Native cherry-pick todos contain only pick steps. If Git
@@ -1137,14 +1136,14 @@ impl GixRepo {
         let mut last = run_git_raw_output(cmd, label)?;
         append_raw_output(&mut acc, &last);
         while !last.status.success() && self.cherry_pick_stopped_became_empty()? {
-            let marker = self.cherry_pick_progress_marker();
+            let marker = self.cherry_pick_progress_marker()?;
             let mut skip = self.git_workdir_cmd();
             skip.arg("cherry-pick").arg("--skip");
             last = run_git_raw_output(skip, "git cherry-pick --skip")?;
             append_raw_output(&mut acc, &last);
             // A skip that moved nothing forward would loop on the same
             // step's output forever; surface it instead.
-            if self.cherry_pick_progress_marker() == marker {
+            if self.cherry_pick_progress_marker()? == marker {
                 break;
             }
         }
@@ -1162,7 +1161,7 @@ impl GixRepo {
             return Ok(false);
         }
         let Some(stopped_on) = self
-            .cherry_pick_progress_marker()
+            .cherry_pick_progress_marker()?
             .and_then(|progress| progress.stopped_on)
         else {
             return Ok(false);
@@ -1257,15 +1256,18 @@ impl GixRepo {
     /// in the sequencer todo plus the commit the sequence is stopped on.
     /// `None` when no cherry-pick state exists at all. A single-commit
     /// cherry-pick writes no `sequencer` directory, only `CHERRY_PICK_HEAD`.
-    fn cherry_pick_progress_marker(&self) -> Option<SequencerProgress> {
-        self.sequencer_progress_marker("CHERRY_PICK_HEAD")
+    fn cherry_pick_progress_marker(&self) -> Result<Option<SequencerProgress>> {
+        self.sequencer_progress_marker(crate::refs::RootRef::CherryPick)
     }
 
-    fn revert_progress_marker(&self) -> Option<SequencerProgress> {
-        self.sequencer_progress_marker("REVERT_HEAD")
+    fn revert_progress_marker(&self) -> Result<Option<SequencerProgress>> {
+        self.sequencer_progress_marker(crate::refs::RootRef::Revert)
     }
 
-    fn sequencer_progress_marker(&self, head_file: &str) -> Option<SequencerProgress> {
+    fn sequencer_progress_marker(
+        &self,
+        root: crate::refs::RootRef,
+    ) -> Result<Option<SequencerProgress>> {
         let repo = self.repo();
         let git_dir = repo.path();
         let remaining_steps = fs::read_to_string(git_dir.join("sequencer").join("todo"))
@@ -1276,17 +1278,15 @@ impl GixRepo {
                     .filter(|line| !line.is_empty() && !line.starts_with('#'))
                     .count()
             });
-        let stopped_on = fs::read_to_string(git_dir.join(head_file))
-            .ok()
-            .map(|sha| sha.trim().to_string());
-        if remaining_steps.is_none() && stopped_on.is_none() {
+        let stopped_on = crate::refs::root_ref(&repo, root)?.map(|id| id.to_string());
+        Ok(if remaining_steps.is_none() && stopped_on.is_none() {
             None
         } else {
             Some(SequencerProgress {
                 remaining_steps,
                 stopped_on,
             })
-        }
+        })
     }
 
     /// Whether the index holds unmerged (conflict) entries — the signature
@@ -1317,7 +1317,7 @@ impl GixRepo {
         if self.sequencer_state_impl()? == SequencerState::Revert {
             // Without REVERT_HEAD there is no stopped step to roll back: git
             // clears the sequence and leaves HEAD where the user put it.
-            let stopped = self.revert_head_exists();
+            let stopped = self.revert_head_exists()?;
             let mut cmd = self.git_workdir_cmd();
             cmd.arg("revert").arg("--abort");
             let mut output = run_git_with_output(cmd, "git revert --abort")?;
@@ -1372,7 +1372,7 @@ impl GixRepo {
 
     pub(super) fn sequencer_state_impl(&self) -> Result<SequencerState> {
         let repo = self.repo();
-        let state = match repo.state() {
+        let state = match crate::refs::operation_state(&repo)? {
             Some(
                 gix::state::InProgress::Rebase
                 | gix::state::InProgress::RebaseInteractive
@@ -1385,7 +1385,7 @@ impl GixRepo {
             Some(gix::state::InProgress::Revert | gix::state::InProgress::RevertSequence) => {
                 SequencerState::Revert
             }
-            Some(gix::state::InProgress::Bisect) if self.revert_head_exists() => {
+            Some(gix::state::InProgress::Bisect) if self.revert_head_exists()? => {
                 SequencerState::Revert
             }
             Some(gix::state::InProgress::Bisect) | None => self.leftover_sequence_state(),
@@ -1404,7 +1404,7 @@ impl GixRepo {
     fn cherry_pick_in_progress_impl(&self) -> Result<bool> {
         let repo = self.repo();
         Ok(matches!(
-            repo.state(),
+            crate::refs::operation_state(&repo)?,
             Some(gix::state::InProgress::CherryPick | gix::state::InProgress::CherryPickSequence)
         ))
     }
@@ -1704,7 +1704,7 @@ impl GixRepo {
                  the cherry-picked commits",
             ));
         }
-        if let Some(operation) = self.operation_in_progress_label() {
+        if let Some(operation) = self.operation_in_progress_label()? {
             return Err(cherry_pick_error(&format!(
                 "{operation} is in progress; finish or abort it first"
             )));
@@ -1800,7 +1800,7 @@ impl GixRepo {
     }
 
     pub(super) fn merge_commit_message_impl(&self) -> Result<Option<String>> {
-        if self.repo().state() != Some(gix::state::InProgress::Merge) {
+        if crate::refs::operation_state(&self.repo())? != Some(gix::state::InProgress::Merge) {
             return Ok(None);
         }
         self.commit_message_template_impl()

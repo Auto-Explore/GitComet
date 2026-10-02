@@ -1129,6 +1129,22 @@ fn tag_file_changes_refresh_tags() {
         "packed-refs should produce tags: true"
     );
 
+    for file in ["reftable/tables.list", "reftable/0x0001-0x0002-example.ref"] {
+        let event = notify::Event {
+            kind: EventKind::Modify(ModifyKind::Data(DataChange::Any)),
+            paths: vec![git_dir.join(file)],
+            attrs: Default::default(),
+        };
+        assert_eq!(
+            classify_change(&workdir, Some(&git_dir), &mut rules, &event),
+            Some(RepoExternalChange {
+                git_state: true,
+                tags: true,
+                ..Default::default()
+            })
+        );
+    }
+
     // Branch ref file → tags: false
     let branch_event = notify::Event {
         kind: EventKind::Modify(ModifyKind::Data(DataChange::Any)),
