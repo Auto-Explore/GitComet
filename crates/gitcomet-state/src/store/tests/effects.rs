@@ -243,6 +243,24 @@ impl GitRepository for MetadataSchedulingRepo {
         &self.spec
     }
 
+    fn lfs_locks_cancellable(
+        &self,
+        _cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<gitcomet_core::large_files::LfsLock>> {
+        let _ = self.started_tx.send("lfs_locks");
+        wait_for_release_signal(&self.release);
+        Ok(Vec::new())
+    }
+
+    fn annex_unused_cancellable(
+        &self,
+        _cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<gitcomet_core::large_files::AnnexUnused> {
+        let _ = self.started_tx.send("annex_unused");
+        wait_for_release_signal(&self.release);
+        Ok(Default::default())
+    }
+
     fn log_head_page(
         &self,
         _limit: usize,

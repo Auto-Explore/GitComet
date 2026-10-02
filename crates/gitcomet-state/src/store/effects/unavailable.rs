@@ -106,6 +106,7 @@ pub(super) fn send_unavailable_git_effect_result(
                 repo_id,
                 generation,
                 result: Err(git_unavailable_error(runtime)),
+                large_files: None,
             },
         )),
         Effect::LoadStatus { repo_id } => {
@@ -213,6 +214,34 @@ pub(super) fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::RunLargeFileCommand {
+            repo_id, command, ..
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::LargeFile { command },
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::LoadLfsLocks { repo_id } => {
+            send(Msg::Internal(crate::msg::InternalMsg::LfsLocksLoaded {
+                repo_id,
+                result: Err(git_unavailable_error(runtime)),
+            }))
+        }
+        Effect::LoadAnnexWhereis { repo_id, key } => {
+            send(Msg::Internal(crate::msg::InternalMsg::AnnexWhereisLoaded {
+                repo_id,
+                key,
+                result: Err(git_unavailable_error(runtime)),
+            }))
+        }
+        Effect::LoadAnnexUnused { repo_id } => {
+            send(Msg::Internal(crate::msg::InternalMsg::AnnexUnusedLoaded {
+                repo_id,
+                result: Err(git_unavailable_error(runtime)),
+            }))
+        }
         Effect::AppendGitattributesRule { repo_id, rule } => send(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
@@ -265,6 +294,12 @@ pub(super) fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             }))
         }
+        Effect::LoadLargeFileSupport { repo_id } => send(Msg::Internal(
+            crate::msg::InternalMsg::LargeFileSupportLoaded {
+                repo_id,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::LoadFileBrowser { repo_id, source } => {
             send(Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
                 cancellation: None,

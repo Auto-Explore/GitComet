@@ -200,6 +200,31 @@ impl PopoverHost {
         self.close_popover(cx);
     }
 
+    pub(in crate::view::panels::popover) fn submit_annex_prompt(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(PopoverKind::Repo {
+            repo_id,
+            kind: RepoPopoverKind::Annex(AnnexPopoverKind::Prompt(prompt)),
+        }) = self.popover.clone()
+        else {
+            return;
+        };
+        let text = self
+            .submodule_ref_input
+            .read_with(cx, |input, _| input.text().to_string());
+        let unused =
+            annex_prompt::droppable_unused(self.state.repos.iter().find(|r| r.id == repo_id));
+        let Ok(command) = annex_prompt::prompt_command(&prompt, &text, unused) else {
+            return;
+        };
+        self.store
+            .dispatch(Msg::RunLargeFileCommand { repo_id, command });
+        self.dismiss_inline_popover(window, cx);
+    }
+
     pub(in crate::view::panels::popover) fn submit_submodule_change_pointer(
         &mut self,
         window: &mut Window,

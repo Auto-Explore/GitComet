@@ -5,6 +5,7 @@ use std::rc::Rc;
 
 mod add_repo_menu;
 mod add_to_gitignore_prompt;
+mod annex_prompt;
 mod app_menu;
 mod apply_file_change_confirm;
 mod author_filter;
@@ -617,6 +618,12 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
                 ),
                 ..
             }
+            | PopoverKind::Repo {
+                kind: RepoPopoverKind::Annex(
+                    AnnexPopoverKind::SectionMenu | AnnexPopoverKind::RepositoryMenu { .. },
+                ),
+                ..
+            }
             | PopoverKind::CommitFileMenu { .. }
             | PopoverKind::CommitRangeFileMenu { .. }
             | PopoverKind::FileBrowserFileMenu { .. }
@@ -1099,6 +1106,10 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
             ..
         } => Some(DIALOG_420_WIDTH),
         PopoverKind::Repo {
+            kind: RepoPopoverKind::Annex(AnnexPopoverKind::Prompt(_)),
+            ..
+        } => Some(DIALOG_460_WIDTH),
+        PopoverKind::Repo {
             kind:
                 RepoPopoverKind::Worktree(
                     WorktreePopoverKind::OpenPicker
@@ -1161,6 +1172,13 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
             kind:
                 RepoPopoverKind::Submodule(
                     SubmodulePopoverKind::SectionMenu | SubmodulePopoverKind::Menu { .. },
+                ),
+            ..
+        }
+        | PopoverKind::Repo {
+            kind:
+                RepoPopoverKind::Annex(
+                    AnnexPopoverKind::SectionMenu | AnnexPopoverKind::RepositoryMenu { .. },
                 ),
             ..
         }

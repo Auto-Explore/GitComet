@@ -684,6 +684,7 @@ pub(super) fn seed_file_image_diff_state_with_rev(
                     path: path.to_path_buf(),
                     old: old.map(|bytes| bytes.to_vec()),
                     new: new.map(|bytes| bytes.to_vec()),
+                    ..Default::default()
                 }),
             ));
 
@@ -938,6 +939,7 @@ pub(super) fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
                     Some(Arc::new(gitcomet_core::domain::DiffPreviewTextFile {
                         path: source_path.clone(),
                         side: gitcomet_core::domain::DiffPreviewTextSide::Old,
+                        large_file: None,
                     })),
                 );
                 repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);
@@ -1069,6 +1071,7 @@ pub(super) fn assert_markdown_file_preview_toggle_visible(
                     Some(Arc::new(gitcomet_core::domain::DiffPreviewTextFile {
                         path: preview_source_path,
                         side,
+                        large_file: None,
                     })),
                 );
             }

@@ -79,6 +79,28 @@ impl Default for RemoteSettings {
     }
 }
 
+/// How GitComet treats Git LFS and git-annex repositories.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LargeFileSettings {
+    /// Hide `git-annex` and `synced/*` branches from branch lists.
+    pub hide_annex_refs: bool,
+    /// On an adjusted branch, Pull and Push run `git annex pull` / `push`:
+    /// a plain merge into an adjusted branch is git-annex's documented footgun.
+    pub annex_pull_push: bool,
+    /// Annex pull, push and sync also move annexed content.
+    pub annex_sync_content: bool,
+}
+
+impl Default for LargeFileSettings {
+    fn default() -> Self {
+        Self {
+            hide_annex_refs: true,
+            annex_pull_push: true,
+            annex_sync_content: false,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MaintenanceSettings {
     /// Check daily whether a repository needs maintenance, and offer to run it.
@@ -133,6 +155,9 @@ pub struct AppState {
     pub git_runtime: GitRuntimeState,
     /// The signature verifiers Git can run. Formats without one are not verified.
     pub signing_tools: SigningToolsState,
+    /// Whether Git can run `git lfs` / `git annex`; gates their commands.
+    pub large_file_tools: gitcomet_core::large_file_tools::LargeFileToolsState,
+    pub large_file_settings: LargeFileSettings,
     pub remote_url_policy: RemoteUrlPolicy,
     pub git_log_settings: GitLogSettings,
     pub remote_settings: RemoteSettings,

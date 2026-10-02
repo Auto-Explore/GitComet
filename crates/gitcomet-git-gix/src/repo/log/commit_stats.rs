@@ -1,7 +1,11 @@
+use super::super::large_files::CommittedPointerScan;
 use super::*;
 use gitcomet_core::domain::{FileMode, ObjectHash};
 
 pub(crate) const COMMIT_STATS_MAX_FILES: usize = 400;
+/// Large-file badges cost ~1-2.5 us per file (measured on 20k-file commits),
+/// far less than line stats, so asset imports keep them.
+pub(crate) const COMMIT_POINTER_MAX_FILES: usize = 10_000;
 /// Blobs larger than this are treated as "stats unknown" instead of diffed.
 pub(crate) const COMMIT_STATS_MAX_BLOB_BYTES: usize = 4 * 1024 * 1024;
 /// Git's binary heuristic: a NUL byte within the leading window.
@@ -106,12 +110,14 @@ pub(crate) fn commit_file_change_from_diff(
     repo: &gix::Repository,
     change: gix::object::tree::diff::ChangeDetached,
     compute_stats: bool,
+    pointers: Option<&CommittedPointerScan>,
     scratch: &mut CommitStatsScratch,
 ) -> Result<Option<CommitFileChange>> {
     use gitcomet_core::domain::FileStatusKind;
     use gix::object::tree::diff::ChangeDetached;
 
-    let (location, source, is_tree, is_submodule, kind, old_id, new_id, old_mode, new_mode) =
+    // `link`: the current (or deleted) entry is a symlink, as git-annex locks files.
+    let (location, source, is_tree, is_submodule, kind, old_id, new_id, old_mode, new_mode, link) =
         match change {
             ChangeDetached::Addition {
                 entry_mode,
@@ -128,6 +134,7 @@ pub(crate) fn commit_file_change_from_diff(
                 Some(id),
                 None,
                 Some(entry_mode),
+                entry_mode.is_link(),
             ),
             ChangeDetached::Deletion {
                 entry_mode,
@@ -144,6 +151,7 @@ pub(crate) fn commit_file_change_from_diff(
                 None,
                 Some(entry_mode),
                 None,
+                entry_mode.is_link(),
             ),
             ChangeDetached::Modification {
                 previous_entry_mode,
@@ -161,6 +169,7 @@ pub(crate) fn commit_file_change_from_diff(
                 Some(id),
                 Some(previous_entry_mode),
                 Some(entry_mode),
+                entry_mode.is_link(),
             ),
             ChangeDetached::Rewrite {
                 source_location,
@@ -185,6 +194,7 @@ pub(crate) fn commit_file_change_from_diff(
                 Some(id),
                 Some(source_entry_mode),
                 Some(entry_mode),
+                entry_mode.is_link(),
             ),
         };
 
@@ -201,6 +211,10 @@ pub(crate) fn commit_file_change_from_diff(
     let old_path = source
         .map(|source| path_buf_from_git_bytes(source.as_ref(), "gix rename source path"))
         .transpose()?;
+    let large_file = pointers
+        .filter(|_| !is_submodule)
+        .zip(new_id.or(old_id))
+        .and_then(|(pointers, id)| pointers.state(repo, id, link));
     let hash = |id: gix::ObjectId| ObjectHash(id.to_string().into());
     Ok(Some(
         CommitFileChange::new(
@@ -214,7 +228,8 @@ pub(crate) fn commit_file_change_from_diff(
         .with_modes(
             old_mode.and_then(file_mode_from_entry),
             new_mode.and_then(file_mode_from_entry),
-        ),
+        )
+        .with_large_file(large_file),
     ))
 }
 
@@ -222,6 +237,7 @@ pub(crate) fn commit_file_change_from_diff(
 /// `new_tree` is an addition) into the flat `CommitFileChange` list used by both
 /// commit details (parent → commit) and range comparisons (from → to).
 pub(crate) fn tree_diff_file_changes(
+    owner: &GixRepo,
     repo: &gix::Repository,
     old_tree: Option<&gix::Tree<'_>>,
     new_tree: &gix::Tree<'_>,
@@ -229,12 +245,22 @@ pub(crate) fn tree_diff_file_changes(
     let changes = crate::refs::diff_tree_to_tree(repo, old_tree, new_tree)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix diff_tree_to_tree: {e}"))))?;
 
+    if changes.is_empty() {
+        return Ok(Vec::new());
+    }
     let compute_stats = changes.len() <= COMMIT_STATS_MAX_FILES;
+    let pointers =
+        (changes.len() <= COMMIT_POINTER_MAX_FILES).then(|| owner.committed_pointer_scan(repo));
     let mut scratch = CommitStatsScratch::default();
     let mut files = Vec::with_capacity(changes.len());
     for change in changes {
-        if let Some(file) = commit_file_change_from_diff(repo, change, compute_stats, &mut scratch)?
-        {
+        if let Some(file) = commit_file_change_from_diff(
+            repo,
+            change,
+            compute_stats,
+            pointers.as_deref(),
+            &mut scratch,
+        )? {
             files.push(file);
         }
     }
@@ -242,6 +268,7 @@ pub(crate) fn tree_diff_file_changes(
 }
 
 pub(crate) fn commit_file_changes(
+    owner: &GixRepo,
     repo: &gix::Repository,
     commit: &gix::Commit<'_>,
     parent_ids: &[gix::ObjectId],
@@ -273,12 +300,13 @@ pub(crate) fn commit_file_changes(
         }
     };
 
-    tree_diff_file_changes(repo, parent_tree.as_ref(), &commit_tree)
+    tree_diff_file_changes(owner, repo, parent_tree.as_ref(), &commit_tree)
 }
 
 /// List the files that differ between two commits (`from` → `to`), for the
 /// compare-selected-commits feature. `from` is the base/older side.
 pub(crate) fn diff_range_files(
+    owner: &GixRepo,
     repo: &gix::Repository,
     from: &CommitId,
     to: &CommitId,
@@ -290,7 +318,7 @@ pub(crate) fn diff_range_files(
         .then(|| commit_tree_for_id(repo, from, "gix range from"))
         .transpose()?;
     let to_tree = commit_tree_for_id(repo, to, "gix range to")?;
-    tree_diff_file_changes(repo, from_tree.as_ref(), &to_tree)
+    tree_diff_file_changes(owner, repo, from_tree.as_ref(), &to_tree)
 }
 
 /// Resolve a comparison endpoint to the tree it names. Peels to a tree rather

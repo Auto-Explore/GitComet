@@ -38,42 +38,37 @@ fn diff_hunk_primary_action(
     }
 }
 
-pub(super) fn model(this: &PopoverHost, repo_id: RepoId, src_ix: usize) -> ContextMenuModel {
+pub(super) fn model(
+    this: &PopoverHost,
+    repo_id: RepoId,
+    src_ix: usize,
+    cx: &gpui::App,
+) -> ContextMenuModel {
     let mut items = vec![ContextMenuItem::Header("Hunk".into())];
     items.push(ContextMenuItem::Separator);
 
-    let diff_target = this
-        .state
-        .repos
-        .iter()
-        .find(|r| r.id == repo_id)
-        .and_then(|r| r.diff_state.diff_target.as_ref());
+    let pane = this.main_pane.read(cx);
+    let diff_target = pane.rendered_diff_target();
     let (disabled, label, icon, shortcut) = diff_hunk_primary_metadata(diff_target);
+    let patch = this.build_unified_patch_for_hunk_src_ix(repo_id, src_ix, cx);
 
     items.push(ContextMenuItem::Entry {
         label: label.into(),
         icon: Some(icon.into()),
         shortcut: shortcut.map(Into::into),
-        disabled,
+        disabled: disabled || patch.is_none(),
         action: Box::new(diff_hunk_primary_action(repo_id, src_ix, diff_target)),
     });
 
-    let is_unstaged = this
-        .state
-        .repos
-        .iter()
-        .find(|r| r.id == repo_id)
-        .and_then(|r| r.diff_state.diff_target.as_ref())
-        .is_some_and(|target| {
-            matches!(
-                target,
-                DiffTarget::WorkingTree {
-                    area: DiffArea::Unstaged,
-                    ..
-                }
-            )
-        });
-    let patch = this.build_unified_patch_for_hunk_src_ix(repo_id, src_ix);
+    let is_unstaged = diff_target.is_some_and(|target| {
+        matches!(
+            target,
+            DiffTarget::WorkingTree {
+                area: DiffArea::Unstaged,
+                ..
+            }
+        )
+    });
 
     items.push(ContextMenuItem::Entry {
         label: "Discard hunk".into(),

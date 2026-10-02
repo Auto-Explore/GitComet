@@ -30,12 +30,15 @@ mod util;
 
 use crate::model::{AppState, Loadable, RepoId};
 use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoPath, RepoPathList};
+use auth::{annex_adjusted_refusal, annex_takeover};
 use gitcomet_core::services::GitRepository;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
+#[cfg(test)]
+pub(crate) use auth::repo_command_replay_msg_for_test;
 #[cfg(feature = "benchmarks")]
 pub(crate) use diff_selection::SelectDiffEffects;
 pub(crate) use repo_management::{ReorderRepoTabsEffects, SetActiveRepoEffects};
@@ -312,6 +315,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::DiscardWorktreeChangesPaths { .. }
             | Msg::SaveWorktreeFile { .. }
             | Msg::AppendGitignorePatterns { .. }
+            | Msg::RunLargeFileCommand { .. }
             | Msg::AppendGitattributesRule { .. }
             | Msg::Commit { .. }
             | Msg::CommitAmend { .. }
@@ -849,6 +853,7 @@ fn reduce_inner(
             epoch,
             commit_ids,
         } => util::set_commit_signature_targets(state, repo_id, epoch, commit_ids),
+        Msg::SetLargeFileToolsState(tools) => settings::set_large_file_tools_state(state, tools),
         Msg::SetSigningToolsState(tools) => settings::set_signing_tools_state(state, tools),
         Msg::SetRemoteUrlPolicy(policy) => settings::set_remote_url_policy(state, policy),
         Msg::SetGitLogSettings {
@@ -862,6 +867,7 @@ fn reduce_inner(
             verify_commit_signatures,
         ),
         Msg::SetRemoteSettings(settings) => settings::set_remote_settings(state, settings),
+        Msg::SetLargeFileSettings(settings) => settings::set_large_file_settings(state, settings),
         Msg::SetMaintenanceSettings(settings) => maintenance::set_settings(state, settings),
         Msg::SetFileBrowserSettings(settings) => {
             effects::set_file_browser_settings(state, settings)
@@ -1491,6 +1497,68 @@ fn reduce_inner(
             begin_local_action(state, repo_id);
             actions_emit_effects::append_gitignore_patterns(repo_id, patterns)
         }
+        Msg::RunLargeFileCommand { repo_id, command } => {
+            actions_emit_effects::run_large_file_command(repos, state, repo_id, command)
+        }
+        Msg::LoadAnnexWhereis { repo_id, keys } => {
+            let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+                return Vec::new();
+            };
+            // Retain shared sides when switching revisions, without accumulating
+            // a repository-wide cache. Replies for discarded keys are ignored.
+            let before = repo.annex_whereis.len();
+            repo.annex_whereis.retain(|key, _| keys.contains(key));
+            if repo.annex_whereis.len() != before {
+                repo.annex_whereis_rev = repo.annex_whereis_rev.wrapping_add(1);
+            }
+            let mut effects = Vec::new();
+            for key in keys {
+                // This is an explicit lookup: allow reloading locations changed
+                // by other tools, while coalescing duplicate/in-flight keys.
+                if matches!(repo.annex_whereis_for(&key), Some(Loadable::Loading)) {
+                    continue;
+                }
+                repo.set_annex_whereis(key.clone(), Loadable::Loading);
+                effects.push(Effect::LoadAnnexWhereis { repo_id, key });
+            }
+            effects
+        }
+        Msg::Internal(crate::msg::InternalMsg::AnnexWhereisLoaded {
+            repo_id,
+            key,
+            result,
+        }) => {
+            if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id)
+                && repo.annex_whereis.contains_key(&key)
+            {
+                let loaded = match result {
+                    Ok(whereis) => Loadable::Ready(Arc::new(whereis)),
+                    Err(error) => Loadable::Error(error.to_string()),
+                };
+                repo.set_annex_whereis(key, loaded);
+            }
+            Vec::new()
+        }
+        Msg::LoadAnnexUnused { repo_id } => state
+            .repos
+            .iter_mut()
+            .find(|repo| repo.id == repo_id)
+            .and_then(effects::request_annex_unused_effect)
+            .into_iter()
+            .collect(),
+        Msg::Internal(crate::msg::InternalMsg::AnnexUnusedLoaded { repo_id, result }) => {
+            effects::annex_unused_loaded(state, repo_id, result)
+        }
+        Msg::LoadLfsLocks { repo_id } => state
+            .repos
+            .iter_mut()
+            .find(|repo| repo.id == repo_id)
+            .and_then(effects::request_lfs_locks_effect)
+            .into_iter()
+            .collect(),
+        Msg::Internal(crate::msg::InternalMsg::LfsLocksLoaded { repo_id, result }) => {
+            effects::lfs_locks_loaded(state, repo_id, result)
+        }
         Msg::AppendGitattributesRule { repo_id, rule } => {
             begin_local_action(state, repo_id);
             vec![Effect::AppendGitattributesRule { repo_id, rule }]
@@ -1506,7 +1574,10 @@ fn reduce_inner(
             push_after_commit,
         } => auth::commit_amend(state, repo_id, message, push_after_commit),
         Msg::SafePushAfterCommit { repo_id, context } => {
-            actions_emit_effects::safe_push_after_commit(repo_id, context)
+            match annex_takeover(repos, state, repo_id, false) {
+                Some(effects) => effects,
+                None => actions_emit_effects::safe_push_after_commit(repo_id, context),
+            }
         }
         Msg::Fetch(crate::msg::FetchMsg::All { repo_id }) => {
             actions_emit_effects::fetch_all(repos, state, repo_id)
@@ -1527,22 +1598,37 @@ fn reduce_inner(
         Msg::Internal(crate::msg::InternalMsg::RepoMaintenanceChecked { repo_id, needed }) => {
             maintenance::checked(state, repo_id, needed)
         }
-        Msg::Pull { repo_id, mode } => actions_emit_effects::pull(repos, state, repo_id, mode),
+        Msg::Pull { repo_id, mode } => match annex_takeover(repos, state, repo_id, true) {
+            Some(effects) => effects,
+            None => actions_emit_effects::pull(repos, state, repo_id, mode),
+        },
         Msg::PullBranch {
             repo_id,
             remote,
             branch,
-        } => actions_emit_effects::pull_branch(repos, state, repo_id, remote, branch),
+        } => match annex_adjusted_refusal(state, repo_id, "Pull from another branch") {
+            Some(effects) => effects,
+            None => actions_emit_effects::pull_branch(repos, state, repo_id, remote, branch),
+        },
         Msg::MergeRef { repo_id, reference } => {
+            if let Some(effects) = annex_adjusted_refusal(state, repo_id, "Merge") {
+                return effects;
+            }
             begin_local_action(state, repo_id);
             actions_emit_effects::merge_ref(repo_id, reference)
         }
         Msg::SquashRef { repo_id, reference } => {
+            if let Some(effects) = annex_adjusted_refusal(state, repo_id, "Squash merge") {
+                return effects;
+            }
             begin_local_action(state, repo_id);
             actions_emit_effects::squash_ref(repo_id, reference)
         }
         Msg::PushWithTags { repo_id, request } => {
-            actions_emit_effects::push_with_tags(repos, state, repo_id, request)
+            match annex_adjusted_refusal(state, repo_id, "Push with tags") {
+                Some(effects) => effects,
+                None => actions_emit_effects::push_with_tags(repos, state, repo_id, request),
+            }
         }
         Msg::PreviewTagPush {
             repo_id,
@@ -1555,21 +1641,39 @@ fn reduce_inner(
             generation,
             result,
         }) => loads::tag_push_preview_loaded(state, repo_id, mode, generation, result),
-        Msg::Push { repo_id } => actions_emit_effects::push(repos, state, repo_id),
+        Msg::Push { repo_id } => match annex_takeover(repos, state, repo_id, false) {
+            Some(effects) => effects,
+            None => actions_emit_effects::push(repos, state, repo_id),
+        },
         Msg::PushAfterCommit {
             repo_id,
             target,
             set_upstream,
-        } => actions_emit_effects::push_after_commit(repos, state, repo_id, target, set_upstream),
-        Msg::ForcePush { repo_id } => actions_emit_effects::force_push(repos, state, repo_id),
+        } => match annex_takeover(repos, state, repo_id, false) {
+            Some(effects) => effects,
+            None => {
+                actions_emit_effects::push_after_commit(repos, state, repo_id, target, set_upstream)
+            }
+        },
+        Msg::ForcePush { repo_id } => match annex_adjusted_refusal(state, repo_id, "Force push") {
+            Some(effects) => effects,
+            None => actions_emit_effects::force_push(repos, state, repo_id),
+        },
         Msg::ForcePushWithLease { repo_id, lease } => {
-            actions_emit_effects::force_push_with_lease(repos, state, repo_id, lease)
+            match annex_adjusted_refusal(state, repo_id, "Force push") {
+                Some(effects) => effects,
+                None => actions_emit_effects::force_push_with_lease(repos, state, repo_id, lease),
+            }
         }
+        // An adjusted branch has no upstream; `git annex push` needs none.
         Msg::PushSetUpstream {
             repo_id,
             remote,
             branch,
-        } => actions_emit_effects::push_set_upstream(repos, state, repo_id, remote, branch),
+        } => match annex_takeover(repos, state, repo_id, false) {
+            Some(effects) => effects,
+            None => actions_emit_effects::push_set_upstream(repos, state, repo_id, remote, branch),
+        },
         Msg::SetUpstreamBranch {
             repo_id,
             branch,
@@ -1946,7 +2050,13 @@ fn reduce_inner(
             repo_id,
             generation,
             result,
-        }) => effects::uncommitted_line_stats_loaded(state, repo_id, generation, result),
+            large_files,
+        }) => {
+            effects::uncommitted_line_stats_loaded(state, repo_id, generation, result, large_files)
+        }
+        Msg::Internal(crate::msg::InternalMsg::LargeFileSupportLoaded { repo_id, result }) => {
+            effects::large_file_support_loaded(state, repo_id, result)
+        }
         Msg::Internal(crate::msg::InternalMsg::StatusLoaded { repo_id, result }) => {
             effects::status_loaded(state, repo_id, result)
         }
@@ -2242,10 +2352,10 @@ fn reduce_inner(
             result,
         ),
         Msg::Internal(crate::msg::InternalMsg::CommitFinished { repo_id, result }) => {
-            auth::commit_finished(state, repo_id, result)
+            auth::commit_finished(repos, state, repo_id, result, false)
         }
         Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished { repo_id, result }) => {
-            auth::commit_amend_finished(state, repo_id, result)
+            auth::commit_finished(repos, state, repo_id, result, true)
         }
         Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
             repo_id,

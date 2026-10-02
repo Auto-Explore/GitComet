@@ -11,7 +11,13 @@ pub(super) enum PathClass {
     Control,
     ControlEntry,
     Index,
-    Git { tags: bool },
+    Git {
+        tags: bool,
+    },
+    /// git-annex support metadata, or a directory that holds it.
+    AnnexSupport {
+        directory: bool,
+    },
     Excluded,
     Worktree,
     Outside,
@@ -99,6 +105,19 @@ impl PolicySnapshot {
                 .is_some_and(|name| name.as_encoded_bytes().starts_with(b".watchman-cookie-"))
         {
             return PathClass::Cache;
+        }
+        if git
+            && let Some(class) = self
+                .git_roots
+                .iter()
+                .find_map(|root| gitcomet_core::annex::watch_path(path.strip_prefix(root).ok()?))
+        {
+            use gitcomet_core::annex::WatchPath;
+            return match class {
+                WatchPath::Private => PathClass::Cache,
+                WatchPath::Directory => PathClass::AnnexSupport { directory: true },
+                WatchPath::Support => PathClass::AnnexSupport { directory: false },
+            };
         }
         if self.control_files.contains(path) {
             PathClass::Control
@@ -281,8 +300,12 @@ impl WatchInputs {
         let info = backend.repository_watch_info(workdir)?.unwrap_or_else(|| {
             let mut info = RepositoryWatchInfo::default();
             if let Some(root) = root_git {
-                info.cache_dirs
-                    .extend([root.join("objects"), root.join("lfs")]);
+                info.cache_dirs.extend(
+                    ["objects", "lfs"]
+                        .into_iter()
+                        .chain(gitcomet_core::annex::WATCH_PRIVATE_DIRS)
+                        .map(|name| root.join(name)),
+                );
                 info.ignore_inputs
                     .extend([root.join("config"), root.join("info/exclude")]);
                 info.git_dirs.push(root);

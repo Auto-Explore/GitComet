@@ -10,7 +10,11 @@ fn hook_completion_notice(operation: &GitHookOperation) -> (components::ToastKin
     match operation.status {
         GitHookOperationStatus::Succeeded => (
             components::ToastKind::Success,
-            format!("{}: Git hooks passed", operation.label),
+            if operation.has_hooks() {
+                format!("{}: Git hooks passed", operation.label)
+            } else {
+                format!("{} completed", operation.label)
+            },
         ),
         GitHookOperationStatus::SucceededWithHookFailure => {
             let hook = failed_hook.unwrap_or("post-operation");
@@ -22,11 +26,12 @@ fn hook_completion_notice(operation: &GitHookOperation) -> (components::ToastKin
             (components::ToastKind::Warning, message)
         }
         GitHookOperationStatus::Failed => {
-            let hook = failed_hook.unwrap_or("Git");
-            let message = if operation.label == "Commit" && hook == "pre-commit" {
-                "Commit blocked by pre-commit hook".to_string()
-            } else {
-                format!("{} failed in {hook} hook", operation.label)
+            let message = match failed_hook {
+                Some("pre-commit") if operation.label == "Commit" => {
+                    "Commit blocked by pre-commit hook".to_string()
+                }
+                Some(hook) => format!("{} failed in {hook} hook", operation.label),
+                None => format!("{} failed", operation.label),
             };
             (components::ToastKind::Error, message)
         }
@@ -39,7 +44,11 @@ fn hook_completion_notice(operation: &GitHookOperation) -> (components::ToastKin
         ),
         GitHookOperationStatus::TimedOut => (
             components::ToastKind::Error,
-            format!("{} timed out while running Git hooks", operation.label),
+            if operation.has_hooks() {
+                format!("{} timed out while running Git hooks", operation.label)
+            } else {
+                format!("{} timed out", operation.label)
+            },
         ),
         GitHookOperationStatus::Running | GitHookOperationStatus::Cancelling => {
             (components::ToastKind::Success, String::new())
@@ -239,6 +248,7 @@ impl GitCometView {
         let git_runtime_changed = self.state.git_runtime != next.git_runtime;
         let prev_git_runtime_available = self.state.git_runtime.is_available();
         let prev_had_repos = !self.state.repos.is_empty();
+        let prev_annex_rail = CollapsedSidebarSection::Annex.is_available(self.active_repo());
         let prev_auth_prompt = self.state.auth_prompt.clone();
         let prev_branch_exists_prompt = self.state.branch_exists_prompt.clone();
         let prev_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
@@ -389,7 +399,7 @@ impl GitCometView {
                 .feedback
                 .hook_activity
                 .iter()
-                .filter(|operation| operation.has_hooks() && !operation.status.is_active())
+                .filter(|operation| operation.is_reportable() && !operation.status.is_active())
             {
                 let was_completed = previous_repo
                     .and_then(|repo| {
@@ -460,7 +470,7 @@ impl GitCometView {
                 repo.feedback
                     .hook_activity
                     .iter()
-                    .filter(|operation| operation.has_hooks() && operation.status.is_active())
+                    .filter(|operation| operation.is_reportable() && operation.status.is_active())
                     .cloned()
                     .map(move |operation| (repo.id, operation))
             })
@@ -477,10 +487,11 @@ impl GitCometView {
                 repo.feedback
                     .hook_activity
                     .iter()
-                    // Hook runs already have their own card.
+                    // Hook runs and large-file transfers already have their
+                    // own card.
                     .filter(|operation| {
                         operation.progress_lane
-                            && !operation.has_hooks()
+                            && !operation.is_reportable()
                             && operation.status.is_active()
                     })
                     .map(move |operation| {
@@ -530,7 +541,7 @@ impl GitCometView {
                             .iter()
                             .find(|previous| previous.id == operation.id)
                     })
-                    .is_some_and(|previous| previous.has_hooks() && previous.status.is_active())
+                    .is_some_and(|previous| previous.is_reportable() && previous.status.is_active())
             })
             .map(|(repo_id, operation)| (*repo_id, operation.id, operation.time))
             .collect::<Vec<_>>();
@@ -624,6 +635,12 @@ impl GitCometView {
         {
             self.refresh_signing_tools(false, cx);
         }
+        if matches!(
+            self.state.large_file_tools.git_lfs,
+            gitcomet_core::signing_tools::SigningToolAvailability::NotChecked
+        ) {
+            self.refresh_large_file_tools(cx);
+        }
         // Only an open palette shows enablement; `open` takes a fresh context.
         if self.command_palette_open {
             let context = self.command_palette_context(cx);
@@ -696,6 +713,11 @@ impl GitCometView {
                 .update(cx, |host, cx| host.close_popover(cx));
             self.open_repo_panel = false;
         }
+        // The rail's git-annex icon comes and goes with the active repository.
+        let annex_rail = CollapsedSidebarSection::Annex.is_available(self.active_repo());
+        if !annex_rail && self.sidebar_collapsed_popover == Some(CollapsedSidebarSection::Annex) {
+            self.close_sidebar_collapsed_popover(cx);
+        }
         self.sync_title_bar_repo_tab_actions(cx);
         self.drive_focused_mergetool_bootstrap();
         self.drive_submodule_diff_bootstrap();
@@ -705,6 +727,7 @@ impl GitCometView {
         }
 
         git_runtime_changed
+            || prev_annex_rail != annex_rail
             || prev_auth_prompt != self.state.auth_prompt
             || prev_branch_exists_prompt != self.state.branch_exists_prompt
     }
@@ -827,6 +850,8 @@ mod tests {
             output_bytes: 0,
             output_truncated: false,
             latest_line: String::new(),
+            command_started: false,
+            transfer: None,
             progress_lane: false,
             progress: None,
         }
@@ -907,6 +932,17 @@ mod tests {
         ));
         assert!(matches!(kind, components::ToastKind::Warning));
         assert_eq!(message, "Commit created, but post-commit hook failed");
+    }
+
+    #[test]
+    fn failed_annex_command_without_hooks_has_a_command_failure_notice() {
+        let mut operation = completed_hook_operation(GitHookOperationStatus::Failed, "pre-commit");
+        operation.hooks.clear();
+        operation.command_started = true;
+        operation.label = "annex sync".into();
+        let (kind, message) = hook_completion_notice(&operation);
+        assert!(matches!(kind, components::ToastKind::Error));
+        assert_eq!(message, "annex sync failed");
     }
 
     #[test]

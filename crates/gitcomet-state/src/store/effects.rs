@@ -416,6 +416,7 @@ pub(super) fn schedule_effect(
             repo_id,
             generation,
             status,
+            large_files,
         } => {
             if let Some((msg_tx, cancellation)) =
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
@@ -427,6 +428,7 @@ pub(super) fn schedule_effect(
                     repo_id,
                     generation,
                     status,
+                    large_files,
                     cancellation,
                 );
             }
@@ -629,6 +631,47 @@ pub(super) fn schedule_effect(
                 patterns,
             )
         }
+        Effect::RunLargeFileCommand {
+            repo_id,
+            command,
+            auth,
+        } => repo_commands::schedule_large_file_command(
+            executor, repos, msg_tx, repo_id, command, auth,
+        ),
+        Effect::LoadLfsLocks { repo_id } => {
+            if let Some((msg_tx, cancellation)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_load_lfs_locks(executor, repos, msg_tx, repo_id, cancellation);
+            }
+        }
+        Effect::LoadAnnexWhereis { repo_id, key } => {
+            if let Some((msg_tx, cancellation)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_load_annex_whereis(
+                    metadata_executor,
+                    repos,
+                    msg_tx,
+                    repo_id,
+                    key,
+                    cancellation,
+                );
+            }
+        }
+        Effect::LoadAnnexUnused { repo_id } => {
+            if let Some((msg_tx, cancellation)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_load_annex_unused(
+                    executor,
+                    repos,
+                    msg_tx,
+                    repo_id,
+                    cancellation,
+                );
+            }
+        }
         Effect::AppendGitattributesRule { repo_id, rule } => {
             repo_commands::schedule_append_gitattributes_rule(
                 super::executor::filesystem_executor(),
@@ -714,6 +757,19 @@ pub(super) fn schedule_effect(
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
                 repo_load::schedule_load_submodules(
+                    metadata_executor,
+                    repos,
+                    msg_tx,
+                    repo_id,
+                    cancellation,
+                );
+            }
+        }
+        Effect::LoadLargeFileSupport { repo_id } => {
+            if let Some((msg_tx, cancellation)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_load_large_file_support(
                     metadata_executor,
                     repos,
                     msg_tx,

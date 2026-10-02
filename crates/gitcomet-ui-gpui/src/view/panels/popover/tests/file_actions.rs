@@ -1269,6 +1269,7 @@ fn file_preview_context_menu_matches_diff_editor_actions(cx: &mut gpui::TestAppC
                 Loadable::Ready(Some(Arc::new(gitcomet_core::domain::DiffPreviewTextFile {
                     path: workdir.join(&path),
                     side: gitcomet_core::domain::DiffPreviewTextSide::New,
+                    large_file: None,
                 })));
             repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);
 
@@ -1997,4 +1998,691 @@ fn copy_path_mnemonic_selects_the_relative_entry_in_every_menu(cx: &mut gpui::Te
             });
         });
     });
+}
+
+fn lfs_status_menu_labels(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<GitCometView>,
+    repo_id: RepoId,
+    path: &std::path::Path,
+    configure: impl FnOnce(&mut RepoState, &mut AppState),
+) -> Vec<(String, bool)> {
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_lfs_status_menu_{}",
+        std::process::id(),
+        repo_id.0
+    ));
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                path.to_path_buf(),
+                gitcomet_core::domain::FileStatusKind::Modified,
+                DiffArea::Unstaged,
+            );
+            let mut state = (*app_state_with_repo(repo.clone(), repo_id)).clone();
+            let mut repo = state.repos.remove(0);
+            configure(&mut repo, &mut state);
+            state.repos.insert(0, repo);
+            push_test_state(this, Arc::new(state), cx);
+        });
+    });
+    cx.update(|_window, app| {
+        let model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::StatusFileMenu {
+                            repo_id,
+                            area: DiffArea::Unstaged,
+                            path: path.to_path_buf(),
+                        },
+                        cx,
+                    )
+                })
+            })
+            .expect("status file menu");
+        model
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                ContextMenuItem::Entry {
+                    label, disabled, ..
+                } => Some((label.to_string(), *disabled)),
+                _ => None,
+            })
+            .collect()
+    })
+}
+
+fn lfs_support(lockable: bool) -> gitcomet_core::large_files::LargeFileSupport {
+    let mut support = gitcomet_core::large_files::LargeFileSupport::default();
+    support.lfs.filter_configured = true;
+    support.lfs.has_lockable_patterns = lockable;
+    support
+        .lfs
+        .tracked_patterns
+        .push(gitcomet_core::large_files::LfsTrackedPattern {
+            pattern: "*.psd".into(),
+            source: std::path::PathBuf::from(".gitattributes"),
+        });
+    support
+}
+
+fn lfs_row(missing: bool, lockable: bool) -> gitcomet_core::large_files::UncommittedLargeFiles {
+    let mut files = gitcomet_core::large_files::UncommittedLargeFiles::default();
+    files.unstaged.insert(
+        std::path::PathBuf::from("art/hero.psd"),
+        gitcomet_core::large_files::LargeFileState {
+            pointer: gitcomet_core::large_files::LargeFilePointer::Lfs(
+                gitcomet_core::lfs::LfsPointer {
+                    oid: gitcomet_core::lfs::LfsOid([4; 32]),
+                    size: 10,
+                },
+            ),
+            in_local_store: Some(!missing),
+            worktree: Some(if missing {
+                gitcomet_core::large_files::LargeFileWorktree::Pointer
+            } else {
+                gitcomet_core::large_files::LargeFileWorktree::Content
+            }),
+            lockable,
+        },
+    );
+    files
+}
+
+/// Row entries follow the row: download for missing content, lock for
+/// lockable files, track for plain files; nothing in a repo without LFS.
+#[gpui::test]
+fn status_file_menu_offers_git_lfs_entries_by_row_state(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let psd = std::path::Path::new("art/hero.psd");
+    let has =
+        |labels: &[(String, bool)], wanted: &str| labels.iter().any(|(label, _)| label == wanted);
+
+    let plain_repo = lfs_status_menu_labels(cx, &view, RepoId(81), psd, |_, _| {});
+    assert!(
+        !plain_repo.iter().any(|(label, _)| label.contains("LFS")),
+        "{plain_repo:?}"
+    );
+
+    let missing = lfs_status_menu_labels(cx, &view, RepoId(82), psd, |repo, _| {
+        repo.large_file_support = Loadable::Ready(Arc::new(lfs_support(true)));
+        repo.uncommitted_large_files = Arc::new(lfs_row(true, true));
+    });
+    assert!(has(&missing, "Download LFS content"), "{missing:?}");
+    assert!(has(&missing, "Lock file"), "{missing:?}");
+
+    let locked = lfs_status_menu_labels(cx, &view, RepoId(83), psd, |repo, _| {
+        repo.large_file_support = Loadable::Ready(Arc::new(lfs_support(true)));
+        repo.uncommitted_large_files = Arc::new(lfs_row(false, true));
+        repo.lfs_locks = Loadable::Ready(Arc::new(vec![gitcomet_core::large_files::LfsLock {
+            id: "1".into(),
+            path: psd.to_path_buf(),
+            owner: Some("alice".into()),
+            locked_at: None,
+        }]));
+    });
+    assert!(has(&locked, "Unlock (locked by alice)"), "{locked:?}");
+    assert!(!has(&locked, "Download LFS content"));
+
+    let untracked_type = lfs_status_menu_labels(
+        cx,
+        &view,
+        RepoId(84),
+        std::path::Path::new("scene.blend"),
+        |repo, state| {
+            repo.large_file_support = Loadable::Ready(Arc::new(lfs_support(false)));
+            state.large_file_tools.git_lfs =
+                gitcomet_core::large_file_tools::ToolAvailability::NotFound {
+                    detail: "Git cannot run `git lfs`.".into(),
+                };
+        },
+    );
+    assert!(
+        untracked_type.iter().any(|(label, disabled)| label
+            == "Track *.blend in Git LFS (install git-lfs)"
+            && *disabled),
+        "missing tool lists the entry disabled: {untracked_type:?}"
+    );
+}
+
+fn annex_support(initialized: bool) -> gitcomet_core::large_files::LargeFileSupport {
+    let mut support = gitcomet_core::large_files::LargeFileSupport::default();
+    support.annex.has_annex_dir = true;
+    support.annex.uuid = initialized.then(|| "u-here".to_string());
+    support.annex.repositories = vec![
+        gitcomet_core::large_files::AnnexRepository {
+            uuid: "u-here".into(),
+            description: "laptop".into(),
+            remote_name: None,
+            special_type: None,
+            special_name: None,
+            trust: gitcomet_core::large_files::AnnexTrust::Semitrusted,
+            here: true,
+        },
+        gitcomet_core::large_files::AnnexRepository {
+            uuid: "u-backup".into(),
+            description: String::new(),
+            remote_name: Some("backup".into()),
+            special_type: Some("directory".into()),
+            special_name: None,
+            trust: gitcomet_core::large_files::AnnexTrust::Semitrusted,
+            here: false,
+        },
+        gitcomet_core::large_files::AnnexRepository {
+            uuid: "u-nas".into(),
+            // Another clone's special remote, not enabled here.
+            description: "nas".into(),
+            remote_name: None,
+            special_type: Some("rsync".into()),
+            special_name: Some("nas".into()),
+            trust: gitcomet_core::large_files::AnnexTrust::Semitrusted,
+            here: false,
+        },
+    ];
+    support
+}
+
+#[gpui::test]
+fn review_annex_sync_menu_disables_only_for_a_running_pull_or_push(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(991);
+    for (pull, worktree_pull, push, disabled) in
+        [(1, 0, 0, false), (1, 1, 0, true), (0, 0, 1, true)]
+    {
+        cx.update(|_, app| {
+            view.update(app, |this, cx| {
+                let mut repo = opening_repo_state(repo_id, &std::env::temp_dir());
+                repo.large_file_support = Loadable::Ready(Arc::new(annex_support(true)));
+                repo.pull_in_flight = pull;
+                repo.worktree_pull_in_flight = worktree_pull;
+                repo.push_in_flight = push;
+                push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+            });
+        });
+        cx.update(|_, app| {
+            view.update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    let model = host
+                        .context_menu_model(
+                            &PopoverKind::annex(repo_id, AnnexPopoverKind::SectionMenu),
+                            cx,
+                        )
+                        .unwrap();
+                    assert_eq!(
+                        context_menu_entry_disabled(&model, "Sync with remotes"),
+                        disabled
+                    );
+                });
+            });
+        });
+    }
+}
+
+#[gpui::test]
+fn review_adjusted_branch_menus_disable_merge_and_squash(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(992);
+    let commit_id = CommitId("deadbeefdeadbeef".into());
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            let mut repo = commit_menu_test_repo(repo_id, &commit_id);
+            repo.head_branch = Loadable::Ready("adjusted/main(unlocked)".into());
+            repo.large_file_support = Loadable::Ready(Arc::new(annex_support(true)));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                for target in [
+                    BranchMenuTarget::local("feature".to_string()),
+                    BranchMenuTarget::remote("origin".to_string(), "feature".to_string()),
+                ] {
+                    let model = host
+                        .context_menu_model(&PopoverKind::BranchMenu { repo_id, target }, cx)
+                        .unwrap();
+                    assert!(context_menu_entry_disabled(&model, "Merge into current"));
+                    assert!(context_menu_entry_disabled(&model, "Squash into current"));
+                }
+                let model = host
+                    .context_menu_model(
+                        &PopoverKind::CommitMenu {
+                            repo_id,
+                            commit_id: commit_id.clone(),
+                        },
+                        cx,
+                    )
+                    .unwrap();
+                assert!(context_menu_entry_disabled(
+                    &model,
+                    "Merge deadbeef into adjusted/main(unlocked)"
+                ));
+            });
+        });
+    });
+}
+
+#[gpui::test]
+fn review_annex_repository_menu_shows_description_with_local_remote_name(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(993);
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &std::env::temp_dir());
+            let mut support = annex_support(true);
+            support.annex.repositories[1].description = "Archive".into();
+            repo.large_file_support = Loadable::Ready(Arc::new(support));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                let model = host.context_menu_model(&PopoverKind::annex(repo_id, AnnexPopoverKind::RepositoryMenu { uuid: "u-backup".into() }), cx).unwrap();
+                assert!(matches!(&model.items[0], ContextMenuItem::Header(label) if label.as_ref() == "Archive [backup]"));
+            });
+        });
+    });
+}
+
+#[gpui::test]
+fn review_hunk_menu_uses_rendered_large_file_target(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::large_files::{LargeFileContent, LargeFilePointer, LargeFileSide};
+    use gitcomet_state::model::{ForeignDiffOrigin, InlineSubmoduleDiffState};
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(994);
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &std::env::temp_dir());
+            let target = DiffTarget::working_tree("asset.txt".into(), DiffArea::Unstaged);
+            let diff = Arc::new(gitcomet_core::domain::Diff::from_unified(target.clone(), "diff --git a/asset.txt b/asset.txt\n--- a/asset.txt\n+++ b/asset.txt\n@@ -1 +1 @@\n-before\n+after\n"));
+            repo.diff_state.diff_target = Some(target.clone());
+            repo.diff_state.diff = Loadable::Ready(diff.clone());
+            repo.diff_state.diff_file = Loadable::Ready(Some(Arc::new(gitcomet_core::domain::FileDiffText::new("asset.txt".into(), Some("before\n".into()), Some("after\n".into())))));
+            let large = LargeFileSide {
+                pointer: LargeFilePointer::Lfs(gitcomet_core::lfs::LfsPointer { oid: gitcomet_core::lfs::LfsOid([9; 32]), size: 12 }),
+                content: LargeFileContent::Available,
+            };
+            repo.diff_state.inline_submodule_diff = Some(InlineSubmoduleDiffState {
+                origin: ForeignDiffOrigin::Submodule, submodule_repo_path: "/tmp/sub".into(), parent_submodule_path: "sub".into(),
+                entries: Arc::from([]), selected_ix: 0, target, rev: 1, diff_rev: 1,
+                diff: Loadable::Ready(diff), diff_file_rev: 1,
+                diff_file: Loadable::Ready(Some(Arc::new(gitcomet_core::domain::FileDiffText::new("asset.txt".into(), Some("before\n".into()), Some("after\n".into())).with_large_sides(Some(large.clone()), Some(large))))),
+                diff_file_image: Loadable::NotLoaded,
+            });
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            assert!(this.main_pane.read(cx).has_large_file_text_diff());
+            this.popover_host.update(cx, |host, cx| {
+                let model = host
+                    .context_menu_model(&PopoverKind::DiffHunkMenu { repo_id, src_ix: 3 }, cx)
+                    .unwrap();
+                assert!(context_menu_entry_disabled(&model, "Stage hunk"));
+            });
+        });
+    });
+}
+
+fn annex_row(present: Option<bool>) -> gitcomet_core::large_files::UncommittedLargeFiles {
+    let mut files = gitcomet_core::large_files::UncommittedLargeFiles::default();
+    files.unstaged.insert(
+        std::path::PathBuf::from("art/hero.psd"),
+        gitcomet_core::large_files::LargeFileState {
+            pointer: gitcomet_core::large_files::LargeFilePointer::Annex(
+                gitcomet_core::annex::parse_key("SHA256E-s10--abc.psd").unwrap(),
+            ),
+            in_local_store: present,
+            worktree: None,
+            lockable: false,
+        },
+    );
+    files
+}
+
+#[gpui::test]
+fn status_file_menu_offers_git_annex_entries_by_presence(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let psd = std::path::Path::new("art/hero.psd");
+    let has = |labels: &[(String, bool)], wanted: &str| labels.iter().any(|(l, _)| l == wanted);
+
+    let absent = lfs_status_menu_labels(cx, &view, RepoId(91), psd, |repo, _| {
+        repo.large_file_support = Loadable::Ready(Arc::new(annex_support(true)));
+        repo.uncommitted_large_files = Arc::new(annex_row(Some(false)));
+    });
+    assert!(has(&absent, "Get content"), "{absent:?}");
+    assert!(!has(&absent, "Drop local content"), "{absent:?}");
+    assert!(has(&absent, "Copy to backup") && has(&absent, "Move to backup"));
+    assert!(
+        !has(&absent, "Copy to nas"),
+        "unreachable remotes are not targets"
+    );
+
+    let present = lfs_status_menu_labels(cx, &view, RepoId(92), psd, |repo, _| {
+        repo.large_file_support = Loadable::Ready(Arc::new(annex_support(true)));
+        repo.uncommitted_large_files = Arc::new(annex_row(Some(true)));
+    });
+    assert!(has(&present, "Drop local content") && !has(&present, "Get content"));
+    assert!(has(&present, "Drop even without other copies…"));
+
+    let missing_tool = lfs_status_menu_labels(cx, &view, RepoId(93), psd, |repo, state| {
+        repo.large_file_support = Loadable::Ready(Arc::new(annex_support(true)));
+        repo.uncommitted_large_files = Arc::new(annex_row(None));
+        state.large_file_tools.git_annex =
+            gitcomet_core::large_file_tools::ToolAvailability::NotFound {
+                detail: "Git cannot run `git annex`.".into(),
+            };
+    });
+    assert!(
+        missing_tool
+            .iter()
+            .any(|(label, disabled)| label == "Get content (install git-annex)" && *disabled),
+        "{missing_tool:?}"
+    );
+}
+
+fn annex_menu_labels(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<GitCometView>,
+    repo_id: RepoId,
+    support: gitcomet_core::large_files::LargeFileSupport,
+    kind: AnnexPopoverKind,
+) -> Vec<String> {
+    annex_menu_labels_on(cx, view, repo_id, support, kind, "main")
+}
+
+fn annex_menu_labels_on(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<GitCometView>,
+    repo_id: RepoId,
+    support: gitcomet_core::large_files::LargeFileSupport,
+    kind: AnnexPopoverKind,
+    head: &str,
+) -> Vec<String> {
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_annex_menu_{}",
+        std::process::id(),
+        repo_id.0
+    ));
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            repo.large_file_support = Loadable::Ready(Arc::new(support));
+            repo.head_branch = Loadable::Ready(head.to_string());
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.update(|_window, app| {
+        let model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(&PopoverKind::annex(repo_id, kind), cx)
+                })
+            })
+            .expect("annex menu");
+        model
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                ContextMenuItem::Entry { label, .. } => Some(label.to_string()),
+                _ => None,
+            })
+            .collect()
+    })
+}
+
+#[gpui::test]
+fn annex_section_and_repository_menus_follow_repo_state(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let fresh = annex_menu_labels(
+        cx,
+        &view,
+        RepoId(101),
+        annex_support(false),
+        AnnexPopoverKind::SectionMenu,
+    );
+    assert_eq!(fresh, ["Initialize git-annex in this clone"]);
+
+    let section = annex_menu_labels(
+        cx,
+        &view,
+        RepoId(102),
+        annex_support(true),
+        AnnexPopoverKind::SectionMenu,
+    );
+    for wanted in [
+        "Sync with remotes",
+        "Adjusted branch: unlock all files",
+        "Add special remote…",
+        "Set number of copies…",
+    ] {
+        assert!(
+            section.iter().any(|l| l == wanted),
+            "{wanted} in {section:?}"
+        );
+    }
+    for wanted in ["Find unused content…", "Open git-annex webapp…"] {
+        assert!(
+            section.iter().any(|l| l == wanted),
+            "{wanted} in {section:?}"
+        );
+    }
+    assert!(
+        !section.iter().any(|l| l == "Stop git-annex assistant"),
+        "no assistant runs: {section:?}"
+    );
+    let mut running = annex_support(true);
+    running.annex.assistant_running = true;
+    let running = annex_menu_labels(
+        cx,
+        &view,
+        RepoId(106),
+        running,
+        AnnexPopoverKind::SectionMenu,
+    );
+    assert!(running.iter().any(|l| l == "Stop git-annex assistant"));
+    let adjusted = annex_menu_labels_on(
+        cx,
+        &view,
+        RepoId(103),
+        annex_support(true),
+        AnnexPopoverKind::SectionMenu,
+        "adjusted/main(unlocked)",
+    );
+    assert!(
+        adjusted
+            .iter()
+            .any(|l| l == "Leave adjusted branch (back to main)")
+    );
+
+    let backup = annex_menu_labels(
+        cx,
+        &view,
+        RepoId(104),
+        annex_support(true),
+        AnnexPopoverKind::RepositoryMenu {
+            uuid: "u-backup".into(),
+        },
+    );
+    assert!(
+        backup.iter().any(|l| l == "Copy all content to backup"),
+        "{backup:?}"
+    );
+    assert!(backup.iter().any(|l| l == "Mark as untrusted"));
+    assert!(
+        !backup.iter().any(|l| l == "Mark as semitrusted"),
+        "current level is omitted"
+    );
+
+    let nas = annex_menu_labels(
+        cx,
+        &view,
+        RepoId(105),
+        annex_support(true),
+        AnnexPopoverKind::RepositoryMenu {
+            uuid: "u-nas".into(),
+        },
+    );
+    assert!(
+        nas.iter().any(|l| l == "Enable nas in this clone…"),
+        "{nas:?}"
+    );
+}
+
+#[gpui::test]
+fn annex_text_prompts_submit_on_enter(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    for (prompt, text) in [
+        (
+            AnnexPrompt::AddSpecialRemote,
+            "backup directory directory=/tmp/backup encryption=none",
+        ),
+        (
+            AnnexPrompt::EnableSpecialRemote {
+                name: "backup".into(),
+            },
+            "backup directory=/tmp/backup",
+        ),
+        (
+            AnnexPrompt::Describe {
+                repository: "here".into(),
+                current: String::new(),
+            },
+            "laptop",
+        ),
+        (AnnexPrompt::Numcopies { current: Some(1) }, "2"),
+    ] {
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        cx.update(|window, app| {
+            crate::app::bind_text_input_keys_for_test(app);
+            view.update(app, |view, cx| {
+                view.open_popover_at(
+                    PopoverKind::annex(RepoId(1), AnnexPopoverKind::Prompt(prompt)),
+                    point(px(72.0), px(72.0)),
+                    window,
+                    cx,
+                );
+                view.popover_host.update(cx, |host, cx| {
+                    host.submodule_ref_input
+                        .update(cx, |input, cx| input.set_text(text, cx));
+                });
+            });
+        });
+        cx.run_until_parked();
+        crate::test_support::refresh_and_draw(cx);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        cx.update(|_, app| {
+            assert!(
+                !view.read(app).popover_host.read(app).is_open(),
+                "Enter should submit {text}"
+            )
+        });
+    }
+}
+
+#[gpui::test]
+fn annex_unused_prompt_drops_only_a_loaded_listing(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(1);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_annex_unused",
+        std::process::id()
+    ));
+    let push = |cx: &mut gpui::VisualTestContext,
+                unused: Loadable<Arc<gitcomet_core::large_files::AnnexUnused>>| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = opening_repo_state(repo_id, &workdir);
+                repo.large_file_support = Loadable::Ready(Arc::new(annex_support(true)));
+                repo.annex_unused = unused;
+                push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+            });
+        });
+    };
+    let prompt = PopoverKind::annex(repo_id, AnnexPopoverKind::Prompt(AnnexPrompt::Unused));
+    let open_and_submit = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.open_popover_at(
+                        prompt.clone(),
+                        gpui::point(gpui::px(0.0), gpui::px(0.0)),
+                        window,
+                        cx,
+                    );
+                    host.submit_annex_prompt(window, cx);
+                });
+            });
+        });
+        cx.update(|_window, app| test_support::popover_kind(view.read(app), app))
+    };
+
+    push(cx, Loadable::Loading);
+    assert_eq!(
+        open_and_submit(cx),
+        Some(prompt.clone()),
+        "Enter must not drop while the listing loads"
+    );
+    push(
+        cx,
+        Loadable::Ready(Arc::new(gitcomet_core::large_files::AnnexUnused::default())),
+    );
+    assert_eq!(open_and_submit(cx), Some(prompt.clone()), "nothing to drop");
+
+    push(
+        cx,
+        Loadable::Ready(Arc::new(gitcomet_core::large_files::AnnexUnused {
+            entries: vec![gitcomet_core::large_files::AnnexUnusedEntry {
+                number: 1,
+                key: "SHA256E-s4--old.bin".into(),
+                kind: gitcomet_core::large_files::AnnexUnusedKind::Unused,
+            }],
+        })),
+    );
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    prompt.clone(),
+                    gpui::point(gpui::px(0.0), gpui::px(0.0)),
+                    window,
+                    cx,
+                );
+            });
+        });
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("annex_prompt_force_unused").is_some(),
+        "a listing offers the forced drop too"
+    );
+    assert_eq!(open_and_submit(cx), None, "a listed item drops and closes");
 }

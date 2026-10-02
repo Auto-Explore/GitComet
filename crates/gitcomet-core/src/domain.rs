@@ -307,6 +307,9 @@ pub struct CommitFileChange {
     pub additions: Option<u32>,
     /// Removed line count; `None` under the same conditions as `additions`.
     pub deletions: Option<u32>,
+    /// Set when the new side (or the old side of a deletion) is a Git LFS
+    /// pointer or git-annex key.
+    pub large_file: Option<crate::large_files::LargeFileState>,
     /// Where a renamed or copied file came from.
     pub old_path: Option<PathBuf>,
     /// The content on each side; `None` where the side is absent or is the
@@ -331,6 +334,7 @@ impl CommitFileChange {
             new_id: None,
             old_mode: None,
             new_mode: None,
+            large_file: None,
         }
     }
 
@@ -360,6 +364,14 @@ impl CommitFileChange {
     pub fn with_modes(mut self, old_mode: Option<FileMode>, new_mode: Option<FileMode>) -> Self {
         self.old_mode = old_mode;
         self.new_mode = new_mode;
+        self
+    }
+
+    pub fn with_large_file(
+        mut self,
+        large_file: Option<crate::large_files::LargeFileState>,
+    ) -> Self {
+        self.large_file = large_file;
         self
     }
 
@@ -1042,6 +1054,7 @@ pub enum DiffPreviewTextSide {
 pub struct DiffPreviewTextFile {
     pub path: PathBuf,
     pub side: DiffPreviewTextSide,
+    pub large_file: Option<crate::large_files::LargeFileSide>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1359,6 +1372,9 @@ pub struct FileDiffText {
     pub new_source: Option<FileDiffTextSource>,
     pub old: Option<Arc<str>>,
     pub new: Option<Arc<str>>,
+    /// Set when a side's git form is a Git LFS pointer or git-annex key.
+    pub old_large: Option<crate::large_files::LargeFileSide>,
+    pub new_large: Option<crate::large_files::LargeFileSide>,
     content_signature: u64,
 }
 
@@ -1376,6 +1392,8 @@ impl FileDiffText {
             new_source: None,
             old,
             new,
+            old_large: None,
+            new_large: None,
             content_signature,
         }
     }
@@ -1398,8 +1416,26 @@ impl FileDiffText {
             new_source,
             old: None,
             new: None,
+            old_large: None,
+            new_large: None,
             content_signature,
         }
+    }
+
+    /// Attach large-file sides, folding them into the content signature.
+    pub fn with_large_sides(
+        mut self,
+        old_large: Option<crate::large_files::LargeFileSide>,
+        new_large: Option<crate::large_files::LargeFileSide>,
+    ) -> Self {
+        let mut hasher = FxHasher::default();
+        self.content_signature.hash(&mut hasher);
+        old_large.hash(&mut hasher);
+        new_large.hash(&mut hasher);
+        self.content_signature = hasher.finish();
+        self.old_large = old_large;
+        self.new_large = new_large;
+        self
     }
 
     pub fn content_signature(&self) -> u64 {
@@ -1427,11 +1463,13 @@ impl FileDiffText {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct FileDiffImage {
     pub path: PathBuf,
     pub old: Option<Vec<u8>>,
     pub new: Option<Vec<u8>>,
+    pub old_large: Option<crate::large_files::LargeFileSide>,
+    pub new_large: Option<crate::large_files::LargeFileSide>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

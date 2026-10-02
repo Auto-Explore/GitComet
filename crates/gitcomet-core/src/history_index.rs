@@ -53,10 +53,7 @@ impl HistoryIndex {
             return None;
         }
         let mut bytes = [0u8; 32];
-        for (slot, pair) in bytes.iter_mut().zip(id.as_bytes().as_chunks::<2>().0) {
-            let digit = |b: u8| (b as char).to_digit(16).map(|n| n as u8);
-            *slot = digit(pair[0])? * 16 + digit(pair[1])?;
-        }
+        faster_hex::hex_decode(id.as_bytes(), &mut bytes[..self.hash_len]).ok()?;
         self.position_bytes(&bytes[..self.hash_len])
     }
     /// Resolve a full ID or a unique hexadecimal prefix (at least seven digits).
@@ -69,15 +66,15 @@ impl HistoryIndex {
         }
         let mut lower = [0u8; 32];
         let mut upper = [255u8; 32];
-        for (ix, byte) in reference.bytes().enumerate() {
-            let digit = (byte as char).to_digit(16)? as u8;
-            if ix.is_multiple_of(2) {
-                lower[ix / 2] = digit << 4;
-                upper[ix / 2] = (digit << 4) | 15;
-            } else {
-                lower[ix / 2] |= digit;
-                upper[ix / 2] = lower[ix / 2];
-            }
+        // Pad an odd-length prefix with a zero nibble for its lower bound.
+        // The upper bound includes every possible low nibble of that byte.
+        let mut padded = [b'0'; 64];
+        padded[..reference.len()].copy_from_slice(reference.as_bytes());
+        let byte_len = reference.len().div_ceil(2);
+        faster_hex::hex_decode(&padded[..byte_len * 2], &mut lower[..byte_len]).ok()?;
+        upper[..byte_len].copy_from_slice(&lower[..byte_len]);
+        if !reference.len().is_multiple_of(2) {
+            upper[byte_len - 1] |= 0x0f;
         }
         let start = self
             .sorted_rows
@@ -596,6 +593,51 @@ mod tests {
             );
             assert_eq!(index.position("invalid"), None);
             assert_eq!(index.commit_id(usize::MAX), None);
+        }
+    }
+
+    #[test]
+    fn abbreviated_ids_preserve_odd_nibble_boundaries_and_ambiguity() {
+        for hash_len in [20, 32] {
+            let mut builder = HistoryIndexBuilder::new(
+                HistorySnapshot("prefixes".into()),
+                HistoryMode::FullReachable,
+                hash_len,
+            )
+            .unwrap();
+            let mut first = vec![0xab; hash_len];
+            first[3] = 0xc0;
+            let mut second = first.clone();
+            second[3] = 0xcf;
+            let mut third = first.clone();
+            third[3] = 0xd0;
+            for id in [&first, &second, &third] {
+                builder
+                    .push(id, std::iter::empty::<&[u8]>(), false)
+                    .unwrap();
+            }
+            let index = builder.finish(&CancellationToken::new()).unwrap();
+            assert_eq!(
+                index.resolve_reference("abababc"),
+                None,
+                "both low-nibble extremes match"
+            );
+            assert_eq!(index.resolve_reference("abababd"), Some(2));
+            assert_eq!(index.resolve_reference("ABABABCF"), Some(1));
+            for bad in [
+                "ababab",
+                "abababe",
+                "abababg",
+                "abababé",
+                "abababcé",
+                "abababc ",
+            ] {
+                assert_eq!(index.resolve_reference(bad), None, "{bad:?}");
+            }
+            let full = crate::hex::encode(&third);
+            for len in 7..=full.len() {
+                assert_eq!(index.resolve_reference(&full[..len]), Some(2));
+            }
         }
     }
 

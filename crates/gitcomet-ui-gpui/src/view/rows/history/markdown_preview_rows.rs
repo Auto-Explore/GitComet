@@ -413,34 +413,7 @@ pub(in crate::view) fn markdown_preview_local_link_missing(
 
 /// Decode `%XX` escapes in a link path. A malformed escape or a result that
 /// is not UTF-8 keeps the text as written, which then names no file.
-pub(in crate::view) fn percent_decode_link_path(path: &str) -> std::borrow::Cow<'_, str> {
-    if !path.contains('%') {
-        return std::borrow::Cow::Borrowed(path);
-    }
-    let bytes = path.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut ix = 0;
-    while ix < bytes.len() {
-        if bytes[ix] == b'%' {
-            let Some(byte) = bytes
-                .get(ix + 1..ix + 3)
-                .and_then(|hex| std::str::from_utf8(hex).ok())
-                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
-            else {
-                return std::borrow::Cow::Borrowed(path);
-            };
-            decoded.push(byte);
-            ix += 3;
-        } else {
-            decoded.push(bytes[ix]);
-            ix += 1;
-        }
-    }
-    match String::from_utf8(decoded) {
-        Ok(decoded) => std::borrow::Cow::Owned(decoded),
-        Err(_) => std::borrow::Cow::Borrowed(path),
-    }
-}
+pub(in crate::view) use gitcomet_core::url_encoding::decode_utf8 as percent_decode_link_path;
 
 /// The `http(s)` URL an image source names, if it names one.
 ///

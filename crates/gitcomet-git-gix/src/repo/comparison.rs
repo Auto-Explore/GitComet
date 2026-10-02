@@ -292,7 +292,7 @@ impl GixRepo {
         };
         cancellation.check_cancelled()?;
         let files = match to {
-            Some(to) => diff_range_files(&self.repo(), &base, to)?,
+            Some(to) => diff_range_files(self, &self.repo(), &base, to)?,
             None => commit_to_worktree_files(
                 &self.spec.workdir,
                 &base,

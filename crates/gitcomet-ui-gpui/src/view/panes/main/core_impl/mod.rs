@@ -212,6 +212,18 @@ impl MainPaneView {
             // the toolbar; without this the pane would not re-render for it.
             repo.diff_state.edit_mode.hash(&mut hasher);
             repo.conflict_state.conflict_rev.hash(&mut hasher);
+            // The large-file card's buttons and "Where is it?" list.
+            repo.annex_whereis_rev.hash(&mut hasher);
+            state
+                .large_file_tools
+                .git_lfs
+                .is_not_found()
+                .hash(&mut hasher);
+            state
+                .large_file_tools
+                .git_annex
+                .is_not_found()
+                .hash(&mut hasher);
 
             // Only include status changes when viewing a working tree diff.
             let status_rev = if matches!(
@@ -1405,6 +1417,13 @@ impl MainPaneView {
 
     pub(in crate::view) fn active_repo_id(&self) -> Option<RepoId> {
         self.state.active_repo
+    }
+
+    /// Whether Git can run `git lfs` / `git annex`.
+    pub(in crate::view) fn large_file_tools(
+        &self,
+    ) -> &gitcomet_core::large_file_tools::LargeFileToolsState {
+        &self.state.large_file_tools
     }
 
     pub(in crate::view) fn active_repo(&self) -> Option<&RepoState> {

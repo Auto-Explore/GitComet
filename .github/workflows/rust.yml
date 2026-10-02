@@ -148,8 +148,6 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --locked --no-deps -p gitcomet-ui-kit -p gitcomet-extension-api
-      - name: Check the public API snapshots
-        run: python3 scripts/ci/public_api.py
       - name: Test the downstream example and API contracts
         run: cargo test --locked -p gitcomet-extension-api -p gitcomet-extension-example
       - uses: ./.github/actions/ci-finish

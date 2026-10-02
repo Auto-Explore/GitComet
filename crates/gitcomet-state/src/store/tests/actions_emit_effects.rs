@@ -5611,3 +5611,5 @@ fn cherry_pick_setup_never_enables_rewording_after_partial_or_stale_message_load
     assert!(matches!(setup.full_messages, Loadable::Error(_)));
     assert_eq!(setup.entries[0].message, "subject");
 }
+
+mod large_files;

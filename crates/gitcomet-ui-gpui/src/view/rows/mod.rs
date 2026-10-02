@@ -595,6 +595,8 @@ fn commit_file_row_presentation_signature(
         ix.hash(&mut primary);
         kind_key.hash(&mut primary);
         path_bytes.hash(&mut primary);
+        // The chip is part of the row's presentation.
+        file.large_file.hash(&mut primary);
 
         kind_key.hash(&mut secondary);
         ix.hash(&mut secondary);
@@ -1707,6 +1709,28 @@ mod tests {
         assert_eq!(
             replacement[0].visuals,
             commit_file_kind_visuals(FileStatusKind::Renamed)
+        );
+    }
+
+    #[test]
+    fn commit_file_signature_changes_with_large_file_state() {
+        let plain = vec![commit_file("a.bin", FileStatusKind::Modified, None, None)];
+        let mut managed = plain.clone();
+        managed[0].large_file = Some(gitcomet_core::large_files::LargeFileState {
+            pointer: gitcomet_core::large_files::LargeFilePointer::Lfs(
+                gitcomet_core::lfs::LfsPointer {
+                    oid: gitcomet_core::lfs::LfsOid([1; 32]),
+                    size: 5,
+                },
+            ),
+            in_local_store: Some(true),
+            worktree: None,
+            lockable: false,
+        });
+        assert_ne!(
+            commit_file_row_presentation_signature(&plain),
+            commit_file_row_presentation_signature(&managed),
+            "a chip appearing must invalidate cached rows"
         );
     }
 

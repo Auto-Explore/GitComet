@@ -303,6 +303,7 @@ pub(super) fn summarize(
         git_state: false,
         tags: false,
         verification_context: false,
+        large_file_support: false,
         text_attributes: false,
         paths: ChangedPaths::none(),
     };
@@ -389,9 +390,31 @@ pub(super) fn summarize(
             PathClass::Git { tags } => {
                 change.git_state = true;
                 change.tags |= tags;
+                change.large_file_support |= snapshot.git_roots.iter().any(|root| {
+                    path.strip_prefix(root).is_ok_and(|relative| {
+                        relative == Path::new("info/attributes")
+                            || relative == Path::new("packed-refs")
+                            || (relative.starts_with("refs")
+                                && relative.file_name().is_some_and(|name| name == "git-annex"))
+                    })
+                });
+            }
+            // A directory's own timestamp moves with every lock file inside it.
+            PathClass::AnnexSupport { directory } => {
+                change.large_file_support |= !directory || structural;
             }
             PathClass::Worktree => {
                 let relative = path.strip_prefix(&snapshot.workdir).unwrap();
+                if path
+                    .file_name()
+                    .is_some_and(|name| name == ".gitattributes")
+                {
+                    // Git reads attributes even when the file itself is ignored.
+                    // Excluded parent directories have already been filtered.
+                    change.worktree = true;
+                    change.large_file_support = true;
+                    continue;
+                }
                 if path.file_name().is_some_and(|name| name == ".gitignore") {
                     if !rules.is_ignored_rel(relative.parent().unwrap_or(Path::new("")), Some(true))
                     {

@@ -1,3 +1,4 @@
+pub mod annex;
 pub mod auth;
 pub mod conflict_labels;
 pub mod conflict_output;
@@ -18,6 +19,9 @@ pub mod hex;
 pub mod history_find;
 pub mod history_index;
 pub mod identity;
+pub mod large_file_tools;
+pub mod large_files;
+pub mod lfs;
 pub mod merge;
 pub mod merge_extraction;
 pub mod mergetool_trace;
@@ -32,6 +36,7 @@ pub mod squash;
 pub mod text_format;
 pub mod text_search;
 pub mod text_utils;
+pub mod url_encoding;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

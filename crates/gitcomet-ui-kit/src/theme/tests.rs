@@ -38,6 +38,36 @@ fn layer_over_matches_painting_both_layers_in_turn() {
     }
 }
 
+#[test]
+fn theme_hex_colors_keep_all_four_spellings_and_strict_validation() {
+    for (input, expected) in [
+        ("#aBc", [0xaa_u8, 0xbb, 0xcc, 0xff]),
+        ("#aBcD", [0xaa, 0xbb, 0xcc, 0xdd]),
+        ("  #a1B2c3\n", [0xa1, 0xb2, 0xc3, 0xff]),
+        ("#a1B2c380", [0xa1, 0xb2, 0xc3, 0x80]),
+    ] {
+        let [r, g, b, a] = expected.map(|channel| f32::from(channel) / 255.0);
+        assert_eq!(HexColor::parse(input).unwrap().0, Rgba::new(r, g, b, a));
+    }
+    for invalid in [
+        "abc",
+        "#",
+        "#12",
+        "#12345",
+        "#123456789",
+        "#aabbccddeeff",
+        "##abc",
+        "#ab g",
+        "#gggggg",
+        "#+a0000",
+        "#0000+a00",
+        "#éab",
+        "#💙ab",
+    ] {
+        assert!(HexColor::parse(invalid).is_err(), "{invalid:?}");
+    }
+}
+
 fn themes_markdown_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/themes.md")
 }
@@ -628,6 +658,39 @@ fn hue_fractions_reach_the_primaries_they_name() {
                      (got {actual:?} for the whole colour)"
             );
         }
+    }
+}
+
+/// Distinct authors must land on distinct hues, not four shades of one.
+#[test]
+fn author_colors_spread_across_the_hue_wheel() {
+    let theme = AppTheme::gitcomet_dark();
+    let names = [
+        "Ada Lovelace",
+        "Grace Hopper",
+        "Alan Turing",
+        "Barbara Liskov",
+    ];
+    let mut hues = names.map(|name| {
+        let color: gpui::Hsla = crate::components::author_color(theme, name).into_color();
+        color.hue.into_positive_degrees()
+    });
+    hues.sort_by(f32::total_cmp);
+
+    // Under the bug this guards, every hue lands under one degree, so the
+    // whole spread collapses and adjacent authors become indistinguishable.
+    let spread = hues[hues.len() - 1] - hues[0];
+    assert!(
+        spread > 90.0,
+        "author hues span only {spread}°, so they have collapsed onto one colour: {hues:?}"
+    );
+    for pair in hues.windows(2) {
+        assert!(
+            pair[1] - pair[0] > 1.0,
+            "author hues {:?} and {:?} are within a degree of each other: {hues:?}",
+            pair[0],
+            pair[1]
+        );
     }
 }
 

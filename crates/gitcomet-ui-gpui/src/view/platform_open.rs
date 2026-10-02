@@ -491,18 +491,7 @@ fn file_uri_for_file_manager(path: &Path) -> Result<String, io::Error> {
     let mut uri = String::with_capacity(path_bytes.len() + "file://".len());
     uri.push_str("file://");
 
-    for &byte in path_bytes {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'_' | b'.' | b'~' => {
-                uri.push(byte as char);
-            }
-            _ => {
-                uri.push('%');
-                uri.push(char::from(b"0123456789ABCDEF"[(byte >> 4) as usize]));
-                uri.push(char::from(b"0123456789ABCDEF"[(byte & 0x0F) as usize]));
-            }
-        }
-    }
+    uri.extend(gitcomet_core::url_encoding::encode_path(path_bytes));
 
     Ok(uri)
 }

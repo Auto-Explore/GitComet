@@ -5,6 +5,7 @@ use super::*;
 pub(super) fn spawn_read_pipe(
     pipe: Option<impl std::io::Read + Send + 'static>,
     activity: Option<(mpsc::Sender<(GitOutputStream, String)>, GitOutputStream)>,
+    liveness: LivenessClock,
 ) -> thread::JoinHandle<Vec<u8>> {
     thread::spawn(move || {
         let mut buf = Vec::new();
@@ -15,6 +16,7 @@ pub(super) fn spawn_read_pipe(
                 match reader.read(&mut chunk) {
                     Ok(0) => break,
                     Ok(read) => {
+                        liveness.touch();
                         buf.extend_from_slice(&chunk[..read]);
                         if let Some((sender, stream)) = activity.as_ref() {
                             let text =
