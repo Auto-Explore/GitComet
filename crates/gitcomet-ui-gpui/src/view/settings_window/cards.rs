@@ -233,7 +233,7 @@ impl SettingsWindowView {
                                 false,
                                 controls::ControlActivation::Action,
                                 move |_, _, cx| {
-                                    cx.open_url(&url);
+                                    crate::view::platform_open::open_url_later(&url, cx);
                                 },
                             ),
                         )
@@ -2336,7 +2336,7 @@ impl SettingsWindowView {
                     false,
                     controls::ControlActivation::Action,
                     move |_, _, cx| {
-                        cx.open_url(&url);
+                        crate::view::platform_open::open_url_later(&url, cx);
                     },
                 ),
             );
@@ -2359,7 +2359,7 @@ impl SettingsWindowView {
                         false,
                         controls::ControlActivation::Action,
                         move |_, _, cx| {
-                            cx.open_url(&url);
+                            crate::view::platform_open::open_url_later(&url, cx);
                         },
                     ),
                 )
@@ -2376,7 +2376,7 @@ impl SettingsWindowView {
                             false,
                             controls::ControlActivation::Action,
                             move |_, _, cx| {
-                                cx.open_url(url);
+                                crate::view::platform_open::open_url_later(url, cx);
                             },
                         ),
                 )
@@ -2393,7 +2393,7 @@ impl SettingsWindowView {
                         false,
                         controls::ControlActivation::Action,
                         move |_, _, cx| {
-                            cx.open_url(&license.url);
+                            crate::view::platform_open::open_url_later(&license.url, cx);
                         },
                     ),
                 )
@@ -2417,7 +2417,7 @@ impl SettingsWindowView {
                         false,
                         controls::ControlActivation::Action,
                         move |_, _, cx| {
-                            cx.open_url(url);
+                            crate::view::platform_open::open_url_later(url, cx);
                         },
                     ),
                 )

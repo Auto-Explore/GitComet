@@ -83,6 +83,19 @@ impl UiRuntime {
         matches!(self.mode, UiRuntimeMode::Live)
     }
 
+    /// Copies probe the platform clipboard (WSLg's X11 bridge) and leave a
+    /// crash diagnostic; otherwise they use GPUI's clipboard only.
+    pub const fn uses_clipboard_diagnostics(self) -> bool {
+        matches!(self.mode, UiRuntimeMode::Live)
+    }
+
+    /// Opening a URL or file starts its default application from a worker
+    /// thread; otherwise the request goes to GPUI's platform, which a test
+    /// platform only records.
+    pub const fn launches_applications(self) -> bool {
+        matches!(self.mode, UiRuntimeMode::Live)
+    }
+
     pub const fn auto_restores_session(self) -> bool {
         match self.mode {
             UiRuntimeMode::Live | UiRuntimeMode::DeterministicAutoRestore => true,

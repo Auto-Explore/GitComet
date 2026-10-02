@@ -5,10 +5,9 @@ use crate::contributions::{
     MenuLocation, RepositoryEntryGate, RepositoryViewDescriptor, SettingsPageDescriptor,
     SidebarSectionDescriptor, StatusItemDescriptor, WindowGateDescriptor,
 };
-use crate::host::WindowHost;
 use crate::id::{ContributionId, ExtensionId};
 use crate::{Extension, HistoryAnnotator};
-use gitcomet_ui_kit::gpui::{App, Keystroke, SharedString};
+use gitcomet_ui_kit::gpui::{Keystroke, SharedString};
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::fmt;
@@ -42,8 +41,6 @@ pub struct MenuItemDeclaration {
     pub location: MenuLocation,
     pub command: ContributionId,
 }
-
-pub type WindowOpened = Rc<dyn Fn(WindowHost, &mut App)>;
 
 #[cfg(test)]
 mod key_context_contract {
@@ -81,7 +78,6 @@ pub struct Registrar {
     entry_gates: Vec<(ContributionId, RepositoryEntryGate)>,
     window_gates: Vec<(ContributionId, WindowGateDescriptor)>,
     close_guards: Vec<(ContributionId, CloseGuard)>,
-    window_opened: Vec<WindowOpened>,
     errors: Vec<String>,
 }
 
@@ -106,7 +102,6 @@ impl Registrar {
             entry_gates: Vec::new(),
             window_gates: Vec::new(),
             close_guards: Vec::new(),
-            window_opened: Vec::new(),
             errors: Vec::new(),
         }
     }
@@ -173,10 +168,11 @@ impl Registrar {
         &mut self,
         local: impl Into<Cow<'static, str>>,
         provider: crate::SidebarProvider,
-    ) {
+    ) -> &mut Self {
         if let Some(id) = self.id(local) {
             self.sidebar_providers.push((id, provider));
         }
+        self
     }
 
     pub fn history_annotator(
@@ -324,15 +320,6 @@ impl Registrar {
         }
         self
     }
-
-    /// Called with each new window's host, after the window is ready.
-    pub fn on_window_opened(
-        &mut self,
-        callback: impl Fn(WindowHost, &mut App) + 'static,
-    ) -> &mut Self {
-        self.window_opened.push(Rc::new(callback));
-        self
-    }
 }
 
 /// The validated, frozen set of every extension's contributions, in
@@ -358,7 +345,6 @@ pub struct Registry {
     entry_gates: Vec<(ContributionId, RepositoryEntryGate)>,
     window_gates: Vec<(ContributionId, WindowGateDescriptor)>,
     close_guards: Vec<(ContributionId, CloseGuard)>,
-    window_opened: Vec<(ExtensionId, WindowOpened)>,
 }
 
 impl Registry {
@@ -410,12 +396,6 @@ impl Registry {
             registry.entry_gates.extend(registrar.entry_gates);
             registry.window_gates.extend(registrar.window_gates);
             registry.close_guards.extend(registrar.close_guards);
-            registry.window_opened.extend(
-                registrar
-                    .window_opened
-                    .into_iter()
-                    .map(|cb| (id.clone(), cb)),
-            );
         }
 
         fn duplicates<'a>(
@@ -642,10 +622,6 @@ impl Registry {
 
     pub fn close_guards(&self) -> &[(ContributionId, CloseGuard)] {
         &self.close_guards
-    }
-
-    pub fn window_opened(&self) -> &[(ExtensionId, WindowOpened)] {
-        &self.window_opened
     }
 }
 

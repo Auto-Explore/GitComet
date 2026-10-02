@@ -430,6 +430,10 @@ fn settings_window_options_request_client_chrome_and_resize_behavior() {
         "settings window should request client-side decorations"
     );
     assert!(
+        options.icon.is_some(),
+        "settings window carries the product's window icon"
+    );
+    assert!(
         options.is_movable,
         "settings window should remain movable with custom chrome"
     );
@@ -4239,6 +4243,56 @@ fn settings_pages_are_listed_and_built_only_when_selected(cx: &mut gpui::TestApp
     assert!(cx.debug_bounds("settings_window_general").is_some());
 }
 
+/// A settings page gets the window's host: its reset opens a hosted dialog,
+/// confirming closes it, and its toasts keep their kind.
+#[gpui::test]
+fn settings_pages_open_dialogs_and_toasts_through_their_host(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    cx.update(|app| {
+        let registry = gitcomet_extension_api::Registry::build(vec![Box::new(
+            gitcomet_extension_example::review::ReviewExtension,
+        )])
+        .expect("valid registration");
+        crate::view::extension_host::install(registry, app);
+    });
+    let (settings, cx) = cx.add_window_view(SettingsWindowView::new);
+    crate::view::test_support::redraw(cx);
+    let nav = "settings_window_nav_extension_com.example.review/review-settings";
+    let center = cx.debug_bounds(nav).unwrap().center();
+    cx.simulate_click(center, gpui::Modifiers::default());
+    crate::view::test_support::redraw(cx);
+
+    let reset = cx.debug_bounds("example_review_reset").unwrap().center();
+    cx.simulate_click(reset, gpui::Modifiers::default());
+    cx.run_until_parked();
+    crate::view::test_support::redraw(cx);
+    assert!(cx.debug_bounds("settings_hosted_dialog").is_some());
+    assert!(cx.debug_bounds("example_reset_confirm").is_some());
+
+    let confirm = cx
+        .debug_bounds("example_reset_confirm_button")
+        .unwrap()
+        .center();
+    cx.simulate_click(confirm, gpui::Modifiers::default());
+    cx.run_until_parked();
+    crate::view::test_support::redraw(cx);
+    assert!(cx.debug_bounds("settings_hosted_dialog").is_none());
+    assert!(cx.debug_bounds("settings_notice").is_some());
+
+    let host = cx.update(|_, app| settings.read(app).extension_window.as_ref().unwrap().host());
+    cx.update(|_, app| {
+        host.report_error("Could not reach the server", Vec::new(), app)
+            .unwrap()
+    });
+    cx.run_until_parked();
+    crate::view::test_support::redraw(cx);
+    cx.update(|_, app| {
+        let (kind, message, _) = settings.read(app).extension_notice.clone().unwrap();
+        assert_eq!(kind, gitcomet_extension_api::NotificationKind::Error);
+        assert_eq!(message.as_ref(), "Could not reach the server");
+    });
+}
+
 #[gpui::test]
 fn settings_extensions_have_a_host_revisioned_gates_and_window_lifetime(
     cx: &mut gpui::TestAppContext,
@@ -4272,15 +4326,15 @@ fn settings_extensions_have_a_host_revisioned_gates_and_window_lifetime(
             let calls = self.calls.clone();
             r.window_gate(
                 "gate",
-                WindowGateDescriptor {
-                    signal: self.signal.clone(),
-                    active: Rc::new(move |host, _| {
+                WindowGateDescriptor::new(
+                    self.signal.clone(),
+                    move |host, _| {
                         assert_eq!(host.kind(), gitcomet_core::identity::WindowKind::Settings);
                         calls.set(calls.get() + 1);
                         active.get()
-                    }),
-                    build: Rc::new(|_, _, cx| cx.new(|_| gpui::Empty).into()),
-                },
+                    },
+                    |_, _, cx| cx.new(|_| gpui::Empty).into(),
+                ),
             );
         }
         fn window_opened(

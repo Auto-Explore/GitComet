@@ -570,7 +570,11 @@ pub(crate) struct SettingsWindowView {
     extension_window: Option<extension_host::SettingsExtensions>,
     window_gates: Option<super::window_gates::WindowGates>,
     extension_dialog: Option<extension_host::SettingsDialog>,
-    extension_notice: Option<(SharedString, Vec<gitcomet_extension_api::HostedAction>)>,
+    extension_notice: Option<(
+        gitcomet_extension_api::NotificationKind,
+        SharedString,
+        Vec<gitcomet_extension_api::HostedAction>,
+    )>,
     theme_mode: ThemeMode,
     theme: AppTheme,
     /// This window's own render scale.
@@ -791,6 +795,7 @@ pub(in crate::view) fn open_settings_at(
                 };
                 view.select_category(page, cx);
             }
+            _ => return,
         }
         cx.notify();
     });
@@ -830,6 +835,7 @@ fn settings_window_options_for_scale(
                 .window_app_id(gitcomet_core::identity::WindowKind::Settings),
         ),
         window_decorations: Some(WindowDecorations::Client),
+        icon: crate::assets::window_icon(),
         is_movable: true,
         is_resizable: true,
         ..Default::default()

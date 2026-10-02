@@ -9,8 +9,8 @@ use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::view::rows::{CommitFileFilter, CommitFileSort, FileListRow, RowIx};
 use gitcomet_core::domain::{CommitFileChange, CommitId};
 use gitcomet_extension_api::{
-    ChangeSource, FileListImpl, FileListMode, FileSelected, RepositoryHandle, StateSubscription,
-    WindowHost,
+    ChangeSource, FileListMode, FileSelected, RepositoryHandle, StateSubscription, WindowHost,
+    panes::FileListImpl,
 };
 use gitcomet_state::diff_session::{DiffSessionMsg, DiffViewId};
 use std::path::Path;
@@ -30,6 +30,8 @@ pub(crate) struct FileListView {
     body: Entity<ChangedFileListView>,
     source: ChangeSource,
     marks: gitcomet_extension_api::FileListMarks,
+    /// Some mark has a glyph, so every file row reserves the glyph column.
+    marks_glyphs: bool,
     chips: Vec<gitcomet_extension_api::FileListFilterChip>,
     base: Option<CommitId>,
     list_rev: Option<u64>,
@@ -42,7 +44,7 @@ pub(crate) struct FileListView {
 }
 
 impl FileListView {
-    #[cfg(feature = "benchmarks")]
+    #[cfg(any(test, feature = "benchmarks"))]
     pub(in crate::view) fn benchmark_snapshot(
         host: WindowHost,
         repository: RepositoryHandle,
@@ -70,6 +72,20 @@ impl FileListView {
             controller.set_files(files, revision);
         }
         self.controller.borrow_mut().plan().row_len()
+    }
+    /// Regroups under `groups` without changing the mode; returns the rows.
+    #[cfg(feature = "benchmarks")]
+    pub(in crate::view) fn benchmark_regroup(
+        &mut self,
+        groups: gitcomet_extension_api::FileListGroups,
+    ) -> usize {
+        let mut controller = self.controller.borrow_mut();
+        controller.set_groups(Some(groups));
+        controller.grouped().rows.len()
+    }
+    #[cfg(feature = "benchmarks")]
+    pub(in crate::view) fn benchmark_plan_builds(&self) -> u64 {
+        self.controller.borrow().plan_cache.builds()
     }
     #[cfg(feature = "benchmarks")]
     pub(in crate::view) fn benchmark_window(
@@ -135,6 +151,7 @@ impl FileListView {
             body,
             source,
             marks: Default::default(),
+            marks_glyphs: false,
             chips: Vec::new(),
             base: None,
             list_rev: None,
@@ -219,6 +236,13 @@ impl FileListView {
         )
     }
 
+    /// Regroup passes and grouped-row builds so far.
+    #[cfg(test)]
+    pub(crate) fn test_group_builds(&self) -> (usize, usize) {
+        let controller = self.controller.borrow();
+        (controller.bucket_builds, controller.group_builds)
+    }
+
     #[cfg(test)]
     pub(crate) fn load_error(&self) -> Option<&str> {
         self.error.as_deref()
@@ -262,6 +286,15 @@ impl FileListView {
                 context_menu_active: false,
                 path_alignment_group: None,
                 diff_stat: true,
+                leading: self.marks_glyphs.then(|| {
+                    let path = change.path.clone();
+                    mark_glyph(
+                        self.marks.rows.get(&change.path),
+                        move || format!("hosted_file_list_{list_id}_glyph_{}", path.display()),
+                        theme,
+                        ui_scale::UiScale::current(cx),
+                    )
+                }),
             },
             theme,
             ui_scale_percent,
@@ -269,9 +302,12 @@ impl FileListView {
         );
         let picked = change.path.clone();
         let mark = self.marks.rows.get(&change.path).cloned();
+        let label = mark
+            .as_ref()
+            .and_then(|mark| Some((mark.label.clone()?, mark.color)));
         Some(
-            row.when_some(mark, |row, mark| {
-                row.child(div().flex_none().text_color(mark.color).child(mark.label))
+            row.when_some(label, |row, (label, color)| {
+                row.child(div().flex_none().text_color(color).child(label))
             })
             .on_activate(
                 false,
@@ -316,6 +352,7 @@ impl FileListView {
                             list: list.clone(),
                             list_id,
                             group,
+                            label: grouped.labels.get(group).cloned().unwrap_or_default(),
                             count,
                             collapsed,
                             sticky: false,
@@ -380,6 +417,7 @@ struct GroupHeader {
     list: gpui::WeakEntity<FileListView>,
     list_id: u64,
     group: usize,
+    label: SharedString,
     count: usize,
     collapsed: bool,
     /// Drawn pinned over the rows rather than as a row.
@@ -398,12 +436,13 @@ fn group_header(
         list,
         list_id,
         group,
+        label,
         count,
         collapsed,
         sticky,
     } = header;
-    let label = group_label(group);
     let role = if sticky { "sticky" } else { "group" };
+    let selector_label = label.clone();
     div()
         .id((
             if sticky {
@@ -413,7 +452,7 @@ fn group_header(
             },
             group,
         ))
-        .debug_selector(move || format!("hosted_file_list_{list_id}_{role}_{label}"))
+        .debug_selector(move || format!("hosted_file_list_{list_id}_{role}_{selector_label}"))
         .h(row_height)
         .w_full()
         .flex()
@@ -502,6 +541,7 @@ impl gpui::UniformListDecoration for StickyGroupHeader {
                     list: self.list.clone(),
                     list_id: self.list_id,
                     group,
+                    label: self.grouped.labels.get(group).cloned().unwrap_or_default(),
                     count,
                     collapsed,
                     sticky: true,
@@ -511,6 +551,70 @@ impl gpui::UniformListDecoration for StickyGroupHeader {
                 item_height,
             ))
             .into_any_element()
+    }
+}
+
+/// Whether `chip`'s filter is the one applied.
+fn chip_active(
+    controller: &FileListController,
+    chip: &gitcomet_extension_api::FileListFilterChip,
+) -> bool {
+    use gitcomet_extension_api::FileListFilterChip as Chip;
+    match chip {
+        Chip::Query { query, .. } => !query.is_empty() && controller.query == *query,
+        Chip::Visible { visible, .. } => controller.shows_only(visible),
+        _ => false,
+    }
+}
+
+/// Applies `chip`'s filter, or clears it.
+fn apply_chip(
+    controller: &mut FileListController,
+    chip: &gitcomet_extension_api::FileListFilterChip,
+    apply: bool,
+) {
+    use gitcomet_extension_api::FileListFilterChip as Chip;
+    match chip {
+        Chip::Query { query, .. } => {
+            controller.set_query(if apply { query.clone() } else { "".into() })
+        }
+        Chip::Visible { visible, .. } => controller.set_visible(apply.then(|| visible.clone())),
+        _ => {}
+    }
+}
+
+/// A file row's glyph column: icon-wide, empty without a glyph.
+fn mark_glyph(
+    mark: Option<&gitcomet_extension_api::RowMark>,
+    selector: impl FnOnce() -> String + 'static,
+    theme: AppTheme,
+    ui_scale: ui_scale::UiScale,
+) -> AnyElement {
+    use gitcomet_extension_api::RowGlyph;
+    let slot = div()
+        .flex_none()
+        .w(ui_scale.px(14.0))
+        .flex()
+        .justify_center();
+    let Some((glyph, color)) = mark.and_then(|mark| Some((mark.glyph.as_ref()?, mark.color)))
+    else {
+        return slot.into_any_element();
+    };
+    let slot = slot.debug_selector(selector).text_color(color);
+    match glyph {
+        RowGlyph::Icon(path) => slot
+            .child(
+                gpui::svg()
+                    .path(path.clone())
+                    .size(ui_scale.px(14.0))
+                    .text_color(color),
+            )
+            .into_any_element(),
+        RowGlyph::Text(text) => slot
+            .text_size(theme.ui_text(11.0))
+            .child(text.clone())
+            .into_any_element(),
+        _ => slot.into_any_element(),
     }
 }
 
@@ -546,13 +650,15 @@ impl Render for FileListView {
             .when(!self.chips.is_empty(), |list| {
                 list.child(div().flex().flex_wrap().gap_1().children(
                     self.chips.iter().enumerate().map(|(ix, chip)| {
-                        let query = chip.query.clone();
+                        let active = chip_active(&self.controller.borrow(), chip);
+                        let chip = chip.clone();
                         components::Button::new(
                             format!("file_filter_{list_id}_{ix}"),
-                            chip.label.clone(),
+                            chip.label().clone(),
                         )
+                        .selected(active)
                         .on_click(theme, cx, move |list, _, _, cx| {
-                            list.controller.borrow_mut().set_query(query.clone());
+                            apply_chip(&mut list.controller.borrow_mut(), &chip, !active);
                             cx.notify();
                         })
                     }),
@@ -631,6 +737,7 @@ impl FileListImpl for HostedFileList {
             gitcomet_extension_api::FileListSort::EditSizeDescending => {
                 CommitFileSort::EditSizeDescending
             }
+            _ => CommitFileSort::PathAscending,
         };
         self.entity.update(cx, |list, cx| {
             list.controller.borrow_mut().set_sort(sort);
@@ -644,6 +751,7 @@ impl FileListImpl for HostedFileList {
             gitcomet_extension_api::FileListFilter::Removed => CommitFileFilter::Removed,
             gitcomet_extension_api::FileListFilter::Added => CommitFileFilter::Added,
             gitcomet_extension_api::FileListFilter::Renamed => CommitFileFilter::Renamed,
+            _ => CommitFileFilter::All,
         };
         self.entity.update(cx, |list, cx| {
             list.controller.borrow_mut().kind_filter = filter;
@@ -654,6 +762,7 @@ impl FileListImpl for HostedFileList {
         self.entity.update(cx, |list, cx| {
             if list.marks.revision != marks.revision || !Arc::ptr_eq(&list.marks.rows, &marks.rows)
             {
+                list.marks_glyphs = marks.rows.values().any(|mark| mark.glyph.is_some());
                 list.marks = marks;
                 cx.notify();
             }
@@ -665,7 +774,32 @@ impl FileListImpl for HostedFileList {
         cx: &mut App,
     ) {
         self.entity.update(cx, |list, cx| {
+            // An active chip follows its replacement of the same label.
+            let mut controller = list.controller.borrow_mut();
+            for old in &list.chips {
+                if let Some(new) = chips.iter().find(|new| new.label() == old.label())
+                    && chip_active(&controller, old)
+                    && !chip_active(&controller, new)
+                {
+                    apply_chip(&mut controller, new, true);
+                }
+            }
+            drop(controller);
             list.chips = chips;
+            cx.notify();
+        });
+    }
+
+    fn set_groups(&self, groups: Option<gitcomet_extension_api::FileListGroups>, cx: &mut App) {
+        self.entity.update(cx, |list, cx| {
+            list.controller.borrow_mut().set_groups(groups);
+            cx.notify();
+        });
+    }
+
+    fn set_visible(&self, visible: Option<gitcomet_extension_api::FileListVisible>, cx: &mut App) {
+        self.entity.update(cx, |list, cx| {
+            list.controller.borrow_mut().set_visible(visible);
             cx.notify();
         });
     }
@@ -785,6 +919,186 @@ mod tests {
             Some(PathBuf::from("README.md"))
         );
         assert!(left.selected().is_none());
+    }
+
+    fn by_role() -> gitcomet_extension_api::FileListGroups {
+        gitcomet_extension_api::FileListGroups::new(
+            1,
+            vec!["Code".into(), "Docs".into()],
+            |path: &Path| match path.extension()?.to_str()? {
+                "rs" => Some(0),
+                "md" => Some(1),
+                // Out of range: shown under "Other".
+                "toml" => Some(7),
+                _ => None,
+            },
+        )
+    }
+
+    fn header_labels(list: &mut FileListController) -> Vec<String> {
+        let grouped = list.grouped();
+        grouped
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                GroupedRow::Header { group, count, .. } => {
+                    Some(format!("{} ({count})", grouped.labels[*group]))
+                }
+                GroupedRow::File { .. } => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn custom_groups_keep_their_order_and_show_the_rest_last() {
+        let mut list = FileListController::new(FileListMode::Grouped);
+        list.set_files(
+            Arc::new(vec![
+                change("Cargo.toml", FileStatusKind::Modified),
+                change("README.md", FileStatusKind::Modified),
+                change("build.sh", FileStatusKind::Added),
+                change("src/a.rs", FileStatusKind::Added),
+                change("src/b.rs", FileStatusKind::Deleted),
+            ]),
+            1,
+        );
+        list.set_groups(Some(by_role()));
+        assert_eq!(
+            header_labels(&mut list),
+            vec!["Code (2)", "Docs (1)", "Other (2)"],
+            "empty groups are skipped; unknown and out-of-range go last"
+        );
+        let paths: Vec<_> = list
+            .shown_changes()
+            .into_iter()
+            .map(|change| change.path)
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                "src/a.rs",
+                "src/b.rs",
+                "README.md",
+                "build.sh",
+                "Cargo.toml"
+            ]
+            .map(PathBuf::from)
+            .to_vec(),
+            "navigation follows the groups, each in the list's sort"
+        );
+        list.set_groups(None);
+        assert_eq!(
+            header_labels(&mut list),
+            vec!["Added (2)", "Modified (2)", "Deleted (1)"]
+        );
+    }
+
+    #[test]
+    fn groups_collapse_on_their_own_and_new_labels_expand_them() {
+        let mut list = FileListController::new(FileListMode::Grouped);
+        list.set_files(
+            Arc::new(vec![
+                change("a.rs", FileStatusKind::Modified),
+                change("b.md", FileStatusKind::Modified),
+            ]),
+            1,
+        );
+        list.set_groups(Some(by_role()));
+        assert_eq!(list.row_count(), 4);
+        list.toggle_group(0);
+        assert_eq!(list.row_count(), 3, "only Code collapses");
+
+        let mut next = by_role();
+        next.revision = 2;
+        list.set_groups(Some(next));
+        assert_eq!(list.row_count(), 3, "the same labels keep the collapse");
+
+        list.set_groups(Some(gitcomet_extension_api::FileListGroups::new(
+            3,
+            vec!["Rust".into(), "Docs".into()],
+            |_: &Path| Some(0),
+        )));
+        assert_eq!(list.row_count(), 3, "new labels: one group, expanded");
+    }
+
+    #[test]
+    fn a_new_grouping_revision_regroups_once_without_replanning() {
+        let mut list = FileListController::new(FileListMode::Grouped);
+        list.set_files(
+            Arc::new(
+                (0..100)
+                    .map(|n| change(&format!("src/f{n}.rs"), FileStatusKind::Modified))
+                    .collect(),
+            ),
+            1,
+        );
+        list.set_groups(Some(by_role()));
+        list.plan();
+        list.grouped();
+        let (plans, buckets, rows) = (
+            list.plan_cache.builds(),
+            list.bucket_builds,
+            list.group_builds,
+        );
+        list.grouped();
+        assert_eq!(list.bucket_builds, buckets, "unchanged input is cached");
+
+        let mut next = by_role();
+        next.revision = 2;
+        list.set_groups(Some(next));
+        list.grouped();
+        list.plan();
+        assert_eq!(list.bucket_builds, buckets + 1, "one regroup pass");
+        assert_eq!(list.group_builds, rows + 1);
+        assert_eq!(list.plan_cache.builds(), plans, "groups never replan");
+
+        list.toggle_group(0);
+        list.grouped();
+        assert_eq!(
+            list.bucket_builds,
+            buckets + 1,
+            "collapse reuses the groups"
+        );
+        assert_eq!(list.group_builds, rows + 2);
+    }
+
+    #[test]
+    fn the_visible_set_composes_with_the_kind_filter_and_query() {
+        let mut list = FileListController::new(FileListMode::Flat);
+        list.set_files(
+            Arc::new(vec![
+                change("src/a.rs", FileStatusKind::Modified),
+                change("src/b.rs", FileStatusKind::Added),
+                change("src/c.rs", FileStatusKind::Modified),
+                change("docs/c.md", FileStatusKind::Modified),
+            ]),
+            1,
+        );
+        let paths = |list: &mut FileListController| {
+            list.shown_changes()
+                .into_iter()
+                .map(|change| change.path.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        };
+        let visible = gitcomet_extension_api::FileListVisible::new(
+            1,
+            ["src/a.rs", "src/b.rs", "docs/c.md"]
+                .map(PathBuf::from)
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+        );
+        list.set_visible(Some(visible.clone()));
+        assert_eq!(paths(&mut list), vec!["docs/c.md", "src/a.rs", "src/b.rs"]);
+        assert!(list.shows_only(&visible));
+
+        list.kind_filter = CommitFileFilter::Modified;
+        assert_eq!(paths(&mut list), vec!["docs/c.md", "src/a.rs"]);
+        list.set_query("src".into());
+        assert_eq!(paths(&mut list), vec!["src/a.rs"]);
+
+        list.set_visible(None);
+        assert_eq!(paths(&mut list), vec!["src/a.rs", "src/c.rs"]);
+        assert!(!list.shows_only(&visible));
     }
 
     #[test]

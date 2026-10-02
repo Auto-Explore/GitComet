@@ -462,7 +462,7 @@ impl Render for BottomStatusBarView {
                 controls::ControlActivation::Action,
                 cx.listener(move |_this, _e: &ClickEvent, _window, cx| {
                     cx.stop_propagation();
-                    cx.open_url(url);
+                    crate::view::platform_open::open_url_later(url, cx);
                 }),
             )
             .gitcomet_tooltip(theme, format!("Join the {name} Discord").into())
@@ -488,7 +488,7 @@ impl Render for BottomStatusBarView {
                 controls::ControlActivation::Action,
                 cx.listener(move |_this, _e: &ClickEvent, _window, cx| {
                     cx.stop_propagation();
-                    cx.open_url(url);
+                    crate::view::platform_open::open_url_later(url, cx);
                 }),
             )
             .gitcomet_tooltip(theme, format!("See {name} editions").into())
@@ -510,7 +510,7 @@ impl Render for BottomStatusBarView {
                 controls::ControlActivation::Action,
                 cx.listener(move |_this, _e: &ClickEvent, _window, cx| {
                     cx.stop_propagation();
-                    cx.open_url(url);
+                    crate::view::platform_open::open_url_later(url, cx);
                 }),
             )
             .gitcomet_tooltip(theme, format!("See {name} Pro").into())
@@ -536,11 +536,7 @@ impl Render for BottomStatusBarView {
             .text_color(theme.colors.foreground.secondary)
             .tab_index(0)
             .control_interaction(InteractionStyle::link(theme), InteractionState::default())
-            .child(svg_icon(
-                "icons/gitcomet_mark.svg",
-                gpui::rgb(0x5ac1fe),
-                scaled_px(13.0),
-            ))
+            .child(brand_mark(scaled_px(13.0)))
             .child(
                 div()
                     .debug_selector(|| "bottom_status_bar_brand".to_string())
@@ -555,7 +551,7 @@ impl Render for BottomStatusBarView {
                         controls::ControlActivation::Action,
                         cx.listener(move |_this, _e: &ClickEvent, _window, cx| {
                             cx.stop_propagation();
-                            cx.open_url(url);
+                            crate::view::platform_open::open_url_later(url, cx);
                         }),
                     )
                     .gitcomet_tooltip(
@@ -583,7 +579,7 @@ impl Render for BottomStatusBarView {
                     controls::ControlActivation::Action,
                     cx.listener(move |_this, _e: &ClickEvent, _window, cx| {
                         cx.stop_propagation();
-                        cx.open_url(url);
+                        crate::view::platform_open::open_url_later(url, cx);
                     }),
                 )
                 .gitcomet_tooltip(theme, format!("View {name} releases").into())
@@ -658,6 +654,23 @@ impl Render for BottomStatusBarView {
                         )
                     }),
             )
+    }
+}
+
+/// The product's mark beside its name: a branded mark keeps its own colours;
+/// GitComet's is a tinted mask.
+fn brand_mark(size: Pixels) -> AnyElement {
+    if gitcomet_core::identity::current()
+        .branding()
+        .mark_svg
+        .is_some()
+    {
+        gpui::img("brand/mark.svg")
+            .size(size)
+            .flex_none()
+            .into_any_element()
+    } else {
+        svg_icon("brand/mark.svg", gpui::rgb(0x5ac1fe), size).into_any_element()
     }
 }
 

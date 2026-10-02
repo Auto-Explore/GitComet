@@ -15,12 +15,9 @@ impl Extension for BenchExtension {
     fn register(&self, r: &mut Registrar) {
         r.repository_view(
             "second",
-            RepositoryViewDescriptor {
-                title: "Second".into(),
-                icon: "icons/diff.svg".into(),
-                navigation: None,
-                build: Rc::new(|_, _, cx| cx.new(|_| gpui::Empty).into()),
-            },
+            RepositoryViewDescriptor::new("Second", "icons/code.svg", |_, _, cx| {
+                cx.new(|_| gpui::Empty).into()
+            }),
         );
     }
 }
@@ -67,6 +64,8 @@ pub struct ExtensionFrameFixture {
     snapshot: DiffSnapshot,
     rendered_rows: Rc<Cell<usize>>,
     next: usize,
+    /// Eight groups over the files, regrouped under a new revision each time.
+    groups: FileListGroups,
     cx: gpui::TestAppContext,
 }
 impl ExtensionFrameFixture {
@@ -128,11 +127,11 @@ impl ExtensionFrameFixture {
             .collect();
         let new = old.replace(" = ", " = 1 + ");
         let snapshot = DiffSnapshot::new("src/example.rs", old, new);
-        let (pane, files) = cx.update(|cx| {
+        let (pane, files, groups) = cx.update(|cx| {
             let pane = host
                 .create_snapshot_pane(snapshot.clone(), DiffPaneOptions::default(), cx)
                 .unwrap();
-            let changes = Arc::new(
+            let changes: Arc<Vec<CommitFileChange>> = Arc::new(
                 (0..files)
                     .map(|i| {
                         CommitFileChange::new(
@@ -142,9 +141,22 @@ impl ExtensionFrameFixture {
                     })
                     .collect(),
             );
+            // A hash lookup per file, as the API asks of a large list's groups.
+            let group_of: rustc_hash::FxHashMap<std::path::PathBuf, usize> = changes
+                .iter()
+                .enumerate()
+                .map(|(i, change)| (change.path.clone(), i % 8))
+                .collect();
+            let groups = FileListGroups::new(
+                0,
+                (0..8)
+                    .map(|group| SharedString::from(format!("Group {group}")))
+                    .collect::<Vec<_>>(),
+                move |path| group_of.get(path).copied(),
+            );
             let list = cx
                 .new(|cx| FileListView::benchmark_snapshot(host, repository.clone(), changes, cx));
-            (pane, list)
+            (pane, list, groups)
         });
         let pane_entity = pane.view().downcast::<DiffPaneView>().unwrap();
         let view = pane.view();
@@ -164,6 +176,7 @@ impl ExtensionFrameFixture {
             snapshot,
             rendered_rows,
             next: 0,
+            groups,
             cx,
         };
         this.settle();
@@ -247,6 +260,21 @@ impl ExtensionFrameFixture {
     pub fn file_plan(&mut self) -> usize {
         self.cx
             .update(|cx| self.files.update(cx, |files, _| files.benchmark_plan(true)))
+    }
+    /// File-list plans built so far; a window draw that replans moves it.
+    pub fn file_plan_builds(&mut self) -> u64 {
+        self.cx
+            .update(|cx| self.files.read(cx).benchmark_plan_builds())
+    }
+    /// Regroups every file, as an extension replacing its groups does;
+    /// returns the grouped rows.
+    pub fn file_regroup(&mut self) -> usize {
+        self.groups.revision += 1;
+        let groups = self.groups.clone();
+        self.cx.update(|cx| {
+            self.files
+                .update(cx, |files, _| files.benchmark_regroup(groups))
+        })
     }
     pub fn file_window(&mut self, decor_update: bool) -> usize {
         self.probe_rows(RowProbe::Files(self.files.clone(), decor_update))
@@ -395,26 +423,13 @@ impl Extension for AnnotationExtension {
     fn register(&self, r: &mut Registrar) {
         r.history_annotator(
             "marks",
-            HistoryAnnotator {
-                signal: SlotSignal::default(),
-                scope_header: None,
-                annotate: Rc::new(|_, _, _| HistoryRowAnnotation {
-                    opacity: 0.75,
-                    leading: Some(RowMark {
-                        label: "●".into(),
-                        color: gpui::red(),
-                    }),
-                    trailing: Some(RowMark {
-                        label: "Checked".into(),
-                        color: gpui::green(),
-                    }),
-                    range: Some(HistoryRangeMark {
-                        color: gpui::blue(),
-                        starts: false,
-                        ends: false,
-                    }),
-                }),
-            },
+            HistoryAnnotator::new(SlotSignal::default(), |_, _, _| {
+                HistoryRowAnnotation::default()
+                    .with_opacity(0.75)
+                    .with_leading(RowMark::new(gpui::red()).with_glyph(RowGlyph::Text("●".into())))
+                    .with_trailing(RowMark::new(gpui::green()).with_label("Checked"))
+                    .with_range(HistoryRangeMark::new(gpui::blue(), false, false))
+            }),
         );
     }
 }

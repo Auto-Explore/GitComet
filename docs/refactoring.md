@@ -105,8 +105,9 @@ re-exports its modules under their old `crate::` paths (`crate::kit`,
   `view/ui_persistence.rs`; the picker's workspace colour became a generic
   `PickerSwatch` with the workspace adapter in `view/workspace_picker.rs`.
 - The icon set and its generation moved with `icons`; GitComet's artwork
-  (`gitcomet_mark.svg`, window icon, logo) stays in the host's asset source,
-  layered over `KitAssets`, and follows the identity's branding.
+  (mark, window icon, logo) stays in the host's asset source, layered over
+  `KitAssets`, and follows the identity's branding (served under `brand/`
+  since the branding change below).
 - `test-support` exposes test helpers and hooks (counters, snapshots) and the
   shared visual/clipboard locks; it adds functions, never behaviour switches.
   `#![warn(unnameable_types)]` keeps every type in a public signature nameable.
@@ -383,6 +384,146 @@ Since then:
   `reducer/util.rs` to `reducer/auth.rs`.
 - The theme and live-syntax inline tests moved to child test files.
 - UI repository tests share one `test_support::git` runner.
+- Extension API hygiene before a downstream product pins a revision:
+  descriptors, history annotations, sidebar rows and file sets,
+  `FileListMarks`, and the identity's links and branding are
+  `#[non_exhaustive]` with `new`/`with_*` builders (`const` for identity
+  values); the enums an extension matches (`HostError`, `EntryOrigin`,
+  `CloseScope`, `DiffPaneEvent`, `Slot`, ...) and `ChangeSource`, `FetchMsg`,
+  `ChangedPaths`, `RepoExternalChange`, and `AppMode` are non-exhaustive, with
+  constructors for the struct variants extensions build. Host-only
+  constructors and the `*Impl` traits are `#[doc(hidden)]` and off the crate
+  root, so the snapshot no longer moves when the host grows.
+  `Extension::window_opened` is the one window hook (`Registrar::
+  on_window_opened` and `WindowExtensionFactory` are gone), and
+  `ProductIdentityBuilder::hidden_ref_prefixes` matches the const builder.
+- The kit's clipboard diagnostics follow the runtime policy
+  (`UiRuntime::uses_clipboard_diagnostics`) rather than `cfg(test)`, so a
+  dependent's tests neither probe the desktop nor write to the crash
+  directory.
+- Opening a submodule's diff in its own tab passes the entry gates, and a
+  running submodule clone asks before its repository or window closes.
+- `file_list/decor_update_no_replan` reports the plan cache's real build
+  count instead of a constant.
+- The public-API snapshot covers every crate a downstream product builds on:
+  the extension API, the UI kit, the app library, and the core and state
+  modules the API exposes (`identity`, `services`, `domain`, `msg`,
+  `diff_session`), each beside its crate (`public_api.py --crate` checks
+  one). One `RUSTC_BOOTSTRAP` value for every crate keeps the proc macros
+  built once.
+- The example registers the contributions it lacked (a window gate behind
+  `COMET_EXAMPLE_GATE=1`, the edition strip, a title-bar brand, a history
+  annotator, and sidebar rows), so it exercises every contribution kind.
+  Sidebar contribution icons take the text colour; as `svg()` masks they
+  painted nothing before.
+- Extensions reach the windows Git itself launches: the registry is
+  installed in every mode (`extension_host::install_registry`), so window
+  gates, close guards, chrome, and `Extension::window_opened` run in the
+  focused difftool and mergetool; commands (key bindings, palette rows, menu
+  entries) stay with main windows (`install_bindings`). Only the focused
+  difftool keeps a host without extensions, for its own pane. Cancelling the
+  focused mergetool (Escape, the diff's close button) runs the window-close
+  guards instead of quitting outright, and closing a focused tool quits it
+  even if a Settings window is open, so `git mergetool`/`difftool` never
+  waits on a leftover window.
+- Settings pages are built with a `SettingsPageContext` (the Settings
+  window's `WindowHost` and theme), so a page can confirm in a dialog and
+  report in a toast. The Settings window draws hosted dialogs, popovers, and
+  menus on the kit's modal and popover surfaces (menu icons included) and
+  notices as kit toasts of their kind; `WindowHost` documents which calls a
+  repository-less Settings window answers with `Unsupported`.
+- The kit completes its settings and interstitial set:
+  `settings_option_row` (the Settings window's option rows delegate to it),
+  `interstitial_cta_button`, and `progress_bar` (the clone toast's bar). CTA
+  colours are a theme group, `interstitial`, seeded from the splash's
+  former hard-coded palette, so GitComet looks the same and a product's
+  interstitial matches the host's; the Git-unavailable "Open Settings"
+  button now takes the light palette in light themes. The group is interned
+  like the lane palette, keeping `AppTheme` small enough to copy per row.
+- `WindowHost::open_url` and `open_path` give extensions the host's safe
+  opener: validated at once (no script or `file:` URLs, no empty paths;
+  refusals are `HostError::InvalidRequest`), launched after the calling
+  update and off the UI thread, failures reported in the window. The host's
+  own links (status bar, Settings, the submodule-trust notice) use it too
+  instead of opening from inside a click handler. Outside the live runtime
+  (`UiRuntime::launches_applications`) the launch goes to GPUI's platform,
+  which a test platform only records, so no test starts a browser.
+- The repository-view and details-tab strips are kit `NavTab`s with icons:
+  History and Details show their own, a repository view its descriptor's
+  icon, and a details tab the new optional `DetailsTabDescriptor::with_icon`.
+  `NavTab` tints its icon like its label and names its parts (`{id}_icon`,
+  `{id}_badge`); tab ids are unchanged, and without extensions there is
+  still no strip.
+- A repository view can bring an action-bar context
+  (`RepositoryViewDescriptor::with_action_bar`), built with the view and
+  dropped with its repository. While an extension view is selected, the
+  action bar's left group is Back/Forward plus that context; History's
+  worktree and branch badges, tracking actions, historical badge, and merge
+  and sequencer controls stay with History, which renders as before. The
+  right group (terminal, branch, stash) is unchanged. `ViewNavigation` now
+  has tests: the action bar's Back/Forward and the mouse side buttons
+  route to the selected view, and to History again once it is back.
+- Hosted file lists take caller-defined groups (`FileList::set_groups`:
+  labels in order plus a per-path lookup; the rest under "Other"), a
+  visible-path filter (`set_visible`, composing with the kind filter and
+  query), and `Visible` filter chips beside `Query` ones; chips show their
+  active state and a second click clears them. `RowMark` is now
+  non-exhaustive with an optional label and a `RowGlyph` (icon or text):
+  file lists draw glyphs in a column before the file icon, History and
+  sidebar rows before the label. Regrouping is one pass over the shown
+  files, cached apart from collapse and keyed on the grouping's revision,
+  so scrolling never regroups and grouping never replans
+  (`file_list/regroup_100k`). The example's Changes list groups by role,
+  flags files with flagged lines and offers a "Flagged" chip.
+- Diff panes' insets and annotations are clickable: `DiffInset::with_action`
+  runs a hosted action from any of the inset's rows (on its own side in a
+  split), and `DiffPaneOptions::on_annotation_click` runs instead of the
+  gutter action when the click lands on an annotation (the renderer's
+  gutter lane, the fallback rows' bar and label). Both rendering paths now
+  agree: line actions need `DiffPanePolicy::line_action` (the fallback rows
+  offered and ran gutter clicks regardless), and an inset's colour is its
+  text colour (the fallback used it as the background). In the example,
+  clicking a flag unflags the line and clicking a note removes it.
+- Branding covers everything GitComet draws of its own: `ProductBranding`
+  adds the status-bar mark (`with_mark_svg`, drawn in its own colours) and
+  the splash and home backdrops (`with_splash_backdrops_png`). Artwork is
+  served under neutral paths (`brand/app-icon.png`, `brand/window-icon.png`,
+  `brand/logo.svg`, `brand/mark.svg`; the product's bytes first, else
+  GitComet's), and `icons/` is the kit's icon set alone, so the asset
+  listing never names GitComet. Windows now carry the window icon (X11 and
+  Wayland); it was served but never applied. The house themes take the
+  product's name ("<Product> Dark"). The example ships neutral artwork and
+  an integration test (`gitcomet-extension-example-app/tests/branding.rs`)
+  proving every brand path serves it and no asset path names GitComet.
+- A linked worktree is a change source: `ChangeSource::linked_worktree(path,
+  area, include_untracked)` lists its changes, and each file's target is
+  `DiffTarget::working_tree(..).in_worktree(path)` (`worktree()` reads it
+  back; equality compares it). Sessions and lists on it load through the
+  worktree's cached repository handle, after checking the path is one of
+  the repository's linked worktrees (else every requested part answers with
+  an error). They reload on that worktree's `WorktreeExternallyChanged`
+  (the extension's `watch_worktree` lease), and main-worktree changes no
+  longer reload them. Staging and saving act on the main checkout, so a
+  pane on a linked file offers neither and refuses both in its handlers
+  (checked against the live session); its projection resolves previews and
+  the editor's paths against the linked checkout and hides the main
+  checkout's status, and the renderer's own working-tree retargets stay in
+  the linked worktree. History ignores a linked `SelectDiff`. The example's
+  Changes view can list a linked worktree.
+- An extension's menu in a main window opened an empty popover: the popover
+  routed every hosted kind to the dialog panel, which draws nothing without
+  dialog content. Hosted menus now render as context menus, and the kit's
+  menu entry draws an extension's own icon (`extensions/<id>/…`) instead of
+  an empty slot. A host guard checks every `icons/…` path literal in
+  production code loads; it found two missing icons (the Settings "Checking
+  Git" row and a bench fixture's tab). Closing a repository tab still
+  discards its unsaved editor buffers without asking; an ignored test
+  (`closing_a_repository_tab_prompts_for_its_unsaved_edits`) reproduces it.
+- Found running the example: Home's tagline was GitComet's literal ("Fastest
+  Open Source Git GUI") under any product's name. It is now
+  `ProductBranding::with_tagline`, set by GitComet's identity only; another
+  product shows its own or none. Contributed sidebar sections and rows take
+  the built-in rows' text size instead of the window default.
 
 ## History find (#532)
 

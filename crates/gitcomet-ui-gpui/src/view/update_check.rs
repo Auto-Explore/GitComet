@@ -273,13 +273,13 @@ fn resolve_update_repo() -> Option<GitHubRepo> {
         .and_then(parse_repo_slug)
         .or_else(
             || match gitcomet_core::identity::current().update_source() {
-                gitcomet_core::identity::UpdateSource::GitHubReleases { owner, repo } => {
+                gitcomet_core::identity::UpdateSource::GitHubReleases { owner, repo, .. } => {
                     Some(GitHubRepo {
                         owner: owner.to_string(),
                         repo: repo.to_string(),
                     })
                 }
-                gitcomet_core::identity::UpdateSource::Disabled => None,
+                _ => None,
             },
         )
 }

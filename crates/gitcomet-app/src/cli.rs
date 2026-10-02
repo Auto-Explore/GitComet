@@ -215,6 +215,7 @@ pub struct ExtractMergeFixturesConfig {
 
 /// Which mode the application was launched in.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum AppMode {
     /// Full repository browser (default).
     Browser { path: Option<PathBuf> },

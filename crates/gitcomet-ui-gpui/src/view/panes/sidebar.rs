@@ -2053,17 +2053,14 @@ impl SidebarPaneView {
             return Vec::new();
         };
         let weak_store = Arc::downgrade(&self.store);
-        let files = gitcomet_extension_api::SidebarFileSet {
-            paths: unsaved.into(),
-            open: Rc::new(move |path, _| {
-                if let Some(store) = weak_store.upgrade() {
-                    store.dispatch(Msg::OpenFileEditor {
-                        repo_id,
-                        path: path.clone(),
-                    });
-                }
-            }),
-        };
+        let files = gitcomet_extension_api::SidebarFileSet::new(unsaved, move |path, _| {
+            if let Some(store) = weak_store.upgrade() {
+                store.dispatch(Msg::OpenFileEditor {
+                    repo_id,
+                    path: path.clone(),
+                });
+            }
+        });
         let mut rows = vec![FileBrowserVisibleRow::FileSetHeader {
             count: files.paths.len(),
         }];

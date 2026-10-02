@@ -224,3 +224,132 @@ pub fn split_columns_header(
         .child(div().flex_1().min_w(px(0.0)).px_2().child(left.into()))
         .child(div().flex_1().min_w(px(0.0)).px_2().child(right.into()))
 }
+
+/// The unfilled track of a [`progress_bar`].
+pub fn progress_bar_track_color(theme: AppTheme) -> gpui::Rgba {
+    crate::theme::with_alpha(
+        theme.colors.stroke.default,
+        if theme.is_dark { 0.40 } else { 0.22 },
+    )
+}
+
+/// The outline of a [`progress_bar`].
+pub fn progress_bar_border_color(theme: AppTheme) -> gpui::Rgba {
+    crate::theme::with_alpha(
+        theme.colors.stroke.default,
+        if theme.is_dark { 0.72 } else { 0.42 },
+    )
+}
+
+/// A horizontal bar with `fraction` (0..=1) of its width filled with `fill`.
+/// It takes its container's width.
+pub fn progress_bar(
+    theme: AppTheme,
+    ui_scale: impl Into<crate::ui_scale::UiScale>,
+    fraction: f32,
+    fill: gpui::Rgba,
+) -> Div {
+    let ui_scale = ui_scale.into();
+    let fraction = if fraction.is_finite() {
+        fraction.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    // Flex weights rather than a percentage width, so the fill rounds to the
+    // track's own pixel grid.
+    let mut filled = div()
+        .h_full()
+        .bg(fill)
+        .rounded(px(999.0))
+        .when(fraction > 0.0, |this| this.min_w(px(2.0)));
+    filled.style().flex_grow = Some(fraction);
+    filled.style().flex_shrink = Some(0.0);
+    filled.style().flex_basis = Some(gpui::relative(0.0).into());
+    let mut rest = div().h_full();
+    rest.style().flex_grow = Some(1.0 - fraction);
+    rest.style().flex_shrink = Some(0.0);
+    rest.style().flex_basis = Some(gpui::relative(0.0).into());
+    div()
+        .w_full()
+        .h(ui_scale.px(8.0))
+        .flex()
+        .rounded(px(999.0))
+        .overflow_hidden()
+        .bg(progress_bar_track_color(theme))
+        .border_1()
+        .border_color(progress_bar_border_color(theme))
+        .child(filled)
+        .child(rest)
+}
+
+#[cfg(test)]
+mod progress_bar_tests {
+    use super::*;
+
+    struct Bars {
+        theme: AppTheme,
+    }
+
+    impl gpui::Render for Bars {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            let fill = self.theme.colors.accent.solid;
+            div().w(px(200.0)).flex().flex_col().children(
+                [0.0, 0.5, 2.0, f32::NAN]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(ix, fraction)| {
+                        div()
+                            .id(("bar", ix))
+                            .debug_selector(move || format!("bar_{ix}"))
+                            .w_full()
+                            .child(progress_bar(
+                                self.theme,
+                                crate::ui_scale::UiScale::from_percent(100),
+                                fraction,
+                                fill,
+                            ))
+                    }),
+            )
+        }
+    }
+
+    /// The fill follows the fraction and never leaves the track, whatever
+    /// the caller passes.
+    #[gpui::test]
+    fn progress_bars_fill_their_fraction_of_the_track(cx: &mut gpui::TestAppContext) {
+        let _guard = crate::test_support::lock_visual_test();
+        let theme = AppTheme::gitcomet_dark();
+        let (_view, cx) = cx.add_window_view(|_, _| Bars { theme });
+        crate::test_support::redraw(cx);
+        let fill: gpui::Background = theme.colors.accent.solid.into();
+        // Painted quads are in device pixels; layout bounds are logical.
+        let widths: Vec<f32> = (0..4)
+            .map(|ix| {
+                let selector: &'static str = Box::leak(format!("bar_{ix}").into_boxed_str());
+                let bounds = cx.debug_bounds(selector).unwrap();
+                cx.update(|window, _| {
+                    let scale = window.scale_factor();
+                    window
+                        .painted_quads()
+                        .into_iter()
+                        .filter(|quad| {
+                            let top = quad.bounds.origin.y.0 / scale;
+                            quad.background == fill
+                                && top >= f32::from(bounds.origin.y)
+                                && top < f32::from(bounds.origin.y + bounds.size.height)
+                        })
+                        .map(|quad| quad.bounds.size.width.0 / scale)
+                        .sum::<f32>()
+                })
+            })
+            .collect();
+        assert_eq!(widths[0], 0.0, "{widths:?}");
+        assert!((95.0..=103.0).contains(&widths[1]), "{widths:?}");
+        assert!((195.0..=200.0).contains(&widths[2]), "{widths:?}");
+        assert_eq!(widths[3], 0.0, "{widths:?}");
+    }
+}

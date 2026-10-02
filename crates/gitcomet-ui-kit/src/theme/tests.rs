@@ -1065,6 +1065,34 @@ fn bundled_theme_notice_text_is_readable_on_its_background() {
     }
 }
 
+/// A primary call-to-action's label stays readable in every state.
+#[test]
+fn bundled_theme_call_to_action_text_is_readable() {
+    for key in [
+        DEFAULT_DARK_THEME_KEY,
+        DEFAULT_LIGHT_THEME_KEY,
+        "tokyo_night",
+        AMBER_DARK_THEME_KEY,
+        "sunset_veil",
+    ] {
+        let theme = AppTheme::from_key(key).expect("bundled theme should load");
+        let primary = theme.colors.interstitial.primary;
+        for (state, background) in [
+            ("background", primary.background),
+            ("background_hover", primary.background_hover),
+            ("background_active", primary.background_active),
+        ] {
+            assert_min_contrast(
+                key,
+                &format!("interstitial.primary.text on {state}"),
+                primary.text,
+                background,
+                4.5,
+            );
+        }
+    }
+}
+
 #[test]
 fn custom_themes_use_their_own_notice_colors_and_inherit_a_missing_group() {
     use serde_json::json;

@@ -36,7 +36,7 @@ crates/gitcomet-state/src/store/mod.rs identifier 2 store and repo-load worker t
 crates/gitcomet-state/src/store/repo_load_trace.rs identifier 1 diagnostic prefix
 crates/gitcomet-state/src/store/repo_monitor.rs identifier 3 diagnostic prefix and thread names
 crates/gitcomet-state/src/store/send_diagnostics.rs identifier 2 diagnostic prefixes
-crates/gitcomet-ui-gpui/src/assets.rs identifier 8 asset keys of the branding artwork, which the identity may replace
+crates/gitcomet-ui-gpui/src/assets.rs identifier 2 GitComet's default artwork files, served where the identity brings none
 crates/gitcomet-ui-gpui/src/bin/perf_budget_report/cli.rs identifier 1 benchmark tool name
 crates/gitcomet-ui-gpui/src/view/panes/main/diff_cache/image_cache.rs identifier 2 temporary directory and file prefix
 crates/gitcomet-ui-gpui/src/view/rows/diff_text/syntax/language.rs identifier 1 thread name
