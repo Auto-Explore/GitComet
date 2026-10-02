@@ -29,16 +29,23 @@ fn main_content_card_radius(theme: AppTheme) -> f32 {
     theme.radii.control
 }
 
+/// The splash backdrop for the theme's appearance: the product's own, else
+/// GitComet's.
 pub(in crate::view) fn load_splash_backdrop_image(is_dark: bool) -> Arc<gpui::Image> {
+    let branding = gitcomet_core::identity::current().branding();
     let (cache, bytes) = if is_dark {
         (
             &SPLASH_BACKDROP_DARK_IMAGE_CACHE,
-            SPLASH_BACKDROP_DARK_PNG_BYTES,
+            branding
+                .splash_backdrop_dark_png
+                .unwrap_or(SPLASH_BACKDROP_DARK_PNG_BYTES),
         )
     } else {
         (
             &SPLASH_BACKDROP_LIGHT_IMAGE_CACHE,
-            SPLASH_BACKDROP_LIGHT_PNG_BYTES,
+            branding
+                .splash_backdrop_light_png
+                .unwrap_or(SPLASH_BACKDROP_LIGHT_PNG_BYTES),
         )
     };
     cache
@@ -258,7 +265,7 @@ impl GitCometView {
             .id("repository_entry_logo")
             .size(size)
             // `svg()` paints a one-colour mask; the logo has two colours.
-            .child(gpui::img("gitcomet_logo.svg").w(size).h(size))
+            .child(gpui::img("brand/logo.svg").w(size).h(size))
             .into_any_element()
     }
 

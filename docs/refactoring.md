@@ -105,8 +105,9 @@ re-exports its modules under their old `crate::` paths (`crate::kit`,
   `view/ui_persistence.rs`; the picker's workspace colour became a generic
   `PickerSwatch` with the workspace adapter in `view/workspace_picker.rs`.
 - The icon set and its generation moved with `icons`; GitComet's artwork
-  (`gitcomet_mark.svg`, window icon, logo) stays in the host's asset source,
-  layered over `KitAssets`, and follows the identity's branding.
+  (mark, window icon, logo) stays in the host's asset source, layered over
+  `KitAssets`, and follows the identity's branding (served under `brand/`
+  since the branding change below).
 - `test-support` exposes test helpers and hooks (counters, snapshots) and the
   shared visual/clipboard locks; it adds functions, never behaviour switches.
   `#![warn(unnameable_types)]` keeps every type in a public signature nameable.
@@ -483,6 +484,17 @@ Since then:
   offered and ran gutter clicks regardless), and an inset's colour is its
   text colour (the fallback used it as the background). In the example,
   clicking a flag unflags the line and clicking a note removes it.
+- Branding covers everything GitComet draws of its own: `ProductBranding`
+  adds the status-bar mark (`with_mark_svg`, drawn in its own colours) and
+  the splash and home backdrops (`with_splash_backdrops_png`). Artwork is
+  served under neutral paths (`brand/app-icon.png`, `brand/window-icon.png`,
+  `brand/logo.svg`, `brand/mark.svg`; the product's bytes first, else
+  GitComet's), and `icons/` is the kit's icon set alone, so the asset
+  listing never names GitComet. Windows now carry the window icon (X11 and
+  Wayland); it was served but never applied. The house themes take the
+  product's name ("<Product> Dark"). The example ships neutral artwork and
+  an integration test (`gitcomet-extension-example-app/tests/branding.rs`)
+  proving every brand path serves it and no asset path names GitComet.
 
 ## History find (#532)
 

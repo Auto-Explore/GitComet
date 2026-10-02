@@ -70,6 +70,7 @@ pub(in crate::view) fn open(
         }),
         app_id: Some(identity.window_app_id(gitcomet_core::identity::WindowKind::Main)),
         window_decorations: Some(WindowDecorations::Server),
+        icon: crate::assets::window_icon(),
         is_movable: true,
         is_resizable: true,
         ..Default::default()

@@ -475,6 +475,10 @@ fn settings_window_options_request_client_chrome_and_resize_behavior() {
         "settings window should request client-side decorations"
     );
     assert!(
+        options.icon.is_some(),
+        "settings window carries the product's window icon"
+    );
+    assert!(
         options.is_movable,
         "settings window should remain movable with custom chrome"
     );

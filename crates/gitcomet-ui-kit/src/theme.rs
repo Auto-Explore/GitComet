@@ -1457,7 +1457,9 @@ fn merged_theme_options(runtime_dir: Option<&Path>) -> Vec<ThemeOption> {
         options.insert(spec.option.key.clone(), spec.option.clone());
     }
     for spec in embedded_theme_cache().values() {
-        options.insert(spec.option.key.clone(), spec.option.clone());
+        let mut option = spec.option.clone();
+        option.label = house_theme_label(&option.key, option.label);
+        options.insert(option.key.clone(), option);
     }
 
     let mut options = options.into_values().collect::<Vec<_>>();
@@ -1467,6 +1469,19 @@ fn merged_theme_options(runtime_dir: Option<&Path>) -> Vec<ThemeOption> {
             .then_with(|| left.key.cmp(&right.key))
     });
     options
+}
+
+/// The house themes carry the product's name ("<Product> Dark").
+fn house_theme_label(key: &str, label: String) -> String {
+    let appearance = match key {
+        DEFAULT_DARK_THEME_KEY => "Dark",
+        DEFAULT_LIGHT_THEME_KEY => "Light",
+        _ => return label,
+    };
+    format!(
+        "{} {appearance}",
+        gitcomet_core::identity::current().display_name()
+    )
 }
 
 /// Keep GitComet's two defaults together at the top of the picker, followed by

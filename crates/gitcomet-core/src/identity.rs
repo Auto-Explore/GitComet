@@ -205,6 +205,13 @@ pub struct ProductBranding {
     pub window_icon_png: Option<&'static [u8]>,
     /// Logo drawn on the splash and home screens (SVG).
     pub logo_svg: Option<&'static [u8]>,
+    /// The small mark beside the product name in the status bar (SVG),
+    /// drawn in its own colours.
+    pub mark_svg: Option<&'static [u8]>,
+    /// The splash and home backdrops (PNG, about 1000 px wide), for dark and
+    /// light themes.
+    pub splash_backdrop_dark_png: Option<&'static [u8]>,
+    pub splash_backdrop_light_png: Option<&'static [u8]>,
 }
 
 impl ProductBranding {
@@ -214,6 +221,9 @@ impl ProductBranding {
             app_icon_png: None,
             window_icon_png: None,
             logo_svg: None,
+            mark_svg: None,
+            splash_backdrop_dark_png: None,
+            splash_backdrop_light_png: None,
         }
     }
 
@@ -229,6 +239,21 @@ impl ProductBranding {
 
     pub const fn with_logo_svg(mut self, svg: &'static [u8]) -> Self {
         self.logo_svg = Some(svg);
+        self
+    }
+
+    pub const fn with_mark_svg(mut self, svg: &'static [u8]) -> Self {
+        self.mark_svg = Some(svg);
+        self
+    }
+
+    pub const fn with_splash_backdrops_png(
+        mut self,
+        dark: &'static [u8],
+        light: &'static [u8],
+    ) -> Self {
+        self.splash_backdrop_dark_png = Some(dark);
+        self.splash_backdrop_light_png = Some(light);
         self
     }
 }
@@ -310,11 +335,7 @@ impl ProductIdentity {
                 owner: Cow::Borrowed("Auto-Explore"),
                 repo: Cow::Borrowed("GitComet"),
             },
-            branding: ProductBranding {
-                app_icon_png: None,
-                window_icon_png: None,
-                logo_svg: None,
-            },
+            branding: ProductBranding::new(),
             hidden_ref_prefixes: &["refs/pull/", "refs/changes/", "refs/notes/"],
             overrides: StaticOverrides::EMPTY,
         }
@@ -350,11 +371,7 @@ impl ProductIdentity {
                 survey: None,
             },
             update_source: UpdateSource::Disabled,
-            branding: ProductBranding {
-                app_icon_png: None,
-                window_icon_png: None,
-                logo_svg: None,
-            },
+            branding: ProductBranding::new(),
             hidden_ref_prefixes: &[],
             overrides: StaticOverrides::EMPTY,
         }
@@ -420,11 +437,7 @@ impl ProductIdentity {
                 executable_name,
                 links: ProductLinks::default(),
                 update_source: UpdateSource::Disabled,
-                branding: ProductBranding {
-                    app_icon_png: None,
-                    window_icon_png: None,
-                    logo_svg: None,
-                },
+                branding: ProductBranding::new(),
                 hidden_ref_prefixes: &[],
                 overrides: StaticOverrides::EMPTY,
             },
@@ -750,7 +763,10 @@ mod tests {
                 Cow::Borrowed("MIT"),
                 Cow::Borrowed("https://example.org/license"),
             ));
-        const BRANDING: ProductBranding = ProductBranding::new().with_logo_svg(b"<svg/>");
+        const BRANDING: ProductBranding = ProductBranding::new()
+            .with_logo_svg(b"<svg/>")
+            .with_mark_svg(b"<svg>mark</svg>")
+            .with_splash_backdrops_png(b"dark", b"light");
         let identity = ProductIdentity::new("Example", "example", "com.example.app")
             .with_links(&LINKS)
             .with_branding(BRANDING);
@@ -762,8 +778,12 @@ mod tests {
             identity.links().license.as_ref().map(|l| l.name.as_ref()),
             Some("MIT")
         );
-        assert_eq!(identity.branding().logo_svg, Some(&b"<svg/>"[..]));
-        assert_eq!(identity.branding().app_icon_png, None);
+        let branding = identity.branding();
+        assert_eq!(branding.logo_svg, Some(&b"<svg/>"[..]));
+        assert_eq!(branding.mark_svg, Some(&b"<svg>mark</svg>"[..]));
+        assert_eq!(branding.splash_backdrop_dark_png, Some(&b"dark"[..]));
+        assert_eq!(branding.splash_backdrop_light_png, Some(&b"light"[..]));
+        assert_eq!(branding.app_icon_png, None);
     }
 
     #[test]

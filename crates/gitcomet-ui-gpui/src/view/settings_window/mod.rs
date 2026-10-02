@@ -826,6 +826,7 @@ fn settings_window_options_for_scale(
         ),
         window_decorations: Some(WindowDecorations::Client),
         window_background: crate::app::main_window_background_appearance(),
+        icon: crate::assets::window_icon(),
         is_movable: true,
         is_resizable: true,
         ..Default::default()

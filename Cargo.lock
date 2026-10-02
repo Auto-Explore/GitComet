@@ -2312,6 +2312,8 @@ dependencies = [
  "gitcomet-app",
  "gitcomet-core",
  "gitcomet-extension-example",
+ "gitcomet-ui-gpui",
+ "gitcomet-ui-kit",
  "tempfile",
 ]
 
