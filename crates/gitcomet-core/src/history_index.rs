@@ -403,6 +403,41 @@ impl HistoryIndexBuilder {
         }
         Ok(())
     }
+
+    /// Refine the stash candidates after traversal, when the walk's temporary
+    /// storage can be released. Parent IDs retain their original order and
+    /// include parents outside this index. An error aborts construction.
+    pub fn retain_probable_stashes(
+        &mut self,
+        mut predicate: impl FnMut(&[u8], std::slice::ChunksExact<'_, u8>) -> Result<bool>,
+    ) -> Result<()> {
+        let hash_len = self.index.hash_len;
+        let mut retained = 0;
+        for candidate in 0..self.index.probable_stashes.len() {
+            let row = self.index.probable_stashes[candidate] as usize;
+            let start = self.index.parent_offsets[row] as usize * hash_len;
+            let end = self.index.parent_offsets[row + 1] as usize * hash_len;
+            match predicate(
+                self.index
+                    .id_bytes(row)
+                    .expect("candidate is an indexed row"),
+                self.parent_ids[start..end].chunks_exact(hash_len),
+            ) {
+                Ok(true) => {
+                    self.index.probable_stashes[retained] = row as u32;
+                    retained += 1;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    self.index.probable_stashes.truncate(retained);
+                    return Err(error);
+                }
+            }
+        }
+        self.index.probable_stashes.truncate(retained);
+        Ok(())
+    }
+
     /// Estimated peak construction storage, including the cached-prefix sort
     /// (retained through parent resolution), unresolved parents, and capacity
     /// growth if every parent is external. Retained index bytes are reported
@@ -562,6 +597,69 @@ mod tests {
             assert_eq!(index.position("invalid"), None);
             assert_eq!(index.commit_id(usize::MAX), None);
         }
+    }
+
+    #[test]
+    fn deferred_stash_filter_preserves_parent_order_and_external_ids() {
+        for hash_len in [20, 32] {
+            let mut builder = HistoryIndexBuilder::new(
+                HistorySnapshot("stashes".into()),
+                HistoryMode::AllBranches,
+                hash_len,
+            )
+            .unwrap();
+            let ids: Vec<_> = (1..=6).map(|byte| vec![byte; hash_len]).collect();
+            for row in 0..4 {
+                builder
+                    .push(&ids[row], [ids[4].as_slice(), ids[5].as_slice()], row != 1)
+                    .unwrap();
+            }
+            let mut visited = Vec::new();
+            builder
+                .retain_probable_stashes(|id, parents| {
+                    visited.push(id[0]);
+                    assert_eq!(
+                        parents.collect::<Vec<_>>(),
+                        [ids[4].as_slice(), ids[5].as_slice()]
+                    );
+                    Ok(id[0] % 2 == 1)
+                })
+                .unwrap();
+            assert_eq!(visited, [1, 3, 4]);
+            let index = builder.finish(&CancellationToken::new()).unwrap();
+            assert_eq!(index.probable_stash_rows(), [0, 2]);
+            for row in 0..4 {
+                assert_eq!(index.parent_id_bytes(row, 0), Some(ids[4].as_slice()));
+                assert_eq!(index.parent_id_bytes(row, 1), Some(ids[5].as_slice()));
+            }
+        }
+    }
+
+    #[test]
+    fn deferred_stash_filter_stops_on_cancellation() {
+        let mut builder = HistoryIndexBuilder::new(
+            HistorySnapshot("cancel".into()),
+            HistoryMode::AllBranches,
+            20,
+        )
+        .unwrap();
+        for byte in 1..=4 {
+            builder.push(&[byte; 20], std::iter::empty(), true).unwrap();
+        }
+        let cancellation = CancellationToken::new();
+        let mut visited = 0;
+        let error = builder
+            .retain_probable_stashes(|_, _| {
+                visited += 1;
+                if visited == 2 {
+                    cancellation.cancel();
+                }
+                cancellation.check_cancelled()?;
+                Ok(true)
+            })
+            .unwrap_err();
+        assert!(matches!(error.kind(), ErrorKind::Cancelled));
+        assert_eq!(visited, 2);
     }
 
     #[test]

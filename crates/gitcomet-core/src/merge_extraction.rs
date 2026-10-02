@@ -717,9 +717,9 @@ mod tests {
         assert_eq!(merges.len(), 1, "expected one merge commit");
 
         let merge = &merges[0];
-        assert_eq!(merge.merge_sha.len(), 40);
-        assert_eq!(merge.parent1_sha.len(), 40);
-        assert_eq!(merge.parent2_sha.len(), 40);
+        assert!(matches!(merge.merge_sha.len(), 40 | 64));
+        assert_eq!(merge.parent1_sha.len(), merge.merge_sha.len());
+        assert_eq!(merge.parent2_sha.len(), merge.merge_sha.len());
     }
 
     #[test]

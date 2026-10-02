@@ -115,12 +115,23 @@ impl GixRepo {
             cancellation.check_cancelled()?;
             has_conflicted_unstaged = direct.has_conflicted_unstaged;
             (cached_staged, direct.index_stamp_after_write)
+        } else if crate::refs::backend(&repo)? == crate::refs::RefBackend::Reftable {
+            let tree = crate::refs::head_tree_id_or_empty(&repo)?;
+            let staged = collect_staged_status_from_tree_index(&repo, &tree)?;
+            let direct = collect_index_worktree_status_direct(
+                &repo,
+                &self.stat_refreshed_index,
+                &mut unstaged,
+                may_have_gitlinks,
+                cancellation,
+            )?;
+            has_conflicted_unstaged = direct.has_conflicted_unstaged;
+            (staged, direct.index_stamp_after_write)
         } else {
             // Full path: run both Tree→Index and Index→Worktree comparisons.
             cancellation.check_cancelled()?;
             let thread_limit = worker_limit::for_repo(&repo, cancellation)?;
-            let platform = repo
-                .status(gix::progress::Discard)
+            let platform = crate::refs::files::status(&repo)
                 .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status platform: {e}"))))?
                 // GitComet supplements gitlink/submodule status separately to match
                 // `git status` parity, so skip gix's default submodule probing on the
@@ -220,7 +231,7 @@ impl GixRepo {
         cancellation.check_cancelled()?;
 
         if should_supplement_unmerged_conflicts(
-            repo.state().is_some(),
+            crate::refs::operation_state(&repo)?.is_some(),
             direct.has_conflicted_unstaged,
         ) {
             apply_unmerged_conflicts(&repo, &mut unstaged)?;
@@ -387,7 +398,10 @@ fn finalize_status(
     // conflicts) from gix status output. Supplement conflict entries from the index's unmerged
     // stages only when the repository is in an in-progress operation or gix already surfaced
     // conflicts.
-    if should_supplement_unmerged_conflicts(repo.state().is_some(), has_conflicted_unstaged) {
+    if should_supplement_unmerged_conflicts(
+        crate::refs::operation_state(repo)?.is_some(),
+        has_conflicted_unstaged,
+    ) {
         apply_unmerged_conflicts(repo, &mut unstaged)?;
     }
 
@@ -453,7 +467,13 @@ fn collect_staged_status_from_tree_index(
         head_oid,
         &index,
         None,
-        gix::status::tree_index::TrackRenames::AsConfigured,
+        // Without an on-disk index there can be no staged rename. Avoid
+        // gix's diff-cache fallback to its files-only HEAD reader.
+        if repo.try_index().map_err(crate::refs::failure)?.is_none() {
+            gix::status::tree_index::TrackRenames::Disabled
+        } else {
+            gix::status::tree_index::TrackRenames::AsConfigured
+        },
         |change, _, _| {
             collect_tree_index_change(change, &mut staged).or_erased()?;
             Ok(std::ops::ControlFlow::Continue(()))
@@ -475,7 +495,13 @@ fn collect_staged_index_paths_from_tree_index(
         head_tree_id,
         &index,
         None,
-        gix::status::tree_index::TrackRenames::AsConfigured,
+        // Without an on-disk index there can be no staged rename. Avoid
+        // gix's diff-cache fallback to its files-only HEAD reader.
+        if repo.try_index().map_err(crate::refs::failure)?.is_none() {
+            gix::status::tree_index::TrackRenames::Disabled
+        } else {
+            gix::status::tree_index::TrackRenames::AsConfigured
+        },
         |change, _, _| {
             collect_tree_index_change_paths(change, &mut paths).or_erased()?;
             Ok(std::ops::ControlFlow::Continue(()))
@@ -641,8 +667,7 @@ fn set_index_stat_discriminators(_stamp: &mut RepoFileStamp, _metadata: &std::fs
 pub(super) fn gix_unmerged_conflicts(
     repo: &gix::Repository,
 ) -> Result<Vec<(PathBuf, FileConflictKind)>> {
-    let index = repo
-        .index_or_load_from_head_or_empty()
+    let index = crate::refs::index_or_load_from_head_or_empty(repo)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
     let path_backing = index.path_backing();
     let mut stage_entries = Vec::new();
@@ -896,7 +921,7 @@ fn collect_index_worktree_status_direct_from_index(
             )))
         })?
         .emit_untracked(gix::dir::walk::EmissionMode::Matching);
-    let collection = if may_have_gitlinks {
+    let collection = if may_have_gitlinks && crate::refs::has_modules(repo)? {
         let submodule = gix::status::index_worktree::BuiltinSubmoduleStatus::new(
             repo.clone().into_sync(),
             gix::status::Submodule::Given {
@@ -1698,7 +1723,10 @@ pub(crate) mod tests {
         write_file(root, "ordinary.txt", "base\n");
         git_success(root, &["add", "ordinary.txt"]);
         git_success(root, &["commit", "-m", "base"]);
-        let oid = gix::open(root).unwrap().head_id().unwrap().to_string();
+        let oid = crate::refs::head_oid(&gix::open(root).unwrap())
+            .unwrap()
+            .unwrap()
+            .to_string();
         for path in ["removed", "replaced", "retained"] {
             git_success(
                 root,

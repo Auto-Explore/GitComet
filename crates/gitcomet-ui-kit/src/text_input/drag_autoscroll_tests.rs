@@ -29,7 +29,7 @@ struct DragHostView {
 
 impl DragHostView {
     fn new(host: Host, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        window.activate_window();
+        window.activate();
         let scroll = ScrollHandle::new();
         let input = cx.new(|cx| {
             let multiline = !matches!(host, Host::SingleLine);

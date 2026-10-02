@@ -307,7 +307,10 @@ fn blame_worktree_synthesizes_local_blame_for_newly_added_file() {
         vec!["alpha", "beta"]
     );
     for line in &untracked {
-        assert_eq!(&*line.commit_id, "0000000000000000000000000000000000000000");
+        assert_eq!(
+            &*line.commit_id,
+            "0".repeat(git_stdout(repo, &["rev-parse", "HEAD"]).len())
+        );
         assert!(!line.prior_exists);
         assert_eq!(line.prior_commit, None);
     }
@@ -324,7 +327,7 @@ fn blame_worktree_synthesizes_local_blame_for_newly_added_file() {
     );
     assert_eq!(
         &*staged[0].commit_id,
-        "0000000000000000000000000000000000000000"
+        "0".repeat(git_stdout(repo, &["rev-parse", "HEAD"]).len())
     );
 }
 

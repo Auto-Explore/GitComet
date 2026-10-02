@@ -1,7 +1,7 @@
 use super::*;
 
 pub(crate) fn reference_commit_id(
-    mut reference: gix::Reference<'_>,
+    mut reference: crate::refs::Reference<'_>,
 ) -> Result<Option<gix::ObjectId>> {
     match reference.peel_to_commit() {
         Ok(commit) => Ok(Some(commit.id().detach())),

@@ -30,6 +30,16 @@ pub(super) fn oid_to_arc_str(oid: &gix::oid) -> Arc<str> {
     Arc::from(hex)
 }
 
+/// A full id in `kind`'s object format; `None` for abbreviations, names and the other format.
+pub(super) fn object_id_from_commit_id(
+    id: &CommitId,
+    kind: gix::hash::Kind,
+) -> Option<gix::ObjectId> {
+    gix::ObjectId::from_hex(id.as_ref().as_bytes())
+        .ok()
+        .filter(|oid| oid.kind() == kind)
+}
+
 /// Convert bytes to `Arc<str>`, avoiding an intermediate String allocation when the input is
 /// valid UTF-8 (the common case for git commit metadata).
 #[inline]

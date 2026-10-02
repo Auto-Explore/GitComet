@@ -1360,15 +1360,25 @@ fn multi_selection_reaching_root_uses_the_empty_tree_as_base() {
     let repo_id = RepoId(1);
     let mut state = new_state_with_repo(repo_id);
     repo_mut(&mut state, repo_id).set_log(Loadable::Ready(Arc::new(LogPage {
-        commits: vec![test_commit("c2", Some("c1")), test_commit("c1", None)],
+        commits: vec![
+            test_commit(
+                "2222222222222222222222222222222222222222",
+                Some("1111111111111111111111111111111111111111"),
+            ),
+            test_commit("1111111111111111111111111111111111111111", None),
+        ],
         next_cursor: None,
     })));
 
-    select_commit(&mut state, repo_id, CommitId("c2".into()));
+    select_commit(
+        &mut state,
+        repo_id,
+        CommitId("2222222222222222222222222222222222222222".into()),
+    );
     select_commit_multi(
         &mut state,
         repo_id,
-        CommitId("c1".into()),
+        CommitId("1111111111111111111111111111111111111111".into()),
         CommitSelectMode::Toggle,
         Some(1),
         None,
@@ -1382,9 +1392,15 @@ fn multi_selection_reaching_root_uses_the_empty_tree_as_base() {
     // The oldest selected commit is the root and has no parent to diff from.
     // Basing on the root itself would drop everything it introduces from the
     // merged diff, so the empty tree is the base instead.
-    assert_eq!(range.from, CommitId(EMPTY_TREE_ID.into()));
+    assert_eq!(
+        range.from,
+        CommitId(gitcomet_core::domain::EMPTY_TREE_ID_SHA1.into())
+    );
     assert_eq!(range.from_label, "start of history");
-    assert_eq!(range.to, Some(CommitId("c2".into())));
+    assert_eq!(
+        range.to,
+        Some(CommitId("2222222222222222222222222222222222222222".into()))
+    );
 }
 
 #[test]

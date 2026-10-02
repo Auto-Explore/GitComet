@@ -511,7 +511,7 @@ impl GixRepo {
         let resume_tip = cursor
             .filter(|_| mode == HistoryMode::FirstParent)
             .and_then(|cursor| cursor.resume_from.as_ref())
-            .and_then(object_id_from_commit_id);
+            .and_then(|id| object_id_from_commit_id(id, tips[0].kind()));
         let (mut walk_state, mut cursor_gate) = match (cached_walk_state, resume_tip) {
             (Some(walk_state), _) => (walk_state, None),
             (None, Some(resume_tip)) => (
@@ -662,21 +662,21 @@ impl GixRepo {
         use rustc_hash::FxHasher;
         use std::hash::{Hash as _, Hasher as _};
 
-        let refs = repo
-            .references()
-            .map_err(|e| crate::repo::object_store::gix_error("gix references", &e))?;
+        let refs =
+            crate::refs::view_cancellable(repo, cancellation.unwrap_or(&CancellationToken::new()))
+                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
 
         // Refs the product leaves out of History. Every all-branches reader
         // (pages, authors, the index, snapshots) starts from these tips, so
         // excluding here reaches all of them and their caches.
         let filter = &self.history_ref_filter;
-        let excluded = |reference: &gix::Reference<'_>| {
+        let excluded = |reference: &crate::refs::Reference<'_>| {
             !filter.is_empty() && filter.excludes(&reference.name().as_bstr().to_string())
         };
 
         // Fingerprint pass: names, raw targets and followed symbolic chains
         // only, no object lookups.
-        let head_id = gix_head_id_or_none(repo)?;
+        let head_id = refs.head_oid()?;
         let mut hasher = FxHasher::default();
         head_id.hash(&mut hasher);
         filter.hash(&mut hasher);
@@ -704,7 +704,7 @@ impl GixRepo {
         let stash_tips = if filter.excludes("refs/stash") {
             Vec::new()
         } else {
-            stash_reflog_tips(repo, 50).unwrap_or_default()
+            stash_reflog_tips(repo, 50)?
         };
         stash_tips.hash(&mut hasher);
         let fingerprint = hasher.finish();
@@ -914,7 +914,7 @@ impl GixRepo {
     /// commit, without the parent diff `commit_details_impl` computes.
     ///
     /// `find_commit_by_id` sends anything that is not a full oid through
-    /// `rev_parse_single`, so an ambiguous prefix errors here rather than
+    /// `refs::resolve`, so an ambiguous prefix errors here rather than
     /// silently picking one candidate.
     pub(in super::super) fn resolve_commit_impl(&self, reference: &CommitId) -> Result<Commit> {
         let repo = self.repo();
@@ -1096,11 +1096,8 @@ impl GixRepo {
             return Err(reflog_unborn_head_error(&repo));
         }
 
-        let head = repo
-            .head()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix head: {e}"))))?;
-        let mut platform = head.log_iter();
-        reflog_lines_rev(&mut platform, "HEAD", Some(limit))?
+        crate::refs::view(&repo)?
+            .reflog("HEAD", Some(limit))?
             .into_iter()
             .enumerate()
             .map(|(index, line)| {
@@ -1117,20 +1114,19 @@ impl GixRepo {
     }
 }
 
-/// Resolves a `CommitId` to its commit. Ids are full hex, so the object is
-/// looked up directly; the revspec parser (and its prefix disambiguation
-/// against every pack) only runs for anything that is not a plain id.
+/// Resolves a `CommitId` to its commit. A full id in the repository's format is
+/// looked up directly; anything else (a 40-digit id is an abbreviation in a
+/// SHA-256 repository) goes through the kind-aware `refs::resolve`.
 fn find_commit_by_id<'repo>(
     repo: &'repo gix::Repository,
     id: &CommitId,
 ) -> Result<gix::Commit<'repo>> {
     let spec = id.as_ref();
-    let object = match object_id_from_commit_id(id) {
+    let object = match object_id_from_commit_id(id, repo.object_hash()) {
         Some(oid) => repo.find_object(oid).map_err(|e| {
             Error::new(ErrorKind::Backend(format!("gix commit object {spec}: {e}")))
         })?,
-        None => repo
-            .rev_parse_single(spec)
+        None => crate::refs::resolve_required(repo, spec)
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}"))))?
             .object()
             .map_err(|e| {

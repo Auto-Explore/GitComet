@@ -24,8 +24,7 @@ fn local_branch_ref_name(branch: &str) -> String {
 }
 
 fn head_targets_branch(repo: &gix::Repository, branch_ref_name: &str) -> Result<bool> {
-    let head_name = repo
-        .head_name()
+    let head_name = crate::refs::head_name(repo)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix head_name: {e}"))))?;
     Ok(head_name.is_some_and(|name| name.as_bstr() == branch_ref_name))
 }
@@ -100,18 +99,11 @@ fn cannot_force_update_branch_error(command: &str, branch: &str, worktree: &Path
 /// Delete `refs/heads/<name>` and its config; the caller checked no worktree holds it.
 fn delete_local_branch_ref_and_config(repo: &gix::Repository, name: &str) -> Result<()> {
     let ref_name = local_branch_ref_name(name);
-    let Some(reference) = repo
-        .try_find_reference(ref_name.as_str())
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
-    else {
+    if !crate::refs::delete_named(repo, &ref_name)? {
         return Err(delete_branch_force_error(format!(
             "error: branch '{name}' not found"
         )));
-    };
-
-    reference
-        .delete()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix delete branch {name}: {e}"))))?;
+    }
     delete_local_branch_config_section(repo, name)
 }
 
@@ -270,8 +262,7 @@ fn branch_target_missing_error(repo: &gix::Repository, target: &str) -> Error {
 }
 
 fn resolve_branch_target_commit_id(repo: &gix::Repository, target: &str) -> Result<gix::ObjectId> {
-    let object = repo
-        .rev_parse_single(target)
+    let object = crate::refs::resolve_required(repo, target)
         .map_err(|_| branch_target_missing_error(repo, target))?
         .object()
         .map_err(|e| {
@@ -295,7 +286,7 @@ fn resolve_branch_target_commit_id(repo: &gix::Repository, target: &str) -> Resu
 
 fn resolve_stash_commit(repo: &gix::Repository, index: usize) -> Result<gix::Commit<'_>> {
     let stash_spec = stash_spec(index);
-    repo.rev_parse_single(stash_spec.as_str())
+    crate::refs::resolve_required(repo, stash_spec.as_str())
         .map_err(|e| {
             Error::new(ErrorKind::Backend(format!(
                 "gix rev-parse {stash_spec}: {e}"
@@ -480,8 +471,8 @@ impl GixRepo {
     }
 
     fn ref_exists_in_repo(repo: &gix::Repository, ref_name: &str) -> Result<bool> {
-        Ok(repo
-            .try_find_reference(ref_name)
+        Ok(crate::refs::view(repo)?
+            .find_exact(ref_name)
             .map_err(|e| {
                 Error::new(ErrorKind::Backend(format!(
                     "gix try_find_reference {ref_name}: {e}"
@@ -513,11 +504,11 @@ impl GixRepo {
         repo.committer_or_set_generic_fallback()
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix committer fallback: {e}"))))?;
 
-        if let Err(e) = repo.reference(
-            local_branch_ref_name(branch),
+        if let Err(e) = crate::refs::create(
+            &repo,
+            &local_branch_ref_name(branch),
             target_id,
-            gix::refs::transaction::PreviousValue::MustNotExist,
-            format!("branch: Created from {target}"),
+            &format!("branch: Created from {target}"),
         ) {
             if self.local_branch_exists(branch)? {
                 return Err(branch_already_exists_error("git branch", branch));
@@ -1016,7 +1007,7 @@ impl GixRepo {
             if has_commits {
                 // A bare `git reset` would also end a conflict-free operation
                 // in progress (a resolved merge, a stopped revert).
-                if conflicted.is_empty() && !self.operation_state_on_disk() {
+                if conflicted.is_empty() && !self.operation_state_on_disk()? {
                     let mut cmd = self.git_workdir_cmd();
                     cmd.arg("reset");
                     return run_git_simple(cmd, "git reset");
@@ -1103,7 +1094,7 @@ impl GixRepo {
 
     fn merge_in_progress_for_commit(&self) -> Result<bool> {
         let repo = self.repo();
-        Ok(repo.state() == Some(gix::state::InProgress::Merge))
+        Ok(crate::refs::operation_state(&repo)? == Some(gix::state::InProgress::Merge))
     }
 
     pub(super) fn commit_amend_impl(&self, message: &str) -> Result<()> {

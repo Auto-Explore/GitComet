@@ -3,17 +3,15 @@ use super::remotes::{
 };
 use super::{
     BranchTrackingConfigCacheEntry, DIVERGENCE_CACHE_LIMIT, DivergenceCache, GixRepo,
-    oid_to_arc_str, repo_file_stamp, with_object_cache,
+    repo_file_stamp, with_object_cache,
 };
+use crate::refs::files::{cached_commit_id, try_collect_loose_local_branches_fast};
 use crate::util::{bytes_to_text_preserving_utf8, run_git_capture, run_git_raw_output};
-use gitcomet_core::domain::{Branch, CommitId, RefMetadata, Upstream, UpstreamDivergence};
+use gitcomet_core::domain::{Branch, RefMetadata, Upstream, UpstreamDivergence};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CancellationToken, Result};
 use gix::bstr::ByteSlice as _;
 use rustc_hash::FxHashMap;
-use std::fs::File;
-use std::io::Read;
-use std::path::Path;
 use std::process::Output;
 
 const LOCAL_BRANCH_PREFIX: &[u8] = b"refs/heads/";
@@ -23,10 +21,7 @@ pub(super) fn head_upstream_divergence(
     cache: &DivergenceCache,
     cancellation: Option<&CancellationToken>,
 ) -> Result<Option<UpstreamDivergence>> {
-    let head = repo
-        .head()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix head: {e}"))))?;
-    let Some(mut branch_ref) = head.try_into_referent() else {
+    let Some(mut branch_ref) = crate::refs::view(repo)?.head_branch()? else {
         return Ok(None);
     };
 
@@ -42,6 +37,9 @@ pub(super) fn head_upstream_divergence(
 
 impl GixRepo {
     pub(super) fn current_branch_impl(&self) -> Result<String> {
+        if crate::refs::backend(&self.repo())? == crate::refs::RefBackend::Reftable {
+            return self.current_branch_gix();
+        }
         self.current_branch_gix().or_else(|gix_err| {
             self.current_branch_cli().map_err(|cli_err| {
                 Error::new(ErrorKind::Backend(format!(
@@ -111,11 +109,7 @@ impl GixRepo {
 
     fn current_branch_gix(&self) -> Result<String> {
         let repo = self.repo();
-        let head = repo
-            .head()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix head: {e}"))))?;
-
-        Ok(match head.referent_name() {
+        Ok(match crate::refs::head_name(&repo)? {
             Some(referent) => referent.shorten().to_str_lossy().into_owned(),
             None => "HEAD".to_string(),
         })
@@ -170,9 +164,10 @@ impl GixRepo {
         )?;
         let mut branches = parse_local_branches_for_each_ref(&output)?;
         let repo = self.reopen_repo()?;
+        let refs = crate::refs::view(&repo)?;
         for branch in &mut branches {
             let ref_name = format!("refs/heads/{}", branch.name);
-            let Some(branch_ref) = repo.try_find_reference(ref_name.as_str()).map_err(|e| {
+            let Some(branch_ref) = refs.find(ref_name.as_str()).map_err(|e| {
                 Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}")))
             })?
             else {
@@ -262,7 +257,7 @@ impl GixRepo {
 /// tag, say): moving that ref changes what this one resolves to.
 pub(super) fn hash_reference_identity(
     hasher: &mut rustc_hash::FxHasher,
-    reference: &mut gix::Reference<'_>,
+    reference: &mut crate::refs::Reference<'_>,
 ) {
     use gix::bstr::ByteSlice as _;
     use std::hash::Hash as _;
@@ -281,8 +276,7 @@ pub(super) fn hash_reference_identity(
 /// `for-each-ref refs/heads refs/remotes` excludes them).
 fn ref_namespace_fingerprint(repo: &gix::Repository) -> Result<u64> {
     use std::hash::Hasher as _;
-    let refs = repo
-        .references()
+    let refs = crate::refs::view(repo)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
     let mut hasher = rustc_hash::FxHasher::default();
     for iter in [
@@ -305,8 +299,7 @@ fn collect_local_branches(
     divergence_cache: &DivergenceCache,
     has_branch_tracking: bool,
 ) -> Result<Vec<Branch>> {
-    let refs = repo
-        .references()
+    let refs = crate::refs::view(repo)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
     let iter = refs
         .local_branches()
@@ -342,34 +335,6 @@ fn collect_local_branches(
         });
     }
     Ok(branches)
-}
-
-fn try_collect_loose_local_branches_fast(repo: &gix::Repository) -> Result<Option<Vec<Branch>>> {
-    if repo_file_stamp(repo.common_dir().join("packed-refs").as_path()).exists {
-        return Ok(None);
-    }
-
-    let root = repo.common_dir().join("refs").join("heads");
-    if !root.exists() {
-        return Ok(Some(Vec::new()));
-    }
-
-    let mut branches = Vec::new();
-    let mut scratch = Vec::new();
-    let mut target_ids = FxHashMap::default();
-    let mut last_target = None;
-    if !collect_loose_local_branches_fast(
-        &root,
-        &root,
-        &mut scratch,
-        &mut target_ids,
-        &mut last_target,
-        &mut branches,
-    )? {
-        return Ok(None);
-    }
-    branches.sort_unstable_by(|left, right| left.name.cmp(&right.name));
-    Ok(Some(branches))
 }
 
 /// Parses `%(refname:short)%00%(authorname)%00%(committerdate:unix)%00%(contents:subject)`
@@ -470,98 +435,6 @@ fn parse_local_branches_for_each_ref(output: &str) -> Result<Vec<Branch>> {
     Ok(branches)
 }
 
-fn collect_loose_local_branches_fast(
-    root: &Path,
-    dir: &Path,
-    scratch: &mut Vec<u8>,
-    target_ids: &mut FxHashMap<gix::ObjectId, CommitId>,
-    last_target: &mut Option<(gix::ObjectId, CommitId)>,
-    branches: &mut Vec<Branch>,
-) -> Result<bool> {
-    for entry in std::fs::read_dir(dir).map_err(|e| {
-        Error::new(ErrorKind::Backend(format!(
-            "read refs dir {}: {e}",
-            dir.display()
-        )))
-    })? {
-        let entry = entry.map_err(|e| {
-            Error::new(ErrorKind::Backend(format!(
-                "read refs dir entry {}: {e}",
-                dir.display()
-            )))
-        })?;
-        let path = entry.path();
-        let file_type = entry.file_type().map_err(|e| {
-            Error::new(ErrorKind::Backend(format!(
-                "read refs file type {}: {e}",
-                path.display()
-            )))
-        })?;
-
-        if file_type.is_dir() {
-            if !collect_loose_local_branches_fast(
-                root,
-                &path,
-                scratch,
-                target_ids,
-                last_target,
-                branches,
-            )? {
-                return Ok(false);
-            }
-            continue;
-        }
-        if !file_type.is_file() {
-            continue;
-        }
-
-        scratch.clear();
-        File::open(&path)
-            .and_then(|mut file| file.read_to_end(scratch))
-            .map_err(|e| {
-                Error::new(ErrorKind::Backend(format!(
-                    "read branch ref {}: {e}",
-                    path.display()
-                )))
-            })?;
-
-        let Some(target_id) = parse_loose_ref_target_id(scratch) else {
-            return Ok(false);
-        };
-
-        let relative = path.strip_prefix(root).unwrap_or(path.as_path());
-        let name = path_to_git_ref_name(relative);
-        let target = cached_commit_id(target_ids, last_target, target_id);
-        branches.push(Branch {
-            name,
-            target,
-            upstream: None,
-            divergence: None,
-        });
-    }
-    Ok(true)
-}
-
-fn parse_loose_ref_target_id(buf: &[u8]) -> Option<gix::ObjectId> {
-    let trimmed = buf.strip_suffix(b"\n").unwrap_or(buf);
-    let trimmed = trimmed.strip_suffix(b"\r").unwrap_or(trimmed);
-    if trimmed.starts_with(b"ref: ") {
-        return None;
-    }
-    gix::ObjectId::from_hex(trimmed).ok()
-}
-
-fn path_to_git_ref_name(path: &Path) -> String {
-    let mut name = String::new();
-    for component in path.components() {
-        if !name.is_empty() {
-            name.push('/');
-        }
-        name.push_str(component.as_os_str().to_string_lossy().as_ref());
-    }
-    name
-}
-
 fn probe_failure_reason(label: &str, output: &Output) -> String {
     if output.status.success() {
         return format!("{label} returned empty stdout");
@@ -602,37 +475,14 @@ fn local_branch_name(name: &gix::refs::FullNameRef) -> String {
         .into_owned()
 }
 
-fn branch_target_id(reference: &mut gix::Reference<'_>) -> Result<gix::ObjectId> {
-    match &reference.inner.target {
-        gix::refs::Target::Object(oid) => Ok(oid.to_owned()),
-        gix::refs::Target::Symbolic(_) => reference
-            .peel_to_id()
-            .map(|id| id.detach())
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix peel branch: {e}")))),
+fn branch_target_id(reference: &mut crate::refs::Reference<'_>) -> Result<gix::ObjectId> {
+    if let Some(id) = reference.try_id() {
+        return Ok(id.detach());
     }
-}
-
-fn cached_commit_id(
-    cache: &mut FxHashMap<gix::ObjectId, CommitId>,
-    last_target: &mut Option<(gix::ObjectId, CommitId)>,
-    target_id: gix::ObjectId,
-) -> CommitId {
-    if let Some((cached_oid, commit_id)) = last_target.as_ref()
-        && *cached_oid == target_id
-    {
-        return commit_id.clone();
-    }
-
-    if let Some(commit_id) = cache.get(&target_id) {
-        let commit_id = commit_id.clone();
-        *last_target = Some((target_id, commit_id.clone()));
-        return commit_id;
-    }
-
-    let commit_id = CommitId(oid_to_arc_str(&target_id));
-    cache.insert(target_id, commit_id.clone());
-    *last_target = Some((target_id, commit_id.clone()));
-    commit_id
+    reference
+        .peel_to_id()
+        .map(|id| id.detach())
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix peel branch: {e}"))))
 }
 
 fn parse_upstream_track_divergence(raw: &str) -> Option<UpstreamDivergence> {
@@ -740,7 +590,7 @@ fn divergence_between(
 fn branch_upstream_and_divergence(
     repo: &gix::Repository,
     cache: &DivergenceCache,
-    branch_ref: &gix::Reference<'_>,
+    branch_ref: &crate::refs::Reference<'_>,
     local_tip: gix::ObjectId,
     cancellation: Option<&CancellationToken>,
 ) -> Result<(Option<Upstream>, Option<UpstreamDivergence>)> {
@@ -757,7 +607,7 @@ fn branch_upstream_and_divergence(
 fn branch_upstream_and_divergence_best_effort(
     repo: &gix::Repository,
     cache: &DivergenceCache,
-    branch_ref: &gix::Reference<'_>,
+    branch_ref: &crate::refs::Reference<'_>,
     local_tip: gix::ObjectId,
 ) -> Result<(Option<Upstream>, Option<UpstreamDivergence>)> {
     let Some((upstream, upstream_tip)) = branch_upstream_target(repo, branch_ref)? else {
@@ -770,7 +620,7 @@ fn branch_upstream_and_divergence_best_effort(
 
 fn branch_upstream_target(
     repo: &gix::Repository,
-    branch_ref: &gix::Reference<'_>,
+    branch_ref: &crate::refs::Reference<'_>,
 ) -> Result<Option<(Upstream, gix::ObjectId)>> {
     let Some(upstream) = configured_upstream_of(branch_ref) else {
         return Ok(None);
@@ -780,8 +630,7 @@ fn branch_upstream_target(
         return Ok(None);
     };
 
-    let Some(mut tracking_ref) = repo
-        .try_find_reference(tracking_ref_name.as_str())
+    let Some(mut tracking_ref) = crate::refs::find(repo, tracking_ref_name.as_str())
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
     else {
         return Ok(None);

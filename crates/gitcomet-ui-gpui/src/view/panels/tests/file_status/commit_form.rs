@@ -727,7 +727,7 @@ fn holding_a_drag_selection_past_the_commit_box_scrolls_it(cx: &mut gpui::TestAp
     let _cache_guard = crate::view::enable_stable_cached_views_for_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
-        window.activate_window();
+        window.activate();
         super::super::super::GitCometView::new(store, events, None, window, cx)
     });
     let repo_id = gitcomet_state::model::RepoId(48);

@@ -361,8 +361,8 @@ fn wrap_boundaries(
 }
 
 /// gpui's private `LineLayout::trailing_whitespace_x`: the x of the first of
-/// the spaces (tabs included) running up to `boundary`, followed back no
-/// further than `line_start`; the boundary glyph's own x when there are none.
+/// the spaces (or tabs) running up to `boundary`, not past `line_start`; the
+/// boundary glyph's own x when the line does not end in one.
 fn trailing_whitespace_x(
     layout: &gpui::LineLayout,
     text: &str,
@@ -386,8 +386,11 @@ fn trailing_whitespace_x(
                 .rev()
                 .map(move |(glyph_ix, glyph)| ((ix, glyph_ix), glyph))
         })
-        .take_while(|&(ix, glyph)| {
-            ix >= line_start && matches!(text.as_bytes().get(glyph.index), Some(b' ' | b'\t'))
+        .take_while(|(ix, glyph)| {
+            *ix >= line_start
+                && text
+                    .get(glyph.index..)
+                    .is_some_and(|rest| rest.starts_with([' ', '\t']))
         })
         .last()
         .map_or_else(
@@ -755,7 +758,7 @@ mod tab_stop_tests {
             glyph_ix,
             trailing_whitespace_x: px(trailing_whitespace_x),
         };
-        // A row of only tabs hangs whole; `abc ` hangs its space at 150.
+        // A row of only tabs hangs whole; `abc ` hangs its space.
         assert_eq!(
             layout.wrap_boundaries.as_slice(),
             &[boundary(2, 0.0), boundary(7, 150.0)]
