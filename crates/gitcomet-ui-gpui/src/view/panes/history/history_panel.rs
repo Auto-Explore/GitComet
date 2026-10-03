@@ -55,6 +55,12 @@ impl HistoryView {
         if manual {
             self.cancel_history_scroll_reveal();
         }
+        // Lets a new indexed viewport start from the pitch its rows will get.
+        let row_height = crate::view::rows::history_row_height(self.ui_scale());
+        self.scroll_interaction.borrow_mut().snapped_row_height = Some((
+            row_height,
+            f64::from(f32::from(window.pixel_snap(row_height))),
+        ));
         self.ensure_indexed_history(cx);
         self.apply_indexed_history(cx);
         if self.indexed.presentation.is_none() {
