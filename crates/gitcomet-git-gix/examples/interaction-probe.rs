@@ -2,7 +2,9 @@
 //! Usage: interaction-probe REPO OP PATH SAMPLES WARMUPS [context]
 use gitcomet_core::domain::{DiffArea, DiffTarget};
 use gitcomet_core::git_operation::{self, GitOperationContext, GitOperationEvent};
+use gitcomet_core::large_files::LargeFileCommand;
 use gitcomet_core::services::GitBackend;
+use gitcomet_core::services::PullMode;
 use gitcomet_git_gix::GixBackend;
 use serde_json::json;
 use std::{
@@ -37,33 +39,97 @@ fn main() {
         });
         let _scope = (args.get(6).map(String::as_str) == Some("context"))
             .then(|| git_operation::attach(&context));
-        let witness = match operation.as_str() {
-            "diff" => {
-                let diff = repo.diff_file_text(&target).unwrap().expect("text diff");
-                json!({"old": diff.old_source.as_ref().map(|source| &source.path),
+        let (witness, commands) =
+            gitcomet_git_gix::command_trace::capture(|| match operation.as_str() {
+                "diff" => {
+                    let diff = repo.diff_file_text(&target).unwrap().expect("text diff");
+                    json!({"old": diff.old_source.as_ref().map(|source| &source.path),
                     "new": diff.new_source.as_ref().map(|source| &source.path)})
-            }
-            "status" => {
-                let status = repo.status().unwrap();
-                json!({"staged":status.staged.len(), "unstaged":status.unstaged.len()})
-            }
-            "stage" => {
-                repo.stage(&[&path]).unwrap();
-                json!("staged")
-            }
-            "checkout" => {
-                repo.checkout_branch(&args[3]).unwrap();
-                json!("checked-out")
-            }
-            "push" => {
-                repo.push_with_output().unwrap();
-                json!("pushed")
-            }
-            _ => panic!("unsupported operation"),
-        };
+                }
+                "status" => {
+                    let status = repo.status().unwrap();
+                    json!({"staged":status.staged.len(), "unstaged":status.unstaged.len()})
+                }
+                "stage" => {
+                    repo.stage(&[&path]).unwrap();
+                    json!("staged")
+                }
+                "checkout" => {
+                    repo.checkout_branch(&args[3]).unwrap();
+                    json!("checked-out")
+                }
+                "push" => {
+                    repo.push_with_output().unwrap();
+                    json!("pushed")
+                }
+                "fetch" => {
+                    repo.fetch_all_with_output().unwrap();
+                    json!("fetched")
+                }
+                "pull" | "pull-merge" => {
+                    repo.pull_with_output(PullMode::Merge).unwrap();
+                    json!("pulled")
+                }
+                "pull-rebase" => {
+                    repo.pull_with_output(PullMode::Rebase).unwrap();
+                    json!("pulled")
+                }
+                "lfs-fetch" => {
+                    repo.run_large_file_command(&LargeFileCommand::LfsFetchAll)
+                        .unwrap();
+                    json!("fetched")
+                }
+                "lfs-pull" => {
+                    repo.run_large_file_command(&LargeFileCommand::LfsPull { paths: vec![] })
+                        .unwrap();
+                    json!("pulled")
+                }
+                "lfs-push" => {
+                    repo.run_large_file_command(&LargeFileCommand::LfsPushAll {
+                        remote: "origin".into(),
+                    })
+                    .unwrap();
+                    json!("pushed")
+                }
+                "annex-get" => {
+                    repo.run_large_file_command(&LargeFileCommand::AnnexGet {
+                        paths: vec![".".into()],
+                        from: Some("backup".into()),
+                    })
+                    .unwrap();
+                    json!("got")
+                }
+                "annex-copy" => {
+                    repo.run_large_file_command(&LargeFileCommand::AnnexCopy {
+                        paths: vec![".".into()],
+                        to: "backup".into(),
+                    })
+                    .unwrap();
+                    json!("copied")
+                }
+                "annex-pull" => {
+                    repo.run_large_file_command(&LargeFileCommand::AnnexPull { content: true })
+                        .unwrap();
+                    json!("pulled")
+                }
+                "annex-push" => {
+                    repo.run_large_file_command(&LargeFileCommand::AnnexPush { content: true })
+                        .unwrap();
+                    json!("pushed")
+                }
+                "annex-sync" => {
+                    repo.run_large_file_command(&LargeFileCommand::AnnexSync { content: true })
+                        .unwrap();
+                    json!("synced")
+                }
+                _ => panic!("unsupported operation"),
+            });
         let elapsed = started.elapsed().as_secs_f64() * 1000.0;
         if ix >= warmups {
-            observations.push(json!({"milliseconds":elapsed, "witness":witness, "progress":*events.lock().unwrap()}));
+            let timings: Vec<_> = commands.iter().map(|command| json!({"label": command.label,
+                "milliseconds": command.elapsed.as_secs_f64() * 1000.0,
+                "stages": command.stages.iter().map(|(stage, duration)| json!({"stage": stage, "milliseconds": duration.as_secs_f64() * 1000.0})).collect::<Vec<_>>() })).collect();
+            observations.push(json!({"milliseconds":elapsed, "witness":witness, "progress":*events.lock().unwrap(), "commands": timings}));
         }
     }
     println!("{}", json!({"operation":operation, "samples":observations}));

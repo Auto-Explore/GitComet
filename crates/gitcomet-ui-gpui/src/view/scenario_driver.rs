@@ -21,12 +21,15 @@
 use super::*;
 use gitcomet_core::op_trace::{self, Stage};
 use gpui::{
-    AnyWindowHandle, AsyncApp, Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent,
-    PlatformInput, ScrollDelta, ScrollWheelEvent, TouchPhase,
+    AnyWindowHandle, AsyncApp, Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, PlatformInput, ScrollDelta, ScrollWheelEvent, TouchPhase,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::path::PathBuf;
+
+mod operations;
+use operations::Operation;
 
 const SCENARIO_ENV: &str = "GITCOMET_UI_SCENARIO";
 const DEFAULT_WITNESS_TIMEOUT: Duration = Duration::from_secs(15);
@@ -54,11 +57,17 @@ enum Step {
         timeout_ms: u64,
     },
     /// Sleeps; used to let startup work finish before measuring.
-    Settle { ms: u64 },
+    Settle {
+        ms: u64,
+    },
     /// Ends the previous phase and starts a named one.
-    Phase { name: String },
+    Phase {
+        name: String,
+    },
     /// Moves keyboard focus inside the window.
-    Focus { target: FocusTarget },
+    Focus {
+        target: FocusTarget,
+    },
     /// Presses a key (`Keystroke::parse` syntax) on a fixed schedule.
     Keys {
         key: String,
@@ -114,9 +123,47 @@ enum Step {
     },
     /// Opens a repository as the Open Repository flow does once a folder is
     /// picked, as a traced input whose witness is that repository loaded.
-    OpenRepo { path: PathBuf },
+    OpenRepo {
+        path: PathBuf,
+    },
     /// Minimizes the window (idle measurements).
     Minimize,
+    /// Coordinates are fractions of the rendered history viewport. Sweeps
+    /// exercise real hit testing; a dwell can require a visible message card.
+    MovePointer {
+        positions: Vec<[f32; 2]>,
+        repeat: usize,
+        interval_ms: u64,
+        #[serde(default)]
+        witness: Option<WitnessKind>,
+    },
+    DragHistory {
+        to_fraction: f32,
+        steps: usize,
+        interval_ms: u64,
+    },
+    /// Starts through the production store, then returns so subsequent input
+    /// runs concurrently with the operation. WaitOperation proves completion.
+    StartOperation {
+        operation: String,
+        #[serde(default)]
+        path: PathBuf,
+        #[serde(default)]
+        remote: String,
+        #[serde(default)]
+        url: String,
+        #[serde(default)]
+        dest: PathBuf,
+    },
+    WaitOperation {
+        timeout_ms: u64,
+        #[serde(default)]
+        cancelled: bool,
+    },
+    CancelOperation,
+    /// Use the activity dialog's production minimize handler, then prove it
+    /// no longer occludes the history targeted by subsequent input.
+    MinimizeActivity,
 }
 
 fn default_ready_timeout_ms() -> u64 {
@@ -154,9 +201,14 @@ enum WitnessKind {
     /// The diff search settled on the typed query.
     SearchSettled,
     /// The repository at `path` is active with status and history loaded.
-    RepoOpen { path: PathBuf },
+    RepoOpen {
+        path: PathBuf,
+    },
     /// No open repository has `path` as its work tree.
-    RepoClosed { path: PathBuf },
+    RepoClosed {
+        path: PathBuf,
+    },
+    MessageHover,
 }
 
 impl WitnessKind {
@@ -168,6 +220,7 @@ impl WitnessKind {
             Self::SearchSettled => "search_settled",
             Self::RepoOpen { .. } => "repo_open",
             Self::RepoClosed { .. } => "repo_closed",
+            Self::MessageHover => "message_hover",
         }
     }
 }
@@ -196,6 +249,10 @@ struct Driver {
     _observers: Vec<gpui::Subscription>,
     errors: Vec<String>,
     phase: Option<String>,
+    operation: Option<Operation>,
+    pointer_expected: Option<Point<Pixels>>,
+    #[cfg(feature = "perf-alloc")]
+    allocation_start: crate::perf_alloc::PerfAllocMetrics,
 }
 
 pub(crate) fn start_if_requested(cx: &mut App) {
@@ -221,6 +278,10 @@ pub(crate) fn start_if_requested(cx: &mut App) {
 }
 
 async fn run(scenario: Scenario, cx: &mut AsyncApp) {
+    record(
+        "scenario_diagnostics",
+        json!({"allocation_tracking": cfg!(feature = "perf-alloc")}),
+    );
     let mut driver = match Driver::attach(cx).await {
         Ok(driver) => driver,
         Err(error) => {
@@ -239,6 +300,12 @@ async fn run(scenario: Scenario, cx: &mut AsyncApp) {
                 .push(format!("step {index} ({step:?}): {error}"));
             break;
         }
+    }
+    if driver.operation.is_some() {
+        let _ = driver.cancel_operation(cx);
+        driver
+            .errors
+            .push("scenario ended with an unwitnessed operation".into());
     }
     driver.end_phase();
     let outcome = if driver.errors.is_empty() {
@@ -348,11 +415,24 @@ impl Driver {
             _observers: observers,
             errors: Vec::new(),
             phase: None,
+            operation: None,
+            pointer_expected: None,
+            #[cfg(feature = "perf-alloc")]
+            allocation_start: crate::perf_alloc::current_alloc_metrics(),
         })
     }
 
     fn end_phase(&mut self) {
         if let Some(name) = self.phase.take() {
+            #[cfg(feature = "perf-alloc")]
+            {
+                let metrics =
+                    crate::perf_alloc::current_alloc_metrics().delta_since(self.allocation_start);
+                let mut payload = serde_json::Map::new();
+                payload.insert("phase".into(), json!(name));
+                metrics.append_to_payload(&mut payload);
+                record("scenario_allocations", Value::Object(payload));
+            }
             record("scenario_phase", json!({"name": name, "state": "end"}));
         }
     }
@@ -374,6 +454,10 @@ impl Driver {
                 self.end_phase();
                 record("scenario_phase", json!({"name": name, "state": "begin"}));
                 self.phase = Some(name.clone());
+                #[cfg(feature = "perf-alloc")]
+                {
+                    self.allocation_start = crate::perf_alloc::current_alloc_metrics();
+                }
                 Ok(())
             }
             Step::Focus { target } => self.focus(*target, cx),
@@ -519,6 +603,149 @@ impl Driver {
                 .window
                 .update(cx, |_, window, _| window.minimize_window())
                 .map_err(|e| e.to_string()),
+            Step::MovePointer {
+                positions,
+                repeat,
+                interval_ms,
+                witness,
+            } => {
+                if positions.is_empty()
+                    || *repeat == 0
+                    || positions
+                        .iter()
+                        .flatten()
+                        .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+                {
+                    return Err(
+                        "pointer positions must be viewport fractions; repeat must be positive"
+                            .into(),
+                    );
+                }
+                let bounds = cx
+                    .update(|cx| {
+                        self.view
+                            .read(cx)
+                            .main_pane
+                            .read(cx)
+                            .history_view
+                            .read(cx)
+                            .history_viewport_bounds()
+                    })
+                    .ok_or("history has no viewport")?;
+                let points: Vec<_> = positions
+                    .iter()
+                    .map(|p| {
+                        point(
+                            bounds.left() + bounds.size.width * p[0],
+                            bounds.top() + bounds.size.height * p[1],
+                        )
+                    })
+                    .collect();
+                self.pointer_expected = Some(points[(*repeat - 1) % points.len()]);
+                self.scheduled(
+                    *repeat,
+                    *interval_ms,
+                    witness.clone(),
+                    cx,
+                    |ix, window, cx| {
+                        window.dispatch_event(
+                            PlatformInput::MouseMove(MouseMoveEvent {
+                                position: points[ix % points.len()],
+                                pressed_button: None,
+                                modifiers: Modifiers::default(),
+                            }),
+                            cx,
+                        );
+                    },
+                )
+                .await
+            }
+            Step::DragHistory {
+                to_fraction,
+                steps,
+                interval_ms,
+            } => {
+                if !(0.01..=0.99).contains(to_fraction) || *steps == 0 {
+                    return Err("drag needs positive steps and destination in 0.01..=0.99".into());
+                }
+                let (start, end) = cx
+                    .update(|cx| {
+                        self.view
+                            .read(cx)
+                            .main_pane
+                            .read(cx)
+                            .history_view
+                            .read(cx)
+                            .scenario_drag_points(*to_fraction)
+                    })
+                    .ok_or("history has no viewport")?;
+                self.window
+                    .update(cx, |_, window, cx| {
+                        window.dispatch_event(
+                            PlatformInput::MouseDown(MouseDownEvent {
+                                button: MouseButton::Left,
+                                position: start,
+                                modifiers: Modifiers::default(),
+                                click_count: 1,
+                                first_mouse: false,
+                            }),
+                            cx,
+                        )
+                    })
+                    .map_err(|e| e.to_string())?;
+                let result = self
+                    .scheduled(
+                        *steps,
+                        *interval_ms,
+                        Some(WitnessKind::HistoryScrolled),
+                        cx,
+                        |ix, window, cx| {
+                            let progress = (ix + 1) as f32 / *steps as f32;
+                            window.dispatch_event(
+                                PlatformInput::MouseMove(MouseMoveEvent {
+                                    position: point(
+                                        start.x,
+                                        start.y + (end.y - start.y) * progress,
+                                    ),
+                                    pressed_button: Some(MouseButton::Left),
+                                    modifiers: Modifiers::default(),
+                                }),
+                                cx,
+                            );
+                        },
+                    )
+                    .await;
+                self.window
+                    .update(cx, |_, window, cx| {
+                        window.dispatch_event(
+                            PlatformInput::MouseUp(MouseUpEvent {
+                                button: MouseButton::Left,
+                                position: end,
+                                modifiers: Modifiers::default(),
+                                click_count: 1,
+                            }),
+                            cx,
+                        )
+                    })
+                    .map_err(|e| e.to_string())?;
+                result
+            }
+            Step::StartOperation {
+                operation,
+                path,
+                remote,
+                url,
+                dest,
+            } => {
+                self.start_operation(operation, path, remote, url, dest, cx)
+                    .await
+            }
+            Step::WaitOperation {
+                timeout_ms,
+                cancelled,
+            } => self.wait_operation(*timeout_ms, *cancelled, cx).await,
+            Step::CancelOperation => self.cancel_operation(cx),
+            Step::MinimizeActivity => self.minimize_activity(cx).await,
         }
     }
 
@@ -537,7 +764,21 @@ impl Driver {
                     && history.history_viewport_bounds().is_some()
             });
             if ready {
-                record("scenario_ready", json!({}));
+                let geometry = cx.update(|cx| {
+                    let view = self.view.read(cx);
+                    let history = view.main_pane.read(cx).history_view.read(cx);
+                    let bounds = history.history_viewport_bounds().expect("ready viewport");
+                    let commits =
+                        view.active_repo()
+                            .and_then(|repo| match &repo.history_state.log {
+                                Loadable::Ready(page) => Some(page.commits.len()),
+                                _ => None,
+                            });
+                    json!({"loaded_commits": commits, "viewport": [
+                        f32::from(bounds.left()), f32::from(bounds.top()),
+                        f32::from(bounds.size.width), f32::from(bounds.size.height)]})
+                });
+                record("scenario_ready", geometry);
                 return Ok(());
             }
             if Instant::now() > deadline {
@@ -617,7 +858,8 @@ impl Driver {
                 }
                 WitnessKind::DiffLoaded
                 | WitnessKind::RepoOpen { .. }
-                | WitnessKind::RepoClosed { .. } => Baseline::None,
+                | WitnessKind::RepoClosed { .. }
+                | WitnessKind::MessageHover => Baseline::None,
             }
         })
     }
@@ -644,6 +886,11 @@ impl Driver {
                 return false;
             };
             match kind {
+                WitnessKind::MessageHover => self.pointer_expected.is_some_and(|position| {
+                    view.commit_message_hover_host
+                        .read(cx)
+                        .scenario_contains_source(position)
+                }),
                 WitnessKind::CommitDetails => {
                     let selected = repo.history_state.selected_commit.clone();
                     if target.is_none() {
@@ -715,6 +962,7 @@ impl Driver {
             let scheduled = started + interval * u32::try_from(ix).unwrap_or(u32::MAX);
             // Resolve witnesses until the next input is due.
             loop {
+                let _ = self.operation_status(cx);
                 self.resolve(&mut pending, cx);
                 let now = Instant::now();
                 if now >= scheduled {
@@ -734,6 +982,11 @@ impl Driver {
                 .map_or(Baseline::None, |kind| self.baseline_for(kind, cx));
             let expects = u64::from(witness.is_some());
             let dispatched = self.window.update(cx, |_, window, cx| {
+                record(
+                    "scenario_input",
+                    json!({"op": op, "window": format!("{:?}", window.window_handle().window_id()),
+                    "intentional_dwell": matches!(witness, Some(WitnessKind::MessageHover))}),
+                );
                 // `b` says whether a witness will follow.
                 op_trace::record(
                     Stage::Input,
@@ -767,6 +1020,7 @@ impl Driver {
         }
         let deadline = Instant::now() + DEFAULT_WITNESS_TIMEOUT;
         while !pending.is_empty() {
+            let _ = self.operation_status(cx);
             self.resolve(&mut pending, cx);
             if pending.is_empty() {
                 break;
@@ -829,6 +1083,7 @@ impl Driver {
                 return "no active repository".to_owned();
             };
             match kind {
+                WitnessKind::MessageHover => format!("pointer={:?}", self.pointer_expected),
                 WitnessKind::CommitDetails => format!(
                     "selected={:?} details_ready={}",
                     repo.history_state.selected_commit,
@@ -893,16 +1148,25 @@ impl Driver {
             .update(|cx| self.view.read(cx).active_repo_workdir())
             .ok_or("no active repository")?;
         // `None` marks a path that did not exist: restoring deletes it.
-        let mut originals = Vec::with_capacity(paths.len());
-        for path in paths {
-            let full = workdir.join(path);
-            let original = match std::fs::read(&full) {
-                Ok(bytes) => Some(bytes),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                Err(error) => return Err(format!("{}: {error}", full.display())),
-            };
-            originals.push((full, original));
-        }
+        let files: Vec<_> = paths.iter().map(|path| workdir.join(path)).collect();
+        let originals = Arc::new(
+            cx.background_executor()
+                .spawn(async move {
+                    files
+                        .into_iter()
+                        .map(|full| {
+                            let original = match std::fs::read(&full) {
+                                Ok(bytes) => Some(bytes),
+                                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                                Err(error) => return Err(format!("{}: {error}", full.display())),
+                            };
+                            Ok((full, original))
+                        })
+                        .collect::<Result<Vec<_>, String>>()
+                })
+                .await?,
+        );
+        let contents: Arc<str> = contents.into();
         let started = Instant::now();
         let interval = Duration::from_millis(interval_ms);
         let mut result = Ok(());
@@ -922,19 +1186,16 @@ impl Driver {
                 u64::from(expect_status),
             );
             let handling = Instant::now();
-            for (full, original) in &originals {
-                let written = match (dirty, original) {
-                    (true, _) => full
-                        .parent()
-                        .map_or(Ok(()), std::fs::create_dir_all)
-                        .and_then(|()| std::fs::write(full, contents)),
-                    (false, Some(original)) => std::fs::write(full, original),
-                    (false, None) => std::fs::remove_file(full),
-                };
-                if let Err(error) = written {
-                    result = Err(format!("{}: {error}", full.display()));
-                }
-            }
+            // These represent an external editor/build. Harness filesystem
+            // work must not manufacture a stall on the application's UI thread.
+            let files = Arc::clone(&originals);
+            let contents = Arc::clone(&contents);
+            result = cx
+                .background_executor()
+                .spawn(
+                    async move { write_fixture_files(&files, dirty.then_some(contents.as_ref())) },
+                )
+                .await;
             op_trace::record(
                 Stage::InputHandled,
                 op,
@@ -983,14 +1244,36 @@ impl Driver {
             }
         }
         // Leave the tree as it was, whatever happened.
-        for (full, original) in &originals {
-            let _ = match original {
-                Some(original) => std::fs::write(full, original),
-                None => std::fs::remove_file(full),
-            };
-        }
-        result
+        let restored = cx
+            .background_executor()
+            .spawn(async move { write_fixture_files(&originals, None) })
+            .await;
+        result.and(restored)
     }
+}
+
+fn write_fixture_files(
+    originals: &[(PathBuf, Option<Vec<u8>>)],
+    contents: Option<&str>,
+) -> Result<(), String> {
+    let mut result = Ok(());
+    for (full, original) in originals {
+        let written = match (contents, original) {
+            (Some(contents), _) => full
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::write(full, contents)),
+            (None, Some(original)) => std::fs::write(full, original),
+            (None, None) => match std::fs::remove_file(full) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                result => result,
+            },
+        };
+        if let Err(error) = written {
+            result = Err(format!("{}: {error}", full.display()));
+        }
+    }
+    result
 }
 
 #[cfg(test)]
@@ -1058,5 +1341,21 @@ mod tests {
             "steps": [{"do": "wait_redy"}]
         }));
         assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn performance_operation_and_pointer_steps_parse() {
+        let scenario: Scenario = serde_json::from_value(json!({"steps": [
+            {"do": "move_pointer", "positions": [[0.55, 0.08]], "repeat": 1,
+             "interval_ms": 0, "witness": {"kind": "message_hover"}},
+            {"do": "drag_history", "to_fraction": 0.8, "steps": 90, "interval_ms": 16},
+            {"do": "start_operation", "operation": "clone", "url": "http://127.0.0.1/remote.git",
+             "dest": "/tmp/disposable-clone"},
+            {"do": "cancel_operation"},
+            {"do": "minimize_activity"},
+            {"do": "wait_operation", "timeout_ms": 15000, "cancelled": true}
+        ]}))
+        .expect("parse performance steps");
+        assert_eq!(scenario.steps.len(), 6);
     }
 }

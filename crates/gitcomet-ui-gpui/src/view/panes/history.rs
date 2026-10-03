@@ -1274,6 +1274,33 @@ impl HistoryView {
         (cache_repo == active && bounds.size.height > px(0.0)).then_some(bounds)
     }
 
+    /// Geometry for native pointer dispatch in the opt-in performance driver.
+    pub(in crate::view) fn scenario_drag_points(
+        &self,
+        fraction: f32,
+    ) -> Option<(Point<Pixels>, Point<Pixels>)> {
+        let bounds = self.history_viewport_bounds()?;
+        let scroll = self.scroll_interaction.borrow();
+        let start = if let Some(logical) = &scroll.logical {
+            let position = if logical.max() > 0.0 {
+                logical.position() / logical.max()
+            } else {
+                0.0
+            };
+            point(
+                // The measured content canvas excludes the scrollbar gutter.
+                bounds.right() + px(8.0),
+                bounds.top() + px(16.0) + (bounds.size.height - px(32.0)) * position as f32,
+            )
+        } else {
+            point(bounds.right() + px(8.0), bounds.top() + px(28.0))
+        };
+        Some((
+            start,
+            point(start.x, bounds.top() + bounds.size.height * fraction),
+        ))
+    }
+
     pub(in crate::view) fn history_scroll_position(&self) -> f64 {
         self.scroll_interaction
             .borrow()
