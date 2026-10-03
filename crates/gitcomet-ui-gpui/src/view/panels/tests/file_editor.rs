@@ -3754,7 +3754,7 @@ async fn unsaved_edits_are_reported_and_discardable_per_file(cx: &mut gpui::Test
 /// `syntax/live.rs`; this pins the rest of the path, which is where an offset or
 /// a dropped window would show up as "the colours are wrong in edit mode" while
 /// every engine test still passed.
-async fn assert_editor_renders_the_engines_highlights(
+fn assert_editor_renders_the_engines_highlights(
     cx: &mut gpui::TestAppContext,
     repo_id: gitcomet_state::model::RepoId,
     label: &str,
@@ -3821,9 +3821,7 @@ async fn assert_editor_renders_the_engines_highlights(
 }
 
 #[gpui::test]
-async fn the_editor_renders_rust_highlights_as_the_engine_produced_them(
-    cx: &mut gpui::TestAppContext,
-) {
+fn the_editor_renders_rust_highlights_as_the_engine_produced_them(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     assert_editor_renders_the_engines_highlights(
         cx,
@@ -3850,14 +3848,11 @@ async fn the_editor_renders_rust_highlights_as_the_engine_produced_them(
             "    }\n",
             "}\n",
         ),
-    )
-    .await;
+    );
 }
 
 #[gpui::test]
-async fn the_editor_renders_shell_highlights_as_the_engine_produced_them(
-    cx: &mut gpui::TestAppContext,
-) {
+fn the_editor_renders_shell_highlights_as_the_engine_produced_them(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     assert_editor_renders_the_engines_highlights(
         cx,
@@ -3883,12 +3878,11 @@ async fn the_editor_renders_shell_highlights_as_the_engine_produced_them(
             "  greet \"$f\"\n",
             "done\n",
         ),
-    )
-    .await;
+    );
 }
 
 #[gpui::test]
-async fn the_editor_renders_nunjucks_with_the_jinja_grammar(cx: &mut gpui::TestAppContext) {
+fn the_editor_renders_nunjucks_with_the_jinja_grammar(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     assert_editor_renders_the_engines_highlights(
         cx,
@@ -3909,8 +3903,7 @@ async fn the_editor_renders_nunjucks_with_the_jinja_grammar(cx: &mut gpui::TestA
             "</nav>\n",
             "<script>\nconst open = false;\n</script>\n",
         ),
-    )
-    .await;
+    );
 }
 
 #[gpui::test]

@@ -1170,7 +1170,7 @@ fn workspace_row_shows_colour_dot_and_its_menu_icons_share_a_column(cx: &mut gpu
     );
 
     cx.update(|_window, app| {
-        popover_host.update(app, |host, cx| picker_row_menu::close(host, cx));
+        popover_host.update(app, picker_row_menu::close);
     });
     draw(cx);
     assert!(

@@ -304,6 +304,8 @@ impl Refreshable for ChangeListSession {
 }
 
 /// Messages for diff sessions. `Loaded` comes from the store's own workers.
+// Inline like `Msg`, so a load does not allocate; Windows paths tip it over.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum DiffSessionMsg {
     /// Opens `view` on `target`, or retargets it if already open.

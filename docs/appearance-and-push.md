@@ -1,6 +1,6 @@
 # Appearance and push options
 
-In **Settings → General**, choose **Compact**, **Comfortable** or **Spacious**
+In **Settings → Appearance**, choose **Compact**, **Comfortable** or **Spacious**
 density. Comfortable is the default. Each step adds space around controls and
 increases button, menu and list-row targets for pointer and trackpad use;
 Spacious continues the same step further again. Density changes spacing only —

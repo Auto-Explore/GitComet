@@ -231,6 +231,17 @@ mod tests {
         let plain = InteractiveRowStyle::new(theme, surface);
         let tinted = plain.tinted(Some(tint));
         let idle = InteractiveRowState::default();
+        // Hover and press fills round-trip through `Hsla` in `StyleRefinement::bg`.
+        let assert_close = |a: Rgba, b: Rgba| {
+            for (x, y) in [
+                (a.red, b.red),
+                (a.green, b.green),
+                (a.blue, b.blue),
+                (a.alpha, b.alpha),
+            ] {
+                assert!((x - y).abs() < 1e-5, "{a:?} vs {b:?}");
+            }
+        };
 
         assert_eq!(plain.resting_fill(idle), None);
         assert_eq!(tinted.resting_fill(idle), Some(tint));
@@ -238,17 +249,17 @@ mod tests {
             tinted.resolved_background(idle),
             composite_over(surface, tint)
         );
-        assert_eq!(
+        assert_close(
             tinted.resolved_hover_background(idle),
-            composite_over(surface, layer_over(tint, theme.hover_overlay()))
+            composite_over(surface, layer_over(tint, theme.hover_overlay())),
         );
         assert_ne!(
             tinted.resolved_hover_background(idle),
             plain.resolved_hover_background(idle)
         );
-        assert_eq!(
+        assert_close(
             tinted.active_fill(idle),
-            layer_over(tint, theme.active_overlay())
+            layer_over(tint, theme.active_overlay()),
         );
 
         // An opaque selection would hide a wash painted under it.

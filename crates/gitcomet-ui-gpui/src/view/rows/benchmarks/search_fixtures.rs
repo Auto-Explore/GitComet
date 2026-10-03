@@ -941,9 +941,9 @@ fn lowercase_subsequence_match_end(haystack: &[u8], needle: &[u8]) -> Option<usi
     let mut offset = 0usize;
     for &needle_byte in needle {
         let remaining = &haystack[offset..];
-        match memchr::memchr(needle_byte, remaining) {
-            Some(pos) => offset += pos + 1,
-            None => return None,
+        {
+            let pos = memchr::memchr(needle_byte, remaining)?;
+            offset += pos + 1
         }
     }
 

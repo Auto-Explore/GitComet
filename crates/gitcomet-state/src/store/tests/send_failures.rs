@@ -580,11 +580,11 @@ fn store_event_send_increments_failure_counter_when_receiver_closed() {
     let (event_tx, event_rx) = smol::channel::bounded::<StoreEvent>(1);
     drop(event_rx);
 
+    let (msg_tx, _msg_rx) = mpsc::channel::<Msg>();
     super::send_diagnostics::try_send_state_changed_or_log(
         &event_tx,
         "test state event send",
-        super::worker_channel::StoreInstanceId::next(),
-        true,
+        &super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx),
     );
 
     let after = store_event_failure_count();

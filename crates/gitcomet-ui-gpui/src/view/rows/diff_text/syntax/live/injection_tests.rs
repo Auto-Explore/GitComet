@@ -1125,12 +1125,12 @@ fn markdown_inline_colors_survive_repeated_edits_while_reparsing_is_deferred() {
         )
         .expect("inline code must start highlighted");
         assert!(style.color.is_some());
-        let mut at = match location {
+        let start = match location {
             "paragraph start" => 0,
             "prose" => 2,
             _ => code + 3,
         };
-        for step in 0..20 {
+        for (step, at) in (start..start + 20).enumerate() {
             text.insert(at, 'a');
             document.sync(
                 Rope::from_text(&text),
@@ -1179,7 +1179,6 @@ fn markdown_inline_colors_survive_repeated_edits_while_reparsing_is_deferred() {
             if location == "code" {
                 assert_eq!(styles_at(&highlights, at), Some(style));
             }
-            at += 1;
         }
         let (version, tree, injections) =
             live_syntax_reparse(document.background_reparse_request().unwrap()).unwrap();

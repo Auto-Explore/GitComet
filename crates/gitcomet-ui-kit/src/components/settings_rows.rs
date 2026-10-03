@@ -9,7 +9,7 @@ use crate::interaction::{ControlInteractionExt, InteractionState, InteractionSty
 use crate::theme::{AppTheme, with_alpha};
 use crate::ui_scale::UiScale;
 use gpui::prelude::*;
-use gpui::{CursorStyle, Div, FontWeight, Rgba, SharedString, Stateful, div, px};
+use gpui::{AnyElement, CursorStyle, Div, FontWeight, Rgba, SharedString, Stateful, div, px};
 
 const TOGGLE_TRACK_WIDTH_PX: f32 = 28.0;
 const TOGGLE_TRACK_COMFORTABLE_WIDTH_PX: f32 = 36.0;
@@ -291,6 +291,19 @@ pub fn settings_summary_row(
     theme: AppTheme,
     ui_scale: UiScale,
 ) -> Stateful<Div> {
+    settings_summary_row_with_value_prefix(id, label, None, value, expanded, theme, ui_scale)
+}
+
+/// A summary row whose value leads with a small visual, such as a theme orb.
+pub fn settings_summary_row_with_value_prefix(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    prefix: Option<AnyElement>,
+    value: impl Into<SharedString>,
+    expanded: bool,
+    theme: AppTheme,
+    ui_scale: UiScale,
+) -> Stateful<Div> {
     let id = id.into();
     row_shell(&id, theme)
         .rounded(px(theme.radii.row))
@@ -308,6 +321,7 @@ pub fn settings_summary_row(
                 .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.foreground.secondary)
                 .overflow_hidden()
+                .children(prefix.map(|prefix| div().flex_shrink_0().child(prefix)))
                 .child(
                     div()
                         .min_w(px(0.0))

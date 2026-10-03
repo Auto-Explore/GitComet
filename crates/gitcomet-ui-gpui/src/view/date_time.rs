@@ -618,7 +618,7 @@ mod tests {
                 Timezone::Fixed(-3 * 3600 - 30 * 60),
                 true
             ),
-            format!("12/31/1969 20:30 UTC\u{2212}3:30")
+            "12/31/1969 20:30 UTC\u{2212}3:30".to_string()
         );
     }
 

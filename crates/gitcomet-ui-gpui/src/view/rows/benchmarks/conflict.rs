@@ -3230,11 +3230,9 @@ impl ConflictResolvedOutputLiveSyntaxFixture {
     pub fn new(lines: usize, conflict_blocks: usize) -> Self {
         let mut text = String::new();
         let mut mask = Vec::new();
-        let conflict_every = if conflict_blocks == 0 {
-            usize::MAX
-        } else {
-            (lines / conflict_blocks).max(1)
-        };
+        let conflict_every = lines
+            .checked_div(conflict_blocks)
+            .map_or(usize::MAX, |every| every.max(1));
         for ix in 0..lines {
             if ix > 0 && conflict_every != usize::MAX && ix % conflict_every == 0 {
                 // An unresolved block renders as one placeholder row, which the

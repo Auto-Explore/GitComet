@@ -4037,13 +4037,8 @@ mod tests {
 
     #[test]
     fn focused_diff_row_backgrounds_are_semantic_and_not_text_selection() {
-        for theme in [
-            AppTheme::gitcomet_dark(),
-            AppTheme::gitcomet_light(),
-            AppTheme::from_key(crate::theme::AMBER_DARK_THEME_KEY)
-                .expect("Amber Dark theme should load"),
-            AppTheme::from_key("tokyo_night").expect("Tokyo Night theme should load"),
-        ] {
+        for (key, _) in crate::theme::bundled_theme_keys() {
+            let theme = AppTheme::from_key(&key).expect("bundled theme should load");
             let text_selection_bg = with_alpha(
                 theme.colors.accent.foreground,
                 if theme.is_dark { 0.28 } else { 0.18 },

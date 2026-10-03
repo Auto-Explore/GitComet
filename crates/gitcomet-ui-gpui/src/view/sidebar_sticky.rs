@@ -414,7 +414,7 @@ mod tests {
                 let sections = [100_000, 100_100];
                 let base = fitted_rows(&sections, &sections, &sections, height, 24.0);
                 let layout = fit_pins(base, &pins, Some(0), scroll, height, 24.0);
-                assert!(layout.slots.len() <= (height / 24.0) as usize - 1);
+                assert!(layout.slots.len() < (height / 24.0) as usize);
                 assert!(layout.slots.len() - base.len() <= (height / 72.0) as usize);
                 let mut previous = -24.0;
                 for (rank, slot) in layout.slots.iter().enumerate() {

@@ -11,14 +11,6 @@ fn sorted_workspaces(cx: &App) -> Vec<Workspace> {
     workspaces
 }
 
-fn workspace_theme_label(workspace: &Workspace) -> SharedString {
-    workspace
-        .theme_mode
-        .as_deref()
-        .and_then(ThemeMode::from_key)
-        .map_or_else(|| "Follow app theme".into(), |mode| mode.label().into())
-}
-
 impl SettingsWindowView {
     pub(super) fn select_workspace(&mut self, id: WorkspaceId, cx: &mut gpui::Context<Self>) {
         if self.selected_workspace == Some(id) {
@@ -80,7 +72,8 @@ impl SettingsWindowView {
         cx.notify();
     }
 
-    fn set_workspace_theme(
+    /// Keeps the theme grid open so themes can be compared pick after pick.
+    pub(super) fn set_workspace_theme(
         &mut self,
         id: WorkspaceId,
         mode: Option<ThemeMode>,
@@ -90,7 +83,6 @@ impl SettingsWindowView {
         if crate::workspaces::set_workspace_theme_mode(cx, id, key) {
             crate::app::notify_workspace_changed_from_view(cx, id);
         }
-        self.expanded_section = None;
         cx.notify();
     }
 
@@ -332,11 +324,29 @@ impl SettingsWindowView {
             .child(self.color_swatches(id, selected.color, theme, cx));
 
         let theme_expanded = self.expanded_section == Some(SettingsSection::WorkspaceTheme);
+        // One read of the themes folder serves every lookup below. An unknown
+        // key (a deleted user theme) is no override, as in the window itself.
+        let themes = crate::theme::ThemeCatalog::load();
+        let override_mode = selected
+            .theme_mode
+            .as_deref()
+            .and_then(|raw| ThemeMode::from_catalog_key(raw, &themes));
+        // The orb of what the window actually shows: the override, else the app theme.
+        let orb = override_mode
+            .as_ref()
+            .and_then(|mode| super::theme_grid::OrbPaint::for_mode(mode, &themes))
+            .unwrap_or_else(|| self.app_theme_orb(&themes, theme));
+        let orb = super::theme_grid::theme_orb(orb, self.row_scale(theme).px(16.0));
+        let label: SharedString = override_mode.as_ref().map_or_else(
+            || "Follow app theme".into(),
+            |mode| mode.catalog_label(&themes).into(),
+        );
         card = card.child(
-            self.summary_row(
+            self.summary_row_with_value_prefix(
                 "settings_window_workspace_theme",
                 "Theme",
-                workspace_theme_label(&selected),
+                Some(orb.into_any_element()),
+                label,
                 theme_expanded,
                 theme,
             )
@@ -349,38 +359,10 @@ impl SettingsWindowView {
             ),
         );
         if theme_expanded {
-            let current = selected.theme_mode.as_deref().and_then(ThemeMode::from_key);
-            let options = std::iter::once((None, SharedString::from("Follow app theme"))).chain(
-                settings_theme_mode_options()
-                    .into_iter()
-                    .map(|(mode, label)| (Some(mode), label)),
+            card = card.child(
+                self.detail_container("settings_window_workspace_theme_container", theme)
+                    .child(self.workspace_theme_tile_grid(&themes, id, override_mode, theme, cx)),
             );
-            let mut detail =
-                self.detail_container("settings_window_workspace_theme_container", theme);
-            for (mode, label) in options {
-                let key = mode
-                    .as_ref()
-                    .map_or("follow_app", |mode| mode.key())
-                    .to_string();
-                let selected_row = current == mode;
-                detail = detail.child(
-                    self.option_row(
-                        format!("settings_window_workspace_theme_{key}"),
-                        label,
-                        None,
-                        selected_row,
-                        theme,
-                    )
-                    .on_activate(
-                        false,
-                        controls::ControlActivation::Action,
-                        cx.listener(move |this, _e: &ClickEvent, _window, cx| {
-                            this.set_workspace_theme(id, mode.clone(), cx);
-                        }),
-                    ),
-                );
-            }
-            card = card.child(detail);
         }
 
         card.child(self.workspace_delete_zone(&selected, theme, cx))

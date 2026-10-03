@@ -320,6 +320,7 @@ mod tests {
     }
 
     /// The highlight ranges are what `matches` matched, field by field.
+    #[allow(clippy::single_range_in_vec_init)]
     #[test]
     fn match_ranges_follow_each_field() {
         let mut ranges = Vec::new();

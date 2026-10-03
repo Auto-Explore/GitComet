@@ -15,6 +15,7 @@ impl SettingsWindowView {
         crate::view::perf::settings_page_rendered();
         match category {
             SettingsCategory::General => self.general_card(theme, cx),
+            SettingsCategory::Appearance => self.appearance_card(theme, cx),
             SettingsCategory::Workspaces => self.workspaces_card(theme, cx),
             SettingsCategory::SecurityPrivacy => self.security_privacy_card(theme, cx),
             SettingsCategory::Terminal => self.terminal_card(theme, cx),
@@ -38,400 +39,8 @@ impl SettingsWindowView {
         cx: &mut gpui::Context<Self>,
     ) -> Stateful<gpui::Div> {
         let card = self.card("settings_window_general", "General", theme);
-        let card = self.general_appearance_rows(card, theme, cx);
         let card = self.general_integration_rows(card, theme, cx);
         self.general_date_time_rows(card, theme, cx)
-    }
-
-    fn general_appearance_rows(
-        &mut self,
-        mut general_card: Stateful<gpui::Div>,
-        theme: AppTheme,
-        cx: &mut gpui::Context<Self>,
-    ) -> Stateful<gpui::Div> {
-        let no_separator = gpui::rgba(0x00000000);
-        let theme_row = self
-            .summary_row(
-                "settings_window_theme",
-                "Theme",
-                self.theme_mode.label().into(),
-                self.expanded_section == Some(SettingsSection::Theme),
-                theme,
-            )
-            .on_activate(
-                false,
-                controls::ControlActivation::Action,
-                cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                    this.toggle_section(SettingsSection::Theme, cx);
-                }),
-            );
-
-        let ui_scale_row = self
-            .summary_row(
-                "settings_window_ui_scale",
-                "Default UI scale",
-                ui_scale::label(self.default_ui_scale_percent).into(),
-                self.expanded_section == Some(SettingsSection::UiScale),
-                theme,
-            )
-            .on_activate(
-                false,
-                controls::ControlActivation::Action,
-                cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                    this.toggle_section(SettingsSection::UiScale, cx);
-                }),
-            );
-
-        let window_controls_row = self
-            .summary_row(
-                "settings_window_window_controls",
-                "Window controls",
-                self.window_controls_mode.label().into(),
-                self.expanded_section == Some(SettingsSection::WindowControls),
-                theme,
-            )
-            .on_activate(
-                false,
-                controls::ControlActivation::Action,
-                cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                    this.toggle_section(SettingsSection::WindowControls, cx);
-                }),
-            );
-
-        let browser_open_target_row = self
-            .summary_row(
-                "settings_window_browser_open_target",
-                "Command-line repository opens",
-                self.browser_open_target.label().into(),
-                self.expanded_section == Some(SettingsSection::BrowserOpenTarget),
-                theme,
-            )
-            .on_activate(
-                false,
-                controls::ControlActivation::Action,
-                cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                    this.toggle_section(SettingsSection::BrowserOpenTarget, cx);
-                }),
-            );
-
-        let ui_font_row = self
-            .summary_row(
-                "settings_window_ui_font",
-                "UI Font",
-                crate::font_preferences::display_label(&self.ui_font_family).into(),
-                self.expanded_section == Some(SettingsSection::UiFont),
-                theme,
-            )
-            .on_activate(
-                false,
-                controls::ControlActivation::Action,
-                cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                    this.toggle_section(SettingsSection::UiFont, cx);
-                }),
-            );
-
-        let editor_font_row = self
-            .summary_row(
-                "settings_window_editor_font",
-                "Editor Font",
-                crate::font_preferences::display_label(&self.editor_font_family).into(),
-                self.expanded_section == Some(SettingsSection::EditorFont),
-                theme,
-            )
-            .on_activate(
-                false,
-                controls::ControlActivation::Action,
-                cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                    this.toggle_section(SettingsSection::EditorFont, cx);
-                }),
-            );
-
-        let font_ligatures_row = self
-            .toggle_row(
-                "settings_window_use_font_ligatures",
-                "Use font ligatures",
-                self.use_font_ligatures,
-                theme,
-            )
-            .on_activate(
-                false,
-                controls::ControlActivation::Action,
-                cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                    this.set_use_font_ligatures(!this.use_font_ligatures, cx);
-                }),
-            );
-
-        general_card = general_card
-            .child(self.subsection_heading(
-                "settings_window_general_appearance",
-                "Appearance",
-                theme,
-            ))
-            .child(theme_row);
-
-        if self.expanded_section == Some(SettingsSection::Theme) {
-            let theme_mode_count = settings_theme_modes().len();
-            let list = uniform_list(
-                "settings_window_theme_list",
-                theme_mode_count,
-                cx.processor(Self::render_theme_option_rows),
-            )
-            .w_full()
-            .min_w(px(0.0))
-            .h_full()
-            .min_h(px(0.0))
-            .track_scroll(&self.theme_scroll)
-            .on_scroll_wheel({
-                let scroll = self.theme_scroll.clone();
-                move |event, window, cx| {
-                    if uniform_list_should_stop_scroll_propagation(&scroll, event, window) {
-                        cx.stop_propagation();
-                    }
-                }
-            });
-            let list = restrict_scroll_to_vertical_axis(list).into_any_element();
-            general_card = general_card.child(self.dropdown_list_container(
-                "settings_window_theme_list_container",
-                "settings_window_theme_scrollbar",
-                self.theme_scroll.clone(),
-                theme_mode_count,
-                SETTINGS_DROPDOWN_COMPACT_ROW_HEIGHT_PX,
-                SETTINGS_DROPDOWN_COMPACT_LIST_EXTRA_HEIGHT_PX,
-                list,
-                theme,
-            ));
-            general_card = general_card.child(
-                self.detail_container("settings_window_theme_links_container", theme)
-                    // Above the folder link, so a theme that is
-                    // missing from the list above is explained right
-                    // next to the way to go and fix it.
-                    .children(self.rejected_theme_rows(theme))
-                    .child(
-                        self.link_row(
-                            "settings_window_theme_custom_folder",
-                            "Open custom theme folder",
-                            self.custom_theme_folder_detail(),
-                            theme,
-                        )
-                        .on_activate(
-                            false,
-                            controls::ControlActivation::Action,
-                            cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                                this.open_custom_theme_folder(cx);
-                            }),
-                        ),
-                    )
-                    .when_some(themes_guide_url(), |container, url| {
-                        container.child(
-                            self.link_row(
-                                "settings_window_theme_guide",
-                                "Theme guide",
-                                url.clone().into(),
-                                theme,
-                            )
-                            .border_color(no_separator)
-                            .on_activate(
-                                false,
-                                controls::ControlActivation::Action,
-                                move |_, _, cx| {
-                                    crate::view::platform_open::open_url_later(&url, cx);
-                                },
-                            ),
-                        )
-                    }),
-            );
-        }
-
-        general_card = general_card.child(ui_scale_row);
-        if self.expanded_section == Some(SettingsSection::UiScale) {
-            let mut detail = self.detail_container("settings_window_ui_scale_container", theme);
-            for percent in ui_scale::UI_SCALE_PRESETS.iter().copied() {
-                let detail_text = match percent {
-                    80 | 90 => Some("Fit more on screen".into()),
-                    110 | 125 | 150 => Some("Larger controls and text".into()),
-                    _ => None,
-                };
-                detail = detail.child(
-                    self.option_row(
-                        format!("settings_window_ui_scale_{percent}"),
-                        ui_scale::label(percent),
-                        detail_text,
-                        self.default_ui_scale_percent == percent,
-                        theme,
-                    )
-                    .on_activate(
-                        false,
-                        controls::ControlActivation::Action,
-                        cx.listener(move |this, _e: &ClickEvent, window, cx| {
-                            this.set_ui_scale_percent(percent, window, cx);
-                        }),
-                    ),
-                );
-            }
-            general_card = general_card.child(
-                detail.child(
-                    div()
-                        .px_2()
-                        .pb_1()
-                        .text_size(theme.ui_text(12.0))
-                        .text_color(theme.colors.foreground.secondary)
-                        .child(
-                            "New windows open at this scale. Zoom one window with Ctrl/Cmd +, -, \
-                             and 0, or the zoom button in its status bar.",
-                        ),
-                ),
-            );
-        }
-
-        general_card = general_card.child(window_controls_row);
-        if self.expanded_section == Some(SettingsSection::WindowControls) {
-            let mut detail =
-                self.detail_container("settings_window_window_controls_container", theme);
-            for mode in crate::window_controls::WindowControlsMode::ALL {
-                detail = detail.child(
-                    self.option_row(
-                        format!("settings_window_window_controls_{}", mode.key()),
-                        mode.label(),
-                        Some(mode.detail().into()),
-                        self.window_controls_mode == mode,
-                        theme,
-                    )
-                    .on_activate(
-                        false,
-                        controls::ControlActivation::Action,
-                        cx.listener(move |this, _e: &ClickEvent, _window, cx| {
-                            this.set_window_controls_mode(mode, cx);
-                        }),
-                    ),
-                );
-            }
-            general_card = general_card.child(detail);
-        }
-
-        general_card = general_card.child(browser_open_target_row);
-        if self.expanded_section == Some(SettingsSection::BrowserOpenTarget) {
-            let mut detail =
-                self.detail_container("settings_window_browser_open_target_container", theme);
-            for target in crate::app::BrowserOpenTarget::ALL {
-                detail = detail.child(
-                    self.option_row(
-                        format!("settings_window_browser_open_target_{}", target.key()),
-                        target.label(),
-                        Some(target.detail().into()),
-                        self.browser_open_target == target,
-                        theme,
-                    )
-                    .on_activate(
-                        false,
-                        controls::ControlActivation::Action,
-                        cx.listener(move |this, _e: &ClickEvent, _window, cx| {
-                            this.set_browser_open_target(target, cx);
-                        }),
-                    ),
-                );
-            }
-            general_card = general_card.child(detail);
-        }
-
-        general_card = general_card.child(ui_font_row);
-        if self.expanded_section == Some(SettingsSection::UiFont) {
-            let list = if self.ui_font_options.is_empty() {
-                self.empty_dropdown_list("No fonts available.", theme)
-            } else {
-                restrict_scroll_to_vertical_axis(
-                    uniform_list(
-                        "settings_window_ui_font_list",
-                        self.ui_font_options.len(),
-                        cx.processor(Self::render_ui_font_option_rows),
-                    )
-                    .w_full()
-                    .min_w(px(0.0))
-                    .h_full()
-                    .min_h(px(0.0))
-                    .track_scroll(&self.ui_font_scroll)
-                    .on_scroll_wheel({
-                        let scroll = self.ui_font_scroll.clone();
-                        move |event, window, cx| {
-                            if uniform_list_should_stop_scroll_propagation(&scroll, event, window) {
-                                cx.stop_propagation();
-                            }
-                        }
-                    }),
-                )
-                .into_any_element()
-            };
-            general_card = general_card
-                .child(
-                    div()
-                        .px_2()
-                        .pb_1()
-                        .text_size(theme.ui_text(12.0))
-                        .text_color(theme.colors.foreground.secondary)
-                        .child(self.font_options_hint(self.ui_font_family.as_str())),
-                )
-                .child(self.dropdown_list_container(
-                    "settings_window_ui_font_list_container",
-                    "settings_window_ui_font_scrollbar",
-                    self.ui_font_scroll.clone(),
-                    self.ui_font_options.len(),
-                    SETTINGS_DROPDOWN_COMPACT_ROW_HEIGHT_PX,
-                    0.0,
-                    list,
-                    theme,
-                ));
-        }
-
-        general_card = general_card.child(editor_font_row);
-        if self.expanded_section == Some(SettingsSection::EditorFont) {
-            let list = if self.editor_font_options.is_empty() {
-                self.empty_dropdown_list("No fonts available.", theme)
-            } else {
-                restrict_scroll_to_vertical_axis(
-                    uniform_list(
-                        "settings_window_editor_font_list",
-                        self.editor_font_options.len(),
-                        cx.processor(Self::render_editor_font_option_rows),
-                    )
-                    .w_full()
-                    .min_w(px(0.0))
-                    .h_full()
-                    .min_h(px(0.0))
-                    .track_scroll(&self.editor_font_scroll)
-                    .on_scroll_wheel({
-                        let scroll = self.editor_font_scroll.clone();
-                        move |event, window, cx| {
-                            if uniform_list_should_stop_scroll_propagation(&scroll, event, window) {
-                                cx.stop_propagation();
-                            }
-                        }
-                    }),
-                )
-                .into_any_element()
-            };
-            general_card = general_card
-                .child(
-                    div()
-                        .px_2()
-                        .pb_1()
-                        .text_size(theme.ui_text(12.0))
-                        .text_color(theme.colors.foreground.secondary)
-                        .child(self.font_options_hint(self.editor_font_family.as_str())),
-                )
-                .child(self.dropdown_list_container(
-                    "settings_window_editor_font_list_container",
-                    "settings_window_editor_font_scrollbar",
-                    self.editor_font_scroll.clone(),
-                    self.editor_font_options.len(),
-                    SETTINGS_DROPDOWN_COMPACT_ROW_HEIGHT_PX,
-                    0.0,
-                    list,
-                    theme,
-                ));
-        }
-
-        general_card = general_card.child(font_ligatures_row);
-        general_card = general_card.child(self.appearance_controls(cx));
-        general_card
     }
 
     fn general_integration_rows(
@@ -459,13 +68,53 @@ impl SettingsWindowView {
                 }),
             );
 
-        general_card = general_card
-            .child(self.subsection_heading(
-                "settings_window_general_integrations",
-                "Integrations",
+        let browser_open_target_row = self
+            .summary_row(
+                "settings_window_browser_open_target",
+                "Command-line repository opens",
+                self.browser_open_target.label().into(),
+                self.expanded_section == Some(SettingsSection::BrowserOpenTarget),
                 theme,
-            ))
-            .child(external_editor_row);
+            )
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                    this.toggle_section(SettingsSection::BrowserOpenTarget, cx);
+                }),
+            );
+
+        general_card = general_card.child(self.subsection_heading(
+            "settings_window_general_integrations",
+            "Integrations",
+            theme,
+        ));
+        general_card = general_card.child(browser_open_target_row);
+        if self.expanded_section == Some(SettingsSection::BrowserOpenTarget) {
+            let mut detail =
+                self.detail_container("settings_window_browser_open_target_container", theme);
+            for target in crate::app::BrowserOpenTarget::ALL {
+                detail = detail.child(
+                    self.option_row(
+                        format!("settings_window_browser_open_target_{}", target.key()),
+                        target.label(),
+                        Some(target.detail().into()),
+                        self.browser_open_target == target,
+                        theme,
+                    )
+                    .on_activate(
+                        false,
+                        controls::ControlActivation::Action,
+                        cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                            this.set_browser_open_target(target, cx);
+                        }),
+                    ),
+                );
+            }
+            general_card = general_card.child(detail);
+        }
+
+        general_card = general_card.child(external_editor_row);
         if self.expanded_section == Some(SettingsSection::ExternalCodeEditor) {
             let (item_count, list) = if self.external_editor_options_loading() {
                 (

@@ -2454,6 +2454,33 @@ fn scrolling_block(
         .into_any_element()
 }
 
+fn render_image(
+    row_ix: usize,
+    row: &MarkdownPreviewRow,
+    context: &MarkdownDocumentContext,
+) -> AnyElement {
+    crate::view::rows::markdown_preview_flow_image(
+        row,
+        row_ix,
+        context.theme,
+        context.ui_scale_percent,
+        pictures(context),
+    )
+}
+
+fn pictures(context: &MarkdownDocumentContext) -> crate::view::rows::MarkdownPictureContext<'_> {
+    crate::view::rows::MarkdownPictureContext {
+        image_root: context.image_root.as_ref(),
+        picture_sizes: &context.picture_sizes,
+        remote_image_access: &context.remote_image_access,
+        drawn: context.drawn_pictures.as_ref(),
+    }
+}
+
+fn scaled(value: f32, context: &MarkdownDocumentContext) -> Pixels {
+    context.theme.markdown_px(value, context.ui_scale_percent)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2542,31 +2569,4 @@ mod tests {
             );
         }
     }
-}
-
-fn render_image(
-    row_ix: usize,
-    row: &MarkdownPreviewRow,
-    context: &MarkdownDocumentContext,
-) -> AnyElement {
-    crate::view::rows::markdown_preview_flow_image(
-        row,
-        row_ix,
-        context.theme,
-        context.ui_scale_percent,
-        pictures(context),
-    )
-}
-
-fn pictures(context: &MarkdownDocumentContext) -> crate::view::rows::MarkdownPictureContext<'_> {
-    crate::view::rows::MarkdownPictureContext {
-        image_root: context.image_root.as_ref(),
-        picture_sizes: &context.picture_sizes,
-        remote_image_access: &context.remote_image_access,
-        drawn: context.drawn_pictures.as_ref(),
-    }
-}
-
-fn scaled(value: f32, context: &MarkdownDocumentContext) -> Pixels {
-    context.theme.markdown_px(value, context.ui_scale_percent)
 }

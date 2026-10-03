@@ -2238,10 +2238,12 @@ mod tests {
         };
 
         assert!(chip(comfortable) > chip(compact));
-        assert!(
-            HISTORY_TAG_CHIP_COMFORTABLE_PADDING_X_PX > HISTORY_TAG_CHIP_PADDING_X_PX,
-            "the padding has to follow the chip or the label crowds its edges"
-        );
+        const {
+            assert!(
+                HISTORY_TAG_CHIP_COMFORTABLE_PADDING_X_PX > HISTORY_TAG_CHIP_PADDING_X_PX,
+                "the padding has to follow the chip or the label crowds its edges"
+            )
+        };
 
         for metrics in UiDensity::ALL.into_iter().map(|density| Appearance {
             density,

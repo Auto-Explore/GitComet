@@ -16,12 +16,12 @@
         },
         "foreground": {
           "primary": "#e7e8ecff",
-          "secondary": "#8b8fa3ff",
+          "secondary": "#b7bcd1ff",
           "disabled": {
             "hex": "#8b8fa3ff",
             "alpha": 0.62
           },
-          "placeholder": "#8b8fa380",
+          "placeholder": "#8b8fa3ff",
           "emphasis": "#ffffffff"
         },
         "stroke": {
@@ -304,8 +304,8 @@
         ]
       },
       "syntax": {
-        "comment": "#6a6e80ff",
-        "comment_doc": "#6a6e80ff",
+        "comment": "#767a8dff",
+        "comment_doc": "#767a8dff",
         "string": "#a8c46eff",
         "string_escape": "#a8c46eff",
         "string_regex": "#a8c46eff",

@@ -596,6 +596,7 @@ fn activate_full_file_diff_horizontal_scroll_fixture(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_working_tree_full_file_horizontal_scroll_fixture_state(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,

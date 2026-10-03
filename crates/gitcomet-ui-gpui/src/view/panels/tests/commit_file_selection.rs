@@ -212,12 +212,12 @@ fn folder_menu_entries(
     })
 }
 
-fn commit_tree_view<'a>(
-    cx: &'a mut gpui::TestAppContext,
+fn commit_tree_view(
+    cx: &mut gpui::TestAppContext,
     repo_id: RepoId,
 ) -> (
     gpui::Entity<super::super::GitCometView>,
-    &'a mut gpui::VisualTestContext,
+    &mut gpui::VisualTestContext,
 ) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {

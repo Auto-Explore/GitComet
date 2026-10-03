@@ -1541,6 +1541,7 @@ fn text_input_test_position(input: &TextInput) -> Point<Pixels> {
     point(bounds.left() + px(2.0), bounds.top() + line_height / 2.0)
 }
 
+#[allow(clippy::single_range_in_vec_init)]
 fn text_input_hotspot_ranges() -> Vec<Range<usize>> {
     vec![0..7]
 }
@@ -1644,11 +1645,11 @@ fn hotspot_hit_test_includes_right_side_of_final_glyph(cx: &mut gpui::TestAppCon
         let final_glyph_left = line.x_for_index(6);
         let final_glyph_right = line.x_for_index(7);
         let final_glyph_width = final_glyph_right - final_glyph_left;
-        let position = point(
+
+        point(
             bounds.left() + final_glyph_left + (final_glyph_width * 3.0) / 4.0,
             bounds.top() + line_height / 2.0,
-        );
-        position
+        )
     });
     cx.update(|_window, app| {
         let hotspot = input
@@ -1762,7 +1763,7 @@ fn hotspot_bounds_match_range_extent(cx: &mut gpui::TestAppContext) {
             .expect("expected hotspot bounds");
         assert!(bounds.size.width > px(0.0));
         assert!(bounds.size.height > px(0.0));
-        assert!(bounds.contains(&text_input_test_position(&input)));
+        assert!(bounds.contains(&text_input_test_position(input)));
     });
 }
 

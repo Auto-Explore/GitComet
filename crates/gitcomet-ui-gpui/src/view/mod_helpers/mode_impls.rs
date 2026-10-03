@@ -1388,6 +1388,15 @@ impl ThemeMode {
     }
 
     pub(crate) fn from_key(raw: &str) -> Option<Self> {
+        Self::parse_key(raw, crate::theme::has_theme_key)
+    }
+
+    /// [`Self::from_key`] against an already-read theme list.
+    pub(crate) fn from_catalog_key(raw: &str, themes: &crate::theme::ThemeCatalog) -> Option<Self> {
+        Self::parse_key(raw, |key| themes.get(key).is_some())
+    }
+
+    fn parse_key(raw: &str, known: impl FnOnce(&str) -> bool) -> Option<Self> {
         match raw {
             "automatic" => Some(Self::Automatic),
             "light" => Some(Self::Named(
@@ -1396,7 +1405,7 @@ impl ThemeMode {
             "dark" => Some(Self::Named(
                 crate::theme::DEFAULT_DARK_THEME_KEY.to_string(),
             )),
-            _ if crate::theme::has_theme_key(raw) => Some(Self::Named(raw.to_string())),
+            _ if known(raw) => Some(Self::Named(raw.to_string())),
             _ => None,
         }
     }
@@ -1405,6 +1414,16 @@ impl ThemeMode {
         match self {
             Self::Automatic => "Automatic".to_string(),
             Self::Named(key) => crate::theme::theme_label(key).unwrap_or_else(|| key.clone()),
+        }
+    }
+
+    /// [`Self::label`] against an already-read theme list.
+    pub(crate) fn catalog_label(&self, themes: &crate::theme::ThemeCatalog) -> String {
+        match self {
+            Self::Automatic => "Automatic".to_string(),
+            Self::Named(key) => themes
+                .get(key)
+                .map_or_else(|| key.clone(), |option| option.label.clone()),
         }
     }
 

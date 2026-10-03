@@ -283,8 +283,8 @@ fn encoding_blame_and_worktree_edits_reload_the_right_sessions() {
         Msg::DiffSession(DiffSessionMsg::Loaded {
             repo_id,
             view: live,
-            lifetime: lifetime,
-            generation: generation,
+            lifetime,
+            generation,
             content: DiffSessionContent::Attributes(Ok(Default::default())),
         }),
     );
@@ -469,7 +469,7 @@ fn watcher_edits_do_not_cancel_a_session_load_or_reload_unrelated_files() {
         &mut state,
         Msg::DiffSession(DiffSessionMsg::Loaded {
             repo_id,
-            view: view,
+            view,
             lifetime: load.lifetime,
             generation: load.generation,
             content: DiffSessionContent::Attributes(Ok(Default::default())),

@@ -1924,6 +1924,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::single_range_in_vec_init)]
     #[test]
     fn styled_line_caches_follow_tab_width_changes() {
         let theme = AppTheme::gitcomet_dark();

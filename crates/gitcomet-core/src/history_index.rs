@@ -873,7 +873,7 @@ mod lookup_regressions {
             }
             // Every fourth ID shares one prefix; externals borrow a prefix that is
             // in the index so a miss must survive the equal-prefix run search.
-            if row % 4 == 0 || (external && row % 2 == 0) {
+            if row.is_multiple_of(4) || (external && row.is_multiple_of(2)) {
                 id[..8].fill(0xab);
             }
             id[16..].copy_from_slice(&(row as u32).to_be_bytes());
@@ -947,9 +947,9 @@ mod lookup_regressions {
                 hidden_before[raw] + usize::from(hidden.binary_search(&(raw as u32)).is_ok());
         }
         let mut visible_rows = Vec::with_capacity(projection.len());
-        for raw in 0..count {
+        for (raw, &hidden_count) in hidden_before.iter().enumerate().take(count) {
             let is_hidden = hidden.binary_search(&(raw as u32)).is_ok();
-            let expected_visible = (!is_hidden).then_some(raw - hidden_before[raw]);
+            let expected_visible = (!is_hidden).then_some(raw - hidden_count);
             assert_eq!(
                 projection.visible_position(raw),
                 expected_visible,
@@ -957,7 +957,7 @@ mod lookup_regressions {
             );
             assert_eq!(
                 projection.visible_position_at_or_after(raw),
-                raw - hidden_before[raw],
+                raw - hidden_count,
                 "raw {raw}"
             );
             if !is_hidden {

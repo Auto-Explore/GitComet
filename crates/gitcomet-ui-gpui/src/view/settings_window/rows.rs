@@ -205,7 +205,28 @@ impl SettingsWindowView {
         expanded: bool,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
-        components::settings_summary_row(id, label, value, expanded, theme, self.row_scale(theme))
+        self.summary_row_with_value_prefix(id, label, None, value, expanded, theme)
+    }
+
+    /// A summary row whose value leads with a small visual, such as a theme orb.
+    pub(super) fn summary_row_with_value_prefix(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        prefix: Option<AnyElement>,
+        value: SharedString,
+        expanded: bool,
+        theme: AppTheme,
+    ) -> Stateful<gpui::Div> {
+        components::settings_summary_row_with_value_prefix(
+            id,
+            label,
+            prefix,
+            value,
+            expanded,
+            theme,
+            self.row_scale(theme),
+        )
     }
 
     pub(super) fn toggle_row(
@@ -333,8 +354,12 @@ impl SettingsWindowView {
     /// app falls back to a bundled theme, and the account of why only ever
     /// reaches stderr. After a schema break every custom theme in the folder is
     /// rejected at once, and "my theme is gone" has to be answerable from here.
-    pub(super) fn rejected_theme_rows(&self, theme: AppTheme) -> Vec<AnyElement> {
-        crate::theme::runtime_theme_issues()
+    pub(super) fn rejected_theme_rows(
+        &self,
+        issues: &[crate::theme::RuntimeThemeIssue],
+        theme: AppTheme,
+    ) -> Vec<AnyElement> {
+        issues
             .iter()
             .enumerate()
             .map(|(ix, issue)| {
@@ -726,36 +751,6 @@ impl SettingsWindowView {
                     controls::ControlActivation::Action,
                     cx.listener(move |this, _e: &ClickEvent, _window, cx| {
                         this.set_ui_font_family(family.clone(), cx);
-                    }),
-                )
-                .into_any_element()
-            })
-            .collect()
-    }
-
-    pub(super) fn render_theme_option_rows(
-        this: &mut Self,
-        range: Range<usize>,
-        _window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> Vec<AnyElement> {
-        let theme = this.theme;
-        let modes = settings_theme_mode_options();
-        range
-            .filter_map(|ix| modes.get(ix).cloned())
-            .map(|(mode, label)| {
-                this.option_row(
-                    format!("settings_window_theme_{}", mode.key()),
-                    label,
-                    None,
-                    this.theme_mode == mode,
-                    theme,
-                )
-                .on_activate(
-                    false,
-                    controls::ControlActivation::Action,
-                    cx.listener(move |this, _e: &ClickEvent, window, cx| {
-                        this.set_theme_mode(mode.clone(), window, cx);
                     }),
                 )
                 .into_any_element()

@@ -1,11 +1,12 @@
 use super::{
     AMBER_DARK_THEME_KEY, AppTheme, DEFAULT_DARK_THEME_KEY, DEFAULT_LIGHT_THEME_KEY,
     EMBEDDED_THEME_FILES, GRAPH_LANE_PALETTE_SIZE, GraphLanePalette, HexColor, Rgba,
-    THEME_SCHEMA_VERSION, ThemeColor, UNFILLED_COLOR_TOKENS, available_themes, composite_over,
-    content_header_bg, derived_syntax_color, fill_missing_color_tokens, has_theme_key,
-    hsla_from_hue_fraction, layer_over, load_theme_specs_from_json, merged_theme_options,
-    resolved_runtime_themes_dir, runtime_themes_with_dir, test_theme_bundle_value,
-    test_theme_json_with_syntax, theme_label, with_alpha,
+    THEME_SCHEMA_VERSION, ThemeColor, UNFILLED_COLOR_TOKENS, available_themes, bundled_theme_keys,
+    composite_over, content_header_bg, derived_syntax_color, fill_missing_color_tokens,
+    has_theme_key, hsla_from_hue_fraction, layer_over, load_theme_specs_from_json,
+    merged_theme_options, resolved_runtime_themes_dir, runtime_theme_issues_with_dir,
+    runtime_themes_with_dir, test_theme_bundle_value, test_theme_json_with_syntax, theme_label,
+    theme_preview_colors, with_alpha,
 };
 use palette::IntoColor;
 use std::{fs, path::PathBuf};
@@ -839,7 +840,7 @@ fn built_in_themes_load_from_embedded_json() {
     assert!(!light.is_dark);
     assert_eq!(
         dark.colors.interaction.focus_ring,
-        with_alpha(gpui::rgba(0x4f8ef7ff), 0.55)
+        with_alpha(gpui::rgba(0x4f8ef7ff), 0.74)
     );
     assert_eq!(light.colors.surface.canvas, gpui::rgba(0xffffffff));
     assert_eq!(light.colors.surface.panel, gpui::rgba(0xf2f4f7ff));
@@ -858,7 +859,7 @@ fn built_in_themes_load_from_embedded_json() {
         with_alpha(gpui::rgba(0x76d39cff), 0.15)
     );
     assert_eq!(light.colors.diff.removed.foreground, gpui::rgba(0xa52a35ff));
-    assert_eq!(dark.colors.foreground.placeholder, gpui::rgba(0x767c8bff));
+    assert_eq!(dark.colors.foreground.placeholder, gpui::rgba(0x8d94a3ff));
     assert_eq!(light.colors.accent.on_solid, gpui::rgba(0xffffffff));
     assert_eq!(dark.colors.foreground.emphasis, gpui::rgba(0xffffffff));
     assert_eq!(light.colors.foreground.emphasis, gpui::rgba(0x000000ff));
@@ -943,7 +944,7 @@ fn gitcomet_dark_uses_the_tuned_neutral_and_diff_palette() {
         colors.interaction.selected_background,
         gpui::rgba(0x2c3242ff)
     );
-    assert_eq!(colors.accent.foreground, gpui::rgba(0x4f8ef7ff));
+    assert_eq!(colors.accent.foreground, gpui::rgba(0x5393fcff));
     assert_eq!(colors.status.danger.foreground, gpui::rgba(0xf0625dff));
     assert_eq!(colors.status.warning.foreground, gpui::rgba(0xf2a53aff));
     assert_eq!(colors.status.success.foreground, gpui::rgba(0x33c06bff));
@@ -1038,7 +1039,8 @@ fn bundled_themes_keep_the_canvas_and_chrome_hierarchy_for_their_appearance() {
         "Sunset Veil should use a warm light-orange canvas"
     );
 
-    for key in ["gitcomet_light", "sunset_veil"] {
+    for (key, _) in bundled_theme_keys().into_iter().filter(|(_, dark)| !dark) {
+        let key = key.as_str();
         let theme = AppTheme::from_key(key).expect("light theme should load");
         let colors = theme.colors;
 
@@ -1056,7 +1058,8 @@ fn bundled_themes_keep_the_canvas_and_chrome_hierarchy_for_their_appearance() {
         );
     }
 
-    for key in [AMBER_DARK_THEME_KEY, "gitcomet_dark", "tokyo_night"] {
+    for (key, _) in bundled_theme_keys().into_iter().filter(|(_, dark)| *dark) {
+        let key = key.as_str();
         let theme = AppTheme::from_key(key).expect("dark theme should load");
         assert!(
             relative_luminance(theme.colors.surface.canvas)
@@ -1066,6 +1069,7 @@ fn bundled_themes_keep_the_canvas_and_chrome_hierarchy_for_their_appearance() {
     }
 }
 
+/// The house dark palettes share one canvas; ported themes keep their own.
 #[test]
 fn bundled_dark_themes_share_the_darker_canvas_and_compact_radii() {
     for key in [AMBER_DARK_THEME_KEY, "gitcomet_dark", "tokyo_night"] {
@@ -1135,13 +1139,8 @@ fn bundled_themes_define_their_notice_colors() {
 /// over that, so text is measured against the two composited.
 #[test]
 fn bundled_theme_notice_text_is_readable_on_its_background() {
-    for key in [
-        DEFAULT_DARK_THEME_KEY,
-        DEFAULT_LIGHT_THEME_KEY,
-        "tokyo_night",
-        AMBER_DARK_THEME_KEY,
-        "sunset_veil",
-    ] {
+    for (key, _) in bundled_theme_keys() {
+        let key = key.as_str();
         let theme = AppTheme::from_key(key).expect("bundled theme should load");
         let notice = theme.colors.notice;
         let background = composite_over(content_header_bg(theme), notice.background);
@@ -1222,13 +1221,13 @@ fn custom_themes_use_their_own_notice_colors_and_inherit_a_missing_group() {
 }
 
 #[test]
-fn bundled_light_themes_match_the_dark_theme_radii() {
+fn bundled_themes_share_the_dark_theme_radii() {
     let dark_radii = AppTheme::gitcomet_dark().radii;
 
-    for key in [DEFAULT_LIGHT_THEME_KEY, "sunset_veil"] {
-        let theme = AppTheme::from_key(key).expect("light theme should load");
+    for (key, is_dark) in bundled_theme_keys() {
+        let theme = AppTheme::from_key(&key).expect("bundled theme should load");
 
-        assert!(!theme.is_dark, "{key}");
+        assert_eq!(theme.is_dark, is_dark, "{key}");
         assert_eq!(theme.radii, dark_radii, "{key}");
     }
 }
@@ -1285,6 +1284,319 @@ fn amber_dark_semantic_foregrounds_have_strong_canvas_contrast() {
             4.5,
         );
     }
+}
+
+/// One readability requirement: the theme token `token` drawn over `background`.
+struct ReadabilityCheck {
+    name: String,
+    /// JSON path of the foreground, e.g. `colors.foreground.secondary`.
+    token: String,
+    foreground: Rgba,
+    background: Rgba,
+    minimum: f32,
+}
+
+impl ReadabilityCheck {
+    /// Translucent text blends into what it is drawn on.
+    fn ratio(&self) -> f32 {
+        contrast_ratio(
+            composite_over(self.background, self.foreground),
+            self.background,
+        )
+    }
+}
+
+/// WCAG AA: 4.5:1 for text; 3:1 for focus/selection indicators, graph lanes and
+/// syntax on a diff, selection or search wash. Washes are composited over what they tint.
+/// Control borders (`stroke.control`) are deliberately not held to 3:1.
+fn readability_checks(theme: AppTheme) -> Vec<ReadabilityCheck> {
+    const TEXT: f32 = 4.5;
+    const NON_TEXT: f32 = 3.0;
+    let colors = theme.colors;
+    let canvas = colors.surface.canvas;
+    let editor = colors.editor.background;
+    let surfaces = [
+        ("canvas", canvas),
+        ("chrome", colors.surface.chrome),
+        ("panel", colors.surface.panel),
+        ("raised", colors.surface.raised),
+        ("input", colors.surface.input),
+    ];
+    // Where selectable, hoverable rows sit.
+    let row_surfaces = &surfaces[..3];
+    let mut checks = Vec::new();
+    let mut check = |name: String, token: &str, foreground, background, minimum| {
+        checks.push(ReadabilityCheck {
+            name,
+            token: token.to_string(),
+            foreground,
+            background,
+            minimum,
+        });
+    };
+
+    for (surface_name, surface) in surfaces {
+        for (name, token, foreground) in [
+            (
+                "primary",
+                "colors.foreground.primary",
+                colors.foreground.primary,
+            ),
+            (
+                "secondary",
+                "colors.foreground.secondary",
+                colors.foreground.secondary,
+            ),
+            (
+                "accent.foreground",
+                "colors.accent.foreground",
+                colors.accent.foreground,
+            ),
+        ] {
+            check(
+                format!("{name}/{surface_name}"),
+                token,
+                foreground,
+                surface,
+                TEXT,
+            );
+        }
+        check(
+            format!("focus_ring/{surface_name}"),
+            "colors.interaction.focus_ring",
+            colors.interaction.focus_ring,
+            surface,
+            NON_TEXT,
+        );
+    }
+    for (surface_name, surface) in row_surfaces.iter().copied() {
+        let selected = composite_over(surface, colors.interaction.selected_background);
+        let hovered = composite_over(surface, colors.interaction.hover_background);
+        for (name, token, foreground, background) in [
+            (
+                "selected_foreground/selected",
+                "colors.interaction.selected_foreground",
+                colors.interaction.selected_foreground,
+                selected,
+            ),
+            (
+                "secondary/selected",
+                "colors.foreground.secondary",
+                colors.foreground.secondary,
+                selected,
+            ),
+            (
+                "primary/hover",
+                "colors.foreground.primary",
+                colors.foreground.primary,
+                hovered,
+            ),
+            (
+                "secondary/hover",
+                "colors.foreground.secondary",
+                colors.foreground.secondary,
+                hovered,
+            ),
+        ] {
+            check(
+                format!("{name}@{surface_name}"),
+                token,
+                foreground,
+                background,
+                TEXT,
+            );
+        }
+        check(
+            format!("selected_indicator/{surface_name}"),
+            "colors.interaction.selected_indicator",
+            colors.interaction.selected_indicator,
+            surface,
+            NON_TEXT,
+        );
+    }
+    for (name, token, foreground, background) in [
+        (
+            "emphasis/canvas",
+            "colors.foreground.emphasis",
+            colors.foreground.emphasis,
+            canvas,
+        ),
+        (
+            "placeholder/input",
+            "colors.foreground.placeholder",
+            colors.foreground.placeholder,
+            colors.surface.input,
+        ),
+        (
+            "accent.foreground/subtle",
+            "colors.accent.foreground",
+            colors.accent.foreground,
+            composite_over(canvas, colors.accent.subtle_background),
+        ),
+        (
+            "accent.on_solid",
+            "colors.accent.on_solid",
+            colors.accent.on_solid,
+            colors.accent.solid,
+        ),
+        (
+            "tooltip",
+            "colors.tooltip.foreground",
+            colors.tooltip.foreground,
+            composite_over(canvas, colors.tooltip.background),
+        ),
+        (
+            "notice.foreground",
+            "colors.notice.foreground",
+            colors.notice.foreground,
+            composite_over(canvas, colors.notice.background),
+        ),
+        (
+            "notice.secondary",
+            "colors.notice.secondary",
+            colors.notice.secondary,
+            composite_over(canvas, colors.notice.background),
+        ),
+        (
+            "editor.foreground",
+            "colors.editor.foreground",
+            colors.editor.foreground,
+            editor,
+        ),
+        (
+            "editor.foreground/selection",
+            "colors.editor.foreground",
+            colors.editor.foreground,
+            composite_over(editor, colors.editor.selection_background),
+        ),
+        // Diff header rows draw their text in the line-number colour too.
+        (
+            "line_number/editor",
+            "colors.editor.line_number",
+            colors.editor.line_number,
+            editor,
+        ),
+        (
+            "line_number/gutter",
+            "colors.editor.line_number",
+            colors.editor.line_number,
+            composite_over(editor, colors.editor.gutter_background),
+        ),
+    ] {
+        check(name.into(), token, foreground, background, TEXT);
+    }
+    let search_match = composite_over(editor, colors.editor.search_match_background);
+    if !theme.is_dark {
+        // Dark themes keep the syntax colours on a match (checked below).
+        check(
+            "search_match".into(),
+            "colors.editor.search_match_foreground",
+            colors.editor.search_match_foreground,
+            search_match,
+            TEXT,
+        );
+    }
+    for (name, set) in [
+        ("info", colors.status.info),
+        ("success", colors.status.success),
+        ("warning", colors.status.warning),
+        ("danger", colors.status.danger),
+    ] {
+        let token = format!("colors.status.{name}.foreground");
+        for (background_name, background) in [
+            ("wash", composite_over(canvas, set.background)),
+            ("chrome", colors.surface.chrome),
+            ("raised", colors.surface.raised),
+        ] {
+            check(
+                format!("status.{name}/{background_name}"),
+                &token,
+                set.foreground,
+                background,
+                TEXT,
+            );
+        }
+    }
+    for (name, set) in [
+        ("added", colors.diff.added),
+        ("removed", colors.diff.removed),
+        ("modified", colors.diff.modified),
+    ] {
+        let token = format!("colors.diff.{name}.foreground");
+        check(
+            format!("diff.{name}"),
+            &token,
+            set.foreground,
+            composite_over(editor, set.background),
+            TEXT,
+        );
+        check(
+            format!("diff.{name}.word"),
+            &token,
+            set.foreground,
+            composite_over(editor, set.word_background),
+            TEXT,
+        );
+    }
+    for (name, color) in syntax_foregrounds(theme) {
+        let token = format!("syntax.{name}");
+        check(format!("{token}/editor"), &token, color, editor, TEXT);
+        // Text selection and the current search match share one wash.
+        let mut washes = vec![
+            (
+                "diff.added",
+                composite_over(editor, colors.diff.added.background),
+            ),
+            (
+                "diff.removed",
+                composite_over(editor, colors.diff.removed.background),
+            ),
+            (
+                "selection",
+                composite_over(editor, colors.editor.selection_background),
+            ),
+        ];
+        if theme.is_dark {
+            washes.push(("search_match", search_match));
+        }
+        for (wash, background) in washes {
+            check(
+                format!("{token}/{wash}"),
+                &token,
+                color,
+                background,
+                NON_TEXT,
+            );
+        }
+    }
+    for (index, color) in theme.graph_lane_palette.as_slice().iter().enumerate() {
+        check(
+            format!("graph_lane_palette[{index}]"),
+            "colors.graph_lane_palette",
+            *color,
+            canvas,
+            NON_TEXT,
+        );
+    }
+    checks
+}
+
+#[test]
+fn every_bundled_theme_meets_the_readability_floor() {
+    let mut failures = Vec::new();
+    for (key, _) in bundled_theme_keys() {
+        let theme = AppTheme::from_key(&key).expect("bundled theme should load");
+        for check in readability_checks(theme) {
+            let actual = check.ratio();
+            if actual < check.minimum {
+                failures.push(format!(
+                    "{key} {} ({}): {actual:.2} < {:.2}",
+                    check.name, check.token, check.minimum
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]
@@ -1450,22 +1762,21 @@ fn bundled_light_theme_foregrounds_have_strong_canvas_contrast() {
 
 #[test]
 fn content_header_bg_matches_the_canvas_on_dark_and_is_distinct_on_light() {
-    for key in [AMBER_DARK_THEME_KEY, "gitcomet_dark", "tokyo_night"] {
-        let theme = AppTheme::from_key(key).expect("dark theme should load");
-        assert_eq!(
-            content_header_bg(theme),
-            theme.colors.surface.canvas,
-            "{key}: header band should be the canvas color"
-        );
-    }
-
-    for key in ["gitcomet_light", "sunset_veil"] {
-        let theme = AppTheme::from_key(key).expect("light theme should load");
-        assert_eq!(
-            content_header_bg(theme),
-            theme.colors.surface.raised,
-            "{key}: header band should stay raised"
-        );
+    for (key, is_dark) in bundled_theme_keys() {
+        let theme = AppTheme::from_key(&key).expect("bundled theme should load");
+        if is_dark {
+            assert_eq!(
+                content_header_bg(theme),
+                theme.colors.surface.canvas,
+                "{key}: header band should be the canvas color"
+            );
+        } else {
+            assert_eq!(
+                content_header_bg(theme),
+                theme.colors.surface.raised,
+                "{key}: header band should stay raised"
+            );
+        }
     }
 }
 
@@ -1598,6 +1909,22 @@ fn bundled_theme_file_exposes_multiple_themes() {
     assert_eq!(specs[1].option.label, "Classic Dark");
     assert!(specs[1].theme.is_dark);
 }
+#[test]
+fn every_available_theme_has_preview_colors_from_its_chrome_accent_and_keyword() {
+    let options = available_themes();
+    assert!(options.len() >= bundled_theme_keys().len());
+    for option in options {
+        let theme = AppTheme::from_key(&option.key).expect("listed theme should load");
+        let preview = theme_preview_colors(&option.key).expect("listed theme has a preview");
+        assert_eq!(preview.is_dark, option.is_dark, "{}", option.key);
+        assert_eq!(preview.base, theme.colors.surface.chrome, "{}", option.key);
+        assert_eq!(preview.glow, theme.colors.accent.solid, "{}", option.key);
+        assert_eq!(preview.secondary, theme.syntax.keyword, "{}", option.key);
+        assert!(!option.custom, "{} is bundled", option.key);
+    }
+    assert_eq!(theme_preview_colors("no_such_theme"), None);
+}
+
 #[test]
 fn embedded_theme_registry_exposes_default_keys() {
     let themes = available_themes();
@@ -1800,6 +2127,50 @@ fn runtime_theme_dir_ignores_embedded_theme_key_collisions_but_keeps_custom_entr
         "valid custom themes should still appear in available theme options"
     );
 }
+
+/// Bundling a theme reserves its file name and keys, which a user's
+/// existing custom theme may already use; the Appearance page must say so.
+#[test]
+fn runtime_theme_issues_explain_reserved_filenames_and_bundled_key_clashes() {
+    use serde_json::json;
+
+    let dir = tempdir().expect("temp dir should exist");
+    let mut own = test_theme_entry(DEFAULT_DARK_THEME_KEY);
+    own["key"] = json!("my_nord");
+    fs::write(
+        dir.path().join("nord.json"),
+        test_theme_bundle_json("My Nord", vec![own]),
+    )
+    .expect("reserved theme file should be written");
+    let mut clash = test_theme_entry(DEFAULT_DARK_THEME_KEY);
+    clash["key"] = json!("monokai");
+    let mut keep = test_theme_entry(DEFAULT_DARK_THEME_KEY);
+    keep["key"] = json!("custom_keep");
+    fs::write(
+        dir.path().join("mine.json"),
+        test_theme_bundle_json("Mine", vec![clash, keep]),
+    )
+    .expect("clashing theme file should be written");
+
+    let issues = runtime_theme_issues_with_dir(Some(dir.path()));
+    let issue_for = |name: &str| {
+        issues
+            .iter()
+            .find(|issue| issue.path.file_name() == Some(std::ffi::OsStr::new(name)))
+            .unwrap_or_else(|| panic!("{name} should be reported: {issues:?}"))
+    };
+    assert!(
+        issue_for("nord.json").message.contains("bundled theme"),
+        "{issues:?}"
+    );
+    assert!(
+        issue_for("mine.json").message.contains("`monokai`"),
+        "{issues:?}"
+    );
+    assert_eq!(issues.len(), 2, "{issues:?}");
+    assert!(runtime_themes_with_dir(Some(dir.path())).contains_key("custom_keep"));
+}
+
 #[test]
 fn themes_markdown_example_matches_current_theme_parser() {
     let example = themes_markdown_example();
@@ -1865,6 +2236,37 @@ fn themes_markdown_lists_current_supported_syntax_keys() {
         assert!(
             markdown.contains(&format!("`{key}`")),
             "THEMES.md should mention the supported syntax key `{key}`"
+        );
+    }
+}
+
+/// Matches whole names in the table's Dark and Light cells: a substring
+/// check passes "Tokyo Night" on "Tokyo Night Storm" or the Source link.
+#[test]
+fn themes_markdown_lists_every_bundled_theme() {
+    let markdown = fs::read_to_string(themes_markdown_path())
+        .expect("THEMES.md should be readable for the built-in theme list");
+    let mut listed = [Vec::new(), Vec::new()];
+    let rows = markdown
+        .lines()
+        .skip_while(|line| !line.starts_with("| Dark | Light |"))
+        .skip(2)
+        .take_while(|line| line.starts_with('|'));
+    for row in rows {
+        for (column, cell) in row.split('|').skip(1).take(2).enumerate() {
+            listed[column].extend(
+                cell.split(',')
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty()),
+            );
+        }
+    }
+    for (key, is_dark) in bundled_theme_keys() {
+        let label = theme_label(&key).expect("bundled theme has a label");
+        let (column, heading) = if is_dark { (0, "Dark") } else { (1, "Light") };
+        assert!(
+            listed[column].contains(&label.as_str()),
+            "THEMES.md should list the bundled theme `{label}` under {heading}"
         );
     }
 }

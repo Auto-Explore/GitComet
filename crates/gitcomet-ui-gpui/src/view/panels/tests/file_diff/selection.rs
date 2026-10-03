@@ -319,9 +319,7 @@ fn collapsed_file_diff_click_lights_the_matching_json_braces(cx: &mut gpui::Test
     new_lines.push("}".to_string());
     let old_text = format!("{}\n", old_lines.join("\n"));
     let new_text = format!("{}\n", new_lines.join("\n"));
-    let unified = format!(
-        "@@ -31,3 +31,3 @@\n   \"items\": [1, 2],\n-  \"name\": \"old\"\n+  \"name\": \"new\"\n }}\n"
-    );
+    let unified = "@@ -31,3 +31,3 @@\n   \"items\": [1, 2],\n-  \"name\": \"old\"\n+  \"name\": \"new\"\n }\n".to_string();
 
     let target = push_regular_diff_content_mode_state(
         cx,

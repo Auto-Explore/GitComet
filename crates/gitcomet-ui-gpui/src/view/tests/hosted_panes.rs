@@ -1373,11 +1373,11 @@ fn a_linked_worktree_pane_offers_and_runs_no_staging_or_editing(cx: &mut gpui::T
         cx.update(|_, app| pane.read(app).renderer_workdir(app))
     };
     assert_eq!(
-        workdir(cx, &linked_view).map(|path| canonicalize_or_original(path)),
+        workdir(cx, &linked_view).map(canonicalize_or_original),
         Some(canonicalize_or_original(linked.clone()))
     );
     assert_eq!(
-        workdir(cx, &main_view).map(|path| canonicalize_or_original(path)),
+        workdir(cx, &main_view).map(canonicalize_or_original),
         Some(canonicalize_or_original(root.clone()))
     );
 

@@ -1264,19 +1264,15 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
-    /// The five bundled themes, so a tint invariant is proved against every
+    /// Every bundled theme, so a tint invariant is proved against every
     /// palette that ships rather than the default dark one alone.
     fn bundled_themes() -> Vec<AppTheme> {
-        [
-            "gitcomet_dark",
-            "gitcomet_light",
-            "tokyo_night",
-            "amber_dark",
-            "sunset_veil",
-        ]
-        .into_iter()
-        .map(|key| AppTheme::from_key(key).unwrap_or_else(|| panic!("bundled theme `{key}`")))
-        .collect()
+        crate::theme::bundled_theme_keys()
+            .into_iter()
+            .map(|(key, _)| {
+                AppTheme::from_key(&key).unwrap_or_else(|| panic!("bundled theme `{key}`"))
+            })
+            .collect()
     }
 
     #[test]

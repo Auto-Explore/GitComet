@@ -820,7 +820,7 @@ fn gitlink_supplement_handles_literal_paths_dirty_children_and_staged_removal() 
     write(
         repo,
         ".gitmodules",
-        &format!("[submodule \"child\"]\n path = {name}\n url = ../child\n"),
+        format!("[submodule \"child\"]\n path = {name}\n url = ../child\n"),
     );
     run_git(repo, &["add", "."]);
     run_git(repo, &["commit", "-qm", "parent"]);

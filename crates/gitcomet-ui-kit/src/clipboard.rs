@@ -44,6 +44,7 @@ impl CopySource {
 
 /// Live runs only: a dependent's tests must not probe the desktop or write
 /// into the real crash directory.
+#[cfg(any(target_os = "linux", test))]
 fn copy_diagnostics_enabled() -> bool {
     cfg!(target_os = "linux") && crate::ui_runtime::current().uses_clipboard_diagnostics()
 }

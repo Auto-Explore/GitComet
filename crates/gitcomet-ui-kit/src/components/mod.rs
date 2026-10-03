@@ -79,7 +79,7 @@ pub use settings_rows::{
     settings_detail_container, settings_dropdown_background, settings_dropdown_border_color,
     settings_info_row, settings_link_row, settings_nav_item, settings_option_row,
     settings_row_separator_color, settings_subsection_heading, settings_summary_row,
-    settings_toggle_row,
+    settings_summary_row_with_value_prefix, settings_toggle_row,
 };
 pub use shortcut_keys::shortcut_keys;
 pub use skeleton::skeleton;

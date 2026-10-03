@@ -10,25 +10,33 @@ use std::sync::{Arc, LazyLock, Mutex};
 const CACHE_BYTES: usize = 128 * 1024 * 1024;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct DirectoryIdentity {
-    #[cfg(unix)]
     device: u64,
-    #[cfg(unix)]
     inode: u64,
-    #[cfg(not(unix))]
-    created: Option<std::time::SystemTime>,
+    // Tiebreaker only: ReFS file indexes are not guaranteed unique, and a
+    // recreated directory can report the old one's creation time.
+    #[cfg(windows)]
+    created: Option<u64>,
 }
 
+#[cfg(unix)]
 fn directory_identity(dir: &Path) -> Option<DirectoryIdentity> {
-    let meta = std::fs::metadata(dir).ok()?;
-    #[cfg(unix)]
     use std::os::unix::fs::MetadataExt as _;
+    let meta = std::fs::metadata(dir).ok()?;
     Some(DirectoryIdentity {
-        #[cfg(unix)]
         device: meta.dev(),
-        #[cfg(unix)]
         inode: meta.ino(),
-        #[cfg(not(unix))]
-        created: meta.created().ok(),
+    })
+}
+
+#[cfg(windows)]
+fn directory_identity(dir: &Path) -> Option<DirectoryIdentity> {
+    // std keeps the volume serial and file index unstable; read them by handle.
+    let handle = winapi_util::Handle::from_path_any(dir).ok()?;
+    let info = winapi_util::file::information(&handle).ok()?;
+    Some(DirectoryIdentity {
+        device: info.volume_serial_number(),
+        inode: info.file_index(),
+        created: info.creation_time(),
     })
 }
 type CacheKey = (PathBuf, Option<DirectoryIdentity>, gix::hash::Kind);

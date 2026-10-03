@@ -607,6 +607,7 @@ fn history_find_matches_and_labels(cx: &mut gpui::TestAppContext) {
 /// Find matches what a row shows. A stash tip missing from the stash list
 /// shows its summary after the "WIP on main:" prefix, so the hidden prefix
 /// neither counts it nor leaves it bright without a visible match.
+#[allow(clippy::single_range_in_vec_init)]
 #[gpui::test]
 fn history_find_matches_stash_rows_on_what_they_show(cx: &mut gpui::TestAppContext) {
     use crate::view::panes::history::find::history_find_row_marks;
@@ -875,6 +876,7 @@ fn history_find_dims_misses_but_not_matches_or_the_selection(cx: &mut gpui::Test
     );
 }
 
+#[allow(clippy::single_range_in_vec_init)]
 #[test]
 fn row_highlights_show_why_the_row_matched() {
     use crate::view::panes::history::find::{HistoryFindHighlights, history_find_highlights};
@@ -1015,6 +1017,7 @@ fn history_find_row_marks_timing() {
     );
 }
 
+#[allow(clippy::single_range_in_vec_init)]
 #[test]
 fn detail_highlights_follow_the_fields_a_row_matches_on() {
     use crate::view::panes::history::find::{

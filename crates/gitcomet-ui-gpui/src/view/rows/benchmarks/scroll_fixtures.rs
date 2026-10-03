@@ -788,11 +788,9 @@ fn keyboard_focus_unique_target_count(focus_target_count: usize, cycle_events: u
 }
 
 fn keyboard_focus_wrap_count(focus_target_count: usize, cycle_events: usize) -> u64 {
-    if focus_target_count == 0 {
-        0
-    } else {
-        u64::try_from(cycle_events / focus_target_count).unwrap_or(u64::MAX)
-    }
+    cycle_events
+        .checked_div(focus_target_count)
+        .map_or(0, |wraps| u64::try_from(wraps).unwrap_or(u64::MAX))
 }
 
 fn keyboard_focus_max_scan_len(

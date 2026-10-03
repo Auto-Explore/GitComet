@@ -271,8 +271,7 @@ impl WorkerLoopContext<'_> {
         try_send_state_changed_or_log(
             self.event_tx,
             "store worker loop state notification",
-            self.thread_msg_tx.store_id(),
-            self.thread_msg_tx.is_alive(),
+            self.thread_msg_tx,
         );
 
         // Keep filesystem monitoring scoped to the active repository, plus any

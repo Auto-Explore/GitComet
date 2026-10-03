@@ -255,11 +255,11 @@ impl FileDiffSyntaxPrepareFixture {
 
         let metrics = benchmark_diff_syntax_prepared_cache_metrics();
         let total = metrics.hit.saturating_add(metrics.miss);
-        let hit_rate_per_mille = if total == 0 {
-            0
-        } else {
-            metrics.hit.saturating_mul(1000) / total
-        };
+        let hit_rate_per_mille = metrics
+            .hit
+            .saturating_mul(1000)
+            .checked_div(total)
+            .unwrap_or(0);
 
         let mut h = FxHasher::default();
         prepared.len().hash(&mut h);

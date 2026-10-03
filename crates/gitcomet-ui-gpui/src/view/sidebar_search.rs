@@ -8,6 +8,100 @@ pub(super) struct SidebarSearch {
     pub matcher: TextSearchMatcher,
 }
 
+impl SidebarSearch {
+    pub fn new(query: &str, options: TextSearchOptions) -> Self {
+        Self {
+            query: query.trim().to_owned(),
+            matcher: TextSearchMatcher::new(query.trim(), options),
+        }
+    }
+
+    /// Group matches include their subtree, even for an anchored expression.
+    /// Full ref spellings avoid guessing the boundary of a slash-named remote.
+    pub fn matches_ref(&self, name: &str) -> bool {
+        self.matcher.is_empty()
+            || self.matcher.is_match(name)
+            || name.match_indices('/').any(|(end, _)| {
+                self.matcher.is_match(&name[..end]) || self.matcher.is_match(&name[..=end])
+            })
+    }
+
+    pub fn matches_remote(&self, remote: &str, name: &str) -> bool {
+        self.matches_ref(&format!("{remote}/{name}"))
+    }
+
+    /// Input rows have expanded ancestors. Retain only matches and their
+    /// context, preserving loading/error rows rather than reporting no results.
+    pub fn project(&self, rows: &[BranchSidebarRow]) -> Vec<BranchSidebarRow> {
+        if self.matcher.is_empty() {
+            return rows
+                .iter()
+                .filter(|row| !matches!(row, BranchSidebarRow::SectionSpacer))
+                .cloned()
+                .collect();
+        }
+        if self.matcher.regex_error().is_some() {
+            return Vec::new();
+        }
+        let mut keep = vec![false; rows.len()];
+        let mut ancestors: Vec<(usize, usize)> = Vec::new();
+        for (ix, row) in rows.iter().enumerate() {
+            let (level, header) = match row {
+                BranchSidebarRow::SectionHeader { .. }
+                | BranchSidebarRow::WorktreesHeader { .. }
+                | BranchSidebarRow::SubmodulesHeader { .. }
+                | BranchSidebarRow::AnnexHeader { .. }
+                | BranchSidebarRow::StashHeader { .. } => (0, true),
+                BranchSidebarRow::RemoteHeader { .. } => (1, true),
+                BranchSidebarRow::GroupHeader { depth, .. } => (usize::from(*depth) + 2, true),
+                BranchSidebarRow::Branch { depth, .. } => (usize::from(*depth) + 2, false),
+                BranchSidebarRow::SectionSpacer => continue,
+                _ => (1, false),
+            };
+            while ancestors.last().is_some_and(|(depth, _)| *depth >= level) {
+                ancestors.pop();
+            }
+            if header {
+                ancestors.push((level, ix));
+                continue;
+            }
+            let matched = match row {
+                BranchSidebarRow::Branch { name, .. } => self.matches_ref(name),
+                BranchSidebarRow::WorktreeItem { path, branch, .. } => {
+                    self.matcher.is_match(&path.to_string_lossy())
+                        || branch
+                            .as_ref()
+                            .is_some_and(|branch| self.matcher.is_match(branch))
+                }
+                BranchSidebarRow::SubmoduleItem { path, .. } => {
+                    self.matcher.is_match(&path.to_string_lossy())
+                }
+                BranchSidebarRow::StashItem { index, message, .. } => self
+                    .matcher
+                    .is_match(&format!("stash@{{{index}}}: {message}")),
+                BranchSidebarRow::AnnexRepositoryItem { name, .. } => self.matcher.is_match(name),
+                BranchSidebarRow::Placeholder { message, .. }
+                | BranchSidebarRow::WorktreePlaceholder { message }
+                | BranchSidebarRow::SubmodulePlaceholder { message, .. }
+                | BranchSidebarRow::AnnexPlaceholder { message, .. }
+                | BranchSidebarRow::StashPlaceholder { message } => !message.starts_with("No "),
+                _ => false,
+            };
+            if matched {
+                keep[ix] = true;
+                for (_, parent) in &ancestors {
+                    keep[*parent] = true;
+                }
+            }
+        }
+        rows.iter()
+            .zip(keep)
+            .filter(|(_, keep)| *keep)
+            .map(|(row, _)| row.clone())
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -27,6 +121,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::single_range_in_vec_init)]
     #[test]
     fn options_groups_and_highlights_use_one_matcher() {
         let mut options = TextSearchOptions::default();
@@ -119,99 +214,5 @@ mod tests {
                 .as_slice(),
             [BranchSidebarRow::StashItem { .. }]
         ));
-    }
-}
-
-impl SidebarSearch {
-    pub fn new(query: &str, options: TextSearchOptions) -> Self {
-        Self {
-            query: query.trim().to_owned(),
-            matcher: TextSearchMatcher::new(query.trim(), options),
-        }
-    }
-
-    /// Group matches include their subtree, even for an anchored expression.
-    /// Full ref spellings avoid guessing the boundary of a slash-named remote.
-    pub fn matches_ref(&self, name: &str) -> bool {
-        self.matcher.is_empty()
-            || self.matcher.is_match(name)
-            || name.match_indices('/').any(|(end, _)| {
-                self.matcher.is_match(&name[..end]) || self.matcher.is_match(&name[..=end])
-            })
-    }
-
-    pub fn matches_remote(&self, remote: &str, name: &str) -> bool {
-        self.matches_ref(&format!("{remote}/{name}"))
-    }
-
-    /// Input rows have expanded ancestors. Retain only matches and their
-    /// context, preserving loading/error rows rather than reporting no results.
-    pub fn project(&self, rows: &[BranchSidebarRow]) -> Vec<BranchSidebarRow> {
-        if self.matcher.is_empty() {
-            return rows
-                .iter()
-                .filter(|row| !matches!(row, BranchSidebarRow::SectionSpacer))
-                .cloned()
-                .collect();
-        }
-        if self.matcher.regex_error().is_some() {
-            return Vec::new();
-        }
-        let mut keep = vec![false; rows.len()];
-        let mut ancestors: Vec<(usize, usize)> = Vec::new();
-        for (ix, row) in rows.iter().enumerate() {
-            let (level, header) = match row {
-                BranchSidebarRow::SectionHeader { .. }
-                | BranchSidebarRow::WorktreesHeader { .. }
-                | BranchSidebarRow::SubmodulesHeader { .. }
-                | BranchSidebarRow::AnnexHeader { .. }
-                | BranchSidebarRow::StashHeader { .. } => (0, true),
-                BranchSidebarRow::RemoteHeader { .. } => (1, true),
-                BranchSidebarRow::GroupHeader { depth, .. } => (usize::from(*depth) + 2, true),
-                BranchSidebarRow::Branch { depth, .. } => (usize::from(*depth) + 2, false),
-                BranchSidebarRow::SectionSpacer => continue,
-                _ => (1, false),
-            };
-            while ancestors.last().is_some_and(|(depth, _)| *depth >= level) {
-                ancestors.pop();
-            }
-            if header {
-                ancestors.push((level, ix));
-                continue;
-            }
-            let matched = match row {
-                BranchSidebarRow::Branch { name, .. } => self.matches_ref(name),
-                BranchSidebarRow::WorktreeItem { path, branch, .. } => {
-                    self.matcher.is_match(&path.to_string_lossy())
-                        || branch
-                            .as_ref()
-                            .is_some_and(|branch| self.matcher.is_match(branch))
-                }
-                BranchSidebarRow::SubmoduleItem { path, .. } => {
-                    self.matcher.is_match(&path.to_string_lossy())
-                }
-                BranchSidebarRow::StashItem { index, message, .. } => self
-                    .matcher
-                    .is_match(&format!("stash@{{{index}}}: {message}")),
-                BranchSidebarRow::AnnexRepositoryItem { name, .. } => self.matcher.is_match(name),
-                BranchSidebarRow::Placeholder { message, .. }
-                | BranchSidebarRow::WorktreePlaceholder { message }
-                | BranchSidebarRow::SubmodulePlaceholder { message, .. }
-                | BranchSidebarRow::AnnexPlaceholder { message, .. }
-                | BranchSidebarRow::StashPlaceholder { message } => !message.starts_with("No "),
-                _ => false,
-            };
-            if matched {
-                keep[ix] = true;
-                for (_, parent) in &ancestors {
-                    keep[*parent] = true;
-                }
-            }
-        }
-        rows.iter()
-            .zip(keep)
-            .filter(|(_, keep)| *keep)
-            .map(|(row, _)| row.clone())
-            .collect()
     }
 }

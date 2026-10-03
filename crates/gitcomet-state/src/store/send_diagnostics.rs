@@ -1,9 +1,9 @@
 use crate::msg::StoreEvent;
 use std::any::Any;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering, fence};
 use std::sync::mpsc;
 
-use super::worker_channel::StoreInstanceId;
+use super::worker_channel::StoreWorkerSender;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SendFailureKind {
@@ -72,17 +72,21 @@ pub(super) fn send_or_log<T>(
 pub(super) fn try_send_state_changed_or_log(
     tx: &smol::channel::Sender<StoreEvent>,
     context: &'static str,
-    store_id: StoreInstanceId,
-    store_is_alive: bool,
+    store: &StoreWorkerSender,
 ) {
     match tx.try_send(StoreEvent::StateChanged) {
         Ok(()) | Err(smol::channel::TrySendError::Full(_)) => {}
         Err(smol::channel::TrySendError::Closed(_)) => {
-            if store_is_alive {
+            // Check liveness only after the send fails: a snapshot taken before
+            // it counts a store dropped ahead of its receiver as a failure. The
+            // queue reads its closed bit Relaxed; the fence makes a shutdown
+            // that preceded the close visible here.
+            fence(Ordering::Acquire);
+            if store.is_alive() {
                 record_send_failure_with_detail(
                     SendFailureKind::StoreEvent,
                     context,
-                    format!("store_id={}", store_id.get()),
+                    format!("store_id={}", store.store_id().get()),
                 );
             }
         }

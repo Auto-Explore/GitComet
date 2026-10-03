@@ -795,6 +795,14 @@ pub(crate) fn workspaces(cx: &App) -> Vec<Workspace> {
         .unwrap_or_default()
 }
 
+/// Reads every workspace without cloning them.
+pub(crate) fn with_workspaces<R>(cx: &App, read: impl FnOnce(&[Workspace]) -> R) -> R {
+    match manager(cx) {
+        Some(manager) => read(&manager.workspaces),
+        None => read(&[]),
+    }
+}
+
 /// Whether a live window currently holds this workspace.
 pub(crate) fn is_open_in_a_window(cx: &App, id: WorkspaceId) -> bool {
     manager(cx).is_some_and(|manager| {
@@ -1262,13 +1270,12 @@ mod tests {
         assert_eq!(restored.height, 700);
     }
 
+    /// Each write the gated sink recorded: its thread and the paths written.
+    type WrittenRx = std::sync::mpsc::Receiver<(std::thread::ThreadId, Vec<PathBuf>)>;
+
     /// A writer whose sink records each write and holds the first one until
     /// `release` is sent, so tests can queue behind an in-progress write.
-    fn gated_writer() -> (
-        Arc<WorkspaceWriter>,
-        std::sync::mpsc::Sender<()>,
-        std::sync::mpsc::Receiver<(std::thread::ThreadId, Vec<PathBuf>)>,
-    ) {
+    fn gated_writer() -> (Arc<WorkspaceWriter>, std::sync::mpsc::Sender<()>, WrittenRx) {
         let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
         let release_rx = Mutex::new(Some(release_rx));
         let (written_tx, written_rx) = std::sync::mpsc::channel();
