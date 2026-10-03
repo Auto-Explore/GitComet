@@ -416,9 +416,10 @@ impl HistoryView {
         {
             return;
         }
-        let height = f64::from(f32::from(crate::view::rows::history_row_height(
-            self.ui_scale(),
-        )));
+        let height = self
+            .scroll_interaction
+            .borrow()
+            .row_height(crate::view::rows::history_row_height(self.ui_scale()));
         let (old_top, within, viewport) =
             if let Some(logical) = &self.scroll_interaction.borrow().logical {
                 (logical.top, logical.within, logical.viewport)
@@ -1150,9 +1151,11 @@ impl HistoryView {
             move |bounds, window, _cx| {
                 let mut state = interaction.borrow_mut();
                 state.viewport_bounds = shown_repo.map(|repo_id| (repo_id, bounds));
+                // Rows step by the height layout gives them, or they drift 1px apart.
+                let row = f64::from(f32::from(window.pixel_snap(row_height)));
+                state.snapped_row_height = Some((row_height, row));
                 if let Some(logical) = &mut state.logical {
                     let height = f64::from(f32::from(bounds.size.height));
-                    let row = f64::from(f32::from(row_height));
                     if logical.viewport != height || logical.height != row {
                         let position = logical.top as f64 * row + logical.within.min(row);
                         logical.viewport = height;
