@@ -201,7 +201,7 @@ fn full_chrome_layout_caches_the_pane_subviews() {
         .filter(|c| !c.is_whitespace())
         .collect();
     assert!(
-        normalized.contains("letmain_content=self.repository_main_content(cx);")
+        normalized.contains("letmain_content=self.repository_main_content();")
             && router_source.contains("stable_cached_fill_view(self.main_pane.clone())"),
         "expected the full-chrome main pane to mount through the router, cached"
     );
