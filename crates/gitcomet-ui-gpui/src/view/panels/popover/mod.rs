@@ -1226,6 +1226,8 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::ConflictResolverChunkMenu { .. } => Some(CONFLICT_CHUNK_MENU_WIDTH),
         PopoverKind::ConflictResolverOutputMenu { .. } => Some(CONFLICT_OUTPUT_MENU_WIDTH),
         PopoverKind::StashMenu { .. } => Some(STASH_MENU_WIDTH),
+        // A hosted menu is a context menu; a hosted dialog frames its content.
+        PopoverKind::Hosted { menu: true, .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::RebaseReword { .. } | PopoverKind::Hosted { .. } => Some(DIALOG_440_WIDTH),
         PopoverKind::InteractiveRebaseActionMenu { .. } => Some(REBASE_ACTION_MENU_WIDTH),
         PopoverKind::InteractiveRebaseAutosquashMenu => Some(REBASE_AUTOSQUASH_MENU_WIDTH),

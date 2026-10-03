@@ -1,7 +1,7 @@
 //! Extension views built per repository: the repository-view router
-//! (History or one of the extensions' repository views in the main area),
-//! details tabs beside the details pane's own content, and sidebar sections
-//! below the sidebar's own.
+//! (History or one of the extensions' repository views in the main area,
+//! chosen from tabs in the action bar), details tabs beside the details
+//! pane's own content, and sidebar sections below the sidebar's own.
 //!
 //! Each exists only when an extension registers that kind; otherwise its
 //! area renders exactly as before. A view is built on first use for a
@@ -135,12 +135,35 @@ pub(in crate::view) struct SidebarSections {
     collapsed: FxHashSet<usize>,
 }
 
-/// Which router a strip or a selection belongs to.
+/// Which router a selection belongs to.
 #[derive(Clone, Copy)]
 pub(in crate::view) enum RoutedArea {
     Main,
     Details,
 }
+
+/// A registered repository view as the action bar's tabs show it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::view) struct ViewTab {
+    /// The view's position among the registered views.
+    pub(in crate::view) index: usize,
+    pub(in crate::view) title: SharedString,
+    pub(in crate::view) icon: Option<SharedString>,
+    /// Listed in the More menu rather than as a tab.
+    pub(in crate::view) under_more: bool,
+}
+
+/// The active repository's views for the action bar: History, then each
+/// registered view, and which one is showing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::view) struct ViewTabs {
+    pub(in crate::view) views: Vec<ViewTab>,
+    /// The selected view's index; `None` is History.
+    pub(in crate::view) selected: Option<usize>,
+}
+
+/// The More tab's invoker, so the tab shows open while its menu does.
+pub(in crate::view) const MORE_VIEWS_INVOKER: &str = "repository_view_more";
 
 impl GitCometView {
     pub(in crate::view) fn extension_navigation_context(
@@ -186,8 +209,10 @@ impl GitCometView {
             let repo = self.active_repo()?;
             self.repository_views.as_ref()?.active_action_bar(repo)
         });
+        let tabs = self.repository_view_tabs();
         self.action_bar.update(cx, |bar, cx| {
-            bar.set_extension_navigation(navigation, slot, cx)
+            bar.set_extension_navigation(navigation, slot, cx);
+            bar.set_view_tabs(tabs, cx);
         });
         crate::app::set_diff_fallback_enabled(self.window_handle.window_id(), enabled, cx);
     }
@@ -216,6 +241,79 @@ impl GitCometView {
             }
         }
         true
+    }
+
+    /// The action bar's view tabs for the active repository: `None` when no
+    /// view is registered or no repository is open, so the bar is as before.
+    pub(in crate::view) fn repository_view_tabs(&self) -> Option<ViewTabs> {
+        let router = self.repository_views.as_ref()?;
+        let repo = self.active_repo()?;
+        Some(ViewTabs {
+            views: router
+                .views
+                .iter()
+                .enumerate()
+                .map(|(index, (_, view))| ViewTab {
+                    index,
+                    title: view.title(),
+                    icon: view.icon(),
+                    under_more: view.under_more,
+                })
+                .collect(),
+            selected: router.selected(repo),
+        })
+    }
+
+    /// The views listed under More, as a menu below `anchor`.
+    pub(in crate::view) fn open_more_views_menu(
+        &mut self,
+        anchor: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        use gitcomet_extension_api::{HostedAction, HostedMenuItem};
+        // A hosted menu survives the gate; the views behind it must not.
+        if self.window_gated {
+            return;
+        }
+        let Some(tabs) = self.repository_view_tabs() else {
+            return;
+        };
+        let root = cx.weak_entity();
+        let window_handle = window.window_handle();
+        let items: Vec<HostedMenuItem> = tabs
+            .views
+            .into_iter()
+            .filter(|view| view.under_more)
+            .map(|view| {
+                let root = root.clone();
+                let index = view.index;
+                let item = HostedMenuItem::action(HostedAction::new(view.title, move |cx| {
+                    let root = root.clone();
+                    let _ = window_handle.update(cx, |_, window, cx| {
+                        let _ = root.update(cx, |root, cx| {
+                            root.select_routed_view(RoutedArea::Main, Some(index), window, cx)
+                        });
+                    });
+                }));
+                match view.icon {
+                    Some(icon) => item.with_icon(icon),
+                    None => item,
+                }
+            })
+            .collect();
+        if items.is_empty() {
+            return;
+        }
+        let id = super::extension_host::next_dialog_id();
+        self.popover_host
+            .update(cx, |host, _| host.set_hosted_menu(id, items));
+        self.open_popover_for_bounds(
+            PopoverKind::Hosted { id, menu: true }.invoked_by(MORE_VIEWS_INVOKER.into()),
+            anchor,
+            window,
+            cx,
+        );
     }
 
     pub(in crate::view) fn repository_view_router(cx: &App) -> Option<RepositoryViewRouter> {
@@ -400,43 +498,26 @@ impl GitCometView {
         cx.notify();
     }
 
-    /// A strip of navigation tabs: the built-in content first, then each
-    /// contribution with its icon.
-    fn routed_strip(
+    /// The details area's strip of tabs: the details pane's own first, then
+    /// each contribution with its icon.
+    fn details_strip(
         &self,
-        area: RoutedArea,
         tabs: Vec<(SharedString, Option<SharedString>)>,
         selected: Option<usize>,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        let (prefix, builtin_id, builtin, builtin_icon) = match area {
-            RoutedArea::Main => (
-                "repository_view",
-                "repository_view_history",
-                "History",
-                "icons/history.svg",
-            ),
-            RoutedArea::Details => (
-                "details_tab",
-                "details_tab_details",
-                "Details",
-                "icons/side_panel_right.svg",
-            ),
-        };
         let theme = self.theme;
         let ui_scale = ui_scale::UiScale::current(cx);
-        let strip_id = format!("{prefix}_strip");
-        let selector = strip_id.clone();
-        let builtin = (builtin.into(), Some(builtin_icon.into()));
         let mut strip = components::navigation_tab_strip(theme.colors.surface.canvas, ui_scale)
-            .id(SharedString::from(strip_id))
-            .debug_selector(move || selector.clone())
+            .id("details_tab_strip")
+            .debug_selector(|| "details_tab_strip".to_string())
             .border_b_1()
             .border_color(theme.colors.stroke.subtle);
-        let entries = std::iter::once((builtin_id.to_string(), builtin, None)).chain(
+        let builtin = ("Details".into(), Some("icons/side_panel_right.svg".into()));
+        let entries = std::iter::once(("details_tab_details".to_string(), builtin, None)).chain(
             tabs.into_iter()
                 .enumerate()
-                .map(|(index, tab)| (format!("{prefix}_{index}"), tab, Some(index))),
+                .map(|(index, tab)| (format!("details_tab_{index}"), tab, Some(index))),
         );
         for (id, (title, icon), index) in entries {
             let mut tab = components::NavTab::new(id, title).selected(selected == index);
@@ -447,43 +528,30 @@ impl GitCometView {
                 false,
                 controls::ControlActivation::ManagedFocus,
                 cx.listener(move |this, _, window, cx| {
-                    this.select_routed_view(area, index, window, cx);
+                    this.select_routed_view(RoutedArea::Details, index, window, cx);
                 }),
             ));
         }
         strip
     }
 
-    /// The main area for the active repository: History, or the selected
-    /// extension view under a strip naming both, or an open standalone document.
-    pub(in crate::view) fn repository_main_content(
-        &mut self,
-        cx: &mut gpui::Context<Self>,
-    ) -> AnyElement {
+    /// The main area for the active repository: History, the extension view
+    /// selected from the action bar's tabs, or an open standalone document.
+    pub(in crate::view) fn repository_main_content(&mut self) -> AnyElement {
         // A standalone document takes the main slot; the panes around it stay.
         if self.documents_active {
             return stable_cached_fill_view(self.documents.clone());
         }
         let history = || stable_cached_fill_view(self.main_pane.clone());
-        let (Some(router), Some(repo)) = (self.repository_views.as_ref(), self.active_repo())
-        else {
-            return history();
-        };
-        let selected = router.selected(repo);
-        let active = router.active_view(repo);
-        let tabs = router.tabs();
-        let strip = self.routed_strip(RoutedArea::Main, tabs, selected, cx);
-        let body = match active {
+        let active = self
+            .repository_views
+            .as_ref()
+            .zip(self.active_repo())
+            .and_then(|(router, repo)| router.active_view(repo));
+        match active {
             Some(view) => div().size_full().child(view).into_any_element(),
             None => history(),
-        };
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .child(strip)
-            .child(div().flex_1().min_h(px(0.0)).child(body))
-            .into_any_element()
+        }
     }
 
     /// The details area with extension tabs, or `None` when no extension
@@ -506,7 +574,7 @@ impl GitCometView {
         let selected = router.selected(repo);
         let active = router.active_view(repo);
         let tabs = router.tabs();
-        let strip = self.routed_strip(RoutedArea::Details, tabs, selected, cx);
+        let strip = self.details_strip(tabs, selected, cx);
         let body = match active {
             Some(view) => div().flex_1().min_h(px(0.0)).child(view).into_any_element(),
             None => details(),

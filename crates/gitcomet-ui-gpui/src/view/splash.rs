@@ -749,7 +749,7 @@ impl GitCometView {
             let bottom_panel_resize_handle = bottom_panel
                 .is_some()
                 .then(|| self.terminal_panel_resize_handle(theme, cx));
-            let main_content = self.repository_main_content(cx);
+            let main_content = self.repository_main_content();
             let details_tabs = self.details_tab_content(cx);
             let sidebar_sections = (!self.sidebar_collapsed)
                 .then(|| self.sidebar_section_content(window, cx))

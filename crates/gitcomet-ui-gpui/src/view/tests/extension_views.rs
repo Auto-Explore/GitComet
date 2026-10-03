@@ -1,5 +1,6 @@
-//! A selected extension repository view in the action bar: its own context
-//! replaces History's controls, and Back/Forward route to the view.
+//! Extension repository views in the action bar: tabs for History and each
+//! view, a More tab for the views listed under it, a selected view's own
+//! context in place of History's controls, and Back/Forward routed to it.
 
 use super::*;
 use crate::view::extension_host;
@@ -192,4 +193,177 @@ fn back_and_forward_route_to_the_selected_view(cx: &mut gpui::TestAppContext) {
     test_support::redraw(cx);
     side_button(cx, gpui::NavigationDirection::Back);
     assert_eq!(back.get(), 2, "History navigates for itself");
+}
+
+/// The repository's views are tabs at the head of the action bar's right
+/// group, as tall as the bar: History and each view, the selected one
+/// underlined. No strip sits above the main area any more.
+#[gpui::test]
+fn the_views_are_tabs_in_the_action_bar(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let registry = Registry::build(vec![Box::new(ReviewExtension)]).unwrap();
+    let (_view, cx) = open_view(cx, registry, Path::new("/tmp/extension-view-tabs"));
+    cx.simulate_resize(gpui::size(px(1600.0), px(900.0)));
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("repository_view_strip").is_none());
+    let bar = cx.debug_bounds("action_bar").expect("the action bar");
+    let right = cx
+        .debug_bounds("right_action_group")
+        .expect("its right group");
+    let tabs = cx
+        .debug_bounds("repository_view_tabs")
+        .expect("the view tabs");
+    assert!(
+        tabs.left() >= right.left() && tabs.right() <= right.right(),
+        "the tabs belong to the right group: {tabs:?} in {right:?}"
+    );
+    let terminal = cx.debug_bounds("terminal").expect("Terminal");
+    assert!(tabs.right() <= terminal.left(), "the tabs lead it");
+    for (selector, label) in [
+        ("repository_view_history", "repository_view_history_label"),
+        ("repository_view_0", "repository_view_0_label"),
+        ("repository_view_1", "repository_view_1_label"),
+    ] {
+        let tab = cx.debug_bounds(selector).expect(selector);
+        assert_eq!(tab.size.height, bar.size.height, "{selector} fills the bar");
+        assert!(cx.debug_bounds(label).is_some(), "{label}");
+    }
+    assert!(
+        cx.debug_bounds("repository_view_history_underline")
+            .is_some()
+    );
+    assert!(cx.debug_bounds("repository_view_0_underline").is_none());
+    assert!(
+        cx.debug_bounds("repository_view_more").is_none(),
+        "no view is listed under More"
+    );
+
+    click_debug_selector(cx, "repository_view_0");
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("example_review_view").is_some());
+    assert!(cx.debug_bounds("repository_view_0_underline").is_some());
+    assert!(
+        cx.debug_bounds("repository_view_history_underline")
+            .is_none()
+    );
+}
+
+/// Narrow, the tabs keep their icons and give up their labels, and the two
+/// groups of the bar still do not overlap at the narrowest window.
+#[gpui::test]
+fn compact_view_tabs_show_icons_alone(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let registry = Registry::build(vec![Box::new(ReviewExtension)]).unwrap();
+    let (_view, cx) = open_view(cx, registry, Path::new("/tmp/extension-view-tabs-compact"));
+    cx.simulate_resize(gpui::size(px(820.0), px(600.0)));
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("repository_view_history_icon").is_some());
+    assert!(cx.debug_bounds("repository_view_history_label").is_none());
+    assert!(cx.debug_bounds("repository_view_0_label").is_none());
+    let left = cx.debug_bounds("left_action_group").expect("left group");
+    let right = cx.debug_bounds("right_action_group").expect("right group");
+    assert!(
+        left.right() <= right.left(),
+        "the groups must not overlap: {left:?}, {right:?}"
+    );
+}
+
+/// Three views, two of them listed under More.
+struct Listed;
+
+impl Extension for Listed {
+    fn id(&self) -> ExtensionId {
+        ExtensionId::new("com.example.listed").unwrap()
+    }
+
+    fn register(&self, registrar: &mut Registrar) {
+        let view = |selector: &'static str| {
+            move |_: RepositoryViewContext, _: &mut Window, cx: &mut App| {
+                cx.new(|_| Labelled(selector)).into()
+            }
+        };
+        registrar
+            .repository_view(
+                "alpha",
+                RepositoryViewDescriptor::new("Alpha", "icons/history.svg", view("alpha_view")),
+            )
+            .repository_view(
+                "beta",
+                RepositoryViewDescriptor::new("Beta", "icons/history.svg", view("beta_view"))
+                    .under_more(),
+            )
+            .repository_view(
+                "gamma",
+                RepositoryViewDescriptor::new("Gamma", "icons/terminal.svg", view("gamma_view"))
+                    .under_more(),
+            );
+    }
+}
+
+struct Labelled(&'static str);
+
+impl gpui::Render for Labelled {
+    fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+        let selector = self.0;
+        div()
+            .debug_selector(move || selector.to_string())
+            .size_full()
+    }
+}
+
+/// Views listed under More share one tab, whose menu lists them; while one
+/// of them shows, the tab names it and carries the underline.
+#[gpui::test]
+fn views_under_more_share_one_tab_that_names_the_selected_one(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let registry = Registry::build(vec![Box::new(Listed)]).unwrap();
+    let (_view, cx) = open_view(cx, registry, Path::new("/tmp/extension-view-more"));
+    cx.simulate_resize(gpui::size(px(1600.0), px(900.0)));
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("repository_view_0").is_some());
+    assert!(cx.debug_bounds("repository_view_1").is_none());
+    assert!(cx.debug_bounds("repository_view_2").is_none());
+    assert!(cx.debug_bounds("repository_view_more_label").is_some());
+    assert!(cx.debug_bounds("repository_view_more_end_icon").is_some());
+    assert!(cx.debug_bounds("repository_view_more_underline").is_none());
+    let more = cx.debug_bounds("repository_view_more").expect("More");
+
+    click_debug_selector(cx, "repository_view_more");
+    cx.run_until_parked();
+    test_support::redraw(cx);
+    let beta = cx
+        .debug_bounds("context_menu_beta")
+        .expect("Beta is listed");
+    assert!(cx.debug_bounds("context_menu_gamma").is_some());
+    assert!(
+        cx.debug_bounds("context_menu_alpha").is_none(),
+        "Alpha has a tab"
+    );
+    assert!(beta.top() >= more.bottom(), "the menu opens below its tab");
+    assert!(
+        cx.debug_bounds("context_menu_entry_icon_Gamma").is_some(),
+        "each entry with its view's icon"
+    );
+
+    click_debug_selector(cx, "context_menu_gamma");
+    cx.run_until_parked();
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("gamma_view").is_some(), "the view shows");
+    assert!(
+        cx.debug_bounds("context_menu_beta").is_none(),
+        "the menu closed"
+    );
+    assert!(cx.debug_bounds("repository_view_more_underline").is_some());
+    assert!(cx.debug_bounds("repository_view_more_icon").is_some());
+    assert!(
+        cx.debug_bounds("repository_view_history_underline")
+            .is_none()
+    );
+
+    // History again: More stops naming the view.
+    click_debug_selector(cx, "repository_view_history");
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("gamma_view").is_none());
+    assert!(cx.debug_bounds("repository_view_more_underline").is_none());
+    assert!(cx.debug_bounds("repository_view_more_icon").is_none());
 }

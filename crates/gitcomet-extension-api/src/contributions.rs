@@ -27,8 +27,8 @@ pub struct RepositoryViewContext {
     pub repository: RepositoryHandle,
 }
 
-/// A view of a repository, selectable next to History in the repository's
-/// navigation. The view is built when first selected in a window and kept
+/// A view of a repository, selectable next to History from the tabs in the
+/// action bar. The view is built when first selected in a window and kept
 /// while the repository stays open there.
 #[derive(Clone)]
 #[non_exhaustive]
@@ -42,6 +42,9 @@ pub struct RepositoryViewDescriptor {
     /// Back/Forward in place of History's branch, tracking and merge
     /// controls, which a selected view always hides. Built with the view.
     pub action_bar: Option<ViewBuilder<RepositoryViewContext>>,
+    /// Listed in the action bar's More menu instead of having a tab of its
+    /// own, for a view used less often. While it is selected, More names it.
+    pub under_more: bool,
 }
 
 impl RepositoryViewDescriptor {
@@ -56,6 +59,7 @@ impl RepositoryViewDescriptor {
             build: Rc::new(build),
             navigation: None,
             action_bar: None,
+            under_more: false,
         }
     }
 
@@ -69,6 +73,12 @@ impl RepositoryViewDescriptor {
         build: impl Fn(RepositoryViewContext, &mut Window, &mut App) -> AnyView + 'static,
     ) -> Self {
         self.action_bar = Some(Rc::new(build));
+        self
+    }
+
+    /// Lists the view in the action bar's More menu rather than as a tab.
+    pub fn under_more(mut self) -> Self {
+        self.under_more = true;
         self
     }
 }
