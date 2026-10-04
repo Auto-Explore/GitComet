@@ -14,8 +14,9 @@ pub trait MarkdownViewImpl {
 /// An owning handle to a read-only markdown view, from
 /// [`WindowHost::create_markdown_view`](crate::WindowHost::create_markdown_view).
 /// It lays out at its content's height, so it belongs inside a container
-/// that scrolls. Text renders as History's markdown preview does; links are
-/// shown but do not open.
+/// that scrolls. It uses History's markdown renderer, read-only: nothing can
+/// be selected, links are shown but do not open, and a line holding inline
+/// code is set in the editor font throughout.
 #[derive(Clone)]
 pub struct MarkdownView(Rc<dyn MarkdownViewImpl>);
 
