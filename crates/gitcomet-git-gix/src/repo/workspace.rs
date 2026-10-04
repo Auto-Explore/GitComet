@@ -1974,4 +1974,189 @@ mod tests {
             "a refused creation must not leave the ref behind"
         );
     }
+
+    // ── Pushing ─────────────────────────────────────────────────
+
+    /// A repository with a bare repository standing in for a remote.
+    fn repo_with_a_remote() -> (tempfile::TempDir, tempfile::TempDir, GixRepo) {
+        let remote = tempfile::tempdir().expect("tempdir");
+        git(remote.path(), &["init", "--bare"]);
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path();
+        git(root, &["init"]);
+        git(root, &["config", "commit.gpgsign", "false"]);
+        // Every assertion here is about exact bytes: a system-wide
+        // `core.autocrlf` would rewrite the checkout to CRLF.
+        git(root, &["config", "core.autocrlf", "false"]);
+        git(root, &["config", "user.name", "Test User"]);
+        git(root, &["config", "user.email", "test@example.com"]);
+        std::fs::write(root.join("a.txt"), "x\n").unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-m", "base"]);
+
+        let default_branch = git(root, &["symbolic-ref", "--short", "HEAD"]);
+        git(root, &["branch", "api"]);
+        let remote_path = remote.path().to_string_lossy().into_owned();
+        git(root, &["remote", "add", "origin", &remote_path]);
+
+        let state = WorkspaceState::new(&default_branch).with_branches(vec![VirtualBranch::new("api")]);
+        let repo = open_repo(root);
+        repo.write_workspace(&state).expect("write workspace");
+        (temp, remote, repo)
+    }
+
+    #[test]
+    fn pushing_a_virtual_branch_publishes_that_branch_and_not_head() {
+        // The user is usually sitting on the target while they work in a
+        // workspace, so pushing `HEAD` would publish the target and leave the
+        // branch they clicked unpushed.
+        let (temp, remote, repo) = repo_with_a_remote();
+        let root = temp.path();
+
+        repo.push_virtual_branch("api").expect("push");
+
+        assert_eq!(
+            git(remote.path(), &["rev-parse", "refs/heads/api"]),
+            git(root, &["rev-parse", "refs/heads/api"]),
+            "the remote has to have the branch that was pushed"
+        );
+        let head = git(root, &["symbolic-ref", "--short", "HEAD"]);
+        assert!(
+            !git_succeeds(remote.path(), &["rev-parse", "--verify", &format!("refs/heads/{head}")]),
+            "and not whichever branch the working directory happens to be on"
+        );
+    }
+
+    #[test]
+    fn the_first_push_sets_the_upstream_and_later_ones_do_not_fail() {
+        let (temp, _remote, repo) = repo_with_a_remote();
+        let root = temp.path();
+
+        repo.push_virtual_branch("api").expect("first push");
+        assert_eq!(
+            git(root, &["rev-parse", "--abbrev-ref", "api@{upstream}"]),
+            "origin/api",
+            "a branch that was never pushed has no upstream to compare against"
+        );
+        repo.push_virtual_branch("api").expect("second push");
+    }
+
+    #[test]
+    fn pushing_with_no_remote_says_so_rather_than_reporting_a_git_failure() {
+        let (_temp, repo, _) = repo_with_two_branches();
+        let error = repo.push_virtual_branch("api").expect_err("no remote");
+        assert!(
+            format!("{error}").contains("no remote"),
+            "the message has to name the reason: {error}"
+        );
+    }
+
+    #[test]
+    fn a_pull_request_targets_the_branch_the_virtual_branch_is_stacked_on() {
+        // Not the remote default: a branch stacked on another virtual branch
+        // belongs in a pull request against *that* branch, or the reviewer sees
+        // the lower branch's work as part of this one.
+        let (_temp, repo, _) = repo_with_two_branches();
+        let mut state = repo.read_workspace().expect("read");
+        let target = state.target.clone();
+        state.set_parent("ui", Some("api")).expect("stack ui on api");
+
+        assert_eq!(
+            repo.virtual_branch_push_target("api", &state).as_deref(),
+            Some(target.as_str()),
+            "an independent branch is reviewed against the workspace target"
+        );
+        assert_eq!(
+            repo.virtual_branch_push_target("ui", &state).as_deref(),
+            Some("api"),
+            "a stacked branch is reviewed against the branch under it"
+        );
+        assert_eq!(
+            repo.virtual_branch_push_target("nowhere", &state),
+            None,
+            "a branch the workspace does not have has no target"
+        );
+    }
+
+    // ── The working directory ────────────────────────────────────
+
+    #[test]
+    fn entering_a_workspace_that_already_exists_does_not_rebuild_it() {
+        // The tab is opened and closed constantly. Rebuilding on every entry
+        // would rewrite the branch each time and make the working directory
+        // jump for no reason.
+        let (temp, repo, _) = repo_with_two_branches();
+        let root = temp.path();
+        repo.enter_workspace().expect("first enter");
+        let tip = git(root, &["rev-parse", WORKSPACE_BRANCH]);
+
+        repo.enter_workspace().expect("second enter");
+
+        assert_eq!(
+            git(root, &["rev-parse", WORKSPACE_BRANCH]),
+            tip,
+            "entering again must not move the workspace branch"
+        );
+    }
+
+    #[test]
+    fn leaving_onto_a_branch_that_no_longer_exists_is_refused() {
+        // The branch the user was on was deleted or renamed while they were in
+        // the workspace. Falling back to a guess would move them onto a branch
+        // they never had checked out.
+        let (temp, repo, default_branch) = repo_with_two_branches();
+        let root = temp.path();
+        repo.enter_workspace().expect("enter");
+        git(root, &["branch", "-D", &default_branch]);
+
+        let result = repo.leave_workspace(&default_branch);
+        assert!(
+            result.is_err(),
+            "there is nowhere to go back to, and guessing is worse than failing"
+        );
+        assert_eq!(
+            git(root, &["symbolic-ref", "--short", "HEAD"]),
+            WORKSPACE_BRANCH,
+            "and the working directory has to stay where it is"
+        );
+    }
+
+    #[test]
+    fn only_the_workspace_branch_counts_as_being_in_the_workspace() {
+        let (temp, repo, default_branch) = repo_with_two_branches();
+        let root = temp.path();
+
+        assert!(
+            !repo.workspace_is_checked_out(),
+            "the working directory starts on the target"
+        );
+        repo.enter_workspace().expect("enter");
+        assert!(
+            repo.workspace_is_checked_out(),
+            "and is on the workspace branch afterwards"
+        );
+        repo.leave_workspace(&default_branch).expect("leave");
+        assert!(!repo.workspace_is_checked_out());
+    }
+
+    #[test]
+    fn a_rebuild_that_changes_nothing_leaves_the_files_alone() {
+        // Syncing the working directory to the tree it already has would still
+        // be a `read-tree -u`, which can refuse on a file the user has edited.
+        let (temp, repo, _) = repo_with_two_branches();
+        let root = temp.path();
+        repo.enter_workspace().expect("enter");
+        let tip = repo.resolve_revision(WORKSPACE_BRANCH).expect("resolve").expect("tip");
+
+        std::fs::write(root.join("shared.txt"), "mine\na2\na3\n").expect("edit");
+        repo.sync_workspace_workdir_impl(&tip, &tip)
+            .expect("sync onto itself");
+
+        assert_eq!(
+            read(root, "shared.txt"),
+            "mine\na2\na3\n",
+            "an edit to a file nothing changed has to survive"
+        );
+    }
 }
