@@ -938,6 +938,7 @@ fn a_page_chunk_counts_lookahead_and_rejected_commits_as_visited() {
         &shallow,
         None,
         None,
+        None,
     )
     .expect("build page walk");
     let mut scanned = Vec::new();
@@ -969,6 +970,7 @@ fn a_page_chunk_counts_lookahead_and_rejected_commits_as_visited() {
         [head],
         HistoryMode::FullReachable,
         &shallow,
+        None,
         None,
         None,
     )

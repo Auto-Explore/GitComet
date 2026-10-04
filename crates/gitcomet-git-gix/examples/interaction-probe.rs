@@ -1,6 +1,6 @@
 //! Shared before/after driver. Invoke only against disposable benchmark repos.
 //! Usage: interaction-probe REPO OP PATH SAMPLES WARMUPS [context]
-use gitcomet_core::domain::{DiffArea, DiffTarget};
+use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget};
 use gitcomet_core::git_operation::{self, GitOperationContext, GitOperationEvent};
 use gitcomet_core::large_files::LargeFileCommand;
 use gitcomet_core::services::GitBackend;
@@ -39,8 +39,8 @@ fn main() {
         });
         let _scope = (args.get(6).map(String::as_str) == Some("context"))
             .then(|| git_operation::attach(&context));
-        let (witness, commands) =
-            gitcomet_git_gix::command_trace::capture(|| match operation.as_str() {
+        let (witness, commands) = gitcomet_git_gix::command_trace::capture(|| {
+            match operation.as_str() {
                 "diff" => {
                     let diff = repo.diff_file_text(&target).unwrap().expect("text diff");
                     json!({"old": diff.old_source.as_ref().map(|source| &source.path),
@@ -49,6 +49,31 @@ fn main() {
                 "status" => {
                     let status = repo.status().unwrap();
                     json!({"staged":status.staged.len(), "unstaged":status.unstaged.len()})
+                }
+                "large-file-support" => {
+                    let support = repo
+                        .large_file_support_cancellable(&Default::default())
+                        .unwrap();
+                    json!({"lfs": support.lfs.in_use(), "annex": support.annex.in_use(),
+                        "lfs_patterns": support.lfs.tracked_patterns.len(),
+                        "annex_repositories": support.annex.repositories.len()})
+                }
+                "large-file-status" => {
+                    let status = repo.status().unwrap();
+                    let files = repo
+                        .uncommitted_large_files_for_status_cancellable(
+                            &status,
+                            &Default::default(),
+                        )
+                        .unwrap();
+                    json!({"staged": files.staged.len(), "unstaged": files.unstaged.len()})
+                }
+                "commit-details" => {
+                    let details = repo
+                        .commit_details(&CommitId(args[3].clone().into()))
+                        .unwrap();
+                    json!({"id": details.id.as_ref(), "files": details.files.len(),
+                        "large_files": details.files.iter().filter(|file| file.large_file.is_some()).count()})
                 }
                 "stage" => {
                     repo.stage(&[&path]).unwrap();
@@ -123,7 +148,8 @@ fn main() {
                     json!("synced")
                 }
                 _ => panic!("unsupported operation"),
-            });
+            }
+        });
         let elapsed = started.elapsed().as_secs_f64() * 1000.0;
         if ix >= warmups {
             let timings: Vec<_> = commands.iter().map(|command| json!({"label": command.label,

@@ -997,6 +997,13 @@ fn indexed_history_skeleton_waits_300ms_and_hydrates_without_a_minimum_dwell(
             next_cursor: None,
         }),
     );
+    cx.update(|_, app| {
+        let history = view.read(app).main_pane.read(app).history_view.read(app);
+        assert!(
+            history.scenario_indexed_window().is_none(),
+            "bootstrap rows must not satisfy indexed readiness"
+        );
+    });
     install_index(&mut state, index.clone());
     store.replace_snapshot_for_test(Arc::new(state.clone()));
     set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
@@ -1028,6 +1035,11 @@ fn indexed_history_skeleton_waits_300ms_and_hydrates_without_a_minimum_dwell(
     let placeholder = cx
         .debug_bounds("history_skeleton_650")
         .expect("skeleton deadline must repaint without more input");
+    cx.update(|_, app| {
+        let history = view.read(app).main_pane.read(app).history_view.read(app);
+        assert!(matches!(history.scenario_indexed_window(), Some((5000, first, last, false)) if first <= 650 && last > 650),
+            "scrolling to placeholders must not satisfy the jump witness");
+    });
     state.repos[0]
         .history_state
         .indexed
@@ -1056,6 +1068,13 @@ fn indexed_history_skeleton_waits_300ms_and_hydrates_without_a_minimum_dwell(
         cx.debug_bounds("history_row_650").is_some()
     });
     let real = cx.debug_bounds("history_row_650").unwrap();
+    cx.update(|_, app| {
+        let history = view.read(app).main_pane.read(app).history_view.read(app);
+        assert!(
+            matches!(history.scenario_indexed_window(), Some((5000, _, _, true))),
+            "hydrated visible rows must satisfy the jump witness"
+        );
+    });
     assert_eq!(real.size.height, placeholder.size.height);
     assert_eq!(real.origin.y, placeholder.origin.y);
     assert!(cx.debug_bounds("history_skeleton_650").is_none());

@@ -19,6 +19,7 @@
 //! analyses the records.
 
 use super::*;
+use gitcomet_core::history_perf::{self, Work};
 use gitcomet_core::op_trace::{self, Stage};
 use gpui::{
     AnyWindowHandle, AsyncApp, Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent,
@@ -55,6 +56,8 @@ enum Step {
     WaitReady {
         #[serde(default = "default_ready_timeout_ms")]
         timeout_ms: u64,
+        #[serde(default)]
+        indexed: bool,
     },
     /// Sleeps; used to let startup work finish before measuring.
     Settle {
@@ -82,6 +85,19 @@ enum Step {
         interval_ms: u64,
         #[serde(default)]
         witness: Option<WitnessKind>,
+    },
+    /// Paste via the production clipboard and text input shortcut.
+    Paste {
+        text: String,
+        #[serde(default)]
+        witness: Option<WitnessKind>,
+    },
+    /// Assert the final filter result, including keyboard selection. This reads
+    /// the existing cache; it must never complete filtering on the app's behalf.
+    ExpectRepoPicker {
+        query: String,
+        matches: usize,
+        selected: Option<usize>,
     },
     /// Wheel events over a target on a fixed schedule; `delta_px` is
     /// negative to scroll down. Direction flips every `flip_every` events.
@@ -141,6 +157,8 @@ enum Step {
         to_fraction: f32,
         steps: usize,
         interval_ms: u64,
+        #[serde(default)]
+        wait_for_rows: bool,
     },
     /// Starts through the production store, then returns so subsequent input
     /// runs concurrently with the operation. WaitOperation proves completion.
@@ -198,8 +216,10 @@ enum WitnessKind {
     DiffLoaded,
     /// The history list moved.
     HistoryScrolled,
+    HistoryJumpLoaded,
     /// The diff search settled on the typed query.
     SearchSettled,
+    RepoPickerFiltered,
     /// The repository at `path` is active with status and history loaded.
     RepoOpen {
         path: PathBuf,
@@ -217,7 +237,9 @@ impl WitnessKind {
             Self::CommitDetails => "commit_details",
             Self::DiffLoaded => "diff_loaded",
             Self::HistoryScrolled => "history_scrolled",
+            Self::HistoryJumpLoaded => "history_jump_loaded",
             Self::SearchSettled => "search_settled",
+            Self::RepoPickerFiltered => "repo_picker_filtered",
             Self::RepoOpen { .. } => "repo_open",
             Self::RepoClosed { .. } => "repo_closed",
             Self::MessageHover => "message_hover",
@@ -251,6 +273,7 @@ struct Driver {
     phase: Option<String>,
     operation: Option<Operation>,
     pointer_expected: Option<Point<Pixels>>,
+    work_start: [u64; Work::ALL.len()],
     #[cfg(feature = "perf-alloc")]
     allocation_start: crate::perf_alloc::PerfAllocMetrics,
 }
@@ -308,6 +331,13 @@ async fn run(scenario: Scenario, cx: &mut AsyncApp) {
             .push("scenario ended with an unwitnessed operation".into());
     }
     driver.end_phase();
+    let work = history_perf::snapshot();
+    let counts: serde_json::Map<String, Value> = Work::ALL
+        .iter()
+        .enumerate()
+        .map(|(index, kind)| (kind.name().into(), json!(work[index])))
+        .collect();
+    record("scenario_work_total", json!({"counts": counts}));
     let outcome = if driver.errors.is_empty() {
         "passed"
     } else {
@@ -417,6 +447,7 @@ impl Driver {
             phase: None,
             operation: None,
             pointer_expected: None,
+            work_start: history_perf::snapshot(),
             #[cfg(feature = "perf-alloc")]
             allocation_start: crate::perf_alloc::current_alloc_metrics(),
         })
@@ -424,6 +455,18 @@ impl Driver {
 
     fn end_phase(&mut self) {
         if let Some(name) = self.phase.take() {
+            let end = history_perf::snapshot();
+            let counts: serde_json::Map<String, Value> = Work::ALL
+                .iter()
+                .enumerate()
+                .map(|(index, work)| {
+                    (
+                        work.name().into(),
+                        json!(end[index].saturating_sub(self.work_start[index])),
+                    )
+                })
+                .collect();
+            record("scenario_work", json!({"phase": name, "counts": counts}));
             #[cfg(feature = "perf-alloc")]
             {
                 let metrics =
@@ -445,7 +488,10 @@ impl Driver {
 
     async fn step(&mut self, step: &Step, cx: &mut AsyncApp) -> Result<(), String> {
         match step {
-            Step::WaitReady { timeout_ms } => self.wait_ready(*timeout_ms, cx).await,
+            Step::WaitReady {
+                timeout_ms,
+                indexed,
+            } => self.wait_ready(*timeout_ms, *indexed, cx).await,
             Step::Settle { ms } => {
                 self.sleep(Duration::from_millis(*ms), cx).await;
                 Ok(())
@@ -454,6 +500,7 @@ impl Driver {
                 self.end_phase();
                 record("scenario_phase", json!({"name": name, "state": "begin"}));
                 self.phase = Some(name.clone());
+                self.work_start = history_perf::snapshot();
                 #[cfg(feature = "perf-alloc")]
                 {
                     self.allocation_start = crate::perf_alloc::current_alloc_metrics();
@@ -497,6 +544,54 @@ impl Driver {
                     },
                 )
                 .await
+            }
+            Step::Paste { text, witness } => {
+                cx.update(|cx| {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.clone()))
+                });
+                // Native clipboard ownership is asynchronous (Wayland needs
+                // a compositor offer). Finish setup before timing the shortcut.
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while !cx.update(|cx| {
+                    cx.read_from_clipboard()
+                        .and_then(|item| item.text())
+                        .as_ref()
+                        == Some(text)
+                }) {
+                    if Instant::now() >= deadline {
+                        return Err("clipboard did not accept scenario text; check native input focus/ownership".into());
+                    }
+                    self.sleep(Duration::from_millis(10), cx).await;
+                }
+                let paste = Keystroke::parse("secondary-v").map_err(|e| e.to_string())?;
+                self.scheduled(1, 0, witness.clone(), cx, |_, window, cx| {
+                    window.dispatch_keystroke(paste.clone(), cx);
+                })
+                .await
+            }
+            Step::ExpectRepoPicker {
+                query,
+                matches,
+                selected,
+            } => {
+                let actual = cx.update(|cx| {
+                    self.view
+                        .read(cx)
+                        .popover_host
+                        .read(cx)
+                        .scenario_repo_picker_state(cx)
+                });
+                let expected = Some((query.clone(), Some(*matches), *selected));
+                if actual != expected {
+                    return Err(format!(
+                        "repository picker: expected {expected:?}, got {actual:?}"
+                    ));
+                }
+                record(
+                    "scenario_assertion",
+                    json!({"kind": "repo_picker", "query": query, "matches": matches, "selected": selected}),
+                );
+                Ok(())
             }
             Step::Scroll {
                 target,
@@ -664,6 +759,7 @@ impl Driver {
                 to_fraction,
                 steps,
                 interval_ms,
+                wait_for_rows,
             } => {
                 if !(0.01..=0.99).contains(to_fraction) || *steps == 0 {
                     return Err("drag needs positive steps and destination in 0.01..=0.99".into());
@@ -697,7 +793,11 @@ impl Driver {
                     .scheduled(
                         *steps,
                         *interval_ms,
-                        Some(WitnessKind::HistoryScrolled),
+                        Some(if *wait_for_rows {
+                            WitnessKind::HistoryJumpLoaded
+                        } else {
+                            WitnessKind::HistoryScrolled
+                        }),
                         cx,
                         |ix, window, cx| {
                             let progress = (ix + 1) as f32 / *steps as f32;
@@ -749,7 +849,12 @@ impl Driver {
         }
     }
 
-    async fn wait_ready(&mut self, timeout_ms: u64, cx: &mut AsyncApp) -> Result<(), String> {
+    async fn wait_ready(
+        &mut self,
+        timeout_ms: u64,
+        indexed: bool,
+        cx: &mut AsyncApp,
+    ) -> Result<(), String> {
         let deadline = Instant::now() + Duration::from_millis(timeout_ms);
         loop {
             let ready = cx.update(|cx| {
@@ -762,6 +867,10 @@ impl Driver {
                     && matches!(repo.status, Loadable::Ready(_))
                     && matches!(repo.history_state.log, Loadable::Ready(_))
                     && history.history_viewport_bounds().is_some()
+                    && (!indexed
+                        || history
+                            .scenario_indexed_window()
+                            .is_some_and(|(_, _, _, loaded)| loaded))
             });
             if ready {
                 let geometry = cx.update(|cx| {
@@ -774,7 +883,7 @@ impl Driver {
                                 Loadable::Ready(page) => Some(page.commits.len()),
                                 _ => None,
                             });
-                    json!({"loaded_commits": commits, "viewport": [
+                    json!({"loaded_commits": commits, "indexed_window": history.scenario_indexed_window(), "viewport": [
                         f32::from(bounds.left()), f32::from(bounds.top()),
                         f32::from(bounds.size.width), f32::from(bounds.size.height)]})
                 });
@@ -782,7 +891,9 @@ impl Driver {
                 return Ok(());
             }
             if Instant::now() > deadline {
-                return Err(format!("repository not ready within {timeout_ms} ms"));
+                return Err(format!(
+                    "repository not ready within {timeout_ms} ms (require indexed rows: {indexed})"
+                ));
             }
             self.sleep(Duration::from_millis(50), cx).await;
         }
@@ -846,16 +957,24 @@ impl Driver {
                     view.active_repo()
                         .and_then(|repo| repo.history_state.selected_commit.clone()),
                 ),
-                WitnessKind::HistoryScrolled => Baseline::ScrollPosition(
-                    view.main_pane
-                        .read(cx)
-                        .history_view
-                        .read(cx)
-                        .history_scroll_position(),
-                ),
+                WitnessKind::HistoryScrolled | WitnessKind::HistoryJumpLoaded => {
+                    Baseline::ScrollPosition(
+                        view.main_pane
+                            .read(cx)
+                            .history_view
+                            .read(cx)
+                            .history_scroll_position(),
+                    )
+                }
                 WitnessKind::SearchSettled => {
                     Baseline::Query(view.main_pane.read(cx).diff_search_query.clone())
                 }
+                WitnessKind::RepoPickerFiltered => view
+                    .popover_host
+                    .read(cx)
+                    .scenario_repo_picker_state(cx)
+                    .map(|(query, _, _)| Baseline::Query(query.into()))
+                    .unwrap_or(Baseline::None),
                 WitnessKind::DiffLoaded
                 | WitnessKind::RepoOpen { .. }
                 | WitnessKind::RepoClosed { .. }
@@ -886,6 +1005,17 @@ impl Driver {
                 return false;
             };
             match kind {
+                WitnessKind::RepoPickerFiltered => view
+                    .popover_host
+                    .read(cx)
+                    .scenario_repo_picker_state(cx)
+                    .is_some_and(|(query, count, _)| {
+                        count.is_some()
+                            && match baseline {
+                                Baseline::Query(before) => query.as_str() != before.as_ref(),
+                                _ => true,
+                            }
+                    }),
                 WitnessKind::MessageHover => self.pointer_expected.is_some_and(|position| {
                     view.commit_message_hover_host
                         .read(cx)
@@ -921,7 +1051,18 @@ impl Driver {
                         && !matches!(diff.diff_file, Loadable::Loading)
                         && !diff.diff_reload_in_flight
                 }
-                WitnessKind::HistoryScrolled => {
+                WitnessKind::HistoryScrolled | WitnessKind::HistoryJumpLoaded => {
+                    if matches!(kind, WitnessKind::HistoryJumpLoaded)
+                        && !view
+                            .main_pane
+                            .read(cx)
+                            .history_view
+                            .read(cx)
+                            .scenario_indexed_window()
+                            .is_some_and(|(_, _, _, loaded)| loaded)
+                    {
+                        return false;
+                    }
                     let position = view
                         .main_pane
                         .read(cx)
@@ -1083,6 +1224,10 @@ impl Driver {
                 return "no active repository".to_owned();
             };
             match kind {
+                WitnessKind::RepoPickerFiltered => format!(
+                    "picker={:?}",
+                    view.popover_host.read(cx).scenario_repo_picker_state(cx)
+                ),
                 WitnessKind::MessageHover => format!("pointer={:?}", self.pointer_expected),
                 WitnessKind::CommitDetails => format!(
                     "selected={:?} details_ready={}",
@@ -1100,7 +1245,7 @@ impl Driver {
                     "target={:?} reload_in_flight={}",
                     repo.diff_state.diff_target, repo.diff_state.diff_reload_in_flight
                 ),
-                WitnessKind::HistoryScrolled => format!(
+                WitnessKind::HistoryScrolled | WitnessKind::HistoryJumpLoaded => format!(
                     "position={}",
                     view.main_pane
                         .read(cx)
@@ -1286,7 +1431,7 @@ mod tests {
     fn harness_step_shapes_parse() {
         let scenario: Scenario = serde_json::from_value(json!({
             "steps": [
-                {"do": "wait_ready", "timeout_ms": 180000},
+                {"do": "wait_ready", "timeout_ms": 180000, "indexed": true},
                 {"do": "settle", "ms": 3000},
                 {"do": "phase", "name": "select"},
                 {"do": "focus", "target": "history"},
@@ -1307,11 +1452,13 @@ mod tests {
                 {"do": "command", "id": "close-repo-tab",
                  "witness": {"kind": "repo_closed", "path": "/tmp"}},
                 {"do": "open_repo", "path": "/tmp"},
-                {"do": "minimize"}
+                {"do": "minimize"},
+                {"do": "paste", "text": "component-017", "witness": {"kind": "repo_picker_filtered"}},
+                {"do": "expect_repo_picker", "query": "component-017", "matches": 1, "selected": 0}
             ]
         }))
         .expect("parse scenario");
-        assert_eq!(scenario.steps.len(), 15);
+        assert_eq!(scenario.steps.len(), 17);
         assert!(matches!(
             scenario.steps[4],
             Step::Keys {

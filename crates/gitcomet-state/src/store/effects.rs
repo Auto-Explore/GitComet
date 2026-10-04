@@ -1,4 +1,5 @@
 mod clone;
+mod commit_details;
 mod diff_session;
 mod history_authors;
 mod history_find;
@@ -859,11 +860,20 @@ pub(super) fn schedule_effect(
             );
         }
         Effect::LoadCommitDetails { repo_id, commit_id } => {
-            if let Some((msg_tx, _)) =
-                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
-            {
-                repo_load::schedule_load_commit_details(
-                    executor, repos, msg_tx, repo_id, commit_id,
+            if let Some((msg_tx, slot)) = load_tokens::commit_details_load_context(
+                thread_state,
+                repo_task_tokens,
+                msg_tx,
+                repo_id,
+            ) {
+                commit_details::schedule(
+                    executor,
+                    &slot,
+                    repos,
+                    Arc::clone(thread_state),
+                    msg_tx,
+                    repo_id,
+                    commit_id,
                 );
             }
         }

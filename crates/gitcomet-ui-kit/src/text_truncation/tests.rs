@@ -517,6 +517,56 @@ fn start_truncation_uses_bounded_candidate_measurements(cx: &mut gpui::TestAppCo
 }
 
 #[gpui::test]
+fn highlighted_path_typing_does_not_measure_every_hidden_suffix(cx: &mut gpui::TestAppContext) {
+    let (_view, cx) = cx.add_window_view(|_window, _cx| gpui::Empty);
+
+    cx.update(|window, app| {
+        let style = window.text_style();
+        for directories in [32, 128] {
+            // A query near the start of a long recent-repository path leaves a
+            // large hidden suffix. Its length must not dictate how many times
+            // we reshape the label while typing.
+            let text: SharedString =
+                format!("/work/needle/{}/repo", "directory/".repeat(directories)).into();
+            let start = text.find("needle").unwrap();
+            for query_len in 1..="needle".len() {
+                clear_truncated_layout_cache_for_test();
+                reset_measure_candidate_calls_for_test();
+                let focus = start..start + query_len;
+                let line = shape_truncated_line_cached(
+                    window,
+                    app,
+                    &style,
+                    &text,
+                    Some(px(120.0)),
+                    TextTruncationProfile::Path,
+                    &[(
+                        focus.clone(),
+                        HighlightStyle {
+                            font_weight: Some(gpui::FontWeight::BOLD),
+                            ..Default::default()
+                        },
+                    )],
+                    Some(focus.clone()),
+                );
+
+                let visible = visible_source_range(&line.projection).unwrap();
+                assert!(line.truncated);
+                assert!(line.shaped_line.width <= px(120.0));
+                assert!(visible.start <= focus.start && visible.end >= focus.end);
+                let measurements = measure_candidate_calls_for_test();
+                assert!(
+                    measurements <= 64,
+                    "query length {query_len} in a {}-byte path needed {measurements} measurements",
+                    text.len(),
+                );
+            }
+        }
+    });
+    clear_truncated_layout_cache_for_test();
+}
+
+#[gpui::test]
 fn truncate_around_focus_preserves_centered_focus_slice_when_full_focus_overflows(
     cx: &mut gpui::TestAppContext,
 ) {

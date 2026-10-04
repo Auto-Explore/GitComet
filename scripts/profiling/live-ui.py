@@ -189,9 +189,78 @@ def file_text(repository, path):
         raise ValueError(f"{path} must be an existing UTF-8 file: {error}") from error
 
 
+PICKER_RECENT_COUNT = 40
+# The version-3 session migrates into one workspace containing the active repo.
+PICKER_UNFILTERED_COUNT = PICKER_RECENT_COUNT + 2
+
+
+def picker_recent_paths():
+    # Stable lengths across runs, independent of artifact directory names.
+    # These are display-only paths: scenarios never open or create them.
+    root = "C:/performance" if os.name == "nt" else "/performance"
+    return [f"{root}/company/{'directory/' * (32 if ix % 2 else 96)}component-{ix:03}/GitComet-{ix:03}"
+            for ix in range(PICKER_RECENT_COUNT)]
+
+
+def picker_scenario(ready):
+    witness = {"kind": "repo_picker_filtered"}
+    def key(key, repeat=1, interval_ms=0, witnessed=False):
+        return {"do": "keys", "key": key, "repeat": repeat, "interval_ms": interval_ms,
+                **({"witness": witness} if witnessed else {})}
+    def expect(query, count):
+        return {"do": "expect_repo_picker", "query": query, "matches": count,
+                "selected": 0 if query and count else None}
+    steps = list(ready)
+    for shortcut in ("a", "o"):
+        steps += [
+            {"do": "phase", "name": f"picker_open_{shortcut}"},
+            key(f"secondary-shift-{shortcut}", witnessed=True),
+            expect("", PICKER_UNFILTERED_COUNT),
+            {"do": "settle", "ms": 750},
+            {"do": "phase", "name": f"picker_name_{shortcut}"},
+            {"do": "type", "text": "GitComet", "interval_ms": 80, "witness": witness},
+            expect("GitComet", PICKER_RECENT_COUNT), {"do": "settle", "ms": 750},
+            {"do": "phase", "name": f"picker_path_{shortcut}"},
+            key("secondary-a"), key("backspace", witnessed=True),
+            {"do": "type", "text": "company", "interval_ms": 80, "witness": witness},
+            expect("company", PICKER_RECENT_COUNT), {"do": "settle", "ms": 750},
+            {"do": "phase", "name": f"picker_paste_{shortcut}"},
+            key("secondary-a"),
+            {"do": "paste", "text": "component-017", "witness": witness},
+            expect("component-017", 1), {"do": "settle", "ms": 750},
+            {"do": "phase", "name": f"picker_no_matches_{shortcut}"},
+            key("secondary-a"),
+            {"do": "paste", "text": "zzzz-no-such-repository", "witness": witness},
+            expect("zzzz-no-such-repository", 0), {"do": "settle", "ms": 750},
+            {"do": "phase", "name": f"picker_backspace_{shortcut}"},
+            key("backspace", repeat=len("zzzz-no-such-repository"), interval_ms=16, witnessed=True),
+            expect("", PICKER_UNFILTERED_COUNT), {"do": "settle", "ms": 750},
+            key("escape"),
+        ]
+    return {"version": 1, "steps": steps}
+
+
 def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
     """Scenario files for the in-app driver (view/scenario_driver.rs)."""
-    ready = [{"do": "wait_ready", "timeout_ms": 180_000}, {"do": "settle", "ms": 3000}]
+    ready = [{"do": "wait_ready", "timeout_ms": 180_000}]
+    if name.startswith("history-"):
+        # First-page readiness is separately recorded. Interactions with a
+        # massive timeline must wait for its published index and visible text.
+        ready.append({"do": "wait_ready", "timeout_ms": 180_000, "indexed": True})
+    ready.append({"do": "settle", "ms": 3000})
+    if name == "repo-picker":
+        return picker_scenario(ready)
+    if name == "history-jump":
+        return {"steps": ready + [{"do": "phase", "name": "jump"}]
+                + [step for fraction in (.9, .1, .8, .2, .95, .05) for step in (
+                    {"do": "drag_history", "to_fraction": fraction, "steps": 1, "interval_ms": 0, "wait_for_rows": True},
+                    {"do": "wait_ready", "indexed": True})]
+                + [{"do": "settle", "ms": 1000}]}
+    if name == "history-reopen":
+        return {"steps": ready + [{"do": "phase", "name": "reopen"},
+                {"do": "command", "id": "close-repo-tab", "witness": {"kind": "repo_closed", "path": str(repository)}},
+                {"do": "open_repo", "path": str(repository)},
+                {"do": "wait_ready", "indexed": True}, {"do": "settle", "ms": 1000}]}
     if name.startswith("history-hover"):
         points = [[.55, .08]] if name == "history-hover-stationary" else [
             [.55, .08 + row * .022] for row in range(24)]
@@ -309,7 +378,7 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
 
 
 SCENARIOS = ("startup", "idle", "idle-minimized", "idle-hidden-terminal", "two-windows-idle", "history-select",
-             "history-hover", "history-hover-stationary", "history-drag",
+             "history-hover", "history-hover-stationary", "history-drag", "history-jump", "history-reopen", "repo-picker",
              "history-select-burst", "history-scroll", "status-save", "status-burst", "status-touch",
              "ignored-churn",
              "diff-search", "terminal-output", "lifecycle")
@@ -471,7 +540,8 @@ class HeadlessCompositor:
     A headless mutter has no input devices, so no window ever gets keyboard
     focus, and GitComet (rightly) accepts text only in an active window. A
     RemoteDesktop session adds a virtual keyboard and pointer; they must exist
-    before the app binds its seat. Nothing is typed or clicked through them."""
+    before the app binds its seat. Clipboard scenarios also send a Shift
+    press/release during setup so Wayland grants clipboard ownership."""
 
     def __init__(self, output, refresh_hz=REFRESH_HZ):
         from gi.repository import Gio, GLib
@@ -514,12 +584,19 @@ class HeadlessCompositor:
         session = call(root, service, "CreateSession", reply="(o)")[0]
         session_interface = service + ".Session"
         call(session, session_interface, "Start")
+        self.keyboard = lambda pressed: call(session, session_interface, "NotifyKeyboardKeysym", GLib.Variant("(ub)", (0xFFE1, pressed)))
         # Shift press/release creates the keyboard; the pointer is parked in
         # the monitor's corner, away from the window.
         call(session, session_interface, "NotifyKeyboardKeysym", GLib.Variant("(ub)", (0xFFE1, True)))
         call(session, session_interface, "NotifyKeyboardKeysym", GLib.Variant("(ub)", (0xFFE1, False)))
         call(session, session_interface, "NotifyPointerMotionRelative", GLib.Variant("(dd)", (5000.0, 5000.0)))
         time.sleep(0.3)
+
+    def prime_clipboard(self):
+        # In-process scenario input has no Wayland serial. A real native press
+        # after the app has focus supplies one, before measured phases begin.
+        self.keyboard(True)
+        self.keyboard(False)
 
     def environment(self, env):
         env = dict(env, WAYLAND_DISPLAY=self.name, XDG_SESSION_TYPE="wayland")
@@ -557,13 +634,20 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
     session_path = output / "session.json"
     session = json.loads(session_path.read_text(encoding="utf-8"))
     session["ui_scale_percent"] = ui_scale
+    if name == "repo-picker":
+        session["recent_repos"] = picker_recent_paths()
     session_path.write_text(json.dumps(session), encoding="utf-8")
-    scenario_file.write_text(json.dumps(scenario_steps or scenario(name, repository, save_file, secondary, cycles), indent=2),
+    scripted = scenario_steps or scenario(name, repository, save_file, secondary, cycles)
+    scenario_file.write_text(json.dumps(scripted, indent=2),
                              encoding="utf-8")
+    needs_clipboard = any(step["do"] == "paste" for step in scripted["steps"])
     frames = output / "frames.jsonl"
     env.update(GITCOMET_UI_PROBE="1", GITCOMET_UI_PROBE_JSONL=str(frames),
                GITCOMET_UI_PROBE_LOG=str(output / "ui.log"), GITCOMET_UI_SCENARIO=str(scenario_file),
                GITCOMET_PERF_RUN_ID=run_id)
+    # Every short picker phase must contain complete probe intervals and
+    # process samples; otherwise identical runs can have different metrics.
+    env["GITCOMET_UI_PROBE_INTERVAL_MS"] = "250" if name == "repo-picker" else "1000"
     for key in ("MIMALLOC_PURGE_DELAY", "MIMALLOC_PURGE_DECOMMITS"):
         if key in os.environ:
             env[key] = os.environ[key]
@@ -581,6 +665,7 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
                "window_size": WINDOW_SIZE, "display": display,
                "refresh_hz": (refresh_hz or REFRESH_HZ) if display == "headless" else refresh_hz,
                "ui_scale_percent": ui_scale, "capabilities": perf_platform.capabilities(),
+               "probe_interval_ms": int(env["GITCOMET_UI_PROBE_INTERVAL_MS"]),
                "measurement_kind": "diagnostic" if wrap else "live_application",
                "ping_ms": ping_ms, "wrap": wrap, "gpu_cache": "cold" if cold_gpu_cache else "warm",
                "load_before": load_average(), "outcome": "failed",
@@ -610,6 +695,10 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
                     raise TimeoutError(f"scenario {name} did not finish within {timeout} s")
                 if prefix and app_pid == process.pid:
                     app_pid = find_app_pid(process.pid, binary) or app_pid
+                if needs_clipboard and compositor and frames.exists() and b'"scenario_ready"' in frames.read_bytes():
+                    compositor.prime_clipboard()
+                    capture["clipboard_input_primed"] = True
+                    needs_clipboard = False
                 sample = read_proc(app_pid)
                 if sample:
                     # A mapping breakdown every ~5 s; smaps is costlier than status.
@@ -738,9 +827,13 @@ def summarize(directory):
         anchor = start["unix_ms"]
         first_draw = next((r for r in records if r["event"] == "draw"), None)
         ready = next((r for r in records if r["event"] == "scenario_ready"), None)
+        indexed = next((r for r in records if r["event"] == "scenario_ready"
+                        and r.get("detail", {}).get("indexed_window")
+                        and r["detail"]["indexed_window"][3]), None)
         startup = {"spawn_to_probe_ms": anchor - capture["spawn_unix_ms"],
                    "spawn_to_first_draw_ms": anchor + first_draw["at_ms"] - capture["spawn_unix_ms"] if first_draw else None,
-                   "spawn_to_ready_ms": ready["unix_ms"] - capture["spawn_unix_ms"] if ready else None}
+                   "spawn_to_ready_ms": ready["unix_ms"] - capture["spawn_unix_ms"] if ready else None,
+                   "spawn_to_indexed_ready_ms": indexed["unix_ms"] - capture["spawn_unix_ms"] if indexed else None}
     retention = None
     if capture["scenario"] == "lifecycle" and all(name in phases for name in
                                                   ("warmup_cycles", "cycles", "after_cycles")):
@@ -774,10 +867,14 @@ def summarize(directory):
                                   "accepted_at_ms": accepted["at_ms"], "finished_at_ms": finished["at_ms"]})
     summary = {"run_id": capture["run_id"], "scenario": capture["scenario"], "startup": startup,
                "debug_assertions": start.get("debug_assertions"),
+               "probe_interval_ms": capture.get("probe_interval_ms"),
                "graphics": next((sorted(r["environment"].get("graphics", {}).values(), key=lambda v: json.dumps(v, sort_keys=True))
                                  for r in reversed(records) if r["event"] == "environment"), None),
                "allocation_tracking": any(r.get("detail", {}).get("allocation_tracking") for r in records if r["event"] == "scenario_diagnostics"),
                "allocation_phases": [r["detail"] for r in records if r["event"] == "scenario_allocations"],
+               "work_units": next((r["detail"]["counts"] for r in records if r["event"] == "scenario_work_total"),
+                                  next((r["work_units"] for r in reversed(records) if r["event"] == "interval" and "work_units" in r), {})),
+               "work_units_complete": any(r["event"] == "scenario_work_total" for r in records),
                "retention": retention,
                "long_frames": [{"window": r.get("window"), "at_ms": r["at_ms"],
                                 "dirty_to_draw_ms": r["at_ms"] - r["dirty_ms"]} for r in stalled],
@@ -900,6 +997,9 @@ def analyse_phase(begin, end, draws, submits, by_op, applied, records, threads, 
         "fds": max((s["fds"] for s in phase_process if s.get("fds") is not None), default=None),
         "handles": max((s["handles"] for s in phase_process if s.get("handles") is not None), default=None),
         "background_work": dict(background.most_common()),
+        "work_units": next((r["detail"]["counts"] for r in records
+                            if r["event"] == "scenario_work"
+                            and r["detail"]["phase"] == begin.get("detail", {}).get("name")), {}),
         "work_counts": dict(collections.Counter(f"{r['stage']}:{r['label']}" for r in records
                             if r["event"] == "stage" and in_phase(r["at_ms"])
                             and r["stage"] in ("received", "task_started", "command_stage")).most_common()),

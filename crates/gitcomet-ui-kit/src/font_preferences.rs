@@ -176,17 +176,25 @@ pub fn editor_font_options(window: &Window) -> Arc<[String]> {
 }
 
 pub fn applied_ui_font_family(selection: &str) -> String {
-    resolve_applied_font_family(
-        selection,
-        &system_font_catalog(None).resolved_system_ui_family,
-    )
+    applied_font_family(selection, || {
+        &system_font_catalog(None).resolved_system_ui_family
+    })
 }
 
 pub fn applied_editor_font_family(selection: &str) -> String {
-    resolve_applied_font_family(
-        selection,
-        &system_font_catalog(None).resolved_system_ui_family,
-    )
+    applied_font_family(selection, || {
+        &system_font_catalog(None).resolved_system_ui_family
+    })
+}
+
+fn applied_font_family(selection: &str, system_family: impl FnOnce() -> &'static str) -> String {
+    // A concrete family needs no system-font discovery. In particular, the
+    // default bundled fonts must not scan every installed font on the UI thread.
+    if should_resolve_system_ui_font(selection) {
+        resolve_applied_font_family(selection, system_family())
+    } else {
+        selection.to_string()
+    }
 }
 
 pub fn normalize_ui_font_family(candidate: Option<&str>, options: &[String]) -> String {
@@ -470,7 +478,6 @@ fn is_special_font_family(font_family: &str) -> bool {
     font_family == UI_SYSTEM_FONT_FAMILY
 }
 
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn is_bundled_font_family(font_family: &str) -> bool {
     matches!(
         font_family,
@@ -496,7 +503,35 @@ fn resolve_for_window(
     editor_font_family: Option<&str>,
     use_font_ligatures: Option<bool>,
 ) -> AppFontPreferences {
-    let catalog = font_option_catalog(window);
+    resolve_with_catalog(
+        ui_font_family,
+        editor_font_family,
+        use_font_ligatures,
+        || font_option_catalog(window),
+    )
+}
+
+fn resolve_with_catalog(
+    ui_font_family: Option<&str>,
+    editor_font_family: Option<&str>,
+    use_font_ligatures: Option<bool>,
+    catalog: impl FnOnce() -> &'static FontOptionCatalog,
+) -> AppFontPreferences {
+    // Bundled families are registered before windows open. Only a custom
+    // selection or the font picker needs the complete installed-font catalog.
+    let ui = ui_font_family.unwrap_or(DEFAULT_UI_FONT_FAMILY);
+    let editor = editor_font_family
+        .filter(|family| *family != LEGACY_EDITOR_MONOSPACE_FONT_FAMILY)
+        .unwrap_or(EDITOR_MONOSPACE_FONT_FAMILY);
+    if is_bundled_font_family(ui) && is_bundled_font_family(editor) {
+        return AppFontPreferences {
+            ui_font_family: ui.to_string(),
+            editor_font_family: editor.to_string(),
+            use_font_ligatures: use_font_ligatures.unwrap_or(DEFAULT_USE_FONT_LIGATURES),
+            initialized: true,
+        };
+    }
+    let catalog = catalog();
     AppFontPreferences {
         ui_font_family: normalize_ui_font_family(ui_font_family, &catalog.ui_options),
         editor_font_family: normalize_editor_font_family(
@@ -523,6 +558,43 @@ fn font_option_catalog(window: &Window) -> &'static FontOptionCatalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundled_font_startup_and_application_do_not_enumerate_system_fonts() {
+        for (ui, editor) in [
+            (None, None),
+            (
+                Some(DEFAULT_UI_FONT_FAMILY),
+                Some(EDITOR_MONOSPACE_FONT_FAMILY),
+            ),
+            (None, Some(LEGACY_EDITOR_MONOSPACE_FONT_FAMILY)),
+            (
+                Some(bundled_fonts::FIRA_CODE_FONT_FAMILY),
+                Some(bundled_fonts::IBM_PLEX_SANS_FONT_FAMILY),
+            ),
+        ] {
+            let resolved = resolve_with_catalog(ui, editor, Some(true), || {
+                panic!("bundled fonts must not enumerate installed fonts")
+            });
+            assert_eq!(
+                resolved.ui_font_family,
+                ui.unwrap_or(DEFAULT_UI_FONT_FAMILY)
+            );
+            assert_eq!(
+                resolved.editor_font_family,
+                editor
+                    .filter(|font| *font != LEGACY_EDITOR_MONOSPACE_FONT_FAMILY)
+                    .unwrap_or(EDITOR_MONOSPACE_FONT_FAMILY)
+            );
+            assert!(resolved.use_font_ligatures);
+            for family in [&resolved.ui_font_family, &resolved.editor_font_family] {
+                assert_eq!(
+                    applied_font_family(family, || panic!("concrete family needs no catalog")),
+                    *family
+                );
+            }
+        }
+    }
 
     #[test]
     fn display_label_maps_special_font_families() {

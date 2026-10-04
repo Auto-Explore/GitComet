@@ -75,6 +75,12 @@ impl GixRepo {
     ) -> Result<RepoStatus> {
         cancellation.check_cancelled()?;
         let repo = self.status_repo();
+        // Bare repositories can display history, but have no checkout whose
+        // changes we can report. Do not walk the Git directory or compare HEAD
+        // against a missing index (which would report every file as deleted).
+        if repo.workdir().is_none() {
+            return Ok(RepoStatus::default());
+        }
         let index_stamp = repo_index_stamp(&repo);
         let may_have_gitlinks = self.may_have_gitlink_status_supplement(&repo, &index_stamp);
         cancellation.check_cancelled()?;
@@ -218,6 +224,9 @@ impl GixRepo {
     ) -> Result<Vec<FileStatus>> {
         cancellation.check_cancelled()?;
         let repo = self.status_repo();
+        if repo.workdir().is_none() {
+            return Ok(Vec::new());
+        }
         let index_stamp = repo_index_stamp(&repo);
         let may_have_gitlinks = self.may_have_gitlink_status_supplement(&repo, &index_stamp);
         let mut unstaged = Vec::new();
@@ -262,6 +271,9 @@ impl GixRepo {
     ) -> Result<Vec<FileStatus>> {
         cancellation.check_cancelled()?;
         let repo = self.repo();
+        if repo.workdir().is_none() {
+            return Ok(Vec::new());
+        }
         let head_oid = super::history::gix_head_id_or_none(&repo)?;
         let index_stamp = repo_index_stamp(&repo);
         cancellation.check_cancelled()?;

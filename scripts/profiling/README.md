@@ -2,7 +2,9 @@
 
 Profiling and benchmark drivers live here. CI execution, cache management and
 test-runtime reports stay in `scripts/ci/`. Application profiling runs locally;
-it does not add jobs or application builds to the CI test matrix.
+it does not add application builds to the CI test matrix. Capture-policy and
+fixture tests run in the existing CI configuration lane; deterministic history
+and picker work limits also run in the performance workflow.
 
 Run examples from the repository root. Python tools require Python 3.11 or newer;
 use `python3` instead of `python` where appropriate. Build probes with the repo's
@@ -29,7 +31,8 @@ job or network account is needed. Start with:
 
 ```sh
 python3 scripts/profiling/performance.py doctor
-cargo build --release -p gitcomet -p gitcomet-git-gix --features gitcomet-git-gix/benchmarks --bin gitcomet --example interaction-probe
+cargo build --release -p gitcomet-git-gix --features benchmarks --example interaction-probe
+cargo build --release -p gitcomet --bin gitcomet
 python3 scripts/profiling/performance.py prepare --suite deep --real --repo-root /home/sampo/git/git_test_repos
 python3 scripts/profiling/performance.py run --suite smoke --backend target/release/examples/interaction-probe --output target/performance/smoke --session initial
 ```
@@ -45,6 +48,8 @@ mirrors. All ref/worktree mutations for transfers happen in disposable copies.
 `corpus.json` pins refs, HEAD, object format, pack sizes and commit graphs;
 run manifests also hash worktree differences, binaries and the harness.
 Existing snapshots are validated rather than overwritten.
+Build the backend probe and app separately, as above, so Cargo feature
+unification does not enable benchmark-only instrumentation in the app.
 
 On another host pass `--repo-root PATH` to prepare and run, and override sources
 with repeated `--source git=PATH --source bun=PATH --source chromium=PATH`.
@@ -69,12 +74,13 @@ python3 scripts/profiling/performance.py run --suite deep --scenario 'ui/*/lifec
 
 | Area | Measurement and completion evidence |
 | --- | --- |
-| Startup/history | Process spawn to first draw and usable history/status; generated and real repositories; refs and worktree fingerprints. |
+| Startup/history | Process spawn to first draw, usable first page/status, and fully indexed history; generated and real repositories; refs and worktree fingerprints. History interactions wait for the index and visible text, so a jump cannot pass against just the 200-row bootstrap page. |
+| Recent repository filter | `repo-picker` opens both Ctrl/Cmd+Shift+A and Ctrl/Cmd+Shift+O, types names and long path components, selects all, pastes, finds no matches, and backspaces. Forty synthetic recent paths exercise truncation; every edit has a filter witness, and each sequence asserts the exact query, result count and selection. |
 | Hover | Rapid row sweeps, repeated stationary pointer events, witnessed message-card dwell and idle after dwell; handler/dispatch delays, draw cost, invalidations and store/worker counts. Sweep events have no per-row visual witness, so they do not claim input-to-draw latency. |
-| Scroll/drag/select | Real production input handlers and rendered scroll-position/commit-detail witnesses; frame, input, store queue, worker queue and UI apply distributions. Burst selection also counts superseded work. |
+| Scroll/drag/select | Real production input handlers and rendered scroll-position/commit-detail witnesses; frame, input, store queue, worker queue and UI apply distributions. Deep runs include distant scrollbar jumps with destination text loaded, close/reopen, stationary hover and burst selection on every corpus size and real snapshot. Burst selection also counts superseded work. |
 | Clone/fetch/pull/push | CLI, backend (where available) and live store paths; resulting refs, ancestry and payload hashes. Clone uses smart HTTP, so local hardlink shortcuts cannot satisfy the test. No-op and divergent merge/rebase cases are in the deep suite. |
-| LFS | Real batch/upload/download endpoints with content hashes; fetch, checkout/pull and push, including UI interaction during transfers. |
-| Annex | Real git-annex with a disposable Git peer and directory content remote; get/copy/pull/push/sync and content hashes. These measure local content transport, not SSH/cloud latency. |
+| LFS | Real batch/upload/download endpoints with content hashes; fetch, checkout/pull and push, including UI interaction during transfers. Deep cases add `-mixed` (half the content present) and `-warm` (all present) destinations, asserting exactly which objects transferred. |
+| Annex | Real git-annex with a disposable Git peer and directory content remote; get/copy/pull/push/sync and content hashes, with cold/mixed/warm destinations in deep runs. These measure local content transport, not SSH/cloud latency. |
 | Background work | Save, identical-byte touch, file bursts, ignored churn, diff search, idle, minimized and multiple-window idle. The save generator writes off the UI thread. |
 | Cancellation | Stalled HTTP fetch/clone/LFS fetch, followed by continued input, cancellation acknowledgement and a usable UI. Failed/unfinished operations fail validation. |
 | Retention | Ten warm-up cycles, repeated repository open/select/close, then a settling plateau; repeat at 100 and 200 cycles to distinguish retention from continuing growth. |
@@ -84,29 +90,49 @@ body-byte limit to the loopback Git/LFS server. This is a controlled application
 transport, not a simulation of packet loss, TCP congestion or a production
 hosting service. Annex's directory remote ignores these HTTP settings.
 `--shape` selects the existing LFS payload shapes and small/large Git payloads.
+For example, select `--suite deep --scenario 'transfer/*/lfs-fetch-*' --shape dense`
+to compare partially populated and warm caches across CLI/backend/live paths.
+Cache state refers to content at the transfer destination, not the OS page cache.
+`bytes` counts verified content; `required_content_bytes` counts initially missing
+content. A warm operation can verify many bytes while transferring none.
 Real clone cases (`clone/chromium/live`, for example) copy the full repository
 and can take hours at a low bandwidth limit. They appear in `--list` but require
 an explicit `--scenario 'clone/chromium/live'` selection; raise `--timeout` as
 needed. Verified payload bytes and HTTP wire bytes are separate.
 
-Every run writes `manifest.json`, `report.txt`, environment/binary identities
+Every run writes `manifest.json`, `report.txt`, `findings.json`, environment/binary identities
 and case artifacts. UI cases retain scenario, frame/stage JSONL, process
 samples and stderr. CLI/backend cases retain command, stdout/stderr, Git
 Trace2, command-stage timings where supported, and final witnesses. Failed
 transfer fixtures remain under the corpus's `.scratch` directory for inspection;
 successful ones are removed unless `--keep-fixtures` is set. Do not run two
 sessions concurrently against the same corpus.
+`findings.json` ranks invalid captures, severe stalls and investigation candidates;
+each entry includes its case, pair, build mode, artifact directory and available
+phase work/CPU/wait evidence. Use the retained `scenario.json` and frozen executable
+to reproduce the exact interaction before attributing a cause or changing code.
+Picker phases include a 750 ms settling tail and use 250 ms probe intervals
+(other scenarios use 1 s), so their short phases retain complete wake and process
+samples. Captures record this cadence, and comparisons reject a cadence change.
 
 ### Regression decisions
 
 First run an A/A check by giving the same executable as `--binary` and
 `--baseline`. For a change, use frozen release executables from the two
-revisions, with corresponding backend probes when selecting backend cases:
+revisions, with corresponding backend probes when selecting backend cases.
+Repeat separately with normal dev executables for development responsiveness;
+dev-to-dev comparisons are supported, while dev-to-release pairs are rejected:
 
 ```sh
 python3 scripts/profiling/performance.py run --binary CANDIDATE --baseline BASELINE --scenario 'ui/history-20000/history-scroll' --pairs 3 --session first --output target/performance/first
 python3 scripts/profiling/performance.py run --binary CANDIDATE --baseline BASELINE --scenario 'ui/history-20000/history-scroll' --pairs 2 --reverse --session second --output target/performance/second
 python3 scripts/profiling/performance.py compare target/performance/first target/performance/second --output target/performance/comparison.json
+
+# Dev A/A: build once, then measure the same binary in two sessions.
+cargo build -p gitcomet
+python3 scripts/profiling/performance.py run --binary target/debug/gitcomet --baseline target/debug/gitcomet --cargo-profile dev --scenario 'ui/*/repo-picker' --pairs 3 --session dev-aa-first --output target/performance/dev-aa-first
+python3 scripts/profiling/performance.py run --binary target/debug/gitcomet --baseline target/debug/gitcomet --cargo-profile dev --scenario 'ui/*/repo-picker' --pairs 2 --reverse --session dev-aa-second --output target/performance/dev-aa-second
+python3 scripts/profiling/performance.py compare target/performance/dev-aa-first target/performance/dev-aa-second --output target/performance/dev-aa.json
 ```
 
 Pairs alternate order. Reports bootstrap **run-level paired ratios**, not
@@ -115,19 +141,28 @@ a median slowdown of at least 20%, and a 95% interval excluding parity.
 Fewer observations are labelled as needing confirmation. Changed binaries
 between sessions, unmatched pairs, different workload/environment identities,
 missing metrics, dropped records and failed witnesses cannot pass silently.
+When a complete trace has zero store/worker/apply stages for an input phase,
+its stage latency is not applicable. Such paired distributions appear in
+`excluded_metrics` with their sample counts; work counters still compare, and
+neither latency zeros nor samples are invented. Missing sampled data remains
+an error.
 Allocation diagnostic timings are excluded. A/A noise must be assessed before
 using the 20% policy on a particular machine. Identical-binary slowdowns are
 labelled `noise_alert`, not code regressions. Shared-desktop activity, thermal
 state and background builds can still confound an otherwise valid capture.
 
-Initial alerts are p95 CPU draw over one frame interval (16.7 ms at 60 Hz),
-immediate witnessed input-to-draw p95 over 50 ms or p99 over 100 ms, and
-handler/dispatch/wake/apply stalls over 100 ms (1 s is severe). Intentional
+Initial **release** alerts are p95 CPU draw over one frame interval (16.7 ms at
+60 Hz), witnessed input-to-draw p95 over 50 ms or p99 over 100 ms, and
+draw/handler/dispatch/wake/apply stalls over 100 ms. **Dev** alerts use 50 ms draw
+p95, 100/250 ms input p95/p99 and 250 ms stalls. One second is severe in either
+mode. These provisional thresholds live in `perf_report.py`; the running binary's
+debug-assertion flag identifies the mode, independent of its filename. Intentional
 tooltip dwell is excluded from immediate-input latency. Draw correlation uses
 the input's window; another window's draw cannot satisfy it. Long frames remain
 evidence rather than automatically being rejected as occlusion. These are
 investigation targets, not universal startup/network time limits. `--strict`
-also exits unsuccessfully on alerts; ordinary runs fail on invalid cases.
+also exits unsuccessfully on alerts or skipped selected cases; ordinary runs
+fail on invalid cases and report optional missing tools as skipped.
 
 Fresh application processes/profiles and warm shared shader/OS caches are the
 default. A new process is **not** a cold filesystem-cache experiment. For
@@ -147,14 +182,41 @@ Compare direct CLI, backend and live operation results to distinguish transport
 or Git cost from application scheduling/refresh cost. `overlapping_inputs`
 proves whether the recorded gestures actually ran before operation completion;
 zero means the run established no concurrent-interaction coverage.
+That produces a `concurrency_not_exercised` finding, including in functional
+validation runs. Increase transport delay or payload size and repeat; warm no-op
+operations can finish too quickly to establish concurrent responsiveness.
 
 For a main-thread stall, inspect a native CPU **and wait** capture: filesystem
 calls, child waits, mutex contention and queue delay can be slow with little CPU.
 Use operation traces to locate the interval before reading a whole flame graph.
-For unnecessary work, compare `work_counts`, background refreshes, invalidations
-and superseded tasks between stationary hover, sweep and idle. Existing
+For unnecessary work, compare `work_counts` (store/task stages), `work_units`
+(history reads and topology builds, graph transitions, painted rows/paths/quads, checkpoints,
+decorations, containment walks, text windows/measurements, picker model builds
+and filtered items), background refreshes, invalidations and superseded tasks
+between stationary hover, sweep and idle. Fine-grained work counters are enabled
+by the existing operation trace, aggregated across threads without per-row JSON
+records, and reported both per phase and per process. They add atomic counter
+overhead while profiling. Interval snapshots retain partial work evidence if a
+run times out; `work_units_complete` identifies a final snapshot, and incomplete
+captures remain invalid for comparison. Counters have no allocations or locks
+on the measured work path; without tracing they only check its enable flag.
+Missing work instrumentation is unavailable data, not zero work. Existing
 indexed-history Criterion groups provide allocation/row/graph mechanism probes;
 they remain distinct from native application latency.
+
+`log_walk_object_read` counts topology header lookups, and `log_topology_build`
+counts full topology scans when no Git commit-graph is available. A bootstrap
+page followed by full indexing should scan each reachable header once and reuse
+that snapshot. Ref changes or object-store replacement invalidate it. The
+`indexed_history_scans_headers_once_and_reuses_bootstrap_topology` regression in
+the existing backend CI job enforces this work budget without timing thresholds.
+
+The picker regression tests bound text measurements as hidden path length grows,
+require one filter pass per edit and no row-model rebuilds during typing. These
+structural checks run without machine-dependent timing limits. Run all Python
+policy/fixture regressions with
+`python3 -m unittest discover -s scripts/profiling`; missing LFS/annex tools are
+reported as skipped tests.
 
 ```sh
 scripts/profiling/build_release_debug.sh
@@ -214,6 +276,23 @@ interaction-probe --features benchmarks --release`. Then run
 `interaction-performance.py` with `--baseline`, `--candidate`, `--output` and
 `--session`; choose `--operations`, `--pairs` and `--samples` as needed. It creates
 disposable diff/status/push fixtures and verifies their results.
+
+For local LFS/annex metadata and commit-click costs, the same probe supports
+`large-file-support`, `large-file-status` (status plus row classification), and
+`commit-details`. The third argument is a commit for `commit-details` and an
+unused placeholder for the other two. These report result counts as witnesses
+and commands issued through GitComet's command runner. Filter processes started
+inside gix are not included; use a process trace when checking all subprocess
+work. For example:
+
+```sh
+target/release/examples/interaction-probe REPO large-file-support . 20 0
+target/release/examples/interaction-probe REPO commit-details HEAD 20 0
+target/release/examples/interaction-probe REPO large-file-status . 20 0
+```
+
+Keep the first sample to assess a cold backend handle; subsequent samples reuse
+that handle. This does not flush the operating system's filesystem cache.
 
 `lfs-performance.py --output PATH` creates a local HTTP LFS fixture. Configure
 `--shape`, `--latency-ms`, `--workers` and `--rounds`, and optionally pass

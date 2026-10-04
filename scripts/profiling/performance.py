@@ -55,13 +55,13 @@ def cases(corpus, suite):
     small = next((n for n in names if n.startswith("history-")), names[0] if names else None)
     if small is None:
         raise ValueError("empty corpus; run prepare first")
-    ui = ["startup", "history-hover", "history-hover-stationary", "history-scroll", "history-drag", "history-select", "idle"]
+    ui = ["startup", "repo-picker", "history-hover", "history-hover-stationary", "history-scroll", "history-drag", "history-select", "idle"]
     for scenario in ui:
         yield {"key": f"ui/{small}/{scenario}", "fixture": small, "scenario": scenario, "layer": "ui"}
     if suite == "deep":
         for name in names:
-            for scenario in (["startup", "history-hover", "history-scroll", "history-drag"] if name != small else
-                             ["history-select-burst", "status-save", "status-touch", "status-burst", "ignored-churn", "diff-search", "idle-minimized", "two-windows-idle", "lifecycle"]):
+            for scenario in (["startup", "history-hover", "history-hover-stationary", "history-scroll", "history-drag", "history-select-burst", "history-jump", "history-reopen"] if name != small else
+                             ["history-jump", "history-reopen", "history-select-burst", "status-save", "status-touch", "status-burst", "ignored-churn", "diff-search", "idle-minimized", "two-windows-idle", "lifecycle"]):
                 yield {"key": f"ui/{name}/{scenario}", "fixture": name, "scenario": scenario, "layer": "ui"}
     operations = ["clone", "fetch", "pull", "push", "lfs-fetch", "lfs-push", "annex-get", "annex-copy"]
     if suite == "deep":
@@ -71,6 +71,10 @@ def cases(corpus, suite):
             if operation == "clone" and layer == "backend":
                 continue  # Cloning is owned by the production store effect.
             yield {"key": f"transfer/{layer}/{operation}", "fixture": small, "scenario": operation, "layer": layer}
+            if suite == "deep" and operation.startswith(("lfs-", "annex-")):
+                for cache in ("mixed", "warm"):
+                    yield {"key": f"transfer/{layer}/{operation}-{cache}", "fixture": small,
+                           "scenario": operation, "layer": layer, "content_cache": cache}
     if suite == "deep":
         for name in names:
             if corpus["fixtures"][name]["kind"] == "real":
@@ -95,6 +99,7 @@ def run_case(case, args, binary, backend, seed, output):
     try:
         with perf_workloads.transfer(scratch, seed, case["scenario"], live, shape=args.shape,
                 latency_ms=args.latency_ms, bandwidth_mib=args.bandwidth_mib,
+                content_cache=case.get("content_cache", "cold"),
                 fault="stall" if case.get("cancel") else "none") as fixture:
             if case["layer"] == "live":
                 result = live.run_once(binary, fixture["repo"], case["scenario"], output, min(args.timeout, 45) if case.get("cancel") else args.timeout,
@@ -122,6 +127,8 @@ def run_case(case, args, binary, backend, seed, output):
             if result["valid"] and not case.get("cancel"):
                 result["witness"] = fixture["verify"]()
                 result["bytes"] = result["witness"]["bytes"]
+                if "required_content_bytes" in result["witness"]:
+                    result["required_content_bytes"] = result["witness"]["required_content_bytes"]
             elif case.get("cancel"):
                 result["witness"] = {"cancelled": any(r["detail"].get("cancelled") for r in result.get("operations", []))}
                 result["valid"] = result["valid"] and result["witness"]["cancelled"]
@@ -199,6 +206,7 @@ def run(args):
                                            "worktree_sha256": worktrees[case["fixture"]],
                                            "shape": args.shape, "latency_ms": args.latency_ms, "bandwidth_mib": args.bandwidth_mib,
                                            "cycles": args.cycles, "fault": "stall" if case.get("cancel") else "none",
+                                           "content_cache": case.get("content_cache", "cold"),
                                            "transport": "directory" if case["scenario"].startswith("annex-") else "loopback_http" if case["layer"] != "ui" else None}, "status": "failed"}
                     print(f"{variant} pair={pair} {case['key']}", flush=True)
                     try:
@@ -216,17 +224,18 @@ def run(args):
                                 raise ValueError("scenario did not restore the fixture worktree; inspect retained artifacts")
                             record.update(result=result, status="passed" if result["valid"] else "failed",
                                           findings=perf_report.findings(result, args.refresh_hz))
-                            if result.get("allocation_tracking") or result.get("debug_assertions") or (args.wrap and case["layer"] in ("ui", "live")):
+                            if result.get("allocation_tracking") or (args.wrap and case["layer"] in ("ui", "live")):
                                 record["measurement_kind"] = "diagnostic"
-                                record["findings"] = [f for f in record["findings"] if f["kind"] != "target_exceeded"]
+                                record["findings"] = [f for f in record["findings"] if f["kind"] not in ("target_exceeded", "long_frame")]
                             if args.purpose == "validation":
                                 record["measurement_kind"] = "validation"
-                                record["findings"] = [f for f in record["findings"] if f["kind"] == "invalid_capture"]
+                                record["findings"] = [f for f in record["findings"] if f["kind"] not in ("target_exceeded", "long_frame", "retention_candidate")]
                     except (OSError, ValueError, AssertionError, RuntimeError, subprocess.SubprocessError) as error:
                         record["reason"] = str(error)
                         print(f"  failed: {error}", flush=True)
                     manifest["cases"].append(record)
                     save(output / "manifest.json", manifest)
+                    save(output / "findings.json", perf_report.ranked_findings(manifest))
                     (output / "report.txt").write_text(perf_report.render(manifest), encoding="utf-8")
         for name, seed in seeds.items():
             perf_corpus.validate(args.repo_root, corpus["fixtures"][name])
@@ -234,7 +243,7 @@ def run(args):
     finally:
         save(output / "manifest.json", manifest)
     print(perf_report.render(manifest))
-    return int(any(c["status"] == "failed" or (args.strict and c.get("findings")) for c in manifest["cases"]))
+    return perf_report.exit_status(manifest["cases"], args.strict)
 
 
 def profile(args):

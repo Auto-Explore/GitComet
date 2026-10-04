@@ -208,6 +208,21 @@ fn window_commit_range(
 }
 
 impl HistoryView {
+    /// Observe the published index and the visible text window without starting
+    /// loads. A scrollbar moving over placeholder rows is not a completed jump.
+    pub(in crate::view) fn scenario_indexed_window(&self) -> Option<(usize, usize, usize, bool)> {
+        let shown = self.indexed.presentation.as_ref()?;
+        let scroll = self.scroll_interaction.borrow();
+        let logical = scroll.logical.as_ref()?;
+        let (first, last) = window_commit_range(shown, &self.indexed.plan, logical);
+        let loaded = self.indexed.window.as_ref().is_some_and(|window| {
+            Arc::ptr_eq(&window._presentation, shown)
+                && window.start <= first
+                && (first..last).all(|row| window.loaded.get(row - window.start) == Some(&true))
+        });
+        Some((shown.graph.projection.len(), first, last, loaded))
+    }
+
     pub(super) fn indexed_is_building(&self) -> bool {
         self.indexed.building.is_some() || self.indexed.pending.is_some()
     }

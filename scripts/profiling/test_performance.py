@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import perf_corpus
 import perf_platform
+import performance
 import perf_report
 import perf_workloads
 
@@ -16,6 +17,71 @@ live = perf_workloads.module("test_live_ui", "live-ui.py")
 
 
 class ReportingTests(unittest.TestCase):
+    def test_strict_runs_cannot_pass_missing_cases(self):
+        cases = [{"status": "passed"}, {"status": "skipped", "reason": "backend unavailable"}]
+        self.assertEqual(perf_report.exit_status(cases), 0)
+        self.assertEqual(perf_report.exit_status(cases, strict=True), 1)
+        self.assertEqual(perf_report.exit_status([{"status": "failed"}]), 1)
+        self.assertEqual(perf_report.exit_status([{"status": "passed"}], strict=True), 0)
+
+    def test_dev_latency_has_separate_alerts_and_does_not_hide_second_long_stalls(self):
+        result = {"debug_assertions": True, "phases": {"typing": {
+            "draw_ms": {"p95": 30}, "wake_ms": {"max": 200},
+            "inputs": {"input_to_draw_ms": {"p95": 90}}}}}
+        self.assertEqual(perf_report.findings(result), [])
+        result["debug_assertions"] = False
+        self.assertEqual(len(perf_report.findings(result)), 3)
+        result["debug_assertions"] = True
+        result["phases"]["typing"]["wake_ms"]["max"] = 1500
+        issues = perf_report.findings(result)
+        self.assertEqual([(i["build_mode"], i["severity"]) for i in issues], [("dev", "high")])
+        result["allocation_tracking"] = True
+        self.assertEqual(perf_report.findings(result), [])
+
+    def test_dev_pairs_are_comparable_but_dev_release_pairs_are_not(self):
+        manifest = self.manifest(pairs=1)
+        for case in manifest["cases"]:
+            case["measurement_kind"] = "live_application"
+            case["result"]["debug_assertions"] = True
+        self.assertTrue(perf_report.compare([manifest])["valid"])
+        manifest["cases"][1]["result"]["debug_assertions"] = False
+        self.assertFalse(perf_report.compare([manifest])["valid"])
+
+    def test_probe_cadence_must_match_between_pairs(self):
+        manifest = self.manifest(pairs=1)
+        for case, interval in zip(manifest["cases"], (250, 1000)):
+            case["result"]["probe_interval_ms"] = interval
+        self.assertFalse(perf_report.compare([manifest])["valid"])
+
+    def test_native_work_counters_stay_in_their_phase_and_missing_data_is_not_zero(self):
+        records = [{"event": "scenario_work", "detail": {"phase": phase, "counts": {"text_measurement": value}}}
+                   for phase, value in (("name", 10), ("path", 90))]
+        data = live.analyse_phase({"at_ms": 0, "detail": {"name": "path"}}, {"at_ms": 100},
+                                  [], [], {}, [], records, [], [], {"unix_ms": 0})
+        self.assertEqual(data["work_units"], {"text_measurement": 90})
+        manifest = self.manifest(pairs=1)
+        manifest["cases"][0]["result"]["phases"] = {"path": data}
+        self.assertFalse(perf_report.compare([manifest])["valid"])
+        self.assertEqual(perf_report.metrics({"phases": {"path": data}})["path.work_units.text_measurement"], 90)
+
+    def test_findings_rank_stalls_and_include_artifacts_and_work_evidence(self):
+        manifest = self.manifest(pairs=1)
+        case = manifest["cases"][0]
+        case.update(directory="capture/typing", findings=[
+            {"kind": "retention_candidate", "severity": "investigate"},
+            {"kind": "target_exceeded", "severity": "high", "metric": "path.draw_ms.max", "value": 1200, "limit": 250}])
+        case["result"].update(debug_assertions=True, phases={"path": {"work_units": {"text_measurement": 1000}}})
+        queue = perf_report.ranked_findings(manifest)
+        self.assertEqual(queue[0]["severity"], "high")
+        self.assertEqual(queue[0]["artifacts"], "capture/typing")
+        self.assertEqual(queue[0]["work_units"], {"text_measurement": 1000})
+
+    def test_transfers_without_overlapping_input_report_the_coverage_gap(self):
+        result = {"operation_results": [{"name": "fetch", "overlapping_inputs": 0}]}
+        self.assertEqual(perf_report.findings(result)[0]["kind"], "concurrency_not_exercised")
+        result["operation_results"][0]["overlapping_inputs"] = 5
+        self.assertEqual(perf_report.findings(result), [])
+
     def test_unsupported_headless_mode_does_not_silently_use_the_desktop(self):
         with patch.object(live.platform, "system", return_value="Windows"):
             with self.assertRaisesRegex(ValueError, "Headless captures require Linux"):
@@ -113,6 +179,22 @@ class ReportingTests(unittest.TestCase):
         self.assertFalse(perf_report.compare([data])["valid"])
         self.assertFalse(perf_report.compare([])["valid"])
 
+    def test_no_store_work_is_inapplicable_latency_not_a_zero_or_lost_sample(self):
+        manifest = self.manifest(pairs=1)
+        for case, count in zip(manifest["cases"], (0, 2)):
+            case["result"]["phases"] = {"typing": {
+                "inputs": {"store_queue_ms": {"count": count, "p95": .1 if count else None}},
+                "work_counts": {"received:IndexedHistory": count}}}
+        compared = perf_report.compare([manifest])
+        self.assertTrue(compared["valid"], compared["errors"])
+        self.assertEqual(compared["excluded_metrics"][0]["stage_samples"], [0, 2])
+        self.assertFalse(any(c["metric"] == "typing.store_queue_ms.p95" for c in compared["comparisons"]))
+        work = next(c for c in compared["comparisons"] if ".work." in c["metric"])
+        self.assertEqual((work["baseline"], work["candidate"]), (0, 2))
+        # Absent sample counts are not proof that no work occurred.
+        del manifest["cases"][0]["result"]["phases"]["typing"]["inputs"]["store_queue_ms"]["count"]
+        self.assertFalse(perf_report.compare([manifest])["valid"])
+
     def test_stall_and_retention_are_separate_from_invalid_capture(self):
         result = {"valid": True, "phases": {"hover": {"wake_ms": {"max": 1200}}},
                   "retention": {"rss_kib": {"growth_per_cycle": 100}}}
@@ -151,8 +233,16 @@ class ReportingTests(unittest.TestCase):
             result = summarize()
             self.assertTrue(result["valid"])
             self.assertEqual(len(result["long_frames"]), 1)
-            records.append({"event": "interval", "records_dropped": 1})
-            self.assertFalse(summarize()["valid"])
+            records.append({"event": "interval", "records_dropped": 1, "work_units": {"index_object_read": 10}})
+            incomplete = summarize()
+            self.assertFalse(incomplete["valid"])
+            self.assertFalse(incomplete["work_units_complete"])
+            self.assertEqual(incomplete["work_units"], {"index_object_read": 10})
+            records.append({"event": "scenario_work_total", "detail": {"counts": {"index_object_read": 12}}})
+            complete = summarize()
+            self.assertFalse(complete["valid"], "a final work snapshot must not hide dropped records")
+            self.assertTrue(complete["work_units_complete"])
+            self.assertEqual(complete["work_units"], {"index_object_read": 12})
 
     def test_missing_optional_counters_are_not_zero(self):
         process = [dict(unix_ms=1, cpu_s=None, rss_kib=20, pss_kib=None, threads=None, fds=None),
@@ -161,6 +251,40 @@ class ReportingTests(unittest.TestCase):
         self.assertIsNone(result["process_cpu_cores"])
         self.assertIsNone(result["pss_kib"]["max"])
         self.assertIsNone(result["threads"])
+
+
+class ScenarioTests(unittest.TestCase):
+    def test_history_interactions_wait_for_the_index_and_jumps_wait_for_content(self):
+        for name in ("history-hover", "history-scroll", "history-select-burst", "history-jump"):
+            steps = live.scenario(name, Path("/fixture"))["steps"]
+            self.assertEqual(steps[0]["do"], "wait_ready")
+            self.assertTrue(steps[1]["indexed"], name)
+            if name == "history-jump":
+                jumps = [step for step in steps if step["do"] == "drag_history"]
+                self.assertEqual(len(jumps), 6)
+                self.assertTrue(all(step["wait_for_rows"] for step in jumps))
+
+    def test_picker_uses_both_shortcuts_real_paste_and_checks_final_results(self):
+        steps = live.scenario("repo-picker", Path("/fixture"))["steps"]
+        self.assertEqual({s["key"] for s in steps if s["do"] == "keys" and "shift" in s["key"]},
+                         {"secondary-shift-a", "secondary-shift-o"})
+        self.assertTrue(all(s.get("witness") == {"kind": "repo_picker_filtered"}
+                            for s in steps if s["do"] in ("type", "paste")))
+        assertions = [s for s in steps if s["do"] == "expect_repo_picker"]
+        self.assertEqual({s["matches"] for s in assertions}, {0, 1, live.PICKER_RECENT_COUNT, live.PICKER_UNFILTERED_COUNT})
+        paths = live.picker_recent_paths()
+        self.assertEqual(len(set(paths)), live.PICKER_RECENT_COUNT)
+        self.assertTrue(all("GitComet" in p and "company" in p and len(p) > 300 for p in paths))
+        self.assertEqual(sum("component-017" in p for p in paths), 1)
+
+    def test_smoke_covers_typing_and_deep_exercises_large_history(self):
+        corpus = {"fixtures": {name: {"kind": "synthetic"} for name in ("history-20000", "history-2000000")}}
+        smoke = list(performance.cases(corpus, "smoke"))
+        self.assertTrue(any(c["scenario"] == "repo-picker" for c in smoke))
+        deep = list(performance.cases(corpus, "deep"))
+        scenarios = {c["scenario"] for c in deep if c["fixture"] == "history-2000000"}
+        self.assertTrue({"history-jump", "history-reopen", "history-hover-stationary", "history-select-burst"} <= scenarios)
+        self.assertTrue(all(c["scenario"] in live.SCENARIOS for c in deep if c["layer"] == "ui"))
 
 
 class FixtureTests(unittest.TestCase):
@@ -232,6 +356,32 @@ class FixtureTests(unittest.TestCase):
                 with perf_workloads.transfer(self.root / operation, self.seed, operation, live) as fixture:
                     perf_workloads.git(fixture["repo"], fixture["env"], *fixture["cli"])
                     self.assertEqual(fixture["verify"]()["objects"], 4)
+
+    def test_lfs_warm_and_mixed_destinations_transfer_only_missing_content(self):
+        if subprocess.run(["git", "lfs", "version"], capture_output=True).returncode:
+            self.skipTest("git-lfs not installed")
+        for operation in ("lfs-fetch", "lfs-pull", "lfs-push"):
+            for cache, transfers in (("mixed", 2), ("warm", 0)):
+                with self.subTest(operation=operation, content_cache=cache):
+                    with perf_workloads.transfer(self.root / f"{operation}-{cache}", self.seed, operation, live, content_cache=cache) as fixture:
+                        perf_workloads.git(fixture["repo"], fixture["env"], *fixture["cli"])
+                        witness = fixture["verify"]()
+                        self.assertEqual(witness["objects"], 4)
+                        self.assertEqual(witness["required_content_bytes"], transfers * 4096)
+                        self.assertEqual(len(fixture["server"].records), transfers)
+
+    def test_annex_warm_and_mixed_destinations_preserve_content_witnesses(self):
+        if subprocess.run(["git", "annex", "version"], capture_output=True).returncode:
+            self.skipTest("git-annex not installed")
+        for operation in ("annex-get", "annex-copy"):
+            for cache, missing in (("mixed", 2), ("warm", 0)):
+                with self.subTest(operation=operation, content_cache=cache):
+                    with perf_workloads.transfer(self.root / f"{operation}-{cache}", self.seed, operation, live, content_cache=cache) as fixture:
+                        if missing:
+                            with self.assertRaises((AssertionError, FileNotFoundError)):
+                                fixture["verify"]()
+                        perf_workloads.git(fixture["repo"], fixture["env"], *fixture["cli"])
+                        self.assertEqual(fixture["verify"]()["required_content_bytes"], missing * 4096)
 
     def test_annex_uses_real_content_and_directory_remote(self):
         if subprocess.run(["git", "annex", "version"], capture_output=True).returncode:

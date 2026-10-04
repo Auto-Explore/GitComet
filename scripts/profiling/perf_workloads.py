@@ -59,7 +59,9 @@ def cli_command(operation):
 
 
 @contextmanager
-def transfer(root, seed, operation, live, shape="smoke", latency_ms=0, bandwidth_mib=0, fault="none"):
+def transfer(root, seed, operation, live, shape="smoke", latency_ms=0, bandwidth_mib=0, fault="none", content_cache="cold"):
+    if content_cache not in ("cold", "mixed", "warm"):
+        raise ValueError(f"unknown content cache state: {content_cache}")
     root = Path(root).resolve()
     root.mkdir(parents=True, exist_ok=False)
     env = lfs.isolated_environment(root)
@@ -70,14 +72,24 @@ def transfer(root, seed, operation, live, shape="smoke", latency_ms=0, bandwidth
         with lfs.server_at(root / "server", expected, latency_ms) as server:
             server.bandwidth = bandwidth_mib * 1024 * 1024
             git(repo, env, "config", "lfs.url", server.url)
+            # Warm means all content is already at the transfer destination;
+            # mixed means half. Keep this setup outside the measured command.
+            ordered = sorted(expected)
+            present = set(ordered[:0 if content_cache == "cold" else len(ordered) // 2 if content_cache == "mixed" else len(ordered)])
+            def object_path(oid):
+                return repo / ".git/lfs/objects" / oid[:2] / oid[2:4] / oid
             if operation != "lfs-push":
                 git(repo, env, "lfs", "push", "--all", "origin")
-                shutil.rmtree(repo / ".git/lfs/objects")
+                for oid in expected.keys() - present:
+                    object_path(oid).unlink()
                 # A native status scan may clean full working-tree content
                 # back into .git/lfs/objects before the measured fetch. Pointer
                 # worktrees ensure the requested download is still necessary.
                 for file in repo.glob("asset-*.bin"):
                     file.write_bytes(git(repo, env, "show", f"HEAD:{file.name}"))
+            else:
+                for oid in present:
+                    shutil.copyfile(object_path(oid), server.root / oid)
             server.records.clear()
             server.fault = fault
             def verify():
@@ -86,7 +98,14 @@ def transfer(root, seed, operation, live, shape="smoke", latency_ms=0, bandwidth
                 if operation == "lfs-pull":
                     for path in repo.glob("asset-*.bin"):
                         assert hashlib.sha256(path.read_bytes()).hexdigest() in expected, "LFS checkout still contains pointers"
-                return {"objects": len(expected), "bytes": sum(expected.values())}
+                # Completed payload requests must match exactly the initially
+                # missing objects; a warm run proves zero redundant transfers.
+                requests = list(server.records)
+                assert len(requests) == len(expected) - len(present), "unexpected LFS payload transfer count"
+                assert {r["oid"] for r in requests} == expected.keys() - present, "wrong LFS objects transferred"
+                assert all(r["success"] for r in requests), "failed LFS payload transfer"
+                return {"objects": len(expected), "bytes": sum(expected.values()), "content_cache": content_cache,
+                        "required_content_bytes": sum(size for oid, size in expected.items() if oid not in present)}
             yield {"repo": repo, "env": env, "verify": verify, "cli": cli_command(operation),
                    "operation": operation, "server": server, "remote": "origin", "bytes": sum(expected.values())}
         return
@@ -109,9 +128,15 @@ def transfer(root, seed, operation, live, shape="smoke", latency_ms=0, bandwidth
         add_history(repo, env)
         git(repo, env, "annex", "wanted", "here", "anything")
         git(repo, env, "annex", "wanted", "backup", "anything")
+        ordered = sorted(expected)
+        present = ordered[:0 if content_cache == "cold" else count // 2 if content_cache == "mixed" else count]
         if operation in ("annex-get", "annex-pull"):
             git(repo, env, "annex", "copy", "--to=backup", ".")
-            git(repo, env, "annex", "drop", ".")
+            missing = ordered[len(present):]
+            if missing:
+                git(repo, env, "annex", "drop", "--", *missing)
+        elif present:
+            git(repo, env, "annex", "copy", "--to=backup", "--", *present)
         # Git branch exchange uses a disposable peer; directory remote holds content.
         git(root, env, "init", "--bare", "remote.git")
         git(repo, env, "remote", "add", "origin", root / "remote.git")
@@ -122,7 +147,8 @@ def transfer(root, seed, operation, live, shape="smoke", latency_ms=0, bandwidth
             if operation in ("annex-copy", "annex-push", "annex-sync"):
                 found = {hashlib.sha256(p.read_bytes()).hexdigest() for p in backup.rglob("*") if p.is_file() and p.stat().st_size == size}
                 assert set(expected.values()) <= found, "annex copies missing from backup"
-            return {"objects": count, "bytes": count * size}
+            return {"objects": count, "bytes": count * size, "content_cache": content_cache,
+                    "required_content_bytes": (count - len(present)) * size}
         yield {"repo": repo, "env": env, "verify": verify, "cli": cli_command(operation),
                "operation": operation, "remote": "backup", "bytes": count * size}
         return

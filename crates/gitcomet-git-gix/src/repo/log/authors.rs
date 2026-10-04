@@ -13,7 +13,7 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<Arc<[Arc<str>]>> {
         cancellation.check_cancelled()?;
-        let (store, _) = self.thread_safe_repo();
+        let (store, generation) = self.thread_safe_repo();
         let repo = store.to_thread_local();
         let shallow = shallow_snapshot(&repo)?;
         let tips = if mode == HistoryMode::AllBranches {
@@ -38,6 +38,7 @@ impl GixRepo {
             &shallow,
             Some(cancellation),
             None,
+            Some((&self.log_topology_cache, generation)),
         )?;
         let mut buffer = Vec::new();
         let mut seen = FxHashSet::default();
