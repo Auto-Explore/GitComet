@@ -1899,6 +1899,7 @@ impl GitCometView {
             extension_window,
             repository_views: Self::repository_view_router(cx),
             details_tabs: Self::details_tab_router(cx),
+            sidebar_tabs: Self::sidebar_tab_router(cx),
             sidebar_sections: Self::sidebar_section_router(cx),
             tooltip_host,
             toast_host,

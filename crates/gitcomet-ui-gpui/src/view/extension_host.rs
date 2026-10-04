@@ -315,6 +315,44 @@ impl StateObservers {
 }
 
 impl HostWindow {
+    /// Selects a details (or, with `sidebar`, sidebar) tab once the current
+    /// update ends; `Unsupported` when no such tab is registered.
+    fn show_tab(
+        &self,
+        repository: &RepositoryHandle,
+        tab: &gitcomet_extension_api::ContributionId,
+        sidebar: bool,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.live()?;
+        let registered = registry(cx).is_some_and(|registry| {
+            if sidebar {
+                registry.sidebar_tabs().iter().any(|(id, _)| id == tab)
+            } else {
+                registry.details_tabs().iter().any(|(id, _)| id == tab)
+            }
+        });
+        if !registered {
+            return Err(HostError::Unsupported);
+        }
+        let view = self.view.clone();
+        let handle = self.window_handle;
+        let repository = repository.clone();
+        let tab = tab.clone();
+        cx.defer(move |cx| {
+            let _ = handle.update(cx, |_, window, cx| {
+                let _ = view.update(cx, |root, cx| {
+                    if sidebar {
+                        root.show_sidebar_tab(&repository, &tab, window, cx);
+                    } else {
+                        root.show_details_tab(&repository, &tab, window, cx);
+                    }
+                });
+            });
+        });
+        Ok(())
+    }
+
     fn present_dialog(
         &self,
         title: SharedString,
@@ -441,6 +479,36 @@ impl WindowHostImpl for HostWindow {
             });
         });
         Ok(())
+    }
+
+    fn show_details_tab(
+        &self,
+        repository: &RepositoryHandle,
+        tab: &gitcomet_extension_api::ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.show_tab(repository, tab, false, cx)
+    }
+
+    fn show_sidebar_tab(
+        &self,
+        repository: &RepositoryHandle,
+        tab: &gitcomet_extension_api::ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.show_tab(repository, tab, true, cx)
+    }
+
+    fn create_markdown_view(
+        &self,
+        cx: &mut App,
+    ) -> Result<gitcomet_extension_api::MarkdownView, HostError> {
+        self.live()?;
+        let theme = Rc::clone(&self.theme);
+        let view = cx.new(|_| super::hosted::markdown::MarkdownView::new(theme));
+        Ok(gitcomet_extension_api::MarkdownView::new(Rc::new(
+            super::hosted::markdown::HostedMarkdownView { entity: view },
+        )))
     }
 
     fn open_settings_at(

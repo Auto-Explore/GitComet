@@ -178,6 +178,23 @@ impl DiffPaneView {
         pane
     }
 
+    /// Inline or Split as the user set it for diffs, for `DiffLayout::Preferred`.
+    fn preferred_view_mode(&self, cx: &App) -> DiffViewMode {
+        self.root
+            .as_ref()
+            .and_then(|root| root.upgrade())
+            .map(|root| root.read(cx).ui_model.read(cx).preferences.diff.view_mode)
+            .unwrap_or_else(|| crate::view::preferences::DiffPreferences::default().view_mode)
+    }
+
+    /// The renderer's layout, once it exists.
+    #[cfg(test)]
+    pub(in crate::view) fn view_mode_for_test(&self, cx: &App) -> Option<DiffViewMode> {
+        self.renderer
+            .as_ref()
+            .map(|renderer| renderer.read(cx).diff_view)
+    }
+
     pub(crate) fn attach_root(&mut self, root: WeakEntity<GitCometView>) {
         self.root = Some(root);
     }
@@ -224,6 +241,7 @@ impl DiffPaneView {
             }
         };
         preferences.diff.content_mode = DiffContentMode::Full;
+        let preferred = preferences.diff.view_mode;
         let model = cx.new(|_| AppUiModel::new_with_preferences(state, preferences));
         let theme = self.host.theme(cx);
         let renderer = cx.new(|cx| {
@@ -250,7 +268,7 @@ impl DiffPaneView {
             );
             pane.hosted_decor.as_mut().unwrap().file_cache = self.file_cache.clone();
             pane.annotate_enabled = self.options.policy.blame;
-            pane.diff_view = diff_view_mode(self.options.layout);
+            pane.diff_view = diff_view_mode(self.options.layout, preferred);
             pane.hosted_content_width = Some(
                 self.options
                     .content_width
@@ -1342,10 +1360,11 @@ impl Drop for DiffPaneView {
     }
 }
 
-fn diff_view_mode(layout: DiffLayout) -> DiffViewMode {
+fn diff_view_mode(layout: DiffLayout, preferred: DiffViewMode) -> DiffViewMode {
     match layout {
         DiffLayout::Split => DiffViewMode::Split,
-        _ => DiffViewMode::Inline,
+        DiffLayout::Inline => DiffViewMode::Inline,
+        _ => preferred,
     }
 }
 
@@ -1476,9 +1495,10 @@ impl DiffPaneImpl for HostedDiffPane {
     fn set_layout(&self, layout: DiffLayout, cx: &mut App) {
         self.entity.update(cx, |pane, cx| {
             pane.options.layout = layout;
+            let preferred = pane.preferred_view_mode(cx);
             if let Some(renderer) = &pane.renderer {
                 renderer.update(cx, |pane, cx| {
-                    pane.set_diff_view_mode(diff_view_mode(layout), cx)
+                    pane.set_diff_view_mode(diff_view_mode(layout, preferred), cx)
                 });
             }
             cx.notify();

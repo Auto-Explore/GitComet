@@ -1,7 +1,10 @@
 //! Extension views built per repository: the repository-view router
 //! (History or one of the extensions' repository views in the main area,
 //! chosen from tabs in the action bar), details tabs beside the details
-//! pane's own content, and sidebar sections below the sidebar's own.
+//! pane's own content, sidebar tabs after Branches and Files, and sidebar
+//! sections below the sidebar's own. A details or sidebar tab can belong to
+//! one repository view: it is listed only with that view, and may open
+//! whenever the view does.
 //!
 //! Each exists only when an extension registers that kind; otherwise its
 //! area renders exactly as before. A view is built on first use for a
@@ -13,7 +16,7 @@ use super::*;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use gitcomet_extension_api::{
     ContributionId, DetailsTabDescriptor, RepositoryViewContext, RepositoryViewDescriptor,
-    SidebarSectionDescriptor, ViewBuilder,
+    SidebarSectionDescriptor, SidebarTabDescriptor, ViewBuilder, ViewTarget,
 };
 use std::rc::Rc;
 
@@ -22,6 +25,15 @@ pub(in crate::view) trait RoutedContribution {
     fn title(&self) -> SharedString;
     fn icon(&self) -> Option<SharedString>;
     fn builder(&self) -> ViewBuilder<RepositoryViewContext>;
+    /// The repository view the contribution is listed with; `None` is every
+    /// view.
+    fn view(&self) -> Option<&ViewTarget> {
+        None
+    }
+    /// Selected whenever its view is.
+    fn opens_with_view(&self) -> bool {
+        false
+    }
 }
 
 macro_rules! routed_contribution {
@@ -45,8 +57,37 @@ macro_rules! routed_contribution {
 
 routed_contribution!(RepositoryViewDescriptor, |view| (!view.icon.is_empty())
     .then(|| view.icon.clone()));
-routed_contribution!(DetailsTabDescriptor, |tab| tab.icon.clone());
 routed_contribution!(SidebarSectionDescriptor, |_section| None);
+
+macro_rules! view_scoped_contribution {
+    ($descriptor:ty, |$this:ident| $icon:expr) => {
+        impl RoutedContribution for $descriptor {
+            fn title(&self) -> SharedString {
+                self.title.clone()
+            }
+
+            fn icon(&self) -> Option<SharedString> {
+                let $this = self;
+                $icon
+            }
+
+            fn builder(&self) -> ViewBuilder<RepositoryViewContext> {
+                Rc::clone(&self.build)
+            }
+
+            fn view(&self) -> Option<&ViewTarget> {
+                self.view.as_ref()
+            }
+
+            fn opens_with_view(&self) -> bool {
+                self.opens_with_view
+            }
+        }
+    };
+}
+
+view_scoped_contribution!(DetailsTabDescriptor, |tab| tab.icon.clone());
+view_scoped_contribution!(SidebarTabDescriptor, |_tab| None);
 
 /// Built views of one contribution kind per repository, and which one each
 /// repository shows (absent: the built-in content).
@@ -56,6 +97,9 @@ pub(in crate::view) struct ViewRouter<D> {
     built: FxHashMap<(RepoKey, usize), gpui::AnyView>,
     /// Repository views' action-bar contexts, built with their views.
     action_bars: FxHashMap<(RepoKey, usize), gpui::AnyView>,
+    /// What each repository showed before a view's own tab opened with it,
+    /// to come back to when the view is left.
+    returns: FxHashMap<std::path::PathBuf, Option<usize>>,
 }
 
 pub(in crate::view) type RepositoryViewRouter = ViewRouter<RepositoryViewDescriptor>;
@@ -71,7 +115,65 @@ impl<D: RoutedContribution + Clone> ViewRouter<D> {
             selected: FxHashMap::default(),
             built: FxHashMap::default(),
             action_bars: FxHashMap::default(),
+            returns: FxHashMap::default(),
         })
+    }
+
+    /// Whether contribution `index` is listed while `active` is the view.
+    fn listed(&self, index: usize, active: &ViewTarget) -> bool {
+        self.views
+            .get(index)
+            .is_some_and(|(_, view)| view.view().is_none_or(|view| view == active))
+    }
+
+    /// The tabs listed while `active` is the view, with their positions.
+    fn listed_tabs(&self, active: &ViewTarget) -> Vec<(usize, SharedString, Option<SharedString>)> {
+        self.views
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| self.listed(*index, active))
+            .map(|(index, (_, view))| (index, view.title(), view.icon()))
+            .collect()
+    }
+
+    fn index_of(&self, id: &ContributionId) -> Option<usize> {
+        self.views.iter().position(|(candidate, _)| candidate == id)
+    }
+
+    /// What `repo` should show once `active` is its view: `Some` when the
+    /// selection changes. A tab that opens with the view is selected, keeping
+    /// what to return to; a tab no longer listed gives way to that.
+    fn follow(&mut self, repo: &RepoState, active: &ViewTarget) -> Option<Option<usize>> {
+        let path = &repo.spec.workdir;
+        let current = self.selected(repo);
+        let opener = self
+            .views
+            .iter()
+            .position(|(_, view)| view.opens_with_view() && view.view() == Some(active));
+        if let Some(open) = opener {
+            if current == Some(open) {
+                return None;
+            }
+            // Leaving one view's tab for another's keeps the first return.
+            let back = match current {
+                Some(current) if !self.listed(current, active) => {
+                    self.returns.get(path).copied().flatten()
+                }
+                current => current,
+            };
+            self.returns.insert(path.clone(), back);
+            return Some(Some(open));
+        }
+        let current = current?;
+        if self.listed(current, active) {
+            return None;
+        }
+        let back = self
+            .returns
+            .remove(path)
+            .flatten()
+            .filter(|back| self.listed(*back, active));
+        Some(back)
     }
 
     pub(in crate::view) fn len(&self) -> usize {
@@ -80,13 +182,6 @@ impl<D: RoutedContribution + Clone> ViewRouter<D> {
 
     fn titles(&self) -> Vec<SharedString> {
         self.views.iter().map(|(_, view)| view.title()).collect()
-    }
-
-    fn tabs(&self) -> Vec<(SharedString, Option<SharedString>)> {
-        self.views
-            .iter()
-            .map(|(_, view)| (view.title(), view.icon()))
-            .collect()
     }
 
     /// The selected view for `repo`: `None` is the built-in content.
@@ -124,6 +219,8 @@ impl<D: RoutedContribution + Clone> ViewRouter<D> {
         };
         self.selected
             .retain(|path, _| state.repos.iter().any(|repo| &repo.spec.workdir == path));
+        self.returns
+            .retain(|path, _| state.repos.iter().any(|repo| &repo.spec.workdir == path));
         self.built.retain(|(key, _), _| open(key));
         self.action_bars.retain(|(key, _), _| open(key));
     }
@@ -140,6 +237,7 @@ pub(in crate::view) struct SidebarSections {
 pub(in crate::view) enum RoutedArea {
     Main,
     Details,
+    Sidebar,
 }
 
 /// A registered repository view as the action bar's tabs show it.
@@ -326,6 +424,12 @@ impl GitCometView {
         ViewRouter::new(super::extension_host::registry(cx)?.details_tabs())
     }
 
+    pub(in crate::view) fn sidebar_tab_router(
+        cx: &App,
+    ) -> Option<ViewRouter<SidebarTabDescriptor>> {
+        ViewRouter::new(super::extension_host::registry(cx)?.sidebar_tabs())
+    }
+
     pub(in crate::view) fn sidebar_section_router(cx: &App) -> Option<SidebarSections> {
         Some(SidebarSections {
             router: ViewRouter::new(super::extension_host::registry(cx)?.sidebar_sections())?,
@@ -338,6 +442,9 @@ impl GitCometView {
             router.retain_open(&self.state);
         }
         if let Some(router) = self.details_tabs.as_mut() {
+            router.retain_open(&self.state);
+        }
+        if let Some(router) = self.sidebar_tabs.as_mut() {
             router.retain_open(&self.state);
         }
         if let Some(sections) = self.sidebar_sections.as_mut() {
@@ -366,6 +473,135 @@ impl GitCometView {
         };
         super::perf::extension_dispatch();
         Some(build(context, window, cx))
+    }
+
+    /// The view `repo` shows in the main area.
+    pub(in crate::view) fn active_view_target(&self, repo: &RepoState) -> ViewTarget {
+        self.repository_views
+            .as_ref()
+            .and_then(|router| {
+                let index = router.selected(repo)?;
+                router.views.get(index).map(|(id, _)| id.clone())
+            })
+            .map(ViewTarget::Extension)
+            .unwrap_or(ViewTarget::History)
+    }
+
+    /// `repo` changed views: its view's own details and sidebar tabs open,
+    /// and tabs of the view it left give way.
+    fn follow_view(&mut self, repo: &RepoState, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        let active = self.active_view_target(repo);
+        let details = self
+            .details_tabs
+            .as_mut()
+            .and_then(|router| router.follow(repo, &active));
+        let sidebar = self
+            .sidebar_tabs
+            .as_mut()
+            .and_then(|router| router.follow(repo, &active));
+        if let Some(index) = details {
+            self.select_routed_for_repo(repo.clone(), RoutedArea::Details, index, window, cx);
+        }
+        if let Some(index) = sidebar {
+            self.select_routed_for_repo(repo.clone(), RoutedArea::Sidebar, index, window, cx);
+        }
+    }
+
+    /// The active repository's sidebar tabs, as its sidebar draws them.
+    pub(in crate::view) fn sync_sidebar_tabs(&self, cx: &mut gpui::Context<Self>) {
+        let tabs = self
+            .sidebar_tabs
+            .as_ref()
+            .zip(self.active_repo())
+            .map(|(router, repo)| {
+                let active = self.active_view_target(repo);
+                crate::view::panes::SidebarExtensionTabs {
+                    tabs: router
+                        .listed_tabs(&active)
+                        .into_iter()
+                        .map(|(index, title, _)| (index, title))
+                        .collect(),
+                    selected: router.selected(repo),
+                    view: router.active_view(repo),
+                }
+            });
+        self.sidebar_pane
+            .update(cx, |pane, cx| pane.set_extension_tabs(tabs, cx));
+    }
+
+    /// Selects details tab `id` for `repository` and shows the details pane.
+    pub(in crate::view) fn show_details_tab(
+        &mut self,
+        repository: &gitcomet_extension_api::RepositoryHandle,
+        id: &ContributionId,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let Some(repo) = self.repository_state(repository) else {
+            return false;
+        };
+        let active = self.active_view_target(&repo);
+        let Some(index) = self
+            .details_tabs
+            .as_ref()
+            .and_then(|router| router.index_of(id))
+            .filter(|index| {
+                self.details_tabs
+                    .as_ref()
+                    .is_some_and(|router| router.listed(*index, &active))
+            })
+        else {
+            return false;
+        };
+        self.select_routed_for_repo(repo, RoutedArea::Details, Some(index), window, cx);
+        if self.details_collapsed {
+            self.set_details_collapsed(false, cx);
+        }
+        true
+    }
+
+    /// Selects sidebar tab `id` for `repository` and shows the sidebar.
+    pub(in crate::view) fn show_sidebar_tab(
+        &mut self,
+        repository: &gitcomet_extension_api::RepositoryHandle,
+        id: &ContributionId,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let Some(repo) = self.repository_state(repository) else {
+            return false;
+        };
+        let active = self.active_view_target(&repo);
+        let Some(index) = self
+            .sidebar_tabs
+            .as_ref()
+            .and_then(|router| router.index_of(id))
+            .filter(|index| {
+                self.sidebar_tabs
+                    .as_ref()
+                    .is_some_and(|router| router.listed(*index, &active))
+            })
+        else {
+            return false;
+        };
+        self.select_routed_for_repo(repo, RoutedArea::Sidebar, Some(index), window, cx);
+        if self.sidebar_collapsed {
+            self.set_sidebar_collapsed(false, cx);
+        }
+        true
+    }
+
+    fn repository_state(
+        &self,
+        repository: &gitcomet_extension_api::RepositoryHandle,
+    ) -> Option<RepoState> {
+        self.state
+            .repos
+            .iter()
+            .find(|repo| {
+                repo.id == repository.repo_id() && repo.lifetime() == repository.lifetime()
+            })
+            .cloned()
     }
 
     /// Shows the built-in content (`None`) or contribution `index` in
@@ -448,6 +684,16 @@ impl GitCometView {
                     .map(|(_, view)| view.builder());
                 (router.len(), router.selected(&repo), build, None)
             }
+            RoutedArea::Sidebar => {
+                let Some(router) = self.sidebar_tabs.as_ref() else {
+                    return;
+                };
+                let build = index
+                    .filter(|index| router.built(&repo, *index).is_none())
+                    .and_then(|index| router.views.get(index))
+                    .map(|(_, view)| view.builder());
+                (router.len(), router.selected(&repo), build, None)
+            }
         };
         let index = index.filter(|index| *index < count);
         if current == index {
@@ -473,6 +719,10 @@ impl GitCometView {
                 Some(router) => (&mut router.selected, &mut router.built, None),
                 None => return,
             },
+            RoutedArea::Sidebar => match self.sidebar_tabs.as_mut() {
+                Some(router) => (&mut router.selected, &mut router.built, None),
+                None => return,
+            },
         };
         match index {
             Some(index) => {
@@ -491,6 +741,10 @@ impl GitCometView {
                 selected.remove(&repo.spec.workdir);
             }
         }
+        if matches!(area, RoutedArea::Main) {
+            self.follow_view(&repo, window, cx);
+        }
+        self.sync_sidebar_tabs(cx);
         self.sync_extension_navigation(cx);
         if let Some(extension) = &self.extension_window {
             extension.emit(gitcomet_extension_api::ShellEvent::ViewChanged, cx);
@@ -502,7 +756,7 @@ impl GitCometView {
     /// each contribution with its icon.
     fn details_strip(
         &self,
-        tabs: Vec<(SharedString, Option<SharedString>)>,
+        tabs: Vec<(usize, SharedString, Option<SharedString>)>,
         selected: Option<usize>,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
@@ -515,9 +769,9 @@ impl GitCometView {
             .border_color(theme.colors.stroke.subtle);
         let builtin = ("Details".into(), Some("icons/side_panel_right.svg".into()));
         let entries = std::iter::once(("details_tab_details".to_string(), builtin, None)).chain(
-            tabs.into_iter()
-                .enumerate()
-                .map(|(index, tab)| (format!("details_tab_{index}"), tab, Some(index))),
+            tabs.into_iter().map(|(index, title, icon)| {
+                (format!("details_tab_{index}"), (title, icon), Some(index))
+            }),
         );
         for (id, (title, icon), index) in entries {
             let mut tab = components::NavTab::new(id, title).selected(selected == index);
@@ -555,7 +809,8 @@ impl GitCometView {
     }
 
     /// The details area with extension tabs, or `None` when no extension
-    /// registers one (the details pane then mounts exactly as before).
+    /// tab is listed in the active repository's view (the details pane then
+    /// mounts exactly as before).
     pub(in crate::view) fn details_tab_content(
         &mut self,
         cx: &mut gpui::Context<Self>,
@@ -571,9 +826,12 @@ impl GitCometView {
         let Some(repo) = self.active_repo() else {
             return Some(details());
         };
+        let tabs = router.listed_tabs(&self.active_view_target(repo));
+        if tabs.is_empty() {
+            return None;
+        }
         let selected = router.selected(repo);
         let active = router.active_view(repo);
-        let tabs = router.tabs();
         let strip = self.details_strip(tabs, selected, cx);
         let body = match active {
             Some(view) => div().flex_1().min_h(px(0.0)).child(view).into_any_element(),

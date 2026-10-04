@@ -25,6 +25,8 @@ pub use sidebar::*;
 pub mod host;
 pub mod id;
 pub mod lifecycle;
+pub mod markdown;
+pub use markdown::{MarkdownView, MarkdownViewImpl};
 pub mod panes;
 pub mod presentation;
 pub use presentation::{HostedAction, HostedMenuItem, NotificationKind};
@@ -38,8 +40,9 @@ pub use contributions::{
     CommandContext, CommandDescriptor, CommandHandler, DetailsTabDescriptor, EntryOrigin,
     GateDecision, MenuLocation, Navigate, NavigationAvailability, RepositoryEntryGate,
     RepositoryEntryRequest, RepositoryViewContext, RepositoryViewDescriptor, SettingsPageContext,
-    SettingsPageDescriptor, SettingsTarget, SidebarSectionDescriptor, StatusItemDescriptor,
-    ViewBuilder, ViewNavigation, ViewTarget, WindowGateDescriptor, WindowGatePredicate,
+    SettingsPageDescriptor, SettingsTarget, SidebarSectionDescriptor, SidebarTabDescriptor,
+    StatusItemDescriptor, ViewBuilder, ViewNavigation, ViewTarget, WindowGateDescriptor,
+    WindowGatePredicate,
 };
 /// Revision-pinned state types hosted panes take.
 pub use gitcomet_state::diff_session::ChangeSource;
