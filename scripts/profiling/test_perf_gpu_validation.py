@@ -33,7 +33,7 @@ class ValidationTests(unittest.TestCase):
         baseline, candidate = commands["lifecycle-baseline"], commands["lifecycle-candidate"]
         self.assertIn("GPUI_GPU_EXPERIMENTS=", baseline)
         self.assertTrue(any("cached-layers" in arg and "pooled-targets" in arg for arg in candidate))
-        self.assertIn("frozen/gitcomet.exe", candidate)
+        self.assertIn(str(Path("frozen/gitcomet.exe")), candidate)
         self.assertEqual(candidate[candidate.index("--cycles") + 1], "100")
         args.cycles = 0
         self.assertFalse(any(name.startswith("lifecycle") for name, _ in validation.measurement_commands(args, Path("binary"))))
