@@ -193,9 +193,12 @@ fn apply_edit(
             let base = parent.clone().unwrap_or_else(|| state.target.clone());
             state.set_parent(name, parent.as_deref())?;
             repo.write_workspace(&state)?;
-            if parent.is_some() {
-                repo.rebase_virtual_branch(name, &base)?;
-            }
+            // Always replay, detaching included. A branch that stops being
+            // stacked now belongs on the target, and leaving it on its old
+            // parent would keep claiming a relationship its commits do not
+            // have — the same reason inserting *below* an anchor rebases the
+            // anchor.
+            repo.rebase_virtual_branch(name, &base)?;
             return rebuild_workspace(repo).map(Some);
         }
         WorkspaceEdit::MoveToStack {
@@ -248,7 +251,12 @@ fn apply_edit(
             paths,
         } => {
             let refs: Vec<&std::path::Path> = paths.iter().map(|p| p.as_path()).collect();
-            return repo.commit_paths_to_virtual_branch(name, message, &refs);
+            // Wrapped rather than returned as it stands: a commit *is* an
+            // outcome, and every caller of this function sees edits producing
+            // one as `Some`.
+            return repo
+                .commit_paths_to_virtual_branch(name, message, &refs)
+                .map(Some);
         }
     }
 

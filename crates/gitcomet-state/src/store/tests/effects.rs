@@ -966,4 +966,5 @@ mod cancellation;
 mod load_scheduling;
 mod repository_operations;
 mod retries_errors;
+mod workspace_edits;
 mod workspace_switch;

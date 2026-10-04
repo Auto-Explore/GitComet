@@ -134,6 +134,12 @@ why every structural edit is the same edit — changing one field:
 `WorkspaceState` validates every one of these before it is written, so a move
 that would close a loop is refused with the state left exactly as it was.
 
+Every row in that table replays the branch's commits, **including making a
+branch independent**. Detaching is not a bookkeeping move: the branch now
+belongs on the target, and leaving it on its old parent would keep claiming a
+relationship its commits do not have — the same reason inserting *below* an
+anchor has to replay the anchor.
+
 ## The target branch
 
 The workspace has a **target**: the base every independent branch is built on.
@@ -308,6 +314,12 @@ base lines everywhere except the hunks assigned to it, so `feature/api`'s commit
 contains the API change and *not* the UI one, even though both are sitting in
 the same working tree. Line endings come from the base, so splitting a CRLF
 file does not rewrite every line of it.
+
+When a branch is removed, its hunks are pruned too, and not just its whole-file
+assignments: a hunk nobody can commit is dead weight in `assignments.json`, and
+leaving it there would re-adopt the file if a branch of the same name were ever
+created again. The file itself survives as long as some other hunk still names
+a branch that exists, and disappears when none does.
 
 ## Committing
 

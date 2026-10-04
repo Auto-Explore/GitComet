@@ -776,9 +776,18 @@ impl HunkFingerprint {
     /// Identify a change from what it adds and what it removes.
     pub fn of(new_side: &[&str], base_lines: usize) -> Self {
         let mut hash = 0xcbf2_9ce4_8422_2325u64;
-        for byte in new_side.iter().flat_map(|line| line.as_bytes()) {
-            hash ^= *byte as u64;
+        for line in new_side {
+            // The line's length goes in first. Hashing the concatenation alone
+            // cannot tell two lines from one, so `["X", "\nY"]` and
+            // `["X\n", "Y"]` — different changes that happen to produce the same
+            // bytes — would share a fingerprint and one would drag the other
+            // along when the user assigned it.
+            hash ^= line.len() as u64;
             hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+            for byte in line.as_bytes() {
+                hash ^= *byte as u64;
+                hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+            }
         }
         Self {
             content: hash,
@@ -1186,10 +1195,17 @@ impl AssignmentIndex {
             if !changed(path) {
                 return false;
             }
-            if let Some(hunks_of) = hunks_of
-                && !assignments.hunks.is_empty()
-            {
-                assignments.retain_hunks(&hunks_of(path), state);
+            if !assignments.hunks.is_empty() {
+                match hunks_of {
+                    Some(hunks_of) => assignments.retain_hunks(&hunks_of(path), state),
+                    // Without a diff to hand, the only thing a hunk can be
+                    // judged by is the branch it names. Keeping one whose branch
+                    // is gone would make the assignment outlive the branch it was
+                    // made for, and it would be written back to disk every load.
+                    None => assignments
+                        .hunks
+                        .retain(|_, branch| state.get(branch).is_some()),
+                }
             }
             let Some(branch) = assignments.whole.as_ref() else {
                 // A split file survives while it still has a hunk on a live
@@ -1896,5 +1912,240 @@ mod tests {
             synthesize_for_branch(base, working, &spans, &|_| true),
             working
         );
+    }
+
+    #[test]
+    fn a_hunk_keeps_the_bases_line_endings() {
+        // A CRLF file where one hunk belongs to this branch and another does
+        // not. If the working tree's endings leaked into the branch's copy,
+        // committing one hunk would rewrite every untouched line of the file —
+        // and the diff would show the whole file as changed.
+        let base = "a\r\nb\r\nc\r\nd\r\ne\r\nf\r\ng\r\nh\r\ni\r\nj\r\n";
+        let working = "A\r\nb\r\nc\r\nd\r\ne\r\nf\r\ng\r\nh\r\ni\r\nJ\r\n";
+        let spans = hunk_spans(base, working);
+        assert_eq!(spans.len(), 2, "further apart than git's context, so two hunks");
+
+        let one = synthesize_for_branch(base, working, &spans, &|f| f == spans[0].fingerprint);
+        assert_eq!(one, "A\r\nb\r\nc\r\nd\r\ne\r\nf\r\ng\r\nh\r\ni\r\nj\r\n");
+        assert_eq!(
+            one.bytes().filter(|b| *b == b'\r').count(),
+            10,
+            "every line still ends CRLF, including the one taken from the working tree: {one:?}"
+        );
+
+        let other = synthesize_for_branch(base, working, &spans, &|_| false);
+        assert_eq!(other, base, "and reverting a hunk gives the base byte for byte");
+    }
+
+    #[test]
+    fn a_hunk_that_deletes_every_line_of_a_span_is_handled() {
+        // A pure removal produces no new lines at all, so its new range is
+        // empty. That is the one span shape where `new_lines` is zero, and it
+        // is the one a file deletion or a removed block goes through.
+        let base = "a\nb\nc\n";
+        let working = "a\nc\n";
+        let spans = hunk_spans(base, working);
+        assert_eq!(spans.len(), 1);
+        assert!(
+            spans[0].new_range.is_empty(),
+            "a deletion produces no new lines to put in a branch's copy"
+        );
+
+        assert_eq!(synthesize_for_branch(base, working, &spans, &|_| true), working);
+        assert_eq!(
+            synthesize_for_branch(base, working, &spans, &|_| false),
+            base,
+            "a deletion another branch owns must not be carried into this one's commit"
+        );
+    }
+
+    #[test]
+    fn a_brand_new_file_splits_against_an_empty_base() {
+        // A file the branch introduces has nothing in its base, so every line is
+        // an addition and the "base range" is empty.
+        let base = "";
+        let working = "one\ntwo\n";
+        let spans = hunk_spans(base, working);
+        assert_eq!(spans.len(), 1);
+        assert!(spans[0].base_range.is_empty(), "there was nothing to replace");
+
+        assert_eq!(synthesize_for_branch(base, working, &spans, &|_| true), working);
+        assert_eq!(
+            synthesize_for_branch(base, working, &spans, &|_| false),
+            "",
+            "a file another branch introduced must not appear in this one's commit"
+        );
+    }
+
+    #[test]
+    fn a_file_with_no_trailing_newline_keeps_that() {
+        // Git marks this with `\ No newline at end of file`, and a synthesized
+        // version that added one back would show as a change to the last line.
+        let base = "one\ntwo";
+        let working = "ONE\ntwo";
+        let spans = hunk_spans(base, working);
+        assert_eq!(synthesize_for_branch(base, working, &spans, &|_| true), working);
+        assert_eq!(synthesize_for_branch(base, working, &spans, &|_| false), base);
+    }
+
+    #[test]
+    fn a_fingerprint_distinguishes_lines_from_one_string() {
+        // The reason each line's length is hashed before its bytes: these two
+        // produce identical bytes but are different changes, and collapsing
+        // them would move an unrelated hunk when the user assigned this one.
+        let split = HunkFingerprint::of(&["X", "\nY"], 1);
+        let whole = HunkFingerprint::of(&["X\nY"], 1);
+        assert_ne!(split, whole);
+    }
+
+    #[test]
+    fn a_fingerprint_counts_how_much_it_removes_as_well_as_what_it_adds() {
+        // Replacing one line with `X` is not the same change as replacing two,
+        // even though both add exactly `X`. Keying on the added text alone
+        // would have the first drag the second along.
+        assert_ne!(
+            HunkFingerprint::of(&["X\n"], 1),
+            HunkFingerprint::of(&["X\n"], 2)
+        );
+        assert_ne!(
+            HunkFingerprint::of(&["X\n"], 1),
+            HunkFingerprint::of(&["X\n", "Y\n"], 1)
+        );
+    }
+
+    #[test]
+    fn removing_a_path_forgets_it_entirely() {
+        // Forget, not "assign to nothing": a path with no entry is one Git no
+        // longer reports as changed, and keeping a tombstone for it would show
+        // the user a file they cannot find.
+        let mut index = AssignmentIndex::new();
+        index.set(PathBuf::from("a.rs"), Some("api".into()));
+        index.set(PathBuf::from("b.rs"), Some("ui".into()));
+        assert_eq!(index.len(), 2);
+
+        index.remove(Path::new("a.rs"));
+        assert_eq!(index.len(), 1);
+        assert!(index.branch_of(Path::new("a.rs")).is_none());
+        assert!(!index.is_empty());
+        index.remove(Path::new("b.rs"));
+        assert!(index.is_empty());
+    }
+
+    #[test]
+    fn pairs_keep_the_paths_in_order_regardless_of_input_order() {
+        // The list is sorted by path so the UI does not sort on every frame and
+        // so the file on disk stays diffable; the constructor has to be the
+        // place that guarantees it, since a map built any other way would not.
+        let index = AssignmentIndex::from_pairs(vec![
+            (PathBuf::from("z.rs"), Some("api".to_string())),
+            (PathBuf::from("a.rs"), Some("ui".to_string())),
+            (PathBuf::from("m.rs"), None),
+        ]);
+        let paths: Vec<_> = index.paths().map(|(path, _)| path.to_path_buf()).collect();
+        assert_eq!(paths, [
+            PathBuf::from("a.rs"),
+            PathBuf::from("m.rs"),
+            PathBuf::from("z.rs")
+        ]);
+        assert_eq!(index.branch_of(Path::new("m.rs")), None);
+    }
+
+    #[test]
+    fn a_hunk_on_a_deleted_branch_is_dropped_but_its_siblings_stay() {
+        // The file is still changed, so it survives — but a hunk naming a branch
+        // that no longer exists is dead weight, and one branch leaving does not
+        // unassign the others' hunks.
+        let state = workspace().with_branches(vec![vb("api"), vb("ui")]);
+        let mut index = AssignmentIndex::new();
+        let kept = HunkFingerprint::of(&["api\n"], 1);
+        let orphan = HunkFingerprint::of(&["ui\n"], 1);
+        index.set_hunk(PathBuf::from("a.rs"), kept, Some("api".into()));
+        index.set_hunk(PathBuf::from("a.rs"), orphan, Some("gone".into()));
+
+        index.retain(&state, &|_| true, None);
+
+        let file = index.file(Path::new("a.rs")).expect("the file is still changed");
+        assert_eq!(file.hunk_branch(kept), Some("api"));
+        assert!(
+            file.hunk_branch(orphan).is_none(),
+            "there is no branch left for this hunk to belong to"
+        );
+    }
+
+    #[test]
+    fn a_split_file_survives_only_while_a_live_branch_has_part_of_it() {
+        // A file whose every hunk belonged to branches that are gone is not
+        // "changed and unassigned" any more — there is nothing left to commit,
+        // so the row has to disappear with the branches.
+        let state = workspace().with_branches(vec![vb("api")]);
+        let mut index = AssignmentIndex::new();
+        index.set_hunk(
+            PathBuf::from("gone.rs"),
+            HunkFingerprint::of(&["x\n"], 1),
+            Some("vanished".into()),
+        );
+        index.set_hunk(
+            PathBuf::from("kept.rs"),
+            HunkFingerprint::of(&["y\n"], 1),
+            Some("api".into()),
+        );
+
+        index.retain(&state, &|_| true, None);
+
+        assert!(index.file(Path::new("gone.rs")).is_none());
+        assert!(index.file(Path::new("kept.rs")).is_some());
+    }
+
+    #[test]
+    fn a_branch_reports_whether_anything_is_stacked_on_it() {
+        let state = workspace()
+            .with_branches(vec![vb("api"), vb("ui").with_parent("api"), vb("docs")]);
+        let stacks = state.stacks().unwrap();
+        assert!(stacks[0].contains("api"));
+        assert!(stacks[0].contains("ui"), "a child belongs to its parent's stack");
+        assert!(!stacks[0].contains("docs"), "an independent branch starts its own");
+        assert!(workspace().stacks().unwrap().is_empty(), "nothing to stack");
+    }
+
+    #[test]
+    fn moving_a_branch_changes_only_what_the_move_names() {
+        // Used to render the shape a drag will produce without applying it, so
+        // the preview and the result have to be computed the same way — and
+        // *below* means stacked on the named branch, not pushed down by it.
+        let state = workspace().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
+
+        assert_eq!(
+            state.parent_after_move("ui", Some("docs"), true),
+            Some("docs".to_string()),
+            "below stacks on the branch it is dropped under"
+        );
+        assert_eq!(
+            state.parent_after_move("ui", Some("docs"), false),
+            Some("main".to_string()),
+            "above takes the target's place, so it inherits the target's parent"
+        );
+        assert_eq!(
+            state.parent_after_move("ui", None, true),
+            None,
+            "no relative target means the branch becomes independent"
+        );
+        assert_eq!(
+            state.parent_after_move("ui", Some("ui"), true),
+            Some("api".to_string()),
+            "a branch relative to itself does not move"
+        );
+        assert_eq!(state.parent_after_move("gone", Some("api"), true), None);
+    }
+
+    #[test]
+    fn the_target_moves_without_touching_the_branches_built_on_it() {
+        // The names are the user's; only their base moves, and rebasing them is
+        // the backend's job — this only has to say what the base now is.
+        let mut state = workspace().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
+        state.set_target("release/2.3").expect("a target nobody has claimed");
+
+        assert_eq!(state.target, "release/2.3");
+        assert_eq!(state.get("api").unwrap().base_branch(&state.target), "release/2.3");
+        assert_eq!(state.get("ui").unwrap().base_branch(&state.target), "api");
     }
 }

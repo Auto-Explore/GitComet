@@ -1127,4 +1127,136 @@ mod tests {
         assert!(dir.ends_with(WORKSPACE_DIR));
         assert_eq!(dir.join(WORKSPACE_STATE_FILE).file_name().unwrap(), "workspace.json");
     }
+
+    #[test]
+    fn only_the_two_executable_modes_are_read_out_of_git() {
+        // `git ls-tree` names a gitlink or a symlink too, and staging one of
+        // those as `100644` would turn it into a plain file the moment a file
+        // was split between branches.
+        assert_eq!(parse_mode("100755 blob abc\trun.sh"), Some("100755"));
+        assert_eq!(parse_mode("100644 blob abc\tsrc/lib.rs"), Some("100644"));
+        assert_eq!(parse_mode("120000 blob abc\tlink"), None);
+        assert_eq!(parse_mode("160000 commit abc\tvendor"), None);
+        assert_eq!(parse_mode(""), None, "nothing to read");
+    }
+
+    #[test]
+    fn a_split_file_keeps_the_mode_it_had() {
+        // The user's real index wins over the base tree, so a mode they staged
+        // survives the split rather than being quietly rewritten.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path();
+        git(root, &["init"]);
+        git(root, &["config", "commit.gpgsign", "false"]);
+        git(root, &["config", "user.name", "Test User"]);
+        git(root, &["config", "user.email", "test@example.com"]);
+        std::fs::write(root.join("run.sh"), "#!/bin/sh\n").unwrap();
+        std::fs::write(root.join("plain.txt"), "text\n").unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-m", "base"]);
+
+        let repo = open_repo(root);
+        let base = repo.resolve_revision("HEAD").expect("resolve").expect("a base");
+        assert_eq!(repo.path_mode(&base, Path::new("run.sh")).unwrap(), "100755");
+        assert_eq!(repo.path_mode(&base, Path::new("plain.txt")).unwrap(), "100644");
+        assert_eq!(
+            repo.path_mode(&base, Path::new("new.txt")).unwrap(),
+            "100644",
+            "a file that is not in the base is a plain file"
+        );
+    }
+
+    #[test]
+    fn two_sibling_branches_are_merged_from_the_commit_they_share() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path();
+        git(root, &["init"]);
+        git(root, &["config", "commit.gpgsign", "false"]);
+        git(root, &["config", "user.name", "Test User"]);
+        git(root, &["config", "user.email", "test@example.com"]);
+        std::fs::write(root.join("base.txt"), "b\n").unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-m", "base"]);
+
+        let repo = open_repo(root);
+        let base = repo
+            .resolve_revision("HEAD")
+            .expect("resolve")
+            .expect("the base commit exists");
+
+        git(root, &["checkout", "-b", "left"]);
+        std::fs::write(root.join("left.txt"), "l\n").unwrap();
+        git(root, &["commit", "-am", "left"]);
+
+        let default_branch = git(root, &["symbolic-ref", "--short", "HEAD"]);
+        git(root, &["checkout", &default_branch]);
+        git(root, &["checkout", "-b", "right"]);
+        std::fs::write(root.join("right.txt"), "r\n").unwrap();
+        git(root, &["commit", "-am", "right"]);
+
+        let left = repo
+            .resolve_revision("left")
+            .expect("resolve")
+            .expect("left exists");
+        let right = repo
+            .resolve_revision("right")
+            .expect("resolve")
+            .expect("right exists");
+        assert_ne!(left, right, "they have to be siblings for this to mean anything");
+        assert_eq!(
+            merge_base_of(&repo, &left, &right),
+            base.as_ref(),
+            "a merge from the wrong base would resurrect one branch's commits as \
+             conflicts against the other's"
+        );
+    }
+
+    #[test]
+    fn branches_with_no_shared_history_merge_against_ours() {
+        // `git merge-tree` needs an explicit base and there is none here.
+        // Falling back to `ours` gives a two-way merge, which surfaces the
+        // clash rather than silently picking a side.
+        let (temp, repo) = repo_with_two_branches();
+        let root = temp.path();
+        git(root, &["checkout", "--orphan", "lonely"]);
+        git(root, &["rm", "-rfq", "."]);
+        std::fs::write(root.join("other.txt"), "z\n").unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-m", "lonely"]);
+
+        let api = repo.resolve_revision("api").expect("resolve").expect("api exists");
+        let lonely = repo
+            .resolve_revision("lonely")
+            .expect("resolve")
+            .expect("lonely exists");
+        assert_eq!(merge_base_of(&repo, &api, &lonely), api.as_ref());
+    }
+
+    #[test]
+    fn one_conflicting_path_is_named_and_several_are_counted() {
+        assert_eq!(describe_paths(&["src/lib.rs".to_string()]), "src/lib.rs");
+        assert_eq!(
+            describe_paths(&["src/lib.rs".to_string(), "src/main.rs".to_string()]),
+            "src/lib.rs (and 1 more)",
+        );
+        assert_eq!(
+            describe_paths(&["a".to_string(), "b".to_string(), "c".to_string()]),
+            "a (and 2 more)"
+        );
+    }
+
+    #[test]
+    fn a_conflict_names_the_other_branch_or_says_that_it_could_not() {
+        let against = conflict_message("feature/ui", Some("feature/api"), &["src/lib.rs".into()]);
+        assert!(
+            against.contains("'feature/ui'") && against.contains("'feature/api'"),
+            "the two branches in the way have to be named: {against}"
+        );
+
+        let nameless = conflict_message("feature/ui", None, &[]);
+        assert!(
+            nameless.contains("feature/ui") && !nameless.contains("conflicts with '"),
+            "with no branch to blame the message must not invent one: {nameless}"
+        );
+    }
 }
