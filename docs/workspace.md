@@ -242,15 +242,38 @@ requests will need later; the multi-PR workflow itself is not implemented yet.
 
 ## What the Workspace tab can do today
 
-The tab currently exposes apply/unapply per branch, push per branch, commit
-per assigned file, and dismissing a conflict. The other edits — creating a
-branch, stacking one, changing the target, reassigning a file, committing a
-whole branch with a written message — are implemented end to end in the model,
-the service contract, the Git backend, and the reducer (`WorkspaceEdit`'s
-`Create`, `CreateStacked`, `SetTarget`, `AssignFile`, `MoveToStack`, `Reorder`,
-`Remove`, and `CommitPaths` variants), but no control in the view dispatches
-them yet. They need text input and a branch-picker popover, which the sidebar
-does not currently host.
+Per branch: apply/unapply, push, a `⋯` menu (stack a new branch on this one,
+change its base, move it into another stack, remove it from the workspace), and
+`↑`/`↓` to reorder it inside its stack — the arrows are disabled at the ends of
+a stack rather than offered and refused.
+
+Per workspace: `New branch` on the summary line, and `Change` on the target row
+to rebase everything onto a different branch.
+
+Per file: commit the file to the branch it is assigned to.
+
+A conflict from a failed apply is shown above the stacks and can be dismissed.
+
+Every `WorkspaceEdit` variant is now reachable from the view. The ones that
+need a name go through a single popover, `PopoverKind::WorkspacePrompt`:
+
+- the body is the same for all of them, so they share one variant rather than
+  seven — what differs is the label on the field and which `WorkspaceEdit`
+  confirming builds;
+- opened from a branch row it shows that branch's actions first, because
+  stacking, re-parenting, joining a stack and removing are the same four
+  questions about the same branch and a row has no room for four buttons;
+- the step shown is host state rather than part of the kind, so narrowing the
+  list to one action does not change which popover is open — a kind swap would
+  read to the fingerprint as a different dialog replacing this one;
+- validation is stricter than the model. A base that does not exist, or a
+  branch that has gone since the prompt opened, is refused at the prompt rather
+  than accepted and failed later on a background thread with a rebase error;
+  a name that is already taken is suffixed rather than passed to Git.
+
+Still not reachable: `AssignFile` (dragging a file onto a branch) and
+`CommitPaths` with a written message (the file row commits with an empty
+message). Both are complete below the view.
 
 ## Where the code is
 
@@ -260,6 +283,8 @@ does not currently host.
 | Service contract | `crates/gitcomet-core/src/services.rs` (workspace section) |
 | Git plumbing | `crates/gitcomet-git-gix/src/repo/workspace.rs` |
 | Per-repository state | `crates/gitcomet-state/src/model/workspace.rs` |
+| Edit dialog | `crates/gitcomet-ui-gpui/src/view/panels/popover/workspace_prompt.rs` |
+| Dialog behaviour | `crates/gitcomet-ui-gpui/src/view/panels/popover/host/workspace_prompts.rs` |
 | Messages and effects | `crates/gitcomet-state/src/store/effects/workspace_effects.rs` |
 | Reducers | `crates/gitcomet-state/src/store/reducer/workspace.rs` |
 | The view | `crates/gitcomet-ui-gpui/src/view/panes/sidebar/workspace.rs` |

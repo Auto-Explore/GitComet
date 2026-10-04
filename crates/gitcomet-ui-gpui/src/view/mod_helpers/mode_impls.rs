@@ -308,6 +308,17 @@ pub(crate) enum PopoverKind {
         section: StatusSection,
         folder: std::sync::Arc<std::path::Path>,
     },
+    /// An edit to the workspace: create, restack, re-parent or remove a
+    /// virtual branch, or point the workspace at a different target.
+    ///
+    /// One kind covers all of them because they differ only in the label on the
+    /// field and in which `WorkspaceEdit` confirming builds; a variant each would
+    /// mean the same prompt body, input handling and dismissal logic repeated
+    /// seven times.
+    WorkspacePrompt {
+        repo_id: RepoId,
+        prompt: WorkspacePrompt,
+    },
     PreviousCommitMessagesMenu {
         repo_id: RepoId,
     },
@@ -1112,6 +1123,84 @@ pub(in crate::view) enum TerminalShutdownAction {
         workspace_id: gitcomet_state::session::WorkspaceId,
     },
     QuitApp,
+}
+
+/// Which workspace edit an open [`WorkspacePrompt`] is collecting input for.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(in crate::view) enum WorkspacePromptKind {
+    /// Offer the branch's own actions, then narrow to one of them.
+    BranchActions,
+    /// A new branch built directly on the workspace target.
+    Create,
+    /// A new branch stacked on [`WorkspacePrompt::branch`].
+    CreateStacked,
+    /// Rebase the workspace onto a different target branch.
+    SetTarget,
+    /// Restack [`WorkspacePrompt::branch`] onto a different base.
+    SetParent,
+    /// Move [`WorkspacePrompt::branch`] into another branch's stack.
+    MoveToStack,
+    /// Delete [`WorkspacePrompt::branch`].
+    Remove,
+}
+
+impl WorkspacePromptKind {
+    /// Whether this step asks for a typed value.
+    ///
+    /// False for the action list, which submits nothing by picking a row, and
+    /// for [`WorkspacePromptKind::Remove`], which is confirmed with no field.
+    pub(in crate::view) fn asks_for_text(self) -> bool {
+        !matches!(self, Self::BranchActions | Self::Remove)
+    }
+
+    pub(in crate::view) fn title(self) -> &'static str {
+        match self {
+            Self::BranchActions => "Branch",
+            Self::Create => "New branch",
+            Self::CreateStacked => "Stack on branch",
+            Self::SetTarget => "Set workspace target",
+            Self::SetParent => "Change base branch",
+            Self::MoveToStack => "Move into stack",
+            Self::Remove => "Remove branch",
+        }
+    }
+
+    pub(in crate::view) fn field_label(self) -> &'static str {
+        match self {
+            Self::Create | Self::CreateStacked => "Branch name",
+            Self::SetTarget => "Target branch",
+            Self::SetParent => "New base branch",
+            Self::MoveToStack => "Stack to join",
+            Self::BranchActions | Self::Remove => "",
+        }
+    }
+
+    /// The label on the button that submits the prompt.
+    pub(in crate::view) fn confirm_label(self) -> &'static str {
+        match self {
+            Self::BranchActions => "Close",
+            Self::Create | Self::CreateStacked => "Create",
+            Self::SetTarget => "Set target",
+            Self::SetParent => "Restack",
+            Self::MoveToStack => "Move",
+            Self::Remove => "Remove",
+        }
+    }
+}
+
+/// The workspace edit an open prompt is performing.
+///
+/// The subject branch is captured here rather than read from the store on
+/// submit: the list can change under an open prompt (a background load, a
+/// restack elsewhere) and the edit should apply to what the user was looking
+/// at when they opened it.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(in crate::view) struct WorkspacePrompt {
+    pub(in crate::view) kind: WorkspacePromptKind,
+    /// The branch the edit acts on, empty for the workspace-wide kinds.
+    pub(in crate::view) branch: String,
+    /// The text the field opens with.
+    pub(in crate::view) value: String,
 }
 
 /// A close the Git-operation or extension guards asked about. Confirming it

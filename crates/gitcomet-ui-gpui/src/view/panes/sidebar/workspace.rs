@@ -15,7 +15,7 @@ use super::*;
 use crate::kit::interaction::ControlInteractionExt as _;
 use crate::view::components::InteractiveRowExt as _;
 use gitcomet_core::workspace::{BranchApplyState, VirtualBranch};
-use gitcomet_state::model::Loadable;
+use gitcomet_state::model::{Loadable, WorkspaceEdit};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -26,6 +26,19 @@ const STACK_INDENT_PX: f32 = 10.0;
 /// row are distinguishable by position alone.
 const FILE_INDENT_PX: f32 = 14.0;
 const ROW_GAP_PX: f32 = 6.0;
+
+/// The branches a row can be swapped with, in the same stack.
+///
+/// Carried on the row rather than looked up while rendering because the arrows
+/// have to be disabled at the ends of a stack, and a row that cannot move has to
+/// say so before it is clicked rather than after.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) struct WorkspaceSiblings {
+    /// The branch one row up in the stack.
+    pub(in crate::view) above: Option<String>,
+    /// The branch one row down in the stack.
+    pub(in crate::view) below: Option<String>,
+}
 
 /// One row of the workspace list.
 ///
@@ -40,6 +53,7 @@ pub(in crate::view) enum WorkspaceRow {
         name: String,
         applied: bool,
         file_count: usize,
+        siblings: WorkspaceSiblings,
     },
     /// A branch stacked on another, indented by its depth.
     Branch {
@@ -48,6 +62,7 @@ pub(in crate::view) enum WorkspaceRow {
         applied: bool,
         file_count: usize,
         description: Option<String>,
+        siblings: WorkspaceSiblings,
     },
     /// The count line above the file list.
     Summary { text: String },
@@ -167,11 +182,22 @@ fn build_rows(repo: &RepoState) -> Vec<WorkspaceRow> {
     for stack in repo.workspace.stacks.iter() {
         for (index, member) in stack.branches.iter().enumerate() {
             let count = counts.get(&member.branch.name).copied().unwrap_or(0);
+            let siblings = WorkspaceSiblings {
+                above: index
+                    .checked_sub(1)
+                    .and_then(|above| stack.branches.get(above))
+                    .map(|above| above.branch.name.clone()),
+                below: stack
+                    .branches
+                    .get(index + 1)
+                    .map(|below| below.branch.name.clone()),
+            };
             if index == 0 {
                 rows.push(WorkspaceRow::StackBase {
                     name: member.branch.name.clone(),
                     applied: member.branch.is_applied(),
                     file_count: count,
+                    siblings,
                 });
             } else {
                 rows.push(WorkspaceRow::Branch {
@@ -180,6 +206,7 @@ fn build_rows(repo: &RepoState) -> Vec<WorkspaceRow> {
                     applied: member.branch.is_applied(),
                     file_count: count,
                     description: member.branch.description.clone(),
+                    siblings,
                 });
             }
         }
@@ -301,11 +328,15 @@ impl SidebarPaneView {
                         ui_scale_percent,
                         ix,
                         name.clone(),
+                        busy,
+                        repo_id,
+                        cx,
                     ),
                     WorkspaceRow::StackBase {
                         name,
                         applied,
                         file_count,
+                        siblings,
                     } => render_branch_row(
                         theme,
                         row_height,
@@ -316,6 +347,7 @@ impl SidebarPaneView {
                         *applied,
                         *file_count,
                         None,
+                        siblings.clone(),
                         busy,
                         repo_id,
                         Arc::clone(&store),
@@ -327,6 +359,7 @@ impl SidebarPaneView {
                         applied,
                         file_count,
                         description,
+                        siblings,
                     } => render_branch_row(
                         theme,
                         row_height,
@@ -337,14 +370,21 @@ impl SidebarPaneView {
                         *applied,
                         *file_count,
                         description.clone(),
+                        siblings.clone(),
                         busy,
                         repo_id,
                         Arc::clone(&store),
                         cx,
                     ),
-                    WorkspaceRow::Summary { text } => {
-                        render_summary_row(theme, row_height, ix, text.clone())
-                    }
+                    WorkspaceRow::Summary { text } => render_summary_row(
+                        theme,
+                        row_height,
+                        ix,
+                        text.clone(),
+                        busy,
+                        repo_id,
+                        cx,
+                    ),
                     WorkspaceRow::File {
                         path,
                         branch,
@@ -417,7 +457,37 @@ fn render_target_row(
     ui_scale_percent: u32,
     index: usize,
     name: String,
+    busy: bool,
+    repo_id: RepoId,
+    cx: &mut gpui::Context<SidebarPaneView>,
 ) -> AnyElement {
+    let set_target = components::Button::new("workspace_set_target", "Change")
+        .style(components::ButtonStyle::Subtle)
+        .disabled(busy)
+        .on_click(theme, cx, move |this, event, window, cx| {
+            this.open_popover_at(
+                PopoverKind::WorkspacePrompt {
+                    repo_id,
+                    prompt: WorkspacePrompt {
+                        kind: WorkspacePromptKind::SetTarget,
+                        branch: String::new(),
+                        // Opens on the current target so the common case is an
+                        // edit rather than a retype.
+                        value: name.clone(),
+                    },
+                },
+                event.position(),
+                window,
+                cx,
+            );
+        })
+        .gitcomet_tooltip(
+            theme,
+            SharedString::from(format!(
+                "Rebase the whole workspace onto a different branch than {name}"
+            )),
+        );
+
     row_frame(
         theme,
         row_height,
@@ -433,7 +503,8 @@ fn render_target_row(
                     .child(name),
                 theme.colors.surface.chrome,
             )
-            .render(ui_scale_percent),
+            .render(ui_scale_percent)
+            .flex_1(),
         )
         .child(
             div()
@@ -441,6 +512,7 @@ fn render_target_row(
                 .text_color(theme.colors.foreground.secondary)
                 .child("target"),
         )
+        .child(set_target)
         .into_any_element()
 }
 
@@ -455,6 +527,7 @@ fn render_branch_row(
     applied: bool,
     file_count: usize,
     description: Option<String>,
+    siblings: WorkspaceSiblings,
     busy: bool,
     repo_id: RepoId,
     store: std::sync::Arc<AppStore>,
@@ -473,7 +546,6 @@ fn render_branch_row(
     let apply = components::Button::new(format!("workspace_apply_{name}"), apply_label(state))
     .style(components::ButtonStyle::Subtle)
     .disabled(busy)
-    .gitcomet_tooltip(theme, tooltip)
     .on_click(theme, cx, move |_, _, _, _| {
         toggle_store.dispatch(Msg::SetWorkspaceBranchApplied {
             repo_id,
@@ -484,23 +556,70 @@ fn render_branch_row(
                 BranchApplyState::Applied
             },
         });
-    });
+    })
+    .gitcomet_tooltip(theme, tooltip);
 
     let push_store = Arc::clone(&store);
     let push_name = name.clone();
     let push = components::Button::new(format!("workspace_push_{name}"), "Push")
         .style(components::ButtonStyle::Subtle)
         .disabled(busy)
-        .gitcomet_tooltip(
-            theme,
-            SharedString::from(format!("Push {name} to its remote")),
-        )
         .on_click(theme, cx, move |_, _, _, _| {
             push_store.dispatch(Msg::PushWorkspaceBranch {
                 repo_id,
                 name: push_name.clone(),
             });
-        });
+        })
+        .gitcomet_tooltip(
+            theme,
+            SharedString::from(format!("Push {name} to its remote")),
+        );
+
+    let up = reorder_button(
+        theme,
+        format!("workspace_up_{name}"),
+        ReorderDirection::Up,
+        siblings.above.clone(),
+        name.clone(),
+        busy,
+        repo_id,
+        Arc::clone(&store),
+        cx,
+    );
+    let down = reorder_button(
+        theme,
+        format!("workspace_down_{name}"),
+        ReorderDirection::Down,
+        siblings.below.clone(),
+        name.clone(),
+        busy,
+        repo_id,
+        Arc::clone(&store),
+        cx,
+    );
+
+    // Stacking, re-parenting, joining another stack and removing are four
+    // questions about the same branch, and a row already carries push and
+    // apply; the actions go behind one button rather than four more.
+    let actions = components::Button::new(format!("workspace_actions_{name}"), "⋯")
+        .style(components::ButtonStyle::Subtle)
+        .disabled(busy)
+        .on_click(theme, cx, move |this, event, window, cx| {
+            this.open_popover_at(
+                PopoverKind::WorkspacePrompt {
+                    repo_id,
+                    prompt: WorkspacePrompt {
+                        kind: WorkspacePromptKind::BranchActions,
+                        branch: name.clone(),
+                        value: String::new(),
+                    },
+                },
+                event.position(),
+                window,
+                cx,
+            );
+        })
+        .gitcomet_tooltip(theme, SharedString::from(format!("Actions for {name}")));
 
     let label = match &description {
         Some(description) => format!("{name} — {description}"),
@@ -538,7 +657,82 @@ fn render_branch_row(
     )
     .child(push)
     .child(apply)
+    .child(up)
+    .child(down)
+    .child(actions)
     .into_any_element()
+}
+
+/// Which way a branch's arrow moves it within its stack.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReorderDirection {
+    Up,
+    Down,
+}
+
+impl ReorderDirection {
+    /// The label on the arrow.
+    pub(in crate::view) fn label(self) -> &'static str {
+        match self {
+            Self::Up => "↑",
+            Self::Down => "↓",
+        }
+    }
+
+    /// The pair of branches to swap so that `name` ends up on `this` side of
+    /// `partner`.
+    ///
+    /// The edit is a swap of two siblings rather than a direction, so it is the
+    /// same edit a drag would produce and the model decides what the result
+    /// looks like.
+    pub(in crate::view) fn swap(self, name: &str, partner: &str) -> (String, String) {
+        let (name, partner) = (name.to_string(), partner.to_string());
+        match self {
+            Self::Up => (partner, name),
+            Self::Down => (name, partner),
+        }
+    }
+}
+
+/// One of a branch's two reordering arrows.
+///
+/// The arrow at the end of a stack is disabled rather than offered and refused,
+/// because "there is nothing above this" is something the row can already show.
+#[allow(clippy::too_many_arguments)]
+fn reorder_button(
+    theme: AppTheme,
+    id: String,
+    direction: ReorderDirection,
+    partner: Option<String>,
+    name: String,
+    busy: bool,
+    repo_id: RepoId,
+    store: Arc<AppStore>,
+    cx: &mut gpui::Context<SidebarPaneView>,
+) -> Stateful<Div> {
+    let tooltip = partner.as_ref().map(|partner| {
+        SharedString::from(match direction {
+            ReorderDirection::Up => format!("Move {name} above {partner}"),
+            ReorderDirection::Down => format!("Move {name} below {partner}"),
+        })
+    });
+    let button = components::Button::new(id, direction.label())
+        .style(components::ButtonStyle::Subtle)
+        .disabled(busy || partner.is_none())
+        .on_click(theme, cx, move |_, _, _, _| {
+            let Some(partner) = partner.clone() else {
+                return;
+            };
+            let (first, second) = direction.swap(&name, &partner);
+            store.dispatch(Msg::ApplyWorkspaceEdit {
+                repo_id,
+                edit: WorkspaceEdit::Reorder { first, second },
+            });
+        });
+    match tooltip {
+        Some(tooltip) => button.gitcomet_tooltip(theme, tooltip),
+        None => button,
+    }
 }
 
 fn render_summary_row(
@@ -546,7 +740,33 @@ fn render_summary_row(
     row_height: gpui::Pixels,
     index: usize,
     text: String,
+    busy: bool,
+    repo_id: RepoId,
+    cx: &mut gpui::Context<SidebarPaneView>,
 ) -> AnyElement {
+    // Creating a branch is the one workspace action with no row of its own to
+    // hang off — there is nothing yet to hang it off — so it lives on the
+    // summary line that closes the branch list.
+    let create = components::Button::new("workspace_create_branch", "New branch")
+        .style(components::ButtonStyle::Subtle)
+        .disabled(busy)
+        .on_click(theme, cx, move |this, event, window, cx| {
+            this.open_popover_at(
+                PopoverKind::WorkspacePrompt {
+                    repo_id,
+                    prompt: WorkspacePrompt {
+                        kind: WorkspacePromptKind::Create,
+                        branch: String::new(),
+                        value: String::new(),
+                    },
+                },
+                event.position(),
+                window,
+                cx,
+            );
+        })
+        .gitcomet_tooltip(theme, SharedString::from("Add a branch to the workspace"));
+
     row_frame(
         theme,
         row_height,
@@ -558,8 +778,10 @@ fn render_summary_row(
             div()
                 .text_size(theme.ui_text(12.0))
                 .text_color(theme.colors.foreground.secondary)
-                .child(text),
+                .child(text)
+                .flex_1(),
         )
+        .child(create)
         .into_any_element()
 }
 
@@ -598,16 +820,16 @@ fn render_file_row(
         )
         .style(components::ButtonStyle::Subtle)
         .disabled(busy)
-        .gitcomet_tooltip(
-            theme,
-            SharedString::from(format!("Commit {} to its branch", commit_path.display())),
-        )
         .on_click(theme, cx, move |_, _, _, _| {
             commit_store.dispatch(Msg::CommitWorkspaceFile {
                 repo_id,
                 path: commit_path.clone(),
             });
         })
+        .gitcomet_tooltip(
+            theme,
+            SharedString::from(format!("Commit {} to its branch", commit_path.display())),
+        )
     });
 
     let mut row = row_frame(theme, row_height, index, indent, surface).child(
@@ -671,10 +893,10 @@ fn render_conflict_row(
     let dismiss = components::Button::new("workspace_conflict_dismiss", "Dismiss")
         .style(components::ButtonStyle::Subtle)
         .disabled(busy)
-        .gitcomet_tooltip(theme, SharedString::from("Hide this conflict"))
         .on_click(theme, cx, move |_, _, _, _| {
             dismiss_store.dispatch(Msg::DismissWorkspaceConflict { repo_id });
-        });
+        })
+        .gitcomet_tooltip(theme, SharedString::from("Hide this conflict"));
 
     row_frame(
         theme,
@@ -846,6 +1068,49 @@ mod tests {
         let before = WorkspaceFingerprint::from_repo(&repo);
         repo.worktree_status_rev = 7;
         assert_ne!(WorkspaceFingerprint::from_repo(&repo), before);
+    }
+
+    #[test]
+    fn a_branch_knows_the_siblings_it_can_swap_with() {
+        let repo = repo_with(
+            WorkspaceState::new("main").with_branches(vec![
+                VirtualBranch::new("api"),
+                VirtualBranch::new("ui").with_parent("api"),
+                VirtualBranch::new("docs").with_parent("ui"),
+            ]),
+        );
+        let presentation = WorkspacePresentation::build(Some(&repo));
+        let siblings: Vec<_> = presentation
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                WorkspaceRow::StackBase { name, siblings, .. }
+                | WorkspaceRow::Branch { name, siblings, .. } => Some((name.clone(), siblings.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(siblings.len(), 3);
+        assert_eq!(siblings[0].1.above, None, "the stack base has nothing above it");
+        assert_eq!(siblings[0].1.below.as_deref(), Some("ui"));
+        assert_eq!(siblings[1].1.above.as_deref(), Some("api"));
+        assert_eq!(siblings[1].1.below.as_deref(), Some("docs"));
+        assert_eq!(siblings[2].1.below, None, "the top of the stack has nothing below it");
+    }
+
+    #[test]
+    fn an_arrow_swaps_the_branch_with_the_neighbour_it_points_at() {
+        // Moving up puts the named branch first, so it lands above its partner.
+        assert_eq!(
+            ReorderDirection::Up.swap("ui", "api"),
+            ("api".to_string(), "ui".to_string())
+        );
+        assert_eq!(
+            ReorderDirection::Down.swap("api", "ui"),
+            ("api".to_string(), "ui".to_string())
+        );
+        // The two directions only differ in which branch ends up first.
+        assert_eq!(ReorderDirection::Up.label(), "↑");
+        assert_eq!(ReorderDirection::Down.label(), "↓");
     }
 
     #[test]

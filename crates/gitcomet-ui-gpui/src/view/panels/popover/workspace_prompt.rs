@@ -1,0 +1,221 @@
+//! The workspace edit prompt: one dialog for creating, restacking, re-parenting
+//! and removing a virtual branch, and for re-pointing the workspace target.
+//!
+//! The dialog has two steps. Opened from a branch row it first offers that
+//! branch's actions, because stacking, re-parenting, joining another stack and
+//! removing are the same four questions about the same branch and a row has
+//! no room for four buttons. Picking one narrows the dialog to a single text
+//! field, which is where every other prompt in the app puts its input.
+
+use super::*;
+
+/// The line above the field, explaining what confirming will do.
+///
+/// Worth the space: restacking rewrites the branch's history and moving a
+/// branch into a stack does too, and neither is obvious from the button label.
+fn detail_line(kind: WorkspacePromptKind, branch: &str, value: &str) -> SharedString {
+    match kind {
+        WorkspacePromptKind::Create => format!(
+            "The new branch starts from the workspace target, with no commits of its own yet."
+        )
+        .into(),
+        WorkspacePromptKind::CreateStacked => {
+            format!("The new branch is created on {branch} and stacks above it.").into()
+        }
+        WorkspacePromptKind::SetTarget => format!(
+            "Every branch is rebased onto {value} and the workspace branch is rebuilt."
+        )
+        .into(),
+        WorkspacePromptKind::SetParent => {
+            if value.is_empty() {
+                format!("{branch} becomes independent, sitting directly on the target.").into()
+            } else {
+                format!("{branch} is rebased onto {value}; its history is rewritten.").into()
+            }
+        }
+        WorkspacePromptKind::MoveToStack => {
+            format!("{branch} is rebased so it sits directly above {value}.").into()
+        }
+        // Neither of these has a field, so the detail line is the whole body.
+        WorkspacePromptKind::Remove => format!(
+            "{branch} stops contributing to the workspace branch. The Git branch itself is kept."
+        )
+        .into(),
+        WorkspacePromptKind::BranchActions => format!("Actions for {branch}.").into(),
+    }
+}
+
+/// The actions offered for a branch, in the order they are listed.
+fn branch_actions() -> [WorkspacePromptKind; 4] {
+    [
+        WorkspacePromptKind::CreateStacked,
+        WorkspacePromptKind::SetParent,
+        WorkspacePromptKind::MoveToStack,
+        WorkspacePromptKind::Remove,
+    ]
+}
+
+fn action_label(kind: WorkspacePromptKind) -> &'static str {
+    match kind {
+        WorkspacePromptKind::CreateStacked => "Stack a new branch on this",
+        WorkspacePromptKind::SetParent => "Change its base branch",
+        WorkspacePromptKind::MoveToStack => "Move it into another stack",
+        WorkspacePromptKind::Remove => "Remove it from the workspace",
+        _ => "",
+    }
+}
+
+pub(super) fn panel(
+    this: &mut PopoverHost,
+    prompt: WorkspacePrompt,
+    cx: &mut gpui::Context<PopoverHost>,
+) -> gpui::Div {
+    let theme = this.theme;
+    let ui_scale_percent = super::popover_ui_scale_percent(cx);
+    let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
+    // The step is host state rather than part of the kind so that narrowing
+    // the dialog does not change which popover is open: a kind swap would look
+    // to the fingerprint like a different dialog replacing this one.
+    let kind = this.workspace_prompt_kind.unwrap_or(prompt.kind);
+    let detail = detail_line(kind, &prompt.branch, &prompt.value);
+
+    let mut body = div().flex().flex_col().w(scaled_px(540.0));
+    body = body
+        .child(popover_title(theme, kind.title()))
+        .child(super::popover_rule(theme))
+        .child(super::popover_detail(theme, detail));
+
+    if kind == WorkspacePromptKind::BranchActions {
+        for action in branch_actions() {
+            let action_id = format!("workspace_action_{}", action_label(action).replace(' ', "_"));
+            body = body.child(
+                components::Button::new(action_id, action_label(action))
+                    .style(components::ButtonStyle::Subtle)
+                    // Full width so the list reads as a menu rather than as four
+                    // differently sized buttons stacked in a column.
+                    .w_full()
+                    .on_click(theme, cx, move |this, _e, window, cx| {
+                        this.open_workspace_prompt_step(action, window, cx);
+                    }),
+            );
+        }
+    } else if kind.asks_for_text() {
+        body = body
+            .child(input_label(theme, kind.field_label()))
+            .child(
+                div()
+                    .px_2()
+                    .pb_1()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .child(this.create_branch_input.clone()),
+            );
+    }
+
+    body.child(super::popover_rule(theme))
+        .child(
+            super::prompt_footer_row()
+                .child(
+                    cancel_button("workspace_prompt_cancel", "workspace_prompt_cancel_hint", theme)
+                        .focus_handle(this.create_branch_from_ref_focus.cancel.clone())
+                        .on_click(theme, cx, |this, _e, window, cx| {
+                            this.dismiss_prompt_popover(window, cx);
+                        }),
+                )
+                .child(
+                    components::Button::new("workspace_prompt_go", kind.confirm_label())
+                        .focus_handle(this.create_branch_from_ref_focus.submit.clone())
+                        .separated_end_slot(hotkey_hint(
+                            theme,
+                            "workspace_prompt_go_hint",
+                            "Enter",
+                        ))
+                        .style(components::ButtonStyle::Filled)
+                        .disabled(!this.can_submit_workspace_prompt(cx))
+                        .on_click(theme, cx, |this, _e, window, cx| {
+                            this.submit_workspace_prompt(window, cx);
+                        }),
+                ),
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_action_list_covers_every_branch_only_edit() {
+        let actions = branch_actions();
+        for kind in [
+            WorkspacePromptKind::CreateStacked,
+            WorkspacePromptKind::SetParent,
+            WorkspacePromptKind::MoveToStack,
+            WorkspacePromptKind::Remove,
+        ] {
+            assert!(actions.contains(&kind), "{kind:?} is not offered");
+        }
+        // Creating a branch has no subject, so it is not on a branch's list.
+        assert!(!actions.contains(&WorkspacePromptKind::Create));
+        assert!(!actions.contains(&WorkspacePromptKind::SetTarget));
+    }
+
+    #[test]
+    fn every_listed_action_has_a_label() {
+        for kind in branch_actions() {
+            assert!(!action_label(kind).is_empty(), "{kind:?} has no label");
+        }
+    }
+
+    #[test]
+    fn only_the_text_edits_ask_for_a_field() {
+        assert!(!WorkspacePromptKind::BranchActions.asks_for_text());
+        assert!(!WorkspacePromptKind::Remove.asks_for_text());
+        assert!(WorkspacePromptKind::Create.asks_for_text());
+        assert!(WorkspacePromptKind::CreateStacked.asks_for_text());
+        assert!(WorkspacePromptKind::SetTarget.asks_for_text());
+        assert!(WorkspacePromptKind::SetParent.asks_for_text());
+        assert!(WorkspacePromptKind::MoveToStack.asks_for_text());
+    }
+
+    #[test]
+    fn every_kind_has_a_distinct_label() {
+        let kinds = [
+            WorkspacePromptKind::BranchActions,
+            WorkspacePromptKind::Create,
+            WorkspacePromptKind::CreateStacked,
+            WorkspacePromptKind::SetTarget,
+            WorkspacePromptKind::SetParent,
+            WorkspacePromptKind::MoveToStack,
+            WorkspacePromptKind::Remove,
+        ];
+        for (i, kind) in kinds.iter().enumerate() {
+            for other in &kinds[i + 1..] {
+                assert_ne!(kind.title(), other.title());
+                assert_ne!(kind.confirm_label(), other.confirm_label());
+            }
+        }
+    }
+
+    #[test]
+    fn the_detail_line_names_the_branch_and_says_history_is_rewritten() {
+        let line = detail_line(
+            WorkspacePromptKind::SetParent,
+            "feature/api",
+            "main",
+        );
+        assert!(line.contains("feature/api"), "{line}");
+        assert!(line.contains("rebased"), "{line}");
+    }
+
+    #[test]
+    fn an_empty_base_makes_the_branch_independent() {
+        let line = detail_line(WorkspacePromptKind::SetParent, "feature/api", "");
+        assert!(line.contains("independent"), "{line}");
+    }
+
+    #[test]
+    fn removing_says_the_git_branch_is_kept() {
+        let line = detail_line(WorkspacePromptKind::Remove, "feature/api", "");
+        assert!(line.contains("kept"), "{line}");
+    }
+}

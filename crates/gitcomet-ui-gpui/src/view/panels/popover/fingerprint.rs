@@ -249,6 +249,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::CommitShaLinkMenu { repo_id, .. }
         | PopoverKind::LocalFileLinkMenu { repo_id, .. }
         | PopoverKind::ReflogEntryMenu { repo_id, .. }
+        | PopoverKind::WorkspacePrompt { repo_id, .. }
         | PopoverKind::HookActivity { repo_id, .. } => Some(*repo_id),
     }?;
 
@@ -263,6 +264,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::UpstreamPicker { .. }
         | PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::RenameBranchPrompt { .. }
+        | PopoverKind::WorkspacePrompt { .. }
         | PopoverKind::BranchMenu { .. }
         | PopoverKind::BranchSectionMenu { .. }
         // The group menu's branch count and the pinned menu's "Unpin all (N)"
@@ -617,6 +619,13 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             repo_id.hash(hasher);
             name.hash(hasher);
             is_current_branch.hash(hasher);
+        }
+        PopoverKind::WorkspacePrompt { repo_id, prompt } => {
+            123u8.hash(hasher);
+            repo_id.hash(hasher);
+            prompt.kind.hash(hasher);
+            prompt.branch.hash(hasher);
+            prompt.value.hash(hasher);
         }
         PopoverKind::CheckoutRemoteBranchPrompt {
             repo_id,
