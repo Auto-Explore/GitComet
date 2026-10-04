@@ -188,7 +188,107 @@ impl GixRepo {
         Ok(commit)
     }
 
-    // ── The workspace branch ─────────────────────────────────────
+    // ── The working directory ────────────────────────────────────
+
+/// Whether the working directory is currently sitting on the workspace branch.
+///
+/// This is what decides whether a rebuild should also move the files: a
+/// workspace the user is not looking at has no business changing their
+/// working tree, and one they are looking at has to follow.
+pub(super) fn workspace_is_checked_out(&self) -> bool {
+    self.current_branch_impl()
+        .map(|branch| branch == WORKSPACE_BRANCH)
+        .unwrap_or(false)
+}
+
+/// Put the working directory on the workspace branch, building it first if it
+/// does not exist yet.
+///
+/// The checkout is git's own, so its rule applies: local changes that the
+/// switch would overwrite are refused rather than carried, and nothing is
+/// discarded. That refusal is the whole safety story of this feature — the
+/// user is told which move failed and why, and gitcomet/workspace has not been
+/// created and left half-applied behind.
+pub(super) fn enter_workspace_impl(&self) -> Result<CommitId> {
+    if self.resolve_revision(WORKSPACE_BRANCH)?.is_none() {
+        let state = self.read_workspace_impl()?;
+        let applied = state.application_order()?;
+        let names: Vec<&str> = applied.iter().map(|branch| branch.name.as_str()).collect();
+        self.update_workspace_branch_impl(&names)?;
+    }
+    let tip = self.require_revision(WORKSPACE_BRANCH)?;
+
+    let mut cmd = self.git_plumbing();
+    cmd.arg("checkout")
+        // Submodules are the user's business, not a side effect of which
+        // virtual branches happen to be applied.
+        .arg("--no-recurse-submodules")
+        .arg(WORKSPACE_BRANCH);
+    run_git_simple(cmd, "git checkout").map_err(|error| {
+        Error::new(ErrorKind::Backend(format!(
+            "could not switch the working directory to the workspace: {error}\n\n\
+             GitComet will not discard uncommitted changes. Commit or stash \
+             them, then try again."
+        )))
+    })?;
+    Ok(tip)
+}
+
+/// Take the working directory back off the workspace branch and onto `onto`.
+///
+/// `onto` is the branch the user was on before they entered the workspace, so
+/// this is the inverse of [`Self::enter_workspace_impl`] and carries the same
+/// refusal rule.
+pub(super) fn leave_workspace_impl(&self, onto: &str) -> Result<()> {
+    self.require_revision(onto)?;
+    let mut cmd = self.git_plumbing();
+    cmd.arg("checkout")
+        .arg("--no-recurse-submodules")
+        .arg(onto);
+    run_git_simple(cmd, "git checkout").map_err(|error| {
+        Error::new(ErrorKind::Backend(format!(
+            "could not switch back to '{onto}': {error}\n\n\
+             GitComet will not discard uncommitted changes. Commit or stash \
+             them, then try again."
+        )))
+    })
+}
+
+/// Move the working directory from one workspace tree to another.
+///
+/// This is the two-way tree switch `git checkout` performs internally, and it is
+/// the reason applying a branch does not throw away work: a file the user has
+/// edited and that the applied-set change does *not* touch keeps its edit and
+/// takes the new committed version underneath it, while a file that is both
+/// edited *and* changed by the switch is refused outright — git's own rule, and
+/// the correct one, because there is no automatic answer to that conflict.
+///
+/// The index and working tree are verified before anything is written, so a
+/// refusal leaves both exactly as they were. Callers must therefore do this
+/// *before* moving the workspace ref, not after, or the two would disagree.
+pub(super) fn sync_workspace_workdir_impl(
+    old_tip: &CommitId,
+    new_tip: &CommitId,
+) -> Result<()> {
+    if old_tip == new_tip {
+        return Ok(());
+    }
+    let mut cmd = self.git_plumbing();
+    cmd.arg("read-tree")
+        .arg("-u")
+        .arg("-m")
+        .arg(old_tip.as_ref())
+        .arg(new_tip.as_ref());
+    run_git_simple(cmd, "git read-tree").map_err(|error| {
+        Error::new(ErrorKind::Backend(format!(
+            "could not update the working directory: {error}\n\n\
+             GitComet will not discard uncommitted changes. Commit or stash \
+             the files above, then try again."
+        )))
+    })
+}
+
+// ── The workspace branch ─────────────────────────────────────
 
     pub(super) fn update_workspace_branch_impl(&self, applied: &[&str]) -> Result<CommitId> {
         let state = self.read_workspace_impl()?;
@@ -232,6 +332,18 @@ impl GixRepo {
             if existing.as_ref() == Some(&head) {
                 return Ok(head);
             }
+        }
+
+        // The working directory follows only when the user is looking at the
+        // workspace; a rebuild of a workspace nobody has entered must not touch
+        // their files.
+        //
+        // Syncing *before* the ref moves is the whole ordering here. A refused
+        // sync leaves the index and the working tree exactly as they were, and
+        // with the ref still on the old tree the two cannot disagree.
+        let previous = self.resolve_revision(WORKSPACE_BRANCH)?;
+        if let Some(previous) = previous.as_ref().filter(|_| self.workspace_is_checked_out()) {
+            self.sync_workspace_workdir_impl(previous, &head)?;
         }
 
         self.update_workspace_ref(&head)?;

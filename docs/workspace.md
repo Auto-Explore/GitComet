@@ -150,6 +150,47 @@ Changing the target rebases the independent branches onto the new one and
 rebuilds the workspace. Branches stacked on another virtual branch are not
 rebased at that point; they move when their base does.
 
+## How the workspace reaches the working directory
+
+The workspace branch is not decoration: while the user is inside the Workspace
+view, the working directory *is* `gitcomet/workspace`. Apply, unapply, create,
+commit and re-target all rebuild that branch and then move the working
+directory onto it, which is what makes a branch's changes actually appear in the
+files.
+
+Rebuilding the ref is plumbing (`merge-tree` + `commit-tree`) and never touches
+the files. Moving the files onto it is a separate, deliberate step:
+
+```
+git checkout --no-recurse-submodules gitcomet/workspace   # entering
+git read-tree -u -m <old-tip> <new-tip>                  # following a rebuild
+git checkout --no-recurse-submodules <previous-branch>   # leaving
+```
+
+`read-tree -u -m` is the two-way tree switch `git checkout` performs internally.
+Its behaviour is the safety property of the whole feature:
+
+- a file the user has edited and that the applied-set change does *not* touch
+  **keeps the edit** and takes the new committed version underneath it;
+- a file that is both edited *and* changed by the switch is **refused**, with
+  the blocking file named — git's own rule, and the correct one, because there
+  is no automatic answer to that conflict.
+
+The sync runs *before* the ref is moved, so a refusal leaves the index, the
+working tree and the ref all exactly as they were. There is no state in which
+they disagree.
+
+A rebuild only touches the working directory when the workspace is actually
+checked out; a workspace the user has not entered never changes their files.
+
+### Not wired up yet
+
+The backend above is implemented and its behaviour verified against real git.
+It is **not yet reachable from the UI**: nothing calls `enter_workspace_impl`
+or `leave_workspace_impl`, and no state records which branch to return to when
+the user leaves. Until that wiring exists, apply/unapply rebuild the ref and
+the user still sees no change in their files.
+
 ## The workspace branch
 
 GitComet keeps a branch called `gitcomet/workspace` that holds the combined
@@ -374,8 +415,8 @@ gesture. Everything else in `WorkspaceEdit` has a control.
 | --- | --- | --- |
 | 1 | Workspace view | done — third sidebar tab, existing tabs untouched |
 | 2 | Existing branch workflow kept | done |
-| 3 | Multiple virtual branches in one directory | done — `gitcomet/workspace` |
-| 4 | Apply / unapply | done — row button, rebuilds on change |
+| 3 | Multiple virtual branches in one directory | backend done, **not wired to the view** |
+| 4 | Apply / unapply | backend done, **not wired to the view** |
 | 5 | Independent virtual branches | done |
 | 6 | Stacked / dependent branches | done |
 | 7 | Create branches above/below existing ones | done — `WorkspaceEdit::InsertRelativeTo`, two distinct edits |
@@ -384,7 +425,7 @@ gesture. Everything else in `WorkspaceEdit` has a control.
 | 10 | Assign files to virtual branches | done |
 | 11 | Assign individual hunks | done — `HunkFingerprint`, diff hunk menu |
 | 12 | Maintain `gitcomet/workspace` | done |
-| 13 | Auto-update when the applied set changes | done |
+| 13 | Auto-update when the applied set changes | done — and moves the working directory when the workspace is checked out |
 | 14 | Prevent direct commits to `gitcomet/workspace` | structurally — see below |
 | 15 | Configurable target branch | done |
 | 16 | Rebase when the target changes | done |
