@@ -99,6 +99,9 @@ pub(in super::super) struct BottomStatusBarView {
     extension_items: Vec<(Option<gitcomet_extension_api::ViewTarget>, gpui::AnyView)>,
     active_view: gitcomet_extension_api::ViewTarget,
     edition_strip: Option<gpui::AnyView>,
+    /// Repositories with an open embedded terminal, for the terminal toggle.
+    open_terminal_repo_ids: rustc_hash::FxHashSet<RepoId>,
+    terminal_button_target: TerminalButtonTarget,
     #[cfg(any(test, feature = "benchmarks"))]
     pub(in crate::view) render_count: usize,
 }
@@ -135,9 +138,35 @@ impl BottomStatusBarView {
             extension_items: Vec::new(),
             active_view: gitcomet_extension_api::ViewTarget::History,
             edition_strip: None,
+            open_terminal_repo_ids: Default::default(),
+            terminal_button_target: TerminalButtonTarget::default(),
             #[cfg(any(test, feature = "benchmarks"))]
             render_count: 0,
         }
+    }
+
+    pub(in super::super) fn set_open_terminal_repo_ids(
+        &mut self,
+        next: rustc_hash::FxHashSet<RepoId>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.open_terminal_repo_ids == next {
+            return;
+        }
+        self.open_terminal_repo_ids = next;
+        cx.notify();
+    }
+
+    pub(in super::super) fn set_terminal_button_target(
+        &mut self,
+        target: TerminalButtonTarget,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.terminal_button_target == target {
+            return;
+        }
+        self.terminal_button_target = target;
+        cx.notify();
     }
 
     #[cfg(test)]
@@ -365,6 +394,41 @@ impl Render for BottomStatusBarView {
                     "Show details panel".into()
                 } else {
                     "Hide details panel".into()
+                },
+            );
+
+        // The terminal opens under the main area; its toggle sits with the
+        // other panel toggles. It is selected while the embedded terminal is
+        // open; launching an external one is momentary.
+        let terminal_opens_external = self.terminal_button_target == TerminalButtonTarget::External;
+        let terminal_is_open = !terminal_opens_external
+            && self
+                .state
+                .active_repo
+                .is_some_and(|repo_id| self.open_terminal_repo_ids.contains(&repo_id));
+        let terminal_toggle = components::Button::new("terminal", "")
+            .start_slot(svg_icon(
+                "icons/terminal.svg",
+                theme.colors.foreground.secondary,
+                scaled_px(16.0),
+            ))
+            .style(components::ButtonStyle::Transparent)
+            .selected(terminal_is_open)
+            .disabled(self.state.active_repo.is_none())
+            .on_click(theme, cx, |this, _e, window, cx| {
+                let _ = this.root_view.update(cx, |root, cx| {
+                    root.activate_terminal_button_for_active_repo(window, cx);
+                });
+            })
+            .debug_selector(|| "terminal".to_string())
+            .gitcomet_tooltip(
+                theme,
+                if terminal_opens_external {
+                    "Open external terminal".into()
+                } else if terminal_is_open {
+                    "Hide terminal".into()
+                } else {
+                    "Show terminal".into()
                 },
             );
 
@@ -659,6 +723,7 @@ impl Render for BottomStatusBarView {
                             })
                             .map(|(_, view)| view.clone()),
                     )
+                    .child(terminal_toggle)
                     .child(details_toggle)
                     .child(hook_activity_button)
                     .child({

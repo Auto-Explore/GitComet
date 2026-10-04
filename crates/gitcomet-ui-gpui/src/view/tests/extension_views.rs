@@ -217,8 +217,8 @@ fn the_views_are_tabs_in_the_action_bar(cx: &mut gpui::TestAppContext) {
         tabs.left() >= right.left() && tabs.right() <= right.right(),
         "the tabs belong to the right group: {tabs:?} in {right:?}"
     );
-    let terminal = cx.debug_bounds("terminal").expect("Terminal");
-    assert!(tabs.right() <= terminal.left(), "the tabs lead it");
+    let branch = cx.debug_bounds("create_branch").expect("Branch");
+    assert!(tabs.right() <= branch.left(), "the tabs lead it");
     for (selector, label) in [
         ("repository_view_history", "repository_view_history_label"),
         ("repository_view_0", "repository_view_0_label"),

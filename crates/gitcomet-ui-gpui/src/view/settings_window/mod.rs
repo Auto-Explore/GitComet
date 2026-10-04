@@ -320,7 +320,7 @@ enum SettingsSection {
     DateFormat,
     Timezone,
     TerminalExternal,
-    TerminalActionBar,
+    TerminalButton,
     ChangeTracking,
     FileListLayout,
     DiffContentMode,
@@ -349,7 +349,7 @@ impl SettingsSection {
             | Self::ExternalCodeEditor
             | Self::DateFormat
             | Self::Timezone => SettingsCategory::General,
-            Self::TerminalExternal | Self::TerminalActionBar => SettingsCategory::Terminal,
+            Self::TerminalExternal | Self::TerminalButton => SettingsCategory::Terminal,
             Self::ChangeTracking => SettingsCategory::ChangeTracking,
             Self::FileListLayout => SettingsCategory::ChangeTracking,
             Self::DiffContentMode | Self::Diff | Self::DiffViewMode | Self::DiffTabSize => {
@@ -495,7 +495,7 @@ impl SettingsCategory {
                  git+ssh ssh+git remote markdown images load image tracking pixels updates \
                  automatically check updates startup"
             }
-            Self::Terminal => "terminal external terminal action bar terminal button opens",
+            Self::Terminal => "terminal external terminal button opens status bar",
             Self::ChangeTracking => "change tracking untracked files",
             Self::Diff => {
                 "diff mode scroll sync show whitespace changes reveal whitespace characters \
