@@ -171,7 +171,7 @@ impl GitCometView {
         self.update_ui_preferences(cx, move |preferences| {
             preferences.terminal = next;
         });
-        self.sync_action_bar_terminal_target(cx);
+        self.sync_terminal_button_target(cx);
         cx.notify();
     }
 
@@ -201,9 +201,9 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        match self.terminal_preferences.action_bar_terminal_target {
-            ActionBarTerminalTarget::Embedded => self.toggle_terminal_for_active_repo(window, cx),
-            ActionBarTerminalTarget::External => {
+        match self.terminal_preferences.terminal_button_target {
+            TerminalButtonTarget::Embedded => self.toggle_terminal_for_active_repo(window, cx),
+            TerminalButtonTarget::External => {
                 if let Some(repo_id) = self.active_repo_id() {
                     self.open_external_terminal_for_repo(repo_id, cx);
                 }
@@ -238,22 +238,22 @@ impl GitCometView {
             .copied()
             .collect::<FxHashSet<RepoId>>();
         let repo_tabs_bar = self.repo_tabs_bar.clone();
-        let action_bar = self.action_bar.clone();
+        let status_bar = self.bottom_status_bar.clone();
         let popover_host = self.popover_host.clone();
         cx.defer(move |cx| {
             repo_tabs_bar.update(cx, |bar, cx| {
                 bar.set_open_terminal_repo_ids(repo_ids.clone(), cx)
             });
-            action_bar.update(cx, |bar, cx| bar.set_open_terminal_repo_ids(repo_ids, cx));
+            status_bar.update(cx, |bar, cx| bar.set_open_terminal_repo_ids(repo_ids, cx));
             popover_host.update(cx, |host, cx| host.dismiss_stale_terminal_menu(cx));
         });
     }
 
-    pub(in crate::view) fn sync_action_bar_terminal_target(&self, cx: &mut gpui::Context<Self>) {
-        let target = self.terminal_preferences.action_bar_terminal_target;
-        let action_bar = self.action_bar.clone();
+    pub(in crate::view) fn sync_terminal_button_target(&self, cx: &mut gpui::Context<Self>) {
+        let target = self.terminal_preferences.terminal_button_target;
+        let status_bar = self.bottom_status_bar.clone();
         cx.defer(move |cx| {
-            action_bar.update(cx, |bar, cx| bar.set_action_bar_terminal_target(target, cx));
+            status_bar.update(cx, |bar, cx| bar.set_terminal_button_target(target, cx));
         });
     }
 

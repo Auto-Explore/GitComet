@@ -2032,7 +2032,7 @@ impl GitCometView {
         };
 
         view.set_theme(initial_theme, cx);
-        view.sync_action_bar_terminal_target(cx);
+        view.sync_terminal_button_target(cx);
         for reason in entry_denials {
             view.push_toast(components::ToastKind::Warning, reason.to_string(), cx);
         }
