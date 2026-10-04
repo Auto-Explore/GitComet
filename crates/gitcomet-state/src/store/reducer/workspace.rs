@@ -13,7 +13,7 @@ use crate::model::{
 };
 use crate::msg::Effect;
 use gitcomet_core::workspace::{AssignmentIndex, BranchApplyState, WorkspaceState};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// The Workspace view asks for its data; nothing else does, so a repository
@@ -379,7 +379,20 @@ pub(super) fn workspace_loaded(
         }
         Err(error) => repo.workspace.state = Loadable::Error(error.clone()),
     };
-    if let Ok(index) = assignments {
+    if let Ok(mut index) = assignments {
+        // A branch that was removed from the workspace must not leave its file
+        // assignments behind: re-creating a branch with the same name would
+        // otherwise silently re-adopt files the user assigned to it months ago,
+        // which is a change nobody asked for and cannot see.
+        //
+        // Only the branch half is pruned here. Dropping assignments for paths
+        // Git no longer reports as changed needs a diff, and that belongs to
+        // the effects layer; doing it without one would drop assignments for
+        // files that are merely unmodified at this instant — the very mistake
+        // the assignments file exists to avoid.
+        if let Some(state) = repo.workspace.workspace().cloned() {
+            index.retain(&state, &|_| true, None);
+        }
         repo.workspace.assignments = Arc::new(index);
     }
     // A reload can land while the working directory is sitting on the workspace
@@ -678,6 +691,59 @@ mod tests {
             "git named none, so there are none to show"
         );
         assert_eq!(conflict.summary(), "ui could not be applied");
+    }
+
+    #[test]
+    fn loading_drops_assignments_naming_a_branch_that_is_gone() {
+        // Without this, removing `api` from the workspace and re-creating it
+        // later silently hands it every file it was ever given, with no action
+        // from the user and nothing on screen saying so.
+        let mut state = repo_with_workspace();
+        let mut index = AssignmentIndex::new();
+        index.set(PathBuf::from("live.rs"), Some("api".into()));
+        index.set(PathBuf::from("gone.rs"), Some("removed".into()));
+
+        // `repo_with_workspace` has api and ui, so `removed` is the odd one out.
+        workspace_loaded(
+            &mut state,
+            RepoId(1),
+            Ok(WorkspaceState::new("main").with_branches(vec![VirtualBranch::new("api")])),
+            Ok(index),
+            Ok(None),
+        );
+
+        let assignments = &state.repos[0].workspace.assignments;
+        assert_eq!(assignments.branch_of(Path::new("live.rs")), Some("api"));
+        assert!(
+            assignments.file(Path::new("gone.rs")).is_none(),
+            "an assignment for a branch that no longer exists has nothing to act on"
+        );
+    }
+
+    #[test]
+    fn loading_keeps_assignments_for_files_that_are_merely_unmodified() {
+        // The whole reason assignments live in a file rather than being derived
+        // from the diff: a file that is saved-but-unchanged must keep its branch.
+        let mut state = repo_with_workspace();
+        let mut index = AssignmentIndex::new();
+        index.set(PathBuf::from("clean.rs"), Some("api".into()));
+
+        workspace_loaded(
+            &mut state,
+            RepoId(1),
+            Ok(WorkspaceState::new("main").with_branches(vec![VirtualBranch::new("api")])),
+            Ok(index),
+            Ok(None),
+        );
+
+        assert_eq!(
+            state.repos[0]
+                .workspace
+                .assignments
+                .branch_of(Path::new("clean.rs")),
+            Some("api"),
+            "pruning here must not turn this into a diff-derived answer"
+        );
     }
 
     #[test]

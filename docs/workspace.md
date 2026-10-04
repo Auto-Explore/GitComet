@@ -261,6 +261,13 @@ therefore keeps its branch across edits made while it is unmodified — the
 alternative would silently move a file to "Unassigned" the moment someone
 saved it and nothing changed.
 
+That is also why an assignment is **not** dropped merely because Git does not
+currently report its path as changed. Assignments naming a branch that has been
+removed from the workspace *are* dropped, when the workspace loads: otherwise
+re-creating a branch with a name the user had used before would silently hand
+it every file it was ever given, with no action from the user and nothing on
+screen to show.
+
 Assignment also works **per hunk**: one file can have its changes split across
 several branches. See below.
 
