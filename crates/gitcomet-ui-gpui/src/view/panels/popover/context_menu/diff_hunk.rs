@@ -38,6 +38,30 @@ fn diff_hunk_primary_action(
     }
 }
 
+/// The workspace-assign entry for this hunk, when there is one to offer.
+///
+/// Assigning a hunk is a workspace action, so it is only offered when the diff
+/// on screen really is an uncommitted change to a file. For a commit's diff the
+/// question has no answer — that change is already committed to something — and
+/// a hunk with no rendered diff has no fingerprint to record.
+///
+/// Pure, so the rule can be tested without standing up a popover host.
+fn workspace_assign_action(
+    repo_id: RepoId,
+    src_ix: usize,
+    diff_target: Option<&DiffTarget>,
+    fingerprint: Option<gitcomet_core::workspace::HunkFingerprint>,
+) -> Option<ContextMenuAction> {
+    let DiffTarget::WorkingTree { path, .. } = diff_target? else {
+        return None;
+    };
+    Some(ContextMenuAction::AssignHunkToWorkspace {
+        repo_id,
+        path: path.clone(),
+        hunk: fingerprint?,
+    })
+}
+
 pub(super) fn model(
     this: &PopoverHost,
     repo_id: RepoId,
@@ -85,26 +109,20 @@ pub(super) fn model(
     // Assigning a hunk is a workspace action, so it is only offered when the
     // diff on screen really is an uncommitted change to a file — not a commit's
     // diff, where "which branch commits this" has no answer.
-    if let Some(DiffTarget::WorkingTree { path, .. }) = diff_target {
-        if let Some(hunk) = pane
-            .rendered_patch_diff_loadable()
-            .and_then(|Loadable::Ready(diff)| {
-                crate::view::diff_utils::hunk_fingerprint(diff.lines.as_slice(), src_ix)
-            })
-        {
-            items.push(ContextMenuItem::Separator);
-            items.push(ContextMenuItem::Entry {
-                label: "Assign to a branch...".into(),
-                icon: Some("icons/git_branch.svg".into()),
-                shortcut: None,
-                disabled: false,
-                action: Box::new(ContextMenuAction::AssignHunkToWorkspace {
-                    repo_id,
-                    path: path.clone(),
-                    hunk,
-                }),
-            });
-        }
+    let fingerprint = pane
+        .rendered_patch_diff_loadable()
+        .and_then(|Loadable::Ready(diff)| {
+            crate::view::diff_utils::hunk_fingerprint(diff.lines.as_slice(), src_ix)
+        });
+    if let Some(action) = workspace_assign_action(repo_id, src_ix, diff_target, fingerprint) {
+        items.push(ContextMenuItem::Separator);
+        items.push(ContextMenuItem::Entry {
+            label: "Assign to a branch...".into(),
+            icon: Some("icons/git_branch.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(action),
+        });
     }
 
     ContextMenuModel::new(items)
@@ -113,6 +131,45 @@ pub(super) fn model(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_uncommitted_hunk_can_be_assigned_to_a_workspace_branch() {
+        let target =
+            DiffTarget::working_tree(std::path::PathBuf::from("src/lib.rs"), DiffArea::Unstaged);
+        let fingerprint = gitcomet_core::workspace::HunkFingerprint::of(&["NEW\n"], 1);
+
+        assert!(matches!(
+            workspace_assign_action(RepoId(1), 3, Some(&target), Some(fingerprint)),
+            Some(ContextMenuAction::AssignHunkToWorkspace {
+                repo_id: RepoId(1),
+                path,
+                hunk,
+            }) if path == std::path::PathBuf::from("src/lib.rs") && hunk == fingerprint
+        ));
+    }
+
+    #[test]
+    fn a_commits_diff_cannot_be_assigned_to_a_branch() {
+        // The change is already committed to something, so there is no honest
+        // answer to "which virtual branch commits this" — offering the entry
+        // would be offering a question with no answer.
+        let target = DiffTarget::commit(
+            gitcomet_core::domain::CommitId("abc123".into()),
+            std::path::PathBuf::from("src/lib.rs"),
+        );
+        let fingerprint = gitcomet_core::workspace::HunkFingerprint::of(&["NEW\n"], 1);
+        assert!(workspace_assign_action(RepoId(1), 3, Some(&target), Some(fingerprint)).is_none());
+    }
+
+    #[test]
+    fn a_hunk_with_no_rendered_diff_is_not_offered() {
+        // Nothing rendered means no fingerprint to record, and an assignment
+        // keyed by one would be an entry the user can fill in that never
+        // resolves at commit time.
+        let target =
+            DiffTarget::working_tree(std::path::PathBuf::from("src/lib.rs"), DiffArea::Unstaged);
+        assert!(workspace_assign_action(RepoId(1), 3, Some(&target), None).is_none());
+    }
 
     #[test]
     fn unstaged_target_uses_stage_shortcut_and_action() {
