@@ -172,7 +172,15 @@ impl GixRepo {
             return Ok(branch_id);
         }
 
-        let tree = self.merge_tree(&branch_id, &onto_id)?;
+        let tree = match self.merge_tree(&branch_id, &onto_id) {
+            MergeOutcome::Merged(tree) => tree,
+            MergeOutcome::Conflicted { paths } => {
+                return Err(Error::new(ErrorKind::Backend(format!(
+                    "'{name}' cannot be moved onto '{onto}': they conflict in {}",
+                    describe_paths(&paths)
+                ))));
+            }
+        };
         let commit = self.commit_tree(
             &tree,
             &[&onto_id],
@@ -299,6 +307,10 @@ pub(super) fn sync_workspace_workdir_impl(
         // set cannot survive into the new one.
         let mut head = target_id.clone();
         let mut merged_any = false;
+        // The branches already folded into `head`, so a conflict can be reported
+        // as the pair it actually is. `head` is one merge commit by this point
+        // and cannot say which of them is in the way.
+        let mut merged: Vec<&str> = Vec::new();
 
         for name in applied {
             let branch_id = self.require_revision(name)?;
@@ -308,13 +320,14 @@ pub(super) fn sync_workspace_workdir_impl(
                 continue;
             }
             let tree = match self.merge_tree(&branch_id, &head) {
-                Ok(tree) => tree,
-                Err(error) => {
-                    return Err(Error::new(ErrorKind::Backend(format!(
-                        "cannot apply '{name}': {error}\n\n\
-                         Two applied branches changed the same files. \
-                         Unapply one of them, or resolve the conflict before applying it again."
-                    ))))
+                MergeOutcome::Merged(tree) => tree,
+                MergeOutcome::Conflicted { paths } => {
+                    let against = self.blames_conflict_on(name, &merged, &target_id);
+                    return Err(Error::new(ErrorKind::Backend(conflict_message(
+                        name,
+                        against.as_deref(),
+                        &paths,
+                    ))));
                 }
             };
             // Every merge gets its own commit so the workspace history shows
@@ -322,6 +335,7 @@ pub(super) fn sync_workspace_workdir_impl(
             // replay rather than an edit of history that has been pushed.
             let message = format!("Apply {name}");
             head = self.commit_tree(&tree, &[&head], &message)?;
+            merged.push(name);
             merged_any = true;
         }
 
@@ -624,7 +638,7 @@ pub(super) fn sync_workspace_workdir_impl(
     /// Requires Git 2.38 or newer. Older Git reports it as an unknown option,
     /// which is surfaced as a workspace-specific error rather than a generic
     /// command failure.
-    fn merge_tree(&self, ours: &CommitId, theirs: &CommitId) -> Result<CommitId> {
+    fn merge_tree(&self, ours: &CommitId, theirs: &CommitId) -> MergeOutcome {
         let mut cmd = self.git_plumbing();
         cmd.arg("merge-tree")
             .arg("--write-tree")
@@ -634,16 +648,29 @@ pub(super) fn sync_workspace_workdir_impl(
             .arg(theirs.as_ref());
 
         match run_git_capture(cmd, "git merge-tree") {
-            Ok(out) => Ok(CommitId(
+            Ok(out) => MergeOutcome::Merged(CommitId(
                 out.lines().next().unwrap_or_default().trim().into(),
             )),
-            // A conflicted merge exits non-zero, so `run_git_capture` reports it
-            // as a command failure. The tree it wanted to write is not usable,
-            // and the caller names the branches involved.
-            Err(error) => Err(Error::new(ErrorKind::Backend(format!(
-                "the two branches conflict and cannot both be applied: {error}"
-            )))),
+            Err(error) => MergeOutcome::Conflicted {
+                paths: conflicted_paths(&error),
+            },
         }
+    }
+
+    /// The paths `from` and `to` disagree about.
+    ///
+    /// Used only when a merge has already failed, to work out which of the
+    /// branches already applied is the one actually in the way — the pair the
+    /// user has to act on, which the merge itself cannot name because from its
+    /// side the other branches are already merged into one tree.
+    fn changed_paths(&self, from: &CommitId, to: &CommitId) -> Result<Vec<String>> {
+        let mut cmd = self.git_plumbing();
+        cmd.arg("diff")
+            .arg("--name-only")
+            .arg(from.as_ref())
+            .arg(to.as_ref());
+        let out = run_git_capture(cmd, "git diff --name-only")?;
+        Ok(out.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect())
     }
 
     /// Create a commit from `tree` with the given parents.
@@ -689,6 +716,109 @@ pub(super) fn sync_workspace_workdir_impl(
         crate::util::run_git_simple(cmd, &label)?;
         Ok(CommandOutput::empty_success(label))
     }
+}
+
+/// Which already-applied branch is the one `name` conflicts with.
+///
+/// The conflict is over paths, and a branch is only in the way if it changed
+/// some of the same ones. Whichever already-merged branch overlaps the most is
+/// the best answer the merge can give, and saying "feature/ui conflicts with
+/// feature/api" is the difference between a message the user can act on and one
+/// they have to go and guess at.
+fn blames_conflict_on(
+    &self,
+    name: &str,
+    merged: &[&str],
+    target_id: &CommitId,
+) -> Option<String> {
+    let branch_id = self.resolve_revision(name).ok()??;
+    let wanted: Vec<String> = self
+        .changed_paths(target_id, &branch_id)
+        .unwrap_or_default();
+    if wanted.is_empty() {
+        return None;
+    }
+    merged
+        .iter()
+        .filter_map(|other| {
+            let other_id = self.resolve_revision(other).ok()??;
+            let overlap = self
+                .changed_paths(target_id, &other_id)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|path| wanted.contains(path))
+                .count();
+            (overlap > 0).then(|| (overlap, (*other).to_string()))
+        })
+        .max_by_key(|(overlap, _)| *overlap)
+        .map(|(_, name)| name)
+}
+
+/// The conflict as the user is shown it: which branch, against which, where.
+fn conflict_message(name: &str, against: Option<&str>, paths: &[String]) -> String {
+    match against {
+        Some(against) => format!(
+            "'{name}' conflicts with '{against}' in {}\n\n\
+             Both are applied, and both changed the same lines. Unapply one of \
+             them, or resolve the conflict before applying {name} again.",
+            describe_paths(paths)
+        ),
+        None => format!(
+            "'{name}' could not be applied: it conflicts with the branches \
+             already in the workspace, in {}\n\n\
+             Unapply one of them, or resolve the conflict before applying \
+             {name} again.",
+            describe_paths(paths)
+        ),
+    }
+}
+
+/// The conflicting paths as a readable list, or a sentence when git named none.
+fn describe_paths(paths: &[String]) -> String {
+    match paths {
+        [] => "files git did not name".to_string(),
+        [one] => one.clone(),
+        many => format!("{} (and {} more)", many[0], many.len() - 1),
+    }
+}
+
+/// What a merge of two trees produced.
+enum MergeOutcome {
+    /// The tree, ready to commit.
+    Merged(CommitId),
+    /// The paths git could not merge.
+    ///
+    /// A conflict is not an error condition in the caller: the workspace is
+    /// still valid, it just cannot take this branch, and the user has to be
+    /// told which two branches are in the way rather than being handed a bare
+    /// "merge failed".
+    Conflicted { paths: Vec<String> },
+}
+
+/// The paths `git merge-tree` reported as conflicted.
+///
+/// On failure git writes everything to **stdout** and nothing to stderr: the
+/// tree it would have written, then one `<mode> <oid> <stage>\t<path>` line per
+/// conflicted entry, then blank-line-separated messages. Reading stderr — which
+/// is what an error built from a failed command usually does — yields an empty
+/// string, which is why a conflict used to arrive at the user with no detail at
+/// all.
+///
+/// Stage 1 is the merge base and appears for every conflicted path, so only the
+/// higher stages are paths git actually marked as conflicted.
+fn conflicted_paths(error: &Error) -> Vec<String> {
+    let ErrorKind::Git(failure) = error.kind() else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(failure.stdout())
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let (meta, path) = line.split_once('\t')?;
+            let stage = meta.split_whitespace().nth(2)?;
+            (stage != "1").then(|| path.to_string())
+        })
+        .collect()
 }
 
 /// The merge base of two commits, or `ours` when they share no history.
@@ -919,6 +1049,68 @@ mod tests {
             "x\n",
             "the applied branch's change is no longer in the files"
         );
+    }
+
+    #[test]
+    fn a_conflict_names_the_applied_branch_that_is_in_the_way() {
+        // Two branches that both change the same line cannot both be applied,
+        // and the message has to say which pair: the merge itself only knows
+        // that the branch it was adding does not fit, because the others are
+        // already one merged tree by the time it runs.
+        let (temp, repo) = repo_with_two_branches();
+        git(
+            temp.path(),
+            &["checkout", "api"],
+        );
+        std::fs::write(temp.path().join("moved.txt"), "from-api\n").unwrap();
+        git(temp.path(), &["commit", "-am", "clash"]);
+
+        let error = repo
+            .update_workspace_branch(&["api", "ui"])
+            .expect_err("api and ui now change the same line");
+        let message = error.to_string();
+        assert!(
+            message.contains("'api' conflicts with 'ui'"),
+            "the message names both branches, got: {message}"
+        );
+        assert!(
+            message.contains("moved.txt"),
+            "and the file they clash in, got: {message}"
+        );
+    }
+
+    #[test]
+    fn conflicted_paths_are_read_from_stdout_because_stderr_is_empty() {
+        // git writes the conflict to stdout and exits non-zero. Reading stderr
+        // — the obvious thing — yields nothing at all.
+        let error = Error::new(ErrorKind::Git(gitcomet_core::error::GitFailure::new(
+            "git merge-tree",
+            gitcomet_core::error::GitFailureId::CommandFailed,
+            Some(1),
+            b"0d69e0ee71279a47cf8802e7400473e50e196110\n\
+              100644 aaa 1\tsrc/a.rs\n\
+              100644 bbb 2\tsrc/a.rs\n\
+              100644 ccc 3\tsrc/a.rs\n\
+              100644 ddd 1\tsrc/b.rs\n\
+              100644 eee 2\tsrc/b.rs\n\
+              100644 fff 3\tsrc/b.rs\n\
+              \nAuto-merging src/a.rs\nCONFLICT (content): Merge conflict in src/a.rs\n"
+                .to_vec(),
+            Vec::new(),
+            None,
+        )));
+        assert_eq!(
+            conflicted_paths(&error),
+            ["src/a.rs", "src/a.rs", "src/a.rs", "src/b.rs", "src/b.rs", "src/b.rs"],
+            "every stage above the base is a conflicted entry"
+        );
+    }
+
+    #[test]
+    fn a_backend_error_names_no_conflicting_paths_rather_than_guessing() {
+        let error = Error::new(ErrorKind::Backend("something else failed".into()));
+        assert!(conflicted_paths(&error).is_empty());
+        assert_eq!(describe_paths(&[]), "files git did not name");
     }
 
     #[test]

@@ -321,6 +321,19 @@ Applying a conflicting branch leaves the workspace branch unchanged and records
 the conflict on the branch that caused it. Unapplying one of the two, or
 resolving the conflict, clears it.
 
+The message names **both** branches, which is the part that takes work:
+
+- `git merge-tree` reports a conflict on **stdout** — the tree it would have
+  written, then one `<mode> <oid> <stage>\t<path>` line per conflicted entry —
+  and exits non-zero with **stderr empty**. An error built from stderr, which is
+  the obvious thing to do, arrives at the user with no detail at all.
+- The merge itself cannot name the *other* branch: by the time it runs, every
+  already-applied branch has been folded into one tree. So the backend works out
+  which applied branch changed the most of the same paths and reports that one.
+- When it cannot attribute the conflict to anyone in particular, the banner says
+  so rather than guessing — a branch name that is nearly right is worse than
+  none, because the user acts on it.
+
 ## State on disk
 
 Everything the model needs lives in `.git/gitcomet/`:
@@ -443,7 +456,7 @@ gesture. Everything else in `WorkspaceEdit` has a control.
 | 14 | Prevent direct commits to `gitcomet/workspace` | structurally — see below |
 | 15 | Configurable target branch | done |
 | 16 | Rebase when the target changes | done |
-| 17 | Expose conflicts between branches | done — both branch names are named |
+| 17 | Expose conflicts between branches | done — both branch names and the file, from git's stdout |
 | 18 | Compatible with normal Git branches and remotes | done |
 | 19 | Push individual virtual branches | done |
 | 20 | Model allows stacked PRs later | done — `base_branch`, `virtual_branch_push_target` |

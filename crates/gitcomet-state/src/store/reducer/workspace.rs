@@ -313,6 +313,37 @@ pub(super) fn workspace_active_finished(
     ]
 }
 
+/// The other branch named by a workspace conflict message.
+///
+/// The backend writes `"'x' conflicts with 'y' in ..."` when it could attribute
+/// the conflict to a specific already-applied branch, and falls back to prose
+/// when it could not. Reading the quote out is deliberately narrow: a message
+/// that happens to contain the word "with" is not a conflict attribution.
+fn conflict_against(message: &str) -> Option<String> {
+    let rest = message.strip_prefix('\'')?;
+    let (_, after) = rest.split_once("' conflicts with '")?;
+    let (other, _) = after.split_once('\'')?;
+    (!other.is_empty()).then(|| other.to_string())
+}
+
+/// The conflicting path a workspace conflict message names.
+///
+/// Only the first one is recovered: the backend collapses longer lists into
+/// prose, because a conflict the user cannot act on is better shown as a
+/// sentence than as a truncated array. The full text stays in `message`, which
+/// is what the banner actually shows.
+fn conflict_paths(message: &str) -> Vec<PathBuf> {
+    let Some((_, tail)) = message.rsplit_once(" in ") else {
+        return Vec::new();
+    };
+    let listed = tail.split(" (").next().unwrap_or(tail).trim();
+    // A list git did not provide, or a count, is not a path.
+    if listed.is_empty() || listed.contains(' ') || listed.contains('/') && listed.matches('/').count() > 8 {
+        return Vec::new();
+    }
+    vec![PathBuf::from(listed)]
+}
+
 pub(super) fn dismiss_conflict(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
     let Some(repo) = repo_mut(state, repo_id) else {
         return Vec::new();
@@ -387,11 +418,16 @@ pub(super) fn workspace_edit_finished(
 
     if let Err(error) = result {
         let branch = edit.branch_name().unwrap_or("workspace");
+        // The backend names the other branch when it can work out which one is
+        // in the way. Without that the banner can only say "X could not be
+        // applied", which is the traditional conflict message the Workspace is
+        // supposed to replace with one about virtual branches.
+        let message = error.to_string();
         repo.workspace.conflict = Some(crate::model::WorkspaceConflict {
             branch: branch.to_string(),
-            against: None,
-            paths: Arc::new(Vec::new()),
-            message: error.to_string(),
+            against: conflict_against(&message),
+            paths: Arc::new(conflict_paths(&message)),
+            message,
         });
         push_diagnostic(repo, DiagnosticKind::Error, error.to_string());
         // The edit did not happen, so the cached state is stale in the other
@@ -580,6 +616,68 @@ mod tests {
         // It is workspace bookkeeping, not a history rewrite.
         assert!(!state.repos[0].workspace.busy.mutating);
         assert!(state.repos[0].workspace.busy.applying);
+    }
+
+    #[test]
+    fn a_conflict_names_the_branch_it_is_in_the_way_of() {
+        // This is the whole point of the Workspace conflict banner: "api and ui
+        // changed the same lines" is something the user can act on, where the
+        // git-native message only says a merge failed.
+        let mut state = repo_with_workspace();
+        let error = gitcomet_core::error::Error::new(
+            gitcomet_core::error::ErrorKind::Backend(
+                "'ui' conflicts with 'api' in src/auth.ts\n\n\
+                 Both are applied, and both changed the same lines."
+                    .into(),
+            ),
+        );
+        workspace_edit_finished(
+            &mut state,
+            RepoId(1),
+            WorkspaceEdit::SetApplied {
+                name: "ui".into(),
+                applied: BranchApplyState::Applied,
+            },
+            Err(error),
+        );
+
+        let conflict = state.repos[0].workspace.conflict.as_ref().unwrap();
+        assert_eq!(conflict.branch, "ui");
+        assert_eq!(conflict.against.as_deref(), Some("api"));
+        assert_eq!(conflict.paths.len(), 1);
+        assert_eq!(conflict.paths[0], PathBuf::from("src/auth.ts"));
+        assert_eq!(conflict.summary(), "ui conflicts with api");
+    }
+
+    #[test]
+    fn a_conflict_the_backend_could_not_attribute_still_reports_the_branch() {
+        // git named no partner, so the banner falls back rather than inventing
+        // one — and must not read a branch name out of unrelated prose.
+        let mut state = repo_with_workspace();
+        let error = gitcomet_core::error::Error::new(
+            gitcomet_core::error::ErrorKind::Backend(
+                "'ui' could not be applied: it conflicts with the branches already \
+                 in the workspace, in files git did not name"
+                    .into(),
+            ),
+        );
+        workspace_edit_finished(
+            &mut state,
+            RepoId(1),
+            WorkspaceEdit::SetApplied {
+                name: "ui".into(),
+                applied: BranchApplyState::Applied,
+            },
+            Err(error),
+        );
+
+        let conflict = state.repos[0].workspace.conflict.as_ref().unwrap();
+        assert_eq!(conflict.against, None, "better silent than wrong");
+        assert!(
+            conflict.paths.is_empty(),
+            "git named none, so there are none to show"
+        );
+        assert_eq!(conflict.summary(), "ui could not be applied");
     }
 
     #[test]
