@@ -489,12 +489,13 @@ pub(super) fn sync_workspace_workdir_impl(
             }
         }
 
-        // `--add` because a path that is new in the working tree is not yet in
-        // the temporary index. Paths git already knows need no `--add`, but
-        // passing it is harmless and keeps this to one command.
+        // No `--all`/`--add` flag: `git add` has no `--add` option and refuses
+        // the whole command when it sees one. Plain `git add -- <paths>` already
+        // stages a path that is new in the working tree and one that has been
+        // deleted, which is the whole range this has to cover.
         if !plain.is_empty() {
             let mut add = self.git_plumbing();
-            add.arg("add").arg("--add").arg("--");
+            add.arg("add").arg("--");
             for path in &plain {
                 add.arg(path);
             }
@@ -574,7 +575,9 @@ pub(super) fn sync_workspace_workdir_impl(
     /// Stage a file from the working tree, ignoring the split.
     fn stage_whole_file(&self, env_index: &str, path: &Path) -> Result<()> {
         let mut add = self.git_plumbing();
-        add.arg("add").arg("--add").arg("--").arg(path);
+        // No `--add`: see `commit_paths_tree`. `git add -- <path>` covers a new
+        // file and a deleted one on its own.
+        add.arg("add").arg("--").arg(path);
         add.env("GIT_INDEX_FILE", env_index);
         run_git_simple(add, "git add")
     }
@@ -898,6 +901,9 @@ mod tests {
         let root = temp.path();
         git(root, &["init"]);
         git(root, &["config", "commit.gpgsign", "false"]);
+        // Every assertion here is about exact bytes: a system-wide
+        // `core.autocrlf` would rewrite the checkout to CRLF.
+        git(root, &["config", "core.autocrlf", "false"]);
         git(root, &["config", "user.name", "Test User"]);
         git(root, &["config", "user.email", "test@example.com"]);
         std::fs::write(root.join("shared.txt"), "a1\na2\na3\n").unwrap();
@@ -1148,6 +1154,9 @@ mod tests {
         let root = temp.path();
         git(root, &["init"]);
         git(root, &["config", "commit.gpgsign", "false"]);
+        // Every assertion here is about exact bytes: a system-wide
+        // `core.autocrlf` would rewrite the checkout to CRLF.
+        git(root, &["config", "core.autocrlf", "false"]);
         git(root, &["config", "user.name", "Test User"]);
         git(root, &["config", "user.email", "test@example.com"]);
         std::fs::write(root.join("run.sh"), "#!/bin/sh\n").unwrap();
@@ -1172,6 +1181,9 @@ mod tests {
         let root = temp.path();
         git(root, &["init"]);
         git(root, &["config", "commit.gpgsign", "false"]);
+        // Every assertion here is about exact bytes: a system-wide
+        // `core.autocrlf` would rewrite the checkout to CRLF.
+        git(root, &["config", "core.autocrlf", "false"]);
         git(root, &["config", "user.name", "Test User"]);
         git(root, &["config", "user.email", "test@example.com"]);
         std::fs::write(root.join("base.txt"), "b\n").unwrap();
@@ -1257,6 +1269,286 @@ mod tests {
         assert!(
             nameless.contains("feature/ui") && !nameless.contains("conflicts with '"),
             "with no branch to blame the message must not invent one: {nameless}"
+        );
+    }
+
+    // ── Committing assigned paths ─────────────────────────────────────
+
+    /// Ten lines, edited at the first and the last.
+    ///
+    /// The gap between the two edits is eight unchanged lines, past the six
+    /// that `git diff` folds into one `@@`, so this is two hunks to the user
+    /// and two spans here — which is what makes it splittable at all.
+    const SPLIT_BASE: &str = "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n";
+    const SPLIT_WORKING: &str = "API\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nL10\n";
+
+    /// A repository with two sibling virtual branches and one file that can be
+    /// split between them, plus an unrelated file that must never be dragged in.
+    fn repo_with_a_splittable_file() -> (tempfile::TempDir, GixRepo, String) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path();
+        git(root, &["init"]);
+        git(root, &["config", "commit.gpgsign", "false"]);
+        // Every assertion here is about exact bytes: a system-wide
+        // `core.autocrlf` would rewrite the checkout to CRLF.
+        git(root, &["config", "core.autocrlf", "false"]);
+        git(root, &["config", "user.name", "Test User"]);
+        git(root, &["config", "user.email", "test@example.com"]);
+        std::fs::write(root.join("shared.txt"), SPLIT_BASE).unwrap();
+        std::fs::write(root.join("other.txt"), "keep\n").unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-m", "base"]);
+
+        let default_branch = git(root, &["symbolic-ref", "--short", "HEAD"]);
+        git(root, &["branch", "api"]);
+        git(root, &["branch", "ui"]);
+
+        let state = WorkspaceState::new(&default_branch)
+            .with_branches(vec![VirtualBranch::new("api"), VirtualBranch::new("ui")]);
+        let repo = open_repo(root);
+        repo.write_workspace(&state).expect("write workspace");
+        (temp, repo, default_branch)
+    }
+
+    /// A file's contents at a revision, exactly as git has them.
+    fn blob(root: &Path, revision: &str, path: &str) -> String {
+        let mut cmd = std::process::Command::new("git");
+        cmd.arg("-C")
+            .arg(root)
+            .arg("show")
+            .arg(format!("{revision}:{path}"));
+        let output = cmd.output().expect("run git");
+        assert!(
+            output.status.success(),
+            "git show {revision}:{path} failed"
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    /// Split `shared.txt` between the two branches, one hunk each.
+    fn assign_the_two_hunks(repo: &GixRepo) -> usize {
+        let spans = hunk_spans(SPLIT_BASE, SPLIT_WORKING);
+        let mut index = AssignmentIndex::new();
+        for (span, branch) in spans.iter().zip(["api", "ui"]) {
+            index.set_hunk(Path::new("shared.txt"), span.fingerprint, Some(branch.into()));
+        }
+        repo.write_workspace_assignments(&index)
+            .expect("write assignments");
+        spans.len()
+    }
+
+    #[test]
+    fn two_edits_far_apart_are_two_hunks_to_split_between_branches() {
+        // The premise the rest of these tests stand on: if this ever said one,
+        // "split a file between two branches" would be impossible and the
+        // assignments would silently do nothing.
+        assert_eq!(hunk_spans(SPLIT_BASE, SPLIT_WORKING).len(), 2);
+        assert_eq!(
+            hunk_spans(SPLIT_BASE, "API\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nL9\nl10\n").len(),
+            1,
+            "edits within git's context are one hunk, not two"
+        );
+    }
+
+    #[test]
+    fn a_commit_to_one_branch_takes_only_the_hunks_assigned_to_it() {
+        let (temp, repo, default_branch) = repo_with_a_splittable_file();
+        let root = temp.path();
+        std::fs::write(root.join("shared.txt"), SPLIT_WORKING).unwrap();
+        assert_eq!(assign_the_two_hunks(&repo), 2);
+
+        let outcome = repo
+            .commit_paths_to_virtual_branch("api", "the api change", &[Path::new("shared.txt")])
+            .expect("commit to api");
+
+        assert_eq!(
+            blob(root, "api", "shared.txt"),
+            "API\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n",
+            "the commit holds this branch's hunk and not the other branch's"
+        );
+        assert_eq!(
+            git(root, &["rev-parse", "api~1"]),
+            git(root, &["rev-parse", &default_branch]),
+            "the commit is built on the branch's own base, never on the workspace"
+        );
+        assert_eq!(outcome.local_branch.as_deref(), Some("api"));
+        assert_eq!(
+            read(root, "shared.txt"),
+            SPLIT_WORKING,
+            "committing to a branch must not change what the user is looking at"
+        );
+    }
+
+    #[test]
+    fn both_branches_commit_their_own_half_and_the_workspace_gathers_both() {
+        // The point of the whole feature: two unrelated changes in one working
+        // directory, each landing on its own branch, and the workspace showing
+        // both.
+        let (temp, repo, _) = repo_with_a_splittable_file();
+        let root = temp.path();
+        std::fs::write(root.join("shared.txt"), SPLIT_WORKING).unwrap();
+        assign_the_two_hunks(&repo);
+
+        repo.commit_paths_to_virtual_branch("api", "the api change", &[Path::new("shared.txt")])
+            .expect("commit to api");
+        repo.commit_paths_to_virtual_branch("ui", "the ui change", &[Path::new("shared.txt")])
+            .expect("commit to ui");
+
+        assert_eq!(
+            blob(root, "ui", "shared.txt"),
+            "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nL10\n",
+            "the second commit must not pick up the first branch's hunk"
+        );
+        assert_eq!(
+            blob(root, WORKSPACE_BRANCH, "shared.txt"),
+            SPLIT_WORKING,
+            "the workspace is the two branches together, which is what makes the \
+             working directory show both changes"
+        );
+    }
+
+    #[test]
+    fn a_stacked_branch_commits_on_top_of_its_parents_newest_commit() {
+        // Otherwise a pull request for the upper branch would contain only its
+        // own change, with the lower branch's work missing from its history.
+        let (temp, repo, _) = repo_with_a_splittable_file();
+        let root = temp.path();
+        std::fs::write(root.join("shared.txt"), SPLIT_WORKING).unwrap();
+        let mut state = repo.read_workspace().expect("read workspace");
+        state.set_parent("ui", Some("api")).expect("stack ui on api");
+        repo.write_workspace(&state).expect("write workspace");
+        assign_the_two_hunks(&repo);
+
+        repo.commit_paths_to_virtual_branch("api", "the api change", &[Path::new("shared.txt")])
+            .expect("commit to api");
+        let api_tip = git(root, &["rev-parse", "api"]);
+        repo.commit_paths_to_virtual_branch("ui", "the ui change", &[Path::new("shared.txt")])
+            .expect("commit to ui");
+
+        assert_eq!(
+            git(root, &["rev-parse", "ui~1"]),
+            api_tip,
+            "the stacked branch has to be built on where its parent ended up"
+        );
+    }
+
+    #[test]
+    fn only_the_paths_named_are_committed() {
+        let (temp, repo, _) = repo_with_a_splittable_file();
+        let root = temp.path();
+        std::fs::write(root.join("mine.txt"), "y\n").unwrap();
+        let mut index = AssignmentIndex::new();
+        index.set(Path::new("mine.txt"), Some("api".into()));
+        repo.write_workspace_assignments(&index).expect("write assignments");
+
+        repo.commit_paths_to_virtual_branch("api", "just the new file", &[Path::new("mine.txt")])
+            .expect("commit");
+
+        assert_eq!(blob(root, "api", "mine.txt"), "y\n");
+        assert_eq!(
+            git(root, &["ls-tree", "--name-only", "api"]),
+            "mine.txt\nother.txt\nshared.txt",
+            "a file nobody assigned comes from the base, not from the working tree"
+        );
+    }
+
+    #[test]
+    fn a_file_deleted_in_the_working_tree_is_deleted_on_its_branch() {
+        // Deleting a file is a change to it, and a branch assigned it.
+        let (temp, repo, _) = repo_with_a_splittable_file();
+        let root = temp.path();
+        std::fs::remove_file(root.join("shared.txt")).unwrap();
+
+        repo.commit_paths_to_virtual_branch("api", "drop the shared file", &[Path::new("shared.txt")])
+            .expect("commit");
+
+        assert_eq!(
+            git(root, &["ls-tree", "--name-only", "api"]),
+            "other.txt\n",
+            "the deletion has to land on the branch too"
+        );
+        assert!(
+            !root.join(".git").join("gitcomet").join("commit-index").exists(),
+            "the temporary index has to be cleaned up"
+        );
+    }
+
+    #[test]
+    fn committing_leaves_the_users_index_and_staging_exactly_as_they_were() {
+        // The commit is built through a temporary index. If it were built
+        // through the real one, this would stage the commit away and swallow
+        // whatever the user had staged for their next commit.
+        let (temp, repo, _) = repo_with_a_splittable_file();
+        let root = temp.path();
+        std::fs::write(root.join("shared.txt"), SPLIT_WORKING).unwrap();
+        std::fs::write(root.join("other.txt"), "staged edit\n").unwrap();
+        git(root, &["add", "-A"]);
+        let staged_before = git(root, &["diff", "--cached", "--name-only"]);
+
+        repo.commit_paths_to_virtual_branch("api", "the api change", &[Path::new("shared.txt")])
+            .expect("commit");
+
+        assert_eq!(
+            git(root, &["diff", "--cached", "--name-only"]),
+            staged_before,
+            "the user's staging has to survive a workspace commit untouched"
+        );
+        assert_eq!(read(root, "shared.txt"), SPLIT_WORKING);
+        assert_eq!(read(root, "other.txt"), "staged edit\n");
+    }
+
+    #[test]
+    fn an_executable_file_stays_executable_after_a_commit_to_a_branch() {
+        // Splitting or committing goes through an index entry this code writes
+        // by hand, and a mode guessed wrong turns a script into a text file.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path();
+        git(root, &["init"]);
+        git(root, &["config", "commit.gpgsign", "false"]);
+        // Every assertion here is about exact bytes: a system-wide
+        // `core.autocrlf` would rewrite the checkout to CRLF.
+        git(root, &["config", "core.autocrlf", "false"]);
+        git(root, &["config", "user.name", "Test User"]);
+        git(root, &["config", "user.email", "test@example.com"]);
+        std::fs::write(root.join("run.sh"), "#!/bin/sh\necho hi\n").unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-m", "base"]);
+
+        let default_branch = git(root, &["symbolic-ref", "--short", "HEAD"]);
+        git(root, &["branch", "api"]);
+        let state = WorkspaceState::new(&default_branch).with_branches(vec![VirtualBranch::new("api")]);
+        let repo = open_repo(root);
+        repo.write_workspace(&state).expect("write workspace");
+
+        std::fs::write(root.join("run.sh"), "#!/bin/sh\necho bye\n").unwrap();
+        let mut index = AssignmentIndex::new();
+        index.set(Path::new("run.sh"), Some("api".into()));
+        repo.write_workspace_assignments(&index).expect("write assignments");
+
+        repo.commit_paths_to_virtual_branch("api", "shout", &[Path::new("run.sh")]).expect("commit");
+
+        let entry = git(root, &["ls-tree", "api", "--", "run.sh"]);
+        assert!(
+            entry.starts_with("100755 "),
+            "the mode has to come from the base, not be defaulted to a plain \
+             file: {entry}"
+        );
+    }
+
+    #[test]
+    fn committing_to_a_branch_that_is_not_in_the_workspace_is_refused() {
+        // Otherwise a typo would create a commit on a ref the workspace has no
+        // idea about, invisible in every stack in the UI.
+        let (temp, repo, _) = repo_with_a_splittable_file();
+        let root = temp.path();
+        std::fs::write(root.join("mine.txt"), "y\n").unwrap();
+
+        let result =
+            repo.commit_paths_to_virtual_branch("nowhere", "m", &[Path::new("mine.txt")]);
+        assert!(result.is_err(), "a branch the workspace does not have is an error");
+        assert!(
+            !root.join(".git").join("refs").join("heads").join("nowhere").exists(),
+            "a refused commit must not create the ref either"
         );
     }
 }
