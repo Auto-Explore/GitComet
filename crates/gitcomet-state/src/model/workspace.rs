@@ -69,11 +69,9 @@ pub struct WorkspaceRepoState {
     /// Stacks derived from `state`, computed once per load so rendering a long
     /// stack list does not re-sort per frame.
     pub stacks: Arc<Vec<Stack>>,
-    /// Which virtual branch each changed file belongs to.
+    /// Which virtual branch each changed file — or each of its hunks — belongs
+    /// to.
     pub assignments: Arc<AssignmentIndex>,
-    /// Paths with no branch assigned, kept beside the index so the UI can show
-    /// them without scanning every status row.
-    pub unassigned: Arc<Vec<PathBuf>>,
     /// The tip of `gitcomet/workspace`, when it has been built.
     pub workspace_commit: Loadable<Option<gitcomet_core::domain::CommitId>>,
     pub busy: WorkspaceBusy,
@@ -102,7 +100,6 @@ impl WorkspaceRepoState {
         self.state = Loadable::NotLoaded;
         self.stacks = Arc::new(Vec::new());
         self.assignments = Arc::new(AssignmentIndex::default());
-        self.unassigned = Arc::new(Vec::new());
         self.workspace_commit = Loadable::NotLoaded;
         self.busy = WorkspaceBusy::default();
         self.conflict = None;
@@ -246,6 +243,15 @@ pub enum WorkspaceEdit {
         path: PathBuf,
         branch: Option<String>,
     },
+    /// Assign one hunk of a file to a branch, or back to no branch.
+    ///
+    /// Splitting a file that was assigned whole keeps the old branch on every
+    /// other hunk, so this moves the hunk rather than orphaning the rest.
+    AssignHunk {
+        path: PathBuf,
+        hunk: gitcomet_core::workspace::HunkKey,
+        branch: Option<String>,
+    },
     /// Commit the given files to a branch rather than to the workspace.
     CommitPaths {
         name: String,
@@ -268,7 +274,8 @@ impl WorkspaceEdit {
             | Self::CommitPaths { name, .. } => Some(name),
             Self::Reorder { first, .. } => Some(first),
             Self::SetTarget { .. } => None,
-            Self::AssignFile { branch, .. } => branch.as_deref(),
+            Self::AssignFile { branch, .. }
+            | Self::AssignHunk { branch, .. } => branch.as_deref(),
         }
     }
 

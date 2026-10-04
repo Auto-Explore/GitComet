@@ -110,11 +110,11 @@ impl PopoverHost {
         kind: WorkspacePromptKind,
         value: &str,
     ) -> Option<WorkspaceEdit> {
-        let (branch, path) = match &self.popover {
+        let (branch, path, hunk) = match &self.popover {
             Some(PopoverKind::WorkspacePrompt { prompt, .. }) => {
-                (prompt.branch.clone(), prompt.path.clone())
+                (prompt.branch.clone(), prompt.path.clone(), prompt.hunk)
             }
-            _ => (String::new(), None),
+            _ => (String::new(), None, None),
         };
         // A prompt left open across a background load that changed the list must
         // not dispatch an edit against a branch that is gone, so the subject is
@@ -128,6 +128,7 @@ impl PopoverHost {
             kind,
             &branch,
             path.as_deref(),
+            hunk,
             value.trim(),
             &in_workspace,
             &free_name,
@@ -222,6 +223,7 @@ fn edit_for(
     kind: WorkspacePromptKind,
     branch: &str,
     path: Option<&std::path::Path>,
+    hunk: Option<gitcomet_core::workspace::HunkKey>,
     value: &str,
     in_workspace: &dyn Fn(&str) -> bool,
     free_name: &dyn Fn(&str) -> String,
@@ -302,6 +304,21 @@ fn edit_for(
             }
             WorkspaceEdit::AssignFile {
                 path: path.to_path_buf(),
+                branch: (!value.is_empty()).then(|| value.to_string()),
+            }
+        }
+        WorkspacePromptKind::AssignHunk => {
+            // An empty field is how a hunk goes back to nobody's, the same as
+            // for a whole file.
+            let (Some(path), Some(hunk)) = (path, hunk) else {
+                return None;
+            };
+            if !value.is_empty() && !in_workspace(value) {
+                return None;
+            }
+            WorkspaceEdit::AssignHunk {
+                path: path.to_path_buf(),
+                hunk,
                 branch: (!value.is_empty()).then(|| value.to_string()),
             }
         }
@@ -410,6 +427,7 @@ mod tests {
             kind,
             branch,
             None,
+            None,
             value,
             &membership(),
             &free,
@@ -424,6 +442,7 @@ mod tests {
             WorkspacePromptKind::AssignFile,
             "",
             Some(std::path::Path::new("src/lib.rs")),
+            None,
             value,
             &membership(),
             &free,
@@ -438,6 +457,7 @@ mod tests {
             WorkspacePromptKind::CommitMessage,
             "",
             Some(std::path::Path::new("src/lib.rs")),
+            None,
             value,
             &membership(),
             &free,
@@ -462,6 +482,7 @@ mod tests {
         edit_for(
             WorkspacePromptKind::CommitBranch,
             branch,
+            None,
             None,
             value,
             &membership(),
@@ -629,6 +650,7 @@ mod tests {
                 WorkspacePromptKind::AssignFile,
                 "",
                 None,
+                None,
                 "ui",
                 &membership(),
                 &free,
@@ -638,6 +660,108 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn assigning_a_hunk_names_the_file_the_hunk_and_the_branch() {
+        let hunk = gitcomet_core::workspace::HunkKey {
+            base_start: 3,
+            base_lines: 1,
+            new_lines: 2,
+        };
+        let Some(WorkspaceEdit::AssignHunk {
+            path,
+            hunk: key,
+            branch,
+        }) = edit_for(
+            WorkspacePromptKind::AssignHunk,
+            "",
+            Some(std::path::Path::new("src/lib.rs")),
+            Some(hunk),
+            "ui",
+            &membership(),
+            &free,
+            &|_| true,
+            &|_| None,
+            &|_| Vec::new(),
+        )
+        else {
+            panic!("expected a hunk assignment");
+        };
+        assert_eq!(path, std::path::PathBuf::from("src/lib.rs"));
+        assert_eq!(key, hunk);
+        assert_eq!(branch.as_deref(), Some("ui"));
+    }
+
+    #[test]
+    fn an_empty_field_unassigns_the_hunk_too() {
+        let hunk = gitcomet_core::workspace::HunkKey::default();
+        let Some(WorkspaceEdit::AssignHunk { branch, .. }) = edit_for(
+            WorkspacePromptKind::AssignHunk,
+            "",
+            Some(std::path::Path::new("src/lib.rs")),
+            Some(hunk),
+            "",
+            &membership(),
+            &free,
+            &|_| true,
+            &|_| None,
+            &|_| Vec::new(),
+        ) else {
+            panic!("an empty field should still produce an edit");
+        };
+        assert_eq!(branch, None);
+    }
+
+    #[test]
+    fn assigning_a_hunk_needs_both_a_file_and_a_hunk() {
+        let any = edit_for(
+            WorkspacePromptKind::AssignHunk,
+            "",
+            None,
+            Some(gitcomet_core::workspace::HunkKey::default()),
+            "ui",
+            &membership(),
+            &free,
+            &|_| true,
+            &|_| None,
+            &|_| Vec::new(),
+        );
+        assert!(any.is_none(), "no file, no hunk to assign");
+
+        let any = edit_for(
+            WorkspacePromptKind::AssignHunk,
+            "",
+            Some(std::path::Path::new("a.rs")),
+            None,
+            "ui",
+            &membership(),
+            &free,
+            &|_| true,
+            &|_| None,
+            &|_| Vec::new(),
+        );
+        assert!(any.is_none(), "no hunk, nothing to address");
+    }
+
+    #[test]
+    fn a_hunk_can_only_go_to_a_branch_that_exists() {
+        let edit = |value: &str| {
+            edit_for(
+                WorkspacePromptKind::AssignHunk,
+                "",
+                Some(std::path::Path::new("src/lib.rs")),
+                Some(gitcomet_core::workspace::HunkKey::default()),
+                value,
+                &membership(),
+                &free,
+                &|_| true,
+                &|_| None,
+                &|_| Vec::new(),
+            )
+        };
+        assert!(edit("nope").is_none());
+        assert!(edit("ui").is_some());
     }
 
     #[test]
@@ -670,6 +794,7 @@ mod tests {
                 WorkspacePromptKind::CommitMessage,
                 "",
                 Some(std::path::Path::new("src/lib.rs")),
+                None,
                 "Update src/lib.rs",
                 &membership(),
                 &free,
@@ -687,6 +812,7 @@ mod tests {
             edit_for(
                 WorkspacePromptKind::CommitMessage,
                 "",
+                None,
                 None,
                 "Update something",
                 &membership(),

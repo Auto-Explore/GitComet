@@ -69,6 +69,19 @@ fn detail_line(
             .into(),
             None => String::new().into(),
         },
+        WorkspacePromptKind::AssignHunk => match path {
+            Some(path) if value.is_empty() => format!(
+                "Only this hunk of {} goes back to being unassigned; the rest of the file is untouched.",
+                path.display()
+            )
+            .into(),
+            Some(path) => format!(
+                "Only this hunk of {} will be committed to {value}. The rest of the file stays where it is.",
+                path.display()
+            )
+            .into(),
+            None => String::new().into(),
+        },
         WorkspacePromptKind::AssignFile => match path {
             Some(path) if value.is_empty() => format!(
                 "{} will not be committed to any branch. Clear the field to leave it as it is.",
@@ -128,6 +141,23 @@ pub(in crate::view) fn assign_file_prompt(
         kind: WorkspacePromptKind::AssignFile,
         branch: String::new(),
         path: Some(path.to_path_buf()),
+        hunk: None,
+        value: branch.unwrap_or_default().to_string(),
+    }
+}
+
+/// The dialog the diff view's hunk menu opens, pre-filled with whatever the
+/// hunk is on today.
+pub(in crate::view) fn assign_hunk_prompt(
+    path: &std::path::Path,
+    hunk: gitcomet_core::workspace::HunkKey,
+    branch: Option<&str>,
+) -> WorkspacePrompt {
+    WorkspacePrompt {
+        kind: WorkspacePromptKind::AssignHunk,
+        branch: String::new(),
+        path: Some(path.to_path_buf()),
+        hunk: Some(hunk),
         value: branch.unwrap_or_default().to_string(),
     }
 }
@@ -146,6 +176,7 @@ pub(in crate::view) fn commit_file_prompt(
         kind: WorkspacePromptKind::CommitMessage,
         branch: String::new(),
         path: Some(path.to_path_buf()),
+        hunk: None,
         value: message.to_string(),
     }
 }
@@ -294,6 +325,7 @@ mod tests {
         assert!(WorkspacePromptKind::SetParent.asks_for_text());
         assert!(WorkspacePromptKind::MoveToStack.asks_for_text());
         assert!(WorkspacePromptKind::AssignFile.asks_for_text());
+        assert!(WorkspacePromptKind::AssignHunk.asks_for_text());
     }#[test]
     fn the_commit_prompt_opens_on_a_message_the_user_can_keep() {
         let path = std::path::Path::new("src/lib.rs");
@@ -367,6 +399,7 @@ mod tests {
             WorkspacePromptKind::MoveToStack,
             WorkspacePromptKind::Remove,
             WorkspacePromptKind::AssignFile,
+            WorkspacePromptKind::AssignHunk,
             WorkspacePromptKind::CommitMessage,
             WorkspacePromptKind::CommitBranch,
         ];

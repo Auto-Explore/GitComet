@@ -719,7 +719,282 @@ impl FileAssignment {
 /// every frame, and so a persisted file stays diffable.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AssignmentIndex {
-    entries: BTreeMap<PathBuf, Option<String>>,
+    entries: BTreeMap<PathBuf, FileAssignments>,
+}
+
+/// One hunk of a file's diff, addressed by where it sits in the **base**.
+///
+/// The base side is what makes it survive ordinary editing: inserting a line at
+/// the top of a file moves every new-side line number down but leaves every
+/// old-side line number where it was, so an assignment made today still points
+/// at the same change tomorrow. Rewriting the hunk itself does change the range,
+/// and the assignment is dropped rather than guessed at — [`HunkKey::rebase`]
+/// recovers the common case where only the hunk's length moved.
+///
+/// The range is derived from the diff rather than stored as an opaque id, which
+/// is what lets the view and the backend compute the same key independently and
+/// still agree.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+pub struct HunkKey {
+    /// First base line the hunk touches, 1-based.
+    pub base_start: u32,
+    /// Base lines the hunk spans. Zero for a pure insertion.
+    pub base_lines: u32,
+    /// Lines the hunk produces on the new side. Zero for a pure deletion.
+    pub new_lines: u32,
+}
+
+impl HunkKey {
+    /// Whether the hunk touches any base line, i.e. whether it can be recovered
+    /// by its position alone.
+    pub fn anchored(self) -> bool {
+        self.base_lines > 0
+    }
+
+    /// Move an assignment for a previous diff onto `current`.
+    ///
+    /// Answers whether these are plausibly the same change: the hunk has to
+    /// start on the same base line and cover the same number of them. That is
+    /// deliberately loose about the new-side length, so editing *inside* a
+    /// hunk keeps the assignment instead of silently unassigning the user's
+    /// work.
+    pub fn rebase(self, current: HunkKey) -> bool {
+        self.base_start == current.base_start && self.base_lines == current.base_lines
+    }
+}
+
+
+
+/// A hunk together with the line ranges it covers on each side.
+///
+/// The key is for *addressing* a hunk across reloads; the ranges are for
+/// *applying* one right now. They are recomputed together because both come out
+/// of the same diff pass, and taking them from two passes would let a file that
+/// changed between them produce a hunk whose range belongs to a different
+/// change.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HunkSpan {
+    pub key: HunkKey,
+    /// Base lines the hunk replaces, 0-based half-open.
+    pub base_range: std::ops::Range<usize>,
+    /// New lines the hunk produces, 0-based half-open.
+    pub new_range: std::ops::Range<usize>,
+}
+
+/// Every hunk between two versions of a file, in base order.
+pub fn hunk_spans(old: &str, new: &str) -> Vec<HunkSpan> {
+    use crate::file_diff::{side_by_side_plan, FileDiffPlanRun};
+
+    let plan = side_by_side_plan(old, new);
+    let mut spans: Vec<HunkSpan> = Vec::new();
+    // The hunk the previous change run opened, if any. Consecutive change runs
+    // are one hunk: git would emit them as one `@@` header.
+    let mut open: Option<(HunkKey, usize, usize, usize, usize)> = None;
+    // The base line the next change starts at, 1-based. Context runs move it;
+    // insertions do not, which is what anchors a pure insertion to the line it
+    // sits in front of.
+    let mut base_pos = 1usize;
+
+    for run in &plan.runs {
+        let (start, base_lines, new_start, new_lines) = match run {
+            FileDiffPlanRun::Context { old_start, len, .. } => {
+                close_span(open.take(), &mut spans);
+                base_pos = old_start + len;
+                continue;
+            }
+            FileDiffPlanRun::Remove { old_start, len } => {
+                base_pos = old_start + len;
+                (*old_start, *len, 0, 0)
+            }
+            FileDiffPlanRun::Add { new_start, len } => (base_pos, 0, *new_start, *len),
+            FileDiffPlanRun::Modify {
+                old_start,
+                new_start,
+                len,
+            } => {
+                base_pos = old_start + len;
+                (*old_start, *len, *new_start, *len)
+            }
+        };
+        open = Some(match open {
+            Some((key, base_start, _, new_at, new_count)) => (
+                HunkKey {
+                    base_lines: key.base_lines + base_lines as u32,
+                    new_lines: key.new_lines + new_lines as u32,
+                    ..key
+                },
+                base_start,
+                0,
+                // Consecutive runs continue the new side: only the first one
+                // says where the hunk's new lines begin.
+                if new_at == 0 { new_start } else { new_at },
+                new_count + new_lines,
+            ),
+            None => (
+                HunkKey {
+                    base_start: start as u32,
+                    base_lines: base_lines as u32,
+                    new_lines: new_lines as u32,
+                },
+                start,
+                base_lines,
+                new_start,
+                new_lines,
+            ),
+        });
+    }
+    close_span(open.take(), &mut spans);
+    spans
+}
+
+fn close_span(
+    open: Option<(HunkKey, usize, usize, usize, usize)>,
+    spans: &mut Vec<HunkSpan>,
+) {
+    let Some((key, base_start, base_lines, new_start, new_lines)) = open else {
+        return;
+    };
+    // Pure insertions start one line past what they follow, which is exactly
+    // what makes `base_start` the line they sit in front of.
+    let base_range = if key.base_lines == 0 {
+        base_start..base_start
+    } else {
+        (base_start - 1)..(base_start - 1 + base_lines)
+    };
+    let new_range = if key.new_lines == 0 {
+        new_start..new_start
+    } else {
+        (new_start - 1)..(new_start - 1 + new_lines)
+    };
+    spans.push(HunkSpan {
+        key,
+        base_range,
+        new_range,
+    });
+}
+
+/// Build the version of a file that belongs to one branch.
+///
+/// Walks the base lines and takes, for each hunk, either the new lines — when
+/// that hunk is on `keep` — or the base lines it replaced. Hunk assignments are
+/// therefore the only thing that decides what a branch's commit contains, and a
+/// file the user never split comes out byte-identical to the working tree.
+///
+/// Line endings are the base's: the working tree's would silently rewrite every
+/// untouched line of a CRLF file on a commit that only moves one hunk.
+pub fn synthesize_for_branch(
+    base: &str,
+    working: &str,
+    spans: &[HunkSpan],
+    keep: &dyn Fn(HunkKey) -> bool,
+) -> String {
+    let base_lines: Vec<&str> = base.split_inclusive('\n').collect();
+    let working_lines: Vec<&str> = working.split_inclusive('\n').collect();
+    let mut out = String::with_capacity(base.len());
+    let mut base_ix = 0usize;
+
+    for span in spans {
+        // Everything between the previous hunk and this one is untouched.
+        while base_ix < span.base_range.start {
+            out.push_str(base_lines.get(base_ix).copied().unwrap_or(""));
+            base_ix += 1;
+        }
+        if keep(span.key) {
+            for line in &working_lines[span.new_range.clone()] {
+                out.push_str(line);
+            }
+        } else {
+            for line in &base_lines[span.base_range.clone()] {
+                out.push_str(line);
+            }
+        }
+        base_ix = span.base_range.end.max(span.base_range.start);
+    }
+    while base_ix < base_lines.len() {
+        out.push_str(base_lines[base_ix]);
+        base_ix += 1;
+    }
+    out
+}
+
+/// What belongs to which branch, for one file.
+///
+/// A file is either whole or split. `whole` and `hunks` are never both set:
+/// assigning a hunk to a whole-assigned file clears the whole-file assignment,
+/// because the two would otherwise disagree about the same lines.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FileAssignments {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    whole: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    hunks: BTreeMap<HunkKey, String>,
+}
+
+impl FileAssignments {
+    /// The whole file belongs to `branch`.
+    pub fn whole(branch: Option<String>) -> Self {
+        Self {
+            whole: branch,
+            hunks: BTreeMap::new(),
+        }
+    }
+
+    pub fn is_whole(&self) -> bool {
+        self.whole.is_some() || (self.whole.is_none() && self.hunks.is_empty())
+    }
+
+    /// The branch the whole file belongs to, `None` when it is split or unassigned.
+    pub fn branch(&self) -> Option<&str> {
+        self.whole.as_deref()
+    }
+
+    pub fn hunks(&self) -> impl Iterator<Item = (HunkKey, &str)> {
+        self.hunks.iter().map(|(key, branch)| (*key, branch.as_str()))
+    }
+
+    pub fn hunk_branches(&self) -> impl Iterator<Item = &str> {
+        self.hunks.values().map(String::as_str)
+    }
+
+    /// Assign one hunk, or clear it when `branch` is `None`.
+    pub fn set_hunk(&mut self, key: HunkKey, branch: Option<String>) {
+        match branch {
+            Some(branch) => {
+                self.hunks.insert(key, branch);
+            }
+            None => {
+                self.hunks.remove(&key);
+            }
+        }
+    }
+
+    /// Drop hunk assignments that the current diff no longer contains, carrying
+    /// over the ones whose range merely moved.
+    pub fn retain_hunks(&mut self, current: &[HunkSpan], state: &WorkspaceState) {
+        let next: BTreeMap<HunkKey, String> = self
+            .hunks
+            .iter()
+            .filter_map(|(key, branch)| {
+                state.get(branch)?;
+                // An exact match first, so a file that did not move keeps its
+                // assignments byte-identical.
+                if current.iter().any(|span| span.key == *key) {
+                    return Some((*key, branch.clone()));
+                }
+                let moved = current
+                    .iter()
+                    .find(|span| key.rebase(span.key))
+                    .map(|span| span.key)?;
+                Some((moved, branch.clone()))
+            })
+            .collect();
+        self.hunks = next;
+    }
+
+    /// Whether the file has no assignment at all, whole or per hunk.
+    pub fn is_empty(&self) -> bool {
+        self.whole.is_none() && self.hunks.is_empty()
+    }
 }
 
 impl AssignmentIndex {
@@ -732,26 +1007,63 @@ impl AssignmentIndex {
         I: IntoIterator<Item = (PathBuf, Option<String>)>,
     {
         Self {
-            entries: pairs.into_iter().collect(),
+            entries: pairs
+                .into_iter()
+                .map(|(path, branch)| (path, FileAssignments::whole(branch)))
+                .collect(),
         }
     }
 
+    /// Assign the whole file, dropping any per-hunk split.
     pub fn set(&mut self, path: impl Into<PathBuf>, branch: Option<String>) {
-        self.entries.insert(path.into(), branch);
+        self.entries.insert(path.into(), FileAssignments::whole(branch));
     }
 
     pub fn remove(&mut self, path: &Path) {
         self.entries.remove(path);
     }
 
+    /// Assign one hunk of a file, creating the split if the file had none.
+    ///
+    /// Assigning a hunk to a file that was assigned whole **splits** it: the
+    /// whole-file branch does not carry over to the other hunks. Doing that
+    /// silently would be worse than not carrying it over — the user would see
+    /// hunks they thought were on a branch quietly land on none — so the prompt
+    /// that offers a hunk assignment says so, and assigning the whole file is
+    /// still one click away.
+    ///
+    /// There is no attempt to seed the rest with the old branch because the
+    /// hunk list depends on which base the diff is taken against, and the
+    /// assignment happens without knowing the branch that will commit it.
+    pub fn set_hunk(
+        &mut self,
+        path: impl Into<PathBuf>,
+        key: HunkKey,
+        branch: Option<String>,
+    ) {
+        let path = path.into();
+        let entry = self.entries.entry(path).or_default();
+        if entry.is_whole() {
+            *entry = FileAssignments::default();
+        }
+        entry.set_hunk(key, branch);
+    }
+
     pub fn branch_of(&self, path: &Path) -> Option<&str> {
-        self.entries.get(path).and_then(Option::as_deref)
+        self.entries.get(path).and_then(FileAssignments::branch)
+    }
+
+    /// The per-hunk assignments of a file, empty when it is not split.
+    pub fn file(&self, path: &Path) -> Option<&FileAssignments> {
+        self.entries.get(path)
     }
 
     /// The branch `path` belongs to, if that branch still exists.
     ///
     /// A branch deleted elsewhere must not leave the map pointing at nothing,
-    /// so the answer is filtered through the workspace state.
+    /// so the answer is filtered through the workspace state. A split file has
+    /// no single branch and so has no answer here; callers that care read
+    /// [`AssignmentIndex::file`].
     pub fn resolve(&self, path: &Path, state: &WorkspaceState) -> Option<&str> {
         let branch = self.branch_of(path)?;
         state.get(branch).map(|b| b.name.as_str())
@@ -760,26 +1072,52 @@ impl AssignmentIndex {
     pub fn paths(&self) -> impl Iterator<Item = (&Path, Option<&str>)> {
         self.entries
             .iter()
-            .map(|(path, branch)| (path.as_path(), branch.as_deref()))
+            .map(|(path, assignments)| (path.as_path(), assignments.branch()))
     }
 
-    /// Every path assigned to `branch`, in path order.
+    /// Every path with something assigned to `branch`, in path order.
+    ///
+    /// A split file counts when any of its hunks is on the branch, because
+    /// committing that branch has to produce a version of the file either way.
     pub fn paths_for(&self, branch: &str) -> Vec<&Path> {
         self.entries
             .iter()
-            .filter(|(_, assigned)| assigned.as_deref() == Some(branch))
+            .filter(|(_, assignments)| {
+                assignments.branch() == Some(branch)
+                    || assignments.hunk_branches().any(|assigned| assigned == branch)
+            })
             .map(|(path, _)| path.as_path())
             .collect()
     }
 
     /// Drop assignments naming branches that are no longer in `state`, and any
     /// entry for a path Git no longer reports as changed.
-    pub fn retain(&mut self, state: &WorkspaceState, changed: &dyn Fn(&Path) -> bool) {
-        self.entries.retain(|path, branch| {
-            branch
-                .as_ref()
-                .is_none_or(|name| state.get(name).is_some())
-                && changed(path)
+    ///
+    /// `hunks_of` supplies the hunks a path currently has, so hunk assignments
+    /// can be dropped when the change they named is gone. Without it hunk
+    /// assignments are kept, which is the right answer for a caller that has
+    /// no diff to hand.
+    pub fn retain(
+        &mut self,
+        state: &WorkspaceState,
+        changed: &dyn Fn(&Path) -> bool,
+        hunks_of: Option<&dyn Fn(&Path) -> Vec<HunkSpan>>,
+    ) {
+        self.entries.retain(|path, assignments| {
+            if !changed(path) {
+                return false;
+            }
+            if let Some(hunks_of) = hunks_of
+                && !assignments.hunks.is_empty()
+            {
+                assignments.retain_hunks(&hunks_of(path), state);
+            }
+            let Some(branch) = assignments.whole.as_ref() else {
+                // A split file survives while it still has a hunk on a live
+                // branch.
+                return assignments.hunk_branches().any(|b| state.get(b).is_some());
+            };
+            state.get(branch).is_some()
         });
     }
 
@@ -1187,9 +1525,156 @@ mod tests {
 
         let state = workspace().with_branches(vec![vb("api")]);
         let mut changed = |path: &Path| path == Path::new("kept.rs");
-        index.retain(&state, &mut changed);
+        index.retain(&state, &mut changed, None);
 
         assert_eq!(index.len(), 1);
         assert_eq!(index.branch_of(Path::new("kept.rs")), Some("api"));
+    }
+
+    #[test]
+    fn a_separate_edit_produces_its_own_hunk() {
+        let base = "one\ntwo\nthree\nfour\nfive\n";
+        let working = "one\nTWO\nthree\nfour\nFIVE\n";
+        let spans = hunk_spans(base, working);
+        assert_eq!(spans.len(), 2, "two separated edits, two hunks");
+        assert_eq!(spans[0].key.base_start, 2);
+        assert_eq!(spans[1].key.base_start, 5);
+    }
+
+    #[test]
+    fn an_insert_anchors_to_the_line_it_precedes() {
+        let spans = hunk_spans("one\ntwo\n", "one\nnew\ntwo\n");
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].key.base_lines, 0, "an insertion covers no base line");
+        assert_eq!(
+            spans[0].base_range,
+            1..1,
+            "empty range at the line the new text sits in front of"
+        );
+        assert_eq!(spans[0].new_range, 1..2);
+        assert!(
+            !spans[0].key.anchored(),
+            "a pure insertion cannot be found again by position alone"
+        );
+    }
+
+    #[test]
+    fn editing_a_file_above_a_hunk_leaves_its_key_alone() {
+        // This is the property the whole model rests on: a change made at the
+        // top of a file must not move the assignment of a change further down.
+        let base = "one\ntwo\nthree\n";
+        let working = "one\ntwo\nTHREE\n";
+        let before = hunk_spans(base, working)[0].key;
+
+        let extended = "ZERO\none\ntwo\nTHREE\n";
+        let after = hunk_spans(base, extended)[0].key;
+        assert_eq!(
+            before, after,
+            "base-side line numbers do not move when the file grows above"
+        );
+    }
+
+    #[test]
+    fn a_hunk_that_merely_grew_keeps_its_assignment() {
+        let state = workspace().with_branches(vec![vb("api")]);
+        let key = HunkKey {
+            base_start: 3,
+            base_lines: 1,
+            new_lines: 2,
+        };
+        let mut index = AssignmentIndex::new();
+        index.set_hunk(PathBuf::from("a.rs"), key, Some("api".into()));
+        let state_now = state.clone();
+        // The hunk is still anchored on the same base line and covers the same
+        // number of them; only its new side grew.
+        let moved = HunkKey {
+            base_start: 3,
+            base_lines: 1,
+            new_lines: 9,
+        };
+        index.retain(
+            &state_now,
+            &|_| true,
+            Some(&|_| {
+                vec![HunkSpan {
+                    key: moved,
+                    base_range: 2..3,
+                    new_range: 2..11,
+                }]
+            }),
+        );
+        assert_eq!(
+            index.file(Path::new("a.rs")).unwrap().hunks().next(),
+            Some((moved, "api")),
+            "the assignment follows the hunk rather than being dropped"
+        );
+    }
+
+    #[test]
+    fn assigning_a_hunk_splits_the_file_and_leaves_the_rest_unassigned() {
+        let base = "one\ntwo\nthree\n";
+        let working = "ONE\ntwo\nTHREE\n";
+        let spans = hunk_spans(base, working);
+        let mut index = AssignmentIndex::new();
+        index.set(PathBuf::from("a.rs"), Some("api".into()));
+        index.set_hunk(PathBuf::from("a.rs"), spans[0].key, Some("ui".into()));
+
+        let file = index.file(Path::new("a.rs")).unwrap();
+        assert_eq!(file.branch(), None, "the file is split, not whole");
+        let assigned: Vec<_> = file.hunks().collect();
+        assert_eq!(
+            assigned,
+            [(spans[0].key, "ui")],
+            "only the hunk that was named; the other is nobody's until it is named"
+        );
+    }
+
+    #[test]
+    fn a_branch_commit_takes_only_its_own_hunks() {
+        let base = "one\ntwo\nthree\nfour\n";
+        let working = "ONE\ntwo\nTHREE\nfour\n";
+        let spans = hunk_spans(base, working);
+
+        let ui = synthesize_for_branch(base, working, &spans, &|key| {
+            key == spans[1].key
+        });
+        assert_eq!(
+            ui, "one\ntwo\nTHREE\nfour\n",
+            "the hunk that is not this branch's is reverted to the base"
+        );
+
+        let api = synthesize_for_branch(base, working, &spans, &|_| true);
+        assert_eq!(api, working, "keeping every hunk reproduces the working tree");
+
+        let neither = synthesize_for_branch(base, working, &spans, &|_| false);
+        assert_eq!(neither, base, "keeping none reproduces the base");
+    }
+
+    #[test]
+    fn an_unsplit_file_commits_unchanged() {
+        // The overwhelmingly common case must not be perturbed by any of this.
+        let base = "one\ntwo\n";
+        let working = "one\nTWO\n";
+        let spans = hunk_spans(base, working);
+        assert_eq!(
+            synthesize_for_branch(base, working, &spans, &|_| true),
+            working
+        );
+    }
+
+    #[test]
+    fn an_insertion_kept_for_one_branch_is_reverted_for_the_other() {
+        let base = "one\ntwo\n";
+        let working = "one\nnew\ntwo\n";
+        let spans = hunk_spans(base, working);
+        assert_eq!(
+            synthesize_for_branch(base, working, &spans, &|_| false),
+            base,
+            "an insertion that is not this branch's must not be left behind"
+        );
+        assert_eq!(
+            synthesize_for_branch(base, working, &spans, &|_| true),
+            working
+        );
     }
 }

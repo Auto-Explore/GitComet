@@ -474,6 +474,7 @@ fn render_target_row(
                         kind: WorkspacePromptKind::SetTarget,
                         branch: String::new(),
                         path: None,
+                        hunk: None,
                         // Opens on the current target so the common case is an
                         // edit rather than a retype.
                         value: name.clone(),
@@ -615,6 +616,7 @@ fn render_branch_row(
                         kind: WorkspacePromptKind::BranchActions,
                         branch: name.clone(),
                         path: None,
+                        hunk: None,
                         value: String::new(),
                     },
                 },
@@ -762,6 +764,7 @@ fn render_summary_row(
                         kind: WorkspacePromptKind::Create,
                         branch: String::new(),
                         path: None,
+                        hunk: None,
                         value: String::new(),
                     },
                 },

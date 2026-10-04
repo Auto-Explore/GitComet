@@ -91,12 +91,15 @@ pub(super) fn send_unavailable_git_effect_result(
         Effect::AssignWorkspaceFile {
             repo_id,
             path,
-            branch: _,
+            hunk,
+            branch,
         } => {
             send(Msg::Internal(
                 crate::msg::InternalMsg::WorkspaceAssignFinished {
                     repo_id,
                     path,
+                    hunk,
+                    branch,
                     result: Err(git_unavailable_error(runtime)),
                 },
             ))

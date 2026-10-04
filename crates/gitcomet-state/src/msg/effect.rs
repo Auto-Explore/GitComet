@@ -120,10 +120,14 @@ pub enum Effect {
         repo_id: RepoId,
         edit: crate::model::WorkspaceEdit,
     },
-    /// Persist one file's branch assignment.
+    /// Persist one file's branch assignment, or one hunk's.
+    ///
+    /// One effect for both because they write the same file through the same
+    /// index; `hunk` is what distinguishes them.
     AssignWorkspaceFile {
         repo_id: RepoId,
         path: PathBuf,
+        hunk: Option<gitcomet_core::workspace::HunkKey>,
         branch: Option<String>,
     },
     /// Push a virtual branch, setting upstream on first push.

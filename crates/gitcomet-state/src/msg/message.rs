@@ -1702,6 +1702,11 @@ pub enum InternalMsg {
     WorkspaceAssignFinished {
         repo_id: RepoId,
         path: PathBuf,
+        /// Which hunk was assigned, `None` for the whole file.
+        hunk: Option<gitcomet_core::workspace::HunkKey>,
+        /// What it was set to, mirrored into the store so the row updates
+        /// without a full reload.
+        branch: Option<String>,
         result: Result<(), Error>,
     },
     WorkspacePushFinished {

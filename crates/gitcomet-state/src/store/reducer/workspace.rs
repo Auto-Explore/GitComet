@@ -46,8 +46,14 @@ pub(super) fn apply_workspace_edit(
     edit: WorkspaceEdit,
 ) -> Vec<Effect> {
     // A file assignment writes only the assignment index, so it gets its own
-    // effect rather than going through the workspace rewrite path.
-    if let WorkspaceEdit::AssignFile { path, branch } = edit {
+    // effect rather than going through the workspace rewrite path. Hunk
+    // assignments take the same road: they write the same file.
+    let assignment = match edit {
+        WorkspaceEdit::AssignFile { path, branch } => Some((path, None, branch)),
+        WorkspaceEdit::AssignHunk { path, hunk, branch } => Some((path, Some(hunk), branch)),
+        _ => None,
+    };
+    if let Some((path, hunk, branch)) = assignment {
         let Some(repo) = repo_mut(state, repo_id) else {
             return Vec::new();
         };
@@ -59,6 +65,7 @@ pub(super) fn apply_workspace_edit(
         return vec![Effect::AssignWorkspaceFile {
             repo_id,
             path,
+            hunk,
             branch,
         }];
     }
@@ -304,15 +311,17 @@ pub(super) fn workspace_assign_finished(
     state: &mut AppState,
     repo_id: RepoId,
     path: PathBuf,
+    hunk: Option<gitcomet_core::workspace::HunkKey>,
+    branch: Option<String>,
     result: gitcomet_core::services::Result<()>,
 ) -> Vec<Effect> {
     let Some(repo) = repo_mut(state, repo_id) else {
         return Vec::new();
     };
     repo.workspace.busy.applying = false;
-    repo.workspace.bump_rev();
 
     if let Err(error) = result {
+        repo.workspace.bump_rev();
         push_notification(
             state,
             AppNotificationKind::Error,
@@ -320,6 +329,17 @@ pub(super) fn workspace_assign_finished(
         );
         return vec![Effect::LoadWorkspace { repo_id }];
     }
+
+    // Mirror the write into the store. Reloading the whole workspace to learn
+    // something the view already knows would discard the derived stacks and
+    // rebuild them for nothing, and on a hunk-by-hunk assignment that is once
+    // per hunk.
+    let index = std::sync::Arc::make_mut(&mut repo.workspace.assignments);
+    match hunk {
+        Some(hunk) => index.set_hunk(path, hunk, branch),
+        None => index.set(path, branch),
+    }
+    repo.workspace.bump_rev();
     Vec::new()
 }
 
@@ -459,6 +479,75 @@ mod tests {
         // It is workspace bookkeeping, not a history rewrite.
         assert!(!state.repos[0].workspace.busy.mutating);
         assert!(state.repos[0].workspace.busy.applying);
+    }
+
+    #[test]
+    fn a_hunk_assignment_takes_the_same_effect_and_names_its_hunk() {
+        let mut state = repo_with_workspace();
+        let hunk = gitcomet_core::workspace::HunkKey {
+            base_start: 3,
+            base_lines: 1,
+            new_lines: 2,
+        };
+        let effects = apply_workspace_edit(
+            &mut state,
+            RepoId(1),
+            WorkspaceEdit::AssignHunk {
+                path: PathBuf::from("a.rs"),
+                hunk,
+                branch: Some("ui".into()),
+            },
+        );
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(
+            &effects[0],
+            Effect::AssignWorkspaceFile {
+                repo_id: RepoId(1),
+                hunk: Some(key),
+                branch: Some(branch),
+                ..
+            } if *key == hunk && branch == "ui"
+        ));
+    }
+
+    #[test]
+    fn a_finished_assignment_lands_in_the_store_without_a_reload() {
+        let mut state = repo_with_workspace();
+        workspace::workspace_assign_finished(
+            &mut state,
+            RepoId(1),
+            PathBuf::from("a.rs"),
+            None,
+            Some("api".into()),
+            Ok(()),
+        );
+        assert_eq!(
+            state.repos[0].workspace.assignments.branch_of(Path::new("a.rs")),
+            Some("api"),
+            "the row has to update without waiting for the next load"
+        );
+        assert!(!state.repos[0].workspace.busy.applying);
+    }
+
+    #[test]
+    fn a_failed_assignment_reloads_rather_than_guessing() {
+        let mut state = repo_with_workspace();
+        let effects = workspace::workspace_assign_finished(
+            &mut state,
+            RepoId(1),
+            PathBuf::from("a.rs"),
+            None,
+            Some("api".into()),
+            Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Backend("no".into()),
+            )),
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadWorkspace { .. })),
+            "the store copy is left alone, so it has to come back from disk"
+        );
     }
 
     #[test]

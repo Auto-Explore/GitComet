@@ -392,6 +392,7 @@ pub(super) fn schedule_effect(
         Effect::AssignWorkspaceFile {
             repo_id,
             path,
+            hunk,
             branch,
         } => {
             workspace_effects::schedule_assign_workspace_file(
@@ -400,6 +401,7 @@ pub(super) fn schedule_effect(
                 msg_tx,
                 repo_id,
                 path,
+                hunk,
                 branch,
             );
         }

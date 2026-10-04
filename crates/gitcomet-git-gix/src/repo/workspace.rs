@@ -18,7 +18,8 @@ use gitcomet_core::domain::CommitId;
 use gitcomet_core::error::{Error, ErrorKind, Result};
 use gitcomet_core::services::{CommandOutput, CommitOperationOutcome};
 use gitcomet_core::workspace::{
-    AssignmentIndex, VirtualBranch, WORKSPACE_BRANCH, WORKSPACE_REF_PREFIX, WorkspaceState,
+    hunk_spans, synthesize_for_branch, AssignmentIndex, VirtualBranch, WORKSPACE_BRANCH,
+    WORKSPACE_REF_PREFIX, WorkspaceState,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -302,7 +303,8 @@ impl GixRepo {
         let index_path = self.workspace_dir().join("commit-index");
         std::fs::create_dir_all(self.workspace_dir()).ok();
 
-        let tree = self.commit_paths_tree(&index_path, &base_id, paths)?;
+        let assignments = self.read_assignments_impl()?;
+        let tree = self.commit_paths_tree(&index_path, &base_id, paths, name, &assignments)?;
         let commit = self.commit_tree(
             &tree,
             &[&base_id],
@@ -343,6 +345,8 @@ impl GixRepo {
         index_path: &Path,
         base_id: &CommitId,
         paths: &[&Path],
+        branch: &str,
+        assignments: &AssignmentIndex,
     ) -> Result<CommitId> {
         let env_index = index_path.as_os_str().to_string_lossy().into_owned();
 
@@ -351,22 +355,147 @@ impl GixRepo {
         read_tree.env("GIT_INDEX_FILE", &env_index);
         run_git_simple(read_tree, "git read-tree")?;
 
+        // Paths whose hunks are all on this branch are taken from the working
+        // tree whole, the way they always were. Only a file that has been split
+        // across branches needs a synthesized version.
+        let mut split: Vec<&Path> = Vec::new();
+        let mut plain: Vec<&Path> = Vec::new();
+        for path in paths {
+            match assignments.file(path) {
+                Some(file) if !file.is_whole() => split.push(path),
+                _ => plain.push(path),
+            }
+        }
+
         // `--add` because a path that is new in the working tree is not yet in
         // the temporary index. Paths git already knows need no `--add`, but
         // passing it is harmless and keeps this to one command.
-        let mut add = self.git_plumbing();
-        add.arg("add").arg("--add").arg("--");
-        for path in paths {
-            add.arg(path);
+        if !plain.is_empty() {
+            let mut add = self.git_plumbing();
+            add.arg("add").arg("--add").arg("--");
+            for path in &plain {
+                add.arg(path);
+            }
+            add.env("GIT_INDEX_FILE", &env_index);
+            run_git_simple(add, "git add")?;
         }
-        add.env("GIT_INDEX_FILE", &env_index);
-        run_git_simple(add, "git add")?;
+
+        for path in split {
+            self.stage_split_file(index_path, &env_index, base_id, path, branch, assignments)?;
+        }
 
         let mut write_tree = self.git_plumbing();
         write_tree.arg("write-tree");
         write_tree.env("GIT_INDEX_FILE", &env_index);
         let tree = run_git_capture(write_tree, "git write-tree")?;
         Ok(CommitId(tree.trim().into()))
+    }
+
+    /// Stage the version of a split file that belongs to `branch`.
+    ///
+    /// The content is built in process — base lines everywhere except the hunks
+    /// assigned to this branch — and written straight into the temporary index,
+    /// so the user's working tree and real index are never involved. A file that
+    /// is not valid UTF-8 cannot be split by hunk at all, so it falls back to
+    /// being staged whole rather than being mangled by a lossy decode.
+    fn stage_split_file(
+        &self,
+        index_path: &Path,
+        env_index: &str,
+        base_id: &CommitId,
+        path: &Path,
+        branch: &str,
+        assignments: &AssignmentIndex,
+    ) -> Result<()> {
+        let base_bytes = self.blob_at(base_id, path)?;
+        let working_bytes = std::fs::read(self.spec().workdir.join(path))?;
+        let (Ok(base_text), Ok(working_text)) = (
+            std::str::from_utf8(&base_bytes),
+            std::str::from_utf8(&working_bytes),
+        ) else {
+            return self.stage_whole_file(env_index, path);
+        };
+
+        let spans = hunk_spans(base_text, working_text);
+        let mine: Vec<_> = assignments
+            .file(path)
+            .map(|file| file.hunks().collect())
+            .unwrap_or_default();
+        let keep = |key: gitcomet_core::workspace::HunkKey| {
+            mine.iter().any(|(assigned, b)| *assigned == key && *b == branch)
+        };
+        let synthesized = synthesize_for_branch(base_text, working_text, &spans, &keep);
+
+        let scratch = index_path.with_extension("blob");
+        std::fs::write(&scratch, synthesized.as_bytes())?;
+        let blob = self.hash_object(&scratch);
+        let _ = std::fs::remove_file(&scratch);
+        let blob = blob?;
+
+        let mode = self.path_mode(base_id, path)?;
+        let mut update = self.git_plumbing();
+        update
+            .arg("update-index")
+            .arg("--add")
+            .arg("--cacheinfo")
+            .arg(format!("{mode},{blob},{}", path.to_string_lossy()))
+            .env("GIT_INDEX_FILE", env_index);
+        run_git_simple(update, "git update-index")
+    }
+
+    /// Stage a file from the working tree, ignoring the split.
+    fn stage_whole_file(&self, env_index: &str, path: &Path) -> Result<()> {
+        let mut add = self.git_plumbing();
+        add.arg("add").arg("--add").arg("--").arg(path);
+        add.env("GIT_INDEX_FILE", env_index);
+        run_git_simple(add, "git add")
+    }
+
+    /// A path's blob as of `revision`, or empty for a file the revision does not
+    /// have — a new file splits against an empty base.
+    fn blob_at(&self, revision: &CommitId, path: &Path) -> Result<Vec<u8>> {
+        let mut cmd = self.git_plumbing();
+        cmd.arg("show")
+            .arg(format!("{}:{}", revision.as_ref(), path.to_string_lossy()));
+        Ok(run_git_capture_bytes(cmd, "git show").unwrap_or_default())
+    }
+
+    /// Write `scratch` into the object database and return its id.
+    fn hash_object(&self, scratch: &Path) -> Result<CommitId> {
+        let mut cmd = self.git_plumbing();
+        cmd.arg("hash-object").arg("-w").arg("--").arg(scratch);
+        let out = run_git_capture(cmd, "git hash-object")?;
+        Ok(CommitId(out.trim().into()))
+    }
+
+    /// The mode a path should be staged with.
+    ///
+    /// The user's real index wins, because that is where a mode they staged
+    /// lives; then the base tree; then a plain file. Splitting a file must not
+    /// quietly turn an executable into a regular one.
+    fn path_mode(&self, base_id: &CommitId, path: &Path) -> Result<&'static str> {
+        let mut staged = self.git_plumbing();
+        staged
+            .arg("ls-files")
+            .arg("-s")
+            .arg("--")
+            .arg(path);
+        if let Ok(out) = run_git_capture(staged, "git ls-files")
+            && let Some(mode) = parse_mode(&out)
+        {
+            return Ok(mode);
+        }
+        let mut base = self.git_plumbing();
+        base.arg("ls-tree")
+            .arg(base_id.as_ref())
+            .arg("--")
+            .arg(path);
+        if let Ok(out) = run_git_capture(base, "git ls-tree")
+            && let Some(mode) = parse_mode(&out)
+        {
+            return Ok(mode);
+        }
+        Ok("100644")
     }
 
     // ── Plumbing helpers ─────────────────────────────────────────
@@ -500,6 +629,18 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 /// Whether `name` is one of GitComet's own branches rather than a user's.
+/// The mode out of `git ls-files -s` or `git ls-tree`, if the output names one.
+///
+/// Only the two executable modes are interesting; anything else is a plain file
+/// and staging it as `100644` says the same thing.
+fn parse_mode(output: &str) -> Option<&'static str> {
+    match output.split_whitespace().next()? {
+        "100755" => Some("100755"),
+        "100644" => Some("100644"),
+        _ => None,
+    }
+}
+
 pub(crate) fn is_workspace_branch(name: &str) -> bool {
     name.starts_with(WORKSPACE_REF_PREFIX)
 }

@@ -1146,6 +1146,8 @@ pub(in crate::view) enum WorkspacePromptKind {
     Remove,
     /// Say which branch [`WorkspacePrompt::path`] belongs to.
     AssignFile,
+    /// Say which branch one hunk of a file belongs to.
+    AssignHunk,
     /// Write the message for the commit of [`WorkspacePrompt::path`].
     CommitMessage,
     /// Write the message for a commit of every file assigned to
@@ -1173,6 +1175,7 @@ impl WorkspacePromptKind {
             Self::MoveToStack => "Move into stack",
             Self::Remove => "Remove branch",
             Self::AssignFile => "Assign file",
+            Self::AssignHunk => "Assign hunk",
             Self::CommitMessage => "Commit changes",
             Self::CommitBranch => "Commit branch",
         }
@@ -1187,6 +1190,7 @@ impl WorkspacePromptKind {
             // An empty field is the way to unassign, so the label says what
             // clearing it does rather than just naming the value.
             Self::AssignFile => "Branch (empty leaves it unassigned)",
+            Self::AssignHunk => "Branch (empty leaves it unassigned)",
             Self::CommitMessage | Self::CommitBranch => "Commit message",
             Self::BranchActions | Self::Remove => "",
         }
@@ -1201,7 +1205,7 @@ impl WorkspacePromptKind {
             Self::SetParent => "Restack",
             Self::MoveToStack => "Move",
             Self::Remove => "Remove",
-            Self::AssignFile => "Assign",
+            Self::AssignFile | Self::AssignHunk => "Assign",
             Self::CommitMessage | Self::CommitBranch => "Commit",
         }
     }
@@ -1221,6 +1225,8 @@ pub(in crate::view) struct WorkspacePrompt {
     pub(in crate::view) branch: String,
     /// The file the edit acts on, set only for the file kinds.
     pub(in crate::view) path: Option<std::path::PathBuf>,
+    /// Which hunk of that file, set only for the hunk kinds.
+    pub(in crate::view) hunk: Option<gitcomet_core::workspace::HunkKey>,
     /// The text the field opens with.
     pub(in crate::view) value: String,
 }

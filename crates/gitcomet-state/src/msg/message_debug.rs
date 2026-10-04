@@ -674,11 +674,15 @@ impl std::fmt::Debug for InternalMsg {
             InternalMsg::WorkspaceAssignFinished {
                 repo_id,
                 path,
+                hunk,
+                branch,
                 result,
             } => f
                 .debug_struct("WorkspaceAssignFinished")
                 .field("repo_id", repo_id)
                 .field("path", path)
+                .field("hunk", hunk)
+                .field("branch", branch)
                 .field("result", result)
                 .finish(),
             InternalMsg::WorkspacePushFinished {

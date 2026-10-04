@@ -287,9 +287,12 @@ pub(super) fn schedule_assign_workspace_file(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
+    hunk: Option<gitcomet_core::workspace::HunkKey>,
     branch: Option<String>,
 ) {
     let command_path = path.clone();
+    let command_hunk = hunk;
+    let command_branch = branch.clone();
     spawn_with_repo_or_else(
         executor,
         repos,
@@ -298,7 +301,10 @@ pub(super) fn schedule_assign_workspace_file(
         move |repo, msg_tx| {
             let result = (|| -> Result<()> {
                 let mut index: AssignmentIndex = repo.read_workspace_assignments()?;
-                index.set(path, branch);
+                match hunk {
+                    Some(hunk) => index.set_hunk(path, hunk, branch),
+                    None => index.set(path, branch),
+                }
                 repo.write_workspace_assignments(&index)
             })();
             send_or_log(
@@ -306,6 +312,8 @@ pub(super) fn schedule_assign_workspace_file(
                 Msg::Internal(InternalMsg::WorkspaceAssignFinished {
                     repo_id,
                     path: command_path,
+                    hunk: command_hunk,
+                    branch: command_branch,
                     result,
                 }),
             );
@@ -316,6 +324,8 @@ pub(super) fn schedule_assign_workspace_file(
                 Msg::Internal(InternalMsg::WorkspaceAssignFinished {
                     repo_id,
                     path: command_path,
+                    hunk: command_hunk,
+                    branch: command_branch,
                     result: Err(missing_repo_error(repo_id)),
                 }),
             );

@@ -2408,8 +2408,10 @@ fn reduce_inner(
         Msg::Internal(crate::msg::InternalMsg::WorkspaceAssignFinished {
             repo_id,
             path,
+            hunk,
+            branch,
             result,
-        }) => workspace::workspace_assign_finished(state, repo_id, path, result),
+        }) => workspace::workspace_assign_finished(state, repo_id, path, hunk, branch, result),
         Msg::Internal(crate::msg::InternalMsg::WorkspacePushFinished {
             repo_id,
             name,
