@@ -994,7 +994,7 @@ fn working_tree_summary_history_row(
         |_, _, _| (),
         move |bounds, _, window, cx| {
             let node_background = paint.background(theme.colors.surface.canvas, window);
-            use gpui::{PathBuilder, point};
+            use gpui::point;
             let scaled_px = ui_scale::scaler(ui_scale::UiScale::from_window(window));
             let margin_x = scaled_px(HISTORY_GRAPH_MARGIN_X_PX);
             let col_gap = scaled_px(HISTORY_GRAPH_COL_GAP_PX);
@@ -1006,12 +1006,13 @@ fn working_tree_summary_history_row(
 
             // Connect the working tree node into the history graph below.
             let stroke_width = scaled_px(1.6);
-            let mut path = PathBuilder::stroke(stroke_width);
-            path.move_to(point(center.x, center.y));
-            path.line_to(point(center.x, bounds.bottom()));
-            if let Ok(p) = path.build() {
-                window.paint_path(p, node_color);
-            }
+            super::history_graph_paint::paint_straight_connector(
+                center,
+                point(center.x, bounds.bottom()),
+                stroke_width,
+                node_color,
+                window,
+            );
 
             if show_graph_color_marker {
                 super::history_graph_paint::paint_graph_fade(

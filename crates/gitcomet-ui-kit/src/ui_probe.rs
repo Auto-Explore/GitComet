@@ -310,6 +310,16 @@ fn frame_record(event: &gpui::profiler::FrameEvent, origin: Instant) -> Value {
     }
 }
 
+fn gpu_frame_record(frame: &gpui::gpu_profiler::GpuFrameMetrics, origin: Instant) -> Value {
+    let mut value = serde_json::to_value(frame).expect("GPU metrics are serializable");
+    value["event"] = json!("gpu_frame");
+    value["at_ms"] = json!(milliseconds(
+        frame.submitted_at.saturating_duration_since(origin)
+    ));
+    value["window"] = json!(format!("{:?}", gpui::WindowId::from(frame.window_id)));
+    value
+}
+
 fn thread_record(thread: &gitcomet_core::op_trace::ThreadInfo) -> Value {
     json!({"event": "thread", "thread": thread.thread, "name": thread.name, "tid": thread.os_tid})
 }
@@ -460,6 +470,7 @@ pub fn start_if_enabled(cx: &mut gpui::App) {
 
     cx.spawn(async move |cx: &mut gpui::AsyncApp| {
         let mut frame_collector = gpui::profiler::FrameTimingCollector::new();
+        let mut gpu_collector = gpui::gpu_profiler::GpuFrameCollector::default();
         let mut wake_latencies: Vec<Duration> = Vec::with_capacity(512);
         let mut interval_started = Instant::now();
         let mut cpu_sample_started = Instant::now();
@@ -490,6 +501,7 @@ pub fn start_if_enabled(cx: &mut gpui::App) {
             let frames = frame_collector.collect_unseen();
             if LOG.get().is_some_and(|log| log.jsonl) {
                 let mut records: Vec<_> = frames.iter().map(|frame| frame_record(frame, started)).collect();
+                records.extend(gpu_collector.collect_unseen().iter().map(|frame| gpu_frame_record(frame, started)));
                 let traced = gitcomet_core::op_trace::drain();
                 let work = gitcomet_core::history_perf::snapshot();
                 let work_units: serde_json::Map<String, serde_json::Value> =
@@ -500,6 +512,7 @@ pub fn start_if_enabled(cx: &mut gpui::App) {
                     "work_units": work_units,
                     "records_dropped": LOG.get().map(|log| log.dropped.load(Ordering::Relaxed)).unwrap_or(0),
                     "stage_records_dropped": traced.dropped,
+                    "gpu_records_dropped": gpu_collector.dropped,
                     "wall_ms": milliseconds(now.duration_since(interval_started)), "main_cpu_percent": main_cpu_pct,
                     "wake_ms": wake_latencies.iter().copied().map(milliseconds).collect::<Vec<_>>() }));
                 cx.update(|app| {
@@ -852,6 +865,25 @@ mod tests {
         assert_eq!(written.lines().count(), 4000);
         drop(tx);
         writer.join().unwrap();
+    }
+
+    #[test]
+    fn gpu_records_use_submission_time_and_preserve_missing_samples() {
+        let origin = Instant::now();
+        let mut scene = gpui::Scene::default();
+        scene.finish();
+        let mut frame = gpui::gpu_profiler::GpuFrameMetrics::new(&scene, 7, 11, "wgpu");
+        frame.submitted_at = origin + Duration::from_millis(42);
+        frame.status = "query_ring_full";
+        frame.query_samples_dropped = 1;
+        let raw = gpu_frame_record(&frame, origin);
+        assert_eq!(raw["event"], "gpu_frame");
+        assert_eq!(raw["at_ms"], 42.0);
+        assert_eq!(raw["renderer_id"], 7);
+        assert_eq!(raw["submission_id"], 11);
+        assert_eq!(raw["query_samples_dropped"], 1);
+        assert!(raw["gpu_duration_ns"].is_null());
+        assert!(raw["memory"]["atlas_bytes"].is_null());
     }
 
     #[test]

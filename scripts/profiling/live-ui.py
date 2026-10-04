@@ -51,6 +51,8 @@ ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 import perf_metadata  # noqa: E402
 import perf_platform  # noqa: E402
+import perf_gpu  # noqa: E402
+import perf_gpu_frames  # noqa: E402
 
 SURVEY_SOURCE = ROOT / "crates/gitcomet-ui-gpui/src/view/user_survey.rs"
 SAVE_FILE = "save-target.txt"
@@ -434,7 +436,7 @@ def smaps_breakdown(pid):
     return dict(kinds)
 
 
-def seed_profile(output, repository):
+def seed_profile(output, repository, window_size=WINDOW_SIZE, session_overrides=None):
     """An isolated profile: sandboxed XDG dirs so the user's session, crash
     reports and desktop entries are never touched, and a seeded session."""
     home = output / "profile"
@@ -444,12 +446,13 @@ def seed_profile(output, repository):
     session_file = output / "session.json"
     session_file.write_text(json.dumps({
         "version": 3, "open_repos": [str(repository)], "active_repo": str(repository),
-        "window_width": WINDOW_SIZE[0], "window_height": WINDOW_SIZE[1], "ui_scale_percent": 100,
+        "window_width": window_size[0], "window_height": window_size[1], "ui_scale_percent": 100,
         "history_verify_commit_signatures": False, "history_verify_commit_signatures_opt_in": False,
         "history_tag_fetch_mode": "disabled", "check_for_updates_on_startup": False,
         # Only this disposable profile contacts the loopback HTTP fixtures.
         "allowed_remote_protocols": ["http", "https", "ssh", "git", "file"],
         "survey_prompt": {"survey_id": survey_id(), "opened_at_unix_seconds": 1},
+        **(session_overrides or {}),
     }), encoding="utf-8")
     gitconfig = output / "gitconfig"
     gitconfig.write_text("", encoding="utf-8")
@@ -543,7 +546,7 @@ class HeadlessCompositor:
     before the app binds its seat. Clipboard scenarios also send a Shift
     press/release during setup so Wayland grants clipboard ownership."""
 
-    def __init__(self, output, refresh_hz=REFRESH_HZ):
+    def __init__(self, output, refresh_hz=REFRESH_HZ, window_size=WINDOW_SIZE):
         from gi.repository import Gio, GLib
         self.name = f"gitcomet-perf-{uuid.uuid4().hex[:8]}"
         self.log = open(output / "compositor.log", "wb")
@@ -552,7 +555,7 @@ class HeadlessCompositor:
             ["dbus-run-session", "--", "sh", "-c",
              'printf %s "$DBUS_SESSION_BUS_ADDRESS" > "$1"; shift; exec "$@"', "sh", str(address_file),
              "mutter", "--headless", "--no-x11",
-             "--virtual-monitor", f"{WINDOW_SIZE[0] + 200}x{WINDOW_SIZE[1] + 200}@{refresh_hz}",
+             "--virtual-monitor", f"{window_size[0] + 200}x{window_size[1] + 200}@{refresh_hz}",
              "--wayland-display", self.name],
             stdin=subprocess.DEVNULL, stdout=self.log, stderr=subprocess.STDOUT, start_new_session=True)
         socket = Path(os.environ["XDG_RUNTIME_DIR"]) / self.name
@@ -581,6 +584,8 @@ class HeadlessCompositor:
 
         wait(lambda: call("/org/freedesktop/DBus", "org.freedesktop.DBus", "NameHasOwner",
                           GLib.Variant("(s)", (service,)), "(b)")[0], "RemoteDesktop service")
+        self.pid = call("/org/freedesktop/DBus", "org.freedesktop.DBus", "GetConnectionUnixProcessID",
+                        GLib.Variant("(s)", (service,)), "(u)")[0]
         session = call(root, service, "CreateSession", reply="(o)")[0]
         session_interface = service + ".Session"
         call(session, session_interface, "Start")
@@ -619,7 +624,8 @@ class HeadlessCompositor:
 
 def run_once(binary, repository, name, output, timeout, metadata=True, display="headless",
              ping_ms=None, save_file=SAVE_FILE, wrap=None, cold_gpu_cache=False, secondary=None,
-             cycles=100, extra_env=None, scenario_steps=None, ui_scale=100, refresh_hz=None):
+             cycles=100, extra_env=None, scenario_steps=None, ui_scale=100, refresh_hz=None, gpu=False,
+             window_size=WINDOW_SIZE, session_overrides=None, gpu_timings=False):
     # Absolute: the app runs with its working directory in `output`.
     binary, repository, output = binary.resolve(), repository.resolve(), output.resolve()
     if display == "headless" and platform.system() != "Linux":
@@ -628,7 +634,7 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
         raise ValueError("Launch native profilers around a desktop run; --wrap currently requires Linux PID discovery")
     output.mkdir(parents=True, exist_ok=False)
     run_id = str(uuid.uuid4())
-    env = seed_profile(output, repository)
+    env = seed_profile(output, repository, window_size, session_overrides)
     scenario_file = output / "scenario.json"
     secondary = secondary.resolve() if secondary else None
     session_path = output / "session.json"
@@ -645,6 +651,9 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
     env.update(GITCOMET_UI_PROBE="1", GITCOMET_UI_PROBE_JSONL=str(frames),
                GITCOMET_UI_PROBE_LOG=str(output / "ui.log"), GITCOMET_UI_SCENARIO=str(scenario_file),
                GITCOMET_PERF_RUN_ID=run_id)
+    env.pop("GPUI_GPU_TIMINGS", None)
+    if gpu_timings:
+        env["GPUI_GPU_TIMINGS"] = "1"
     # Every short picker phase must contain complete probe intervals and
     # process samples; otherwise identical runs can have different metrics.
     env["GITCOMET_UI_PROBE_INTERVAL_MS"] = "250" if name == "repo-picker" else "1000"
@@ -662,20 +671,24 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
     capture = {"version": 2, "run_id": run_id, "scenario": name, "binary": str(binary),
                "binary_sha256": perf_metadata.sha256_file(binary), "repository": str(repository),
                "repository_head": git(repository, "rev-parse", "HEAD").stdout.decode().strip(),
-               "window_size": WINDOW_SIZE, "display": display,
+               "window_size": window_size, "display": display, "session_overrides": session_overrides or {},
                "refresh_hz": (refresh_hz or REFRESH_HZ) if display == "headless" else refresh_hz,
                "ui_scale_percent": ui_scale, "capabilities": perf_platform.capabilities(),
                "probe_interval_ms": int(env["GITCOMET_UI_PROBE_INTERVAL_MS"]),
-               "measurement_kind": "diagnostic" if wrap else "live_application",
+               "measurement_kind": "diagnostic" if wrap or gpu_timings else "live_application",
                "ping_ms": ping_ms, "wrap": wrap, "gpu_cache": "cold" if cold_gpu_cache else "warm",
                "load_before": load_average(), "outcome": "failed",
                "cycles": cycles if name == "lifecycle" else None, "extra_env": extra_env or {}}
+    capture["gpu_timings_requested"] = gpu_timings
+    capture["renderer_experiments"] = env.get("GPUI_GPU_EXPERIMENTS", "")
+    capture["graph_quad_experiment"] = env.get("GITCOMET_GPU_GRAPH_QUADS", "0")
+    capture["gpu_capture"] = {"requested": gpu}
     if metadata:
         (output / "environment.json").write_text(json.dumps(perf_metadata.collect(
             binaries=[("gitcomet", binary)], fixtures=[("repository", repository)],
             command=" ".join(sys.argv)), indent=2) + "\n", encoding="utf-8")
     samples = []
-    compositor = HeadlessCompositor(output, refresh_hz or REFRESH_HZ) if display == "headless" else None
+    compositor = HeadlessCompositor(output, refresh_hz or REFRESH_HZ, window_size) if display == "headless" else None
     if compositor:
         env = compositor.environment(env)
     started = time.time()
@@ -688,13 +701,19 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
         prefix = [part.replace("{output}", str(output)) for part in shlex.split(wrap)] if wrap else []
         process = subprocess.Popen([*prefix, str(binary)], env=env, cwd=output, stdin=subprocess.DEVNULL,
                                    stdout=subprocess.DEVNULL, stderr=stderr, start_new_session=True)
+        gpu_sampler = None
         try:
             app_pid = process.pid
+            if gpu:
+                gpu_sampler = perf_gpu.Sampler(output, {"app": None if prefix else app_pid,
+                                                       "compositor": compositor.pid if compositor else None})
             while process.poll() is None:
                 if time.time() - started > timeout:
                     raise TimeoutError(f"scenario {name} did not finish within {timeout} s")
                 if prefix and app_pid == process.pid:
                     app_pid = find_app_pid(process.pid, binary) or app_pid
+                    if gpu_sampler:
+                        gpu_sampler.set_app_pid(app_pid)
                 if needs_clipboard and compositor and frames.exists() and b'"scenario_ready"' in frames.read_bytes():
                     compositor.prime_clipboard()
                     capture["clipboard_input_primed"] = True
@@ -713,6 +732,8 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
             perf_platform.stop_tree(process)
             raise
         finally:
+            if gpu_sampler:
+                capture["gpu_capture"] = gpu_sampler.close()
             if compositor:
                 compositor.close()
             capture["exit_code"] = process.returncode
@@ -773,6 +794,7 @@ def summarize(directory):
     if capture.get("crash_reports"):
         problems.append(f"crash reports: {capture['crash_reports']}")
     records = load_records(directory)
+    gpu_records = perf_gpu.load(directory)
     starts = [r for r in records if r["event"] == "start"]
     if len(starts) != 1:
         problems.append(f"expected one probe start record, saw {len(starts)}")
@@ -813,8 +835,15 @@ def summarize(directory):
         if record["detail"]["state"] == "begin":
             begins[name] = record
         elif name in begins:
-            phases[name] = analyse_phase(begins.pop(name), record, draws, submits, by_op, applied,
+            begin = begins.pop(name)
+            phases[name] = analyse_phase(begin, record, draws, submits, by_op, applied,
                                          records, threads, process, start)
+            if capture.get("gpu_timings_requested"):
+                phases[name]["gpu_frames"] = perf_gpu_frames.summarize(records, begin["at_ms"], record["at_ms"], distribution)
+            if capture.get("gpu_capture", {}).get("requested"):
+                phases[name]["gpu"] = perf_gpu.summarize_phase(
+                    gpu_records, start["unix_ms"] + begin["at_ms"],
+                    start["unix_ms"] + record["at_ms"], distribution)
     if not phases and capture["scenario"] != "startup":
         problems.append("no complete phase")
     for name, phase in phases.items():
@@ -880,6 +909,8 @@ def summarize(directory):
                                 "dirty_to_draw_ms": r["at_ms"] - r["dirty_ms"]} for r in stalled],
                "operations": operations, "operation_results": operation_results, "unfinished_operations": unfinished,
                "binary_sha256": capture["binary_sha256"], "repository_head": capture["repository_head"],
+               "gpu_timings_requested": capture.get("gpu_timings_requested", False),
+               "gpu_capture": capture.get("gpu_capture", {"requested": False}),
                "valid": not problems, "problems": problems, "load_before": capture.get("load_before"),
                "load_after": capture.get("load_after"), "phases": phases,
                "note": "Submission is CPU/platform work, not display completion; see README."}
@@ -894,6 +925,10 @@ def analyse_phase(begin, end, draws, submits, by_op, applied, records, threads, 
     phase_draws = [r for t, r in draws if in_phase(t)]
     phase_submits = [r for t, r in submits if in_phase(t)]
     inputs = []
+    scoped_applied = [r for r in records if r["event"] == "state_applied"]
+    draw_windows = {r.get("window") for _, r in draws}
+    known_windows = draw_windows | {w["window"] for r in records if r["event"] == "scenario_windows"
+                                    for w in r["detail"]["windows"]}
     input_details = {r["detail"]["op"]: r["detail"] for r in records if r["event"] == "scenario_input"}
     for op, items in by_op.items():
         stage = {}
@@ -920,8 +955,7 @@ def analyse_phase(begin, end, draws, submits, by_op, applied, records, threads, 
             # evidence that this result was rendered. Legacy multiwindow runs
             # without this association cannot establish input-to-draw latency.
             expected_window = detail.get("window")
-            windows = {r.get("window") for _, r in draws}
-            own_draws = [(t, r) for t, r in draws if r.get("window") == expected_window] if expected_window else (draws if len(windows) == 1 else [])
+            own_draws = [(t, r) for t, r in draws if r.get("window") == expected_window] if expected_window else (draws if len(known_windows) == 1 else [])
             drawn = first_at_or_after(own_draws, at)
             if detail.get("intentional_dwell") or detail.get("no_op"):
                 drawn = None
@@ -932,7 +966,15 @@ def analyse_phase(begin, end, draws, submits, by_op, applied, records, threads, 
                     row["submitted_ms"] = submitted[1]["at_ms"] - scheduled
             publications = [r["b"] for r in stage.get("reduced", [])]
             if publications:
-                shown = first_at_or_after([(r["a"], r) for _, r in applied], max(publications))
+                # Every window has its own store/publication sequence. Legacy
+                # unscoped records cannot establish this latency across windows.
+                candidates = [(r["detail"]["publication"],
+                               {"at_ms": r["at_ms"], "b": r["detail"]["duration_ns"]})
+                              for r in scoped_applied if r["detail"]["window"] == expected_window]
+                if not scoped_applied and len(known_windows) == 1:
+                    candidates = [(r["a"], r) for _, r in applied]
+                candidates.sort(key=lambda item: item[0])
+                shown = first_at_or_after(candidates, max(publications))
                 if shown:
                     row["published_to_applied_ms"] = shown[1]["at_ms"] - max(
                         r["at_ms"] for r in stage["reduced"])
@@ -971,8 +1013,22 @@ def analyse_phase(begin, end, draws, submits, by_op, applied, records, threads, 
             thread_cpu[key] = thread_cpu.get(key, 0) + (row[2] - before[2]) / 1e6
             thread_wait[key] = thread_wait.get(key, 0) + (row[3] - before[3]) / 1e6
             thread_wakeups[key] = thread_wakeups.get(key, 0) + row[4] - before[4]
+    window_snapshot = next((r["detail"]["windows"] for r in reversed(records)
+                            if r["event"] == "scenario_windows" and r["at_ms"] <= lo), [])
+    live_windows = {r["window"] for r in window_snapshot} or {r.get("window") for r in phase_draws}
+    windows = {}
+    for window_id in sorted(w for w in live_windows if w is not None):
+        window_draws = [r for r in phase_draws if r.get("window") == window_id]
+        info = next((r for r in window_snapshot if r["window"] == window_id), {})
+        windows[window_id] = {
+            "name": info.get("name"), "active_at_start": info.get("active"),
+            "repository": info.get("repository"), "frames": len(window_draws),
+            "draw_ms": distribution(r["duration_ms"] for r in window_draws),
+            "invalidations": sum(r.get("invalidations", 0) for r in window_draws),
+        }
     return {
         "seconds": seconds,
+        "windows": windows,
         "frames": len(phase_draws), "frames_per_second": len(phase_draws) / seconds if seconds else None,
         "invalidations": sum(r.get("invalidations", 0) for r in phase_draws),
         "draw_ms": distribution(r["duration_ms"] for r in phase_draws),
@@ -1142,6 +1198,8 @@ def measure(args):
     session = {"measurement_id": str(uuid.uuid4()), "session": args.session, "pairs": args.pairs,
                "candidate_runtime": candidate,
                "display": args.display,
+               "gpu_sampling": args.gpu,
+               "gpu_timings": args.gpu_timings,
                "scenarios": args.scenarios, "repository": str(repository), "repository_head": head,
                "binaries": {k: str(v) for k, v in binaries.items()}, "hashes": hashes,
                "environment": perf_metadata.collect(binaries=list(binaries.items()),
@@ -1160,7 +1218,7 @@ def measure(args):
                     summary = run_once(binaries[variant], repository, name, output, args.timeout,
                                        metadata=False, display=args.display, save_file=args.save_file,
                                        secondary=args.secondary_repository, wrap=runtime["wrap"],
-                                       extra_env=runtime["env"])
+                                       extra_env=runtime["env"], gpu=args.gpu, gpu_timings=args.gpu_timings)
                     if summary["binary_sha256"] != hashes[variant]:
                         raise ValueError(f"{variant} binary changed during the session")
                     if not summary["valid"]:
@@ -1182,6 +1240,10 @@ def report(directories):
         raise ValueError("a copied session is not an independent measurement")
     reference = sessions[0]
     for other in sessions[1:]:
+        if other.get("gpu_sampling", False) != reference.get("gpu_sampling", False):
+            raise ValueError("sessions disagree on GPU sampling")
+        if other.get("gpu_timings", False) != reference.get("gpu_timings", False):
+            raise ValueError("sessions disagree on GPU timestamps")
         for key in ("hashes", "scenarios", "repository_head", "display", "candidate_runtime"):
             if other.get(key) != reference.get(key):
                 raise ValueError(f"sessions disagree on {key}")
@@ -1226,6 +1288,10 @@ def main():
     single.add_argument("--timeout", type=int, default=600)
     single.add_argument("--display", choices=("headless", "desktop"), default="headless")
     single.add_argument("--ping-ms", type=int)
+    single.add_argument("--gpu-timings", action="store_true", help="asynchronous native GPU frame and pass timestamps")
+    single.add_argument("--gpu", action="store_true", help="sample NVIDIA process/device GPU usage on Linux")
+    single.add_argument("--window-size", type=positive_int, nargs=2, default=WINDOW_SIZE,
+                        metavar=("WIDTH", "HEIGHT"), help="window dimensions in logical pixels")
     single.add_argument("--save-file", default=SAVE_FILE, help="tracked file status-save and status-touch rewrite")
     single.add_argument("--wrap", help="diagnostic wrapper command, e.g. 'perf record -o {output}/cpu.data --'")
     single.add_argument("--secondary-repository", type=Path, help="repository lifecycle opens and closes")
@@ -1244,6 +1310,8 @@ def main():
     paired.add_argument("--reverse", action="store_true")
     paired.add_argument("--timeout", type=int, default=600)
     paired.add_argument("--display", choices=("headless", "desktop"), default="headless")
+    paired.add_argument("--gpu-timings", action="store_true", help="collect native GPU timestamps on both sides")
+    paired.add_argument("--gpu", action="store_true", help="sample GPU usage on both sides of each pair")
     paired.add_argument("--save-file", default=SAVE_FILE, help="tracked file status-save and status-touch rewrite")
     paired.add_argument("--secondary-repository", type=Path, help="repository lifecycle opens and closes")
     paired.add_argument("--max-load", type=float,
@@ -1265,7 +1333,8 @@ def main():
                           display=args.display, ping_ms=args.ping_ms, save_file=args.save_file,
                           wrap=args.wrap, cold_gpu_cache=args.cold_gpu_cache,
                           secondary=args.secondary_repository, cycles=args.cycles,
-                          extra_env=dict(item.split("=", 1) for item in args.env))
+                          extra_env=dict(item.split("=", 1) for item in args.env), gpu=args.gpu,
+                          window_size=args.window_size, gpu_timings=args.gpu_timings)
         print(json.dumps({"valid": result["valid"], "problems": result["problems"]}, indent=2))
         if not result["valid"]:
             sys.exit(1)

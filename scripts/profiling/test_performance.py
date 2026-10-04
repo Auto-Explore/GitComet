@@ -14,6 +14,7 @@ import perf_report
 import perf_workloads
 
 live = perf_workloads.module("test_live_ui", "live-ui.py")
+multi_window = perf_workloads.module("test_multi_window", "multi-window.py")
 
 
 class ReportingTests(unittest.TestCase):
@@ -214,6 +215,94 @@ class ReportingTests(unittest.TestCase):
         records[0]["detail"]["intentional_dwell"] = True
         result = live.analyse_phase({"at_ms": 0}, {"at_ms": 100}, draws, [], stages, [], records, [], [], {"unix_ms": 0})
         self.assertEqual(result["inputs"]["input_to_draw_ms"]["count"], 0)
+
+    def test_applied_publications_are_scoped_to_the_input_window(self):
+        records = [
+            {"event": "scenario_input", "detail": {"op": 1, "window": "A"}},
+            {"event": "state_applied", "at_ms": 13,
+             "detail": {"window": "B", "publication": 50, "duration_ns": 9_000_000}},
+            {"event": "state_applied", "at_ms": 20,
+             "detail": {"window": "A", "publication": 2, "duration_ns": 1_000_000}},
+            {"event": "scenario_windows", "at_ms": 0, "detail": {"windows": [
+                {"name": "primary", "window": "A", "active": True},
+                {"name": "other", "window": "B", "active": False}]}}
+        ]
+        stages = {1: [{"stage": "input", "at_ms": 10, "a": 10_000_000, "b": 1},
+                      {"stage": "reduced", "at_ms": 11, "a": 1000, "b": 2},
+                      {"stage": "witness", "at_ms": 21, "a": 1}]}
+        draws = [(30, {"window": "A", "at_ms": 35, "duration_ms": 5})]
+        args = ({"at_ms": 0}, {"at_ms": 100}, draws, [], stages, [], records, [], [], {"unix_ms": 0})
+        result = live.analyse_phase(*args)
+        self.assertEqual(result["inputs"]["published_to_applied_ms"]["p50"], 9)
+        self.assertEqual(result["inputs"]["apply_ms"]["p50"], 1)
+        self.assertEqual(result["windows"]["B"]["frames"], 0)
+        self.assertEqual(result["windows"]["A"]["frames"], 1)
+        # A different store's larger sequence must never satisfy window A.
+        records.pop(2)
+        result = live.analyse_phase(*args)
+        self.assertEqual(result["inputs"]["apply_ms"]["count"], 0)
+        # Legacy unscoped events are ambiguous even if only one window drew.
+        records.pop(1)
+        applied = [(2, {"a": 2, "b": 9_000_000, "at_ms": 13})]
+        result = live.analyse_phase(*args[:5], applied, *args[6:])
+        self.assertEqual(result["inputs"]["apply_ms"]["count"], 0)
+
+    def test_multi_window_isolation_uses_snapshot_after_last_input(self):
+        def snapshot(at, primary, other):
+            return {"event": "scenario_windows", "at_ms": at, "detail": {"windows": [
+                {"name": "primary", "window": "A", "selected_commit": primary},
+                {"name": "window-1", "window": "B", "selected_commit": other}]}}
+        records = [snapshot(0, "one", "two"),
+                   {"event": "scenario_phase", "at_ms": 1, "detail": {"name": "focus_1", "state": "begin"}},
+                   snapshot(2, "one", "two"),  # focus changed, before the first input
+                   {"event": "scenario_phase", "at_ms": 10, "detail": {"name": "focus_1", "state": "end"}},
+                   snapshot(11, "one", "three")]
+        with patch.object(multi_window.live, "load_records", return_value=records):
+            multi_window.verify_isolation(Path("unused"))
+            records[-1] = snapshot(11, "changed incorrectly", "three")
+            with self.assertRaisesRegex(ValueError, "another window's selection"):
+                multi_window.verify_isolation(Path("unused"))
+            records.pop()
+            with self.assertRaisesRegex(ValueError, "missing window snapshot"):
+                multi_window.verify_isolation(Path("unused"))
+
+    def test_repository_loading_is_not_reported_as_keystroke_latency(self):
+        result = {"valid": True, "phases": {name: {
+            "inputs": {"input_to_draw_ms": {"p95": 1000}}}
+            for name in ("warmup", "open_2", "cycle_0", "select")}}
+        findings = multi_window.findings(result)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["metric"], "select.input_to_draw_ms.p95")
+
+    def test_window_retention_uses_settled_resources_after_closing(self):
+        result = {"phases": {
+            "before_cycles": {"end_sample": {"fds": 80, "pss_kib": 1000}},
+            "cycle_9": {"fds": 95, "end_sample": {"fds": 80, "pss_kib": 1500}},
+            "after_cycles": {"fds": 82, "end_sample": {"fds": 80, "pss_kib": 1300}}}}
+        data = multi_window.retention(result, 10)
+        self.assertEqual(data["fds"]["growth_per_cycle"], 0)
+        self.assertEqual(data["pss_kib"]["growth_per_cycle"], 30)
+        self.assertIsNone(data["private_kib"]["growth_per_cycle"])
+
+    def test_background_coverage_requires_input_in_another_window_during_its_load(self):
+        records = [{"event": "scenario_phase", "at_ms": at, "detail": {"name": name, "state": state}}
+                   for name, state, at in (("background_load", "begin", 0), ("background_load", "end", 10),
+                                          ("select_while_loading", "begin", 10), ("select_while_loading", "end", 100))]
+        records += [{"event": "scenario_input", "at_ms": at, "detail": {"op": op, "window": window}}
+                    for op, window, at in ((1, "background", 5), (2, "primary", 40), (3, "background", 40))]
+        records += [{"event": "stage", "stage": "input", "at_ms": 40, "op": op} for op in (2, 3)]
+        records += [{"event": "stage", "stage": "task_finished", "label": "LoadLog", "op": 1,
+                     "at_ms": 50, "a": 30_000_000}]
+        with patch.object(multi_window.live, "load_records", return_value=records):
+            self.assertEqual(multi_window.background_overlap(Path("unused"))["overlapping_inputs"], 1)
+            del records[5]["detail"]["window"]
+            self.assertEqual(multi_window.background_overlap(Path("unused"))["overlapping_inputs"], 0)
+            records[5]["detail"]["window"] = "primary"
+            records[-1]["at_ms"] = 30
+            self.assertEqual(multi_window.background_overlap(Path("unused"))["overlapping_inputs"], 0)
+            # An unrelated load cannot establish background-window coverage.
+            records[-1].update(op=0, at_ms=50)
+            self.assertEqual(multi_window.background_overlap(Path("unused"))["overlapping_inputs"], 0)
 
     def test_long_frame_is_retained_and_dropped_records_still_invalidate(self):
         with tempfile.TemporaryDirectory() as directory:

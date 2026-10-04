@@ -30,6 +30,7 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 
 mod operations;
+mod windows;
 use operations::Operation;
 
 const SCENARIO_ENV: &str = "GITCOMET_UI_SCENARIO";
@@ -141,6 +142,24 @@ enum Step {
     /// picked, as a traced input whose witness is that repository loaded.
     OpenRepo {
         path: PathBuf,
+        #[serde(default = "default_true")]
+        wait: bool,
+    },
+    /// Open a real application window and make it the input target.
+    NewWindow {
+        name: String,
+    },
+    /// Activate a named window. The initial window is named `primary`.
+    SwitchWindow {
+        name: String,
+    },
+    /// Close another named window through the normal close guards.
+    CloseWindow {
+        name: String,
+    },
+    /// Assert and record the live main windows and their repository state.
+    ExpectWindows {
+        count: usize,
     },
     /// Minimizes the window (idle measurements).
     Minimize,
@@ -266,6 +285,7 @@ struct Pending {
 
 struct Driver {
     window: AnyWindowHandle,
+    windows: FxHashMap<String, AnyWindowHandle>,
     view: Entity<GitCometView>,
     changed: smol::channel::Receiver<()>,
     _observers: Vec<gpui::Subscription>,
@@ -402,6 +422,27 @@ impl Driver {
                 .timer(Duration::from_millis(50))
                 .await;
         };
+        let (changed, observers) = Self::observe_view(&view, cx);
+        Ok(Self {
+            window,
+            windows: [("primary".into(), window)].into_iter().collect(),
+            view,
+            changed,
+            _observers: observers,
+            errors: Vec::new(),
+            phase: None,
+            operation: None,
+            pointer_expected: None,
+            work_start: history_perf::snapshot(),
+            #[cfg(feature = "perf-alloc")]
+            allocation_start: crate::perf_alloc::current_alloc_metrics(),
+        })
+    }
+
+    fn observe_view(
+        view: &Entity<GitCometView>,
+        cx: &mut AsyncApp,
+    ) -> (smol::channel::Receiver<()>, Vec<gpui::Subscription>) {
         let (tx, changed) = smol::channel::bounded(1);
         let observers = cx.update(|cx| {
             let (ui_model, main_pane, details_pane) = {
@@ -423,7 +464,7 @@ impl Driver {
                     let tx = tx.clone();
                     move |_, _| notify(&tx)
                 }),
-                cx.observe(&view, {
+                cx.observe(view, {
                     let tx = tx.clone();
                     move |_, _| notify(&tx)
                 }),
@@ -438,19 +479,7 @@ impl Driver {
                 cx.observe(&history, move |_, _| notify(&tx)),
             ]
         });
-        Ok(Self {
-            window,
-            view,
-            changed,
-            _observers: observers,
-            errors: Vec::new(),
-            phase: None,
-            operation: None,
-            pointer_expected: None,
-            work_start: history_perf::snapshot(),
-            #[cfg(feature = "perf-alloc")]
-            allocation_start: crate::perf_alloc::current_alloc_metrics(),
-        })
+        (changed, observers)
     }
 
     fn end_phase(&mut self) {
@@ -498,6 +527,7 @@ impl Driver {
             }
             Step::Phase { name } => {
                 self.end_phase();
+                self.record_windows(cx)?;
                 record("scenario_phase", json!({"name": name, "state": "begin"}));
                 self.phase = Some(name.clone());
                 self.work_start = history_perf::snapshot();
@@ -684,12 +714,22 @@ impl Driver {
                 })
                 .await
             }
-            Step::OpenRepo { path } => {
+            Step::NewWindow { name } => self.new_window(name, cx).await,
+            Step::SwitchWindow { name } => self.switch_window(name, cx).await,
+            Step::CloseWindow { name } => self.close_window(name, cx).await,
+            Step::ExpectWindows { count } => {
+                let actual = self.record_windows(cx)?;
+                if actual != *count {
+                    return Err(format!("expected {count} main windows, found {actual}"));
+                }
+                Ok(())
+            }
+            Step::OpenRepo { path, wait } => {
                 let path =
                     std::fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))?;
                 let store = cx.update(|cx| Arc::clone(&self.view.read(cx).store));
                 let witness = WitnessKind::RepoOpen { path: path.clone() };
-                self.scheduled(1, 0, Some(witness), cx, move |_, _, _| {
+                self.scheduled(1, 0, wait.then_some(witness), cx, move |_, _, _| {
                     store.dispatch(Msg::OpenRepo(path.clone()));
                 })
                 .await
@@ -1504,5 +1544,26 @@ mod tests {
         ]}))
         .expect("parse performance steps");
         assert_eq!(scenario.steps.len(), 6);
+    }
+
+    #[test]
+    fn multi_window_steps_keep_repository_waits_explicit() {
+        let scenario: Scenario = serde_json::from_value(json!({"steps": [
+            {"do": "new_window", "name": "other"},
+            {"do": "open_repo", "path": "/tmp/repo", "wait": false},
+            {"do": "switch_window", "name": "primary"},
+            {"do": "expect_windows", "count": 2},
+            {"do": "close_window", "name": "other"},
+            {"do": "open_repo", "path": "/tmp/repo"}
+        ]}))
+        .unwrap();
+        assert!(matches!(
+            scenario.steps[1],
+            Step::OpenRepo { wait: false, .. }
+        ));
+        assert!(matches!(
+            scenario.steps[5],
+            Step::OpenRepo { wait: true, .. }
+        ));
     }
 }
