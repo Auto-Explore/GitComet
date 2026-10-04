@@ -811,6 +811,7 @@ mod tests {
         let mut state = repo_with_workspace();
         let repo = state.repos.iter_mut().find(|r| r.id == RepoId(1)).unwrap();
         repo.head_branch = Loadable::Ready("main".into());
+        let before_rev = state.repos[0].workspace.rev;
 
         let effects = enter_workspace(&mut state, RepoId(1));
         assert_eq!(effects.len(), 1);
@@ -824,6 +825,11 @@ mod tests {
         assert!(
             state.repos[0].workspace.busy.switching,
             "moving HEAD under the user is its own kind of busy"
+        );
+        assert_ne!(
+            state.repos[0].workspace.rev,
+            before_rev,
+            "the presentation is cached on this counter, so a switch that does not bump it would leave the tab describing a working directory that has moved"
         );
     }
 
@@ -938,6 +944,11 @@ mod tests {
         // on, so both ordinary views are now stale.
         let mut state = repo_with_workspace();
         let effects = workspace_active_finished(&mut state, RepoId(1), true, None, Ok(()));
+        assert_ne!(
+            state.repos[0].workspace.rev,
+            0,
+            "the switch has to reach the cached presentation, which only sees this counter"
+        );
         assert!(effects.iter().any(|effect| matches!(
             effect,
             Effect::LoadWorktreeStatus { repo_id: RepoId(1) }

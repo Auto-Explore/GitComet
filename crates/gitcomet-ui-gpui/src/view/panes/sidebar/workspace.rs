@@ -1090,6 +1090,25 @@ mod tests {
     }
 
     #[test]
+    fn a_workspace_the_working_directory_is_on_says_nothing_about_it() {
+        // The other half of the notice: a workspace in its normal state must not
+        // carry a permanent warning at the top of the tab.
+        let repo = repo_with(WorkspaceState::new("main").with_branches(vec![VirtualBranch::new("api")]));
+        let presentation = WorkspacePresentation::build(Some(&repo));
+        assert!(
+            presentation.rows.iter().all(|row| !matches!(
+                row,
+                WorkspaceRow::Placeholder { message } if message.contains("workspace")
+            )),
+            "the notice is about being off the workspace, not about being in it"
+        );
+        assert!(
+            matches!(presentation.rows.first(), Some(WorkspaceRow::Target { .. })),
+            "and the target row still comes first"
+        );
+    }
+
+    #[test]
     fn a_stacked_branch_reports_its_depth() {
         let repo = repo_with(
             WorkspaceState::new("main").with_branches(vec![
