@@ -1989,6 +1989,11 @@ impl GixRepo {
     }
 
     fn push_force_with_optional_output_impl(&self, capture_output: bool) -> Result<CommandOutput> {
+        // A force push publishes HEAD just as an ordinary push does, and with
+        // `--force-with-lease` it would overwrite the remote's copy of the
+        // workspace branch rather than merely adding to it. See
+        // [`GixRepo::refuse_workspace_head_action`], which carries the reasoning.
+        self.refuse_workspace_head_action("a force push")?;
         if let Some(branch) = self.current_branch_name()?
             && let Some(upstream) = self.branch_upstream(&branch)?
         {
@@ -2019,6 +2024,7 @@ impl GixRepo {
         &self,
         lease: &ForcePushLease,
     ) -> Result<CommandOutput> {
+        self.refuse_workspace_head_action("a force push with a lease")?;
         self.push_head_to_branch_with_oid_lease_with_output_impl(lease)
     }
 

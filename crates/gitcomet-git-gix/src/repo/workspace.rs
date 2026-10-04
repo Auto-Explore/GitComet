@@ -198,132 +198,139 @@ impl GixRepo {
 
     // ── The working directory ────────────────────────────────────
 
-/// Refuse an action that would land on `gitcomet/workspace` because it acts on
-/// **HEAD** rather than on a branch the user picked.
-///
-/// Hiding the branch from every branch list keeps it out of the pickers, but a
-/// plain commit, an amend and an ordinary push all apply to whatever HEAD is —
-/// and entering the workspace is exactly what puts HEAD there. Without this,
-/// the user's own commits land on GitComet's bookkeeping branch, where the next
-/// rebuild discards them, and the ordinary push publishes that branch to the
-/// user's remote under their name.
-///
-/// `action` names what was refused, so the message says what was refused rather
-/// than something generic. The escape is the Workspace tab, which works on the
-/// branch each change belongs to.
-pub(super) fn refuse_workspace_head_action(&self, action: &str) -> Result<()> {
-    if let Ok(Some(branch)) = self.current_branch_name()
-        && is_workspace_branch(branch.trim())
-    {
-        return Err(Error::new(ErrorKind::Backend(format!(
-            "'{branch}' is GitComet's own branch and is rebuilt from the applied \
-             branches, so {action} here would be undone by the next apply. Use \
-             the Workspace tab: it works on the branch each change belongs to, \
-             and pushes a named branch rather than HEAD."
-        ))));
+    /// Refuse an action that would land on `gitcomet/workspace` because it acts on
+    /// **HEAD** rather than on a branch the user picked.
+    ///
+    /// Hiding the branch from every branch list keeps it out of the pickers, but a
+    /// plain commit, an amend and an ordinary push all apply to whatever HEAD is —
+    /// and entering the workspace is exactly what puts HEAD there. Without this,
+    /// the user's own commits land on GitComet's bookkeeping branch, where the next
+    /// rebuild discards them, and the ordinary push publishes that branch to the
+    /// user's remote under their name.
+    ///
+    /// `action` names what was refused, so the message says what was refused rather
+    /// than something generic. The escape is the Workspace tab, which works on the
+    /// branch each change belongs to.
+    ///
+    /// A failure to name HEAD is treated as "not the workspace branch" rather
+    /// than propagated: `current_branch_name` needs a commit to read, so in a
+    /// repository that has none yet — where a first commit is the one thing the
+    /// user is trying to do — it fails, and failing there would block the very
+    /// commit the guard exists to protect. Whatever command asked is about to
+    /// run against the same repository and will report the real problem.
+    pub(super) fn refuse_workspace_head_action(&self, action: &str) -> Result<()> {
+        if let Ok(Some(branch)) = self.current_branch_name()
+            && is_workspace_branch(branch.trim())
+        {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "'{branch}' is GitComet's own branch and is rebuilt from the applied \
+                 branches, so {action} here would be undone by the next apply. Use \
+                 the Workspace tab: it works on the branch each change belongs to, \
+                 and pushes a named branch rather than HEAD."
+            ))));
+        }
+        Ok(())
     }
-    Ok(())
-}
 
-/// Whether the working directory is currently sitting on the workspace branch.
-///
-/// This is what decides whether a rebuild should also move the files: a
-/// workspace the user is not looking at has no business changing their
-/// working tree, and one they are looking at has to follow.
-pub(super) fn workspace_is_checked_out(&self) -> bool {
-    self.current_branch_impl()
-        .map(|branch| branch == WORKSPACE_BRANCH)
-        .unwrap_or(false)
-}
-
-/// Put the working directory on the workspace branch, building it first if it
-/// does not exist yet.
-///
-/// The checkout is git's own, so its rule applies: local changes that the
-/// switch would overwrite are refused rather than carried, and nothing is
-/// discarded. That refusal is the whole safety story of this feature — the
-/// user is told which move failed and why, and gitcomet/workspace has not been
-/// created and left half-applied behind.
-pub(super) fn enter_workspace_impl(&self) -> Result<CommitId> {
-    if self.resolve_revision(WORKSPACE_BRANCH)?.is_none() {
-        let state = self.read_workspace_impl()?;
-        let applied = state.application_order()?;
-        let names: Vec<&str> = applied.iter().map(|branch| branch.name.as_str()).collect();
-        self.update_workspace_branch_impl(&names)?;
+    /// Whether the working directory is currently sitting on the workspace branch.
+    ///
+    /// This is what decides whether a rebuild should also move the files: a
+    /// workspace the user is not looking at has no business changing their
+    /// working tree, and one they are looking at has to follow.
+    pub(super) fn workspace_is_checked_out(&self) -> bool {
+        self.current_branch_impl()
+            .map(|branch| branch == WORKSPACE_BRANCH)
+            .unwrap_or(false)
     }
-    let tip = self.require_revision(WORKSPACE_BRANCH)?;
 
-    let mut cmd = self.git_plumbing();
-    cmd.arg("checkout")
-        // Submodules are the user's business, not a side effect of which
-        // virtual branches happen to be applied.
-        .arg("--no-recurse-submodules")
-        .arg(WORKSPACE_BRANCH);
-    run_git_simple(cmd, "git checkout").map_err(|error| {
-        Error::new(ErrorKind::Backend(format!(
-            "could not switch the working directory to the workspace: {error}\n\n\
-             GitComet will not discard uncommitted changes. Commit or stash \
-             them, then try again."
-        )))
-    })?;
-    Ok(tip)
-}
+    /// Put the working directory on the workspace branch, building it first if it
+    /// does not exist yet.
+    ///
+    /// The checkout is git's own, so its rule applies: local changes that the
+    /// switch would overwrite are refused rather than carried, and nothing is
+    /// discarded. That refusal is the whole safety story of this feature — the
+    /// user is told which move failed and why, and gitcomet/workspace has not been
+    /// created and left half-applied behind.
+    pub(super) fn enter_workspace_impl(&self) -> Result<CommitId> {
+        if self.resolve_revision(WORKSPACE_BRANCH)?.is_none() {
+            let state = self.read_workspace_impl()?;
+            let applied = state.application_order()?;
+            let names: Vec<&str> = applied.iter().map(|branch| branch.name.as_str()).collect();
+            self.update_workspace_branch_impl(&names)?;
+        }
+        let tip = self.require_revision(WORKSPACE_BRANCH)?;
 
-/// Take the working directory back off the workspace branch and onto `onto`.
-///
-/// `onto` is the branch the user was on before they entered the workspace, so
-/// this is the inverse of [`Self::enter_workspace_impl`] and carries the same
-/// refusal rule.
-pub(super) fn leave_workspace_impl(&self, onto: &str) -> Result<()> {
-    self.require_revision(onto)?;
-    let mut cmd = self.git_plumbing();
-    cmd.arg("checkout")
-        .arg("--no-recurse-submodules")
-        .arg(onto);
-    run_git_simple(cmd, "git checkout").map_err(|error| {
-        Error::new(ErrorKind::Backend(format!(
-            "could not switch back to '{onto}': {error}\n\n\
-             GitComet will not discard uncommitted changes. Commit or stash \
-             them, then try again."
-        )))
-    })
-}
-
-/// Move the working directory from one workspace tree to another.
-///
-/// This is the two-way tree switch `git checkout` performs internally, and it is
-/// the reason applying a branch does not throw away work: a file the user has
-/// edited and that the applied-set change does *not* touch keeps its edit and
-/// takes the new committed version underneath it, while a file that is both
-/// edited *and* changed by the switch is refused outright — git's own rule, and
-/// the correct one, because there is no automatic answer to that conflict.
-///
-/// The index and working tree are verified before anything is written, so a
-/// refusal leaves both exactly as they were. Callers must therefore do this
-/// *before* moving the workspace ref, not after, or the two would disagree.
-pub(super) fn sync_workspace_workdir_impl(
-    old_tip: &CommitId,
-    new_tip: &CommitId,
-) -> Result<()> {
-    if old_tip == new_tip {
-        return Ok(());
+        let mut cmd = self.git_plumbing();
+        cmd.arg("checkout")
+            // Submodules are the user's business, not a side effect of which
+            // virtual branches happen to be applied.
+            .arg("--no-recurse-submodules")
+            .arg(WORKSPACE_BRANCH);
+        run_git_simple(cmd, "git checkout").map_err(|error| {
+            Error::new(ErrorKind::Backend(format!(
+                "could not switch the working directory to the workspace: {error}\n\n\
+                 GitComet will not discard uncommitted changes. Commit or stash \
+                 them, then try again."
+            )))
+        })?;
+        Ok(tip)
     }
-    let mut cmd = self.git_plumbing();
-    cmd.arg("read-tree")
-        .arg("-u")
-        .arg("-m")
-        .arg(old_tip.as_ref())
-        .arg(new_tip.as_ref());
-    run_git_simple(cmd, "git read-tree").map_err(|error| {
-        Error::new(ErrorKind::Backend(format!(
-            "could not update the working directory: {error}\n\n\
-             GitComet will not discard uncommitted changes. Commit or stash \
-             the files above, then try again."
-        )))
-    })
-}
 
-// ── The workspace branch ─────────────────────────────────────
+    /// Take the working directory back off the workspace branch and onto `onto`.
+    ///
+    /// `onto` is the branch the user was on before they entered the workspace, so
+    /// this is the inverse of [`Self::enter_workspace_impl`] and carries the same
+    /// refusal rule.
+    pub(super) fn leave_workspace_impl(&self, onto: &str) -> Result<()> {
+        self.require_revision(onto)?;
+        let mut cmd = self.git_plumbing();
+        cmd.arg("checkout")
+            .arg("--no-recurse-submodules")
+            .arg(onto);
+        run_git_simple(cmd, "git checkout").map_err(|error| {
+            Error::new(ErrorKind::Backend(format!(
+                "could not switch back to '{onto}': {error}\n\n\
+                 GitComet will not discard uncommitted changes. Commit or stash \
+                 them, then try again."
+            )))
+        })
+    }
+
+    /// Move the working directory from one workspace tree to another.
+    ///
+    /// This is the two-way tree switch `git checkout` performs internally, and it is
+    /// the reason applying a branch does not throw away work: a file the user has
+    /// edited and that the applied-set change does *not* touch keeps its edit and
+    /// takes the new committed version underneath it, while a file that is both
+    /// edited *and* changed by the switch is refused outright — git's own rule, and
+    /// the correct one, because there is no automatic answer to that conflict.
+    ///
+    /// The index and working tree are verified before anything is written, so a
+    /// refusal leaves both exactly as they were. Callers must therefore do this
+    /// *before* moving the workspace ref, not after, or the two would disagree.
+    pub(super) fn sync_workspace_workdir_impl(
+        old_tip: &CommitId,
+        new_tip: &CommitId,
+    ) -> Result<()> {
+        if old_tip == new_tip {
+            return Ok(());
+        }
+        let mut cmd = self.git_plumbing();
+        cmd.arg("read-tree")
+            .arg("-u")
+            .arg("-m")
+            .arg(old_tip.as_ref())
+            .arg(new_tip.as_ref());
+        run_git_simple(cmd, "git read-tree").map_err(|error| {
+            Error::new(ErrorKind::Backend(format!(
+                "could not update the working directory: {error}\n\n\
+                 GitComet will not discard uncommitted changes. Commit or stash \
+                 the files above, then try again."
+            )))
+        })
+    }
+
+    // ── The workspace branch ─────────────────────────────────────
 
     pub(super) fn update_workspace_branch_impl(&self, applied: &[&str]) -> Result<CommitId> {
         let state = self.read_workspace_impl()?;
@@ -899,7 +906,6 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     })
 }
 
-/// Whether `name` is one of GitComet's own branches rather than a user's.
 /// The mode out of `git ls-files -s` or `git ls-tree`, if the output names one.
 ///
 /// Only the two executable modes are interesting; anything else is a plain file
@@ -912,6 +918,7 @@ fn parse_mode(output: &str) -> Option<&'static str> {
     }
 }
 
+/// Whether `name` is one of GitComet's own branches rather than a user's.
 pub(crate) fn is_workspace_branch(name: &str) -> bool {
     name.starts_with(WORKSPACE_REF_PREFIX)
 }
@@ -920,7 +927,7 @@ pub(crate) fn is_workspace_branch(name: &str) -> bool {
 mod tests {
     use super::*;
 
-    use gitcomet_core::services::{GitRepository, PullMode, ResetMode};
+    use gitcomet_core::services::{ForcePushLease, GitRepository, PullMode, ResetMode};
 
     fn git(root: &Path, args: &[&str]) -> String {
         let mut cmd = std::process::Command::new("git");
@@ -936,7 +943,7 @@ mod tests {
 
     /// A repository with two virtual branches whose changes touch different
     /// files, so applying and unapplying one is visible in the other's absence.
-    fn repo_with_two_branches() -> (tempfile::TempDir, GixRepo) {
+    fn repo_with_two_branches() -> (tempfile::TempDir, GixRepo, String) {
         let temp = tempfile::tempdir().expect("tempdir");
         let root = temp.path();
         git(root, &["init"]);
@@ -970,7 +977,7 @@ mod tests {
         ]);
         let repo = open_repo(root);
         repo.write_workspace(&state).expect("write workspace");
-        (temp, repo)
+        (temp, repo, default_branch)
     }
 
     fn open_repo(workdir: &Path) -> GixRepo {
@@ -984,7 +991,7 @@ mod tests {
 
     #[test]
     fn entering_the_workspace_puts_every_applied_branch_in_the_files() {
-        let (temp, repo) = repo_with_two_branches();
+        let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
         let tip = repo.enter_workspace().expect("enter workspace");
 
@@ -1003,7 +1010,7 @@ mod tests {
     fn unapplying_a_branch_keeps_edits_to_files_it_never_touched() {
         // The property the whole design rests on: a rebuild moves the working
         // directory without taking uncommitted work with it.
-        let (temp, repo) = repo_with_two_branches();
+        let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
         repo.enter_workspace().expect("enter workspace");
 
@@ -1035,7 +1042,7 @@ mod tests {
         // edited and changed by the switch has no automatic answer, so the
         // switch is refused — and because the sync runs before the ref moves,
         // a refusal cannot leave the two disagreeing.
-        let (temp, repo) = repo_with_two_branches();
+        let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
         repo.enter_workspace().expect("enter workspace");
         let before = git(root, &["rev-parse", WORKSPACE_BRANCH]);
@@ -1066,7 +1073,7 @@ mod tests {
 
     #[test]
     fn a_rebuild_does_not_touch_the_files_of_a_workspace_that_is_not_checked_out() {
-        let (temp, repo) = repo_with_two_branches();
+        let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
         assert!(!repo.workspace_is_checked_out());
 
@@ -1083,7 +1090,7 @@ mod tests {
 
     #[test]
     fn leaving_the_workspace_returns_to_the_branch_it_came_from() {
-        let (temp, repo) = repo_with_two_branches();
+        let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
         let original = repo.current_branch().expect("current branch");
         repo.enter_workspace().expect("enter workspace");
@@ -1103,7 +1110,7 @@ mod tests {
         // and the message has to say which pair: the merge itself only knows
         // that the branch it was adding does not fit, because the others are
         // already one merged tree by the time it runs.
-        let (temp, repo) = repo_with_two_branches();
+        let (temp, repo, _) = repo_with_two_branches();
         git(
             temp.path(),
             &["checkout", "api"],
@@ -1328,7 +1335,7 @@ mod tests {
         // `git merge-tree` needs an explicit base and there is none here.
         // Falling back to `ours` gives a two-way merge, which surfaces the
         // clash rather than silently picking a side.
-        let (temp, repo) = repo_with_two_branches();
+        let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
         git(root, &["checkout", "--orphan", "lonely"]);
         git(root, &["rm", "-rfq", "."]);
@@ -2418,6 +2425,48 @@ mod tests {
         let before = git(root, &["rev-parse", WORKSPACE_BRANCH]);
 
         assert_refused(repo.pull_with_output(PullMode::Merge), "a pull");
+
+        assert_eq!(git(root, &["rev-parse", WORKSPACE_BRANCH]), before);
+    }
+
+    #[test]
+    fn a_force_push_inside_the_workspace_is_refused() {
+        // A force push publishes HEAD just as an ordinary push does, and with
+        // `--force-with-lease` it would overwrite what the remote already has
+        // rather than add to it — so the ordinary-push guard is not enough.
+        let (temp, _remote, repo) = repo_with_a_remote();
+        let root = temp.path();
+        repo.enter_workspace().expect("enter");
+        let before = git(root, &["rev-parse", WORKSPACE_BRANCH]);
+
+        assert_refused(repo.push_force_with_output(), "a force push");
+
+        assert_eq!(git(root, &["rev-parse", WORKSPACE_BRANCH]), before);
+    }
+
+    #[test]
+    fn a_force_push_with_a_lease_inside_the_workspace_is_refused() {
+        // The lease form is a separate entry point with its own command, so
+        // covering only the plain force push would leave this path open.
+        let (temp, _remote, repo) = repo_with_a_remote();
+        let root = temp.path();
+        repo.enter_workspace().expect("enter");
+        let before = git(root, &["rev-parse", WORKSPACE_BRANCH]);
+        let head = repo
+            .resolve_revision(WORKSPACE_BRANCH)
+            .expect("resolve")
+            .expect("the workspace branch exists");
+
+        assert_refused(
+            repo.push_force_with_lease_with_output(&ForcePushLease {
+                remote: "origin".into(),
+                branch: "api".into(),
+                expected: head.clone(),
+                local_branch: WORKSPACE_BRANCH.into(),
+                local_head: head,
+            }),
+            "a force push with a lease",
+        );
 
         assert_eq!(git(root, &["rev-parse", WORKSPACE_BRANCH]), before);
     }

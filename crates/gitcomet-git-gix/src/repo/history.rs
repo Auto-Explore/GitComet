@@ -328,6 +328,16 @@ impl GixRepo {
         mainline: Option<usize>,
     ) -> Result<CommandOutput> {
         validate_hex_commit_id(id)?;
+        let parent_ids = self.validate_single_pick_mainline("cherry-pick", id, mainline)?;
+        let mainline_label = mainline.map_or_else(String::new, |parent| format!(" -m {parent}"));
+        let label = if commit {
+            format!("git cherry-pick{mainline_label} {}", id.as_ref())
+        } else {
+            format!(
+                "git cherry-pick{mainline_label} --no-commit {}",
+                id.as_ref()
+            )
+        };
 
         // The signing-passphrase retry replays this call after git stopped
         // at the commit step; finish that pick rather than refuse it.
@@ -339,19 +349,10 @@ impl GixRepo {
         }
 
         // After the `--continue` above, never before: refusing to finish a pick
-        // git already started would strand the user in it.
+        // git already started would strand the user in it. Before the
+        // validation above, or `git cherry-pick --continue` would run with a
+        // mainline nothing had checked.
         self.refuse_workspace_head_action("a cherry-pick")?;
-
-        let parent_ids = self.validate_single_pick_mainline("cherry-pick", id, mainline)?;
-        let mainline_label = mainline.map_or_else(String::new, |parent| format!(" -m {parent}"));
-        let label = if commit {
-            format!("git cherry-pick{mainline_label} {}", id.as_ref())
-        } else {
-            format!(
-                "git cherry-pick{mainline_label} --no-commit {}",
-                id.as_ref()
-            )
-        };
 
         if let Some(operation) = self.operation_in_progress_label()? {
             return Err(Error::new(ErrorKind::Backend(format!(

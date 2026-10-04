@@ -1080,10 +1080,10 @@ impl FileAssignments {
     }
 
     /// Drop hunk assignments whose change the current diff no longer contains.
-///
-/// Identity is by content, so there is nothing to carry over: a hunk that
-/// still exists has the same fingerprint and stays; one that was reverted or
-/// rewritten no longer matches and goes.
+    ///
+    /// Identity is by content, so there is nothing to carry over: a hunk that
+    /// still exists has the same fingerprint and stays; one that was reverted or
+    /// rewritten no longer matches and goes.
     pub fn retain_hunks(&mut self, current: &[HunkSpan], state: &WorkspaceState) {
         self.hunks.retain(|fingerprint, branch| {
             state.get(branch).is_some() && current.iter().any(|span| span.fingerprint == *fingerprint)

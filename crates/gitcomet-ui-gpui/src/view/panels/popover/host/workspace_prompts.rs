@@ -663,27 +663,27 @@ mod tests {
     }
 
     /// Every kind the dialog can be opened for.
-///
-/// Hand-written rather than derived, because deriving it would need a way to
-/// enumerate a plain enum, and a list that has to be updated by hand is exactly
-/// what makes the test below worth having: adding a kind without adding it here
-/// fails, and adding a kind here without implementing it fails too.
-const ALL_KINDS: [WorkspacePromptKind; 12] = [
-    WorkspacePromptKind::BranchActions,
-    WorkspacePromptKind::Create,
-    WorkspacePromptKind::CreateAbove,
-    WorkspacePromptKind::CreateBelow,
-    WorkspacePromptKind::SetTarget,
-    WorkspacePromptKind::SetParent,
-    WorkspacePromptKind::MoveToStack,
-    WorkspacePromptKind::Remove,
-    WorkspacePromptKind::AssignFile,
-    WorkspacePromptKind::AssignHunk,
-    WorkspacePromptKind::CommitMessage,
-    WorkspacePromptKind::CommitBranch,
-];
+    ///
+    /// Hand-written rather than derived, because deriving it would need a way to
+    /// enumerate a plain enum, and a list that has to be updated by hand is exactly
+    /// what makes the test below worth having: adding a kind without adding it here
+    /// fails, and adding a kind here without implementing it fails too.
+    const ALL_KINDS: [WorkspacePromptKind; 12] = [
+        WorkspacePromptKind::BranchActions,
+        WorkspacePromptKind::Create,
+        WorkspacePromptKind::CreateAbove,
+        WorkspacePromptKind::CreateBelow,
+        WorkspacePromptKind::SetTarget,
+        WorkspacePromptKind::SetParent,
+        WorkspacePromptKind::MoveToStack,
+        WorkspacePromptKind::Remove,
+        WorkspacePromptKind::AssignFile,
+        WorkspacePromptKind::AssignHunk,
+        WorkspacePromptKind::CommitMessage,
+        WorkspacePromptKind::CommitBranch,
+    ];
 
-#[test]
+    #[test]
     fn every_prompt_kind_produces_an_edit_or_says_it_submits_nothing() {
         // The docs claim every `WorkspaceEdit` variant is reachable from the
         // view. `edit_for` has no catch-all — adding a kind is a compile error,

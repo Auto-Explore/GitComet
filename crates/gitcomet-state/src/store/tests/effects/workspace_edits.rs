@@ -47,6 +47,9 @@ struct Calls {
     writes: Vec<WorkspaceState>,
     /// `commit_paths_to_virtual_branch(name, message, paths)`.
     committed: Vec<(String, String, Vec<PathBuf>)>,
+    /// `push_virtual_branch(name)` — the branch is named because the workspace
+    /// branch itself must never be what gets published.
+    pushed: Vec<String>,
     /// How many times the stored workspace was read.
     reads: usize,
 }
@@ -919,7 +922,7 @@ fn pushing_a_virtual_branch_reports_the_branch_it_pushed() {
             msg,
             Msg::Internal(crate::msg::InternalMsg::WorkspacePushFinished {
                 repo_id: REPO_ID,
-                name,
+                name: ref name,
                 result: Ok(_),
             } if name == "api"
         ),

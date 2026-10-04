@@ -339,7 +339,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn the_commit_line_says_the_commit_is_just_this_file() {
         let line = detail_line(
             WorkspacePromptKind::CommitMessage,
@@ -350,7 +350,7 @@ mod tests {
         assert!(line.contains("on its own"), "{line}");
     }
 
-#[test]
+    #[test]
     fn the_assign_prompt_carries_the_file_and_its_current_branch() {
         let prompt = assign_file_prompt(std::path::Path::new("src/lib.rs"), Some("feature/api"));
         assert_eq!(prompt.kind, WorkspacePromptKind::AssignFile);
