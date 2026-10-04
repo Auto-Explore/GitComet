@@ -160,6 +160,12 @@ pub struct DetailsTabDescriptor {
     /// Shown before the title in the tab strip.
     pub icon: Option<SharedString>,
     pub build: ViewBuilder<RepositoryViewContext>,
+    /// Lists the tab only while this repository view is selected; `None`
+    /// lists it in every view.
+    pub view: Option<ViewTarget>,
+    /// Selects the tab whenever its view is selected. Leaving the view
+    /// brings back the tab that was selected before.
+    pub opens_with_view: bool,
 }
 
 impl DetailsTabDescriptor {
@@ -171,11 +177,67 @@ impl DetailsTabDescriptor {
             title: title.into(),
             icon: None,
             build: Rc::new(build),
+            view: None,
+            opens_with_view: false,
         }
     }
 
     pub fn with_icon(mut self, icon: impl Into<SharedString>) -> Self {
         self.icon = Some(icon.into());
+        self
+    }
+
+    /// Lists the tab only while `view` is selected.
+    pub fn with_view(mut self, view: ViewTarget) -> Self {
+        self.view = Some(view);
+        self
+    }
+
+    /// Selects the tab when its view is selected; see [`Self::opens_with_view`].
+    pub fn opens_with_view(mut self) -> Self {
+        self.opens_with_view = true;
+        self
+    }
+}
+
+/// A tab in the sidebar's strip after Branches and Files, for the active
+/// repository. Built when first selected in a window and kept while the
+/// repository stays open there.
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct SidebarTabDescriptor {
+    pub title: SharedString,
+    pub build: ViewBuilder<RepositoryViewContext>,
+    /// Lists the tab only while this repository view is selected; `None`
+    /// lists it in every view.
+    pub view: Option<ViewTarget>,
+    /// Selects the tab whenever its view is selected. Leaving the view
+    /// brings back the tab that was selected before.
+    pub opens_with_view: bool,
+}
+
+impl SidebarTabDescriptor {
+    pub fn new(
+        title: impl Into<SharedString>,
+        build: impl Fn(RepositoryViewContext, &mut Window, &mut App) -> AnyView + 'static,
+    ) -> Self {
+        Self {
+            title: title.into(),
+            build: Rc::new(build),
+            view: None,
+            opens_with_view: false,
+        }
+    }
+
+    /// Lists the tab only while `view` is selected.
+    pub fn with_view(mut self, view: ViewTarget) -> Self {
+        self.view = Some(view);
+        self
+    }
+
+    /// Selects the tab when its view is selected; see [`Self::opens_with_view`].
+    pub fn opens_with_view(mut self) -> Self {
+        self.opens_with_view = true;
         self
     }
 }

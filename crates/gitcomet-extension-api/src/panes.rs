@@ -294,7 +294,10 @@ impl DiffInset {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DiffLayout {
+    /// The user's own choice in Settings > Diff, as History's diff shows it.
+    /// The pane's toolbar can still switch it.
     #[default]
+    Preferred,
     Inline,
     Split,
 }

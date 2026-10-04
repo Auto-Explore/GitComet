@@ -155,6 +155,30 @@ pub trait WindowHostImpl {
         target: crate::SettingsTarget,
         cx: &mut App,
     ) -> Result<(), HostError>;
+    /// Selects details tab `tab` for `repository` and shows the details
+    /// pane if it is hidden.
+    fn show_details_tab(
+        &self,
+        _repository: &RepositoryHandle,
+        _tab: &ContributionId,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unsupported)
+    }
+    /// Selects sidebar tab `tab` for `repository` and shows the sidebar if
+    /// it is hidden.
+    fn show_sidebar_tab(
+        &self,
+        _repository: &RepositoryHandle,
+        _tab: &ContributionId,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unsupported)
+    }
+    /// A read-only view that renders markdown.
+    fn create_markdown_view(&self, _cx: &mut App) -> Result<crate::MarkdownView, HostError> {
+        Err(HostError::Unsupported)
+    }
     fn window_id(&self) -> WindowId;
 
     fn is_open(&self, cx: &App) -> bool;
@@ -407,6 +431,38 @@ impl WindowHost {
         cx: &mut App,
     ) -> Result<(), HostError> {
         self.0.open_settings_at(target, cx)
+    }
+
+    /// Selects details tab `tab` (a [`crate::DetailsTabDescriptor`] listed in
+    /// the current view) for `repository`, and shows the details pane if it
+    /// is hidden. [`HostError::Unsupported`] when no such tab is listed.
+    pub fn show_details_tab(
+        &self,
+        repository: &RepositoryHandle,
+        tab: &ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.check(repository, cx)?;
+        self.0.show_details_tab(repository, tab, cx)
+    }
+
+    /// Selects sidebar tab `tab` (a [`crate::SidebarTabDescriptor`] listed in
+    /// the current view) for `repository`, and shows the sidebar if it is
+    /// hidden. [`HostError::Unsupported`] when no such tab is listed.
+    pub fn show_sidebar_tab(
+        &self,
+        repository: &RepositoryHandle,
+        tab: &ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.check(repository, cx)?;
+        self.0.show_sidebar_tab(repository, tab, cx)
+    }
+
+    /// A read-only markdown view to place in the extension's own views; set
+    /// its text with [`crate::MarkdownView::set_source`].
+    pub fn create_markdown_view(&self, cx: &mut App) -> Result<crate::MarkdownView, HostError> {
+        self.0.create_markdown_view(cx)
     }
 
     /// Invalidates only the owner of the given slot, after this update.

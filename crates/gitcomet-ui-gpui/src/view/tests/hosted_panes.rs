@@ -630,6 +630,60 @@ fn snapshot_panes_diff_texts_without_a_repository(cx: &mut gpui::TestAppContext)
     assert_eq!(rows_with(cx, &pane, "two"), 1);
 }
 
+/// A pane left at the default layout opens in the user's Inline/Split
+/// setting; an explicit layout wins, and `Preferred` reads the setting again.
+#[gpui::test]
+fn a_pane_at_the_default_layout_follows_the_diff_setting(cx: &mut gpui::TestAppContext) {
+    use crate::view::DiffViewMode;
+    use gitcomet_extension_api::DiffLayout;
+    let _visual_guard = crate::test_support::lock_visual_test();
+    install_example(cx);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, app_cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    publish(app_cx, &view, Arc::new(AppState::test_default()));
+    // The setting's own default is Split; the user chose Inline.
+    app_cx.update(|_window, app| {
+        view.update(app, |view, cx| {
+            view.set_diff_view_mode(DiffViewMode::Inline, cx)
+        })
+    });
+    let host =
+        app_cx.update(|_window, app| view.read(app).extension_window.as_ref().unwrap().host());
+    let pane = app_cx.update(|_window, app| {
+        host.create_snapshot_pane(
+            DiffSnapshot::new("lib.rs", "old\n", "new\n"),
+            DiffPaneOptions::default(),
+            app,
+        )
+        .unwrap()
+    });
+    let view_any = pane.view();
+    let (_holder, cx) = cx.add_window_view(move |_, _| PaneHolder(view_any));
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+    let entity = pane
+        .view()
+        .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+        .unwrap();
+    let mode = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| entity.read(app).view_mode_for_test(app))
+    };
+    assert_eq!(mode(cx), Some(DiffViewMode::Inline), "as the user set it");
+
+    cx.update(|_window, app| pane.set_layout(DiffLayout::Split, app));
+    assert_eq!(
+        mode(cx),
+        Some(DiffViewMode::Split),
+        "an explicit layout wins"
+    );
+    cx.update(|_window, app| pane.set_layout(DiffLayout::Preferred, app));
+    assert_eq!(mode(cx), Some(DiffViewMode::Inline));
+}
+
 /// Commits a rename with an edit, an addition, a deletion, and a binary
 /// change on top of an initial commit; returns the second commit's id.
 fn commit_every_kind_of_change(root: &Path) -> String {
@@ -802,6 +856,8 @@ fn pane_contributions_annotate_act_and_inset_without_touching_file_lines(
                 selection_actions: vec![DiffSelectionAction::new("Comment", move |range, _| {
                     on_action.borrow_mut().push(range)
                 })],
+                // Rows are counted inline, whatever the diff setting says.
+                layout: gitcomet_extension_api::DiffLayout::Inline,
                 ..DiffPaneOptions::default()
             },
             app,
@@ -1164,6 +1220,8 @@ fn clickable_pane(
         policy,
         on_gutter_click: record("gutter"),
         on_annotation_click: record("annotation"),
+        // Rows are counted inline, whatever the diff setting says.
+        layout: gitcomet_extension_api::DiffLayout::Inline,
         ..DiffPaneOptions::default()
     };
     let snapshot = DiffSnapshot::new("notes.txt", "one\ntwo\nthree\n", "one\nTWO\nthree\n");
