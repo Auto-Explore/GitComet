@@ -490,6 +490,13 @@ impl WorkspaceState {
             None => Some(stack_base.to_string()),
             Some(relative) if relative == name => self.get(name).and_then(|b| b.parent.clone()),
             Some(relative) => {
+                // A relative branch that is not in the workspace cannot be
+                // reasoned about. Falling back to `stack_base` would land the
+                // branch somewhere the user never asked for and report success,
+                // which is the same failure `insert_above`/`insert_below` refuse.
+                if self.get(relative).is_none() {
+                    return Err(workspace_error(format!("no workspace branch '{relative}'")));
+                }
                 if below {
                     Some(relative.to_string())
                 } else {
@@ -1568,6 +1575,16 @@ mod tests {
             vb("e2e").with_parent("ui"),
         ]);
         assert!(state.move_to_stack("api", "main", Some("e2e"), true).is_err());
+        assert_eq!(state.get("api").unwrap().parent, None);
+    }
+
+    #[test]
+    fn a_move_relative_to_a_branch_that_is_not_there_is_refused() {
+        // The drag named a branch that was removed in the meantime. Guessing the
+        // stack base instead would put the branch somewhere the user never
+        // asked for and report the move as done.
+        let mut state = workspace().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
+        assert!(state.move_to_stack("api", "main", Some("gone"), false).is_err());
         assert_eq!(state.get("api").unwrap().parent, None);
     }
 

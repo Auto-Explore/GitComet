@@ -24,17 +24,15 @@ fn detail_line(
             "The new branch starts from the workspace target, with no commits of its own yet."
         )
         .into(),
-        WorkspacePromptKind::CreateAbove => {
-            // Above is the one creation that moves work that already exists:
-            // the anchor, and anything stacked on it, each move down a level
-            // and are rebased.
-            format!(
-                "The new branch takes {branch}'s place in the stack; {branch} and anything stacked on it move down and are rebased."
-            )
-            .into()
-        }
+        WorkspacePromptKind::CreateAbove => format!(
+            "The new branch is stacked on {branch}, so it starts from {branch}'s tip. Nothing already in the stack moves."
+        )
+        .into(),
+        // Below is the one creation that moves work that already exists: the
+        // new branch starts from the anchor's *base*, so the anchor and
+        // anything stacked on it have to be replayed on top of it.
         WorkspacePromptKind::CreateBelow => format!(
-            "The new branch starts from {branch} and sits below it. Nothing already in the stack moves."
+            "The new branch takes {branch}'s place in the stack, so it starts from {branch}'s base; {branch} and anything stacked on it are rebased."
         )
         .into(),
         WorkspacePromptKind::SetTarget => format!(
@@ -326,7 +324,9 @@ mod tests {
         assert!(WorkspacePromptKind::MoveToStack.asks_for_text());
         assert!(WorkspacePromptKind::AssignFile.asks_for_text());
         assert!(WorkspacePromptKind::AssignHunk.asks_for_text());
-    }#[test]
+    }
+
+    #[test]
     fn the_commit_prompt_opens_on_a_message_the_user_can_keep() {
         let path = std::path::Path::new("src/lib.rs");
         let prompt = commit_file_prompt(path, &default_commit_message(path));
@@ -348,6 +348,21 @@ mod tests {
             "Update src/lib.rs",
         );
         assert!(line.contains("on its own"), "{line}");
+    }
+
+    #[test]
+    fn the_insert_lines_describe_what_each_direction_actually_does() {
+        // `CreateAbove` stacks the new branch on the anchor and leaves every
+        // existing branch alone; `CreateBelow` starts it from the anchor's base
+        // and rebases the anchor onto it. These two descriptions were once the
+        // other way round, which sold a history rewrite as the harmless option.
+        let above = detail_line(WorkspacePromptKind::CreateAbove, "api", None, "ui");
+        assert!(above.contains("stacked on api"), "{above}");
+        assert!(!above.contains("rebased"), "{above}");
+
+        let below = detail_line(WorkspacePromptKind::CreateBelow, "api", None, "ui");
+        assert!(below.contains("rebased"), "{below}");
+        assert!(below.contains("base"), "{below}");
     }
 
     #[test]

@@ -130,10 +130,16 @@ fn apply_edit(
     repo: &dyn GitRepository,
     edit: &WorkspaceEdit,
 ) -> Result<Option<gitcomet_core::services::CommitOperationOutcome>> {
-    if let WorkspaceEdit::AssignFile { .. } = edit {
-        // Assigning a file only touches the assignment index. The reducer
-        // routes it to `AssignWorkspaceFile` so a drag in the file list does
-        // not revalidate and rewrite the whole workspace.
+    if matches!(
+        edit,
+        WorkspaceEdit::AssignFile { .. } | WorkspaceEdit::AssignHunk { .. }
+    ) {
+        // Assigning a file or a hunk only touches the assignment index. The
+        // reducer routes both to `AssignWorkspaceFile` so a drag in the file
+        // list does not revalidate and rewrite the whole workspace. Reaching
+        // here at all means something sent the edit the long way round, and the
+        // answer is the same: no Git work, and in particular no rewrite of the
+        // state file, which the assignment path does not own.
         return Ok(None);
     }
     let mut state = repo.read_workspace()?;

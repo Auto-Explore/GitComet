@@ -1274,15 +1274,6 @@ pub enum Msg {
         repo_id: RepoId,
         path: PathBuf,
     },
-    /// Put the working directory on `gitcomet/workspace`, so applied branches
-    /// become visible in the user's files.
-    EnterWorkspace {
-        repo_id: RepoId,
-    },
-    /// Take the working directory back off the workspace branch.
-    LeaveWorkspace {
-        repo_id: RepoId,
-    },
     /// Dismiss the conflict from a failed apply.
     DismissWorkspaceConflict {
         repo_id: RepoId,

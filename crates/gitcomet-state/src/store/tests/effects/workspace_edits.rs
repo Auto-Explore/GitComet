@@ -777,7 +777,7 @@ fn assigning_a_file_never_reaches_git_at_all() {
 #[test]
 fn assigning_a_hunk_is_also_only_bookkeeping() {
     let repo = Arc::new(WorkspaceRepo::new(vec![applied("api")]));
-    apply(
+    let outcome = apply(
         &repo,
         WorkspaceEdit::AssignHunk {
             path: PathBuf::from("src/api.rs"),
@@ -787,7 +787,11 @@ fn assigning_a_hunk_is_also_only_bookkeeping() {
     )
     .expect("the edit failed");
 
-    assert!(repo.calls().rebuilds.is_empty());
+    let calls = repo.calls();
+    assert!(calls.reads.is_empty(), "the assignment index does not need the workspace");
+    assert!(calls.writes.is_empty());
+    assert!(calls.rebuilds.is_empty());
+    assert!(outcome.post_head.is_none());
 }
 
 #[test]
