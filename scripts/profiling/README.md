@@ -486,7 +486,9 @@ in [CONTRIBUTING.md](../../CONTRIBUTING.md#getting-started). Windows requires th
 MSVC C++ tools and Windows SDK; macOS requires Xcode command line tools. Use an
 unlocked, otherwise idle desktop and leave the application windows alone during
 measurement. The scripts use disposable profiles and do not modify repository
-worktree files. Supply existing repositories; for a synthetic large history:
+worktree files. Choose window sizes that fit the display at its native scaling;
+an OS-clamped window does not establish performance at the requested larger size.
+Supply existing repositories; for a synthetic large history:
 
 ```sh
 python scripts/profiling/live-ui.py fixture target/gpu-fixtures/history-100000 --commits 100000
@@ -602,10 +604,16 @@ falls back to ordinary drawing. Resize, transparency and device changes
 invalidate the applicable resources.
 
 The initial five-pair Linux study found useful GPU reductions from path caching
-and batching. Retained redraw failed its performance gate: most live scenes
+and batching. Caching added too little benefit after batching to pass its
+incremental improvement gate, and caching plus batching missed an input p95
+guard in the clean four-window run. Batching alone also missed clean multi-window
+guards; its CPU stalls need controlled native measurements before promotion.
+Retained redraw failed its performance gate: most live scenes
 required full redraw, adding a copy and a retained full-size texture. Keep that
 experiment disabled unless a new workload demonstrates a benefit. Pooling also
-needs evidence from close/reopen captures before earning its memory cost.
+failed to justify its additional driver memory in the 100-cycle Linux capture.
+The final build passed a clean four-window input/CPU comparison against the
+original renderer with all experiments disabled.
 Machine-specific captures and reports belong under `target/performance/`.
 
 Cross-compilation verifies native code and test compilation, not native pixels
