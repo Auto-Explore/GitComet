@@ -336,9 +336,18 @@ fn conflict_paths(message: &str) -> Vec<PathBuf> {
     let Some((_, tail)) = message.rsplit_once(" in ") else {
         return Vec::new();
     };
-    let listed = tail.split(" (").next().unwrap_or(tail).trim();
-    // A list git did not provide, or a count, is not a path.
-    if listed.is_empty() || listed.contains(' ') || listed.contains('/') && listed.matches('/').count() > 8 {
+    // `conflict_message` puts the paths on one line and then a sentence saying
+    // what to do about them, so only the first line of the tail is the path
+    // list. Taking the whole tail — which is what this used to do — always
+    // swallowed that sentence, and since a single-path conflict carries no
+    // " (" to cut on, it recovered nothing at all: the common case reported no
+    // paths while the backend had named one.
+    let listed = tail.lines().next().unwrap_or_default().trim();
+    // A longer list is collapsed to "<first> (and N more)", which is prose.
+    let listed = listed.split(" (").next().unwrap_or(listed).trim();
+    // So is "files git did not name". A path git reports has no whitespace in
+    // it, which is the only thing separating the two.
+    if listed.is_empty() || listed.contains(char::is_whitespace) {
         return Vec::new();
     }
     vec![PathBuf::from(listed)]
@@ -1151,6 +1160,213 @@ mod tests {
     }
 
     #[test]
+    /// The conflict message the backend builds, copied from
+    /// `gitcomet_gix::repo::workspace::conflict_message` so these tests exercise
+    /// the shape that really arrives. Nothing enforces that the two stay in
+    /// step — if one changes, this is the place that has to follow.
+    fn conflict_message(name: &str, against: Option<&str>, listed: &str) -> String {
+        let head = match against {
+            Some(against) => format!("'{name}' conflicts with '{against}' in {listed}"),
+            None => format!(
+                "'{name}' could not be applied: it conflicts with the branches \
+                 already in the workspace, in {listed}"
+            ),
+        };
+        format!(
+            "{head}\n\nBoth are applied, and both changed the same lines. \
+             Unapply one of them, or resolve the conflict before applying \
+             {name} again."
+        )
+    }
+
+    /// Run a failing edit carrying `message` and return the conflict recorded.
+    fn conflict_from(message: &str) -> crate::model::WorkspaceConflict {
+        let mut state = repo_with_workspace();
+        workspace_edit_finished(
+            &mut state,
+            RepoId(1),
+            WorkspaceEdit::SetApplied {
+                name: "ui".into(),
+                applied: BranchApplyState::Applied,
+            },
+            Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Backend(message.into()),
+            )),
+        );
+        state.repos[0]
+            .workspace
+            .conflict
+            .clone()
+            .expect("a failed edit has to record the conflict")
+    }
+
+    #[test]
+    fn a_conflict_names_the_file_the_two_branches_clashed_on() {
+        // The single-file case, which is the one that matters most and the one
+        // that used to come back empty: with one path there is no " (" for the
+        // parser to cut on, so it took the rest of the sentence as the path and
+        // rejected it as prose. The backend names the file and the user never
+        // saw it.
+        let conflict = conflict_from(&conflict_message(
+            "feature/ui",
+            Some("feature/api"),
+            "src/lib.rs",
+        ));
+        assert_eq!(
+            conflict.paths.as_ref(),
+            &[PathBuf::from("src/lib.rs")]
+        );
+        assert_eq!(conflict.against.as_deref(), Some("feature/api"));
+    }
+
+    #[test]
+    fn a_conflict_over_several_files_names_the_first_and_leaves_the_rest_to_the_text() {
+        let conflict = conflict_from(&conflict_message(
+            "feature/ui",
+            Some("feature/api"),
+            "src/a.rs (and 2 more)",
+        ));
+        assert_eq!(conflict.paths.as_ref(), &[PathBuf::from("src/a.rs")]);
+    }
+
+    #[test]
+    fn a_conflict_git_named_no_file_for_reports_none() {
+        // "files git did not name" is prose the backend substituted, not a path.
+        // Reporting it as one would put a fake entry in the list the user is
+        // asked to open.
+        let conflict = conflict_from(&conflict_message(
+            "feature/ui",
+            Some("feature/api"),
+            "files git did not name",
+        ));
+        assert!(
+            conflict.paths.is_empty(),
+            "prose must not be reported as a file: {:?}",
+            conflict.paths
+        );
+    }
+
+    #[test]
+    fn a_conflict_the_backend_could_not_blame_on_a_branch_still_names_the_file() {
+        // Not knowing *which* branch is in the way does not mean not knowing
+        // *where*. Losing both together left the user with nothing to act on.
+        let conflict = conflict_from(&conflict_message("feature/ui", None, "src/lib.rs"));
+        assert_eq!(conflict.paths.as_ref(), &[PathBuf::from("src/lib.rs")]);
+        assert_eq!(conflict.against, None);
+    }
+
+    #[test]
+    fn committing_one_file_commits_only_that_file() {
+        let mut state = repo_with_workspace();
+        let mut index = AssignmentIndex::new();
+        index.set(PathBuf::from("a.rs"), Some("api".into()));
+        index.set(PathBuf::from("b.rs"), Some("api".into()));
+        state.repos[0].workspace.assignments = Arc::new(index);
+
+        let effects =
+            commit_single_file(&mut state, RepoId(1), PathBuf::from("a.rs"));
+        assert_eq!(effects.len(), 1);
+        match &effects[0] {
+            Effect::ApplyWorkspaceEdit {
+                repo_id,
+                edit: WorkspaceEdit::CommitPaths { name, message, paths },
+            } => {
+                assert_eq!(*repo_id, RepoId(1));
+                assert_eq!(name, "api");
+                assert_eq!(
+                    paths,
+                    &[PathBuf::from("a.rs")],
+                    "the row the user clicked is the file they meant to commit"
+                );
+                assert!(message.contains("a.rs"), "{message}");
+                assert!(
+                    !message.contains("b.rs"),
+                    "a per-file commit must not borrow another file's name: {message}"
+                );
+            }
+            other => panic!("unexpected effect {other:?}"),
+        }
+        assert!(state.repos[0].workspace.busy.committing);
+    }
+
+    #[test]
+    fn committing_a_file_that_is_on_no_branch_says_so_instead_of_committing_it_anywhere() {
+        let mut state = repo_with_workspace();
+        let effects =
+            commit_single_file(&mut state, RepoId(1), PathBuf::from("a.rs"));
+
+        assert!(effects.is_empty(), "there is nowhere for it to go");
+        assert_eq!(state.notifications.len(), 1);
+        assert!(
+            state.notifications[0].message.contains("a.rs"),
+            "the message has to name the file the user clicked: {}",
+            state.notifications[0].message
+        );
+        assert!(!state.repos[0].workspace.busy.any());
+    }
+
+    #[test]
+    fn committing_one_hunk_of_a_split_file_is_refused() {
+        // A split file is on no single branch, so there is no branch to commit
+        // it to; committing the whole file to either one would take hunks
+        // belonging to the other.
+        let mut state = repo_with_workspace();
+        let mut index = AssignmentIndex::new();
+        index.set_hunk(
+            PathBuf::from("a.rs"),
+            gitcomet_core::workspace::HunkFingerprint::of(&["API\n"], 1),
+            Some("api".into()),
+        );
+        index.set_hunk(
+            PathBuf::from("a.rs"),
+            gitcomet_core::workspace::HunkFingerprint::of(&["UI\n"], 1),
+            Some("ui".into()),
+        );
+        state.repos[0].workspace.assignments = Arc::new(index);
+
+        let effects =
+            commit_single_file(&mut state, RepoId(1), PathBuf::from("a.rs"));
+
+        assert!(effects.is_empty(), "a split file has no single branch to commit to");
+        assert_eq!(state.notifications.len(), 1);
+    }
+
+    #[test]
+    fn committing_a_file_whose_branch_is_gone_is_refused() {
+        // The branch was removed elsewhere. Falling back to the raw assignment
+        // would commit to a ref the workspace no longer has.
+        let mut state = repo_with_workspace();
+        let mut index = AssignmentIndex::new();
+        index.set(PathBuf::from("a.rs"), Some("vanished".into()));
+        state.repos[0].workspace.assignments = Arc::new(index);
+
+        let effects =
+            commit_single_file(&mut state, RepoId(1), PathBuf::from("a.rs"));
+
+        assert!(effects.is_empty());
+        assert_eq!(state.notifications.len(), 1);
+    }
+
+    #[test]
+    fn committing_one_file_while_something_else_runs_does_nothing() {
+        // Same gate as a whole-branch commit: two commits racing would leave a
+        // ref moved by whichever lost.
+        let mut state = repo_with_workspace();
+        let mut index = AssignmentIndex::new();
+        index.set(PathBuf::from("a.rs"), Some("api".into()));
+        state.repos[0].workspace.assignments = Arc::new(index);
+        state.repos[0].workspace.busy.mutating = true;
+
+        let effects =
+            commit_single_file(&mut state, RepoId(1), PathBuf::from("a.rs"));
+
+        assert!(effects.is_empty());
+        assert!(
+            !state.repos[0].workspace.busy.committing,
+            "and it must not claim it is committing either"
+        );
+    }
+
     fn messages_for_an_unknown_repository_are_ignored() {
         let mut state = repo_with_workspace();
         let effects = load_workspace(&mut state, RepoId(99));
