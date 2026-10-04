@@ -163,6 +163,30 @@ fn a_views_own_tabs_open_with_it_and_give_way_when_it_is_left(cx: &mut gpui::Tes
     assert!(shows(cx, "panels_always"));
 }
 
+/// The sidebar's own tabs and a contributed one, clicked in turn. Each click
+/// runs inside the sidebar's update, and choosing a tab updates the sidebar
+/// again, so the choice has to wait until the click is handled.
+#[gpui::test]
+fn clicking_between_the_sidebars_tabs_and_a_contributed_one(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (_view, cx) = open_view(cx);
+    click(cx, "repository_view_0");
+    assert!(shows(cx, "panels_files"));
+
+    click(cx, "sidebar_tab_branches");
+    assert!(!shows(cx, "panels_files"));
+    assert!(!shows(cx, "sidebar_extension_tab_content"));
+    assert!(shows(cx, "sidebar_tab_extension_0"), "still listed");
+
+    click(cx, "sidebar_tab_extension_0");
+    assert!(shows(cx, "panels_files"));
+
+    click(cx, "sidebar_tab_files");
+    assert!(!shows(cx, "panels_files"));
+    click(cx, "sidebar_tab_extension_0");
+    assert!(shows(cx, "panels_files"));
+}
+
 #[gpui::test]
 fn show_selects_a_listed_tab_and_reveals_its_pane(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
