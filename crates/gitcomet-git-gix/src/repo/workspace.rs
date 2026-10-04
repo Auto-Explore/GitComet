@@ -83,10 +83,22 @@ impl GixRepo {
 
     pub(super) fn read_workspace_impl(&self) -> Result<WorkspaceState> {
         let path = self.workspace_state_path();
-        let Ok(bytes) = std::fs::read(&path) else {
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
             // No workspace yet is the normal state for a repository that has
-            // never opened the Workspace view, not an error.
-            return Ok(WorkspaceState::default());
+            // never opened the Workspace view, not an error. Any other failure
+            // is reported rather than folded into "empty": saying "empty" would
+            // let the next edit overwrite a file the user can still not read,
+            // which is the one outcome worse than an error message.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(WorkspaceState::default());
+            }
+            Err(error) => {
+                return Err(Error::new(ErrorKind::Backend(format!(
+                    "reading {}: {error}",
+                    path.display()
+                ))));
+            }
         };
         // A workspace file written by a newer or hand-edited version must not
         // make the whole repository unusable; an unparseable file reads as an
@@ -109,8 +121,21 @@ impl GixRepo {
     }
 
     pub(super) fn read_assignments_impl(&self) -> Result<AssignmentIndex> {
-        let Ok(bytes) = std::fs::read(self.workspace_assignments_path()) else {
-            return Ok(AssignmentIndex::default());
+        let path = self.workspace_assignments_path();
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            // Same reasoning as `read_workspace_impl`: absent is ordinary, any
+            // other failure is not, and reporting it as "no assignments" would
+            // quietly discard a file the user cannot read yet can.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(AssignmentIndex::default());
+            }
+            Err(error) => {
+                return Err(Error::new(ErrorKind::Backend(format!(
+                    "reading {}: {error}",
+                    path.display()
+                ))));
+            }
         };
         Ok(serde_json::from_slice(&bytes).unwrap_or_default())
     }
@@ -407,11 +432,15 @@ impl GixRepo {
         cmd.arg("update-ref");
         cmd.arg(format!("refs/heads/{WORKSPACE_BRANCH}"));
         cmd.arg(commit.as_ref());
-        // The all-zero id means "create only if absent"; a real old value makes
-        // the update conditional on the branch not having moved underneath us.
+        // The empty string means "must not exist yet", which is what creating
+        // the branch needs; a real old value makes the update conditional on
+        // the branch not having moved underneath us. A hand-written all-zero id
+        // would have been the wrong way to say the first case: its length is
+        // 40 for SHA-1 and 64 for SHA-256, so it only works in the repository
+        // format the author happened to be thinking of.
         cmd.arg(match self.resolve_revision(WORKSPACE_BRANCH)? {
             Some(existing) => existing.to_string(),
-            None => "0".repeat(40),
+            None => String::new(),
         });
         run_git_simple(cmd, "git update-ref")
     }
@@ -457,7 +486,10 @@ impl GixRepo {
         // workspace, so it contains only the assigned files. A temporary index
         // keeps the user's real index and working tree untouched.
         let index_path = self.workspace_dir().join("commit-index");
-        std::fs::create_dir_all(self.workspace_dir()).ok();
+        // Not `.ok()`: if the directory cannot be made, every later `GIT_INDEX_FILE`
+        // command fails with a git error that says nothing about the real
+        // problem, and the user is left guessing at their repository.
+        std::fs::create_dir_all(self.workspace_dir())?;
 
         let assignments = self.read_assignments_impl()?;
         let tree = self.commit_paths_tree(&index_path, &base_id, paths, name, &assignments)?;
@@ -1919,6 +1951,28 @@ mod tests {
             state.branches.is_empty(),
             "the branches are gone from the file, so they are gone here too"
         );
+    }
+
+    #[test]
+    fn a_workspace_file_that_cannot_be_read_is_an_error_not_an_empty_workspace() {
+        // Corrupt is recoverable — the user rebuilds from the UI. Unreadable is
+        // not: reported as "empty", the next edit writes over a file the user
+        // still cannot read, and that data is gone.
+        let (_temp, repo, _) = repo_with_two_branches();
+        std::fs::remove_file(repo.workspace_state_path()).expect("remove the file");
+        std::fs::create_dir(repo.workspace_state_path()).expect("put something unreadable there");
+
+        let error = repo
+            .read_workspace()
+            .expect_err("an unreadable file is not an empty workspace");
+        assert!(
+            format!("{error}").contains("reading"),
+            "the message has to say which file: {error}"
+        );
+
+        // The assignments file follows the same rule.
+        std::fs::create_dir(repo.workspace_assignments_path()).expect("same for assignments");
+        assert!(repo.read_workspace_assignments().is_err());
     }
 
     #[test]

@@ -1013,11 +1013,25 @@ pub fn synthesize_for_branch(
             base_ix += 1;
         }
         if keep(span.fingerprint) {
-            for line in &working_lines[span.new_range.clone()] {
+            // `.get(..)` rather than indexing: a span whose range runs past the
+            // end would panic, and this runs inside a commit the user is waiting
+            // on. Everything else here degrades instead of dying, and a hunk
+            // that contributes nothing is recoverable in a way a panic is not.
+            for line in working_lines
+                .get(span.new_range.clone())
+                .unwrap_or_default()
+                .iter()
+                .copied()
+            {
                 out.push_str(line);
             }
         } else {
-            for line in &base_lines[span.base_range.clone()] {
+            for line in base_lines
+                .get(span.base_range.clone())
+                .unwrap_or_default()
+                .iter()
+                .copied()
+            {
                 out.push_str(line);
             }
         }
