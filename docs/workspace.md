@@ -479,7 +479,7 @@ gesture. Everything else in `WorkspaceEdit` has a control.
 | 11 | Assign individual hunks | done — `HunkFingerprint`, diff hunk menu |
 | 12 | Maintain `gitcomet/workspace` | done |
 | 13 | Auto-update when the applied set changes | done — and moves the working directory when the workspace is checked out |
-| 14 | Prevent direct commits to `gitcomet/workspace` | structurally — see below |
+| 14 | Prevent direct commits to `gitcomet/workspace` | done — hidden from every branch list, and `commit`/`commit --amend` refuse while HEAD is on it |
 | 15 | Configurable target branch | done |
 | 16 | Rebase when the target changes | done |
 | 17 | Expose conflicts between branches | done — both branch names and the file, from git's stdout |
@@ -490,12 +490,22 @@ gesture. Everything else in `WorkspaceEdit` has a control.
 
 ### On #14
 
-There is no guard that rejects a commit naming `gitcomet/workspace`. Instead the
-branch is filtered out of all three places branches are listed — the gix
-iterator, the `for-each-ref` fallback, and the packed-refs reader — so no UI can
-offer it for checkout, commit, merge, push or delete. That is a stronger
-guarantee than a check that can be bypassed, but it does assume no code path
-invents a branch name the user typed.
+Two layers, because one of them is not enough on its own.
+
+**The branch is hidden.** `gitcomet/*` is filtered out of all three places
+branches are listed — the gix iterator, the `for-each-ref` fallback, and the
+packed-refs reader — so no picker can offer it for checkout, rename, push or
+delete. The *virtual* branches are ordinary refs and deliberately still appear:
+they are the user's work.
+
+**Commits and amends are refused outright.** Hiding the branch does not cover
+the commit path, and this is not a hypothetical: a plain commit goes to **HEAD**,
+not to a branch the user picked from a list, and the Workspace tab is exactly
+what puts HEAD on `gitcomet/workspace`. So while the working directory is inside
+the workspace, `commit` and `commit --amend` refuse and say to commit from the
+Workspace tab instead — which is the edit the user meant anyway. Without this, a
+commit here would be silently discarded by the next rebuild, after the log had
+already shown it to the user as their own work.
 
 ### On #11
 

@@ -2141,6 +2141,102 @@ mod tests {
     }
 
     #[test]
+    fn the_workspace_branch_never_appears_as_a_user_branch() {
+        // Criterion 14 is carried by the name: `gitcomet/*` is GitComet's own
+        // namespace and the branch list skips it, so no picker can offer to
+        // check it out, rename it, or delete it. The virtual branches are
+        // ordinary Git refs and *do* appear — hiding them would be wrong, they
+        // are the user's work.
+        let (temp, repo, _) = repo_with_two_branches();
+        let root = temp.path();
+        repo.update_workspace_branch(&["api", "ui"]).expect("build");
+        assert!(git_succeeds(
+            root,
+            &["rev-parse", "--verify", &format!("refs/heads/{WORKSPACE_BRANCH}")]
+        ));
+
+        let branches: Vec<String> = repo
+            .list_branches()
+            .expect("list branches")
+            .into_iter()
+            .map(|branch| branch.name)
+            .collect();
+        assert!(
+            !branches.iter().any(|name| is_workspace_branch(name)),
+            "the workspace branch is bookkeeping, not a branch the user works on: {branches:?}"
+        );
+        assert!(
+            branches.iter().any(|name| name == "api"),
+            "the virtual branches are ordinary refs and belong in the list: {branches:?}"
+        );
+    }
+
+    #[test]
+    fn committing_while_the_working_directory_is_in_the_workspace_is_refused() {
+        // The other half of criterion 14, and the half a hidden branch does not
+        // cover: a plain commit goes to HEAD, and entering the workspace is
+        // exactly what puts HEAD there. A commit here would be thrown away at
+        // the next apply, after the log had shown it to the user as theirs.
+        let (temp, repo, _) = repo_with_two_branches();
+        let root = temp.path();
+        repo.enter_workspace().expect("enter");
+        std::fs::write(root.join("shared.txt"), "edited\na2\na3\n").expect("edit");
+        git(root, &["add", "-A"]);
+
+        let error = repo.commit("a message").expect_err("the workspace branch is not commit-able");
+        assert!(
+            format!("{error}").contains("Workspace tab"),
+            "the message has to say where to commit instead: {error}"
+        );
+
+        assert_eq!(
+            git(root, &["symbolic-ref", "--short", "HEAD"]),
+            WORKSPACE_BRANCH,
+            "and nothing may have been committed or moved"
+        );
+        assert_eq!(
+            git(root, &["diff", "--cached", "--name-only"]),
+            "shared.txt",
+            "the change is still staged: a refused commit must leave the \
+             working tree exactly as it was"
+        );
+        assert_eq!(read(root, "shared.txt"), "edited\na2\na3\n");
+    }
+
+    #[test]
+    fn amending_a_commit_on_the_workspace_branch_is_refused_too() {
+        let (temp, repo, _) = repo_with_two_branches();
+        let root = temp.path();
+        repo.enter_workspace().expect("enter");
+
+        let error = repo
+            .commit_amend("a message")
+            .expect_err("an amend here rewrites a commit the next rebuild discards");
+        assert!(
+            format!("{error}").contains("gitcomet/workspace"),
+            "the refusal has to name the branch it is about: {error}"
+        );
+    }
+
+    #[test]
+    fn committing_on_an_ordinary_branch_still_works() {
+        // The guard is about the workspace branch, not about commits: refusing
+        // here would break the workflow the Workspace view sits next to.
+        let (temp, repo, _) = repo_with_two_branches();
+        let root = temp.path();
+        std::fs::write(root.join("mine.txt"), "y\n").expect("edit");
+        git(root, &["add", "-A"]);
+
+        repo.commit("ordinary work").expect("commit");
+
+        assert_eq!(
+            git(root, &["log", "-1", "--format=%s"]),
+            "ordinary work",
+            "the user must still be able to commit normally"
+        );
+    }
+
+    #[test]
     fn a_rebuild_that_changes_nothing_leaves_the_files_alone() {
         // Syncing the working directory to the tree it already has would still
         // be a `read-tree -u`, which can refuse on a file the user has edited.
