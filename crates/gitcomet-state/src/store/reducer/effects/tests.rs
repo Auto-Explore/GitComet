@@ -2319,6 +2319,30 @@ fn opening_the_workspace_tab_twice_does_not_switch_again() {
 }
 
 #[test]
+fn opening_the_workspace_tab_waits_for_the_load_before_moving_the_working_directory() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    state.active_repo = Some(repo_id);
+    mark_repo_open_ready(&mut state, repo_id);
+    // Deliberately not loaded: this is the first time the tab is opened.
+    assert!(matches!(
+        repo_mut(&mut state, repo_id).workspace.state,
+        Loadable::NotLoaded
+    ));
+
+    let effects = set_sidebar_mode(&mut state, SidebarMode::Workspace);
+    // `Effect` has no `PartialEq`, so this is checked by shape.
+    assert_eq!(
+        effects.len(),
+        1,
+        "only the load: the switch cannot run before the state says the \
+         workspace exists, and a rejected checkout would leave the user on a \
+         tab describing branches they are not on"
+    );
+    assert!(matches!(effects[0], Effect::LoadWorkspace { .. }));
+}
+
+#[test]
 fn set_sidebar_mode_triggers_file_browser_load_and_retries_on_error() {
     let repo_id = RepoId(1);
     let mut state = new_state_with_repo(repo_id);

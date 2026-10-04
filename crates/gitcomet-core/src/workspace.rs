@@ -2013,6 +2013,157 @@ mod tests {
         );
     }
 
+    /// `count` lines named `l1..`, each terminated.
+    fn numbered_lines(count: usize) -> String {
+        (1..=count).map(|n| format!("l{n}\n")).collect()
+    }
+
+    /// The same, with Windows line endings.
+    fn crlf_lines(count: usize) -> String {
+        (1..=count).map(|n| format!("l{n}\r\n")).collect()
+    }
+
+    /// Keeping every hunk must reproduce the working tree and keeping none must
+    /// reproduce the base, byte for byte. Checked on every awkward shape
+    /// because `synthesize_for_branch` walks ranges rather than lines, and an
+    /// off-by-one only shows up where a range is empty — an insertion or a
+    /// deletion — which is exactly where a plain diff never looks.
+    fn assert_round_trips(base: &str, working: &str, expected_hunks: usize) {
+        let spans = hunk_spans(base, working);
+        assert_eq!(
+            spans.len(),
+            expected_hunks,
+            "{spans:#?}\n`git diff -U3` prints {expected_hunks} hunk(s) for this"
+        );
+        assert_eq!(
+            synthesize_for_branch(base, working, &spans, &|_| true),
+            working,
+            "keeping every hunk must reproduce the working tree"
+        );
+        assert_eq!(
+            synthesize_for_branch(base, working, &spans, &|_| false),
+            base,
+            "keeping no hunk must reproduce the base"
+        );
+    }
+
+    #[test]
+    fn an_insertion_at_the_end_of_the_file_is_one_hunk() {
+        // An insertion has no base lines, which is the one range shape the walk
+        // has to get right on its own.
+        assert_round_trips("a\nb\nc\n", "a\nb\nc\nd\n", 1);
+    }
+
+    #[test]
+    fn deleting_the_first_line_of_the_file_is_one_hunk() {
+        assert_round_trips("a\nb\nc\n", "b\nc\n", 1);
+    }
+
+    #[test]
+    fn a_file_the_user_emptied_is_one_hunk_that_removes_everything() {
+        // The branch keeping the deletion commits an empty file; the branch not
+        // keeping it commits the file as it was. Neither may end up with a
+        // stray blank line where the content used to be.
+        assert_round_trips("a\nb\n", "", 1);
+    }
+
+    #[test]
+    fn a_last_line_with_no_newline_is_still_a_line() {
+        // No trailing newline means the last line is a line: adding one back
+        // would put the whole file in the diff, and an assignment keyed on the
+        // line count would match nothing.
+        assert_round_trips("a\nb", "a\nB", 1);
+        assert_round_trips("a\nb", "a\nb\n", 1);
+    }
+
+    #[test]
+    fn changes_on_neighbouring_lines_are_one_hunk() {
+        // No unchanged line between them, so they are one run — and one thing to
+        // assign, which is what the user sees.
+        assert_round_trips(&numbered_lines(5), "l1\nL2\nL3\nl4\nl5\n", 1);
+    }
+
+    #[test]
+    fn a_crlf_file_is_split_without_rewriting_its_line_endings() {
+        // The promise the docs make: line endings come from the base, so a
+        // commit that moves one hunk does not rewrite every untouched line of a
+        // Windows file. If they came from the working tree instead, the whole
+        // file would show as changed.
+        let base = crlf_lines(10);
+        let working = base
+            .replacen("l1\r\n", "API\r\n", 1)
+            .replacen("l10\r\n", "L10\r\n", 1);
+        let spans = hunk_spans(&base, &working);
+        assert_eq!(spans.len(), 2, "`git diff -U3` prints two hunks here");
+
+        let api = synthesize_for_branch(&base, &working, &spans, &|fingerprint| {
+            fingerprint == spans[0].fingerprint
+        });
+        assert_eq!(
+            api,
+            "API\r\nl2\r\nl3\r\nl4\r\nl5\r\nl6\r\nl7\r\nl8\r\nl9\r\nl10\r\n"
+        );
+        assert_eq!(
+            api.matches('\r').count(),
+            10,
+            "every line has to keep its carriage return"
+        );
+
+        let ui = synthesize_for_branch(&base, &working, &spans, &|fingerprint| {
+            fingerprint == spans[1].fingerprint
+        });
+        assert_eq!(
+            ui,
+            "l1\r\nl2\r\nl3\r\nl4\r\nl5\r\nl6\r\nl7\r\nl8\r\nl9\r\nL10\r\n"
+        );
+        assert_eq!(ui.matches('\r').count(), 10);
+    }
+
+    #[test]
+    fn a_branch_that_keeps_a_deletion_commits_nothing_where_the_file_used_to_be() {
+        // The other half of the deletion case, on a file with content after the
+        // deleted run: the lines after it must survive untouched rather than
+        // being swallowed by the walk.
+        assert_round_trips("a\nb\nc\nd\n", "a\nd\n", 1);
+    }
+
+    #[test]
+    fn three_hunks_are_three_units_and_each_branch_keeps_only_its_own() {
+        // Two branches were the most the tests had; three checks that a middle
+        // hunk's fingerprint is not disturbed by the ones on either side of it,
+        // which is what stops its assignment dragging the others along.
+        let base = numbered_lines(30);
+        let working = base
+            .replacen("l1\n", "ONE\n", 1)
+            .replacen("l10\n", "TEN\n", 1)
+            .replacen("l25\n", "TWENTYFIVE\n", 1);
+        let spans = hunk_spans(&base, &working);
+        assert_eq!(spans.len(), 3, "`git diff -U3` prints three hunks here");
+
+        let only = |index: usize| {
+            synthesize_for_branch(&base, &working, &spans, &|fingerprint| {
+                fingerprint == spans[index].fingerprint
+            })
+        };
+
+        assert_eq!(
+            only(0),
+            working
+                .replacen("TEN\n", "l10\n", 1)
+                .replacen("TWENTYFIVE\n", "l25\n", 1)
+        );
+        assert_eq!(
+            only(1),
+            working
+                .replacen("ONE\n", "l1\n", 1)
+                .replacen("TWENTYFIVE\n", "l25\n", 1)
+        );
+        assert_eq!(
+            only(2),
+            working.replacen("ONE\n", "l1\n", 1).replacen("TEN\n", "l10\n", 1)
+        );
+    }
+
     #[test]
     fn removing_a_path_forgets_it_entirely() {
         // Forget, not "assign to nothing": a path with no entry is one Git no
