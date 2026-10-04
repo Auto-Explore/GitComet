@@ -1240,6 +1240,28 @@ impl SidebarPaneView {
         Some(presentation)
     }
 
+    /// Shows Branches or Files (`None`) or contributed tab `index`.
+    /// Deferred: a tab is clicked inside this pane's update, and the root
+    /// updates this pane again as the selection changes.
+    fn select_routed_tab(
+        &self,
+        index: Option<usize>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let root = self.root_view.clone();
+        window.defer(cx, move |window, cx| {
+            let _ = root.update(cx, |root, cx| {
+                root.select_routed_view(
+                    crate::view::repository_views::RoutedArea::Sidebar,
+                    index,
+                    window,
+                    cx,
+                )
+            });
+        });
+    }
+
     /// The window's routing of contributed tabs for the active repository.
     pub(in crate::view) fn set_extension_tabs(
         &mut self,
@@ -1508,14 +1530,7 @@ impl SidebarPaneView {
                 .on_click(theme, cx, move |this, _, window, cx| {
                     store.dispatch(Msg::SetSidebarMode { mode: tab_mode });
                     if contributed.is_some() {
-                        let _ = this.root_view.update(cx, |root, cx| {
-                            root.select_routed_view(
-                                crate::view::repository_views::RoutedArea::Sidebar,
-                                None,
-                                window,
-                                cx,
-                            )
-                        });
+                        this.select_routed_tab(None, window, cx);
                     }
                 });
             components::navigation_tab_metrics(tab, theme, ui_scale)
@@ -1562,14 +1577,7 @@ impl SidebarPaneView {
                     theme,
                 )
                 .on_click(theme, cx, move |this, _, window, cx| {
-                    let _ = this.root_view.update(cx, |root, cx| {
-                        root.select_routed_view(
-                            crate::view::repository_views::RoutedArea::Sidebar,
-                            Some(index),
-                            window,
-                            cx,
-                        )
-                    });
+                    this.select_routed_tab(Some(index), window, cx);
                 });
                 div()
                     .debug_selector(move || format!("sidebar_tab_extension_{index}"))
