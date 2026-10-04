@@ -150,7 +150,7 @@ pub(in crate::view) fn assign_file_prompt(
 /// hunk is on today.
 pub(in crate::view) fn assign_hunk_prompt(
     path: &std::path::Path,
-    hunk: gitcomet_core::workspace::HunkKey,
+    hunk: gitcomet_core::workspace::HunkFingerprint,
     branch: Option<&str>,
 ) -> WorkspacePrompt {
     WorkspacePrompt {

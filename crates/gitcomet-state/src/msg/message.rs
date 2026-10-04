@@ -1703,7 +1703,7 @@ pub enum InternalMsg {
         repo_id: RepoId,
         path: PathBuf,
         /// Which hunk was assigned, `None` for the whole file.
-        hunk: Option<gitcomet_core::workspace::HunkKey>,
+        hunk: Option<gitcomet_core::workspace::HunkFingerprint>,
         /// What it was set to, mirrored into the store so the row updates
         /// without a full reload.
         branch: Option<String>,

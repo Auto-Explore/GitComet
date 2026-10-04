@@ -585,6 +585,45 @@ fn unified_patch_capacity<T: UnifiedDiffLine>(
         )
 }
 
+/// The identity of the hunk starting at `hunk_src_ix`.
+///
+/// Built from what the hunk adds and removes rather than from where it sits,
+/// because a workspace hunk assignment is resolved later against a *different*
+/// base — the branch's, not `HEAD`'s — and only the change itself is the same
+/// on both sides.
+///
+/// The line text is reassembled from the diff's `+`/`-` prefixes to match what
+/// the backend sees when it reads the file: a CRLF file's lines end `\r\n` on
+/// both sides, because the diff line keeps its CR and the newline is added
+/// back.
+pub(super) fn hunk_fingerprint(
+    diff: &[impl UnifiedDiffLine],
+    hunk_src_ix: usize,
+) -> Option<gitcomet_core::workspace::HunkFingerprint> {
+    use gitcomet_core::domain::DiffLineKind;
+
+    let (_, _, hunk_end) = unified_patch_file_and_hunk_bounds(diff, hunk_src_ix)?;
+    let body = diff.get(hunk_src_ix + 1..hunk_end)?;
+    let mut produced: Vec<String> = Vec::new();
+    let mut removed = 0usize;
+    for line in body {
+        let text = line.text();
+        match line.kind() {
+            DiffLineKind::Add => {
+                let added = text.strip_prefix('+').unwrap_or(text);
+                produced.push(format!("{added}\n"));
+            }
+            DiffLineKind::Remove => removed += 1,
+            _ => {}
+        }
+    }
+    let produced: Vec<&str> = produced.iter().map(String::as_str).collect();
+    Some(gitcomet_core::workspace::HunkFingerprint::of(
+        &produced,
+        removed,
+    ))
+}
+
 pub(super) fn build_unified_patch_for_hunk(
     diff: &[impl UnifiedDiffLine],
     hunk_src_ix: usize,

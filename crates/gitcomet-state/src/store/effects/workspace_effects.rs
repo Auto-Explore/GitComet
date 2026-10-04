@@ -287,7 +287,7 @@ pub(super) fn schedule_assign_workspace_file(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
-    hunk: Option<gitcomet_core::workspace::HunkKey>,
+    hunk: Option<gitcomet_core::workspace::HunkFingerprint>,
     branch: Option<String>,
 ) {
     let command_path = path.clone();

@@ -82,6 +82,31 @@ pub(super) fn model(
         }),
     });
 
+    // Assigning a hunk is a workspace action, so it is only offered when the
+    // diff on screen really is an uncommitted change to a file — not a commit's
+    // diff, where "which branch commits this" has no answer.
+    if let Some(DiffTarget::WorkingTree { path, .. }) = diff_target {
+        if let Some(hunk) = pane
+            .rendered_patch_diff_loadable()
+            .and_then(|Loadable::Ready(diff)| {
+                crate::view::diff_utils::hunk_fingerprint(diff.lines.as_slice(), src_ix)
+            })
+        {
+            items.push(ContextMenuItem::Separator);
+            items.push(ContextMenuItem::Entry {
+                label: "Assign to a branch...".into(),
+                icon: Some("icons/git_branch.svg".into()),
+                shortcut: None,
+                disabled: false,
+                action: Box::new(ContextMenuAction::AssignHunkToWorkspace {
+                    repo_id,
+                    path: path.clone(),
+                    hunk,
+                }),
+            });
+        }
+    }
+
     ContextMenuModel::new(items)
 }
 

@@ -595,6 +595,13 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         src_ix: usize,
     },
+    /// Open the workspace prompt for one hunk of the working-tree file on
+    /// screen, so the user can say which virtual branch commits it.
+    AssignHunkToWorkspace {
+        repo_id: RepoId,
+        path: PathBuf,
+        hunk: gitcomet_core::workspace::HunkFingerprint,
+    },
     UnstageHunk {
         repo_id: RepoId,
         src_ix: usize,

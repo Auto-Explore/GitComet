@@ -1226,7 +1226,7 @@ pub(in crate::view) struct WorkspacePrompt {
     /// The file the edit acts on, set only for the file kinds.
     pub(in crate::view) path: Option<std::path::PathBuf>,
     /// Which hunk of that file, set only for the hunk kinds.
-    pub(in crate::view) hunk: Option<gitcomet_core::workspace::HunkKey>,
+    pub(in crate::view) hunk: Option<gitcomet_core::workspace::HunkFingerprint>,
     /// The text the field opens with.
     pub(in crate::view) value: String,
 }

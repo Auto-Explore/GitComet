@@ -72,8 +72,10 @@ pub(in crate::view) enum WorkspaceRow {
     /// A changed file, labelled with the branch it is assigned to.
     File {
         path: PathBuf,
-        /// `None` is the unassigned bucket.
+        /// The branch the whole file is on; `None` for a split or unassigned one.
         branch: Option<String>,
+        /// The branches a split file's hunks are on.
+        split: Vec<String>,
         indented: bool,
     },
     Placeholder { message: String },
@@ -170,8 +172,15 @@ fn build_rows(repo: &RepoState) -> Vec<WorkspaceRow> {
     let assignments = repo.workspace.files_by_branch(&paths);
     let mut counts: rustc_hash::FxHashMap<String, usize> = rustc_hash::FxHashMap::default();
     for assignment in &assignments {
-        if let Some(branch) = &assignment.branch {
-            *counts.entry(branch.clone()).or_default() += 1;
+        // A split file is committed by every branch holding part of it, so it
+        // counts under each of them. See `WorkspaceRepoState::summary_counts`.
+        match &assignment.branch {
+            Some(branch) => *counts.entry(branch.clone()).or_default() += 1,
+            None => {
+                for branch in &assignment.split {
+                    *counts.entry(branch.clone()).or_default() += 1;
+                }
+            }
         }
     }
 
@@ -231,12 +240,16 @@ fn build_rows(repo: &RepoState) -> Vec<WorkspaceRow> {
     });
 
     for assignment in assignments {
+        // Asked before the struct moves any of it out: a file indented under its
+        // branch reads as belonging to it, an unassigned file sits at the margin
+        // so the gap is visible, and a split file is indented because it *is*
+        // assigned — just to more than one branch.
+        let indented = assignment.is_assigned();
         rows.push(WorkspaceRow::File {
             path: assignment.path,
-            // A file indented under its branch reads as belonging to it; an
-            // unassigned file sits at the margin so the gap is visible.
-            indented: assignment.branch.is_some(),
             branch: assignment.branch,
+            split: assignment.split,
+            indented,
         });
     }
 
@@ -391,6 +404,7 @@ impl SidebarPaneView {
                     WorkspaceRow::File {
                         path,
                         branch,
+                        split,
                         indented,
                     } => render_file_row(
                         theme,
@@ -399,6 +413,7 @@ impl SidebarPaneView {
                         ix,
                         path.clone(),
                         branch.clone(),
+                        split.clone(),
                         *indented,
                         busy,
                         repo_id,
@@ -801,6 +816,7 @@ fn render_file_row(
     index: usize,
     path: PathBuf,
     branch: Option<String>,
+    split: Vec<String>,
     indented: bool,
     busy: bool,
     repo_id: RepoId,
@@ -820,6 +836,10 @@ fn render_file_row(
     // rather than offered and refused. The message is written in the dialog the
     // button opens, pre-filled with what the quick commit used to synthesise, so
     // accepting it is still one press.
+    //
+    // A split file gets no commit button: it is committed by every branch
+    // holding part of it, so there is no single branch for the button to name.
+    // The branch row's *Commit its assigned files* is the one that covers it.
     let commit = branch.as_ref().map(|branch| {
         let commit_path = path.clone();
         let message = default_commit_message(&commit_path);
@@ -851,11 +871,15 @@ fn render_file_row(
 
     // Assignment is what the whole tab is for, so it is offered on every file
     // row and the label follows the file: "Assign" when it has nowhere to go,
-    // "Change" when it already does.
-    let assign_label_text = if branch.is_some() { "Change" } else { "Assign" };
-    let assign_tooltip = match &branch {
-        Some(branch) => format!("Commit {label} to a different branch than {branch}"),
-        None => format!("Say which branch commits {label}"),
+    // "Change" when it already does. Assigning a split file whole is a real
+    // answer to a real question, so the button is not disabled for one.
+    let assigned = branch.is_some() || !split.is_empty();
+    let assign_label_text = if assigned { "Change" } else { "Assign" };
+    let assign_tooltip = match (&branch, split.as_slice()) {
+        (Some(branch), _) => format!("Commit {label} to a different branch than {branch}"),
+        (None, [only]) => format!("Commit all of {label} to {only} instead of only part of it"),
+        (None, many) if many.is_empty() => format!("Say which branch commits {label}"),
+        (None, many) => format!("Commit all of {label} to one branch instead of {}", many.join(" + ")),
     };
     let assign_path = path.clone();
     let assign_branch = branch.clone();
@@ -893,13 +917,20 @@ fn render_file_row(
     row = row.child(
         div()
             .text_size(theme.ui_text(12.0))
-            .text_color(match &branch {
-                Some(_) => theme.colors.foreground.secondary,
+            .text_color(match (&branch, split.is_empty()) {
+                (Some(_), _) | (None, false) => theme.colors.foreground.secondary,
                 // Unassigned is the one label worth pulling attention to: it is
                 // the file that will not be committed anywhere.
-                None => theme.colors.status.warning.foreground,
+                (None, true) => theme.colors.status.warning.foreground,
             })
-            .child(branch.clone().unwrap_or_else(|| "Unassigned".into())),
+            .child(match (&branch, split.as_slice()) {
+                (Some(branch), _) => branch.clone(),
+                // "api + ui" rather than a count, because the count is not what
+                // the user needs to know to go and look at a hunk.
+                (None, [only]) => only.clone(),
+                (None, many) if many.is_empty() => "Unassigned".into(),
+                (None, many) => many.join(" + "),
+            }),
     );
 
     row = row.child(assign);

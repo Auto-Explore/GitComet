@@ -134,8 +134,7 @@ impl WorkspaceRepoState {
         self.stacks.iter().map(|stack| stack.branches.len()).sum()
     }
 
-    /// Changed files grouped by the branch they are assigned to, plus the
-    /// unassigned remainder, in path order within each group.
+    /// Changed files with the branch — or the branches — they are assigned to.
     ///
     /// Paths whose branch no longer exists are reported as unassigned rather
     /// than dropped: the file is still changed and still needs a home.
@@ -146,23 +145,49 @@ impl WorkspaceRepoState {
         };
         changed
             .iter()
-            .map(|path| FileAssignment {
-                path: path.clone(),
-                branch: self.assignments.resolve(path, state).map(str::to_string),
+            .map(|path| {
+                let file = self.assignments.file(path);
+                let mut split: Vec<String> = file
+                    .map(|file| file.hunk_branches())
+                    .into_iter()
+                    .flatten()
+                    .filter(|branch| state.get(branch).is_some())
+                    .map(str::to_string)
+                    .collect();
+                // The map is keyed by hunk, so the same branch appears once per
+                // hunk it owns; the view shows a file, not its hunks.
+                split.sort_unstable();
+                split.dedup();
+                FileAssignment {
+                    path: path.clone(),
+                    branch: self.assignments.resolve(path, state).map(str::to_string),
+                    split,
+                }
             })
             .collect()
     }
 
     /// The counts the workspace header shows: assigned per branch, unassigned,
     /// and unapplied branches that hold no files right now.
+    ///
+    /// A split file counts once for every branch that commits part of it, so
+    /// the per-branch numbers answer "what will this branch commit" rather than
+    /// "how many files sum to the list above" — and the two do not have to
+    /// agree, which is the point of a file being split.
     pub fn summary_counts(&self, changed: &[PathBuf]) -> WorkspaceSummary {
         let assignments = self.files_by_branch(changed);
         let mut per_branch: FxHashMap<String, usize> = FxHashMap::default();
         let mut unassigned = 0;
         for assignment in &assignments {
-            match &assignment.branch {
-                Some(branch) => *per_branch.entry(branch.clone()).or_default() += 1,
-                None => unassigned += 1,
+            if let Some(branch) = &assignment.branch {
+                *per_branch.entry(branch.clone()).or_default() += 1;
+            } else {
+                for branch in &assignment.split {
+                    *per_branch.entry(branch.clone()).or_default() += 1;
+                }
+            }
+            if !assignment.is_assigned() {
+                unassigned += 1;
             }
         }
         WorkspaceSummary {
@@ -249,7 +274,7 @@ pub enum WorkspaceEdit {
     /// other hunk, so this moves the hunk rather than orphaning the rest.
     AssignHunk {
         path: PathBuf,
-        hunk: gitcomet_core::workspace::HunkKey,
+        hunk: gitcomet_core::workspace::HunkFingerprint,
         branch: Option<String>,
     },
     /// Commit the given files to a branch rather than to the workspace.
@@ -415,6 +440,46 @@ mod tests {
         assert_eq!(summary.per_branch.get("ui"), Some(&1));
         assert_eq!(summary.unassigned, 1);
         assert_eq!(summary.applied, 2);
+    }
+
+    #[test]
+    fn a_split_file_reads_as_belonging_to_every_branch_that_has_part_of_it() {
+        // A split file has no single branch, so `branch` is `None` — but
+        // reporting that as unassigned would send the user looking for a file
+        // that two branches are already committing.
+        let mut workspace = loaded(&[("api", None, BranchApplyState::Applied), ("ui", None, BranchApplyState::Applied)]);
+        let mut index = AssignmentIndex::new();
+        let first = gitcomet_core::workspace::HunkFingerprint::of(&["api\n"], 1);
+        let second = gitcomet_core::workspace::HunkFingerprint::of(&["ui\n"], 1);
+        index.set_hunk(PathBuf::from("a.rs"), first, Some("api".into()));
+        index.set_hunk(PathBuf::from("a.rs"), second, Some("ui".into()));
+        workspace.assignments = Arc::new(index);
+
+        let files = workspace.files_by_branch(&[PathBuf::from("a.rs")]);
+        assert_eq!(files[0].branch, None, "it is on no single branch");
+        assert_eq!(files[0].split, ["api", "ui"], "it is on both");
+        assert!(files[0].is_assigned());
+
+        let summary = workspace.summary_counts(&[PathBuf::from("a.rs")]);
+        assert_eq!(summary.per_branch.get("api"), Some(&1));
+        assert_eq!(summary.per_branch.get("ui"), Some(&1));
+        assert_eq!(summary.unassigned, 0, "nothing here will fail to commit");
+    }
+
+    #[test]
+    fn a_hunk_on_a_deleted_branch_does_not_keep_a_file_assigned() {
+        let mut workspace = loaded(&[("api", None, BranchApplyState::Applied)]);
+        let mut index = AssignmentIndex::new();
+        index.set_hunk(
+            PathBuf::from("a.rs"),
+            gitcomet_core::workspace::HunkFingerprint::of(&["new\n"], 1),
+            Some("gone".into()),
+        );
+        workspace.assignments = Arc::new(index);
+
+        let files = workspace.files_by_branch(&[PathBuf::from("a.rs")]);
+        assert!(files[0].split.is_empty());
+        assert!(!files[0].is_assigned());
     }
 
     #[test]

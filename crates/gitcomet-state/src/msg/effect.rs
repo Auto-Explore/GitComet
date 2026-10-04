@@ -127,7 +127,7 @@ pub enum Effect {
     AssignWorkspaceFile {
         repo_id: RepoId,
         path: PathBuf,
-        hunk: Option<gitcomet_core::workspace::HunkKey>,
+        hunk: Option<gitcomet_core::workspace::HunkFingerprint>,
         branch: Option<String>,
     },
     /// Push a virtual branch, setting upstream on first push.

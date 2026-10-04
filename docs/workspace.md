@@ -177,8 +177,46 @@ therefore keeps its branch across edits made while it is unmodified — the
 alternative would silently move a file to "Unassigned" the moment someone
 saved it and nothing changed.
 
-Assigning is currently per file. Assigning individual hunks of one file to
-different branches is not implemented.
+Assignment also works **per hunk**: one file can have its changes split across
+several branches. See below.
+
+## Assigning hunks
+
+A file that goes to more than one branch is *split*. In the diff view, right
+click a hunk and choose **Assign to a branch…**; in the Workspace tab the file
+row then reads `feature/api + feature/ui` instead of a single branch.
+
+The hard part is not recording the assignment but *finding the hunk again* at
+commit time, when the same change is diffed against a different base:
+
+```
+the view diffs      HEAD          →  the commit diffs    feature/api's base
+```
+
+A line range cannot survive that — the same change has different line numbers
+on the two sides. So a hunk is identified by a **fingerprint**: how many lines
+it adds, how many it removes, and an FNV-1a hash of the text it produces.
+
+FNV rather than the standard library's hasher, because this is written to
+disk: a hasher whose output changes between Rust releases would silently
+invalidate every assignment a user ever made.
+
+Two consequences worth knowing:
+
+- **Two identical hunks share a fingerprint.** Two edits that add and remove
+  exactly the same text are the same fingerprint, and both follow the
+  assignment. Deliberate: they are indistinguishable to somebody reading the
+  file, and picking one would be a coin flip dressed up as precision.
+- **A hunk is what `git diff` calls a hunk.** Two edits three lines apart are
+  one `@@` to the user, so they are one unit here too — `HUNK_CONTEXT_LINES`
+  records the context the model groups by. If it disagreed with the diff, an
+  assignment would match neither span and quietly apply to nothing.
+
+A split file is committed by every branch holding part of it: each takes the
+base lines everywhere except the hunks assigned to it, so `feature/api`'s commit
+contains the API change and *not* the UI one, even though both are sitting in
+the same working tree. Line endings come from the base, so splitting a CRLF
+file does not rewrite every line of it.
 
 ## Committing
 
@@ -213,7 +251,7 @@ Everything the model needs lives in `.git/gitcomet/`:
 | File | Contents |
 | --- | --- |
 | `workspace.json` | target branch and every virtual branch |
-| `assignments.json` | which branch each changed file belongs to |
+| `assignments.json` | which branch each changed file — or each of its hunks — belongs to |
 
 Both are written atomically and are ignored if unreadable: a workspace file
 written by a newer or hand-edited version makes the Workspace tab show an
@@ -256,6 +294,10 @@ branch commits it, and `Commit` once it has one. Clearing the assign field is
 how a file goes back to the unassigned bucket — it is an answer, not a missing
 one, which is why the prompt's confirm button stays live on an empty field.
 
+Per hunk: right click a hunk in the diff view and choose *Assign to a branch…*.
+This is the only place a file gets split, and the split is undone by assigning
+the file whole again.
+
 `Commit` opens a dialog pre-filled with `Update <path>`, the message the quick
 commit synthesised, so accepting it is still one press while the field can be
 replaced with something the user means. The branch it goes to is read *at
@@ -270,6 +312,11 @@ changes, and a synthesised default would invite the user to accept a message
 that describes nothing. The confirm button stays disabled until something is
 typed, and a branch with no files assigned produces no commit at all rather than
 an empty one.
+
+A split file has no per-file *Commit* button, because it has no single branch
+for the button to name; the branch's *Commit its assigned files* is what
+commits it. Its *Assign* button stays live, and assigns the whole file to one
+branch — a real answer to a real question, and one that clears the split.
 
 A conflict from a failed apply is shown above the stacks and can be dismissed.
 
@@ -296,8 +343,8 @@ distinct thing the dialog can be asked for:
   standing up a popover host.
 
 Not exposed anywhere: dragging a file onto a branch as a way to assign it — the
-row's `Assign` button is the only assignment gesture. Everything else in
-`WorkspaceEdit` has a control.
+row's `Assign` button, or the diff view's hunk menu, is the only assignment
+gesture. Everything else in `WorkspaceEdit` has a control.
 
 ## Acceptance criteria for #539
 
@@ -313,7 +360,7 @@ row's `Assign` button is the only assignment gesture. Everything else in
 | 8 | Move branches between stacks | done — `MoveToStack` |
 | 9 | Reorder within a stack | done — `Reorder` plus `↑`/`↓` |
 | 10 | Assign files to virtual branches | done |
-| 11 | Assign individual hunks | **not done** — see below |
+| 11 | Assign individual hunks | done — `HunkFingerprint`, diff hunk menu |
 | 12 | Maintain `gitcomet/workspace` | done |
 | 13 | Auto-update when the applied set changes | done |
 | 14 | Prevent direct commits to `gitcomet/workspace` | structurally — see below |
@@ -336,19 +383,26 @@ invents a branch name the user typed.
 
 ### On #11
 
-Assignment is whole-file: `AssignmentIndex` is a `BTreeMap<PathBuf, Option<String>>`.
-Hunk-level needs three things none of which exist yet:
+The three things that were missing:
 
-- a hunk identity that survives the file moving. Line ranges do not; GitButler
-  anchors them to unidiff context, which is why its assignments stay correct
-  across edits.
-- a commit path that can build a tree per branch where some hunks come from the
-  branch and the rest from the working tree. `commit_paths_tree` today takes a
-  whole file from one side or the other.
-- a control in the diff view. The hunks exist there as a rendering concept
-  (`DiffHunk`, `CollapsedDiffHunk`), not as something selectable.
+- **A hunk identity that survives the file moving.** `HunkFingerprint` hashes
+  what a change adds and removes rather than where it sits. It is content-based
+  rather than context-based (GitButler anchors to unidiff context), which makes
+  it independent of *both* the base it was made against and the surrounding
+  code, at the cost of treating two textually identical changes as one. See
+  *Assigning hunks* above.
+- **A commit path that can build a tree per branch.** `commit_paths_tree` sends
+  a file git-add style when it belongs to one branch, and `stage_split_file`
+  synthesizes a per-branch version of it when it does not — base lines
+  everywhere except the hunks that branch owns, hashed straight into a
+  temporary index. The working tree and the user's real index are never
+  involved.
+- **A control in the diff view.** The hunk context menu now offers *Assign to a
+  branch…*, which opens the same `WorkspacePrompt` the sidebar uses.
 
-This is a feature in its own right, not a wiring gap.
+A file split across branches is reported as `api + ui` rather than as
+unassigned: it has no single branch, but it is assigned, and saying otherwise
+would send the user looking for a file two branches are already committing.
 
 ## Where the code is
 
@@ -363,6 +417,8 @@ This is a feature in its own right, not a wiring gap.
 | Messages and effects | `crates/gitcomet-state/src/store/effects/workspace_effects.rs` |
 | Reducers | `crates/gitcomet-state/src/store/reducer/workspace.rs` |
 | The view | `crates/gitcomet-ui-gpui/src/view/panes/sidebar/workspace.rs` |
+| Hunk fingerprints from a rendered diff | `crates/gitcomet-ui-gpui/src/view/diff_utils.rs` |
+| Hunk menu entry | `crates/gitcomet-ui-gpui/src/view/panels/popover/context_menu/diff_hunk.rs` |
 
 ## Naming
 

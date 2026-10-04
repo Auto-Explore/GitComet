@@ -223,7 +223,7 @@ fn edit_for(
     kind: WorkspacePromptKind,
     branch: &str,
     path: Option<&std::path::Path>,
-    hunk: Option<gitcomet_core::workspace::HunkKey>,
+    hunk: Option<gitcomet_core::workspace::HunkFingerprint>,
     value: &str,
     in_workspace: &dyn Fn(&str) -> bool,
     free_name: &dyn Fn(&str) -> String,
@@ -664,11 +664,7 @@ mod tests {
 
     #[test]
     fn assigning_a_hunk_names_the_file_the_hunk_and_the_branch() {
-        let hunk = gitcomet_core::workspace::HunkKey {
-            base_start: 3,
-            base_lines: 1,
-            new_lines: 2,
-        };
+        let hunk = gitcomet_core::workspace::HunkFingerprint::of(&["new\n"], 1);
         let Some(WorkspaceEdit::AssignHunk {
             path,
             hunk: key,
@@ -695,7 +691,7 @@ mod tests {
 
     #[test]
     fn an_empty_field_unassigns_the_hunk_too() {
-        let hunk = gitcomet_core::workspace::HunkKey::default();
+        let hunk = gitcomet_core::workspace::HunkFingerprint::default();
         let Some(WorkspaceEdit::AssignHunk { branch, .. }) = edit_for(
             WorkspacePromptKind::AssignHunk,
             "",
@@ -719,7 +715,7 @@ mod tests {
             WorkspacePromptKind::AssignHunk,
             "",
             None,
-            Some(gitcomet_core::workspace::HunkKey::default()),
+            Some(gitcomet_core::workspace::HunkFingerprint::default()),
             "ui",
             &membership(),
             &free,
@@ -751,7 +747,7 @@ mod tests {
                 WorkspacePromptKind::AssignHunk,
                 "",
                 Some(std::path::Path::new("src/lib.rs")),
-                Some(gitcomet_core::workspace::HunkKey::default()),
+                Some(gitcomet_core::workspace::HunkFingerprint::default()),
                 value,
                 &membership(),
                 &free,

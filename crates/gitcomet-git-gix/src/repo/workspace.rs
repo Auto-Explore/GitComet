@@ -421,8 +421,14 @@ impl GixRepo {
             .file(path)
             .map(|file| file.hunks().collect())
             .unwrap_or_default();
-        let keep = |key: gitcomet_core::workspace::HunkKey| {
-            mine.iter().any(|(assigned, b)| *assigned == key && *b == branch)
+        // The fingerprints are recomputed here, against *this branch's* base.
+        // That is the whole point of keying on content: the assignment was made
+        // from a diff against something else, and it still resolves.
+        let keep = |fingerprint: gitcomet_core::workspace::HunkFingerprint| {
+            mine.iter()
+                .any(|(assigned, assigned_branch)| {
+                    *assigned == fingerprint && assigned_branch == branch
+                })
         };
         let synthesized = synthesize_for_branch(base_text, working_text, &spans, &keep);
 

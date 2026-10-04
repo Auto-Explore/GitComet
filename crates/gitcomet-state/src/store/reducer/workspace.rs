@@ -311,7 +311,7 @@ pub(super) fn workspace_assign_finished(
     state: &mut AppState,
     repo_id: RepoId,
     path: PathBuf,
-    hunk: Option<gitcomet_core::workspace::HunkKey>,
+    hunk: Option<gitcomet_core::workspace::HunkFingerprint>,
     branch: Option<String>,
     result: gitcomet_core::services::Result<()>,
 ) -> Vec<Effect> {
@@ -484,11 +484,7 @@ mod tests {
     #[test]
     fn a_hunk_assignment_takes_the_same_effect_and_names_its_hunk() {
         let mut state = repo_with_workspace();
-        let hunk = gitcomet_core::workspace::HunkKey {
-            base_start: 3,
-            base_lines: 1,
-            new_lines: 2,
-        };
+        let hunk = gitcomet_core::workspace::HunkFingerprint::of(&["new\n"], 1);
         let effects = apply_workspace_edit(
             &mut state,
             RepoId(1),
