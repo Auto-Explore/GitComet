@@ -117,6 +117,7 @@ impl PopoverHost {
         let state = self.workspace_state(repo_id);
         let in_workspace = |name: &str| state.is_some_and(|state| state.contains(name));
         let free_name = |value: &str| self.free_branch_name(repo_id, value, state);
+        let assignment_of = |path: &std::path::Path| self.file_assignment(repo_id, path);
         edit_for(
             kind,
             &branch,
@@ -125,6 +126,7 @@ impl PopoverHost {
             &in_workspace,
             &free_name,
             |name| self.knows_git_branch(repo_id, name),
+            &assignment_of,
         )
     }
 
@@ -170,16 +172,30 @@ impl PopoverHost {
             .find(|repo| repo.id == repo_id)
             .and_then(|repo| repo.workspace.workspace())
     }
+
+    /// The branch a file is currently assigned to, if that branch still exists.
+    fn file_assignment(
+        &self,
+        repo_id: RepoId,
+        path: &std::path::Path,
+    ) -> Option<String> {
+        let repo = self.state.repos.iter().find(|repo| repo.id == repo_id)?;
+        let workspace = repo.workspace.workspace()?;
+        repo.workspace
+            .assignments
+            .resolve(path, workspace)
+            .map(str::to_string)
+    }
 }
 
 /// The edit a prompt at `kind` with `branch`, `path` and `value` produces.
 ///
 /// `in_workspace` answers whether a name is one of the repository's virtual
 /// branches, `free_name` turns typed text into a name nothing else has taken,
-/// and `is_git_branch` whether it is a real branch in the repository — the
-/// target is a real branch, while a base or a stack is a virtual one, and
-/// conflating the two is how a prompt ends up offering a branch that cannot be
-/// resolved.
+/// `is_git_branch` whether it is a real branch in the repository — the target
+/// is a real branch, while a base or a stack is a virtual one, and conflating
+/// the two is how a prompt ends up offering a branch that cannot be resolved —
+/// and `assignment_of` which branch a file currently belongs to.
 #[allow(clippy::too_many_arguments)]
 fn edit_for(
     kind: WorkspacePromptKind,
@@ -189,6 +205,7 @@ fn edit_for(
     in_workspace: &dyn Fn(&str) -> bool,
     free_name: &dyn Fn(&str) -> String,
     is_git_branch: &dyn Fn(&str) -> bool,
+    assignment_of: &dyn Fn(&std::path::Path) -> Option<String>,
 ) -> Option<WorkspaceEdit> {
     // The action list submits nothing; picking a row is the whole interaction.
     let branch_exists = !branch.is_empty() && in_workspace(branch);
@@ -265,6 +282,30 @@ fn edit_for(
                 branch: (!value.is_empty()).then(|| value.to_string()),
             }
         }
+        WorkspacePromptKind::CommitMessage => {
+            let Some(path) = path else {
+                return None;
+            };
+            // A commit with no message is one Git will refuse to describe, so
+            // the prompt opens on the synthesised default rather than empty and
+            // the user can accept it or replace it.
+            let message = value.trim();
+            if message.is_empty() {
+                return None;
+            }
+            // The destination is read live rather than captured when the prompt
+            // opened: a file can be reassigned while its commit dialog is up,
+            // and committing to the branch it used to belong to would put the
+            // change somewhere the user is no longer looking.
+            let Some(name) = assignment_of(path) else {
+                return None;
+            };
+            WorkspaceEdit::CommitPaths {
+                name,
+                message: message.to_string(),
+                paths: vec![path.to_path_buf()],
+            }
+        }
     };
     // A creation whose name could not be made free is not an edit at all, and
     // the confirm button stays disabled rather than dispatching an empty name.
@@ -328,6 +369,7 @@ mod tests {
             &membership(),
             &free,
             &|name| matches!(name, "main" | "develop" | "api"),
+            &|_| None,
         )
     }
 
@@ -340,6 +382,20 @@ mod tests {
             &membership(),
             &free,
             &|name| matches!(name, "main" | "develop" | "api"),
+            &|_| Some("ui".to_string()),
+        )
+    }
+
+    fn commit(value: &str) -> Option<WorkspaceEdit> {
+        edit_for(
+            WorkspacePromptKind::CommitMessage,
+            "",
+            Some(std::path::Path::new("src/lib.rs")),
+            value,
+            &membership(),
+            &free,
+            &|name| matches!(name, "main" | "develop" | "api"),
+            &|_| Some("ui".to_string()),
         )
     }
 
@@ -489,6 +545,64 @@ mod tests {
                 &membership(),
                 &free,
                 &|_| true,
+                &|_| None,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn committing_carries_the_message_and_the_file() {
+        let Some(WorkspaceEdit::CommitPaths {
+            name,
+            message,
+            paths,
+        }) = commit("Fix the thing")
+        else {
+            panic!("expected a commit edit");
+        };
+        // The branch is the file's assignment, read at submit rather than
+        // captured at open.
+        assert_eq!(name, "ui");
+        assert_eq!(message, "Fix the thing");
+        assert_eq!(paths, [std::path::PathBuf::from("src/lib.rs")]);
+    }
+
+    #[test]
+    fn a_commit_with_no_message_is_refused() {
+        assert!(commit("").is_none());
+        assert!(commit("   ").is_none());
+    }
+
+    #[test]
+    fn a_file_with_no_branch_cannot_be_committed() {
+        assert!(
+            edit_for(
+                WorkspacePromptKind::CommitMessage,
+                "",
+                Some(std::path::Path::new("src/lib.rs")),
+                "Update src/lib.rs",
+                &membership(),
+                &free,
+                &|_| true,
+                &|_| None,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn committing_needs_a_file() {
+        assert!(
+            edit_for(
+                WorkspacePromptKind::CommitMessage,
+                "",
+                None,
+                "Update something",
+                &membership(),
+                &free,
+                &|_| true,
+                &|_| Some("ui".to_string()),
             )
             .is_none()
         );

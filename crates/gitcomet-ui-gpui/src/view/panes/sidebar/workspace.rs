@@ -14,6 +14,9 @@
 use super::*;
 use crate::kit::interaction::ControlInteractionExt as _;
 use crate::view::components::InteractiveRowExt as _;
+use crate::view::panels::popover::workspace_prompt::{
+    assign_file_prompt, commit_file_prompt, default_commit_message,
+};
 use gitcomet_core::workspace::{BranchApplyState, VirtualBranch};
 use gitcomet_state::model::{Loadable, WorkspaceEdit};
 use std::path::PathBuf;
@@ -399,7 +402,6 @@ impl SidebarPaneView {
                         *indented,
                         busy,
                         repo_id,
-                        Arc::clone(&store),
                         cx,
                     ),
                     WorkspaceRow::Placeholder { message } => {
@@ -799,7 +801,6 @@ fn render_file_row(
     indented: bool,
     busy: bool,
     repo_id: RepoId,
-    store: Arc<AppStore>,
     cx: &mut gpui::Context<SidebarPaneView>,
 ) -> AnyElement {
     // An unassigned file sits one level out from its assigned siblings, so the
@@ -813,25 +814,35 @@ fn render_file_row(
     let surface = theme.colors.surface.canvas;
 
     // An unassigned file has nowhere to go, so the control is not offered at all
-    // rather than offered and refused.
-    let commit = branch.as_ref().map(|_| {
-        let commit_store = Arc::clone(&store);
+    // rather than offered and refused. The message is written in the dialog the
+    // button opens, pre-filled with what the quick commit used to synthesise, so
+    // accepting it is still one press.
+    let commit = branch.as_ref().map(|branch| {
         let commit_path = path.clone();
+        let message = default_commit_message(&commit_path);
         components::Button::new(
             format!("workspace_commit_{}", commit_path.display()),
             "Commit",
         )
         .style(components::ButtonStyle::Subtle)
         .disabled(busy)
-        .on_click(theme, cx, move |_, _, _, _| {
-            commit_store.dispatch(Msg::CommitWorkspaceFile {
-                repo_id,
-                path: commit_path.clone(),
-            });
+        .on_click(theme, cx, move |this, event, window, cx| {
+            this.open_popover_at(
+                PopoverKind::WorkspacePrompt {
+                    repo_id,
+                    prompt: commit_file_prompt(&commit_path, &message),
+                },
+                event.position(),
+                window,
+                cx,
+            );
         })
         .gitcomet_tooltip(
             theme,
-            SharedString::from(format!("Commit {} to its branch", commit_path.display())),
+            SharedString::from(format!(
+                "Commit {} to {branch}",
+                commit_path.display()
+            )),
         )
     });
 
@@ -855,10 +866,7 @@ fn render_file_row(
         this.open_popover_at(
             PopoverKind::WorkspacePrompt {
                 repo_id,
-                prompt: crate::view::panels::popover::workspace_prompt::assign_file_prompt(
-                    &assign_path,
-                    assign_branch.as_deref(),
-                ),
+                prompt: assign_file_prompt(&assign_path, assign_branch.as_deref()),
             },
             event.position(),
             window,

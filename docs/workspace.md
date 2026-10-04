@@ -255,10 +255,17 @@ branch commits it, and `Commit` once it has one. Clearing the assign field is
 how a file goes back to the unassigned bucket — it is an answer, not a missing
 one, which is why the prompt's confirm button stays live on an empty field.
 
+`Commit` opens a dialog pre-filled with `Update <path>`, the message the quick
+commit synthesised, so accepting it is still one press while the field can be
+replaced with something the user means. The branch it goes to is read *at
+submit*, not captured when the dialog opened: a file can be reassigned while its
+commit dialog is up, and committing to the branch it used to belong to would
+put the change somewhere the user is no longer looking.
+
 A conflict from a failed apply is shown above the stacks and can be dismissed.
 
-Every `WorkspaceEdit` variant except one is now reachable from the view. The
-ones that need a name go through a single popover,
+Every `WorkspaceEdit` variant is now reachable from the view. The ones that
+need a name or a message go through a single popover,
 `PopoverKind::WorkspacePrompt`:
 
 - the body is the same for all of them, so they share one variant rather than
@@ -275,9 +282,10 @@ ones that need a name go through a single popover,
   than accepted and failed later on a background thread with a rebase error;
   a name that is already taken is suffixed rather than passed to Git.
 
-Still not reachable: `CommitPaths` with a message the user wrote. The file
-row's `Commit` synthesises `Update <path>`, and `commit_branch` exists for the
-whole-branch case, but nothing in the view asks for a message yet.
+Not exposed anywhere yet: `CommitPaths` for a whole branch (`commit_branch`
+takes a message and every file assigned to the branch), and dragging a file
+onto a branch as a way to assign it — the row's `Assign` button is the only
+assignment gesture.
 
 ## Where the code is
 

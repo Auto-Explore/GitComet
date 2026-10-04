@@ -47,6 +47,14 @@ fn detail_line(
         )
         .into(),
         WorkspacePromptKind::BranchActions => format!("Actions for {branch}.").into(),
+        WorkspacePromptKind::CommitMessage => match path {
+            Some(path) => format!(
+                "{} will be committed on its own, to the branch it is assigned to.",
+                path.display()
+            )
+            .into(),
+            None => String::new().into(),
+        },
         WorkspacePromptKind::AssignFile => match path {
             Some(path) if value.is_empty() => format!(
                 "{} will not be committed to any branch. Clear the field to leave it as it is.",
@@ -101,6 +109,30 @@ pub(in crate::view) fn assign_file_prompt(
         path: Some(path.to_path_buf()),
         value: branch.unwrap_or_default().to_string(),
     }
+}
+
+/// The dialog the file row opens for a commit, opened on the message the
+/// quick commit used to synthesise.
+///
+/// Prefilling rather than starting empty keeps the one-press commit the row
+/// had, while letting the same field be replaced with something the user
+/// actually means.
+pub(in crate::view) fn commit_file_prompt(
+    path: &std::path::Path,
+    message: &str,
+) -> WorkspacePrompt {
+    WorkspacePrompt {
+        kind: WorkspacePromptKind::CommitMessage,
+        branch: String::new(),
+        path: Some(path.to_path_buf()),
+        value: message.to_string(),
+    }
+}
+
+/// The message the quick commit falls back on: the same one the reducer used to
+/// synthesise, so nothing about the default changes.
+pub(in crate::view) fn default_commit_message(path: &std::path::Path) -> String {
+    format!("Update {}", path.display())
 }
 
 pub(super) fn panel(
@@ -215,6 +247,30 @@ mod tests {
         assert!(WorkspacePromptKind::MoveToStack.asks_for_text());
         assert!(WorkspacePromptKind::AssignFile.asks_for_text());
     }#[test]
+    fn the_commit_prompt_opens_on_a_message_the_user_can_keep() {
+        let path = std::path::Path::new("src/lib.rs");
+        let prompt = commit_file_prompt(path, &default_commit_message(path));
+        assert_eq!(prompt.kind, WorkspacePromptKind::CommitMessage);
+        assert_eq!(prompt.path.as_deref(), Some(path));
+        assert_eq!(prompt.value, "Update src/lib.rs");
+        assert!(
+            !prompt.value.trim().is_empty(),
+            "an empty default would make the confirm button dead on open"
+        );
+    }
+
+#[test]
+    fn the_commit_line_says_the_commit_is_just_this_file() {
+        let line = detail_line(
+            WorkspacePromptKind::CommitMessage,
+            "",
+            Some(std::path::Path::new("src/lib.rs")),
+            "Update src/lib.rs",
+        );
+        assert!(line.contains("on its own"), "{line}");
+    }
+
+#[test]
     fn the_assign_prompt_carries_the_file_and_its_current_branch() {
         let prompt = assign_file_prompt(std::path::Path::new("src/lib.rs"), Some("feature/api"));
         assert_eq!(prompt.kind, WorkspacePromptKind::AssignFile);
@@ -262,6 +318,7 @@ mod tests {
             WorkspacePromptKind::MoveToStack,
             WorkspacePromptKind::Remove,
             WorkspacePromptKind::AssignFile,
+            WorkspacePromptKind::CommitMessage,
         ];
         for (i, kind) in kinds.iter().enumerate() {
             for other in &kinds[i + 1..] {

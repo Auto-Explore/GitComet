@@ -1144,6 +1144,8 @@ pub(in crate::view) enum WorkspacePromptKind {
     Remove,
     /// Say which branch [`WorkspacePrompt::path`] belongs to.
     AssignFile,
+    /// Write the message for the commit of [`WorkspacePrompt::path`].
+    CommitMessage,
 }
 
 impl WorkspacePromptKind {
@@ -1165,6 +1167,7 @@ impl WorkspacePromptKind {
             Self::MoveToStack => "Move into stack",
             Self::Remove => "Remove branch",
             Self::AssignFile => "Assign file",
+            Self::CommitMessage => "Commit changes",
         }
     }
 
@@ -1177,6 +1180,7 @@ impl WorkspacePromptKind {
             // An empty field is the way to unassign, so the label says what
             // clearing it does rather than just naming the value.
             Self::AssignFile => "Branch (empty leaves it unassigned)",
+            Self::CommitMessage => "Commit message",
             Self::BranchActions | Self::Remove => "",
         }
     }
@@ -1191,6 +1195,7 @@ impl WorkspacePromptKind {
             Self::MoveToStack => "Move",
             Self::Remove => "Remove",
             Self::AssignFile => "Assign",
+            Self::CommitMessage => "Commit",
         }
     }
 }
