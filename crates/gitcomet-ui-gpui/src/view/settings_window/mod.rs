@@ -162,6 +162,49 @@ const FILE_LIST_LAYOUT_OPTIONS: &[(&str, FileListLayout, &str)] = &[
         FileListLayout::Tree,
         "Group changed files under their folders",
     ),
+    (
+        "settings_window_file_list_layout_groups",
+        FileListLayout::Groups,
+        "Group changed files by kind, or by the groups a view defines",
+    ),
+];
+
+const FILE_LIST_SORT_OPTIONS: &[(&str, crate::view::rows::CommitFileSort, &str)] = &[
+    (
+        "settings_window_file_list_sort_path_ascending",
+        crate::view::rows::CommitFileSort::PathAscending,
+        "A to Z by path",
+    ),
+    (
+        "settings_window_file_list_sort_path_descending",
+        crate::view::rows::CommitFileSort::PathDescending,
+        "Z to A by path",
+    ),
+    (
+        "settings_window_file_list_sort_file_type_ascending",
+        crate::view::rows::CommitFileSort::FileTypeAscending,
+        "Together by extension, A to Z",
+    ),
+    (
+        "settings_window_file_list_sort_file_type_descending",
+        crate::view::rows::CommitFileSort::FileTypeDescending,
+        "Together by extension, Z to A",
+    ),
+    (
+        "settings_window_file_list_sort_edit_size_smallest",
+        crate::view::rows::CommitFileSort::EditSizeAscending,
+        "Fewest changed lines first",
+    ),
+    (
+        "settings_window_file_list_sort_edit_size_largest",
+        crate::view::rows::CommitFileSort::EditSizeDescending,
+        "Most changed lines first",
+    ),
+    (
+        "settings_window_file_list_sort_edits",
+        crate::view::rows::CommitFileSort::Edits,
+        "Files changed the same way together, the most repeated first",
+    ),
 ];
 
 const DIFF_TAB_SIZE_OPTIONS: &[(&str, u8)] = &[
@@ -323,6 +366,7 @@ enum SettingsSection {
     TerminalButton,
     ChangeTracking,
     FileListLayout,
+    FileListSort,
     DiffContentMode,
     Diff,
     DiffViewMode,
@@ -351,7 +395,7 @@ impl SettingsSection {
             | Self::Timezone => SettingsCategory::General,
             Self::TerminalExternal | Self::TerminalButton => SettingsCategory::Terminal,
             Self::ChangeTracking => SettingsCategory::ChangeTracking,
-            Self::FileListLayout => SettingsCategory::ChangeTracking,
+            Self::FileListLayout | Self::FileListSort => SettingsCategory::ChangeTracking,
             Self::DiffContentMode | Self::Diff | Self::DiffViewMode | Self::DiffTabSize => {
                 SettingsCategory::Diff
             }
@@ -625,6 +669,7 @@ pub(crate) struct SettingsWindowView {
     timezone_scroll: UniformListScrollHandle,
     change_tracking_scroll: UniformListScrollHandle,
     file_list_layout_scroll: UniformListScrollHandle,
+    file_list_sort_scroll: UniformListScrollHandle,
     diff_content_mode_scroll: UniformListScrollHandle,
     diff_scroll_sync_scroll: UniformListScrollHandle,
     diff_tab_size_scroll: UniformListScrollHandle,
@@ -636,6 +681,7 @@ pub(crate) struct SettingsWindowView {
     show_timezone: bool,
     change_tracking_view: ChangeTrackingView,
     file_list_layout: FileListLayout,
+    file_list_sort: crate::view::rows::CommitFileSort,
     terminal_preferences: TerminalPreferences,
     terminal_external_program_input: Entity<components::TextInput>,
     terminal_external_args_input: Entity<components::TextInput>,
@@ -1062,6 +1108,7 @@ impl SettingsWindowView {
         let show_timezone = ui_preferences.appearance.show_timezone;
         let change_tracking_view = ui_preferences.change_tracking.view;
         let file_list_layout = ui_preferences.file_lists.layout;
+        let file_list_sort = ui_preferences.file_lists.sort;
         let terminal_preferences = ui_preferences.terminal.clone();
         let diff_scroll_sync = ui_preferences.diff.scroll_sync;
         let diff_content_mode = ui_preferences.diff.content_mode;
@@ -1399,6 +1446,7 @@ impl SettingsWindowView {
             timezone_scroll: UniformListScrollHandle::default(),
             change_tracking_scroll: UniformListScrollHandle::default(),
             file_list_layout_scroll: UniformListScrollHandle::default(),
+            file_list_sort_scroll: UniformListScrollHandle::default(),
             diff_content_mode_scroll: UniformListScrollHandle::default(),
             diff_scroll_sync_scroll: UniformListScrollHandle::default(),
             diff_tab_size_scroll: UniformListScrollHandle::default(),
@@ -1410,6 +1458,7 @@ impl SettingsWindowView {
             show_timezone,
             change_tracking_view,
             file_list_layout,
+            file_list_sort,
             terminal_preferences,
             terminal_external_program_input,
             terminal_external_args_input,

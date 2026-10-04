@@ -290,6 +290,11 @@ pub(crate) enum PopoverKind {
     CommitFileSortMenu {
         list: crate::view::rows::FileListId,
     },
+    /// Right-click menu of a changed-file list's layout icon.
+    FileListLayoutMenu {
+        repo_id: RepoId,
+        list: crate::view::rows::FileListId,
+    },
     /// Right-click menu of a folder row in a file list's tree view.
     FileListFolderMenu {
         repo_id: RepoId,
@@ -1440,56 +1445,10 @@ impl ThemeMode {
     }
 }
 
-/// Whether a changed-file list groups by directory. The global default is a
-/// persisted preference; each list may override it transiently.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) enum FileListLayout {
-    #[default]
-    Flat,
-    Tree,
-}
-
-impl FileListLayout {
-    pub(crate) const fn key(self) -> &'static str {
-        match self {
-            Self::Flat => "flat",
-            Self::Tree => "tree",
-        }
-    }
-
-    pub(crate) fn from_key(raw: &str) -> Option<Self> {
-        match raw {
-            "flat" => Some(Self::Flat),
-            "tree" => Some(Self::Tree),
-            _ => None,
-        }
-    }
-
-    pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::Flat => "Flat list",
-            Self::Tree => "Tree",
-        }
-    }
-
-    pub(crate) const fn settings_label(self) -> &'static str {
-        self.label()
-    }
-
-    pub(crate) const fn icon(self) -> &'static str {
-        match self {
-            Self::Flat => "icons/menu.svg",
-            Self::Tree => "icons/list_tree.svg",
-        }
-    }
-
-    pub(crate) const fn toggled(self) -> Self {
-        match self {
-            Self::Flat => Self::Tree,
-            Self::Tree => Self::Flat,
-        }
-    }
-}
+/// How a changed-file list arranges its files: flat, under folders, or under
+/// group headers. The global default is a persisted preference; each list may
+/// override it transiently.
+pub(crate) type FileListLayout = crate::kit::components::ListLayout;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum ChangeTrackingView {

@@ -141,6 +141,7 @@ impl DetailsPaneView {
                 Self::render_staged_rows,
             ),
         };
+        let sticky = self.sticky_group_headers(repo_id, list, cx);
         let mut lists = self.file_controllers.borrow_mut();
         let entry = lists.entry((repo_id, list)).or_default();
         let view = entry.view.get_or_insert_with(|| {
@@ -159,7 +160,73 @@ impl DetailsPaneView {
                 )
             })
         });
-        view.update(cx, |view, _| view.refresh(Some(count), None));
+        let decorate = sticky.map(|sticky| {
+            Rc::new(move |list: gpui::UniformList| list.with_decoration(sticky.clone())) as Decorate
+        });
+        view.update(cx, |view, _| view.refresh(Some(count), decorate));
         view.clone()
+    }
+
+    /// The pinned group header of `list` while its plan is grouped. The
+    /// caller has just planned the list, so the cached plan is the drawn one.
+    fn sticky_group_headers(
+        &self,
+        repo_id: RepoId,
+        list: crate::view::rows::FileListId,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<crate::view::rows::StickyGroupHeaders> {
+        use crate::view::rows::{FileListId, FileListRow, RowIx};
+        let plan = self
+            .file_controllers
+            .borrow()
+            .get(&(repo_id, list))?
+            .controller
+            .borrow()
+            .plan_cache
+            .current()?;
+        let headers = plan.headers()?;
+        let prefix = match list {
+            FileListId::CommitFiles => format!("commit_file_group_{}", repo_id.0),
+            FileListId::WorktreeFiles => format!("worktree_file_group_{}", repo_id.0),
+            FileListId::RangeFiles => format!("range_file_group_{}", repo_id.0),
+            FileListId::Status(section) => {
+                format!("status_group_{}_{}", repo_id.0, section.id_label())
+            }
+        };
+        let pane = cx.weak_entity();
+        let theme = self.theme;
+        let ui_scale = crate::ui_scale::UiScale::current(cx);
+        Some(crate::view::rows::StickyGroupHeaders {
+            headers,
+            header: Rc::new(move |row, row_height, _cx| {
+                let FileListRow::Group {
+                    group,
+                    label,
+                    count,
+                    collapsed,
+                } = plan.row_at(RowIx(row))?
+                else {
+                    return None;
+                };
+                let pane = pane.clone();
+                Some(crate::view::rows::group_header_row(
+                    crate::view::rows::GroupHeaderProps {
+                        id: ("file_list_sticky_group", group),
+                        selector: format!("{prefix}_sticky_{label}"),
+                        label,
+                        count,
+                        collapsed,
+                    },
+                    theme,
+                    ui_scale,
+                    row_height,
+                    move |cx| {
+                        let _ = pane.update(cx, |pane, cx| {
+                            pane.toggle_file_list_group(repo_id, list, group, cx)
+                        });
+                    },
+                ))
+            }),
+        })
     }
 }

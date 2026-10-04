@@ -2073,6 +2073,10 @@ fn commit_details_reports_root_and_rename_file_changes() {
     assert_eq!(root_details.id, CommitId(root_id.into()));
     assert_eq!(root_details.message, "root commit");
     assert_eq!(root_details.parent_ids, Vec::<CommitId>::new());
+    // The root commit adds the file's one line; the rename changes no line,
+    // so it has no edit.
+    let mut added = gitcomet_core::edit_signature::EditSignatureBuilder::default();
+    added.added_lines(b"hello\n");
     assert_eq!(
         root_details.files,
         vec![
@@ -2081,6 +2085,7 @@ fn commit_details_reports_root_and_rename_file_changes() {
                 FileStatusKind::Added
             )
             .with_line_counts(Some(1), Some(0))
+            .with_edit(added.finish())
             .with_ids(None, Some(blob.clone()))
             .with_modes(None, regular)
         ]

@@ -9,9 +9,9 @@ pub(super) fn model(
     model_for_sort(list, current)
 }
 
-/// Status entries carry no `+/-` counts, so the edit-size modes have nothing to
-/// order by and are left out of their menus. Path and file type read off the
-/// path alone, so they stay.
+/// Untracked entries carry no line diff, so the edit-size and edit modes have
+/// nothing to order by and are left out of their menu. Path and file type
+/// read off the path alone, so they stay.
 fn sorts_for(list: crate::view::rows::FileListId) -> &'static [crate::view::rows::CommitFileSort] {
     use crate::view::rows::CommitFileSort;
     const WITHOUT_EDIT_SIZE: [CommitFileSort; 4] = [
@@ -22,7 +22,7 @@ fn sorts_for(list: crate::view::rows::FileListId) -> &'static [crate::view::rows
     ];
     match list {
         // Untracked files are in neither index lane, so git reports no counts
-        // for them — an edit-size mode there would silently sort by path.
+        // or edits for them — those modes there would silently sort by path.
         crate::view::rows::FileListId::Status(section)
             if !crate::view::status_section_has_line_stats(section) =>
         {

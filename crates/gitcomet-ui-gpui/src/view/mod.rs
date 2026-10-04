@@ -314,6 +314,7 @@ use date_time::{DateTimeFormat, Timezone, format_datetime_into};
 use diff_preview::build_new_file_preview_from_diff;
 use patch_split::build_patch_split_rows;
 use poller::Poller;
+pub(in crate::view) use preferences::FileListDefaults;
 use preferences::{HistoryBranchNamesMode, RemoteMarkdownImagePolicy, UiPreferences};
 pub(in crate::view) use terminal_preferences::{
     ExternalTerminalLaunchContext, ExternalTerminalMode, TerminalButtonTarget, TerminalPreferences,

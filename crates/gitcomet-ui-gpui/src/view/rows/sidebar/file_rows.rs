@@ -10,6 +10,7 @@ use gitcomet_core::domain::{ApplyChangeSource, CommitFileChange};
 #[derive(Clone, Copy)]
 struct ChangedFileList {
     dir_id: &'static str,
+    group_id: &'static str,
     file_id: &'static str,
     row_group: &'static str,
     list: crate::view::rows::FileListId,
@@ -18,18 +19,21 @@ struct ChangedFileList {
 impl ChangedFileList {
     const COMMIT: Self = Self {
         dir_id: "commit_file_dir",
+        group_id: "commit_file_group",
         file_id: "commit_file",
         row_group: "commit_file_row",
         list: crate::view::rows::FileListId::CommitFiles,
     };
     const WORKTREE: Self = Self {
         dir_id: "worktree_file_dir",
+        group_id: "worktree_file_group",
         file_id: "worktree_file",
         row_group: "worktree_file_row",
         list: crate::view::rows::FileListId::WorktreeFiles,
     };
     const RANGE: Self = Self {
         dir_id: "range_file_dir",
+        group_id: "range_file_group",
         file_id: "range_file",
         row_group: "range_file_row",
         list: crate::view::rows::FileListId::RangeFiles,
@@ -52,8 +56,9 @@ struct ChangedFileRow<'a> {
 }
 
 impl DetailsPaneView {
-    /// A directory row of `list`; `None` for a file row. Right-click opens
-    /// its folder menu, whose "Apply changes" takes from `apply_source`.
+    /// A directory or group header row of `list`; `None` for a file row.
+    /// Right-click on a folder opens its folder menu, whose "Apply changes"
+    /// takes from `apply_source`.
     #[allow(clippy::too_many_arguments)]
     fn changed_file_directory_row(
         list: ChangedFileList,
@@ -66,6 +71,32 @@ impl DetailsPaneView {
         ui_scale_percent: u32,
         cx: &mut gpui::Context<Self>,
     ) -> Option<AnyElement> {
+        if let crate::view::rows::FileListRow::Group {
+            group,
+            label,
+            count,
+            collapsed,
+        } = row
+        {
+            let pane = cx.weak_entity();
+            return Some(crate::view::rows::group_header_row(
+                crate::view::rows::GroupHeaderProps {
+                    id: (list.group_id, group),
+                    selector: format!("{}_{}_{label}", list.group_id, repo_id.0),
+                    label,
+                    count,
+                    collapsed,
+                },
+                theme,
+                crate::ui_scale::UiScale::current(cx),
+                crate::view::rows::sidebar::sidebar_list_row_height(theme, ui_scale_percent),
+                move |cx| {
+                    let _ = pane.update(cx, |pane, cx| {
+                        pane.toggle_file_list_group(repo_id, list.list, group, cx)
+                    });
+                },
+            ));
+        }
         // Only build the invoker while some menu is open.
         let menu_open = match (&row, active_menu) {
             (crate::view::rows::FileListRow::Directory { key, .. }, Some(active)) => {

@@ -2750,6 +2750,93 @@ fn auto_save_file_edits_toggle_reaches_the_main_window(cx: &mut gpui::TestAppCon
     });
 }
 
+/// Every layout and sort is offered, under the label the lists' own menus use.
+#[test]
+fn changed_file_list_options_cover_every_layout_and_sort() {
+    assert_eq!(
+        FILE_LIST_LAYOUT_OPTIONS
+            .iter()
+            .map(|(_, layout, _)| *layout)
+            .collect::<Vec<_>>(),
+        FileListLayout::ALL.to_vec()
+    );
+    assert_eq!(
+        FILE_LIST_SORT_OPTIONS
+            .iter()
+            .map(|(_, sort, _)| *sort)
+            .collect::<Vec<_>>(),
+        crate::view::rows::CommitFileSort::ALL.to_vec()
+    );
+    for sort in crate::view::rows::CommitFileSort::ALL {
+        assert_eq!(
+            crate::view::rows::CommitFileSort::from_key(sort.key()),
+            Some(sort)
+        );
+    }
+}
+
+/// The defaults reach every list: the details pane, its sections (Untracked
+/// keeps path order under a sort it cannot offer), and the global a list an
+/// extension opens reads.
+#[gpui::test]
+fn changed_file_list_defaults_reach_the_main_window(cx: &mut gpui::TestAppContext) {
+    use crate::view::rows::CommitFileSort;
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
+    let (main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        open_settings_window(app);
+    });
+    cx.run_until_parked();
+    let settings_window = cx.update(|_window, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window should be open")
+    });
+
+    cx.update(|_window, app| {
+        main_view.update(app, |view, cx| {
+            view.details_pane.update(cx, |pane, cx| {
+                pane.set_status_file_sort(
+                    StatusSection::Unstaged,
+                    CommitFileSort::PathDescending,
+                    cx,
+                )
+            });
+        });
+        let _ = settings_window.update(app, |settings, _window, cx| {
+            settings.set_file_list_layout(FileListLayout::Groups, cx);
+            settings.set_file_list_sort(CommitFileSort::Edits, cx);
+        });
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let pane = main_view.read(app).details_pane.read(app);
+        assert_eq!(pane.file_list_layout, FileListLayout::Groups);
+        assert_eq!(pane.commit_file_sort, CommitFileSort::Edits);
+        assert_eq!(
+            pane.status_file_sort_for(StatusSection::Unstaged),
+            CommitFileSort::Edits,
+            "the new default replaces a sort chosen by hand"
+        );
+        assert_eq!(
+            pane.status_file_sort_for(StatusSection::Untracked),
+            CommitFileSort::PathAscending
+        );
+        assert_eq!(
+            crate::view::FileListDefaults::current(app),
+            crate::view::FileListDefaults {
+                layout: FileListLayout::Groups,
+                sort: CommitFileSort::Edits,
+            }
+        );
+    });
+}
+
 #[gpui::test]
 fn remote_prune_toggle_reaches_the_global_store_setting(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
