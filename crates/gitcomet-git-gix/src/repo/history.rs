@@ -194,6 +194,7 @@ impl GixRepo {
         target: &str,
         mode: ResetMode,
     ) -> Result<CommandOutput> {
+        self.refuse_workspace_head_action("a reset")?;
         validate_ref_like_arg(target, "reset target")?;
 
         let mut cmd = self.git_workdir_cmd();
@@ -237,6 +238,7 @@ impl GixRepo {
         expected_head: &CommitId,
         message: &str,
     ) -> Result<CommandOutput> {
+        self.refuse_workspace_head_action("a squash")?;
         validate_hex_commit_id(oldest)?;
         validate_hex_commit_id(expected_head)?;
         if message.trim().is_empty() {
@@ -311,6 +313,7 @@ impl GixRepo {
     }
 
     pub(super) fn rebase_with_output_impl(&self, onto: &str) -> Result<CommandOutput> {
+        self.refuse_workspace_head_action("a rebase")?;
         validate_ref_like_arg(onto, "rebase target")?;
 
         let mut cmd = self.git_workdir_cmd();
@@ -325,6 +328,20 @@ impl GixRepo {
         mainline: Option<usize>,
     ) -> Result<CommandOutput> {
         validate_hex_commit_id(id)?;
+
+        // The signing-passphrase retry replays this call after git stopped
+        // at the commit step; finish that pick rather than refuse it.
+        if commit && self.cherry_pick_awaits_commit(id)? {
+            let mut cmd = self.git_workdir_cmd();
+            cmd.env("GIT_EDITOR", "true");
+            cmd.arg("cherry-pick").arg("--continue");
+            return self.run_cherry_pick_step_output(cmd, "git cherry-pick --continue");
+        }
+
+        // After the `--continue` above, never before: refusing to finish a pick
+        // git already started would strand the user in it.
+        self.refuse_workspace_head_action("a cherry-pick")?;
+
         let parent_ids = self.validate_single_pick_mainline("cherry-pick", id, mainline)?;
         let mainline_label = mainline.map_or_else(String::new, |parent| format!(" -m {parent}"));
         let label = if commit {
@@ -335,15 +352,6 @@ impl GixRepo {
                 id.as_ref()
             )
         };
-
-        // The signing-passphrase retry replays this call after git stopped
-        // at the commit step; finish that pick rather than refuse it.
-        if commit && self.cherry_pick_awaits_commit(id)? {
-            let mut cmd = self.git_workdir_cmd();
-            cmd.env("GIT_EDITOR", "true");
-            cmd.arg("cherry-pick").arg("--continue");
-            return self.run_cherry_pick_step_output(cmd, "git cherry-pick --continue");
-        }
 
         if let Some(operation) = self.operation_in_progress_label()? {
             return Err(Error::new(ErrorKind::Backend(format!(
@@ -678,6 +686,10 @@ impl GixRepo {
             output.command = label;
             return Ok(output);
         }
+
+        // After the `--continue` above, never before: refusing to finish a
+        // revert git already started would strand the user in it.
+        self.refuse_workspace_head_action("a revert")?;
 
         // `--no-commit` checks neither of these itself: it would fold staged
         // work into the revert and ignores another operation's state (a

@@ -506,19 +506,27 @@ packed-refs reader — so no picker can offer it for checkout, rename, push or
 delete. The *virtual* branches are ordinary refs and deliberately still appear:
 they are the user's work.
 
-**Commits, amends and the ordinary push are refused outright.** Hiding the
-branch does not cover those paths, and this is not a hypothetical: a plain
-commit, an amend and a plain push all apply to whatever **HEAD** is — not to a
+**Actions that apply to HEAD are refused outright.** Hiding the branch does
+not cover those paths, and this is not a hypothetical: `commit`,
+`commit --amend`, `cherry-pick`, `revert`, `reset`, `squash`, `rebase`, `merge`,
+`pull` and the ordinary `push` all apply to whatever **HEAD** is — not to a
 branch the user picked from a list — and the Workspace tab is exactly what puts
 HEAD on `gitcomet/workspace`. So while the working directory is inside the
-workspace, `commit`, `commit --amend` and the ordinary `push` refuse and say to
-use the Workspace tab instead, which is the edit the user meant anyway. Without
-this, a commit would be silently discarded by the next rebuild after the log had
-shown it to the user as their own work, and a push would publish GitComet's
-bookkeeping branch to their remote.
+workspace, all ten refuse and say to use the Workspace tab instead, which is the
+edit the user meant anyway. Without this, a commit would be silently discarded by
+the next rebuild after the log had shown it to the user as their own work, and a
+push would publish GitComet's bookkeeping branch to their remote.
 
-The shared guard is `GixRepo::refuse_workspace_head_action`, so commit, amend
-and push cannot drift apart in what they refuse.
+The shared guard is `GixRepo::refuse_workspace_head_action`, so the ten cannot
+drift apart in what they refuse, and each one has a test. **The `--continue`
+paths of an in-flight `cherry-pick` or `revert` are deliberately exempt**: the
+guard runs after them, because refusing to finish an operation git has already
+started would strand the user in it. (In practice this cannot arise — entering
+the workspace is refused while the working tree has a conflict to overwrite.)
+
+`pull` deserves a note: while inside the workspace it is refused rather than
+redirected, because moving the base forward is `SetTarget`, which already exists
+and means exactly that.
 
 ### On #11
 

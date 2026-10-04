@@ -1279,6 +1279,11 @@ impl GixRepo {
         prune: bool,
         capture_output: bool,
     ) -> Result<CommandOutput> {
+        // A pull merges into HEAD, so on the workspace branch it would leave a
+        // merge commit there that the next rebuild discards. Moving the base
+        // forward is `SetTarget`, which already exists and is the operation
+        // that means it here.
+        self.refuse_workspace_head_action("a pull")?;
         let branch = self.current_branch_name()?;
         // Read the configuration rather than the tracking ref: a branch whose
         // upstream was deleted on the remote still has one configured, and
@@ -2102,6 +2107,7 @@ impl GixRepo {
     }
 
     pub(super) fn merge_ref_with_output_impl(&self, reference: &str) -> Result<CommandOutput> {
+        self.refuse_workspace_head_action("a merge")?;
         validate_ref_like_arg(reference, "reference")?;
 
         let command_str = format!("git merge --ff --no-edit {reference}");

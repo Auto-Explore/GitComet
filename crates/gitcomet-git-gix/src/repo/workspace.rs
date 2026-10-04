@@ -920,7 +920,7 @@ pub(crate) fn is_workspace_branch(name: &str) -> bool {
 mod tests {
     use super::*;
 
-    use gitcomet_core::services::GitRepository;
+    use gitcomet_core::services::{GitRepository, PullMode, ResetMode};
 
     fn git(root: &Path, args: &[&str]) -> String {
         let mut cmd = std::process::Command::new("git");
@@ -2291,6 +2291,135 @@ mod tests {
             !git_succeeds(remote.path(), &["rev-parse", "--verify", "refs/heads/gitcomet/workspace"]),
             "pushing a branch must not drag HEAD along with it"
         );
+    }
+
+    /// A repository with the working directory inside the workspace, and a commit
+    /// on `api` to point history operations at.
+    fn repo_inside_the_workspace() -> (tempfile::TempDir, GixRepo, CommitId) {
+        let (temp, repo, _) = repo_with_two_branches();
+        let root = temp.path();
+        repo.enter_workspace().expect("enter");
+        let api_tip = repo
+            .resolve_revision("api")
+            .expect("resolve")
+            .expect("api exists");
+        (temp, repo, api_tip)
+    }
+
+    /// Assert that an operation was refused for the right reason.
+    ///
+    /// Every one of these is the same bug: an action that applies to **HEAD**,
+    /// run while the workspace has put HEAD on `gitcomet/workspace`. Each would
+    /// create or rewrite a commit on GitComet's bookkeeping branch, where the
+    /// next rebuild discards it. Listing them one by one is the point — a guard
+    /// that covers six operations and not the seventh is indistinguishable from
+    /// one that covers none.
+    fn assert_refused(result: std::result::Result<CommandOutput>, action: &str) {
+        let error = result.expect_err("the workspace branch is not the user's to rewrite");
+        let message = format!("{error}");
+        assert!(
+            message.contains("gitcomet/workspace"),
+            "{action} has to say which branch it is about: {message}"
+        );
+        assert!(
+            message.contains("Workspace tab"),
+            "{action} has to say what to do instead: {message}"
+        );
+    }
+
+    #[test]
+    fn a_cherry_pick_inside_the_workspace_is_refused() {
+        let (temp, repo, tip) = repo_inside_the_workspace();
+        let root = temp.path();
+        let before = git(root, &["rev-parse", WORKSPACE_BRANCH]);
+
+        assert_refused(repo.cherry_pick_with_output(&tip, true, None), "a cherry-pick");
+
+        assert_eq!(
+            git(root, &["rev-parse", WORKSPACE_BRANCH]),
+            before,
+            "a refused pick must not move the branch"
+        );
+    }
+
+    #[test]
+    fn a_revert_inside_the_workspace_is_refused() {
+        let (temp, repo, tip) = repo_inside_the_workspace();
+        let root = temp.path();
+        let before = git(root, &["rev-parse", WORKSPACE_BRANCH]);
+
+        assert_refused(repo.revert_with_output(&tip, true, None), "a revert");
+
+        assert_eq!(git(root, &["rev-parse", WORKSPACE_BRANCH]), before);
+    }
+
+    #[test]
+    fn a_reset_inside_the_workspace_is_refused() {
+        // A reset here would throw away the merge history the branch exists to hold,
+        // and the next rebuild would put it straight back.
+        let (temp, repo, tip) = repo_inside_the_workspace();
+        let root = temp.path();
+        let before = git(root, &["rev-parse", WORKSPACE_BRANCH]);
+
+        assert_refused(
+            repo.reset_with_output(tip.as_ref(), ResetMode::Hard),
+            "a reset",
+        );
+
+        assert_eq!(git(root, &["rev-parse", WORKSPACE_BRANCH]), before);
+    }
+
+    #[test]
+    fn a_squash_inside_the_workspace_is_refused() {
+        let (temp, repo, tip) = repo_inside_the_workspace();
+        let root = temp.path();
+        let head = git(root, &["rev-parse", WORKSPACE_BRANCH]);
+
+        assert_refused(
+            repo.squash_commits_with_output(&tip, &tip, "squashed"),
+            "a squash",
+        );
+
+        assert_eq!(git(root, &["rev-parse", WORKSPACE_BRANCH]), head);
+    }
+
+    #[test]
+    fn a_rebase_inside_the_workspace_is_refused() {
+        // Rebasing the workspace branch would rewrite the merge commits that say
+        // which branch contributed what — the one thing the branch's history is for.
+        let (temp, repo, _) = repo_inside_the_workspace();
+        let root = temp.path();
+        let before = git(root, &["rev-parse", WORKSPACE_BRANCH]);
+
+        assert_refused(repo.rebase_with_output("api"), "a rebase");
+
+        assert_eq!(git(root, &["rev-parse", WORKSPACE_BRANCH]), before);
+    }
+
+    #[test]
+    fn a_merge_inside_the_workspace_is_refused() {
+        let (temp, repo, _) = repo_inside_the_workspace();
+        let root = temp.path();
+        let before = git(root, &["rev-parse", WORKSPACE_BRANCH]);
+
+        assert_refused(repo.merge_ref_with_output("api"), "a merge");
+
+        assert_eq!(git(root, &["rev-parse", WORKSPACE_BRANCH]), before);
+    }
+
+    #[test]
+    fn a_pull_inside_the_workspace_is_refused() {
+        // A pull merges into HEAD, so here it would leave a merge commit that the
+        // next rebuild discards. Moving the base forward is SetTarget, which is the
+        // operation that means it here.
+        let (temp, _remote, repo) = repo_with_a_remote();
+        let root = temp.path();
+        repo.enter_workspace().expect("enter");
+        let before = git(root, &["rev-parse", WORKSPACE_BRANCH]);
+
+        assert_refused(repo.pull_with_output(PullMode::Merge), "a pull");
+
+        assert_eq!(git(root, &["rev-parse", WORKSPACE_BRANCH]), before);
     }
 
     #[test]
