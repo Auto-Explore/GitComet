@@ -7,9 +7,11 @@
 //! dropped on the worker thread where nobody would ever hear about it.
 //!
 //! Asserting *which* branch `leave_workspace` was called with would need a
-//! recording double, and there is no way to extend one: `GitRepository` has 27
-//! required methods and Rust has no inheritance, so a double that overrides the
-//! three workspace calls still has to spell out the other 27.
+//! recording double, and building one here would mean spelling out all 26 of
+//! `GitRepository`'s required methods again — Rust has no inheritance, so a
+//! double that cares about three calls still has to implement the other 23.
+//! `workspace_edits` already carries such a double; duplicating it to assert
+//! one more field would cost more than the assertion is worth.
 
 use super::*;
 
@@ -84,7 +86,7 @@ fn entering_the_workspace_carries_the_branch_to_go_back_to() {
         matches!(
             msg,
             Msg::Internal(crate::msg::InternalMsg::WorkspaceActiveFinished {
-                checkout_base: Some(base),
+                checkout_base: Some(ref base),
                 ..
             }) if base == "release/2.3"
         ),

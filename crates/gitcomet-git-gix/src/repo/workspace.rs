@@ -197,7 +197,7 @@ impl GixRepo {
             return Ok(branch_id);
         }
 
-        let tree = match self.merge_tree(&branch_id, &onto_id) {
+        let tree = match self.merge_tree(&branch_id, &onto_id)? {
             MergeOutcome::Merged(tree) => tree,
             MergeOutcome::Conflicted { paths } => {
                 return Err(Error::new(ErrorKind::Backend(format!(
@@ -378,7 +378,7 @@ impl GixRepo {
                 // would produce an empty merge commit.
                 continue;
             }
-            let tree = match self.merge_tree(&branch_id, &head) {
+            let tree = match self.merge_tree(&branch_id, &head)? {
                 MergeOutcome::Merged(tree) => tree,
                 MergeOutcome::Conflicted { paths } => {
                     let against = self.blames_conflict_on(name, &merged, &target_id);
@@ -705,9 +705,9 @@ impl GixRepo {
     /// the user has unsaved edits in the files being merged.
     ///
     /// Requires Git 2.38 or newer. Older Git reports it as an unknown option,
-    /// which is surfaced as a workspace-specific error rather than a generic
-    /// command failure.
-    fn merge_tree(&self, ours: &CommitId, theirs: &CommitId) -> MergeOutcome {
+    /// which is a command failure and is propagated as one rather than being
+    /// dressed up as a conflict between two of the user's branches.
+    fn merge_tree(&self, ours: &CommitId, theirs: &CommitId) -> Result<MergeOutcome> {
         let mut cmd = self.git_plumbing();
         cmd.arg("merge-tree")
             .arg("--write-tree")
@@ -717,12 +717,13 @@ impl GixRepo {
             .arg(theirs.as_ref());
 
         match run_git_capture(cmd, "git merge-tree") {
-            Ok(out) => MergeOutcome::Merged(CommitId(
+            Ok(out) => Ok(MergeOutcome::Merged(CommitId(
                 out.lines().next().unwrap_or_default().trim().into(),
-            )),
-            Err(error) => MergeOutcome::Conflicted {
+            ))),
+            Err(error) if merge_tree_conflicted(&error) => Ok(MergeOutcome::Conflicted {
                 paths: conflicted_paths(&error),
-            },
+            }),
+            Err(error) => Err(error),
         }
     }
 
@@ -901,6 +902,21 @@ fn conflicted_paths(error: &Error) -> Vec<String> {
         }
     }
     paths
+}
+
+/// Whether a failed `git merge-tree --write-tree` means "these two clash".
+///
+/// `1` is git's conflict code and nothing else produces it: a usage error —
+/// `--write-tree` needs Git 2.38, and an older one answers with exit 129 — or a
+/// repository git cannot read both exit elsewhere. Folding those into
+/// "conflict" would tell the user two of their branches are in each other's
+/// way when in fact nothing was ever compared, and the way out of the message
+/// (unapply a branch) would be wrong advice.
+fn merge_tree_conflicted(error: &Error) -> bool {
+    let ErrorKind::Git(failure) = error.kind() else {
+        return false;
+    };
+    failure.exit_code() == Some(1)
 }
 
 /// The merge base of two commits, or `ours` when they share no history.
@@ -1190,6 +1206,31 @@ mod tests {
             "one entry per path: git writes a line per stage, so a content \
              conflict is three lines naming the same file, and a caller showing \
              these would list one file three times"
+        );
+    }
+
+    #[test]
+    fn only_exit_one_counts_as_a_merge_conflict() {
+        // `git merge-tree --write-tree` needs Git 2.38; an older one answers a
+        // usage error with exit 129 and a message on stderr. Reporting that as
+        // a conflict would send the user to unapply a branch that has nothing
+        // to do with what went wrong.
+        let failed = |code| {
+            Error::new(ErrorKind::Git(gitcomet_core::error::GitFailure::new(
+                "git merge-tree",
+                gitcomet_core::error::GitFailureId::CommandFailed,
+                Some(code),
+                Vec::new(),
+                b"error: unknown option".to_vec(),
+                None,
+            )))
+        };
+
+        assert!(merge_tree_conflicted(&failed(1)), "1 is git's conflict code");
+        assert!(!merge_tree_conflicted(&failed(129)), "129 is a usage error");
+        assert!(
+            !merge_tree_conflicted(&Error::new(ErrorKind::Backend("nope".to_string()))),
+            "an error that never ran git cannot be a conflict in git's output"
         );
     }
 

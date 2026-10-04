@@ -359,6 +359,11 @@ The message names **both** branches, which is the part that takes work:
 - When it cannot attribute the conflict to anyone in particular, the banner says
   so rather than guessing — a branch name that is nearly right is worse than
   none, because the user acts on it.
+- Only exit code **1** counts as a conflict. A usage error (`--write-tree` needs
+  Git 2.38, and an older git answers 129) or a repository git cannot read is
+  reported as the command failure it is, because calling it a conflict would
+  tell the user two of their branches clash when nothing was ever compared —
+  and the advice that comes with a conflict (unapply one of them) is then wrong.
 
 ## State on disk
 
