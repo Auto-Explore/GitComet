@@ -167,12 +167,14 @@ pub(super) fn panel(
             body = body.child(
                 components::Button::new(action_id, action_label(action))
                     .style(components::ButtonStyle::Subtle)
-                    // Full width so the list reads as a menu rather than as four
-                    // differently sized buttons stacked in a column.
-                    .w_full()
                     .on_click(theme, cx, move |this, _e, window, cx| {
                         this.open_workspace_prompt_step(action, window, cx);
-                    }),
+                    })
+                    // Full width so the list reads as a menu rather than as five
+                    // differently sized buttons stacked in a column. Sizing is
+                    // a property of the rendered element, so it has to come
+                    // after `on_click` — `Button` has no builder method for it.
+                    .w_full(),
             );
         }
     } else if kind.asks_for_text() {
