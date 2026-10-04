@@ -199,6 +199,13 @@ they are not actually on.
 | `active` | the working directory is on `gitcomet/workspace` |
 | `checkout_base` | the branch to go back to, captured on entry |
 
+Leaving is triggered by switching **tab** *or* by switching **repository**. The
+second one matters because the checkout belongs to the repository while the tab
+belongs to the window: walking away from a repository tab while the sidebar
+stays on Workspace would otherwise strand that repository on
+`gitcomet/workspace`, and the next time it was picked up the user would be
+looking at another repository's branches.
+
 Neither survives a reload as a *decision* — `workspace_loaded` infers `active`
 from whether `HEAD` is the workspace branch, because that is the only true
 answer after a restart — and a refused switch leaves both untouched, since git

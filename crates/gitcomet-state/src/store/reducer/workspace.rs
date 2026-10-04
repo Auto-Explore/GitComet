@@ -681,6 +681,66 @@ mod tests {
     }
 
     #[test]
+    fn switching_repositories_hands_back_a_workspace_the_user_was_in() {
+        // The checkout belongs to the repository; the tab that explains it
+        // belongs to the window. Walking away from a repository tab must not
+        // leave that repository sitting on `gitcomet/workspace`, because the
+        // sidebar stays on Workspace and the next time it is picked up the
+        // user would be looking at the wrong repository's branches.
+        let mut state = repo_with_workspace();
+        state.active_repo = Some(RepoId(1));
+        state.repos[0].workspace.active = true;
+        state.repos[0].workspace.checkout_base = Some("main".into());
+        state.repos.push(RepoState::new_opening(
+            RepoId(2),
+            RepoSpec {
+                workdir: std::path::PathBuf::from("/other"),
+            },
+        ));
+
+        let effects = super::super::repo_management::set_active_repo(
+            &rustc_hash::FxHashMap::default(),
+            &mut state,
+            RepoId(2),
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(
+                    effect,
+                    Effect::LeaveWorkspace { repo_id: RepoId(1), .. }
+                )),
+            "the repository left behind has to be handed its working directory back"
+        );
+    }
+
+    #[test]
+    fn switching_repositories_untouched_by_the_workspace_costs_nothing() {
+        // The common case: a repository that was never in the workspace must not
+        // grow a checkout on every repository switch.
+        let mut state = repo_with_workspace();
+        state.active_repo = Some(RepoId(1));
+        state.repos.push(RepoState::new_opening(
+            RepoId(2),
+            RepoSpec {
+                workdir: std::path::PathBuf::from("/other"),
+            },
+        ));
+
+        let effects = super::super::repo_management::set_active_repo(
+            &rustc_hash::FxHashMap::default(),
+            &mut state,
+            RepoId(2),
+        );
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LeaveWorkspace { .. })),
+            "nothing to hand back"
+        );
+    }
+
+    #[test]
     fn entering_the_workspace_remembers_where_to_go_back_to() {
         let mut state = repo_with_workspace();
         let repo = state.repos.iter_mut().find(|r| r.id == RepoId(1)).unwrap();
