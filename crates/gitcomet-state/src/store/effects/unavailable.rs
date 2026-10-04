@@ -1363,3 +1363,90 @@ pub(super) fn send_unavailable_git_effect_result(
         )),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::msg::InternalMsg;
+
+    /// Run one effect through the unavailable runtime and return what it sent.
+    fn answer(effect: Effect) -> Option<Msg> {
+        let thread_state: Arc<RwLock<Arc<AppState>>> =
+            Arc::new(RwLock::new(Arc::new(AppState::test_default())));
+        let (tx, rx) = std::sync::mpsc::channel::<Msg>();
+        let msg_tx = crate::store::worker_channel::StoreWorkerSender::for_test_msg_sender(tx);
+        send_unavailable_git_effect_result(
+            &thread_state,
+            &msg_tx,
+            effect,
+            &GitRuntimeState::default(),
+        );
+        rx.try_recv().ok()
+    }
+
+    /// A Git that cannot be run must still answer every workspace effect.
+    ///
+    /// The match above has no catch-all, so a variant that nobody adds here is
+    /// a compile error — but the property being pinned is the other one: an
+    /// answer *does* arrive. A silent effect would leave the reducer waiting on
+    /// a reply that never comes, with the workspace's busy flag set for good.
+    #[test]
+    fn entering_the_workspace_is_answered_even_with_no_git() {
+        let sent = answer(Effect::EnterWorkspace {
+            repo_id: RepoId(1),
+            checkout_base: Some("main".into()),
+        });
+        assert!(
+            matches!(
+                sent,
+                Some(Msg::Internal(InternalMsg::WorkspaceActiveFinished {
+                    active: true,
+                    checkout_base: Some(base),
+                    result: Err(_),
+                    ..
+                })) if base == "main"
+            ),
+            "expected a failed enter, got {sent:?}"
+        );
+    }
+
+    #[test]
+    fn leaving_the_workspace_is_answered_even_with_no_git() {
+        let sent = answer(Effect::LeaveWorkspace {
+            repo_id: RepoId(1),
+            checkout_base: None,
+        });
+        assert!(
+            matches!(
+                sent,
+                Some(Msg::Internal(InternalMsg::WorkspaceActiveFinished {
+                    active: false,
+                    result: Err(_),
+                    ..
+                }))
+            ),
+            "expected a failed leave, got {sent:?}"
+        );
+    }
+
+    #[test]
+    fn assigning_a_file_is_answered_even_with_no_git() {
+        let sent = answer(Effect::AssignWorkspaceFile {
+            repo_id: RepoId(1),
+            path: std::path::PathBuf::from("src/lib.rs"),
+            hunk: None,
+            branch: Some("api".into()),
+        });
+        assert!(
+            matches!(
+                sent,
+                Some(Msg::Internal(InternalMsg::WorkspaceAssignFinished {
+                    branch: Some(branch),
+                    result: Err(_),
+                    ..
+                })) if branch == "api"
+            ),
+            "the assignment has to come back as failed, not vanish: {sent:?}"
+        );
+    }
+}
