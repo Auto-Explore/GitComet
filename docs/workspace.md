@@ -386,6 +386,14 @@ publish that one instead of the branch whose Push button they clicked. The
 backend picks the remote the same way the ordinary push path does and sets
 the upstream on the branch it pushed.
 
+The converse is a refusal. The ordinary push also applies to `HEAD`, and
+entering the workspace is what puts `HEAD` on `gitcomet/workspace` — so while
+the working directory is inside the workspace, the ordinary **Push** would
+create `gitcomet/workspace` on the user's remote, visible in their fork and in
+every pull request's branch picker, and set it as an upstream so it followed
+them to every later branch switch. It is refused, with a message pointing at
+the Workspace tab, whose push names the ref and so is unaffected.
+
 What a workspace adds is the *base*: a stacked branch's pull request targets
 the branch below it, not the target. `WorkspaceState::base_branch` computes
 that base, and `virtual_branch_push_target` exposes it so the UI can say what
@@ -479,7 +487,7 @@ gesture. Everything else in `WorkspaceEdit` has a control.
 | 11 | Assign individual hunks | done — `HunkFingerprint`, diff hunk menu |
 | 12 | Maintain `gitcomet/workspace` | done |
 | 13 | Auto-update when the applied set changes | done — and moves the working directory when the workspace is checked out |
-| 14 | Prevent direct commits to `gitcomet/workspace` | done — hidden from every branch list, and `commit`/`commit --amend` refuse while HEAD is on it |
+| 14 | Prevent direct commits to `gitcomet/workspace` | done — hidden from every branch list, and `commit`/`commit --amend`/`push` refuse while HEAD is on it |
 | 15 | Configurable target branch | done |
 | 16 | Rebase when the target changes | done |
 | 17 | Expose conflicts between branches | done — both branch names and the file, from git's stdout |
@@ -498,14 +506,19 @@ packed-refs reader — so no picker can offer it for checkout, rename, push or
 delete. The *virtual* branches are ordinary refs and deliberately still appear:
 they are the user's work.
 
-**Commits and amends are refused outright.** Hiding the branch does not cover
-the commit path, and this is not a hypothetical: a plain commit goes to **HEAD**,
-not to a branch the user picked from a list, and the Workspace tab is exactly
-what puts HEAD on `gitcomet/workspace`. So while the working directory is inside
-the workspace, `commit` and `commit --amend` refuse and say to commit from the
-Workspace tab instead — which is the edit the user meant anyway. Without this, a
-commit here would be silently discarded by the next rebuild, after the log had
-already shown it to the user as their own work.
+**Commits, amends and the ordinary push are refused outright.** Hiding the
+branch does not cover those paths, and this is not a hypothetical: a plain
+commit, an amend and a plain push all apply to whatever **HEAD** is — not to a
+branch the user picked from a list — and the Workspace tab is exactly what puts
+HEAD on `gitcomet/workspace`. So while the working directory is inside the
+workspace, `commit`, `commit --amend` and the ordinary `push` refuse and say to
+use the Workspace tab instead, which is the edit the user meant anyway. Without
+this, a commit would be silently discarded by the next rebuild after the log had
+shown it to the user as their own work, and a push would publish GitComet's
+bookkeeping branch to their remote.
+
+The shared guard is `GixRepo::refuse_workspace_head_action`, so commit, amend
+and push cannot drift apart in what they refuse.
 
 ### On #11
 

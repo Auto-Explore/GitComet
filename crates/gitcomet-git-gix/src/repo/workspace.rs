@@ -198,6 +198,33 @@ impl GixRepo {
 
     // ── The working directory ────────────────────────────────────
 
+/// Refuse an action that would land on `gitcomet/workspace` because it acts on
+/// **HEAD** rather than on a branch the user picked.
+///
+/// Hiding the branch from every branch list keeps it out of the pickers, but a
+/// plain commit, an amend and an ordinary push all apply to whatever HEAD is —
+/// and entering the workspace is exactly what puts HEAD there. Without this,
+/// the user's own commits land on GitComet's bookkeeping branch, where the next
+/// rebuild discards them, and the ordinary push publishes that branch to the
+/// user's remote under their name.
+///
+/// `action` names what was refused, so the message says what was refused rather
+/// than something generic. The escape is the Workspace tab, which works on the
+/// branch each change belongs to.
+pub(super) fn refuse_workspace_head_action(&self, action: &str) -> Result<()> {
+    if let Ok(Some(branch)) = self.current_branch_name()
+        && is_workspace_branch(branch.trim())
+    {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "'{branch}' is GitComet's own branch and is rebuilt from the applied \
+             branches, so {action} here would be undone by the next apply. Use \
+             the Workspace tab: it works on the branch each change belongs to, \
+             and pushes a named branch rather than HEAD."
+        ))));
+    }
+    Ok(())
+}
+
 /// Whether the working directory is currently sitting on the workspace branch.
 ///
 /// This is what decides whether a rebuild should also move the files: a
@@ -2215,6 +2242,54 @@ mod tests {
         assert!(
             format!("{error}").contains("gitcomet/workspace"),
             "the refusal has to name the branch it is about: {error}"
+        );
+    }
+
+    #[test]
+    fn pushing_from_inside_the_workspace_would_publish_it_and_is_refused() {
+        // The ordinary push publishes whatever HEAD is, and entering the
+        // workspace is what puts HEAD there. Left alone it would create
+        // `gitcomet/workspace` on the user's remote — visible in their fork and
+        // in every pull request's branch picker — and set it as an upstream, so
+        // it would follow them to every later branch switch.
+        let (temp, remote, repo) = repo_with_a_remote();
+        let root = temp.path();
+        repo.enter_workspace().expect("enter");
+
+        let error = repo.push().expect_err("the workspace branch is not the user's to publish");
+        let message = format!("{error}");
+        assert!(
+            message.contains("gitcomet/workspace") && message.contains("Workspace tab"),
+            "the message has to name the branch and say what to do instead: {message}"
+        );
+        assert!(
+            !git_succeeds(remote.path(), &["rev-parse", "--verify", "refs/heads/gitcomet/workspace"]),
+            "nothing may have reached the remote"
+        );
+        assert!(
+            !git_succeeds(root, &["config", "--get", "branch.gitcomet/workspace.remote"]),
+            "and no upstream may have been configured"
+        );
+    }
+
+    #[test]
+    fn the_named_branch_push_still_works_from_inside_the_workspace() {
+        // The refusal above must not take the Workspace tab's own push with it:
+        // that one names the ref, so it is exactly the action the user wants
+        // while they are in here.
+        let (temp, remote, repo) = repo_with_a_remote();
+        let root = temp.path();
+        repo.enter_workspace().expect("enter");
+
+        repo.push_virtual_branch("api").expect("push the branch");
+
+        assert!(git_succeeds(
+            remote.path(),
+            &["rev-parse", "--verify", "refs/heads/api"]
+        ));
+        assert!(
+            !git_succeeds(remote.path(), &["rev-parse", "--verify", "refs/heads/gitcomet/workspace"]),
+            "pushing a branch must not drag HEAD along with it"
         );
     }
 

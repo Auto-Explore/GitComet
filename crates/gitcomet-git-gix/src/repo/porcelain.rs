@@ -1066,33 +1066,11 @@ impl GixRepo {
 
     /// Refuse a commit while the working directory is on `gitcomet/workspace`.
 ///
-/// The workspace branch is GitComet's own bookkeeping: it is rebuilt from the
-/// applied set every time that set changes, so a commit on it is discarded at
-/// the next apply — silently, and after the log has shown it to the user as
-/// their work. Hiding the branch from the branch list keeps it out of the
-/// pickers, but a plain commit goes to HEAD rather than to a branch the user
-/// chose, and the workspace deliberately *puts* HEAD there. So the guard has to
-/// be here too.
-///
-/// The way out is the Workspace tab: assign the files to a branch and commit
-/// them to it, which is the edit the user meant anyway.
-fn refuse_commit_on_workspace_branch(&self) -> Result<()> {
-    if let Ok(Some(branch)) = self.current_branch_name()
-        && super::workspace::is_workspace_branch(branch.trim())
-    {
-        return Err(Error::new(ErrorKind::Backend(
-            "'gitcomet/workspace' is GitComet's own branch and is rebuilt from \
-             the applied branches, so a commit here would be discarded at the \
-             next apply. Commit from the Workspace tab instead, which commits \
-             each file to the branch it is assigned to."
-                .to_string(),
-        )));
-    }
-    Ok(())
-}
-
+/// The workspace branch is GitComet's own bookkeeping and is rebuilt from the
+/// applied set, so a commit on it is discarded at the next apply. See
+/// [`GixRepo::refuse_workspace_head_action`], which carries the reasoning.
 pub(super) fn commit_impl(&self, message: &str) -> Result<()> {
-        self.refuse_commit_on_workspace_branch()?;
+        self.refuse_workspace_head_action("a commit")?;
         let merge_in_progress = self.merge_in_progress_for_commit()?;
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("commit");
@@ -1127,9 +1105,9 @@ pub(super) fn commit_impl(&self, message: &str) -> Result<()> {
 
     pub(super) fn commit_amend_impl(&self, message: &str) -> Result<()> {
         self.refuse_amending_annex_adjustment()?;
-        // Same reasoning as `commit_impl`: an amend here rewrites a commit the
-        // next rebuild is going to throw away.
-        self.refuse_commit_on_workspace_branch()?;
+        // An amend here rewrites a commit the next rebuild is going to throw
+        // away, for the same reason a commit would.
+        self.refuse_workspace_head_action("an amend")?;
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("commit").arg("--amend").arg("-m").arg(message);
         run_git_simple(cmd, "git commit --amend")

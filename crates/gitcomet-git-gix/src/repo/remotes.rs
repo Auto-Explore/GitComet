@@ -1942,6 +1942,13 @@ impl GixRepo {
     }
 
     fn push_with_optional_output_impl(&self, capture_output: bool) -> Result<CommandOutput> {
+        // This pushes whatever HEAD is, and entering the workspace is what puts
+        // HEAD on `gitcomet/workspace`. Without the guard the ordinary Push
+        // button would publish GitComet's bookkeeping branch to the user's
+        // remote — with `--set-upstream`, so it would also follow the user to
+        // every later branch switch. `push_virtual_branch` is the safe path: it
+        // names the ref instead of publishing HEAD.
+        self.refuse_workspace_head_action("a push")?;
         if let Some(branch) = self.current_branch_name()? {
             if let Some(upstream) = self.configured_branch_upstream(&branch)? {
                 let output = self.push_head_to_branch_with_optional_output_impl(
