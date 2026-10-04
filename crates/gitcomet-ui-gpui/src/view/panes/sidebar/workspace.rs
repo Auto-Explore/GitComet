@@ -184,6 +184,20 @@ fn build_rows(repo: &RepoState) -> Vec<WorkspaceRow> {
         }
     }
 
+    // Opening this tab is supposed to move the working directory onto
+    // `gitcomet/workspace`, which is the only reason an applied branch becomes
+    // visible in the files. When that did not happen — a refused checkout, or a
+    // workspace restored after a restart — the list below describes branches the
+    // user is not actually working in, and saying so is the difference between a
+    // confusing tab and an honest one.
+    if !repo.workspace.active {
+        rows.push(WorkspaceRow::Placeholder {
+            message: "Your working directory is not on the workspace, so applied \
+                      branches are not in your files."
+                .into(),
+        });
+    }
+
     rows.push(WorkspaceRow::Target {
         name: workspace.target.clone(),
     });
@@ -1020,6 +1034,9 @@ mod tests {
         );
         let mut state = WorkspaceRepoState::default();
         state.set_state(workspace);
+        // Most tests are about the stack layout, and the tab normally has the
+        // working directory. The notice for when it does not has its own test.
+        state.active = true;
         repo.workspace = state;
         repo
     }
@@ -1050,6 +1067,25 @@ mod tests {
             names(&presentation),
             ["main", "api", "ui", ""],
             "target, stack base, stacked branch, then the summary row and no files"
+        );
+    }
+
+    #[test]
+    fn a_workspace_the_working_directory_is_not_on_says_so() {
+        // Without this the tab happily lists applied branches while the user's
+        // files contain none of them, which reads as the feature being broken.
+        let repo = repo_with(WorkspaceState::new("main").with_branches(vec![VirtualBranch::new("api")]));
+        let mut repo = repo;
+        repo.workspace.active = false;
+
+        let presentation = WorkspacePresentation::build(Some(&repo));
+        let first = match &presentation.rows[0] {
+            WorkspaceRow::Placeholder { message } => message.clone(),
+            other => panic!("expected a notice, got {other:?}"),
+        };
+        assert!(
+            first.contains("not on the workspace"),
+            "the notice says what is wrong, not just that something is"
         );
     }
 

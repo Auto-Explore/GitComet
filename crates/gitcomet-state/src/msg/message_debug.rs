@@ -671,6 +671,18 @@ impl std::fmt::Debug for InternalMsg {
                 .field("edit", edit)
                 .field("result", result)
                 .finish(),
+            InternalMsg::WorkspaceActiveFinished {
+                repo_id,
+                active,
+                checkout_base,
+                result,
+            } => f
+                .debug_struct("WorkspaceActiveFinished")
+                .field("repo_id", repo_id)
+                .field("active", active)
+                .field("checkout_base", checkout_base)
+                .field("result", result)
+                .finish(),
             InternalMsg::WorkspaceAssignFinished {
                 repo_id,
                 path,

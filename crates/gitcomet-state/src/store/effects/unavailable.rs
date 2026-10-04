@@ -104,6 +104,32 @@ pub(super) fn send_unavailable_git_effect_result(
                 },
             ))
         }
+        Effect::EnterWorkspace {
+            repo_id,
+            checkout_base,
+        } => {
+            send(Msg::Internal(
+                crate::msg::InternalMsg::WorkspaceActiveFinished {
+                    repo_id,
+                    active: true,
+                    checkout_base,
+                    result: Err(git_unavailable_error(runtime)),
+                },
+            ))
+        }
+        Effect::LeaveWorkspace {
+            repo_id,
+            checkout_base,
+        } => {
+            send(Msg::Internal(
+                crate::msg::InternalMsg::WorkspaceActiveFinished {
+                    repo_id,
+                    active: false,
+                    checkout_base,
+                    result: Err(git_unavailable_error(runtime)),
+                },
+            ))
+        }
         Effect::PushWorkspaceBranch { repo_id, name } => {
             send(Msg::Internal(crate::msg::InternalMsg::WorkspacePushFinished {
                 repo_id,

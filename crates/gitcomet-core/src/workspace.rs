@@ -1737,6 +1737,46 @@ mod tests {
     }
 
     #[test]
+    fn a_merged_hunk_still_reproduces_both_answers_to_the_whole_file() {
+        // The merge folds context into a span's ranges, so the two degenerate
+        // cases have to be re-checked on the merged shape: keeping everything
+        // must still be the working tree byte for byte, and keeping nothing
+        // must still be the base. If the folded context broke either, the
+        // commit for an unsplit file would stop being a no-op.
+        let base = "one\ntwo\nthree\nfour\n";
+        let working = "ONE\ntwo\nTHREE\nfour\n";
+        let spans = hunk_spans(base, working);
+        assert_eq!(spans.len(), 1, "one hunk, so this really is the merged shape");
+
+        assert_eq!(
+            synthesize_for_branch(base, working, &spans, &|_| true),
+            working,
+            "keeping every hunk reproduces the working tree"
+        );
+        assert_eq!(
+            synthesize_for_branch(base, working, &spans, &|_| false),
+            base,
+            "keeping none reproduces the base"
+        );
+    }
+
+    #[test]
+    fn two_changes_that_add_and_remove_the_same_text_share_a_fingerprint() {
+        // A deliberate consequence of keying on content rather than position:
+        // the user cannot tell these apart in the file either, so picking one
+        // would be a coin flip dressed up as precision. Pinned so that if the
+        // scheme ever changes, this is a decision rather than a surprise.
+        let base = "alpha\nbeta\nMOVE ME\ngamma\nMOVE ME\n";
+        let working = "alpha\nbeta\nmoved\ngamma\nmoved\n";
+        let spans = hunk_spans(base, working);
+        assert_eq!(spans.len(), 2, "the two edits are far apart");
+        assert_eq!(
+            spans[0].fingerprint, spans[1].fingerprint,
+            "identical changes are the same fingerprint, and both follow the assignment"
+        );
+    }
+
+    #[test]
     fn two_different_changes_do_not_share_a_fingerprint() {
         // Far enough apart that git prints them as two hunks.
         let base = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n";
