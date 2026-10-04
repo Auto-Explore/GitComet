@@ -13,7 +13,12 @@ use super::*;
 ///
 /// Worth the space: restacking rewrites the branch's history and moving a
 /// branch into a stack does too, and neither is obvious from the button label.
-fn detail_line(kind: WorkspacePromptKind, branch: &str, value: &str) -> SharedString {
+fn detail_line(
+    kind: WorkspacePromptKind,
+    branch: &str,
+    path: Option<&std::path::Path>,
+    value: &str,
+) -> SharedString {
     match kind {
         WorkspacePromptKind::Create => format!(
             "The new branch starts from the workspace target, with no commits of its own yet."
@@ -42,6 +47,21 @@ fn detail_line(kind: WorkspacePromptKind, branch: &str, value: &str) -> SharedSt
         )
         .into(),
         WorkspacePromptKind::BranchActions => format!("Actions for {branch}.").into(),
+        WorkspacePromptKind::AssignFile => match path {
+            Some(path) if value.is_empty() => format!(
+                "{} will not be committed to any branch. Clear the field to leave it as it is.",
+                path.display()
+            )
+            .into(),
+            Some(path) => format!(
+                "{} will be committed to {value}.",
+                path.display()
+            )
+            .into(),
+            // The panel is only reachable from a file row, so a prompt with no
+            // path is a wiring bug rather than something to explain.
+            None => String::new().into(),
+        },
     }
 }
 
@@ -65,6 +85,24 @@ fn action_label(kind: WorkspacePromptKind) -> &'static str {
     }
 }
 
+/// The dialog the file row opens, given where the file currently sits.
+///
+/// Separate from the panel because the answer is two-sided — the prompt is
+/// about a file, and the field is seeded with the assignment it is replacing —
+/// and both sides have to agree or the row would describe one thing and edit
+/// another.
+pub(in crate::view) fn assign_file_prompt(
+    path: &std::path::Path,
+    branch: Option<&str>,
+) -> WorkspacePrompt {
+    WorkspacePrompt {
+        kind: WorkspacePromptKind::AssignFile,
+        branch: String::new(),
+        path: Some(path.to_path_buf()),
+        value: branch.unwrap_or_default().to_string(),
+    }
+}
+
 pub(super) fn panel(
     this: &mut PopoverHost,
     prompt: WorkspacePrompt,
@@ -77,7 +115,7 @@ pub(super) fn panel(
     // the dialog does not change which popover is open: a kind swap would look
     // to the fingerprint like a different dialog replacing this one.
     let kind = this.workspace_prompt_kind.unwrap_or(prompt.kind);
-    let detail = detail_line(kind, &prompt.branch, &prompt.value);
+    let detail = detail_line(kind, &prompt.branch, prompt.path.as_deref(), &prompt.value);
 
     let mut body = div().flex().flex_col().w(scaled_px(540.0));
     body = body
@@ -175,6 +213,42 @@ mod tests {
         assert!(WorkspacePromptKind::SetTarget.asks_for_text());
         assert!(WorkspacePromptKind::SetParent.asks_for_text());
         assert!(WorkspacePromptKind::MoveToStack.asks_for_text());
+        assert!(WorkspacePromptKind::AssignFile.asks_for_text());
+    }#[test]
+    fn the_assign_prompt_carries_the_file_and_its_current_branch() {
+        let prompt = assign_file_prompt(std::path::Path::new("src/lib.rs"), Some("feature/api"));
+        assert_eq!(prompt.kind, WorkspacePromptKind::AssignFile);
+        assert_eq!(prompt.path.as_deref(), Some(std::path::Path::new("src/lib.rs")));
+        assert_eq!(prompt.value, "feature/api");
+        assert!(prompt.branch.is_empty(), "the branch is typed, not captured");
+
+        // An unassigned file opens on an empty field, which is also how it is
+        // put back.
+        let prompt = assign_file_prompt(std::path::Path::new("src/lib.rs"), None);
+        assert!(prompt.value.is_empty());
+    }
+
+    #[test]
+    fn the_assign_line_names_the_file_and_says_where_it_goes() {
+        let line = detail_line(
+            WorkspacePromptKind::AssignFile,
+            "",
+            Some(std::path::Path::new("src/lib.rs")),
+            "feature/api",
+        );
+        assert!(line.contains("src/lib.rs"), "{line}");
+        assert!(line.contains("feature/api"), "{line}");
+    }
+
+    #[test]
+    fn an_empty_assign_line_says_the_file_stays_where_it_is() {
+        let line = detail_line(
+            WorkspacePromptKind::AssignFile,
+            "",
+            Some(std::path::Path::new("src/lib.rs")),
+            "",
+        );
+        assert!(line.contains("not be committed to any branch"), "{line}");
     }
 
     #[test]
@@ -187,6 +261,7 @@ mod tests {
             WorkspacePromptKind::SetParent,
             WorkspacePromptKind::MoveToStack,
             WorkspacePromptKind::Remove,
+            WorkspacePromptKind::AssignFile,
         ];
         for (i, kind) in kinds.iter().enumerate() {
             for other in &kinds[i + 1..] {
@@ -201,6 +276,7 @@ mod tests {
         let line = detail_line(
             WorkspacePromptKind::SetParent,
             "feature/api",
+            None,
             "main",
         );
         assert!(line.contains("feature/api"), "{line}");
@@ -209,13 +285,13 @@ mod tests {
 
     #[test]
     fn an_empty_base_makes_the_branch_independent() {
-        let line = detail_line(WorkspacePromptKind::SetParent, "feature/api", "");
+        let line = detail_line(WorkspacePromptKind::SetParent, "feature/api", None, "");
         assert!(line.contains("independent"), "{line}");
     }
 
     #[test]
     fn removing_says_the_git_branch_is_kept() {
-        let line = detail_line(WorkspacePromptKind::Remove, "feature/api", "");
+        let line = detail_line(WorkspacePromptKind::Remove, "feature/api", None, "");
         assert!(line.contains("kept"), "{line}");
     }
 }

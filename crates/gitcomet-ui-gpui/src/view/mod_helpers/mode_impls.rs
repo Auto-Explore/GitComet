@@ -1142,6 +1142,8 @@ pub(in crate::view) enum WorkspacePromptKind {
     MoveToStack,
     /// Delete [`WorkspacePrompt::branch`].
     Remove,
+    /// Say which branch [`WorkspacePrompt::path`] belongs to.
+    AssignFile,
 }
 
 impl WorkspacePromptKind {
@@ -1162,6 +1164,7 @@ impl WorkspacePromptKind {
             Self::SetParent => "Change base branch",
             Self::MoveToStack => "Move into stack",
             Self::Remove => "Remove branch",
+            Self::AssignFile => "Assign file",
         }
     }
 
@@ -1171,6 +1174,9 @@ impl WorkspacePromptKind {
             Self::SetTarget => "Target branch",
             Self::SetParent => "New base branch",
             Self::MoveToStack => "Stack to join",
+            // An empty field is the way to unassign, so the label says what
+            // clearing it does rather than just naming the value.
+            Self::AssignFile => "Branch (empty leaves it unassigned)",
             Self::BranchActions | Self::Remove => "",
         }
     }
@@ -1184,6 +1190,7 @@ impl WorkspacePromptKind {
             Self::SetParent => "Restack",
             Self::MoveToStack => "Move",
             Self::Remove => "Remove",
+            Self::AssignFile => "Assign",
         }
     }
 }
@@ -1197,8 +1204,11 @@ impl WorkspacePromptKind {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(in crate::view) struct WorkspacePrompt {
     pub(in crate::view) kind: WorkspacePromptKind,
-    /// The branch the edit acts on, empty for the workspace-wide kinds.
+    /// The branch the edit acts on, empty for the workspace-wide kinds and for
+    /// the file ones, where the branch is what gets typed.
     pub(in crate::view) branch: String,
+    /// The file the edit acts on, set only for the file kinds.
+    pub(in crate::view) path: Option<std::path::PathBuf>,
     /// The text the field opens with.
     pub(in crate::view) value: String,
 }

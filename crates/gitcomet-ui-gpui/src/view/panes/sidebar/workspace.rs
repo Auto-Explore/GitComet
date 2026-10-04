@@ -471,6 +471,7 @@ fn render_target_row(
                     prompt: WorkspacePrompt {
                         kind: WorkspacePromptKind::SetTarget,
                         branch: String::new(),
+                        path: None,
                         // Opens on the current target so the common case is an
                         // edit rather than a retype.
                         value: name.clone(),
@@ -611,6 +612,7 @@ fn render_branch_row(
                     prompt: WorkspacePrompt {
                         kind: WorkspacePromptKind::BranchActions,
                         branch: name.clone(),
+                        path: None,
                         value: String::new(),
                     },
                 },
@@ -757,6 +759,7 @@ fn render_summary_row(
                     prompt: WorkspacePrompt {
                         kind: WorkspacePromptKind::Create,
                         branch: String::new(),
+                        path: None,
                         value: String::new(),
                     },
                 },
@@ -832,6 +835,38 @@ fn render_file_row(
         )
     });
 
+    // Assignment is what the whole tab is for, so it is offered on every file
+    // row and the label follows the file: "Assign" when it has nowhere to go,
+    // "Change" when it already does.
+    let assign_label_text = if branch.is_some() { "Change" } else { "Assign" };
+    let assign_tooltip = match &branch {
+        Some(branch) => format!("Commit {label} to a different branch than {branch}"),
+        None => format!("Say which branch commits {label}"),
+    };
+    let assign_path = path.clone();
+    let assign_branch = branch.clone();
+    let assign = components::Button::new(
+        format!("workspace_assign_{}", assign_path.display()),
+        assign_label_text,
+    )
+    .style(components::ButtonStyle::Subtle)
+    .disabled(busy)
+    .on_click(theme, cx, move |this, event, window, cx| {
+        this.open_popover_at(
+            PopoverKind::WorkspacePrompt {
+                repo_id,
+                prompt: crate::view::panels::popover::workspace_prompt::assign_file_prompt(
+                    &assign_path,
+                    assign_branch.as_deref(),
+                ),
+            },
+            event.position(),
+            window,
+            cx,
+        );
+    })
+    .gitcomet_tooltip(theme, SharedString::from(assign_tooltip));
+
     let mut row = row_frame(theme, row_height, index, indent, surface).child(
         components::FadingText::new(
             div()
@@ -855,6 +890,8 @@ fn render_file_row(
             })
             .child(branch.clone().unwrap_or_else(|| "Unassigned".into())),
     );
+
+    row = row.child(assign);
     if let Some(commit) = commit {
         row = row.child(commit);
     }

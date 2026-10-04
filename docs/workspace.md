@@ -250,15 +250,19 @@ a stack rather than offered and refused.
 Per workspace: `New branch` on the summary line, and `Change` on the target row
 to rebase everything onto a different branch.
 
-Per file: commit the file to the branch it is assigned to.
+Per file: `Assign` (or `Change`, when it already has a branch) to say which
+branch commits it, and `Commit` once it has one. Clearing the assign field is
+how a file goes back to the unassigned bucket — it is an answer, not a missing
+one, which is why the prompt's confirm button stays live on an empty field.
 
 A conflict from a failed apply is shown above the stacks and can be dismissed.
 
-Every `WorkspaceEdit` variant is now reachable from the view. The ones that
-need a name go through a single popover, `PopoverKind::WorkspacePrompt`:
+Every `WorkspaceEdit` variant except one is now reachable from the view. The
+ones that need a name go through a single popover,
+`PopoverKind::WorkspacePrompt`:
 
 - the body is the same for all of them, so they share one variant rather than
-  seven — what differs is the label on the field and which `WorkspaceEdit`
+  one each — what differs is the label on the field and which `WorkspaceEdit`
   confirming builds;
 - opened from a branch row it shows that branch's actions first, because
   stacking, re-parenting, joining a stack and removing are the same four
@@ -271,9 +275,9 @@ need a name go through a single popover, `PopoverKind::WorkspacePrompt`:
   than accepted and failed later on a background thread with a rebase error;
   a name that is already taken is suffixed rather than passed to Git.
 
-Still not reachable: `AssignFile` (dragging a file onto a branch) and
-`CommitPaths` with a written message (the file row commits with an empty
-message). Both are complete below the view.
+Still not reachable: `CommitPaths` with a message the user wrote. The file
+row's `Commit` synthesises `Update <path>`, and `commit_branch` exists for the
+whole-branch case, but nothing in the view asks for a message yet.
 
 ## Where the code is
 

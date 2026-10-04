@@ -71,7 +71,7 @@ mod worktree_add_prompt;
 mod worktree_badge_picker;
 mod worktree_picker;
 mod worktree_remove_confirm;
-mod workspace_prompt;
+pub(in crate::view) mod workspace_prompt;
 
 #[derive(Clone, Debug)]
 enum PopoverAnchor {

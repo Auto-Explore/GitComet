@@ -105,9 +105,11 @@ impl PopoverHost {
         kind: WorkspacePromptKind,
         value: &str,
     ) -> Option<WorkspaceEdit> {
-        let branch = match &self.popover {
-            Some(PopoverKind::WorkspacePrompt { prompt, .. }) => prompt.branch.clone(),
-            _ => String::new(),
+        let (branch, path) = match &self.popover {
+            Some(PopoverKind::WorkspacePrompt { prompt, .. }) => {
+                (prompt.branch.clone(), prompt.path.clone())
+            }
+            _ => (String::new(), None),
         };
         // A prompt left open across a background load that changed the list must
         // not dispatch an edit against a branch that is gone, so the subject is
@@ -115,9 +117,15 @@ impl PopoverHost {
         let state = self.workspace_state(repo_id);
         let in_workspace = |name: &str| state.is_some_and(|state| state.contains(name));
         let free_name = |value: &str| self.free_branch_name(repo_id, value, state);
-        edit_for(kind, &branch, value.trim(), &in_workspace, &free_name, |name| {
-            self.knows_git_branch(repo_id, name)
-        })
+        edit_for(
+            kind,
+            &branch,
+            path.as_deref(),
+            value.trim(),
+            &in_workspace,
+            &free_name,
+            |name| self.knows_git_branch(repo_id, name),
+        )
     }
 
     /// The name to create, suffixed until it is free.
@@ -164,7 +172,7 @@ impl PopoverHost {
     }
 }
 
-/// The edit a prompt at `kind` with `branch` and `value` produces.
+/// The edit a prompt at `kind` with `branch`, `path` and `value` produces.
 ///
 /// `in_workspace` answers whether a name is one of the repository's virtual
 /// branches, `free_name` turns typed text into a name nothing else has taken,
@@ -172,9 +180,11 @@ impl PopoverHost {
 /// target is a real branch, while a base or a stack is a virtual one, and
 /// conflating the two is how a prompt ends up offering a branch that cannot be
 /// resolved.
+#[allow(clippy::too_many_arguments)]
 fn edit_for(
     kind: WorkspacePromptKind,
     branch: &str,
+    path: Option<&std::path::Path>,
     value: &str,
     in_workspace: &dyn Fn(&str) -> bool,
     free_name: &dyn Fn(&str) -> String,
@@ -241,6 +251,20 @@ fn edit_for(
                 name: branch.to_string(),
             }
         }
+        WorkspacePromptKind::AssignFile => {
+            // An empty field is not a missing answer here: it is how a file
+            // goes back to the unassigned bucket.
+            let Some(path) = path else {
+                return None;
+            };
+            if !value.is_empty() && !in_workspace(value) {
+                return None;
+            }
+            WorkspaceEdit::AssignFile {
+                path: path.to_path_buf(),
+                branch: (!value.is_empty()).then(|| value.to_string()),
+            }
+        }
     };
     // A creation whose name could not be made free is not an edit at all, and
     // the confirm button stays disabled rather than dispatching an empty name.
@@ -299,6 +323,19 @@ mod tests {
         edit_for(
             kind,
             branch,
+            None,
+            value,
+            &membership(),
+            &free,
+            &|name| matches!(name, "main" | "develop" | "api"),
+        )
+    }
+
+    fn assign(value: &str) -> Option<WorkspaceEdit> {
+        edit_for(
+            WorkspacePromptKind::AssignFile,
+            "",
+            Some(std::path::Path::new("src/lib.rs")),
             value,
             &membership(),
             &free,
@@ -415,6 +452,46 @@ mod tests {
         };
         assert_eq!(name, "api");
         assert!(edit(WorkspacePromptKind::Remove, "gone", "").is_none());
+    }
+
+    #[test]
+    fn assigning_a_file_names_the_branch_it_goes_to() {
+        let Some(WorkspaceEdit::AssignFile { path, branch }) = assign("ui") else {
+            panic!("expected an assign edit");
+        };
+        assert_eq!(path, std::path::Path::new("src/lib.rs"));
+        assert_eq!(branch.as_deref(), Some("ui"));
+    }
+
+    #[test]
+    fn an_empty_field_unassigns_rather_than_refusing() {
+        let Some(WorkspaceEdit::AssignFile { branch, .. }) = assign("") else {
+            panic!("an empty field should still produce an edit");
+        };
+        assert_eq!(branch, None);
+    }
+
+    #[test]
+    fn a_file_can_only_go_to_a_branch_that_exists() {
+        assert!(assign("nope").is_none());
+        // A real Git branch is not a workspace branch, so it is not a target.
+        assert!(assign("main").is_none());
+    }
+
+    #[test]
+    fn assigning_needs_a_file() {
+        assert!(
+            edit_for(
+                WorkspacePromptKind::AssignFile,
+                "",
+                None,
+                "ui",
+                &membership(),
+                &free,
+                &|_| true,
+            )
+            .is_none()
+        );
     }
 
     #[test]
