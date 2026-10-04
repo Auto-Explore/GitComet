@@ -130,6 +130,17 @@ pub enum Effect {
         hunk: Option<gitcomet_core::workspace::HunkFingerprint>,
         branch: Option<String>,
     },
+    /// Put the working directory on the workspace branch.
+    EnterWorkspace {
+        repo_id: RepoId,
+        /// The branch to remember so leaving has somewhere to go back to.
+        checkout_base: Option<String>,
+    },
+    /// Take the working directory back off the workspace branch.
+    LeaveWorkspace {
+        repo_id: RepoId,
+        checkout_base: Option<String>,
+    },
     /// Push a virtual branch, setting upstream on first push.
     PushWorkspaceBranch {
         repo_id: RepoId,

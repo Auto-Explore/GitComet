@@ -183,13 +183,27 @@ they disagree.
 A rebuild only touches the working directory when the workspace is actually
 checked out; a workspace the user has not entered never changes their files.
 
-### Not wired up yet
+### Where the switch is driven from
 
-The backend above is implemented and its behaviour verified against real git.
-It is **not yet reachable from the UI**: nothing calls `enter_workspace_impl`
-or `leave_workspace_impl`, and no state records which branch to return to when
-the user leaves. Until that wiring exists, apply/unapply rebuild the ref and
-the user still sees no change in their files.
+Opening the Workspace tab enters; switching to any other tab leaves. Both go
+through `set_sidebar_mode`, which is the only place that knows the mode
+changed. Entering is deferred behind `LoadWorkspace` when the workspace has
+never been read: a checkout cannot run before the state says a workspace
+exists, and a rejected one would leave the user on a tab describing branches
+they are not actually on.
+
+`WorkspaceRepoState` holds the two pieces of session state this needs:
+
+| Field | Meaning |
+| --- | --- |
+| `active` | the working directory is on `gitcomet/workspace` |
+| `checkout_base` | the branch to go back to, captured on entry |
+
+Neither survives a reload as a *decision* — `workspace_loaded` infers `active`
+from whether `HEAD` is the workspace branch, because that is the only true
+answer after a restart — and a refused switch leaves both untouched, since git
+never moved `HEAD` and claiming otherwise would make the next leave try to undo
+a switch that never happened.
 
 ## The workspace branch
 
@@ -415,8 +429,8 @@ gesture. Everything else in `WorkspaceEdit` has a control.
 | --- | --- | --- |
 | 1 | Workspace view | done — third sidebar tab, existing tabs untouched |
 | 2 | Existing branch workflow kept | done |
-| 3 | Multiple virtual branches in one directory | backend done, **not wired to the view** |
-| 4 | Apply / unapply | backend done, **not wired to the view** |
+| 3 | Multiple virtual branches in one directory | done — the tab owns the working directory |
+| 4 | Apply / unapply | done — rebuild moves the files |
 | 5 | Independent virtual branches | done |
 | 6 | Stacked / dependent branches | done |
 | 7 | Create branches above/below existing ones | done — `WorkspaceEdit::InsertRelativeTo`, two distinct edits |

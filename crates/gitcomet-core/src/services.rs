@@ -2175,6 +2175,28 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
+    /// Put the working directory on the workspace branch, building it if
+    /// needed, and return its tip.
+    ///
+    /// This is what makes an applied branch visible in the user's files rather
+    /// than only in a ref. Implementations must refuse, never discard, when
+    /// local changes would be overwritten — the same rule `git checkout` has.
+    fn enter_workspace(&self) -> Result<CommitId> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "workspace is not implemented for this backend",
+        )))
+    }
+
+    /// Take the working directory back off the workspace branch onto `onto`.
+    ///
+    /// `onto` is the branch the user was on before entering, so leaving is the
+    /// inverse of [`Self::enter_workspace`] and carries the same refusal rule.
+    fn leave_workspace(&self, _onto: &str) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "workspace is not implemented for this backend",
+        )))
+    }
+
     /// Rebuild `gitcomet/workspace` so it holds the combined tree of
     /// `applied`, in the order given.
     ///

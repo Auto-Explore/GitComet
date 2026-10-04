@@ -274,6 +274,92 @@ fn rebuild_workspace(
     })
 }
 
+/// Put the working directory on the workspace branch.
+pub(super) fn schedule_enter_workspace(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    checkout_base: Option<String>,
+) {
+    let command_base = checkout_base.clone();
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            let result = repo.enter_workspace().map(|_| ());
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(InternalMsg::WorkspaceActiveFinished {
+                    repo_id,
+                    active: true,
+                    checkout_base: command_base.clone(),
+                    result,
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(InternalMsg::WorkspaceActiveFinished {
+                    repo_id,
+                    active: true,
+                    checkout_base,
+                    result: missing_repo_error(repo_id),
+                }),
+            );
+        },
+    );
+}
+
+/// Take the working directory back off the workspace branch.
+pub(super) fn schedule_leave_workspace(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    checkout_base: Option<String>,
+) {
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            // No branch to go back to: fall back to the workspace target rather
+            // than guessing, since a wrong guess would move the user onto a
+            // branch they never had checked out.
+            let onto = match &checkout_base {
+                Some(branch) => branch.clone(),
+                None => repo.read_workspace().map(|state| state.target)?,
+            };
+            let result = repo.leave_workspace(&onto);
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(InternalMsg::WorkspaceActiveFinished {
+                    repo_id,
+                    active: false,
+                    checkout_base: None,
+                    result,
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(InternalMsg::WorkspaceActiveFinished {
+                    repo_id,
+                    active: false,
+                    checkout_base: None,
+                    result: missing_repo_error(repo_id),
+                }),
+            );
+        },
+    );
+}
+
 /// Persist one file's branch assignment.
 pub(super) fn schedule_assign_workspace_file(
     executor: &TaskExecutor,

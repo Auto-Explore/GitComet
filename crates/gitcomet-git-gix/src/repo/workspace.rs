@@ -747,6 +747,180 @@ pub(crate) fn is_workspace_branch(name: &str) -> bool {
 mod tests {
     use super::*;
 
+    use gitcomet_core::services::GitRepository;
+
+    fn git(root: &Path, args: &[&str]) -> String {
+        let mut cmd = std::process::Command::new("git");
+        cmd.arg("-C").arg(root).args(args);
+        let output = cmd.output().expect("run git");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    /// A repository with two virtual branches whose changes touch different
+    /// files, so applying and unapplying one is visible in the other's absence.
+    fn repo_with_two_branches() -> (tempfile::TempDir, GixRepo) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path();
+        git(root, &["init"]);
+        git(root, &["config", "commit.gpgsign", "false"]);
+        git(root, &["config", "user.name", "Test User"]);
+        git(root, &["config", "user.email", "test@example.com"]);
+        std::fs::write(root.join("shared.txt"), "a1\na2\na3\n").unwrap();
+        std::fs::write(root.join("moved.txt"), "x\n").unwrap();
+        std::fs::write(root.join("mine.txt"), "y\n").unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-m", "base"]);
+
+        git(root, &["branch", "api"]);
+        git(root, &["checkout", "api"]);
+        std::fs::write(root.join("shared.txt"), "a1\nAPI\na3\n").unwrap();
+        git(root, &["commit", "-am", "api"]);
+
+        git(root, &["branch", "ui"]);
+        std::fs::write(root.join("moved.txt"), "ui-x\n").unwrap();
+        git(root, &["commit", "-am", "ui"]);
+
+        let default_branch = git(root, &["symbolic-ref", "--short", "HEAD"]);
+        git(root, &["checkout", &default_branch]);
+
+        let state = WorkspaceState::new(&default_branch).with_branches(vec![
+            VirtualBranch::new("api"),
+            VirtualBranch::new("ui"),
+        ]);
+        let repo = open_repo(root);
+        repo.write_workspace(&state).expect("write workspace");
+        (temp, repo)
+    }
+
+    fn open_repo(workdir: &Path) -> GixRepo {
+        let thread_safe = gix::open(workdir).expect("open repo").into_sync();
+        GixRepo::new(workdir.to_path_buf(), thread_safe)
+    }
+
+    fn read(root: &Path, name: &str) -> String {
+        std::fs::read_to_string(root.join(name)).expect("read file")
+    }
+
+    #[test]
+    fn entering_the_workspace_puts_every_applied_branch_in_the_files() {
+        let (temp, repo) = repo_with_two_branches();
+        let root = temp.path();
+        let tip = repo.enter_workspace().expect("enter workspace");
+
+        assert_eq!(read(root, "shared.txt"), "a1\nAPI\na3\n", "api is applied");
+        assert_eq!(read(root, "moved.txt"), "ui-x\n", "ui is applied");
+        assert_eq!(read(root, "mine.txt"), "y\n");
+        assert_eq!(
+            repo.current_branch().expect("current branch"),
+            WORKSPACE_BRANCH,
+            "the working directory is the workspace"
+        );
+        assert_eq!(tip.as_ref(), git(root, &["rev-parse", "HEAD"]).as_str());
+    }
+
+    #[test]
+    fn unapplying_a_branch_keeps_edits_to_files_it_never_touched() {
+        // The property the whole design rests on: a rebuild moves the working
+        // directory without taking uncommitted work with it.
+        let (temp, repo) = repo_with_two_branches();
+        let root = temp.path();
+        repo.enter_workspace().expect("enter workspace");
+
+        std::fs::write(root.join("mine.txt"), "y\nMY UNCOMMITTED WORK\n").unwrap();
+
+        let mut state = repo.read_workspace().expect("read workspace");
+        state
+            .set_applied("ui", gitcomet_core::workspace::BranchApplyState::Unapplied)
+            .expect("unapply");
+        repo.write_workspace(&state).expect("write workspace");
+        repo.update_workspace_branch(&["api"]).expect("rebuild");
+
+        assert_eq!(
+            read(root, "moved.txt"),
+            "x\n",
+            "the unapplied branch's change is gone"
+        );
+        assert_eq!(
+            read(root, "mine.txt"),
+            "y\nMY UNCOMMITTED WORK\n",
+            "an unrelated edit survives the rebuild"
+        );
+        assert_eq!(read(root, "shared.txt"), "a1\nAPI\na3\n");
+    }
+
+    #[test]
+    fn a_refused_sync_leaves_the_files_and_the_ref_exactly_as_they_were() {
+        // GitComet never discards uncommitted changes. A file that is both
+        // edited and changed by the switch has no automatic answer, so the
+        // switch is refused — and because the sync runs before the ref moves,
+        // a refusal cannot leave the two disagreeing.
+        let (temp, repo) = repo_with_two_branches();
+        let root = temp.path();
+        repo.enter_workspace().expect("enter workspace");
+        let before = git(root, &["rev-parse", WORKSPACE_BRANCH]);
+
+        // Edit the very file `api` changed, then unapply it.
+        std::fs::write(root.join("shared.txt"), "a1\nAPI\nMINE\na3\n").unwrap();
+        let mut state = repo.read_workspace().expect("read workspace");
+        state
+            .set_applied("api", gitcomet_core::workspace::BranchApplyState::Unapplied)
+            .expect("unapply");
+        repo.write_workspace(&state).expect("write workspace");
+
+        assert!(
+            repo.update_workspace_branch(&["ui"]).is_err(),
+            "a switch that would overwrite a local edit is refused"
+        );
+        assert_eq!(
+            read(root, "shared.txt"),
+            "a1\nAPI\nMINE\na3\n",
+            "the file is untouched"
+        );
+        assert_eq!(
+            git(root, &["rev-parse", WORKSPACE_BRANCH]),
+            before,
+            "and so is the branch, because the ref is only moved after a sync succeeds"
+        );
+    }
+
+    #[test]
+    fn a_rebuild_does_not_touch_the_files_of_a_workspace_that_is_not_checked_out() {
+        let (temp, repo) = repo_with_two_branches();
+        let root = temp.path();
+        assert!(!repo.workspace_is_checked_out());
+
+        repo.update_workspace_branch(&["api", "ui"])
+            .expect("rebuild");
+
+        assert_eq!(
+            read(root, "moved.txt"),
+            "x\n",
+            "the ref moved, but a workspace nobody has entered must not move files"
+        );
+        assert_eq!(read(root, "shared.txt"), "a1\na2\na3\n");
+    }
+
+    #[test]
+    fn leaving_the_workspace_returns_to_the_branch_it_came_from() {
+        let (temp, repo) = repo_with_two_branches();
+        let root = temp.path();
+        let original = repo.current_branch().expect("current branch");
+        repo.enter_workspace().expect("enter workspace");
+
+        repo.leave_workspace(&original).expect("leave workspace");
+        assert_eq!(repo.current_branch().expect("current branch"), original);
+        assert_eq!(
+            read(root, "moved.txt"),
+            "x\n",
+            "the applied branch's change is no longer in the files"
+        );
+    }
+
     #[test]
     fn workspace_branches_are_recognized_by_their_prefix() {
         assert!(is_workspace_branch(WORKSPACE_BRANCH));

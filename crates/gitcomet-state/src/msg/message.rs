@@ -1274,6 +1274,24 @@ pub enum Msg {
         repo_id: RepoId,
         path: PathBuf,
     },
+    /// Put the working directory on `gitcomet/workspace`, so applied branches
+    /// become visible in the user's files.
+    EnterWorkspace {
+        repo_id: RepoId,
+    },
+    /// Take the working directory back off the workspace branch.
+    LeaveWorkspace {
+        repo_id: RepoId,
+    },
+    /// Put the working directory on `gitcomet/workspace`, so applied branches
+    /// become visible in the user's files.
+    EnterWorkspace {
+        repo_id: RepoId,
+    },
+    /// Take the working directory back off the workspace branch.
+    LeaveWorkspace {
+        repo_id: RepoId,
+    },
     /// Dismiss the conflict from a failed apply.
     DismissWorkspaceConflict {
         repo_id: RepoId,
@@ -1698,6 +1716,16 @@ pub enum InternalMsg {
         repo_id: RepoId,
         edit: WorkspaceEdit,
         result: Result<gitcomet_core::services::CommitOperationOutcome, Error>,
+    },
+    /// A switch of the working directory into or out of the workspace.
+    WorkspaceActiveFinished {
+        repo_id: RepoId,
+        /// `true` for entering, `false` for leaving.
+        active: bool,
+        /// The branch to return to, set on entering so leaving has a target
+        /// even if the user has since forgotten which branch they were on.
+        checkout_base: Option<String>,
+        result: Result<(), Error>,
     },
     WorkspaceAssignFinished {
         repo_id: RepoId,

@@ -29,11 +29,18 @@ pub struct WorkspaceBusy {
     /// Any operation that changes branches or the workspace branch, including
     /// apply, unapply, restack, and a target change.
     pub mutating: bool,
+    /// Switching the working directory into or out of the workspace.
+    ///
+    /// Separate from `mutating` because this one moves HEAD under the user: it
+    /// needs its own progress state so nothing else offers to run at the same
+    /// time, and so a failure can be reported as "could not switch" rather than
+    /// as a broken apply.
+    pub switching: bool,
 }
 
 impl WorkspaceBusy {
     pub fn any(&self) -> bool {
-        self.loading || self.applying || self.committing || self.mutating
+        self.loading || self.applying || self.committing || self.mutating || self.switching
     }
 }
 
@@ -80,6 +87,19 @@ pub struct WorkspaceRepoState {
     pub conflict: Option<WorkspaceConflict>,
     /// Bumped on every change to the workspace, for cache keys.
     pub rev: u64,
+    /// Whether the working directory is currently on `gitcomet/workspace`.
+    ///
+    /// The workspace only owns the working directory while the user is looking
+    /// at it. A rebuild while this is `false` updates the ref and nothing else,
+    /// which is what stops a workspace nobody has entered from changing files.
+    pub active: bool,
+    /// The branch to put the working directory back on when the user leaves.
+    ///
+    /// Captured on entry rather than derived, because by the time they leave
+    /// there is no way to tell what they were on. Kept in memory rather than on
+    /// disk: after a restart the user is either already on the workspace (and
+    /// this is `None`, meaning "no idea") or not on it at all.
+    pub checkout_base: Option<String>,
 }
 
 impl WorkspaceRepoState {
@@ -103,6 +123,8 @@ impl WorkspaceRepoState {
         self.workspace_commit = Loadable::NotLoaded;
         self.busy = WorkspaceBusy::default();
         self.conflict = None;
+        self.active = false;
+        self.checkout_base = None;
         self.bump_rev();
     }
 
@@ -480,6 +502,29 @@ mod tests {
         let files = workspace.files_by_branch(&[PathBuf::from("a.rs")]);
         assert!(files[0].split.is_empty());
         assert!(!files[0].is_assigned());
+    }
+
+    #[test]
+    fn switching_the_working_directory_counts_as_busy() {
+        // Entering the workspace moves HEAD under the user. Nothing else may
+        // offer to run while that is in flight.
+        let mut workspace = WorkspaceRepoState::default();
+        workspace.busy.switching = true;
+        assert!(workspace.busy.any());
+        assert!(!workspace.can_commit(1));
+    }
+
+    #[test]
+    fn clearing_forgets_that_the_working_directory_was_in_the_workspace() {
+        let mut workspace = WorkspaceRepoState::default();
+        workspace.active = true;
+        workspace.checkout_base = Some("main".into());
+        workspace.clear();
+        assert!(!workspace.active);
+        assert!(
+            workspace.checkout_base.is_none(),
+            "a remembered branch must not outlive the session that remembered it"
+        );
     }
 
     #[test]

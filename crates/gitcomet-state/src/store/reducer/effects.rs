@@ -2138,32 +2138,50 @@ pub(super) fn set_file_browser_settings(
 }
 
 pub(super) fn set_sidebar_mode(state: &mut AppState, mode: SidebarMode) -> Vec<Effect> {
-    if state.sidebar_mode != mode {
-        state.sidebar_mode = mode;
-        let follow = state.file_browser_settings.follow_selected_commit;
+    if state.sidebar_mode == mode {
+        return Vec::new();
+    }
+    let previous = state.sidebar_mode;
+    state.sidebar_mode = mode;
+    let follow = state.file_browser_settings.follow_selected_commit;
 
-        if mode == SidebarMode::Files
-            && let Some(repo_id) = state.active_repo
-            && let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id)
-        {
-            // Retarget first, so the one load below carries the selection's
-            // source instead of walking the old one and then walking again.
-            sync_file_browser_to_selection(repo, follow, mode);
-            if repo.file_browser.needs_load() {
-                return request_file_browser_load(repo).into_iter().collect();
-            }
-        }
-
-        if mode == SidebarMode::Workspace
-            && let Some(repo_id) = state.active_repo
-            && let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id)
-            // Only load what is not already there: switching back to the tab
-            // must not re-read the workspace and blank the stacks.
-            && matches!(repo.workspace.state, Loadable::NotLoaded)
-        {
-            return vec![Effect::LoadWorkspace { repo_id }];
+    if mode == SidebarMode::Files
+        && let Some(repo_id) = state.active_repo
+        && let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id)
+    {
+        // Retarget first, so the one load below carries the selection's
+        // source instead of walking the old one and then walking again.
+        sync_file_browser_to_selection(repo, follow, mode);
+        if repo.file_browser.needs_load() {
+            return request_file_browser_load(repo).into_iter().collect();
         }
     }
+
+    if mode == SidebarMode::Workspace {
+        if let Some(repo_id) = state.active_repo {
+            // Load first when there is nothing to show yet; the switch into the
+            // workspace itself cannot run before the state says the workspace
+            // exists, and a rejected checkout would leave the user on a tab
+            // describing branches they are not actually on.
+            let needs_load = state
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .is_some_and(|repo| matches!(repo.workspace.state, Loadable::NotLoaded));
+            if needs_load {
+                return vec![Effect::LoadWorkspace { repo_id }];
+            }
+            return super::workspace::enter_workspace(state, repo_id);
+        }
+    } else if previous == SidebarMode::Workspace
+        && let Some(repo_id) = state.active_repo
+    {
+        // Leaving hands the working directory back. Anything else here would
+        // strand the user on `gitcomet/workspace` after they have walked away
+        // from the tab that explains it.
+        return super::workspace::leave_workspace(state, repo_id);
+    }
+
     Vec::new()
 }
 

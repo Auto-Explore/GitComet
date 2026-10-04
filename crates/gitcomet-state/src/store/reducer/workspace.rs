@@ -218,6 +218,101 @@ pub(super) fn push_branch(state: &mut AppState, repo_id: RepoId, name: String) -
     vec![Effect::PushWorkspaceBranch { repo_id, name }]
 }
 
+/// Switch the working directory into the workspace.
+///
+/// The branch to return to is read here rather than in the effect, because it
+/// is the reducer that sees the repository state and the effect that has
+/// already queued a command by the time anybody could ask.
+pub(super) fn enter_workspace(
+    state: &mut AppState,
+    repo_id: RepoId,
+) -> Vec<Effect> {
+    let Some(repo) = repo_mut(state, repo_id) else {
+        return Vec::new();
+    };
+    if repo.workspace.busy.any() {
+        return Vec::new();
+    }
+    // Already on the workspace branch: entering again is a no-op, and re-running
+    // the checkout would only risk a refusal over changes that are already in
+    // place.
+    if repo.workspace.active {
+        return Vec::new();
+    }
+    let checkout_base = match &repo.head_branch {
+        Loadable::Ready(branch) => Some(branch.clone()),
+        // Detached HEAD, or not loaded yet: there is no branch to go back to,
+        // and leaving then falls back to the workspace target.
+        _ => None,
+    };
+    repo.workspace.busy.switching = true;
+    repo.workspace.bump_rev();
+    vec![Effect::EnterWorkspace {
+        repo_id,
+        checkout_base,
+    }]
+}
+
+/// Switch the working directory back off the workspace branch.
+pub(super) fn leave_workspace(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+    let Some(repo) = repo_mut(state, repo_id) else {
+        return Vec::new();
+    };
+    if repo.workspace.busy.any() || !repo.workspace.active {
+        return Vec::new();
+    }
+    let checkout_base = repo.workspace.checkout_base.clone();
+    repo.workspace.busy.switching = true;
+    repo.workspace.bump_rev();
+    vec![Effect::LeaveWorkspace {
+        repo_id,
+        checkout_base,
+    }]
+}
+
+/// Record the outcome of entering or leaving.
+///
+/// A failure leaves `active` and `checkout_base` exactly as they were, so the
+/// view keeps describing the repository as it really is: a refused checkout
+/// never moved HEAD, and pretending it had would make the next leave try to
+/// undo a switch that never happened.
+pub(super) fn workspace_active_finished(
+    state: &mut AppState,
+    repo_id: RepoId,
+    active: bool,
+    checkout_base: Option<String>,
+    result: gitcomet_core::services::Result<()>,
+) -> Vec<Effect> {
+    let Some(repo) = repo_mut(state, repo_id) else {
+        return Vec::new();
+    };
+    repo.workspace.busy.switching = false;
+
+    if let Err(error) = result {
+        repo.workspace.bump_rev();
+        push_notification(
+            state,
+            AppNotificationKind::Error,
+            if active {
+                format!("Could not open the workspace: {error}")
+            } else {
+                format!("Could not switch back out of the workspace: {error}")
+            },
+        );
+        return vec![Effect::LoadWorkspace { repo_id }];
+    }
+
+    repo.workspace.active = active;
+    repo.workspace.checkout_base = if active { checkout_base } else { None };
+    repo.workspace.bump_rev();
+    // Leaving changes which branch HEAD is on, and entering changes the files,
+    // so the ordinary views have to catch up either way.
+    vec![
+        Effect::LoadWorktreeStatus { repo_id },
+        Effect::LoadBranches { repo_id },
+    ]
+}
+
 pub(super) fn dismiss_conflict(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
     let Some(repo) = repo_mut(state, repo_id) else {
         return Vec::new();
@@ -256,6 +351,12 @@ pub(super) fn workspace_loaded(
     if let Ok(index) = assignments {
         repo.workspace.assignments = Arc::new(index);
     }
+    // A reload can land while the working directory is sitting on the workspace
+    // branch — the user was there before a refresh, or after a restart that left
+    // HEAD there. Nothing is going to tell us we are "active" any other way, and
+    // guessing wrong would either hide the fact or send the user to a branch
+    // they were never on.
+    repo.workspace.active = matches!(&repo.head_branch, Loadable::Ready(branch) if branch == gitcomet_core::workspace::WORKSPACE_BRANCH);
     repo.workspace.bump_rev();
 
     let mut effects = Vec::new();
@@ -479,6 +580,164 @@ mod tests {
         // It is workspace bookkeeping, not a history rewrite.
         assert!(!state.repos[0].workspace.busy.mutating);
         assert!(state.repos[0].workspace.busy.applying);
+    }
+
+    #[test]
+    fn entering_the_workspace_remembers_where_to_go_back_to() {
+        let mut state = repo_with_workspace();
+        let repo = state.repos.iter_mut().find(|r| r.id == RepoId(1)).unwrap();
+        repo.head_branch = Loadable::Ready("main".into());
+
+        let effects = enter_workspace(&mut state, RepoId(1));
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(
+            &effects[0],
+            Effect::EnterWorkspace {
+                repo_id: RepoId(1),
+                checkout_base: Some(base),
+            } if base == "main"
+        ));
+        assert!(
+            state.repos[0].workspace.busy.switching,
+            "moving HEAD under the user is its own kind of busy"
+        );
+    }
+
+    #[test]
+    fn entering_the_workspace_twice_does_nothing_the_second_time() {
+        let mut state = repo_with_workspace();
+        state.repos[0].workspace.active = true;
+        // Re-running the checkout would only risk a refusal over changes that
+        // are already in place.
+        assert!(enter_workspace(&mut state, RepoId(1)).is_empty());
+    }
+
+    #[test]
+    fn entering_the_workspace_is_refused_while_something_else_is_running() {
+        let mut state = repo_with_workspace();
+        state.repos[0].workspace.busy.committing = true;
+        assert!(enter_workspace(&mut state, RepoId(1)).is_empty());
+        assert!(!state.repos[0].workspace.busy.switching);
+    }
+
+    #[test]
+    fn entering_with_a_detached_head_remembers_nothing_to_go_back_to() {
+        let mut state = repo_with_workspace();
+        state.repos[0].head_branch = Loadable::Ready(String::new());
+        assert!(matches!(
+            &enter_workspace(&mut state, RepoId(1))[0],
+            Effect::EnterWorkspace { checkout_base: None, .. }
+        ));
+    }
+
+    #[test]
+    fn leaving_the_workspace_asks_for_the_branch_it_came_from() {
+        let mut state = repo_with_workspace();
+        state.repos[0].workspace.active = true;
+        state.repos[0].workspace.checkout_base = Some("main".into());
+
+        assert!(matches!(
+            &leave_workspace(&mut state, RepoId(1))[0],
+            Effect::LeaveWorkspace {
+                repo_id: RepoId(1),
+                checkout_base: Some(base),
+            } if base == "main"
+        ));
+    }
+
+    #[test]
+    fn leaving_a_workspace_that_was_never_entered_does_nothing() {
+        let mut state = repo_with_workspace();
+        assert!(leave_workspace(&mut state, RepoId(1)).is_empty());
+        assert!(!state.repos[0].workspace.busy.switching);
+    }
+
+    #[test]
+    fn a_finished_switch_records_where_the_working_directory_is() {
+        let mut state = repo_with_workspace();
+        state.repos[0].workspace.busy.switching = true;
+        workspace_active_finished(&mut state, RepoId(1), true, Some("main".into()), Ok(()));
+
+        let workspace = &state.repos[0].workspace;
+        assert!(workspace.active);
+        assert_eq!(workspace.checkout_base.as_deref(), Some("main"));
+        assert!(!workspace.busy.switching);
+    }
+
+    #[test]
+    fn a_finished_leave_forgets_where_to_go_back_to() {
+        let mut state = repo_with_workspace();
+        state.repos[0].workspace.active = true;
+        state.repos[0].workspace.checkout_base = Some("main".into());
+        workspace_active_finished(&mut state, RepoId(1), false, None, Ok(()));
+
+        let workspace = &state.repos[0].workspace;
+        assert!(!workspace.active);
+        assert!(
+            workspace.checkout_base.is_none(),
+            "the remembered branch is only meaningful while the workspace is checked out"
+        );
+    }
+
+    #[test]
+    fn a_refused_switch_leaves_the_working_directory_described_as_it_is() {
+        // The property that stops the view lying after a refused checkout: git
+        // never moved HEAD, so claiming we are on the workspace would make the
+        // next leave try to undo a switch that never happened.
+        let mut state = repo_with_workspace();
+        state.repos[0].workspace.busy.switching = true;
+        let effects = workspace_active_finished(
+            &mut state,
+            RepoId(1),
+            true,
+            Some("main".into()),
+            Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Backend("would overwrite local changes".into()),
+            )),
+        );
+
+        let workspace = &state.repos[0].workspace;
+        assert!(!workspace.active, "HEAD never moved");
+        assert!(workspace.checkout_base.is_none());
+        assert!(!workspace.busy.switching, "but the operation is over");
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadWorkspace { repo_id: RepoId(1) })),
+            "and the workspace is re-read so the view matches the repository"
+        );
+    }
+
+    #[test]
+    fn a_switch_reloads_the_branches_and_the_working_tree() {
+        // Entering changes the files and leaving changes which branch HEAD is
+        // on, so both ordinary views are now stale.
+        let mut state = repo_with_workspace();
+        let effects = workspace_active_finished(&mut state, RepoId(1), true, None, Ok(()));
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadWorktreeStatus { repo_id: RepoId(1) }
+        )));
+        assert!(effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadBranches { repo_id: RepoId(1) })));
+    }
+
+    #[test]
+    fn a_load_infers_that_the_working_directory_is_on_the_workspace() {
+        // Nothing else will say so, and it has to survive a restart that left
+        // HEAD on `gitcomet/workspace`.
+        let mut state = repo_with_workspace();
+        state.repos[0].head_branch =
+            Loadable::Ready(gitcomet_core::workspace::WORKSPACE_BRANCH.into());
+        workspace_loaded(
+            &mut state,
+            RepoId(1),
+            Ok(WorkspaceState::new("main")),
+            Ok(AssignmentIndex::new()),
+            Ok(None),
+        );
+        assert!(state.repos[0].workspace.active);
     }
 
     #[test]

@@ -1948,6 +1948,14 @@ impl GitRepository for GixRepo {
         self.rebase_virtual_branch_impl(name, onto)
     }
 
+    fn enter_workspace(&self) -> Result<CommitId> {
+        self.enter_workspace_impl()
+    }
+
+    fn leave_workspace(&self, onto: &str) -> Result<()> {
+        self.leave_workspace_impl(onto)
+    }
+
     fn update_workspace_branch(&self, applied: &[&str]) -> Result<CommitId> {
         self.update_workspace_branch_impl(applied)
     }

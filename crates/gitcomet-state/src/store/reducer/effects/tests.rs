@@ -2262,6 +2262,63 @@ fn set_file_browser_source_blanks_a_tree_that_never_loaded() {
 }
 
 #[test]
+fn opening_the_workspace_tab_moves_the_working_directory_onto_it() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    state.active_repo = Some(repo_id);
+    mark_repo_open_ready(&mut state, repo_id);
+    // Already loaded, so the switch is not deferred behind a load.
+    let repo = repo_mut(&mut state, repo_id);
+    repo.workspace.set_state(gitcomet_core::workspace::WorkspaceState::new("main"));
+    repo.head_branch = Loadable::Ready("main".into());
+
+    let effects = set_sidebar_mode(&mut state, SidebarMode::Workspace);
+    assert_eq!(state.sidebar_mode, SidebarMode::Workspace);
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::EnterWorkspace { .. })),
+        "opening the tab is what puts the applied branches in the files"
+    );
+}
+
+#[test]
+fn leaving_the_workspace_tab_hands_the_working_directory_back() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    state.active_repo = Some(repo_id);
+    state.sidebar_mode = SidebarMode::Workspace;
+    let repo = repo_mut(&mut state, repo_id);
+    repo.workspace.set_state(gitcomet_core::workspace::WorkspaceState::new("main"));
+    repo.workspace.active = true;
+    repo.workspace.checkout_base = Some("main".into());
+
+    let effects = set_sidebar_mode(&mut state, SidebarMode::Branches);
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LeaveWorkspace { .. })),
+        "walking away from the tab must not strand the user on gitcomet/workspace"
+    );
+}
+
+#[test]
+fn opening_the_workspace_tab_twice_does_not_switch_again() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    state.active_repo = Some(repo_id);
+    state.sidebar_mode = SidebarMode::Workspace;
+    let repo = repo_mut(&mut state, repo_id);
+    repo.workspace.set_state(gitcomet_core::workspace::WorkspaceState::new("main"));
+    repo.workspace.active = true;
+
+    assert!(
+        set_sidebar_mode(&mut state, SidebarMode::Workspace).is_empty(),
+        "the mode did not change, so neither should the working directory"
+    );
+}
+
+#[test]
 fn set_sidebar_mode_triggers_file_browser_load_and_retries_on_error() {
     let repo_id = RepoId(1);
     let mut state = new_state_with_repo(repo_id);

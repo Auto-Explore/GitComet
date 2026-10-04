@@ -389,6 +389,26 @@ pub(super) fn schedule_effect(
         Effect::ApplyWorkspaceEdit { repo_id, edit } => {
             workspace_effects::schedule_apply_workspace_edit(executor, repos, msg_tx, repo_id, edit);
         }
+        Effect::EnterWorkspace {
+            repo_id,
+            checkout_base,
+        } => workspace_effects::schedule_enter_workspace(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            checkout_base,
+        ),
+        Effect::LeaveWorkspace {
+            repo_id,
+            checkout_base,
+        } => workspace_effects::schedule_leave_workspace(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            checkout_base,
+        ),
         Effect::AssignWorkspaceFile {
             repo_id,
             path,
