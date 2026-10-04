@@ -24,9 +24,19 @@ fn detail_line(
             "The new branch starts from the workspace target, with no commits of its own yet."
         )
         .into(),
-        WorkspacePromptKind::CreateStacked => {
-            format!("The new branch is created on {branch} and stacks above it.").into()
+        WorkspacePromptKind::CreateAbove => {
+            // Above is the one creation that moves work that already exists:
+            // the anchor, and anything stacked on it, each move down a level
+            // and are rebased.
+            format!(
+                "The new branch takes {branch}'s place in the stack; {branch} and anything stacked on it move down and are rebased."
+            )
+            .into()
         }
+        WorkspacePromptKind::CreateBelow => format!(
+            "The new branch starts from {branch} and sits below it. Nothing already in the stack moves."
+        )
+        .into(),
         WorkspacePromptKind::SetTarget => format!(
             "Every branch is rebased onto {value} and the workspace branch is rebuilt."
         )
@@ -78,9 +88,13 @@ fn detail_line(
 }
 
 /// The actions offered for a branch, in the order they are listed.
-fn branch_actions() -> [WorkspacePromptKind; 5] {
+///
+/// The two "new branch" entries come first because they are what someone opens
+/// a branch row for most often.
+fn branch_actions() -> [WorkspacePromptKind; 6] {
     [
-        WorkspacePromptKind::CreateStacked,
+        WorkspacePromptKind::CreateAbove,
+        WorkspacePromptKind::CreateBelow,
         WorkspacePromptKind::SetParent,
         WorkspacePromptKind::MoveToStack,
         WorkspacePromptKind::CommitBranch,
@@ -90,7 +104,8 @@ fn branch_actions() -> [WorkspacePromptKind; 5] {
 
 fn action_label(kind: WorkspacePromptKind) -> &'static str {
     match kind {
-        WorkspacePromptKind::CreateStacked => "Stack a new branch on this",
+        WorkspacePromptKind::CreateAbove => "New branch above this",
+        WorkspacePromptKind::CreateBelow => "New branch below this",
         WorkspacePromptKind::SetParent => "Change its base branch",
         WorkspacePromptKind::MoveToStack => "Move it into another stack",
         WorkspacePromptKind::CommitBranch => "Commit its assigned files",
@@ -225,9 +240,11 @@ mod tests {
     fn the_action_list_covers_every_branch_only_edit() {
         let actions = branch_actions();
         for kind in [
-            WorkspacePromptKind::CreateStacked,
+            WorkspacePromptKind::CreateAbove,
+            WorkspacePromptKind::CreateBelow,
             WorkspacePromptKind::SetParent,
             WorkspacePromptKind::MoveToStack,
+            WorkspacePromptKind::CommitBranch,
             WorkspacePromptKind::Remove,
         ] {
             assert!(actions.contains(&kind), "{kind:?} is not offered");
@@ -271,7 +288,8 @@ mod tests {
         assert!(!WorkspacePromptKind::BranchActions.asks_for_text());
         assert!(!WorkspacePromptKind::Remove.asks_for_text());
         assert!(WorkspacePromptKind::Create.asks_for_text());
-        assert!(WorkspacePromptKind::CreateStacked.asks_for_text());
+        assert!(WorkspacePromptKind::CreateAbove.asks_for_text());
+        assert!(WorkspacePromptKind::CreateBelow.asks_for_text());
         assert!(WorkspacePromptKind::SetTarget.asks_for_text());
         assert!(WorkspacePromptKind::SetParent.asks_for_text());
         assert!(WorkspacePromptKind::MoveToStack.asks_for_text());
@@ -342,7 +360,8 @@ mod tests {
         let kinds = [
             WorkspacePromptKind::BranchActions,
             WorkspacePromptKind::Create,
-            WorkspacePromptKind::CreateStacked,
+            WorkspacePromptKind::CreateAbove,
+            WorkspacePromptKind::CreateBelow,
             WorkspacePromptKind::SetTarget,
             WorkspacePromptKind::SetParent,
             WorkspacePromptKind::MoveToStack,

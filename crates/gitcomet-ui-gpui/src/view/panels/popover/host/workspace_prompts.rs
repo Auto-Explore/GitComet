@@ -237,13 +237,14 @@ fn edit_for(
         WorkspacePromptKind::Create => WorkspaceEdit::Create {
             name: free_name(value),
         },
-        WorkspacePromptKind::CreateStacked => {
+        WorkspacePromptKind::CreateAbove | WorkspacePromptKind::CreateBelow => {
             if !branch_exists {
                 return None;
             }
-            WorkspaceEdit::CreateStacked {
+            WorkspaceEdit::InsertRelativeTo {
                 name: free_name(value),
-                parent: Some(branch.to_string()),
+                anchor: branch.to_string(),
+                below: kind == WorkspacePromptKind::CreateBelow,
             }
         }
         WorkspacePromptKind::SetTarget => {
@@ -354,7 +355,7 @@ fn edit_for(
     // A creation whose name could not be made free is not an edit at all, and
     // the confirm button stays disabled rather than dispatching an empty name.
     match &edit {
-        WorkspaceEdit::Create { name } | WorkspaceEdit::CreateStacked { name, .. }
+        WorkspaceEdit::Create { name } | WorkspaceEdit::InsertRelativeTo { name, .. }
             if name.is_empty() =>
         {
             None
@@ -500,17 +501,32 @@ mod tests {
     }
 
     #[test]
-    fn stacking_needs_a_subject_and_stacks_on_it() {
-        let Some(WorkspaceEdit::CreateStacked { name, parent }) =
-            edit(WorkspacePromptKind::CreateStacked, "api", "ui")
+    fn inserting_below_stacks_on_the_branch_and_inserting_above_takes_its_place() {
+        let Some(WorkspaceEdit::InsertRelativeTo {
+            name,
+            anchor,
+            below,
+        }) = edit(WorkspacePromptKind::CreateBelow, "api", "ui")
         else {
-            panic!("expected a stacked edit");
+            panic!("expected an insert edit");
         };
-        assert_eq!(name, "ui-2");
-        assert_eq!(parent.as_deref(), Some("api"));
+        assert_eq!(name, "ui-2", "a taken name is suffixed, not refused");
+        assert_eq!(anchor, "api");
+        assert!(below);
 
+        let Some(WorkspaceEdit::InsertRelativeTo { below, .. }) =
+            edit(WorkspacePromptKind::CreateAbove, "api", "web")
+        else {
+            panic!("expected an insert edit");
+        };
+        assert!(!below, "above is the other direction");
+    }
+
+    #[test]
+    fn inserting_needs_a_branch_that_is_still_there() {
         // The branch vanished from the workspace while the prompt was open.
-        assert!(edit(WorkspacePromptKind::CreateStacked, "gone", "x").is_none());
+        assert!(edit(WorkspacePromptKind::CreateAbove, "gone", "x").is_none());
+        assert!(edit(WorkspacePromptKind::CreateBelow, "gone", "x").is_none());
     }
 
     #[test]
@@ -727,7 +743,8 @@ mod tests {
     #[test]
     fn every_branch_edit_is_refused_for_a_branch_that_is_gone() {
         for kind in [
-            WorkspacePromptKind::CreateStacked,
+            WorkspacePromptKind::CreateAbove,
+            WorkspacePromptKind::CreateBelow,
             WorkspacePromptKind::SetParent,
             WorkspacePromptKind::MoveToStack,
             WorkspacePromptKind::Remove,

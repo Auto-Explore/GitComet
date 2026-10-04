@@ -1132,8 +1132,10 @@ pub(in crate::view) enum WorkspacePromptKind {
     BranchActions,
     /// A new branch built directly on the workspace target.
     Create,
-    /// A new branch stacked on [`WorkspacePrompt::branch`].
-    CreateStacked,
+    /// A new branch that takes [`WorkspacePrompt::branch`]'s place in the stack.
+    CreateAbove,
+    /// A new branch stacked under [`WorkspacePrompt::branch`].
+    CreateBelow,
     /// Rebase the workspace onto a different target branch.
     SetTarget,
     /// Restack [`WorkspacePrompt::branch`] onto a different base.
@@ -1164,7 +1166,8 @@ impl WorkspacePromptKind {
         match self {
             Self::BranchActions => "Branch",
             Self::Create => "New branch",
-            Self::CreateStacked => "Stack on branch",
+            Self::CreateAbove => "New branch above",
+            Self::CreateBelow => "New branch below",
             Self::SetTarget => "Set workspace target",
             Self::SetParent => "Change base branch",
             Self::MoveToStack => "Move into stack",
@@ -1177,7 +1180,7 @@ impl WorkspacePromptKind {
 
     pub(in crate::view) fn field_label(self) -> &'static str {
         match self {
-            Self::Create | Self::CreateStacked => "Branch name",
+            Self::Create | Self::CreateAbove | Self::CreateBelow => "Branch name",
             Self::SetTarget => "Target branch",
             Self::SetParent => "New base branch",
             Self::MoveToStack => "Stack to join",
@@ -1193,7 +1196,7 @@ impl WorkspacePromptKind {
     pub(in crate::view) fn confirm_label(self) -> &'static str {
         match self {
             Self::BranchActions => "Close",
-            Self::Create | Self::CreateStacked => "Create",
+            Self::Create | Self::CreateAbove | Self::CreateBelow => "Create",
             Self::SetTarget => "Set target",
             Self::SetParent => "Restack",
             Self::MoveToStack => "Move",

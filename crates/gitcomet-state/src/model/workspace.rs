@@ -203,11 +203,15 @@ pub enum WorkspaceEdit {
     Create {
         name: String,
     },
-    /// Add a branch stacked on another, or directly on the target when
-    /// `parent` is `None`.
-    CreateStacked {
+    /// Slot a new branch into a stack next to `anchor`.
+    ///
+    /// `below` is the whole difference: below means stacking on the anchor,
+    /// above means taking the anchor's place and pushing it — and whatever was
+    /// above it — down one.
+    InsertRelativeTo {
         name: String,
-        parent: Option<String>,
+        anchor: String,
+        below: bool,
     },
     SetApplied {
         name: String,
@@ -256,7 +260,7 @@ impl WorkspaceEdit {
     pub fn branch_name(&self) -> Option<&str> {
         match self {
             Self::Create { name }
-            | Self::CreateStacked { name, .. }
+            | Self::InsertRelativeTo { name, .. }
             | Self::SetApplied { name, .. }
             | Self::SetParent { name, .. }
             | Self::MoveToStack { name, .. }
@@ -280,18 +284,24 @@ impl WorkspaceEdit {
             Self::SetApplied { .. }
                 | Self::SetTarget { .. }
                 | Self::Create { .. }
-                | Self::CreateStacked { .. }
+                | Self::InsertRelativeTo { .. }
                 | Self::Remove { .. }
         )
     }
 
     /// Whether a branch's base moved, which is the only edit that rewrites
     /// branch history.
+    ///
+    /// Inserting below only adds to the end of the anchor's stack, so nothing
+    /// that existed moves. Inserting *above* takes the anchor's place, which
+    /// pushes the anchor's children one level further from the target, so their
+    /// history has to be rebuilt on their new base.
     pub fn rewrites_history(&self) -> bool {
-        matches!(
-            self,
-            Self::SetParent { .. } | Self::MoveToStack { .. } | Self::SetTarget { .. }
-        )
+        match self {
+            Self::SetParent { .. } | Self::MoveToStack { .. } | Self::SetTarget { .. } => true,
+            Self::InsertRelativeTo { below, .. } => !below,
+            _ => false,
+        }
     }
 
     /// Whether applying this edit produced a commit on a branch.
@@ -492,6 +502,41 @@ mod tests {
             branch: None,
         }
         .rewrites_history());
+    }
+
+    #[test]
+    fn only_inserting_above_pushes_existing_history_down() {
+        let insert = |below| WorkspaceEdit::InsertRelativeTo {
+            name: "b".into(),
+            anchor: "a".into(),
+            below,
+        };
+        // Below only adds to the end of the anchor's stack: nothing that
+        // existed changes base.
+        assert!(!insert(true).rewrites_history());
+        // Above takes the anchor's place, so the anchor's children move.
+        assert!(insert(false).rewrites_history());
+    }
+
+    #[test]
+    fn inserting_a_branch_moves_the_applied_set() {
+        // A new branch is applied by default, like any other creation.
+        assert!(WorkspaceEdit::InsertRelativeTo {
+            name: "b".into(),
+            anchor: "a".into(),
+            below: true,
+        }
+        .changes_applied_set());
+        assert_eq!(
+            WorkspaceEdit::InsertRelativeTo {
+                name: "b".into(),
+                anchor: "a".into(),
+                below: true,
+            }
+            .branch_name(),
+            Some("b"),
+            "the created branch is the one to report progress on"
+        );
     }
 
     #[test]

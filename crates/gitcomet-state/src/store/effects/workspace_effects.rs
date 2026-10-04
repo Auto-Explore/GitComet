@@ -149,16 +149,45 @@ fn apply_edit(
             // to pick it up or the working tree would not show it.
             rebuild = true;
         }
-        WorkspaceEdit::CreateStacked { name, parent } => {
-            let base = match parent {
-                Some(parent) => parent.clone(),
-                None => state.target.clone(),
-            };
+        WorkspaceEdit::InsertRelativeTo {
+            name,
+            anchor,
+            below,
+        } => {
+            // The new branch takes the anchor's slot in the stack, so that is
+            // the commit it has to start from. Read before the insert, because
+            // inserting changes the anchor's own parent when going above.
+            let base = state
+                .get(anchor)
+                .map(|branch| branch.base_branch(&state.target).to_string())
+                .ok_or_else(|| {
+                    gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Backend(
+                        format!("no workspace branch '{anchor}'"),
+                    ))
+                })?;
+            let inserted = VirtualBranch::new(name.clone());
             repo.create_virtual_branch(name, &base)?;
-            state.push_branch(VirtualBranch::new(name.clone()))?;
-            // Set after the push so `push_branch` does not reject a parent that
-            // is not in the state yet.
-            state.set_parent(name, parent.as_deref())?;
+            if *below {
+                state.insert_below(inserted, anchor)?;
+            } else {
+                // Above: the anchor, and anything stacked on it, moves down one
+                // level, so their history no longer sits on the base they were
+                // built against.
+                let children: Vec<String> = state
+                    .branches
+                    .iter()
+                    .filter(|branch| branch.parent.as_deref() == Some(anchor.as_str()))
+                    .map(|branch| branch.name.clone())
+                    .collect();
+                state.insert_above(inserted, anchor)?;
+                for child in children {
+                    let child_base = state
+                        .get(anchor)
+                        .map(|anchor| anchor.base_branch(&state.target).to_string())
+                        .unwrap_or_else(|| state.target.clone());
+                    repo.rebase_virtual_branch(&child, &child_base)?;
+                }
+            }
             rebuild = true;
         }
         WorkspaceEdit::SetApplied { name, applied } => {

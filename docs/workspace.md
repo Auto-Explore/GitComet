@@ -242,10 +242,11 @@ requests will need later; the multi-PR workflow itself is not implemented yet.
 
 ## What the Workspace tab can do today
 
-Per branch: apply/unapply, push, a `⋯` menu (stack a new branch on this one,
-change its base, move it into another stack, commit every file assigned to it,
-remove it from the workspace), and `↑`/`↓` to reorder it inside its stack — the
-arrows are disabled at the ends of a stack rather than offered and refused.
+Per branch: apply/unapply, push, a `⋯` menu (new branch above it, new branch
+below it, change its base, move it into another stack, commit every file
+assigned to it, remove it from the workspace), and `↑`/`↓` to reorder it inside
+its stack — the arrows are disabled at the ends of a stack rather than offered
+and refused.
 
 Per workspace: `New branch` on the summary line, and `Change` on the target row
 to rebase everything onto a different branch.
@@ -297,6 +298,57 @@ distinct thing the dialog can be asked for:
 Not exposed anywhere: dragging a file onto a branch as a way to assign it — the
 row's `Assign` button is the only assignment gesture. Everything else in
 `WorkspaceEdit` has a control.
+
+## Acceptance criteria for #539
+
+| # | Criterion | State |
+| --- | --- | --- |
+| 1 | Workspace view | done — third sidebar tab, existing tabs untouched |
+| 2 | Existing branch workflow kept | done |
+| 3 | Multiple virtual branches in one directory | done — `gitcomet/workspace` |
+| 4 | Apply / unapply | done — row button, rebuilds on change |
+| 5 | Independent virtual branches | done |
+| 6 | Stacked / dependent branches | done |
+| 7 | Create branches above/below existing ones | done — `WorkspaceEdit::InsertRelativeTo` |
+| 8 | Move branches between stacks | done — `MoveToStack` |
+| 9 | Reorder within a stack | done — `Reorder` plus `↑`/`↓` |
+| 10 | Assign files to virtual branches | done |
+| 11 | Assign individual hunks | **not done** — see below |
+| 12 | Maintain `gitcomet/workspace` | done |
+| 13 | Auto-update when the applied set changes | done |
+| 14 | Prevent direct commits to `gitcomet/workspace` | structurally — see below |
+| 15 | Configurable target branch | done |
+| 16 | Rebase when the target changes | done |
+| 17 | Expose conflicts between branches | done — both branch names are named |
+| 18 | Compatible with normal Git branches and remotes | done |
+| 19 | Push individual virtual branches | done |
+| 20 | Model allows stacked PRs later | done — `base_branch`, `virtual_branch_push_target` |
+| 21 | Documentation | done — this file |
+
+### On #14
+
+There is no guard that rejects a commit naming `gitcomet/workspace`. Instead the
+branch is filtered out of all three places branches are listed — the gix
+iterator, the `for-each-ref` fallback, and the packed-refs reader — so no UI can
+offer it for checkout, commit, merge, push or delete. That is a stronger
+guarantee than a check that can be bypassed, but it does assume no code path
+invents a branch name the user typed.
+
+### On #11
+
+Assignment is whole-file: `AssignmentIndex` is a `BTreeMap<PathBuf, Option<String>>`.
+Hunk-level needs three things none of which exist yet:
+
+- a hunk identity that survives the file moving. Line ranges do not; GitButler
+  anchors them to unidiff context, which is why its assignments stay correct
+  across edits.
+- a commit path that can build a tree per branch where some hunks come from the
+  branch and the rest from the working tree. `commit_paths_tree` today takes a
+  whole file from one side or the other.
+- a control in the diff view. The hunks exist there as a rendering concept
+  (`DiffHunk`, `CollapsedDiffHunk`), not as something selectable.
+
+This is a feature in its own right, not a wiring gap.
 
 ## Where the code is
 
