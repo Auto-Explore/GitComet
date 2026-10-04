@@ -809,19 +809,32 @@ enum MergeOutcome {
 ///
 /// Stage 1 is the merge base and appears for every conflicted path, so only the
 /// higher stages are paths git actually marked as conflicted.
+///
+/// That means each conflicted path is reported once per stage above the base —
+/// three lines for a content conflict — so they are collapsed here. A caller
+/// showing this list to the user would otherwise name the same file three
+/// times, and `describe_paths` would count it as three files in conflict when
+/// there is one. First occurrence wins, in the order git reported them.
 fn conflicted_paths(error: &Error) -> Vec<String> {
     let ErrorKind::Git(failure) = error.kind() else {
         return Vec::new();
     };
-    String::from_utf8_lossy(failure.stdout())
-        .lines()
-        .skip(1)
-        .filter_map(|line| {
-            let (meta, path) = line.split_once('\t')?;
-            let stage = meta.split_whitespace().nth(2)?;
-            (stage != "1").then(|| path.to_string())
-        })
-        .collect()
+    let mut paths: Vec<String> = Vec::new();
+    for line in String::from_utf8_lossy(failure.stdout()).lines().skip(1) {
+        let Some((meta, path)) = line.split_once('\t') else {
+            continue;
+        };
+        let Some(stage) = meta.split_whitespace().nth(2) else {
+            continue;
+        };
+        if stage == "1" {
+            continue;
+        }
+        if !paths.iter().any(|seen| seen == path) {
+            paths.push(path.to_string());
+        }
+    }
+    paths
 }
 
 /// The merge base of two commits, or `ours` when they share no history.
@@ -1107,9 +1120,69 @@ mod tests {
         )));
         assert_eq!(
             conflicted_paths(&error),
-            ["src/a.rs", "src/a.rs", "src/a.rs", "src/b.rs", "src/b.rs", "src/b.rs"],
-            "every stage above the base is a conflicted entry"
+            ["src/a.rs", "src/b.rs"],
+            "one entry per path: git writes a line per stage, so a content \
+             conflict is three lines naming the same file, and a caller showing \
+             these would list one file three times"
         );
+    }
+
+    #[test]
+    fn a_real_merge_conflict_names_each_path_once() {
+        // The same thing against a repository rather than a hand-written
+        // fixture, because the shape of `merge-tree`'s output is git's and
+        // changes between versions.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path();
+        git(root, &["init"]);
+        git(root, &["config", "commit.gpgsign", "false"]);
+        git(root, &["config", "core.autocrlf", "false"]);
+        git(root, &["config", "user.name", "Test User"]);
+        git(root, &["config", "user.email", "test@example.com"]);
+        std::fs::write(root.join("same.txt"), "base\n").unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-m", "base"]);
+        let default_branch = git(root, &["symbolic-ref", "--short", "HEAD"]);
+
+        git(root, &["checkout", "-b", "left"]);
+        std::fs::write(root.join("same.txt"), "A\n").unwrap();
+        git(root, &["commit", "-am", "left"]);
+        git(root, &["checkout", &default_branch]);
+        git(root, &["checkout", "-b", "right"]);
+        std::fs::write(root.join("same.txt"), "B\n").unwrap();
+        git(root, &["commit", "-am", "right"]);
+
+        let repo = open_repo(root);
+        let left = repo
+            .resolve_revision("left")
+            .expect("resolve")
+            .expect("left exists");
+        let right = repo
+            .resolve_revision("right")
+            .expect("resolve")
+            .expect("right exists");
+        // The very command `merge_tree` runs, kept here rather than through a
+        // helper so the test cannot pass by agreeing with a bug in one.
+        let mut cmd = std::process::Command::new("git");
+        cmd.arg("-C")
+            .arg(root)
+            .arg("merge-tree")
+            .arg("--write-tree")
+            .arg(format!("--merge-base={}", repo.merge_base_of(&left, &right)))
+            .arg(left.as_ref())
+            .arg(right.as_ref());
+        let output = cmd.output().expect("run git");
+        assert!(!output.status.success(), "this conflict has to fail the merge");
+
+        let error = Error::new(ErrorKind::Git(gitcomet_core::error::GitFailure::new(
+            "git merge-tree",
+            gitcomet_core::error::GitFailureId::CommandFailed,
+            Some(output.status.code()),
+            output.stdout,
+            output.stderr,
+            None,
+        )));
+        assert_eq!(conflicted_paths(&error), ["same.txt"]);
     }
 
     #[test]
@@ -1549,6 +1622,356 @@ mod tests {
         assert!(
             !root.join(".git").join("refs").join("heads").join("nowhere").exists(),
             "a refused commit must not create the ref either"
+        );
+    }
+
+    // ── Rebuilding, restacking, and what is on disk ──────────────
+
+    /// Whether a git command succeeds, for the assertions where failure *is* the
+    /// expected outcome.
+    fn git_succeeds(root: &Path, args: &[&str]) -> bool {
+        let mut cmd = std::process::Command::new("git");
+        cmd.arg("-C").arg(root).args(args);
+        cmd.output().map(|o| o.status.success()).unwrap_or(false)
+    }
+
+    /// The subjects on the workspace branch, newest first.
+    fn workspace_log(root: &Path) -> String {
+        git(root, &["log", "--format=%s", WORKSPACE_BRANCH])
+    }
+
+    /// Two branches that changed the same line, so applying both cannot work.
+    fn repo_with_conflicting_branches() -> (tempfile::TempDir, GixRepo, String) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path();
+        git(root, &["init"]);
+        git(root, &["config", "commit.gpgsign", "false"]);
+        // Every assertion here is about exact bytes: a system-wide
+        // `core.autocrlf` would rewrite the checkout to CRLF.
+        git(root, &["config", "core.autocrlf", "false"]);
+        git(root, &["config", "user.name", "Test User"]);
+        git(root, &["config", "user.email", "test@example.com"]);
+        std::fs::write(root.join("same.txt"), "base\n").unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-m", "base"]);
+        let default_branch = git(root, &["symbolic-ref", "--short", "HEAD"]);
+
+        git(root, &["checkout", "-b", "left"]);
+        std::fs::write(root.join("same.txt"), "A\n").unwrap();
+        git(root, &["commit", "-am", "left"]);
+        git(root, &["checkout", &default_branch]);
+        git(root, &["checkout", "-b", "right"]);
+        std::fs::write(root.join("same.txt"), "B\n").unwrap();
+        git(root, &["commit", "-am", "right"]);
+        git(root, &["checkout", &default_branch]);
+
+        let state = WorkspaceState::new(&default_branch).with_branches(vec![
+            VirtualBranch::new("left"),
+            VirtualBranch::new("right"),
+        ]);
+        let repo = open_repo(root);
+        repo.write_workspace(&state).expect("write workspace");
+        (temp, repo, default_branch)
+    }
+
+    /// An independent branch with a stacked one on it, plus a second target
+    /// that also moved.
+    fn repo_with_a_stacked_pair() -> (tempfile::TempDir, GixRepo, String) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path();
+        git(root, &["init"]);
+        git(root, &["config", "commit.gpgsign", "false"]);
+        // Every assertion here is about exact bytes: a system-wide
+        // `core.autocrlf` would rewrite the checkout to CRLF.
+        git(root, &["config", "core.autocrlf", "false"]);
+        git(root, &["config", "user.name", "Test User"]);
+        git(root, &["config", "user.email", "test@example.com"]);
+        std::fs::write(root.join("base.txt"), "base\n").unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-m", "base"]);
+        let default_branch = git(root, &["symbolic-ref", "--short", "HEAD"]);
+
+        git(root, &["checkout", "-b", "api"]);
+        std::fs::write(root.join("api.txt"), "api\n").unwrap();
+        git(root, &["commit", "-am", "api"]);
+        git(root, &["checkout", "-b", "ui"]);
+        std::fs::write(root.join("ui.txt"), "ui\n").unwrap();
+        git(root, &["commit", "-am", "ui"]);
+        git(root, &["checkout", &default_branch]);
+
+        // A second target that moved too, so pointing the workspace at it is a
+        // real change rather than a rename.
+        git(root, &["checkout", "-b", "next"]);
+        std::fs::write(root.join("next.txt"), "next\n").unwrap();
+        git(root, &["commit", "-am", "next"]);
+        git(root, &["checkout", &default_branch]);
+
+        let state = WorkspaceState::new(&default_branch).with_branches(vec![
+            VirtualBranch::new("api"),
+            VirtualBranch::new("ui").with_parent("api"),
+        ]);
+        let repo = open_repo(root);
+        repo.write_workspace(&state).expect("write workspace");
+        (temp, repo, default_branch)
+    }
+
+    #[test]
+    fn an_empty_applied_set_points_the_workspace_at_the_target() {
+        // Unapplying everything is a legitimate state, and then the workspace
+        // branch *is* the target rather than a branch whose tree nobody can
+        // explain.
+        let (temp, repo, default_branch) = repo_with_two_branches();
+        let root = temp.path();
+
+        let tip = repo
+            .update_workspace_branch(&[])
+            .expect("rebuild with nothing applied");
+
+        assert_eq!(
+            tip,
+            repo.resolve_revision(&default_branch)
+                .expect("resolve")
+                .expect("the target exists"),
+            "with nothing applied the workspace branch is the target"
+        );
+        assert_eq!(
+            git(root, &["rev-parse", WORKSPACE_BRANCH]),
+            git(root, &["rev-parse", &default_branch])
+        );
+        assert!(
+            !workspace_log(root).contains("Apply "),
+            "a merge that did not happen must not leave a commit: {}",
+            workspace_log(root)
+        );
+    }
+
+    #[test]
+    fn rebuilding_the_workspace_branch_is_a_pure_function_of_the_applied_set() {
+        // Rebuilt from the target every time, never patched. If merges piled up,
+        // unapplying a branch would leave its merge commit in the history for
+        // good and the branch could no longer be explained by the virtual
+        // branches alone.
+        let (temp, repo, _) = repo_with_two_branches();
+        let root = temp.path();
+
+        repo.update_workspace_branch(&["api", "ui"])
+            .expect("apply both");
+        let both = workspace_log(root);
+        assert!(
+            both.contains("Apply api") && both.contains("Apply ui"),
+            "{both}"
+        );
+
+        repo.update_workspace_branch(&["api"]).expect("unapply ui");
+        let one = workspace_log(root);
+        assert!(one.contains("Apply api"), "{one}");
+        assert!(
+            !one.contains("Apply ui"),
+            "the merge that is no longer wanted is still in the history: {one}"
+        );
+    }
+
+    #[test]
+    fn rebuilding_an_unchanged_applied_set_appends_nothing() {
+        // Every reload of the Workspace tab rebuilds. A rebuild that invented a
+        // commit would lengthen the branch every time the user looked at it.
+        let (temp, repo, _) = repo_with_two_branches();
+        let root = temp.path();
+
+        repo.update_workspace_branch(&["api", "ui"])
+            .expect("first");
+        let tree = format!("{WORKSPACE_BRANCH}^{{tree}}");
+        let tree_after_first = git(root, &["rev-parse", &tree]);
+        let commits_after_first = workspace_log(root).lines().count();
+
+        repo.update_workspace_branch(&["api", "ui"])
+            .expect("second");
+
+        assert_eq!(
+            workspace_log(root).lines().count(),
+            commits_after_first,
+            "an identical rebuild grew the branch"
+        );
+        assert_eq!(
+            git(root, &["rev-parse", &tree]),
+            tree_after_first,
+            "and it changed the tree it points at"
+        );
+        assert_eq!(
+            commits_after_first,
+            3,
+            "the base plus one commit per applied branch, and nothing else"
+        );
+    }
+
+    #[test]
+    fn restacking_a_branch_onto_where_it_already_is_changes_nothing() {
+        let (temp, repo, default_branch) = repo_with_a_splittable_file();
+        let root = temp.path();
+        let before = git(root, &["rev-parse", "api"]);
+
+        repo.rebase_virtual_branch("api", &default_branch)
+            .expect("restack onto the base it is already on");
+
+        assert_eq!(
+            git(root, &["rev-parse", "api"]),
+            before,
+            "a branch already on its base must not gain a commit"
+        );
+    }
+
+    #[test]
+    fn applying_two_branches_that_conflict_names_both_and_writes_nothing() {
+        // The failure the user has to act on: which two branches are in the way,
+        // and over which file. A bare "merge failed" is not actionable.
+        let (temp, repo, default_branch) = repo_with_conflicting_branches();
+        let root = temp.path();
+
+        let Err(error) = repo.update_workspace_branch(&["left", "right"]) else {
+            panic!("these two branches edit the same line; the rebuild must be refused");
+        };
+        let message = format!("{error}");
+        assert!(
+            message.contains("left") && message.contains("right"),
+            "the two branches in the way have to be named: {message}"
+        );
+        assert!(
+            message.contains("same.txt"),
+            "and so does the file they clash on: {message}"
+        );
+        assert!(
+            !git_succeeds(root, &["rev-parse", "--verify", &format!("refs/heads/{WORKSPACE_BRANCH}")]),
+            "a refused rebuild must not leave a half-built branch behind"
+        );
+        assert_eq!(
+            git(root, &["symbolic-ref", "--short", "HEAD"]),
+            default_branch,
+            "and must not have moved the working directory either"
+        );
+    }
+
+    #[test]
+    fn moving_the_target_moves_the_independent_branches_and_leaves_the_stacked_ones() {
+        let (temp, repo, _) = repo_with_a_stacked_pair();
+        let root = temp.path();
+        let ui_parent_before = git(root, &["rev-parse", "ui^"]);
+        let next = git(root, &["rev-parse", "next"]);
+
+        repo.update_workspace_target("next").expect("move the target");
+
+        assert_eq!(repo.read_workspace().expect("read").target, "next");
+        assert_eq!(
+            git(root, &["rev-parse", "api^"]),
+            next,
+            "an independent branch is based on the target, so it has to follow it"
+        );
+        assert_eq!(
+            git(root, &["rev-parse", "ui^"]),
+            ui_parent_before,
+            "a stacked branch moves with its base, not with the target: replaying \
+             it here too would rewrite it twice"
+        );
+    }
+
+    #[test]
+    fn a_corrupt_workspace_file_reads_as_an_empty_workspace() {
+        // A file written by a newer version, or half-written by a crash, must
+        // not make the whole repository unusable: the user rebuilds from the UI.
+        let (_temp, repo, _) = repo_with_two_branches();
+        std::fs::write(repo.workspace_state_path(), b"{ this is not json").expect("corrupt it");
+
+        let state = repo.read_workspace().expect("a corrupt file is not an error");
+        assert!(
+            state.branches.is_empty(),
+            "the branches are gone from the file, so they are gone here too"
+        );
+    }
+
+    #[test]
+    fn an_invalid_workspace_is_refused_and_the_file_on_disk_is_untouched() {
+        let (_temp, repo, _) = repo_with_two_branches();
+        let before = repo.read_workspace().expect("read");
+
+        // A loop between two branches: the state renders, but no ordering of it
+        // can be applied, so it must never reach the disk.
+        let cyclic = WorkspaceState::new("main").with_branches(vec![
+            VirtualBranch::new("a").with_parent("b"),
+            VirtualBranch::new("b").with_parent("a"),
+        ]);
+        assert!(
+            repo.write_workspace(&cyclic).is_err(),
+            "a state that cannot be ordered has to be refused"
+        );
+
+        assert_eq!(
+            repo.read_workspace().expect("read"),
+            before,
+            "the file on disk still has to describe what Git actually has"
+        );
+    }
+
+    #[test]
+    fn assignments_survive_a_write_and_a_read() {
+        // The whole reason the file exists: a drag made today has to still be
+        // there after a restart, on the branch the user picked.
+        let (_temp, repo, _) = repo_with_two_branches();
+        let mut index = AssignmentIndex::new();
+        index.set(Path::new("src/a.rs"), Some("api".to_string()));
+        index.set(Path::new("src/b.rs"), None);
+        index.set_hunk(
+            Path::new("src/c.rs"),
+            gitcomet_core::workspace::HunkFingerprint::of(&["NEW\n"], 1),
+            Some("ui".to_string()),
+        );
+
+        repo.write_workspace_assignments(&index).expect("write");
+
+        assert_eq!(repo.read_workspace_assignments().expect("read"), index);
+    }
+
+    #[test]
+    fn an_unreadable_assignments_file_reads_as_empty() {
+        // Same reasoning as the workspace file: a corrupt file must not make
+        // every changed file in the repository unusable.
+        let (_temp, repo, _) = repo_with_two_branches();
+        std::fs::write(repo.workspace_assignments_path(), b"not json at all").expect("corrupt it");
+        assert!(repo.read_workspace_assignments().expect("read").is_empty());
+    }
+
+    #[test]
+    fn a_virtual_branch_tracks_nothing_until_it_is_pushed() {
+        // A branch that claims an upstream it was never pushed to shows as
+        // permanently behind one, and the first push would try to reconcile
+        // against a ref that does not exist.
+        let (_temp, repo, _) = repo_with_two_branches();
+        let root = repo.spec().workdir.clone();
+        let target = repo.read_workspace().expect("read").target;
+
+        repo.create_virtual_branch("feature", &target)
+            .expect("create");
+
+        assert!(git_succeeds(&root, &["rev-parse", "--verify", "refs/heads/feature"]));
+        assert!(
+            !git_succeeds(&root, &["rev-parse", "--abbrev-ref", "feature@{upstream}"]),
+            "a branch nobody pushed has to track nothing"
+        );
+    }
+
+    #[test]
+    fn creating_a_virtual_branch_on_a_base_that_does_not_exist_is_refused() {
+        // A typo in a stack's base would otherwise create a branch that GitComet
+        // believes in and that nothing can be built on.
+        let (_temp, repo, _) = repo_with_two_branches();
+        let root = repo.spec().workdir.clone();
+
+        assert!(
+            repo.create_virtual_branch("api", "no-such-branch")
+                .is_err(),
+            "a base that does not name a commit cannot be built on"
+        );
+        assert!(
+            !git_succeeds(&root, &["rev-parse", "--verify", "refs/heads/api"]),
+            "a refused creation must not leave the ref behind"
         );
     }
 }
