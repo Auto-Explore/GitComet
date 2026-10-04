@@ -324,14 +324,14 @@ impl WorkspaceEdit {
     /// Whether a branch's base moved, which is the only edit that rewrites
     /// branch history.
     ///
-    /// Inserting below only adds to the end of the anchor's stack, so nothing
-    /// that existed moves. Inserting *above* takes the anchor's place, which
-    /// pushes the anchor's children one level further from the target, so their
-    /// history has to be rebuilt on their new base.
+    /// Inserting *above* an anchor stacks the new branch on it, so nothing that
+    /// existed changes base. Inserting *below* puts the new branch in the
+    /// anchor's place, which leaves the anchor sitting on it, so the anchor's
+    /// commits have to be replayed on the branch that displaced them.
     pub fn rewrites_history(&self) -> bool {
         match self {
             Self::SetParent { .. } | Self::MoveToStack { .. } | Self::SetTarget { .. } => true,
-            Self::InsertRelativeTo { below, .. } => !below,
+            Self::InsertRelativeTo { below, .. } => *below,
             _ => false,
         }
     }
@@ -577,17 +577,16 @@ mod tests {
     }
 
     #[test]
-    fn only_inserting_above_pushes_existing_history_down() {
+    fn only_inserting_below_replays_the_anchor() {
         let insert = |below| WorkspaceEdit::InsertRelativeTo {
             name: "b".into(),
             anchor: "a".into(),
             below,
         };
-        // Below only adds to the end of the anchor's stack: nothing that
-        // existed changes base.
-        assert!(!insert(true).rewrites_history());
-        // Above takes the anchor's place, so the anchor's children move.
-        assert!(insert(false).rewrites_history());
+        // Above stacks on the anchor: nothing that existed changes base.
+        assert!(!insert(false).rewrites_history());
+        // Below takes the anchor's place, so the anchor is replayed on it.
+        assert!(insert(true).rewrites_history());
     }
 
     #[test]

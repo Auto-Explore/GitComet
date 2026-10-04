@@ -142,24 +142,20 @@ impl GixRepo {
 
     /// Rebase `name` onto `onto` without touching the worktree.
     ///
-    /// `--update-refs` moves the branches stacked on `name` with it, which is
-    /// what keeps a stack intact when its bottom branch is rebased onto a new
-    /// target.
+    /// `git rebase` is not usable here. It refuses outright when the working
+    /// tree has unstaged changes — "cannot rebase: You have unstaged changes" —
+    /// and in a workspace that is the *normal* state, not a mistake: the whole
+    /// point is uncommitted changes spread across several branches at once.
+    /// Every stack edit would fail, so the replay goes through the same
+    /// `merge-tree` + `commit-tree` plumbing the target change already uses,
+    /// which reads neither the worktree nor the index.
+    ///
+    /// The cost is that the branch's commits are replayed as one: the result is
+    /// a single commit on `onto` holding everything `name` had, rather than
+    /// `name`'s commits one for one. That is the same trade the target change
+    /// makes, and it is why `restack_branch_onto` carries the name it does.
     pub(super) fn rebase_virtual_branch_impl(&self, name: &str, onto: &str) -> Result<()> {
-        let onto_id = self.require_revision(onto)?;
-        let name_ref = format!("refs/heads/{name}");
-
-        let mut cmd = self.git_plumbing();
-        cmd.arg("rebase")
-            .arg("--update-refs")
-            .arg("--onto")
-            .arg(onto_id.as_ref())
-            .arg(onto_id.as_ref())
-            .arg(&name_ref);
-        // `rebase` touches the worktree via its index, and any unrelated dirty
-        // file would abort it. Refuse rather than silently including it.
-        self.require_clean_index()?;
-        run_git_simple(cmd, "git rebase --onto")
+        self.restack_branch_onto(name, onto).map(|_| ())
     }
 
     /// Rebase `name` onto `onto` as a history rewrite with no worktree effect.
@@ -549,22 +545,6 @@ impl GixRepo {
         cmd.arg("-m").arg(message);
         let id = run_git_capture(cmd, "git commit-tree")?;
         Ok(CommitId(id.trim().into()))
-    }
-
-    /// Refuse operations that would disturb a dirty index.
-    fn require_clean_index(&self) -> Result<()> {
-        let mut cmd = self.git_plumbing();
-        cmd.arg("diff-index").arg("--quiet").arg("HEAD").arg("--");
-        match run_git_capture_bytes(cmd, "git diff-index") {
-            // `diff-index --quiet` exits 1 when the index differs from HEAD,
-            // and `run_git_capture` turns that into an error carrying git's
-            // stderr — which is empty for a clean result. Either way the
-            // message below is the one the user needs.
-            Ok(_) => Ok(()),
-            Err(_) => Err(Error::new(ErrorKind::Backend(
-                "the index has staged changes; commit or unstage them first".to_string(),
-            ))),
-        }
     }
 
     pub(super) fn virtual_branch_push_target_impl(

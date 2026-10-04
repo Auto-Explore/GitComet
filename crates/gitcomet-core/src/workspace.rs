@@ -434,27 +434,33 @@ impl WorkspaceState {
         }
     }
 
-    /// Insert a branch above `name`, taking over `name`'s parent.
+    /// Insert a branch above `name`: the new branch is stacked on `name`.
     pub fn insert_above(&mut self, branch: VirtualBranch, name: &str) -> Result<()> {
+        if self.get(name).is_none() {
+            return Err(workspace_error(format!("no workspace branch '{name}'")));
+        }
+        self.push_branch(branch.clone())?;
+        self.set_parent(&branch.name, Some(name))
+    }
+
+    /// Insert a branch below `name`: it takes `name`'s place in the stack, so
+    /// `name` ends up sitting on it and everything above follows along.
+    ///
+    /// The mirror of [`Self::insert_above`], and deliberately not the same
+    /// operation. A branch *above* an anchor is stacked on it; a branch *below*
+    /// one displaces it. Doing the first for both would make the two buttons the
+    /// same edit, and neither would mean what the label on it says.
+    pub fn insert_below(&mut self, branch: VirtualBranch, name: &str) -> Result<()> {
         let displaced = self
             .get(name)
             .ok_or_else(|| workspace_error(format!("no workspace branch '{name}'")))?
             .parent
             .clone();
-        self.push_branch(branch)?;
-        self.set_parent(name, displaced.as_deref())?;
-        self.set_parent(&branch.name, Some(name))?;
-        Ok(())
-    }
-
-    /// Insert a branch below `name`, stacked on it.
-    pub fn insert_below(&mut self, branch: VirtualBranch, name: &str) -> Result<()> {
-        if self.get(name).is_none() {
-            return Err(workspace_error(format!("no workspace branch '{name}'")));
-        }
-        self.push_branch(branch)?;
-        self.set_parent(&branch.name, Some(name))?;
-        Ok(())
+        self.push_branch(branch.clone())?;
+        self.set_parent(name, Some(&branch.name))?;
+        // The new branch inherits the anchor's old parent, so the stack keeps
+        // its depth and everything that was above the anchor stays above it.
+        self.set_parent(&branch.name, displaced.as_deref())
     }
 
     /// Move `name` into `stack_base`'s stack, optionally above or below
@@ -1400,7 +1406,7 @@ mod tests {
     }
 
     #[test]
-    fn moving_a_branch_above_another_takes_over_its_parent() {
+    fn a_branch_inserted_above_another_is_stacked_on_it() {
         let mut state = workspace().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
         state.insert_above(vb("ui2"), "ui").unwrap();
         assert_eq!(state.get("ui").unwrap().parent.as_deref(), Some("api"));
@@ -1408,10 +1414,46 @@ mod tests {
     }
 
     #[test]
-    fn moving_a_branch_below_another_stacks_it_on_that_branch() {
+    fn a_branch_inserted_below_another_takes_its_place() {
+        // The opposite of the above case, which is the whole point of having
+        // two: `ui2` is pushed *down* to where `ui` was, `ui` now sits on it,
+        // and the stack is one deeper without anything above having moved.
+        let mut state = workspace().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
+        state.insert_below(vb("ui2"), "ui").unwrap();
+        assert_eq!(
+            state.get("ui2").unwrap().parent.as_deref(),
+            Some("api"),
+            "it inherits the anchor's parent"
+        );
+        assert_eq!(
+            state.get("ui").unwrap().parent.as_deref(),
+            Some("ui2"),
+            "the anchor now sits on the branch that took its place"
+        );
+    }
+
+    #[test]
+    fn inserting_below_a_branch_below_the_target_puts_the_new_one_on_the_target() {
         let mut state = workspace().with_branches(vec![vb("api")]);
         state.insert_below(vb("ui"), "api").unwrap();
-        assert_eq!(state.get("ui").unwrap().parent.as_deref(), Some("api"));
+        assert_eq!(state.get("ui").unwrap().parent.as_deref(), None);
+        assert_eq!(state.get("api").unwrap().parent.as_deref(), Some("ui"));
+    }
+
+    #[test]
+    fn inserting_below_leaves_the_branches_above_the_anchor_where_they_are() {
+        let mut state = workspace().with_branches(vec![
+            vb("api"),
+            vb("ui").with_parent("api"),
+            vb("e2e").with_parent("ui"),
+        ]);
+        state.insert_below(vb("ui2"), "ui").unwrap();
+        assert_eq!(
+            state.get("e2e").unwrap().parent.as_deref(),
+            Some("ui"),
+            "what was stacked on the anchor is still stacked on it"
+        );
+        assert_eq!(state.application_order().unwrap().len(), 4);
     }
 
     #[test]

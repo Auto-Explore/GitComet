@@ -154,10 +154,18 @@ fn apply_edit(
             anchor,
             below,
         } => {
-            // The new branch takes the anchor's slot in the stack, so that is
-            // the commit it has to start from. Read before the insert, because
-            // inserting changes the anchor's own parent when going above.
-            let base = state
+            // Above and below are different edits, so they start the new branch from
+            // different commits and only one of them rewrites history.
+            //
+            // *Above* stacks the new branch on the anchor, so it starts at the
+            // anchor's tip and displaces nothing.
+            //
+            // *Below* puts it where the anchor sat, so it starts at the
+            // anchor's *base* and the anchor then has to be replayed on top of
+            // it — otherwise the two would claim a parent relationship their
+            // commits do not have, and a pull request for the upper branch
+            // would contain none of the lower one's work.
+            let anchor_parent = state
                 .get(anchor)
                 .map(|branch| branch.base_branch(&state.target).to_string())
                 .ok_or_else(|| {
@@ -166,27 +174,13 @@ fn apply_edit(
                     ))
                 })?;
             let inserted = VirtualBranch::new(name.clone());
-            repo.create_virtual_branch(name, &base)?;
             if *below {
+                repo.create_virtual_branch(name, &anchor_parent)?;
                 state.insert_below(inserted, anchor)?;
+                repo.rebase_virtual_branch(anchor, name)?;
             } else {
-                // Above: the anchor, and anything stacked on it, moves down one
-                // level, so their history no longer sits on the base they were
-                // built against.
-                let children: Vec<String> = state
-                    .branches
-                    .iter()
-                    .filter(|branch| branch.parent.as_deref() == Some(anchor.as_str()))
-                    .map(|branch| branch.name.clone())
-                    .collect();
+                repo.create_virtual_branch(name, anchor)?;
                 state.insert_above(inserted, anchor)?;
-                for child in children {
-                    let child_base = state
-                        .get(anchor)
-                        .map(|anchor| anchor.base_branch(&state.target).to_string())
-                        .unwrap_or_else(|| state.target.clone());
-                    repo.rebase_virtual_branch(&child, &child_base)?;
-                }
             }
             rebuild = true;
         }

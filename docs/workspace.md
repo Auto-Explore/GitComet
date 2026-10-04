@@ -96,6 +96,28 @@ Stacks are not stored as a separate structure. They are derived from the
 `parent` fields by `WorkspaceState::stacks()`, which means a stack can never
 disagree with the branches that make it up.
 
+### Above and below
+
+A branch row offers *New branch above this* and *New branch below this*, and
+they are genuinely different edits:
+
+```
+target ── api ── ui        insert "ui2" above ui   →  api ── ui ── ui2
+                           insert "ui2" below ui   →  api ── ui2 ── ui
+```
+
+*Above* stacks the new branch on the anchor: it starts at the anchor's tip and
+displaces nothing. *Below* puts it in the anchor's place: it starts at the
+anchor's base and the anchor is then replayed on top of it. Either way the
+branches that were already stacked on the anchor stay where they were.
+
+The *below* case has to rewrite history, because the anchor's commits were built
+on the new branch's commit, not the other way round. That rewrite goes through
+`merge-tree` + `commit-tree` rather than `git rebase`, because `git rebase`
+refuses outright when the working tree has unstaged changes — which in a
+workspace is the normal state, not a mistake. The cost is that the branch's
+commits are replayed as one.
+
 ### Independent and stacked are the same thing
 
 There is no "stacked branch" type and no "independent branch" type. A branch
@@ -356,7 +378,7 @@ gesture. Everything else in `WorkspaceEdit` has a control.
 | 4 | Apply / unapply | done — row button, rebuilds on change |
 | 5 | Independent virtual branches | done |
 | 6 | Stacked / dependent branches | done |
-| 7 | Create branches above/below existing ones | done — `WorkspaceEdit::InsertRelativeTo` |
+| 7 | Create branches above/below existing ones | done — `WorkspaceEdit::InsertRelativeTo`, two distinct edits |
 | 8 | Move branches between stacks | done — `MoveToStack` |
 | 9 | Reorder within a stack | done — `Reorder` plus `↑`/`↓` |
 | 10 | Assign files to virtual branches | done |
