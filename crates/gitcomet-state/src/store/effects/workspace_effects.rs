@@ -331,9 +331,28 @@ pub(super) fn schedule_leave_workspace(
             // No branch to go back to: fall back to the workspace target rather
             // than guessing, since a wrong guess would move the user onto a
             // branch they never had checked out.
+            //
+            // The read can itself fail — a repository with no workspace on disk
+            // at all — and this closure answers through the message channel
+            // rather than by returning, so the failure is reported the same way
+            // every other one is instead of being dropped on the worker.
             let onto = match &checkout_base {
                 Some(branch) => branch.clone(),
-                None => repo.read_workspace().map(|state| state.target)?,
+                None => match repo.read_workspace() {
+                    Ok(state) => state.target,
+                    Err(error) => {
+                        send_or_log(
+                            &msg_tx,
+                            Msg::Internal(InternalMsg::WorkspaceActiveFinished {
+                                repo_id,
+                                active: false,
+                                checkout_base: None,
+                                result: Err(error),
+                            }),
+                        );
+                        return;
+                    }
+                },
             };
             let result = repo.leave_workspace(&onto);
             send_or_log(
