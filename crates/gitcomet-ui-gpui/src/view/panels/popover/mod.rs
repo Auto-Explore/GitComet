@@ -599,6 +599,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::DiffContentModeSettings
             | PopoverKind::TextFormatMenu { .. }
             | PopoverKind::CommitFileSortMenu { .. }
+            | PopoverKind::FileListLayoutMenu { .. }
             | PopoverKind::ChangeTrackingSettings
             | PopoverKind::UiScalePicker
             | PopoverKind::TerminalMenu { .. }
@@ -1029,6 +1030,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::HistoryAuthorFilter { .. }
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::CommitFileSortMenu { .. }
+        | PopoverKind::FileListLayoutMenu { .. }
         | PopoverKind::ChangeTrackingSettings
         | PopoverKind::TerminalMenu { .. } => Anchor::TopRight,
         // The strip and the bottom bar sit at the bottom edge; open upwards.
@@ -1214,6 +1216,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
             ..
         } => Some(REMOTE_WEB_PICKER_WIDTH),
         PopoverKind::CommitFileSortMenu { .. } => Some(SORT_CONTEXT_MENU_WIDTH),
+        PopoverKind::FileListLayoutMenu { .. } => Some(NARROW_CONTEXT_MENU_WIDTH),
         PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::UiScalePicker

@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::edit_signature::EditSignature;
 use gpui::Pixels;
 use rustc_hash::FxHasher;
 use std::cell::RefCell;
@@ -207,17 +208,46 @@ pub(in crate::view) enum CommitFileSort {
     FileTypeDescending,
     EditSizeAscending,
     EditSizeDescending,
+    /// Files changed the same way next to each other: the largest set of
+    /// files sharing one edit first, then the files whose edit is their own.
+    Edits,
 }
 
 impl CommitFileSort {
-    pub(in crate::view) const ALL: [Self; 6] = [
+    pub(in crate::view) const ALL: [Self; 7] = [
         Self::PathAscending,
         Self::PathDescending,
         Self::FileTypeAscending,
         Self::FileTypeDescending,
         Self::EditSizeAscending,
         Self::EditSizeDescending,
+        Self::Edits,
     ];
+
+    /// The name the setting is stored under.
+    pub(in crate::view) const fn key(self) -> &'static str {
+        match self {
+            Self::PathAscending => "path_ascending",
+            Self::PathDescending => "path_descending",
+            Self::FileTypeAscending => "file_type_ascending",
+            Self::FileTypeDescending => "file_type_descending",
+            Self::EditSizeAscending => "edit_size_smallest",
+            Self::EditSizeDescending => "edit_size_largest",
+            Self::Edits => "edits",
+        }
+    }
+
+    pub(in crate::view) fn from_key(raw: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|sort| sort.key() == raw)
+    }
+
+    /// Whether the sort reads the line diff, which an untracked file lacks.
+    pub(in crate::view) const fn needs_line_stats(self) -> bool {
+        matches!(
+            self,
+            Self::EditSizeAscending | Self::EditSizeDescending | Self::Edits
+        )
+    }
 
     /// Each option reads "Ascending"/"Descending" its own way -- path A→Z, file
     /// type by extension A→Z -- so the direction word is the same everywhere and
@@ -232,6 +262,47 @@ impl CommitFileSort {
             Self::FileTypeDescending => "File type: Descending",
             Self::EditSizeAscending => "Edit size: Smallest",
             Self::EditSizeDescending => "Edit size: Largest",
+            Self::Edits => "Edits: Repeated first",
+        }
+    }
+}
+
+/// The Edits sort's order over one list: files sharing an edit form a
+/// cluster, clusters come largest first (ties by their first path), then the
+/// files whose edit no other file shares, then those with no edit known.
+/// Path order applies inside each of those, so the result is stable.
+struct EditClusters {
+    by_edit: rustc_hash::FxHashMap<EditSignature, (usize, String)>,
+}
+
+impl EditClusters {
+    fn new<'a>(items: impl Iterator<Item = (Option<EditSignature>, &'a str)>) -> Self {
+        let mut by_edit = rustc_hash::FxHashMap::<EditSignature, (usize, String)>::default();
+        for (edit, path_key) in items {
+            let Some(edit) = edit else { continue };
+            let entry = by_edit
+                .entry(edit)
+                .or_insert_with(|| (0, path_key.to_owned()));
+            entry.0 += 1;
+            if path_key < entry.1.as_str() {
+                path_key.clone_into(&mut entry.1);
+            }
+        }
+        Self { by_edit }
+    }
+
+    /// Compared before the path. The edit itself is last, so two clusters
+    /// whose first paths compare equal still do not interleave.
+    fn rank(
+        &self,
+        edit: Option<EditSignature>,
+    ) -> (u8, std::cmp::Reverse<usize>, &str, Option<EditSignature>) {
+        match edit.and_then(|edit| Some((edit, self.by_edit.get(&edit)?))) {
+            Some((edit, (count, first))) if *count > 1 => {
+                (0, std::cmp::Reverse(*count), first.as_str(), Some(edit))
+            }
+            Some(_) => (1, std::cmp::Reverse(0), "", None),
+            None => (2, std::cmp::Reverse(0), "", None),
         }
     }
 }
@@ -412,6 +483,9 @@ pub(in crate::view) fn status_section_sorted_indexes(
         let stats = stats?.get(&entry.path)?;
         Some(u64::from(stats.additions?) + u64::from(stats.deletions?))
     };
+    let edit = |ix: usize| -> Option<EditSignature> { stats?.get(&entries.get(ix)?.path)?.edit };
+    let clusters = (sort == CommitFileSort::Edits)
+        .then(|| EditClusters::new(sortable.iter().map(|item| (edit(item.0), item.1.as_str()))));
     let by_path = |left: &(usize, String, String), right: &(usize, String, String)| {
         left.1
             .cmp(&right.1)
@@ -454,6 +528,15 @@ pub(in crate::view) fn status_section_sorted_indexes(
                 (None, None) => by_path(left, right),
             }
         }
+        CommitFileSort::Edits => clusters
+            .as_ref()
+            .map(|clusters| {
+                clusters
+                    .rank(edit(left.0))
+                    .cmp(&clusters.rank(edit(right.0)))
+            })
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| by_path(left, right)),
     });
     sortable
         .into_iter()
@@ -498,6 +581,13 @@ fn build_commit_file_projection(
         })
         .collect();
 
+    let clusters = (sort == CommitFileSort::Edits).then(|| {
+        EditClusters::new(
+            sortable
+                .iter()
+                .map(|item| (files[item.0].edit, item.1.as_str())),
+        )
+    });
     sortable.sort_by(|left, right| match sort {
         CommitFileSort::PathAscending => compare_commit_file_paths(left, right, files),
         CommitFileSort::PathDescending => compare_commit_file_paths(left, right, files).reverse(),
@@ -530,6 +620,15 @@ fn build_commit_file_projection(
                 (None, None) => compare_commit_file_paths(left, right, files),
             }
         }
+        CommitFileSort::Edits => clusters
+            .as_ref()
+            .map(|clusters| {
+                clusters
+                    .rank(files[left.0].edit)
+                    .cmp(&clusters.rank(files[right.0].edit))
+            })
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| compare_commit_file_paths(left, right, files)),
     });
 
     CommitFileProjection {
@@ -1149,9 +1248,10 @@ mod file_list;
 pub(in crate::view) use file_list::{
     ChangedFileRow, CollapsedDirs, DirectoryRowDetail, DirectoryRowProps, DirectoryToggle,
     FileListId, FileListMultiSelection, FileListPlan, FileListPlanCache, FileListRow, FileOrdinal,
-    FileTree, FileTreeItem, RowIx, changed_file_directory_row, changed_file_row, directory_row,
-    directory_row_detail_for_width, file_list_folder_menu_invoker, file_list_projection_key,
-    file_list_projection_key_scoped, file_row_indent_px,
+    FileTree, FileTreeItem, GroupHeaderProps, PlanShape, RowIx, StickyGroupHeaders,
+    changed_file_directory_row, changed_file_row, directory_row, directory_row_detail_for_width,
+    file_list_folder_menu_invoker, file_list_projection_key, file_list_projection_key_scoped,
+    file_row_indent_px, group_header_row,
 };
 mod diff_text;
 mod history;
@@ -1877,6 +1977,59 @@ mod tests {
         // ts before rs, but a.* before b.* within each -- reading a group is
         // still alphabetical, only the group order reverses.
         assert_eq!(descending.source_indices.as_ref(), &[1, 3, 2, 0]);
+    }
+
+    pub(in crate::view) fn edit(text: &str) -> Option<EditSignature> {
+        let mut edit = gitcomet_core::edit_signature::EditSignatureBuilder::default();
+        edit.added(text.as_bytes());
+        edit.finish()
+    }
+
+    #[test]
+    fn edits_put_the_largest_shared_edit_first_then_singles_then_unknown() {
+        let file = |path: &str, text: Option<&str>| {
+            commit_file(path, FileStatusKind::Modified, Some(1), Some(1))
+                .with_edit(text.and_then(edit))
+        };
+        let files = vec![
+            file("z/one.rs", Some("a")),
+            file("b.rs", Some("b")),
+            file("a.rs", Some("a")),
+            file("c.rs", Some("b")),
+            file("d.rs", Some("b")),
+            file("solo2.rs", Some("c")),
+            file("solo1.rs", Some("d")),
+            file("bin.png", None),
+            file("aaa.rs", None),
+            file("0.rs", Some("e")),
+            file("y.rs", Some("e")),
+        ];
+
+        let projection =
+            build_commit_file_projection(&files, CommitFileSort::Edits, CommitFileFilter::All);
+
+        // Three share "b"; "e" and "a" share by two each, "e" first by its
+        // first path; then the singles and the unknown, each by path.
+        assert_eq!(
+            projection.source_indices.as_ref(),
+            &[1, 3, 4, 9, 10, 2, 0, 6, 5, 8, 7]
+        );
+    }
+
+    #[test]
+    fn edits_cluster_only_the_files_a_filter_shows() {
+        let files = vec![
+            commit_file("a.rs", FileStatusKind::Added, Some(1), Some(0)).with_edit(edit("x")),
+            commit_file("b.rs", FileStatusKind::Modified, Some(1), Some(0)).with_edit(edit("x")),
+            commit_file("c.rs", FileStatusKind::Modified, Some(1), Some(0)).with_edit(edit("y")),
+            commit_file("d.rs", FileStatusKind::Modified, Some(1), Some(0)).with_edit(edit("y")),
+        ];
+
+        let modified =
+            build_commit_file_projection(&files, CommitFileSort::Edits, CommitFileFilter::Modified);
+
+        // With `a.rs` filtered out, "x" is one file's edit and sorts as a single.
+        assert_eq!(modified.source_indices.as_ref(), &[2, 3, 1]);
     }
 
     /// The direction word is the same across options; only the noun changes.

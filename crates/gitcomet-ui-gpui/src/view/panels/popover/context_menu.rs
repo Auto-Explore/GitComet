@@ -25,6 +25,7 @@ mod file_browser_file;
 mod file_browser_folder;
 pub(super) mod file_history_commit;
 mod file_list_folder;
+mod file_list_layout;
 mod history_branch_filter;
 mod history_refs;
 mod large_file;
@@ -683,6 +684,9 @@ impl PopoverHost {
             )),
             PopoverKind::CommitFileSortMenu { list } => {
                 Some(commit_file_sort::model(self, *list, cx))
+            }
+            PopoverKind::FileListLayoutMenu { repo_id, list } => {
+                Some(file_list_layout::model(self, *repo_id, *list, cx))
             }
             PopoverKind::FileBrowserFileMenu { repo_id, path } => {
                 Some(file_browser_file::model(self, *repo_id, path, cx))
@@ -1469,6 +1473,15 @@ impl PopoverHost {
             ContextMenuAction::SetCommitFileSort { list, sort } => {
                 self.details_pane.update(cx, |pane, cx| {
                     pane.set_file_list_sort(list, sort, cx);
+                });
+            }
+            ContextMenuAction::SetFileListLayout {
+                repo_id,
+                list,
+                layout,
+            } => {
+                self.details_pane.update(cx, |pane, cx| {
+                    pane.set_list_file_layout(repo_id, list, layout, cx);
                 });
             }
             ContextMenuAction::SetTextEncoding { encoding } => {

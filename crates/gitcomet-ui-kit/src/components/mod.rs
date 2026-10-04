@@ -7,6 +7,7 @@ mod context_menu;
 mod diff_stat;
 mod interactive_row;
 mod interstitial;
+mod list_layout;
 mod modal;
 mod navigation;
 mod painted_when;
@@ -50,6 +51,7 @@ pub use context_menu::{
 pub use diff_stat::{diff_stat, diff_stat_optional};
 pub use interactive_row::{InteractiveRowExt, InteractiveRowState, InteractiveRowStyle};
 pub use interstitial::{INTERSTITIAL_CARD_MAX_WIDTH_PX, interstitial, interstitial_cta_button};
+pub use list_layout::{ListLayout, list_layout_button};
 pub use modal::{modal_scrim, modal_surface, popover_surface};
 pub use navigation::{
     NavTab, navigation_tab, navigation_tab_metrics, navigation_tab_strip, selectable_field,

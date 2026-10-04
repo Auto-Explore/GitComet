@@ -354,6 +354,11 @@ pub(in crate::view) enum ContextMenuAction {
         list: crate::view::rows::FileListId,
         sort: crate::view::rows::CommitFileSort,
     },
+    SetFileListLayout {
+        repo_id: RepoId,
+        list: crate::view::rows::FileListId,
+        layout: crate::view::FileListLayout,
+    },
     SetDiffContentMode {
         mode: DiffContentMode,
     },

@@ -312,8 +312,32 @@ impl GitCometView {
         self.update_ui_preferences(cx, move |preferences| {
             preferences.file_lists.layout = next;
         });
+        cx.update_default_global::<crate::view::FileListDefaults, _>(|defaults, _| {
+            defaults.layout = next;
+        });
         self.details_pane
             .update(cx, |pane, cx| pane.set_file_list_layout(next, cx));
+        self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(in crate::view) fn set_file_list_sort(
+        &mut self,
+        next: crate::view::rows::CommitFileSort,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.file_list_sort == next {
+            return;
+        }
+
+        self.file_list_sort = next;
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.file_lists.sort = next;
+        });
+        cx.update_default_global::<crate::view::FileListDefaults, _>(|defaults, _| {
+            defaults.sort = next;
+        });
+        self.details_pane
+            .update(cx, |pane, cx| pane.set_default_file_list_sort(next, cx));
         self.schedule_ui_settings_persist(cx);
     }
 
