@@ -2,7 +2,7 @@ use crate::model::GitLogTagFetchMode;
 use crate::model::{
     BranchExistsPromptState, ConflictFileLoadMode, DefaultTagType, FileBrowserSettings,
     GitOperationOuterOutcome, MaintenanceSettings, RemoteSettings, RepoId, SidebarDataRequest,
-    SidebarMode,
+    SidebarMode, WorkspaceEdit,
 };
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::ConflictSession;
@@ -1245,6 +1245,44 @@ pub enum Msg {
         repo_id: RepoId,
         index: usize,
     },
+    // ── Workspace ───────────────────────────────────────────────
+    //
+    // One request per user action; the reducer turns it into the state edit
+    // plus whatever backend calls realizing it needs.
+    /// Read the workspace and its file assignments for a repository.
+    LoadWorkspace {
+        repo_id: RepoId,
+    },
+    ApplyWorkspaceEdit {
+        repo_id: RepoId,
+        edit: WorkspaceEdit,
+    },
+    /// Apply or unapply a branch from its row.
+    SetWorkspaceBranchApplied {
+        repo_id: RepoId,
+        name: String,
+        applied: gitcomet_core::workspace::BranchApplyState,
+    },
+    /// Commit the files assigned to one branch.
+    CommitWorkspaceBranch {
+        repo_id: RepoId,
+        name: String,
+        message: String,
+    },
+    /// Commit one file to its assigned branch.
+    CommitWorkspaceFile {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    /// Dismiss the conflict from a failed apply.
+    DismissWorkspaceConflict {
+        repo_id: RepoId,
+    },
+    /// Push a virtual branch to its remote.
+    PushWorkspaceBranch {
+        repo_id: RepoId,
+        name: String,
+    },
     Internal(InternalMsg),
 }
 
@@ -1648,6 +1686,27 @@ pub enum InternalMsg {
     RepoCommandFinished {
         repo_id: RepoId,
         command: RepoCommandKind,
+        result: Result<CommandOutput, Error>,
+    },
+    WorkspaceLoaded {
+        repo_id: RepoId,
+        result: Result<gitcomet_core::workspace::WorkspaceState, Error>,
+        assignments: Result<gitcomet_core::workspace::AssignmentIndex, Error>,
+        workspace_commit: Result<Option<gitcomet_core::domain::CommitId>, Error>,
+    },
+    WorkspaceEditFinished {
+        repo_id: RepoId,
+        edit: WorkspaceEdit,
+        result: Result<gitcomet_core::services::CommitOperationOutcome, Error>,
+    },
+    WorkspaceAssignFinished {
+        repo_id: RepoId,
+        path: PathBuf,
+        result: Result<(), Error>,
+    },
+    WorkspacePushFinished {
+        repo_id: RepoId,
+        name: String,
         result: Result<CommandOutput, Error>,
     },
 }

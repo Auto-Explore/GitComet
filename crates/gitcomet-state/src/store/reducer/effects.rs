@@ -2153,6 +2153,16 @@ pub(super) fn set_sidebar_mode(state: &mut AppState, mode: SidebarMode) -> Vec<E
                 return request_file_browser_load(repo).into_iter().collect();
             }
         }
+
+        if mode == SidebarMode::Workspace
+            && let Some(repo_id) = state.active_repo
+            && let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id)
+            // Only load what is not already there: switching back to the tab
+            // must not re-read the workspace and blank the stacks.
+            && matches!(repo.workspace.state, Loadable::NotLoaded)
+        {
+            return vec![Effect::LoadWorkspace { repo_id }];
+        }
     }
     Vec::new()
 }

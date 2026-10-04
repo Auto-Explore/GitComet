@@ -78,7 +78,12 @@ mod submodules;
 mod tags;
 mod text_attributes;
 mod text_decode;
+pub(crate) mod workspace;
 mod worktrees;
+
+/// Re-exported so the loose-ref reader can filter GitComet's own branches
+/// without depending on a `repo::workspace` path.
+pub(crate) use workspace::is_workspace_branch as is_workspace_branch_name;
 
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 struct RepoFileStamp {
@@ -1914,6 +1919,62 @@ impl GitRepository for GixRepo {
 
     fn discard_worktree_changes(&self, paths: &[&Path]) -> Result<()> {
         self.discard_worktree_changes_impl(paths)
+    }
+
+    fn read_workspace(&self) -> Result<gitcomet_core::workspace::WorkspaceState> {
+        self.read_workspace_impl()
+    }
+
+    fn write_workspace(&self, state: &gitcomet_core::workspace::WorkspaceState) -> Result<()> {
+        self.write_workspace_impl(state)
+    }
+
+    fn read_workspace_assignments(&self) -> Result<gitcomet_core::workspace::AssignmentIndex> {
+        self.read_assignments_impl()
+    }
+
+    fn write_workspace_assignments(
+        &self,
+        index: &gitcomet_core::workspace::AssignmentIndex,
+    ) -> Result<()> {
+        self.write_assignments_impl(index)
+    }
+
+    fn create_virtual_branch(&self, name: &str, base: &str) -> Result<()> {
+        self.create_virtual_branch_impl(name, base)
+    }
+
+    fn rebase_virtual_branch(&self, name: &str, onto: &str) -> Result<()> {
+        self.rebase_virtual_branch_impl(name, onto)
+    }
+
+    fn update_workspace_branch(&self, applied: &[&str]) -> Result<CommitId> {
+        self.update_workspace_branch_impl(applied)
+    }
+
+    fn update_workspace_target(&self, target: &str) -> Result<()> {
+        self.update_workspace_target_impl(target)
+    }
+
+    fn commit_paths_to_virtual_branch(
+        &self,
+        name: &str,
+        message: &str,
+        paths: &[&Path],
+    ) -> Result<CommitOperationOutcome> {
+        self.commit_paths_to_virtual_branch_impl(name, message, paths)
+    }
+
+    fn virtual_branch_push_target(
+        &self,
+        name: &str,
+        workspace: &gitcomet_core::workspace::WorkspaceState,
+    ) -> Option<String> {
+        self.virtual_branch_push_target_impl(name, workspace)
+    }
+
+    fn push_virtual_branch(&self, name: &str) -> Result<CommandOutput> {
+        self.push_virtual_branch_impl(name)
     }
 }
 

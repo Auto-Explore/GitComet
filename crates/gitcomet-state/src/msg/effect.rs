@@ -110,6 +110,27 @@ pub enum Effect {
     LoadBranches {
         repo_id: RepoId,
     },
+    /// Read a repository's workspace, assignments, and workspace-branch tip.
+    LoadWorkspace {
+        repo_id: RepoId,
+    },
+    /// Realize one workspace edit: the state write plus whatever branch
+    /// creation, restacking, or workspace rebuild the edit needs.
+    ApplyWorkspaceEdit {
+        repo_id: RepoId,
+        edit: crate::model::WorkspaceEdit,
+    },
+    /// Persist one file's branch assignment.
+    AssignWorkspaceFile {
+        repo_id: RepoId,
+        path: PathBuf,
+        branch: Option<String>,
+    },
+    /// Push a virtual branch, setting upstream on first push.
+    PushWorkspaceBranch {
+        repo_id: RepoId,
+        name: String,
+    },
     LoadRemotes {
         repo_id: RepoId,
     },

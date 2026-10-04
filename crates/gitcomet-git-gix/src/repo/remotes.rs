@@ -526,7 +526,7 @@ impl GixRepo {
         !fetch_urls.is_empty() && fetch_urls == push_urls
     }
 
-    fn preferred_remote_name(&self) -> Result<Option<String>> {
+    pub(super) fn preferred_remote_name(&self) -> Result<Option<String>> {
         let remotes = self.list_remotes_impl()?;
         if remotes.is_empty() {
             return Ok(None);

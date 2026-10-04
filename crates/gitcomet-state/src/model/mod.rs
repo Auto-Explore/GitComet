@@ -8,6 +8,7 @@ mod navigation;
 mod operations;
 mod repository;
 mod signature_map;
+mod workspace;
 
 pub use app::*;
 pub use diff::*;
@@ -17,6 +18,7 @@ pub use navigation::*;
 pub use operations::*;
 pub use repository::*;
 pub use signature_map::CommitSignatureMap;
+pub use workspace::*;
 
 pub type Shared<T> = Arc<T>;
 

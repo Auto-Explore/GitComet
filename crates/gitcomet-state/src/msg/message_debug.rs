@@ -649,6 +649,48 @@ impl std::fmt::Debug for InternalMsg {
                 .field("command", command)
                 .field("result", result)
                 .finish(),
+            InternalMsg::WorkspaceLoaded {
+                repo_id,
+                result,
+                assignments,
+                workspace_commit,
+            } => f
+                .debug_struct("WorkspaceLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .field("assignments", assignments)
+                .field("workspace_commit", workspace_commit)
+                .finish(),
+            InternalMsg::WorkspaceEditFinished {
+                repo_id,
+                edit,
+                result,
+            } => f
+                .debug_struct("WorkspaceEditFinished")
+                .field("repo_id", repo_id)
+                .field("edit", edit)
+                .field("result", result)
+                .finish(),
+            InternalMsg::WorkspaceAssignFinished {
+                repo_id,
+                path,
+                result,
+            } => f
+                .debug_struct("WorkspaceAssignFinished")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .field("result", result)
+                .finish(),
+            InternalMsg::WorkspacePushFinished {
+                repo_id,
+                name,
+                result,
+            } => f
+                .debug_struct("WorkspacePushFinished")
+                .field("repo_id", repo_id)
+                .field("name", name)
+                .field("result", result)
+                .finish(),
         }
     }
 }

@@ -135,6 +135,10 @@ pub(super) fn effect_repo_id(effect: &Effect) -> Option<RepoId> {
         | Effect::CancelRepoLoads { repo_id, .. }
         | Effect::CancelGitOperation { repo_id, .. }
         | Effect::LoadBranches { repo_id }
+        | Effect::LoadWorkspace { repo_id }
+        | Effect::ApplyWorkspaceEdit { repo_id, .. }
+        | Effect::AssignWorkspaceFile { repo_id, .. }
+        | Effect::PushWorkspaceBranch { repo_id, .. }
         | Effect::LoadRemotes { repo_id }
         | Effect::LoadRemoteBranches { repo_id }
         | Effect::LoadWorktreeStatus { repo_id }

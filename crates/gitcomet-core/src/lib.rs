@@ -37,6 +37,7 @@ pub mod text_format;
 pub mod text_search;
 pub mod text_utils;
 pub mod url_encoding;
+pub mod workspace;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

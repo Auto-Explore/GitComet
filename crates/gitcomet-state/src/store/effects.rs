@@ -10,6 +10,7 @@ mod repo_commands;
 mod repo_load;
 mod unavailable;
 mod util;
+mod workspace_effects;
 
 /// Called by the reducer as it drops a repo's handle, so the worktree scan's
 /// cached repository handles go with it. See [`repo_load`].
@@ -372,6 +373,38 @@ pub(super) fn schedule_effect(
                     cancellation,
                 );
             }
+        }
+        Effect::LoadWorkspace { repo_id } => {
+            if let Some((msg_tx, _cancellation)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                workspace_effects::schedule_load_workspace(
+                    repo_load_executor,
+                    repos,
+                    msg_tx,
+                    repo_id,
+                );
+            }
+        }
+        Effect::ApplyWorkspaceEdit { repo_id, edit } => {
+            workspace_effects::schedule_apply_workspace_edit(executor, repos, msg_tx, repo_id, edit);
+        }
+        Effect::AssignWorkspaceFile {
+            repo_id,
+            path,
+            branch,
+        } => {
+            workspace_effects::schedule_assign_workspace_file(
+                metadata_executor,
+                repos,
+                msg_tx,
+                repo_id,
+                path,
+                branch,
+            );
+        }
+        Effect::PushWorkspaceBranch { repo_id, name } => {
+            workspace_effects::schedule_push_workspace_branch(executor, repos, msg_tx, repo_id, name);
         }
         Effect::LoadRemotes { repo_id } => {
             if let Some((msg_tx, cancellation)) =

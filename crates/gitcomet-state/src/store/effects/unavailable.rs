@@ -73,6 +73,41 @@ pub(super) fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             }))
         }
+        Effect::LoadWorkspace { repo_id } => {
+            send(Msg::Internal(crate::msg::InternalMsg::WorkspaceLoaded {
+                repo_id,
+                result: Err(git_unavailable_error(runtime)),
+                assignments: Err(git_unavailable_error(runtime)),
+                workspace_commit: Err(git_unavailable_error(runtime)),
+            }))
+        }
+        Effect::ApplyWorkspaceEdit { repo_id, edit } => {
+            send(Msg::Internal(crate::msg::InternalMsg::WorkspaceEditFinished {
+                repo_id,
+                edit,
+                result: Err(git_unavailable_error(runtime)),
+            }))
+        }
+        Effect::AssignWorkspaceFile {
+            repo_id,
+            path,
+            branch: _,
+        } => {
+            send(Msg::Internal(
+                crate::msg::InternalMsg::WorkspaceAssignFinished {
+                    repo_id,
+                    path,
+                    result: Err(git_unavailable_error(runtime)),
+                },
+            ))
+        }
+        Effect::PushWorkspaceBranch { repo_id, name } => {
+            send(Msg::Internal(crate::msg::InternalMsg::WorkspacePushFinished {
+                repo_id,
+                name,
+                result: Err(git_unavailable_error(runtime)),
+            }))
+        }
         Effect::LoadRemotes { repo_id } => {
             send(Msg::Internal(crate::msg::InternalMsg::RemotesLoaded {
                 repo_id,
