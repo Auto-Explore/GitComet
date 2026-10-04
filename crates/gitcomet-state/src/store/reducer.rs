@@ -2388,8 +2388,6 @@ fn reduce_inner(
         Msg::CommitWorkspaceFile { repo_id, path } => {
             workspace::commit_single_file(state, repo_id, path)
         }
-        Msg::EnterWorkspace { repo_id } => workspace::enter_workspace(state, repo_id),
-        Msg::LeaveWorkspace { repo_id } => workspace::leave_workspace(state, repo_id),
         Msg::DismissWorkspaceConflict { repo_id } => {
             workspace::dismiss_conflict(state, repo_id)
         }

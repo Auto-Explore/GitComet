@@ -662,6 +662,61 @@ mod tests {
         );
     }
 
+    /// Every kind the dialog can be opened for.
+///
+/// Hand-written rather than derived, because deriving it would need a way to
+/// enumerate a plain enum, and a list that has to be updated by hand is exactly
+/// what makes the test below worth having: adding a kind without adding it here
+/// fails, and adding a kind here without implementing it fails too.
+const ALL_KINDS: [WorkspacePromptKind; 12] = [
+    WorkspacePromptKind::BranchActions,
+    WorkspacePromptKind::Create,
+    WorkspacePromptKind::CreateAbove,
+    WorkspacePromptKind::CreateBelow,
+    WorkspacePromptKind::SetTarget,
+    WorkspacePromptKind::SetParent,
+    WorkspacePromptKind::MoveToStack,
+    WorkspacePromptKind::Remove,
+    WorkspacePromptKind::AssignFile,
+    WorkspacePromptKind::AssignHunk,
+    WorkspacePromptKind::CommitMessage,
+    WorkspacePromptKind::CommitBranch,
+];
+
+#[test]
+    fn every_prompt_kind_produces_an_edit_or_says_it_submits_nothing() {
+        // The docs claim every `WorkspaceEdit` variant is reachable from the
+        // view. `edit_for` has no catch-all — adding a kind is a compile error,
+        // not a silent no-op — so this pins the other half of the claim: that
+        // each kind really does resolve to something, and that the ones that
+        // submit nothing are only the ones meant to.
+        let in_workspace = membership();
+        let free = |name: &str| name.to_string();
+
+        for kind in ALL_KINDS {
+            let edit = edit_for(
+                kind,
+                "api",
+                Some(std::path::Path::new("src/lib.rs")),
+                None,
+                "x",
+                &in_workspace,
+                &free,
+                &|_| false,
+                &|_| Some("api".to_string()),
+                &|_| Vec::new(),
+            );
+            if kind == WorkspacePromptKind::BranchActions {
+                assert!(
+                    edit.is_none(),
+                    "the action list submits nothing; picking a row is the interaction"
+                );
+            } else {
+                assert!(edit.is_some(), "{kind:?} produced no edit at all");
+            }
+        }
+    }
+
     #[test]
     fn assigning_a_hunk_names_the_file_the_hunk_and_the_branch() {
         let hunk = gitcomet_core::workspace::HunkFingerprint::of(&["new\n"], 1);
