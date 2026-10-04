@@ -918,6 +918,26 @@ const ALL_KINDS: [WorkspacePromptKind; 12] = [
     }
 
     #[test]
+    fn the_suffix_search_stops_at_the_first_free_number() {
+        let mut spoken_for = vec!["busy".to_string()];
+        for suffix in 2..=6 {
+            spoken_for.push(format!("busy-{suffix}"));
+        }
+        let is_taken = move |name: &str| spoken_for.iter().any(|taken| taken == name);
+        assert_eq!(free_branch_name("busy", &is_taken), "busy-7");
+    }
+
+    #[test]
+    fn a_name_taken_all_the_way_up_answers_nothing_rather_than_a_taken_name() {
+        // The search runs to 99 and then gives up, and an empty answer is what
+        // the prompt reads as "do not submit". Falling back to the typed name
+        // instead would offer something already taken and let the backend be
+        // the one to refuse it.
+        let everything = |name: &str| name.starts_with("busy");
+        assert_eq!(free_branch_name("busy", &everything), "");
+    }
+
+    #[test]
     fn every_branch_edit_is_refused_for_a_branch_that_is_gone() {
         for kind in [
             WorkspacePromptKind::CreateAbove,

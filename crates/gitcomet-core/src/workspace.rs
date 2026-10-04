@@ -203,6 +203,17 @@ impl WorkspaceState {
         self.branches.iter_mut().find(|b| b.name == name)
     }
 
+    /// Whether a virtual branch of that name exists.
+    ///
+    /// The target is deliberately not counted: it is a branch the user already
+    /// has, not one of the workspace's, and `validate` refuses a virtual branch
+    /// that reuses the name. Callers asking "can I create this?" get the
+    /// answer from this and from the repository's own branch list; a name that
+    /// is only the target is a refusal the user can read, not a silent one.
+    pub fn contains(&self, name: &str) -> bool {
+        self.branches.iter().any(|b| b.name == name)
+    }
+
     pub fn applied(&self) -> impl Iterator<Item = &VirtualBranch> {
         self.branches.iter().filter(|b| b.is_applied())
     }
@@ -2245,6 +2256,34 @@ mod tests {
 
         assert!(index.file(Path::new("gone.rs")).is_none());
         assert!(index.file(Path::new("kept.rs")).is_some());
+    }
+
+    #[test]
+    fn a_workspace_reports_which_of_its_branches_it_has() {
+        // The create prompt asks this before it will use a name: creating a
+        // branch whose name is spoken for fails on the backend with a Git error
+        // the user can do nothing about.
+        let state = workspace()
+            .with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
+
+        assert!(state.contains("api"));
+        assert!(
+            state.contains("ui"),
+            "a stacked branch is still one of the workspace's own branches"
+        );
+        assert!(!state.contains("uii"));
+        assert!(!state.contains(""));
+    }
+
+    #[test]
+    fn the_target_is_not_one_of_the_workspaces_branches() {
+        // It is the base every independent branch is built on, and `validate`
+        // refuses a virtual branch with the same name, so it is never something
+        // `get` can return and `contains` must not pretend otherwise.
+        let state = workspace().with_branches(vec![vb("api")]);
+        assert_eq!(state.target, "main");
+        assert!(!state.contains("main"));
+        assert!(state.get("main").is_none());
     }
 
     #[test]
