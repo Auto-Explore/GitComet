@@ -47,6 +47,10 @@ fn detail_line(
         )
         .into(),
         WorkspacePromptKind::BranchActions => format!("Actions for {branch}.").into(),
+        WorkspacePromptKind::CommitBranch => format!(
+            "Every file assigned to {branch} will be committed to it, and only those."
+        )
+        .into(),
         WorkspacePromptKind::CommitMessage => match path {
             Some(path) => format!(
                 "{} will be committed on its own, to the branch it is assigned to.",
@@ -74,11 +78,12 @@ fn detail_line(
 }
 
 /// The actions offered for a branch, in the order they are listed.
-fn branch_actions() -> [WorkspacePromptKind; 4] {
+fn branch_actions() -> [WorkspacePromptKind; 5] {
     [
         WorkspacePromptKind::CreateStacked,
         WorkspacePromptKind::SetParent,
         WorkspacePromptKind::MoveToStack,
+        WorkspacePromptKind::CommitBranch,
         WorkspacePromptKind::Remove,
     ]
 }
@@ -88,6 +93,7 @@ fn action_label(kind: WorkspacePromptKind) -> &'static str {
         WorkspacePromptKind::CreateStacked => "Stack a new branch on this",
         WorkspacePromptKind::SetParent => "Change its base branch",
         WorkspacePromptKind::MoveToStack => "Move it into another stack",
+        WorkspacePromptKind::CommitBranch => "Commit its assigned files",
         WorkspacePromptKind::Remove => "Remove it from the workspace",
         _ => "",
     }
@@ -237,6 +243,28 @@ mod tests {
     }
 
     #[test]
+    fn committing_a_branch_is_offered_and_creating_one_is_not() {
+        let actions = branch_actions();
+        assert!(actions.contains(&WorkspacePromptKind::CommitBranch));
+        // A whole-branch commit needs no subject of its own, so it belongs on
+        // the branch's list; creating a branch does.
+        assert!(!actions.contains(&WorkspacePromptKind::CommitMessage));
+        assert!(!actions.contains(&WorkspacePromptKind::Create));
+    }
+
+    #[test]
+    fn the_branch_commit_line_says_only_assigned_files_go() {
+        let line = detail_line(
+            WorkspacePromptKind::CommitBranch,
+            "feature/api",
+            None,
+            "Add the client",
+        );
+        assert!(line.contains("feature/api"), "{line}");
+        assert!(line.contains("only those"), "{line}");
+    }
+
+    #[test]
     fn only_the_text_edits_ask_for_a_field() {
         assert!(!WorkspacePromptKind::BranchActions.asks_for_text());
         assert!(!WorkspacePromptKind::Remove.asks_for_text());
@@ -308,7 +336,7 @@ mod tests {
     }
 
     #[test]
-    fn every_kind_has_a_distinct_label() {
+    fn every_kind_has_a_distinct_title() {
         let kinds = [
             WorkspacePromptKind::BranchActions,
             WorkspacePromptKind::Create,
@@ -319,11 +347,16 @@ mod tests {
             WorkspacePromptKind::Remove,
             WorkspacePromptKind::AssignFile,
             WorkspacePromptKind::CommitMessage,
+            WorkspacePromptKind::CommitBranch,
         ];
         for (i, kind) in kinds.iter().enumerate() {
             for other in &kinds[i + 1..] {
-                assert_ne!(kind.title(), other.title());
-                assert_ne!(kind.confirm_label(), other.confirm_label());
+                // The title is what tells two open dialogs apart, so it has to
+                // separate every pair. The confirm label need not: committing
+                // one file and committing a whole branch are both "Commit", and
+                // calling them anything else would describe the plumbing.
+                assert_ne!(kind.title(), other.title(), "{kind:?} vs {other:?}");
+                assert!(!kind.confirm_label().is_empty());
             }
         }
     }

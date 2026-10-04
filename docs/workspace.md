@@ -243,9 +243,9 @@ requests will need later; the multi-PR workflow itself is not implemented yet.
 ## What the Workspace tab can do today
 
 Per branch: apply/unapply, push, a `⋯` menu (stack a new branch on this one,
-change its base, move it into another stack, remove it from the workspace), and
-`↑`/`↓` to reorder it inside its stack — the arrows are disabled at the ends of
-a stack rather than offered and refused.
+change its base, move it into another stack, commit every file assigned to it,
+remove it from the workspace), and `↑`/`↓` to reorder it inside its stack — the
+arrows are disabled at the ends of a stack rather than offered and refused.
 
 Per workspace: `New branch` on the summary line, and `Change` on the target row
 to rebase everything onto a different branch.
@@ -262,11 +262,19 @@ submit*, not captured when the dialog opened: a file can be reassigned while its
 commit dialog is up, and committing to the branch it used to belong to would
 put the change somewhere the user is no longer looking.
 
+Committing a whole branch (`⋯` → *Commit its assigned files*) takes every file
+assigned to that branch and nothing else. Its message field opens **empty**,
+unlike the single-file one: there is no honest one-word summary of a branch's
+changes, and a synthesised default would invite the user to accept a message
+that describes nothing. The confirm button stays disabled until something is
+typed, and a branch with no files assigned produces no commit at all rather than
+an empty one.
+
 A conflict from a failed apply is shown above the stacks and can be dismissed.
 
-Every `WorkspaceEdit` variant is now reachable from the view. The ones that
-need a name or a message go through a single popover,
-`PopoverKind::WorkspacePrompt`:
+Every `WorkspaceEdit` variant is now reachable from the view, through a single
+popover, `PopoverKind::WorkspacePrompt`, with one `WorkspacePromptKind` per
+distinct thing the dialog can be asked for:
 
 - the body is the same for all of them, so they share one variant rather than
   one each — what differs is the label on the field and which `WorkspaceEdit`
@@ -280,12 +288,15 @@ need a name or a message go through a single popover,
 - validation is stricter than the model. A base that does not exist, or a
   branch that has gone since the prompt opened, is refused at the prompt rather
   than accepted and failed later on a background thread with a rebase error;
-  a name that is already taken is suffixed rather than passed to Git.
+  a name that is already taken is suffixed rather than passed to Git;
+- the mapping from `(kind, branch, path, text)` to an edit is a free function
+  over predicates (`in_workspace`, `free_name`, `is_git_branch`,
+  `assignment_of`, `paths_for`), so every rule above is unit-tested without
+  standing up a popover host.
 
-Not exposed anywhere yet: `CommitPaths` for a whole branch (`commit_branch`
-takes a message and every file assigned to the branch), and dragging a file
-onto a branch as a way to assign it — the row's `Assign` button is the only
-assignment gesture.
+Not exposed anywhere: dragging a file onto a branch as a way to assign it — the
+row's `Assign` button is the only assignment gesture. Everything else in
+`WorkspaceEdit` has a control.
 
 ## Where the code is
 

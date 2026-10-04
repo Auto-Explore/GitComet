@@ -35,6 +35,11 @@ impl PopoverHost {
                 .workspace_state(repo_id)
                 .and_then(|state| state.get(&prompt.branch).and_then(|branch| branch.parent.clone()))
                 .unwrap_or_default(),
+            // Deliberately empty, unlike the single-file commit. There is no
+            // honest one-word summary of an entire branch's changes, and a
+            // synthesised default here would invite the user to accept a commit
+            // message that describes nothing.
+            WorkspacePromptKind::CommitBranch => String::new(),
             _ => String::new(),
         };
         self.workspace_prompt_kind = Some(kind);
@@ -118,6 +123,7 @@ impl PopoverHost {
         let in_workspace = |name: &str| state.is_some_and(|state| state.contains(name));
         let free_name = |value: &str| self.free_branch_name(repo_id, value, state);
         let assignment_of = |path: &std::path::Path| self.file_assignment(repo_id, path);
+        let paths_for = |branch: &str| self.assigned_paths(repo_id, branch);
         edit_for(
             kind,
             &branch,
@@ -127,6 +133,7 @@ impl PopoverHost {
             &free_name,
             |name| self.knows_git_branch(repo_id, name),
             &assignment_of,
+            &paths_for,
         )
     }
 
@@ -174,17 +181,30 @@ impl PopoverHost {
     }
 
     /// The branch a file is currently assigned to, if that branch still exists.
-    fn file_assignment(
-        &self,
-        repo_id: RepoId,
-        path: &std::path::Path,
-    ) -> Option<String> {
+    fn file_assignment(&self, repo_id: RepoId, path: &std::path::Path) -> Option<String> {
         let repo = self.state.repos.iter().find(|repo| repo.id == repo_id)?;
         let workspace = repo.workspace.workspace()?;
         repo.workspace
             .assignments
             .resolve(path, workspace)
             .map(str::to_string)
+    }
+
+    /// The files assigned to a branch, in path order.
+    fn assigned_paths(&self, repo_id: RepoId, branch: &str) -> Vec<std::path::PathBuf> {
+        self.state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .map(|repo| {
+                repo.workspace
+                    .assignments
+                    .paths_for(branch)
+                    .into_iter()
+                    .map(std::path::PathBuf::from)
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 }
 
@@ -195,7 +215,8 @@ impl PopoverHost {
 /// `is_git_branch` whether it is a real branch in the repository — the target
 /// is a real branch, while a base or a stack is a virtual one, and conflating
 /// the two is how a prompt ends up offering a branch that cannot be resolved —
-/// and `assignment_of` which branch a file currently belongs to.
+/// and `assignment_of` which branch a file currently belongs to, with
+/// `paths_for` the files assigned to a branch.
 #[allow(clippy::too_many_arguments)]
 fn edit_for(
     kind: WorkspacePromptKind,
@@ -206,6 +227,7 @@ fn edit_for(
     free_name: &dyn Fn(&str) -> String,
     is_git_branch: &dyn Fn(&str) -> bool,
     assignment_of: &dyn Fn(&std::path::Path) -> Option<String>,
+    paths_for: &dyn Fn(&str) -> Vec<std::path::PathBuf>,
 ) -> Option<WorkspaceEdit> {
     // The action list submits nothing; picking a row is the whole interaction.
     let branch_exists = !branch.is_empty() && in_workspace(branch);
@@ -306,6 +328,28 @@ fn edit_for(
                 paths: vec![path.to_path_buf()],
             }
         }
+        WorkspacePromptKind::CommitBranch => {
+            if !branch_exists {
+                return None;
+            }
+            // A commit Git cannot describe is refused, so an empty message is
+            // not a commit with a blank subject — it is nothing to submit.
+            let message = value.trim();
+            if message.is_empty() {
+                return None;
+            }
+            // A branch with no files assigned has nothing to commit. Saying so
+            // at the prompt beats opening an empty commit dialog.
+            let paths = paths_for(branch);
+            if paths.is_empty() {
+                return None;
+            }
+            WorkspaceEdit::CommitPaths {
+                name: branch.to_string(),
+                message: message.to_string(),
+                paths,
+            }
+        }
     };
     // A creation whose name could not be made free is not an edit at all, and
     // the confirm button stays disabled rather than dispatching an empty name.
@@ -370,6 +414,7 @@ mod tests {
             &free,
             &|name| matches!(name, "main" | "develop" | "api"),
             &|_| None,
+            &|_| Vec::new(),
         )
     }
 
@@ -383,6 +428,7 @@ mod tests {
             &free,
             &|name| matches!(name, "main" | "develop" | "api"),
             &|_| Some("ui".to_string()),
+            &|_| Vec::new(),
         )
     }
 
@@ -396,6 +442,32 @@ mod tests {
             &free,
             &|name| matches!(name, "main" | "develop" | "api"),
             &|_| Some("ui".to_string()),
+            &|_| Vec::new(),
+        )
+    }
+
+    /// `api` has two files assigned; `ui` has none.
+    fn assigned_paths(branch: &str) -> Vec<std::path::PathBuf> {
+        match branch {
+            "api" => vec![
+                std::path::PathBuf::from("src/api.rs"),
+                std::path::PathBuf::from("src/api/client.rs"),
+            ],
+            _ => Vec::new(),
+        }
+    }
+
+    fn commit_branch(branch: &str, value: &str) -> Option<WorkspaceEdit> {
+        edit_for(
+            WorkspacePromptKind::CommitBranch,
+            branch,
+            None,
+            value,
+            &membership(),
+            &free,
+            &|_| true,
+            &|_| None,
+            &assigned_paths,
         )
     }
 
@@ -546,6 +618,7 @@ mod tests {
                 &free,
                 &|_| true,
                 &|_| None,
+                &|_| Vec::new(),
             )
             .is_none()
         );
@@ -586,6 +659,7 @@ mod tests {
                 &free,
                 &|_| true,
                 &|_| None,
+                &|_| Vec::new(),
             )
             .is_none()
         );
@@ -603,9 +677,44 @@ mod tests {
                 &free,
                 &|_| true,
                 &|_| Some("ui".to_string()),
+                &|_| Vec::new(),
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn committing_a_branch_takes_every_file_assigned_to_it() {
+        let Some(WorkspaceEdit::CommitPaths {
+            name,
+            message,
+            paths,
+        }) = commit_branch("api", "Add the client")
+        else {
+            panic!("expected a commit edit");
+        };
+        assert_eq!(name, "api");
+        assert_eq!(message, "Add the client");
+        assert_eq!(
+            paths,
+            [
+                std::path::PathBuf::from("src/api.rs"),
+                std::path::PathBuf::from("src/api/client.rs"),
+            ],
+            "the whole branch is committed, not just the file last touched"
+        );
+    }
+
+    #[test]
+    fn a_branch_with_nothing_assigned_has_nothing_to_commit() {
+        assert!(commit_branch("ui", "Anything").is_none());
+        assert!(commit_branch("gone", "Anything").is_none());
+    }
+
+    #[test]
+    fn committing_a_branch_refuses_an_empty_message() {
+        assert!(commit_branch("api", "").is_none());
+        assert!(commit_branch("api", "  ").is_none());
     }
 
     #[test]
