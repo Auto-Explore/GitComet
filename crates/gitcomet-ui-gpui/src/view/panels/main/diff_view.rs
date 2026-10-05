@@ -2014,9 +2014,11 @@ impl MainPaneView {
                     self.diff_annotate_toggle_button(theme, view_toggle_selected_bg, cx);
 
                 controls = controls
-                    .child(view_toggle)
                     .child(diff_edit_btn)
                     .child(diff_annotate_btn)
+                    // Keep the view mode beside the action menu so it remains
+                    // reachable when the header clips its leading controls.
+                    .child(view_toggle)
                     // `is_file_editor`, not `is_file_editor_active`: edit mode
                     // can be on while a submodule summary or an
                     // untracked-directory notice owns the body, and a Save
