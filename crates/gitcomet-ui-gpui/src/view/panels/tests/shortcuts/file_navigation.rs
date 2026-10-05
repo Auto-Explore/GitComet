@@ -1092,3 +1092,57 @@ fn switching_change_tracking_view_restores_diff_panel_focus_for_adjacent_navigat
         "expected adjacent navigation to keep working immediately after switching to split view"
     );
 }
+
+/// Every control on the diff's header and bar names its keys in its tooltip.
+#[gpui::test]
+fn the_diff_controls_name_their_keys(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70568);
+    let commit_id = CommitId("abcdef001122338c".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_control_keys",
+        std::process::id()
+    ));
+    let first = std::path::PathBuf::from("src/first.rs");
+    let second = std::path::PathBuf::from("src/second.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        &[first.clone(), second],
+        &first,
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    cx.simulate_resize(gpui::size(px(1600.0), px(900.0)));
+    draw_and_drain_test_window(cx);
+
+    let alt = crate::view::shortcut_labels::alt_shortcut;
+    for (selector, expected) in [
+        ("diff_next_file", "Next file (F4)".to_string()),
+        ("diff_bar_stage", "Stage this file (Space)".to_string()),
+        (
+            "diff_prev_hunk",
+            format!("Previous change (F2 / Shift+F7 / {})", alt("Up")),
+        ),
+        ("diff_split", format!("Split diff view ({})", alt("S"))),
+        (
+            "diff_edit",
+            format!("Edit the working-tree file ({})", alt("E")),
+        ),
+    ] {
+        let bounds = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("expected {selector} to render"));
+        cx.simulate_mouse_move(bounds.center(), None, Modifiers::default());
+        crate::view::test_support::wait_for_native_tooltip(cx);
+        assert_eq!(
+            crate::view::test_support::tooltip_text(cx, &view).as_deref(),
+            Some(expected.as_str()),
+            "{selector}"
+        );
+    }
+}

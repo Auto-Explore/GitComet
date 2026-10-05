@@ -24,7 +24,8 @@ pub fn bottom_bar(theme: AppTheme, scale: UiScale) -> Div {
 }
 
 /// A borderless icon button for stepping: previous/next file in the bar,
-/// previous/next change in the header. Disabled at either end.
+/// previous/next change in the header. Disabled at either end. The icon's
+/// debug selector is `{id}_icon`.
 pub fn nav_arrow_button(
     id: impl Into<SharedString>,
     icon: &'static str,
@@ -37,10 +38,12 @@ pub fn nav_arrow_button(
     } else {
         theme.colors.foreground.disabled
     };
+    let id: SharedString = id.into();
+    let icon_selector = format!("{id}_icon");
     Button::new(id, "")
         .borderless()
         .style(ButtonStyle::Subtle)
-        .start_slot(svg_icon(icon, color, scale.px(14.0)))
+        .start_slot(svg_icon(icon, color, scale.px(14.0)).debug_selector(move || icon_selector))
         .disabled(!enabled)
 }
 

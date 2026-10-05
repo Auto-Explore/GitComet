@@ -31,14 +31,14 @@ fn alt_shortcut_for(suffix: &str, is_macos: bool) -> String {
     }
 }
 
-/// Tooltip for every diff surface's previous-change button.
-pub(crate) fn previous_change_tooltip() -> String {
-    format!("Previous change (F2 / Shift+F7 / {})", alt_shortcut("Up"))
+/// The keys for every diff surface's previous-change button.
+pub(crate) fn previous_change_shortcuts() -> Vec<gpui::SharedString> {
+    vec!["F2".into(), "Shift+F7".into(), alt_shortcut("Up").into()]
 }
 
-/// Tooltip for every diff surface's next-change button.
-pub(crate) fn next_change_tooltip() -> String {
-    format!("Next change (F3 / F7 / {})", alt_shortcut("Down"))
+/// The keys for every diff surface's next-change button.
+pub(crate) fn next_change_shortcuts() -> Vec<gpui::SharedString> {
+    vec!["F3".into(), "F7".into(), alt_shortcut("Down").into()]
 }
 
 /// A displayable shortcut attached to a command-palette entry.

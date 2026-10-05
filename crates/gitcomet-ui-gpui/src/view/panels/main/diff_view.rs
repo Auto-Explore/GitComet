@@ -1245,6 +1245,7 @@ impl MainPaneView {
         // toggle greys out there rather than silently doing nothing — matching
         // Alt+B, which is inert for the same reason. Text mode still annotates.
         let preview_blocks_blame = self.is_markdown_preview_active();
+        let mut shortcuts: Vec<SharedString> = Vec::new();
         let (tooltip, errored): (SharedString, bool) = if preview_blocks_blame {
             (
                 "Blame is unavailable in the rendered preview\nSwitch to Text to annotate".into(),
@@ -1257,14 +1258,10 @@ impl MainPaneView {
                     format!("Blame failed: {message}\nToggle off and on to retry").into(),
                     true,
                 ),
-                _ => (
-                    format!(
-                        "Toggle blame annotations ({})",
-                        crate::view::shortcut_labels::alt_shortcut("B")
-                    )
-                    .into(),
-                    false,
-                ),
+                _ => {
+                    shortcuts.push(crate::view::shortcut_labels::alt_shortcut("B").into());
+                    ("Toggle blame annotations".into(), false)
+                }
             }
         };
         let selected_bg = if errored {
@@ -1301,7 +1298,7 @@ impl MainPaneView {
                 cx.notify();
             })
             .debug_selector(|| "diff_annotate".to_string())
-            .gitcomet_tooltip(theme, tooltip)
+            .gitcomet_tooltip_keyed(theme, tooltip, shortcuts)
     }
 
     /// The "Edit" toggle, shared by the diff toolbar and the file content view.
@@ -1339,11 +1336,12 @@ impl MainPaneView {
             )
             .into()
         } else {
-            format!(
-                "Edit the working-tree file ({})",
-                crate::view::shortcut_labels::alt_shortcut("E")
-            )
-            .into()
+            "Edit the working-tree file".into()
+        };
+        let shortcuts: Vec<SharedString> = if disabled || dirty {
+            Vec::new()
+        } else {
+            vec![crate::view::shortcut_labels::alt_shortcut("E").into()]
         };
 
         components::Button::new("diff_edit", if dirty { "Edit •" } else { "Edit" })
@@ -1356,7 +1354,7 @@ impl MainPaneView {
                 this.toggle_file_editor(window, cx);
             })
             .debug_selector(|| "diff_edit".to_string())
-            .gitcomet_tooltip(theme, tooltip)
+            .gitcomet_tooltip_keyed(theme, tooltip, shortcuts)
     }
 
     /// Whether the file on screen has text the editor can open.
@@ -1587,13 +1585,10 @@ impl MainPaneView {
                 this.save_file_editor_buffer_and_exit(window, cx);
             })
             .debug_selector(|| "file_editor_save".to_string())
-            .gitcomet_tooltip(
+            .gitcomet_tooltip_keyed(
                 theme,
-                format!(
-                    "Save the file and return ({})",
-                    crate::view::shortcut_labels::secondary_shortcut("S")
-                )
-                .into(),
+                "Save the file and return".into(),
+                vec![crate::view::shortcut_labels::secondary_shortcut("S").into()],
             )
     }
 
@@ -1892,11 +1887,6 @@ impl MainPaneView {
                 theme.colors.accent.foreground,
                 if theme.is_dark { 0.26 } else { 0.20 },
             );
-            let view_toggle_border = with_alpha(
-                theme.colors.foreground.secondary,
-                if theme.is_dark { 0.38 } else { 0.28 },
-            );
-            let view_toggle_divider = with_alpha(view_toggle_border, 0.90);
 
             if supports_diff_content_toggle {
                 let diff_mode_invoker: SharedString = "diff_content_mode_header".into();
@@ -1936,6 +1926,7 @@ impl MainPaneView {
                             theme.colors.foreground.secondary,
                             scaled_px(12.0),
                         ))
+                        .gitcomet_tooltip(theme, "Diff content".into())
                         .on_activate(
                             false,
                             controls::ControlActivation::Action,
@@ -1957,129 +1948,80 @@ impl MainPaneView {
                 let can_nav_prev = self.diff_nav_prev_target_ix(&nav_entries).is_some();
                 let can_nav_next = self.diff_nav_next_target_ix(&nav_entries).is_some();
 
-                let prev_hunk_btn = components::Button::new("diff_prev_hunk", "")
-                    .start_slot(
-                        svg_icon(
-                            "icons/arrow_up.svg",
-                            theme.colors.foreground.primary,
-                            scaled_px(14.0),
-                        )
-                        .debug_selector(|| "diff_prev_hunk_icon".to_string()),
-                    )
-                    .style(components::ButtonStyle::Outlined)
-                    .disabled(!can_nav_prev)
-                    .on_click(theme, cx, |this, _e, _w, cx| {
-                        this.diff_jump_prev();
-                        cx.notify();
-                    })
-                    .gitcomet_tooltip(
-                        theme,
-                        crate::view::shortcut_labels::previous_change_tooltip().into(),
-                    );
+                // The same arrows as the bottom bar's, stepping changes.
+                let scale = ui_scale::UiScale::from_percent(ui_scale_percent)
+                    .with_appearance(theme.metrics);
+                let prev_hunk_btn = components::nav_arrow_button(
+                    "diff_prev_hunk",
+                    "icons/arrow_up.svg",
+                    theme,
+                    scale,
+                    can_nav_prev,
+                )
+                .on_click(theme, cx, |this, _e, _w, cx| {
+                    this.diff_jump_prev();
+                    cx.notify();
+                })
+                .gitcomet_tooltip_keyed(
+                    theme,
+                    "Previous change".into(),
+                    crate::view::shortcut_labels::previous_change_shortcuts(),
+                );
 
-                let next_hunk_btn = components::Button::new("diff_next_hunk", "")
-                    .start_slot(
-                        svg_icon(
-                            "icons/arrow_down.svg",
-                            theme.colors.foreground.primary,
-                            scaled_px(14.0),
-                        )
-                        .debug_selector(|| "diff_next_hunk_icon".to_string()),
-                    )
-                    .style(components::ButtonStyle::Outlined)
-                    .disabled(!can_nav_next)
-                    .on_click(theme, cx, |this, _e, _w, cx| {
-                        this.diff_jump_next();
-                        cx.notify();
-                    })
-                    .gitcomet_tooltip(
-                        theme,
-                        crate::view::shortcut_labels::next_change_tooltip().into(),
-                    );
+                let next_hunk_btn = components::nav_arrow_button(
+                    "diff_next_hunk",
+                    "icons/arrow_down.svg",
+                    theme,
+                    scale,
+                    can_nav_next,
+                )
+                .on_click(theme, cx, |this, _e, _w, cx| {
+                    this.diff_jump_next();
+                    cx.notify();
+                })
+                .gitcomet_tooltip_keyed(
+                    theme,
+                    "Next change".into(),
+                    crate::view::shortcut_labels::next_change_shortcuts(),
+                );
 
-                let diff_inline_btn = components::Button::new("diff_inline", "Inline")
-                    .borderless()
-                    .rounded_left()
-                    .style(components::ButtonStyle::Subtle)
-                    .selected(self.diff_view == DiffViewMode::Inline)
-                    .selected_bg(view_toggle_selected_bg)
-                    .on_click(theme, cx, |this, _e, window, cx| {
-                        this.set_diff_view_mode(DiffViewMode::Inline, cx);
+                let alt = crate::view::shortcut_labels::alt_shortcut;
+                let view_toggle = components::SegmentedControl::new("diff_view_toggle")
+                    .segment(
+                        components::Segment::new("diff_inline", "Inline")
+                            .icon("icons/diff_inline.svg")
+                            .selected(self.diff_view == DiffViewMode::Inline)
+                            .tooltip("Inline diff view", vec![alt("I").into()]),
+                    )
+                    .segment(
+                        components::Segment::new("diff_split", "Split")
+                            .icon("icons/diff_split.svg")
+                            .selected(self.diff_view == DiffViewMode::Split)
+                            .tooltip("Split diff view", vec![alt("S").into()]),
+                    )
+                    .render(theme, scale, cx, |this, index, window, cx| {
+                        let mode = if index == 0 {
+                            DiffViewMode::Inline
+                        } else {
+                            DiffViewMode::Split
+                        };
+                        this.set_diff_view_mode(mode, cx);
                         this.restore_diff_panel_focus_after_toolbar_action(window, cx);
                         let root_view = this.root_view.clone();
                         let bound = this.store.binding.is_some();
                         cx.defer(move |cx| {
                             if !bound && let Some(root) = root_view.upgrade() {
-                                root.update(cx, |root, cx| {
-                                    root.set_diff_view_mode(DiffViewMode::Inline, cx);
-                                });
+                                root.update(cx, |root, cx| root.set_diff_view_mode(mode, cx));
                             }
                         });
                         cx.notify();
-                    })
-                    .debug_selector(|| "diff_inline".to_string())
-                    .gitcomet_tooltip(
-                        theme,
-                        format!(
-                            "Inline diff view ({})",
-                            crate::view::shortcut_labels::alt_shortcut("I")
-                        )
-                        .into(),
-                    );
-
-                let diff_split_btn = components::Button::new("diff_split", "Split")
-                    .borderless()
-                    .rounded_right()
-                    .style(components::ButtonStyle::Subtle)
-                    .selected(self.diff_view == DiffViewMode::Split)
-                    .selected_bg(view_toggle_selected_bg)
-                    .on_click(theme, cx, |this, _e, window, cx| {
-                        this.set_diff_view_mode(DiffViewMode::Split, cx);
-                        this.restore_diff_panel_focus_after_toolbar_action(window, cx);
-                        let root_view = this.root_view.clone();
-                        let bound = this.store.binding.is_some();
-                        cx.defer(move |cx| {
-                            if !bound && let Some(root) = root_view.upgrade() {
-                                root.update(cx, |root, cx| {
-                                    root.set_diff_view_mode(DiffViewMode::Split, cx);
-                                });
-                            }
-                        });
-                        cx.notify();
-                    })
-                    .debug_selector(|| "diff_split".to_string())
-                    .gitcomet_tooltip(
-                        theme,
-                        format!(
-                            "Split diff view ({})",
-                            crate::view::shortcut_labels::alt_shortcut("S")
-                        )
-                        .into(),
-                    );
+                    });
 
                 let diff_edit_btn = self
                     .file_edit_toggle_button(theme, view_toggle_selected_bg, is_file_editor, cx)
                     .into_any_element();
                 let diff_annotate_btn =
                     self.diff_annotate_toggle_button(theme, view_toggle_selected_bg, cx);
-
-                let view_toggle = div()
-                    .id("diff_view_toggle")
-                    .debug_selector(|| "diff_view_toggle".to_string())
-                    .flex()
-                    .items_center()
-                    .h(components::control_height(
-                        ui_scale::UiScale::from_percent(ui_scale_percent)
-                            .with_appearance(theme.metrics),
-                    ))
-                    .rounded(px(theme.radii.row))
-                    .border_1()
-                    .border_color(view_toggle_border)
-                    .bg(gpui::rgba(0x00000000))
-                    .overflow_hidden()
-                    .child(diff_inline_btn)
-                    .child(div().h_full().w(px(1.0)).bg(view_toggle_divider))
-                    .child(diff_split_btn);
 
                 controls = controls
                     .child(prev_hunk_btn)
@@ -2271,7 +2213,15 @@ impl MainPaneView {
                             cx.notify();
                         })
                         .debug_selector(|| "diff_close".to_string())
-                        .gitcomet_tooltip(theme, "Close diff".into()),
+                        .gitcomet_tooltip_keyed(
+                            theme,
+                            "Close diff".into(),
+                            if self.store.policy.escape_clears_target {
+                                vec!["Esc".into()]
+                            } else {
+                                Vec::new()
+                            },
+                        ),
                 )
             });
         }
