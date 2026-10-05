@@ -14,7 +14,7 @@
 pub use gpui;
 
 /// The exact GPUI revision used by this kit and its host.
-pub const GPUI_REVISION: &str = "58eaec912a5956ed53787f5dd8a351af90e64cec";
+pub const GPUI_REVISION: &str = "fdb60b0950bf29be87fd7f19ff3990f31cf85bac";
 
 pub mod appearance;
 pub mod assets;
