@@ -1827,6 +1827,7 @@ impl MainPaneView {
                     == RenderedPreviewMode::Rendered);
 
         let mut controls = div().flex().items_center().gap_1();
+        let mut change_navigation = None;
         if self.is_inline_submodule_diff_active()
             && let Some(repo_id) = repo_id
         {
@@ -1963,6 +1964,17 @@ impl MainPaneView {
                     crate::view::shortcut_labels::next_change_shortcuts(),
                 );
 
+                change_navigation = Some(
+                    div()
+                        .id("diff_change_navigation")
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .gap_1()
+                        .child(prev_hunk_btn)
+                        .child(next_hunk_btn),
+                );
+
                 let alt = crate::view::shortcut_labels::alt_shortcut;
                 let view_toggle = components::SegmentedControl::new("diff_view_toggle")
                     .segment(
@@ -2002,8 +2014,6 @@ impl MainPaneView {
                     self.diff_annotate_toggle_button(theme, view_toggle_selected_bg, cx);
 
                 controls = controls
-                    .child(prev_hunk_btn)
-                    .child(next_hunk_btn)
                     .child(view_toggle)
                     .child(diff_edit_btn)
                     .child(diff_annotate_btn)
@@ -2182,6 +2192,7 @@ impl MainPaneView {
             });
         }
 
+        let has_change_navigation = change_navigation.is_some();
         let header = div()
             .debug_selector(|| "diff_file_header".to_string())
             .w_full()
@@ -2194,6 +2205,7 @@ impl MainPaneView {
             .child(
                 div()
                     .flex_1()
+                    .when(has_change_navigation, |d| d.flex_basis(px(0.0)))
                     .flex()
                     .items_center()
                     .gap_2()
@@ -2201,18 +2213,21 @@ impl MainPaneView {
                     .overflow_hidden()
                     .child(div().min_w(px(0.0)).overflow_hidden().child(title)),
             )
+            .children(change_navigation)
             .child(
+                // Equal side slots centre the change arrows in the header.
                 // Right-anchor the controls and clip from the leading edge so a
                 // narrow pane hides lower-priority buttons instead of pushing
                 // the action menu / close button past the pane clip, where they
                 // still paint but can no longer be clicked.
                 div()
+                    .when(has_change_navigation, |d| d.flex_1().flex_basis(px(0.0)))
                     .min_w(px(0.0))
                     .flex()
                     .items_center()
                     .justify_end()
                     .overflow_hidden()
-                    .child(controls),
+                    .child(controls.flex_none()),
             );
 
         let (old_large, new_large) = if !is_file_editor
