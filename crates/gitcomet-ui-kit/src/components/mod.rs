@@ -81,7 +81,7 @@ pub use settings_rows::{
     settings_row_separator_color, settings_subsection_heading, settings_summary_row,
     settings_summary_row_with_value_prefix, settings_toggle_row,
 };
-pub use shortcut_keys::shortcut_keys;
+pub use shortcut_keys::{shortcut_keys, shortcut_keys_compact};
 pub use skeleton::skeleton;
 pub use split_button::{SplitButton, SplitButtonStyle};
 pub use tab::Tab;
