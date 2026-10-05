@@ -730,7 +730,7 @@ pub(super) fn measure_candidate(
     let shaped_line =
         window
             .text_system()
-            .shape_line(candidate.display_text.clone(), font_size, &runs, None);
+            .shape_line(candidate.display_text.clone(), font_size, &runs);
     (
         shaped_line.width,
         ellipsis_x_for_projection_and_line(candidate.projection.as_ref(), &shaped_line),

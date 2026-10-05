@@ -1,4 +1,5 @@
 use super::TruncatedLineLayout;
+use crate::text_layout::TextLayoutExt as _;
 use gpui::{Pixels, ShapedLine};
 use smallvec::SmallVec;
 use std::ops::Range;

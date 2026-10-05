@@ -255,51 +255,17 @@ pub(in crate::view) fn markdown_flow_range_rects(
     let Some(line) = layout.line_layout_for_index(start) else {
         return Vec::new();
     };
-    let unwrapped = &line.unwrapped_layout;
-    let boundary_index = |boundary: &gpui::WrapBoundary| {
-        unwrapped
-            .runs
-            .get(boundary.run_ix)
-            .and_then(|run| run.glyphs.get(boundary.glyph_ix))
-            .map(|glyph| glyph.index)
-    };
-    // Every later line is placed from the boundaries before it, so skipping a
-    // boundary that names a missing glyph would paint the rest a line too
-    // high. Painting nothing is the honest failure.
-    if line
-        .wrap_boundaries()
-        .iter()
-        .any(|boundary| boundary_index(boundary).is_none())
-    {
-        return Vec::new();
-    }
+    let _ = align; // Alignment is already part of the backend-owned layout.
     let bounds = layout.bounds();
-    let line_height = layout.line_height();
-    let starts = std::iter::once(0).chain(line.wrap_boundaries().iter().filter_map(boundary_index));
-    let ends = line
-        .wrap_boundaries()
-        .iter()
-        .filter_map(boundary_index)
-        .chain([unwrapped.len]);
-
-    let mut rects = Vec::new();
-    for (visual_ix, (line_start, line_end)) in starts.zip(ends).enumerate() {
-        let from = start.max(line_start);
-        let to = end.min(line_end);
-        if from >= to {
-            continue;
-        }
-        // Every x is relative to where that line starts inside the unwrapped
-        // layout, then moved to where the line was painted.
-        let shift = line.wrapped_line_offset(visual_ix, align, bounds.size.width);
-        let left = bounds.left() + shift - unwrapped.x_for_index(line_start);
-        let top = bounds.top() + line_height * (visual_ix as f32);
-        rects.push(Bounds::from_corners(
-            point(left + unwrapped.x_for_index(from), top),
-            point(left + unwrapped.x_for_index(to), top + line_height),
-        ));
-    }
+    let origin = bounds.origin;
+    let rects = line.selection_bounds(start..end, layout.line_height());
     rects
+        .into_iter()
+        .map(|mut rect| {
+            rect.origin += origin;
+            rect.intersect(&bounds)
+        })
+        .collect()
 }
 
 /// Offset in tab-expanded text for an offset in the raw text.
@@ -521,6 +487,9 @@ impl gpui::Element for MarkdownFlowText {
             .with_font_family_overrides(self.font_overrides.iter().cloned());
         self.layout = Some(inner.layout().clone());
         let layout = inner.request_layout(id, inspector_id, window, cx);
+        // This element owns range painting and hit testing. Its StyledText must
+        // retain its own measurement instead of joining the parent's paragraph.
+        window.mark_layout_as_atomic(layout.0);
         self.inner = Some(inner);
         layout
     }

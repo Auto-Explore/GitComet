@@ -8,6 +8,7 @@ use super::path::path_boundaries;
 use super::path_alignment::{PathAlignmentLayoutKey, PathTruncationAlignmentGroup};
 use super::projection::{Affinity, ProjectionSegment, TruncationProjection};
 use super::*;
+use crate::text_layout::TextLayoutExt as _;
 use gpui::{FontFallbacks, FontFeatures, StrikethroughStyle, UnderlineStyle, hsla, px};
 use smallvec::SmallVec;
 use std::cmp::Ordering;
@@ -22,7 +23,7 @@ fn display_width(window: &mut Window, text: &str, style: &TextStyle, font_size: 
     let runs = vec![style.clone().to_run(text.len())];
     window
         .text_system()
-        .shape_line(text.to_string().into(), font_size, &runs, None)
+        .shape_line(text.to_string().into(), font_size, &runs)
         .width
 }
 
@@ -1152,7 +1153,6 @@ fn path_profile_anchor_preserves_posix_drive_and_unc_roots(cx: &mut gpui::TestAp
                 posix_display.into(),
                 font_size,
                 &[style.clone().to_run(posix_display.len())],
-                None,
             )
             .x_for_index("/root/".len());
         let drive_anchor = window
@@ -1161,7 +1161,6 @@ fn path_profile_anchor_preserves_posix_drive_and_unc_roots(cx: &mut gpui::TestAp
                 drive_display.into(),
                 font_size,
                 &[style.clone().to_run(drive_display.len())],
-                None,
             )
             .x_for_index("C:\\root\\".len());
         let unc_anchor = window
@@ -1170,7 +1169,6 @@ fn path_profile_anchor_preserves_posix_drive_and_unc_roots(cx: &mut gpui::TestAp
                 unc_display.into(),
                 font_size,
                 &[style.clone().to_run(unc_display.len())],
-                None,
             )
             .x_for_index(r"\\server\share\dir1\".len());
 

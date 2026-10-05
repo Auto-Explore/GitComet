@@ -231,6 +231,7 @@ fn file_editor_horizontal_scrollbar_works_for_all_text_file_types(
 
 #[gpui::test]
 fn file_editor_wrapped_typing_keeps_the_viewport_stable(test_cx: &mut gpui::TestAppContext) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(test_cx);
     let _visual_guard = lock_visual_test();
     for filename in ["notes.md", "main.rs", "notes.txt"] {
         let (store, events) = AppStore::new_test(Arc::new(TestBackend));

@@ -14,7 +14,7 @@
 pub use gpui;
 
 /// The exact GPUI revision used by this kit and its host.
-pub const GPUI_REVISION: &str = "46e1ede350cc95071b389e83831e18e7d114bbaf";
+pub const GPUI_REVISION: &str = "58eaec912a5956ed53787f5dd8a351af90e64cec";
 
 pub mod appearance;
 pub mod assets;
@@ -36,6 +36,7 @@ pub mod press_gesture;
 pub mod rope;
 mod scrollbar;
 mod text_input;
+pub mod text_layout;
 pub mod text_model;
 pub mod text_runs;
 pub mod text_selection;
@@ -88,13 +89,22 @@ pub fn restrict_scroll_to_vertical_axis<E: gpui::Styled>(mut element: E) -> E {
 #[cfg(test)]
 mod version_contract {
     #[test]
-    fn exported_gpui_revision_matches_both_workspace_dependencies() {
+    fn exported_gpui_revision_matches_all_workspace_dependencies() {
         let manifest = include_str!("../../../Cargo.toml");
         let pins: Vec<_> = manifest
             .lines()
-            .filter(|line| line.starts_with("gpui = ") || line.starts_with("gpui_platform = "))
+            .filter(|line| {
+                [
+                    "gpui = ",
+                    "gpui_platform = ",
+                    "gpui_wgpu = ",
+                    "gpui_parley = ",
+                ]
+                .iter()
+                .any(|prefix| line.starts_with(prefix))
+            })
             .collect();
-        assert_eq!(pins.len(), 2);
+        assert_eq!(pins.len(), 4);
         for pin in pins {
             assert!(
                 pin.contains(super::GPUI_REVISION),

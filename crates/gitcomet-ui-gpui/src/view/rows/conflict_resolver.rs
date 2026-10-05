@@ -235,7 +235,7 @@ fn conflict_row_text_width(
     let width = if !text.as_ref().contains(['\n', '\r']) {
         window
             .text_system()
-            .shape_line(text.clone(), font_size, &[style.to_run(text.len())], None)
+            .shape_line(text.clone(), font_size, &[style.to_run(text.len())])
             .width
     } else {
         text.as_ref()
@@ -248,7 +248,6 @@ fn conflict_row_text_width(
                         line.to_string().into(),
                         font_size,
                         &[style.to_run(line.len())],
-                        None,
                     )
                     .width
             })

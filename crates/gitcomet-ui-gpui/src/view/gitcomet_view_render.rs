@@ -250,6 +250,7 @@ impl Render for GitCometView {
                 features: font_features,
                 fallbacks: None,
                 weight: gpui::FontWeight::default(),
+                width: gpui::FontWidth::default(),
                 style: gpui::FontStyle::default(),
             })
             .text_color(theme.colors.foreground.primary)

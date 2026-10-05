@@ -2,6 +2,28 @@
 //! (`test-support` feature). The locks are process-wide, so a host that
 //! re-exports them serializes its tests with the kit's.
 
+/// Replace the default single-line test shaper before creating windows. Bundled
+/// fonts keep wrapping and cluster tests independent of the machine font catalog.
+pub fn use_real_text_backend(cx: &mut gpui::TestAppContext) {
+    use gpui::PlatformTextSystem as _;
+    let system = std::sync::Arc::new(
+        gpui_parley::ParleyTextSystem::new_with_system_font(
+            gpui_parley::SystemFonts::Skip,
+            "IBM Plex Sans",
+        )
+        .with_fallback_families(["IBM Plex Sans", "Lilex"]),
+    );
+    system
+        .add_fonts(vec![
+            std::borrow::Cow::Borrowed(include_bytes!(
+                "../assets/fonts/ibm_plex_sans/IBMPlexSans-Regular.ttf"
+            )),
+            std::borrow::Cow::Borrowed(include_bytes!("../assets/fonts/lilex/Lilex-Regular.ttf")),
+        ])
+        .expect("bundled test fonts");
+    *cx = gpui::TestAppContext::build_with_text_system(cx.dispatcher.clone(), None, system);
+}
+
 /// Force layout and paint even when only a scroll handle or test fixture changed.
 pub fn refresh_and_draw(cx: &mut gpui::VisualTestContext) {
     cx.update(|window, app| {

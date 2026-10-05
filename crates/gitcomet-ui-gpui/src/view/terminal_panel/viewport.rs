@@ -1398,11 +1398,15 @@ impl TerminalViewportView {
                         &layout.base_style,
                         self.theme,
                     );
-                    let shaped = window.text_system().shape_line(
+                    let shaped = super::painting::shape_terminal_grid_line(
                         text,
-                        layout.metrics.font_size,
                         &runs,
-                        Some(layout.metrics.cell_width),
+                        &content.cells,
+                        grid_row,
+                        cols,
+                        layout.metrics.font_size,
+                        layout.metrics.cell_width,
+                        window,
                     );
                     cache_row.fingerprint = row_fingerprint;
                     cache_row.layout_key = layout.key;

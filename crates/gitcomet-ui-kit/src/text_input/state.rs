@@ -590,18 +590,16 @@ pub(super) struct PendingWrapJob {
 /// The shaped lines a frame actually touches, addressed by absolute line index.
 ///
 /// A plain multiline input only shapes its visible window, plus the caret's own
-/// line when that has been scrolled out of view. `ShapedLine` carries an inline
-/// `SmallVec` of decoration runs and is ~3 KB, so a document-length vector costs
-/// megabytes of zeroing per frame for rows that are never painted — which made
-/// the per-keystroke frame scale with the file instead of the viewport.
+/// line when that has been scrolled out of view. Backend layouts and tab maps
+/// are shared on cache hits; unvisited rows stay unshaped.
 #[derive(Debug, Default)]
 pub(super) struct PlainLineLayouts {
     line_count: usize,
     window_start: usize,
-    window: Vec<ShapedLine>,
+    window: Vec<EditorLine>,
     /// The caret's line when it sits outside the visible window. Boxed so one
-    /// stray line does not widen every `TextInputLayout` by ~3 KB.
-    stray: Option<(usize, Box<ShapedLine>)>,
+    /// stray line does not widen every `TextInputLayout`.
+    stray: Option<(usize, Box<EditorLine>)>,
 }
 
 impl PlainLineLayouts {
@@ -616,15 +614,15 @@ impl PlainLineLayouts {
 
     /// Append the next shaped line of the visible window. Callers shape the
     /// window in ascending line order, so position follows from `window_start`.
-    pub(super) fn push(&mut self, line: ShapedLine) {
+    pub(super) fn push(&mut self, line: EditorLine) {
         self.window.push(line);
     }
 
-    pub(super) fn set_stray(&mut self, line_ix: usize, line: ShapedLine) {
+    pub(super) fn set_stray(&mut self, line_ix: usize, line: EditorLine) {
         self.stray = Some((line_ix, Box::new(line)));
     }
 
-    pub(super) fn get(&self, line_ix: usize) -> Option<&ShapedLine> {
+    pub(super) fn get(&self, line_ix: usize) -> Option<&EditorLine> {
         if let Some(offset) = line_ix.checked_sub(self.window_start)
             && let Some(line) = self.window.get(offset)
         {
@@ -658,7 +656,7 @@ pub(super) enum TextInputLayout {
     Plain(PlainLineLayouts),
     TruncatedSingleLine(Arc<TruncatedLineLayout>),
     Wrapped {
-        lines: Vec<WrappedLine>,
+        lines: Vec<EditorLine>,
         y_offsets: Vec<Pixels>,
         row_counts: Vec<usize>,
     },
@@ -715,7 +713,7 @@ pub(super) struct LayoutState {
     pub(super) paint_seq: u64,
     pub(super) line_height: Pixels,
     pub(super) shape_style_epoch: u64,
-    pub(super) plain_line_cache: FxHashMap<ShapedRowCacheKey, ShapedLine>,
+    pub(super) plain_line_cache: FxHashMap<ShapedRowCacheKey, EditorLine>,
 }
 
 impl LayoutState {

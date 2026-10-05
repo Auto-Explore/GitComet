@@ -46,12 +46,7 @@ impl Render for TextInput {
             let run = style.to_run(text.len());
             let width = window
                 .text_system()
-                .shape_line(
-                    text,
-                    style.font_size.to_pixels(window.rem_size()),
-                    &[run],
-                    None,
-                )
+                .shape_line(text, style.font_size.to_pixels(window.rem_size()), &[run])
                 .width;
             // Explicit layout widths snap to the nearest device pixel. Round
             // intrinsic text widths up first so a fractional glyph advance

@@ -3,6 +3,7 @@ use super::shaping::*;
 use super::state::*;
 use super::wrap::*;
 use super::*;
+use crate::text_layout::TextLayoutExt as _;
 
 #[gpui::test]
 fn window_blur_stops_text_input_until_deliberately_refocused(cx: &mut gpui::TestAppContext) {
@@ -1872,11 +1873,11 @@ fn focused_truncated_line_hit_testing_snaps_both_ellipsis_segments_to_hidden_bou
         let runs_five = vec![style.clone().to_run("…aaaaa…".len())];
         let width_four = window
             .text_system()
-            .shape_line("…aaaa…".into(), font_size, &runs_four, None)
+            .shape_line("…aaaa…".into(), font_size, &runs_four)
             .width;
         let width_five = window
             .text_system()
-            .shape_line("…aaaaa…".into(), font_size, &runs_five, None)
+            .shape_line("…aaaaa…".into(), font_size, &runs_five)
             .width;
         let max_width = width_four + (width_five - width_four) / 2.0;
 
@@ -2314,7 +2315,7 @@ fn replace_utf8_range_clears_shaped_row_caches(cx: &mut gpui::TestAppContext) {
                     line_ix: 0,
                     font_size_key: 13,
                 },
-                ShapedLine::default(),
+                EditorLine::default(),
             );
 
             assert_eq!(input.layout.plain_line_cache.len(), 1);
