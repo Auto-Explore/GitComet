@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+  "vendor/gpui",
   "crates/gitcomet",
   "crates/gitcomet-app",
   "crates/gitcomet-core",
@@ -410,3 +411,7 @@ inherits = "ci-bench"
 
 [profile.ci-bench-candidate.package.gitcomet-ui-gpui]
 opt-level = 0
+
+# Compact text decorations; platform/rendering crates retain the dev revision.
+[patch."https://github.com/Havunen/gpui-ce.git"]
+gpui-ce = { path = "vendor/gpui" }
