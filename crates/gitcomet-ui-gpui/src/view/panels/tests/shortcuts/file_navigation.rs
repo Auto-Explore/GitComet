@@ -400,6 +400,12 @@ fn comparison_diff_steps_through_range_files_with_arrows_and_f1_f4(cx: &mut gpui
         cx.debug_bounds("diff_bar_stage").is_none(),
         "a comparison has nothing to stage"
     );
+    // The header's icon knows the file from the comparison's list.
+    assert!(cx.debug_bounds("diff_title_icon").is_some());
+    assert_eq!(
+        cx.update(|_window, app| view.read(app).main_pane.read(app).rendered_file_kind()),
+        Some(FileStatusKind::Modified)
+    );
 
     cx.simulate_keystrokes("f4");
     draw_and_drain_test_window(cx);
