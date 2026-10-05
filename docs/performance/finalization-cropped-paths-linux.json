@@ -1,0 +1,298 @@
+{
+  "binary": "/home/sampo/git/gpui-ce-verified-improvements/target/debug/examples/path_target_footprint",
+  "sha256": "7c92c902d00ff7ce895a15d5db2e637329584e53a33da681dd15e30c9f221e1c",
+  "metric": "process GPU footprint MiB (NVIDIA driver)",
+  "scope": "2560x1440 headless renderer, 512x1408 retained path target; no app latency claim",
+  "gpu": "NVIDIA GeForce GTX 1080, 580.178.04",
+  "revision": "2ff80e614dd8196eb103232611d06d5e2a749d86",
+  "sessions": [
+    [
+      {
+        "order": [
+          false,
+          true
+        ],
+        "runs": [
+          {
+            "mib_samples": [
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0
+            ],
+            "median_mib": 132.0,
+            "stderr": "",
+            "cropped": false
+          },
+          {
+            "mib_samples": [
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0
+            ],
+            "median_mib": 68.0,
+            "stderr": "",
+            "cropped": true
+          }
+        ],
+        "reduction": 0.48484848484848486
+      },
+      {
+        "order": [
+          true,
+          false
+        ],
+        "runs": [
+          {
+            "mib_samples": [
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0
+            ],
+            "median_mib": 68.0,
+            "stderr": "",
+            "cropped": true
+          },
+          {
+            "mib_samples": [
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0
+            ],
+            "median_mib": 132.0,
+            "stderr": "",
+            "cropped": false
+          }
+        ],
+        "reduction": 0.48484848484848486
+      },
+      {
+        "order": [
+          false,
+          true
+        ],
+        "runs": [
+          {
+            "mib_samples": [
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0
+            ],
+            "median_mib": 132.0,
+            "stderr": "",
+            "cropped": false
+          },
+          {
+            "mib_samples": [
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0
+            ],
+            "median_mib": 68.0,
+            "stderr": "",
+            "cropped": true
+          }
+        ],
+        "reduction": 0.48484848484848486
+      }
+    ],
+    [
+      {
+        "order": [
+          true,
+          false
+        ],
+        "runs": [
+          {
+            "mib_samples": [
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0
+            ],
+            "median_mib": 68.0,
+            "stderr": "",
+            "cropped": true
+          },
+          {
+            "mib_samples": [
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0
+            ],
+            "median_mib": 132.0,
+            "stderr": "",
+            "cropped": false
+          }
+        ],
+        "reduction": 0.48484848484848486
+      },
+      {
+        "order": [
+          false,
+          true
+        ],
+        "runs": [
+          {
+            "mib_samples": [
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0
+            ],
+            "median_mib": 132.0,
+            "stderr": "",
+            "cropped": false
+          },
+          {
+            "mib_samples": [
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0
+            ],
+            "median_mib": 68.0,
+            "stderr": "",
+            "cropped": true
+          }
+        ],
+        "reduction": 0.48484848484848486
+      },
+      {
+        "order": [
+          true,
+          false
+        ],
+        "runs": [
+          {
+            "mib_samples": [
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0,
+              68.0
+            ],
+            "median_mib": 68.0,
+            "stderr": "",
+            "cropped": true
+          },
+          {
+            "mib_samples": [
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0,
+              132.0
+            ],
+            "median_mib": 132.0,
+            "stderr": "",
+            "cropped": false
+          }
+        ],
+        "reduction": 0.48484848484848486
+      }
+    ]
+  ],
+  "median_reduction": 0.48484848484848486,
+  "significant_memory_benefit": true
+}

@@ -1,0 +1,4443 @@
+{
+  "measured_application_revision": "3b0fea823a925d93841f016d5ceaf31c12e134bb",
+  "measured_gpui_revision": "fdb60b0950bf29be87fd7f19ff3990f31cf85bac",
+  "final_gpui_revision": "80c32256b87ff82b13373b297388ea730c5da4df",
+  "final_pin_difference": "Only cfg(test) gradient expectations and comments changed in GPUI. Application changes after measurement are dependency SHA, exported revision and documentation. No renderer or application behavior changed.",
+  "builds": {
+    "dev": {
+      "revision": "6b4eed45c6c141376fd494ee615d415525552989",
+      "binary_sha256": "3020697c0326612a8988cbef7671345faa084525de8ed9361ac3166d5bf1aed1",
+      "lock_sha256": "2badc7e472cf2527f4122b1a5a4dc95a19dada33f9699c4fbea2668f628081ec",
+      "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+      "profile": "release"
+    },
+    "reviewed": {
+      "revision": "516a38608eb2a89dc2c66257f7392fb8f5aa11ea",
+      "binary_sha256": "19dd6475975e29619b6b49a37fc78906315c795d2cdb0d154666f8837c0d2db9",
+      "lock_sha256": "94ca986cb7dd4e32f47061096bf38ac6e30ed326fa78a7d5b87b6f2e8e58433c",
+      "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+      "profile": "release"
+    },
+    "compatibility": {
+      "revision": "5d74edfaa3281715b8d533d3b4c2eca2262c1fac",
+      "gpui_revision": "58eaec912a5956ed53787f5dd8a351af90e64cec",
+      "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+      "profile": "release",
+      "sha256": "65f788a3a25eda2bcd35c8b1caf320c09280a3ab6341445840fd7f357c951d6a",
+      "lock_sha256": "f2576536dd2808053b30d4a7f989e6de760fbf586f71ab50ab68834e2250e18b"
+    },
+    "final": {
+      "revision": "3b0fea823a925d93841f016d5ceaf31c12e134bb",
+      "gpui_revision": "fdb60b0950bf29be87fd7f19ff3990f31cf85bac",
+      "profile": "release",
+      "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+      "sha256": "9759069f7c434a5641595717cc74b6a66019ff607bb848cfd78adf5cf1e64acd",
+      "lock_sha256": "c00c38617b44f69896d0c8112603bef36f5fa8d24f4ba49dfa821c5c534823fa"
+    }
+  },
+  "comparisons": {
+    "compat": {
+      "sessions": 2,
+      "pairs": 6,
+      "enough_samples": true,
+      "hashes": {
+        "baseline": "65f788a3a25eda2bcd35c8b1caf320c09280a3ab6341445840fd7f357c951d6a",
+        "candidate": "9759069f7c434a5641595717cc74b6a66019ff607bb848cfd78adf5cf1e64acd"
+      },
+      "comparisons": {
+        "startup": {
+          "launch": {
+            "spawn_to_first_draw_ms": {
+              "direction": "lower",
+              "baseline_median": 202.7811279296875,
+              "candidate_median": 194.1173095703125,
+              "ratio": {
+                "median_ratio": 0.9466652965672302,
+                "ci95": [
+                  0.9250454091231404,
+                  0.998515483566538
+                ],
+                "pairs": 6
+              }
+            },
+            "spawn_to_ready_ms": {
+              "direction": "lower",
+              "baseline_median": 289.6220703125,
+              "candidate_median": 232.6434326171875,
+              "ratio": {
+                "median_ratio": 0.8029229186950411,
+                "ci95": [
+                  0.7820088595491175,
+                  0.9166720923355763
+                ],
+                "pairs": 6
+              }
+            }
+          }
+        },
+        "history-select": {
+          "select": {
+            "inputs.input_to_submit_ms.p50": {
+              "direction": "lower",
+              "baseline_median": 8.14501350000046,
+              "candidate_median": 8.112202999998772,
+              "ratio": {
+                "median_ratio": 1.0015456530008393,
+                "ci95": [
+                  0.817376155448851,
+                  1.0039959533552012
+                ],
+                "pairs": 6
+              }
+            },
+            "inputs.input_to_submit_ms.p95": {
+              "direction": "lower",
+              "baseline_median": 10.128989500000444,
+              "candidate_median": 10.064832499998374,
+              "ratio": {
+                "median_ratio": 0.9929205643722292,
+                "ci95": [
+                  0.58104795860396,
+                  1.0132764609436156
+                ],
+                "pairs": 6
+              }
+            },
+            "inputs.input_to_witness_ms.p50": {
+              "direction": "lower",
+              "baseline_median": 3.688194000000294,
+              "candidate_median": 3.6457390000000487,
+              "ratio": {
+                "median_ratio": 1.0037480923810844,
+                "ci95": [
+                  0.8757398784740291,
+                  1.0117661575280779
+                ],
+                "pairs": 6
+              }
+            },
+            "inputs.input_to_witness_ms.p95": {
+              "direction": "lower",
+              "baseline_median": 4.91323199999988,
+              "candidate_median": 4.8733760000000075,
+              "ratio": {
+                "median_ratio": 0.9856944278609975,
+                "ci95": [
+                  0.5603379487207711,
+                  1.0057342776955795
+                ],
+                "pairs": 6
+              }
+            },
+            "inputs.dispatch_delay_ms.p95": {
+              "direction": "lower",
+              "baseline_median": 0.11632949999966513,
+              "candidate_median": 0.09992800000054558,
+              "ratio": {
+                "median_ratio": 1.0238595502393606,
+                "ci95": [
+                  0.5355757692302427,
+                  1.3351073581141244
+                ],
+                "pairs": 6
+              }
+            },
+            "inputs.apply_ms.p95": {
+              "direction": "lower",
+              "baseline_median": 0.031420000000000003,
+              "candidate_median": 0.0315355,
+              "ratio": {
+                "median_ratio": 1.0045901145052496,
+                "ci95": [
+                  0.6244160491537597,
+                  1.0800846578381642
+                ],
+                "pairs": 6
+              }
+            },
+            "draw_ms.p50": {
+              "direction": "lower",
+              "baseline_median": 0.9964545,
+              "candidate_median": 0.9909794999999999,
+              "ratio": {
+                "median_ratio": 1.01850440653449,
+                "ci95": [
+                  0.6619437228898994,
+                  1.1142590096945275
+                ],
+                "pairs": 6
+              }
+            },
+            "draw_ms.p95": {
+              "direction": "lower",
+              "baseline_median": 3.816859,
+              "candidate_median": 3.8271935,
+              "ratio": {
+                "median_ratio": 0.9886097877021238,
+                "ci95": [
+                  0.5971656309877945,
+                  1.0158523055031023
+                ],
+                "pairs": 6
+              }
+            },
+            "draw_ms.p99": {
+              "direction": "lower",
+              "baseline_median": 4.3021415,
+              "candidate_median": 4.2933164999999995,
+              "ratio": {
+                "median_ratio": 0.9854539624863229,
+                "ci95": [
+                  0.5527131698538006,
+                  1.0119248232021545
+                ],
+                "pairs": 6
+              }
+            },
+            "dirty_to_draw_ms.p95": {
+              "direction": "lower",
+              "baseline_median": 14.509078500000214,
+              "candidate_median": 14.488378000000466,
+              "ratio": {
+                "median_ratio": 1.0006816115482031,
+                "ci95": [
+                  0.8334464515121207,
+                  1.007688151804046
+                ],
+                "pairs": 6
+              }
+            },
+            "wake_ms.p99": {
+              "direction": "lower",
+              "baseline_median": 2.8814305,
+              "candidate_median": 2.936656,
+              "ratio": {
+                "median_ratio": 1.0059370162055727,
+                "ci95": [
+                  0.5490432581970712,
+                  1.0426617662972961
+                ],
+                "pairs": 6
+              }
+            },
+            "main_cpu_percent": {
+              "direction": "lower",
+              "baseline_median": 8.377902851481947,
+              "candidate_median": 8.446634041175656,
+              "ratio": {
+                "median_ratio": 0.9967909059766878,
+                "ci95": [
+                  0.7498955183075549,
+                  1.0232380133964287
+                ],
+                "pairs": 6
+              }
+            },
+            "process_cpu_cores": {
+              "direction": "lower",
+              "baseline_median": 0.10250823796297498,
+              "candidate_median": 0.103554318035632,
+              "ratio": {
+                "median_ratio": 1.000001311217682,
+                "ci95": [
+                  0.7483411906700352,
+                  1.0257841539338404
+                ],
+                "pairs": 6
+              }
+            },
+            "wakeups_per_second": {
+              "direction": "lower",
+              "baseline_median": 1005.4872824466136,
+              "candidate_median": 1006.4817803286845,
+              "ratio": {
+                "median_ratio": 1.0017859669919045,
+                "ci95": [
+                  0.9995659977129017,
+                  1.0268182529433476
+                ],
+                "pairs": 6
+              }
+            },
+            "frames_per_second": {
+              "direction": "info",
+              "baseline_median": 41.70057950241829,
+              "candidate_median": 41.700651053452546,
+              "ratio": {
+                "median_ratio": 1.0000007768315713,
+                "ci95": [
+                  0.9999991348345981,
+                  1.0187524525924996
+                ],
+                "pairs": 6
+              }
+            },
+            "pss_kib.max": {
+              "direction": "lower",
+              "baseline_median": 401295.0,
+              "candidate_median": 409723.0,
+              "ratio": {
+                "median_ratio": 1.0075061711296327,
+                "ci95": [
+                  0.9994713471593606,
+                  1.047867304816061
+                ],
+                "pairs": 6
+              }
+            },
+            "rss_kib.max": {
+              "direction": "lower",
+              "baseline_median": 436002.0,
+              "candidate_median": 443696.0,
+              "ratio": {
+                "median_ratio": 1.0069453503100654,
+                "ci95": [
+                  0.998490744866032,
+                  1.0416438053357526
+                ],
+                "pairs": 6
+              }
+            },
+            "slow_frames_16ms": {
+              "direction": "lower",
+              "baseline_median": 0.0,
+              "candidate_median": 0.0,
+              "ratio": null
+            },
+            "inputs.witnessed": {
+              "direction": "higher",
+              "baseline_median": 240.0,
+              "candidate_median": 240.0,
+              "ratio": {
+                "median_ratio": 1.0,
+                "ci95": [
+                  1.0,
+                  1.0
+                ],
+                "pairs": 6
+              }
+            },
+            "inputs.superseded": {
+              "direction": "lower",
+              "baseline_median": 0.0,
+              "candidate_median": 0.0,
+              "ratio": null
+            },
+            "inputs.superseded_task_ms": {
+              "direction": "lower",
+              "baseline_median": 0.0,
+              "candidate_median": 0.0,
+              "ratio": null
+            }
+          },
+          "launch": {
+            "spawn_to_first_draw_ms": {
+              "direction": "lower",
+              "baseline_median": 192.319580078125,
+              "candidate_median": 184.9993896484375,
+              "ratio": {
+                "median_ratio": 0.9442654949092446,
+                "ci95": [
+                  0.8989545980935103,
+                  1.0424082610545056
+                ],
+                "pairs": 6
+              }
+            },
+            "spawn_to_ready_ms": {
+              "direction": "lower",
+              "baseline_median": 278.810546875,
+              "candidate_median": 223.369140625,
+              "ratio": {
+                "median_ratio": 0.7899260087733082,
+                "ci95": [
+                  0.7627725733248377,
+                  0.852433725950601
+                ],
+                "pairs": 6
+              }
+            }
+          }
+        },
+        "history-scroll": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": {
+              "direction": "lower",
+              "baseline_median": 9.968564499999047,
+              "candidate_median": 9.85780049999994,
+              "ratio": {
+                "median_ratio": 0.9897094316919282,
+                "ci95": [
+                  0.9784425690428706,
+                  0.9960778060084357
+                ],
+                "pairs": 6
+              }
+            },
+            "inputs.input_to_submit_ms.p95": {
+              "direction": "lower",
+              "baseline_median": 17.3915894999991,
+              "candidate_median": 17.32691850000083,
+              "ratio": {
+                "median_ratio": 0.9960602015335642,
+                "ci95": [
+                  0.9876652894603151,
+                  1.0033634200439896
+                ],
+                "pairs": 6
+              }
+            },
+            "inputs.input_to_witness_ms.p50": {
+              "direction": "lower",
+              "baseline_median": 0.10172050000073796,
+              "candidate_median": 0.09901050000098621,
+              "ratio": {
+                "median_ratio": 1.0066468712795065,
+                "ci95": [
+                  0.9203967891579229,
+                  1.0844087230404638
+                ],
+                "pairs": 6
+              }
+            },
+            "inputs.input_to_witness_ms.p95": {
+              "direction": "lower",
+              "baseline_median": 0.8007065000010698,
+              "candidate_median": 0.721690999999737,
+              "ratio": {
+                "median_ratio": 0.9248683695097721,
+                "ci95": [
+                  0.849723210633033,
+                  1.024031779522041
+                ],
+                "pairs": 6
+              }
+            },
+            "inputs.dispatch_delay_ms.p95": {
+              "direction": "lower",
+              "baseline_median": 0.7703539999993154,
+              "candidate_median": 0.6860854999995354,
+              "ratio": {
+                "median_ratio": 0.9216522052338334,
+                "ci95": [
+                  0.8411547842381438,
+                  1.023991437087746
+                ],
+                "pairs": 6
+              }
+            },
+            "draw_ms.p50": {
+              "direction": "lower",
+              "baseline_median": 1.151471,
+              "candidate_median": 1.1236605000000002,
+              "ratio": {
+                "median_ratio": 0.9752893125380513,
+                "ci95": [
+                  0.9229754888187606,
+                  0.9832912934866112
+                ],
+                "pairs": 6
+              }
+            },
+            "draw_ms.p95": {
+              "direction": "lower",
+              "baseline_median": 1.3796365000000002,
+              "candidate_median": 1.3524075,
+              "ratio": {
+                "median_ratio": 0.9589631997207,
+                "ci95": [
+                  0.8960371290543927,
+                  1.0048987394550808
+                ],
+                "pairs": 6
+              }
+            },
+            "draw_ms.p99": {
+              "direction": "lower",
+              "baseline_median": 1.6066935,
+              "candidate_median": 1.6089570000000002,
+              "ratio": {
+                "median_ratio": 0.9848474103602822,
+                "ci95": [
+                  0.9072195000907721,
+                  1.0333468585150114
+                ],
+                "pairs": 6
+              }
+            },
+            "dirty_to_draw_ms.p95": {
+              "direction": "lower",
+              "baseline_median": 16.391099999998914,
+              "candidate_median": 16.380450499999824,
+              "ratio": {
+                "median_ratio": 0.9991132287182267,
+                "ci95": [
+                  0.9969296576932485,
+                  1.0013789408679932
+                ],
+                "pairs": 6
+              }
+            },
+            "wake_ms.p99": {
+              "direction": "lower",
+              "baseline_median": 1.3123079999999998,
+              "candidate_median": 1.287537,
+              "ratio": {
+                "median_ratio": 0.9559447504315954,
+                "ci95": [
+                  0.877259997597119,
+                  1.0094944124154355
+                ],
+                "pairs": 6
+              }
+            },
+            "main_cpu_percent": {
+              "direction": "lower",
+              "baseline_median": 8.23566954811031,
+              "candidate_median": 8.142093126190804,
+              "ratio": {
+                "median_ratio": 0.9835517663272837,
+                "ci95": [
+                  0.9530510199975664,
+                  0.990775758327473
+                ],
+                "pairs": 6
+              }
+            },
+            "process_cpu_cores": {
+              "direction": "lower",
+              "baseline_median": 0.1034704860809719,
+              "candidate_median": 0.10242853093936834,
+              "ratio": {
+                "median_ratio": 0.9796584128293001,
+                "ci95": [
+                  0.9294130048601796,
+                  0.9899425594961
+                ],
+                "pairs": 6
+              }
+            },
+            "wakeups_per_second": {
+              "direction": "lower",
+              "baseline_median": 1248.6603659462394,
+              "candidate_median": 1251.0885187655667,
+              "ratio": {
+                "median_ratio": 1.0028008335112164,
+                "ci95": [
+                  1.0010662687548733,
+                  1.0048836481844141
+                ],
+                "pairs": 6
+              }
+            },
+            "frames_per_second": {
+              "direction": "info",
+              "baseline_median": 59.971335553293436,
+              "candidate_median": 59.99762031089344,
+              "ratio": {
+                "median_ratio": 1.000437681811348,
+                "ci95": [
+                  1.0000015865493173,
+                  1.00087426115247
+                ],
+                "pairs": 6
+              }
+            },
+            "pss_kib.max": {
+              "direction": "lower",
+              "baseline_median": 386051.0,
+              "candidate_median": 385408.0,
+              "ratio": {
+                "median_ratio": 1.0032539913579566,
+                "ci95": [
+                  0.9866824690206865,
+                  1.0131436547130128
+                ],
+                "pairs": 6
+              }
+            },
+            "rss_kib.max": {
+              "direction": "lower",
+              "baseline_median": 419936.0,
+              "candidate_median": 419980.0,
+              "ratio": {
+                "median_ratio": 1.0019246446416565,
+                "ci95": [
+                  0.9866921586257482,
+                  1.013203694390742
+                ],
+                "pairs": 6
+              }
+            },
+            "slow_frames_16ms": {
+              "direction": "lower",
+              "baseline_median": 0.0,
+              "candidate_median": 0.0,
+              "ratio": null
+            },
+            "inputs.witnessed": {
+              "direction": "higher",
+              "baseline_median": 1200.0,
+              "candidate_median": 1200.0,
+              "ratio": {
+                "median_ratio": 1.0,
+                "ci95": [
+                  1.0,
+                  1.0
+                ],
+                "pairs": 6
+              }
+            },
+            "inputs.superseded": {
+              "direction": "lower",
+              "baseline_median": 0.0,
+              "candidate_median": 0.0,
+              "ratio": null
+            },
+            "inputs.superseded_task_ms": {
+              "direction": "lower",
+              "baseline_median": 0.0,
+              "candidate_median": 0.0,
+              "ratio": null
+            }
+          },
+          "launch": {
+            "spawn_to_first_draw_ms": {
+              "direction": "lower",
+              "baseline_median": 194.3226318359375,
+              "candidate_median": 186.2474365234375,
+              "ratio": {
+                "median_ratio": 0.9729343970826441,
+                "ci95": [
+                  0.9043122270553492,
+                  1.044093583811996
+                ],
+                "pairs": 6
+              }
+            },
+            "spawn_to_ready_ms": {
+              "direction": "lower",
+              "baseline_median": 282.15869140625,
+              "candidate_median": 224.5477294921875,
+              "ratio": {
+                "median_ratio": 0.8025306093987638,
+                "ci95": [
+                  0.7675463089910277,
+                  0.855141319073413
+                ],
+                "pairs": 6
+              }
+            }
+          }
+        },
+        "terminal-output": {
+          "scroll_with_output": {
+            "inputs.input_to_submit_ms.p50": {
+              "direction": "lower",
+              "baseline_median": 10.369498000000021,
+              "candidate_median": 10.310284999999567,
+              "ratio": {
+                "median_ratio": 0.9887905062679818,
+                "ci95": [
+                  0.8958089560943308,
+                  1.014497729509656
+                ],
+                "pairs": 6
+              }
+            },
+            "inputs.input_to_submit_ms.p95": {
+              "direction": "lower",
+              "baseline_median": 17.829639000000043,
+              "candidate_median": 17.718659500000285,
+              "ratio": {
+                "median_ratio": 0.994654993518029,
+                "ci95": [
+                  0.8474124876050699,
+                  1.0021561692517404
+                ],
+                "pairs": 6
+              }
+            },
+            "inputs.input_to_witness_ms.p50": {
+              "direction": "lower",
+              "baseline_median": 0.09767650000048889,
+              "candidate_median": 0.09457849999944301,
+              "ratio": {
+                "median_ratio": 0.9978647617832795,
+                "ci95": [
+                  0.7546677882058436,
+                  1.1368022157154771
+                ],
+                "pairs": 6
+              }
+            },
+            "inputs.input_to_witness_ms.p95": {
+              "direction": "lower",
+              "baseline_median": 1.3007125000003725,
+              "candidate_median": 1.1059839999998076,
+              "ratio": {
+                "median_ratio": 0.9201836178477614,
+                "ci95": [
+                  0.44303743568486276,
+                  1.0493834407836173
+                ],
+                "pairs": 6
+              }
+            },
+            "inputs.dispatch_delay_ms.p95": {
+              "direction": "lower",
+              "baseline_median": 1.2652525000012247,
+              "candidate_median": 1.072100500000488,
+              "ratio": {
+                "median_ratio": 0.9271465893285322,
+                "ci95": [
+                  0.4376417050968392,
+                  1.0449425002621995
+                ],
+                "pairs": 6
+              }
+            },
+            "draw_ms.p50": {
+              "direction": "lower",
+              "baseline_median": 1.3851235,
+              "candidate_median": 1.3668075000000002,
+              "ratio": {
+                "median_ratio": 0.9772927615086133,
+                "ci95": [
+                  0.8053700058882269,
+                  1.0036813496779335
+                ],
+                "pairs": 6
+              }
+            },
+            "draw_ms.p95": {
+              "direction": "lower",
+              "baseline_median": 3.178744,
+              "candidate_median": 3.1317335,
+              "ratio": {
+                "median_ratio": 0.973513723466018,
+                "ci95": [
+                  0.6158256333382726,
+                  1.0104985198022354
+                ],
+                "pairs": 6
+              }
+            },
+            "draw_ms.p99": {
+              "direction": "lower",
+              "baseline_median": 3.9459295,
+              "candidate_median": 3.9105869999999996,
+              "ratio": {
+                "median_ratio": 0.9853729775935014,
+                "ci95": [
+                  0.6467243107122589,
+                  1.0461425976879377
+                ],
+                "pairs": 6
+              }
+            },
+            "dirty_to_draw_ms.p95": {
+              "direction": "lower",
+              "baseline_median": 16.5891615000005,
+              "candidate_median": 16.641427999999905,
+              "ratio": {
+                "median_ratio": 0.9998055904641289,
+                "ci95": [
+                  0.9709440338896314,
+                  1.009493342920723
+                ],
+                "pairs": 6
+              }
+            },
+            "wake_ms.p99": {
+              "direction": "lower",
+              "baseline_median": 1.5589970000000002,
+              "candidate_median": 2.3174615000000003,
+              "ratio": {
+                "median_ratio": 1.4210845381390926,
+                "ci95": [
+                  1.0712333062415726,
+                  1.587997079958404
+                ],
+                "pairs": 6
+              }
+            },
+            "main_cpu_percent": {
+              "direction": "lower",
+              "baseline_median": 8.417449866704512,
+              "candidate_median": 7.465296517518137,
+              "ratio": {
+                "median_ratio": 0.8791473771787286,
+                "ci95": [
+                  0.6903693881089374,
+                  0.8935645320315393
+                ],
+                "pairs": 6
+              }
+            },
+            "process_cpu_cores": {
+              "direction": "lower",
+              "baseline_median": 0.23260876389737514,
+              "candidate_median": 0.26393725543085683,
+              "ratio": {
+                "median_ratio": 1.131327419483963,
+                "ci95": [
+                  0.8710319973072176,
+                  1.139463391333463
+                ],
+                "pairs": 6
+              }
+            },
+            "wakeups_per_second": {
+              "direction": "lower",
+              "baseline_median": 1924.7787667805032,
+              "candidate_median": 2360.0806030654685,
+              "ratio": {
+                "median_ratio": 1.1172230408208719,
+                "ci95": [
+                  0.930103685439053,
+                  1.3713572178714886
+                ],
+                "pairs": 6
+              }
+            },
+            "frames_per_second": {
+              "direction": "info",
+              "baseline_median": 59.9924702276322,
+              "candidate_median": 59.99270141169298,
+              "ratio": {
+                "median_ratio": 1.000005306942222,
+                "ci95": [
+                  0.9999998446185085,
+                  1.008120067686429
+                ],
+                "pairs": 6
+              }
+            },
+            "pss_kib.max": {
+              "direction": "lower",
+              "baseline_median": 392544.5,
+              "candidate_median": 399375.5,
+              "ratio": {
+                "median_ratio": 1.026234732565531,
+                "ci95": [
+                  0.9979539552090226,
+                  1.046666828048684
+                ],
+                "pairs": 6
+              }
+            },
+            "rss_kib.max": {
+              "direction": "lower",
+              "baseline_median": 427404.0,
+              "candidate_median": 433536.0,
+              "ratio": {
+                "median_ratio": 1.0239079325808242,
+                "ci95": [
+                  0.9965002562758605,
+                  1.0414571267516792
+                ],
+                "pairs": 6
+              }
+            },
+            "slow_frames_16ms": {
+              "direction": "lower",
+              "baseline_median": 0.0,
+              "candidate_median": 0.0,
+              "ratio": null
+            },
+            "inputs.witnessed": {
+              "direction": "higher",
+              "baseline_median": 400.0,
+              "candidate_median": 400.0,
+              "ratio": {
+                "median_ratio": 1.0,
+                "ci95": [
+                  1.0,
+                  1.0
+                ],
+                "pairs": 6
+              }
+            },
+            "inputs.superseded": {
+              "direction": "lower",
+              "baseline_median": 0.0,
+              "candidate_median": 0.0,
+              "ratio": null
+            },
+            "inputs.superseded_task_ms": {
+              "direction": "lower",
+              "baseline_median": 0.0,
+              "candidate_median": 0.0,
+              "ratio": null
+            }
+          },
+          "output_settling": {
+            "draw_ms.p50": {
+              "direction": "lower",
+              "baseline_median": 1.2667380000000001,
+              "candidate_median": 1.227544,
+              "ratio": {
+                "median_ratio": 0.958532840850091,
+                "ci95": [
+                  0.904137724042376,
+                  1.0867193505393804
+                ],
+                "pairs": 6
+              }
+            },
+            "draw_ms.p95": {
+              "direction": "lower",
+              "baseline_median": 1.4522635,
+              "candidate_median": 1.4206195,
+              "ratio": {
+                "median_ratio": 0.9621823667991523,
+                "ci95": [
+                  0.3049808343889324,
+                  1.0476134346389103
+                ],
+                "pairs": 6
+              }
+            },
+            "draw_ms.p99": {
+              "direction": "lower",
+              "baseline_median": 1.4651995,
+              "candidate_median": 1.4206195,
+              "ratio": {
+                "median_ratio": 0.9537244893187693,
+                "ci95": [
+                  0.22310859809006967,
+                  1.0367626210466288
+                ],
+                "pairs": 6
+              }
+            },
+            "dirty_to_draw_ms.p95": {
+              "direction": "lower",
+              "baseline_median": 11.329824999998891,
+              "candidate_median": 14.600282999999763,
+              "ratio": {
+                "median_ratio": 1.2849742458883393,
+                "ci95": [
+                  1.1849715045903704,
+                  1.2992303369413754
+                ],
+                "pairs": 6
+              }
+            },
+            "wake_ms.p99": {
+              "direction": "lower",
+              "baseline_median": 0.2274565,
+              "candidate_median": 0.12882549999999998,
+              "ratio": {
+                "median_ratio": 0.5888442554101033,
+                "ci95": [
+                  0.10057321032875721,
+                  1.9330941124971377
+                ],
+                "pairs": 6
+              }
+            },
+            "main_cpu_percent": {
+              "direction": "lower",
+              "baseline_median": 4.768422884550922,
+              "candidate_median": 4.4918628860771745,
+              "ratio": {
+                "median_ratio": 0.915806446754007,
+                "ci95": [
+                  0.7442303673702947,
+                  0.9727008178821279
+                ],
+                "pairs": 6
+              }
+            },
+            "process_cpu_cores": {
+              "direction": "lower",
+              "baseline_median": 0.013499883656009137,
+              "candidate_median": 0.010999881702885577,
+              "ratio": {
+                "median_ratio": 0.8095246353400773,
+                "ci95": [
+                  0.5657905201303235,
+                  0.8461623760433805
+                ],
+                "pairs": 6
+              }
+            },
+            "wakeups_per_second": {
+              "direction": "lower",
+              "baseline_median": 670.6939654694108,
+              "candidate_median": 645.1948453128775,
+              "ratio": {
+                "median_ratio": 0.9619810120341614,
+                "ci95": [
+                  0.9490397659542165,
+                  0.9673516658693002
+                ],
+                "pairs": 6
+              }
+            },
+            "frames_per_second": {
+              "direction": "info",
+              "baseline_median": 1.9999815647699393,
+              "candidate_median": 0.7999926642274537,
+              "ratio": {
+                "median_ratio": 0.4000004032168934,
+                "ci95": [
+                  0.39999947150517035,
+                  0.4000054448416132
+                ],
+                "pairs": 6
+              }
+            },
+            "pss_kib.max": {
+              "direction": "lower",
+              "baseline_median": 392552.5,
+              "candidate_median": 399381.5,
+              "ratio": {
+                "median_ratio": 1.0234693380390218,
+                "ci95": [
+                  0.9979489995664816,
+                  1.0438345837863912
+                ],
+                "pairs": 6
+              }
+            },
+            "rss_kib.max": {
+              "direction": "lower",
+              "baseline_median": 427412.0,
+              "candidate_median": 433542.0,
+              "ratio": {
+                "median_ratio": 1.0213916071258042,
+                "ci95": [
+                  0.996495723414877,
+                  1.0388725193263288
+                ],
+                "pairs": 6
+              }
+            },
+            "slow_frames_16ms": {
+              "direction": "lower",
+              "baseline_median": 0.0,
+              "candidate_median": 0.0,
+              "ratio": null
+            },
+            "inputs.witnessed": {
+              "direction": "higher",
+              "baseline_median": 0.0,
+              "candidate_median": 0.0,
+              "ratio": null
+            },
+            "inputs.superseded": {
+              "direction": "lower",
+              "baseline_median": 0.0,
+              "candidate_median": 0.0,
+              "ratio": null
+            },
+            "inputs.superseded_task_ms": {
+              "direction": "lower",
+              "baseline_median": 0.0,
+              "candidate_median": 0.0,
+              "ratio": null
+            }
+          },
+          "launch": {
+            "spawn_to_first_draw_ms": {
+              "direction": "lower",
+              "baseline_median": 195.0020751953125,
+              "candidate_median": 179.7198486328125,
+              "ratio": {
+                "median_ratio": 0.9122626551858679,
+                "ci95": [
+                  0.898694711900601,
+                  0.9449453337508202
+                ],
+                "pairs": 6
+              }
+            },
+            "spawn_to_ready_ms": {
+              "direction": "lower",
+              "baseline_median": 281.9434814453125,
+              "candidate_median": 219.173583984375,
+              "ratio": {
+                "median_ratio": 0.7731460384961557,
+                "ci95": [
+                  0.757994708340068,
+                  0.7969323750239945
+                ],
+                "pairs": 6
+              }
+            }
+          }
+        },
+        "idle": {
+          "idle": {
+            "draw_ms.p50": {
+              "direction": "lower",
+              "baseline_median": 1.5645705,
+              "candidate_median": 1.4988695,
+              "ratio": {
+                "median_ratio": 0.9464142365021296,
+                "ci95": [
+                  0.7183042562856334,
+                  1.411751115564284
+                ],
+                "pairs": 6
+              }
+            },
+            "draw_ms.p95": {
+              "direction": "lower",
+              "baseline_median": 1.5645705,
+              "candidate_median": 1.4988695,
+              "ratio": {
+                "median_ratio": 0.9464142365021296,
+                "ci95": [
+                  0.7183042562856334,
+                  1.411751115564284
+                ],
+                "pairs": 6
+              }
+            },
+            "draw_ms.p99": {
+              "direction": "lower",
+              "baseline_median": 1.5645705,
+              "candidate_median": 1.4988695,
+              "ratio": {
+                "median_ratio": 0.9464142365021296,
+                "ci95": [
+                  0.7183042562856334,
+                  1.411751115564284
+                ],
+                "pairs": 6
+              }
+            },
+            "dirty_to_draw_ms.p95": {
+              "direction": "lower",
+              "baseline_median": 1.589900499999203,
+              "candidate_median": 1.5201445000020612,
+              "ratio": {
+                "median_ratio": 0.9437087202399952,
+                "ci95": [
+                  0.7062131861561838,
+                  1.4105756097361997
+                ],
+                "pairs": 6
+              }
+            },
+            "wake_ms.p99": {
+              "direction": "lower",
+              "baseline_median": 0.21663,
+              "candidate_median": 0.27976500000000004,
+              "ratio": {
+                "median_ratio": 0.9607002908566876,
+                "ci95": [
+                  0.14897031004206465,
+                  6.673307605637368
+                ],
+                "pairs": 6
+              }
+            },
+            "main_cpu_percent": {
+              "direction": "lower",
+              "baseline_median": 0.08220973123874781,
+              "candidate_median": 0.08023048176633113,
+              "ratio": {
+                "median_ratio": 0.9598538184001684,
+                "ci95": [
+                  0.8577243537945469,
+                  1.0160219540782331
+                ],
+                "pairs": 6
+              }
+            },
+            "process_cpu_cores": {
+              "direction": "lower",
+              "baseline_median": 0.0029999957867809443,
+              "candidate_median": 0.0030833255469843914,
+              "ratio": {
+                "median_ratio": 1.000000251524627,
+                "ci95": [
+                  0.7663043681173567,
+                  1.0833319323704074
+                ],
+                "pairs": 6
+              }
+            },
+            "wakeups_per_second": {
+              "direction": "lower",
+              "baseline_median": 135.44977618677507,
+              "candidate_median": 135.03310376483807,
+              "ratio": {
+                "median_ratio": 0.9961167617475217,
+                "ci95": [
+                  0.9853100757961328,
+                  0.9999984280623826
+                ],
+                "pairs": 6
+              }
+            },
+            "frames_per_second": {
+              "direction": "info",
+              "baseline_median": 0.016666638072826888,
+              "candidate_median": 0.016666635707001956,
+              "ratio": {
+                "median_ratio": 1.0000000230999613,
+                "ci95": [
+                  0.9999986823877365,
+                  1.0000002515246271
+                ],
+                "pairs": 6
+              }
+            },
+            "pss_kib.max": {
+              "direction": "lower",
+              "baseline_median": 324480.0,
+              "candidate_median": 320915.5,
+              "ratio": {
+                "median_ratio": 0.9823254139900379,
+                "ci95": [
+                  0.9646427348627691,
+                  1.0336486960551912
+                ],
+                "pairs": 6
+              }
+            },
+            "rss_kib.max": {
+              "direction": "lower",
+              "baseline_median": 357992.0,
+              "candidate_median": 354024.0,
+              "ratio": {
+                "median_ratio": 0.981288981390164,
+                "ci95": [
+                  0.9651319127375022,
+                  1.0307937039807518
+                ],
+                "pairs": 6
+              }
+            },
+            "slow_frames_16ms": {
+              "direction": "lower",
+              "baseline_median": 0.0,
+              "candidate_median": 0.0,
+              "ratio": null
+            },
+            "inputs.witnessed": {
+              "direction": "higher",
+              "baseline_median": 0.0,
+              "candidate_median": 0.0,
+              "ratio": null
+            },
+            "inputs.superseded": {
+              "direction": "lower",
+              "baseline_median": 0.0,
+              "candidate_median": 0.0,
+              "ratio": null
+            },
+            "inputs.superseded_task_ms": {
+              "direction": "lower",
+              "baseline_median": 0.0,
+              "candidate_median": 0.0,
+              "ratio": null
+            }
+          },
+          "launch": {
+            "spawn_to_first_draw_ms": {
+              "direction": "lower",
+              "baseline_median": 197.6280517578125,
+              "candidate_median": 185.9150390625,
+              "ratio": {
+                "median_ratio": 0.9557962455835944,
+                "ci95": [
+                  0.8673431818550312,
+                  1.0155809902148654
+                ],
+                "pairs": 6
+              }
+            },
+            "spawn_to_ready_ms": {
+              "direction": "lower",
+              "baseline_median": 283.776611328125,
+              "candidate_median": 224.095703125,
+              "ratio": {
+                "median_ratio": 0.7938800131124937,
+                "ci95": [
+                  0.7453013169446622,
+                  0.8383353977457659
+                ],
+                "pairs": 6
+              }
+            }
+          }
+        }
+      },
+      "note": "Ratios are candidate/baseline medians over runs with bootstrap 95% intervals. Accept a timing claim only when the interval excludes 1 by more than the calibrated noise; investigate guarded regressions above 5%."
+    },
+    "dev": {
+      "sessions": 2,
+      "pairs": 6,
+      "enough_samples": true,
+      "hashes": {
+        "baseline": "3020697c0326612a8988cbef7671345faa084525de8ed9361ac3166d5bf1aed1",
+        "candidate": "9759069f7c434a5641595717cc74b6a66019ff607bb848cfd78adf5cf1e64acd"
+      },
+      "comparisons": {
+        "startup": {
+          "launch": {
+            "spawn_to_first_draw_ms": {
+              "direction": "lower",
+              "baseline_median": 200.23486328125,
+              "candidate_median": 179.333251953125,
+              "ratio": {
+                "median_ratio": 0.8867619430108468,
+                "ci95": [
+                  0.5078411884507823,
+                  0.9327334276951821
+                ],
+                "pairs": 6
+              }
+            },
+            "spawn_to_ready_ms": {
+              "direction": "lower",
+              "baseline_median": 279.06689453125,
+              "candidate_median": 218.2489013671875,
+              "ratio": {
+                "median_ratio": 0.7792161022787074,
+                "ci95": [
+                  0.47863113902820564,
+                  0.80688189576014
+                ],
+                "pairs": 6
+              }
+            }
+          }
+        },
+        "history-scroll": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": {
+              "direction": "lower",
+              "baseline_median": 9.761987000000317,
+              "candidate_median": 9.88580349999961,
+              "ratio": {
+                "median_ratio": 1.0105535805994554,
+                "ci95": [
+                  0.999923305948321,
+                  1.0294242595276395
+                ],
+                "pairs": 6
+              }
+            },
+            "inputs.input_to_submit_ms.p95": {
+              "direction": "lower",
+              "baseline_median": 17.236065499998404,
+              "candidate_median": 17.344396000000415,
+              "ratio": {
+                "median_ratio": 1.0085618393074032,
+                "ci95": [
+                  0.9954747735416603,
+                  1.0156860180743896
+                ],
+                "pairs": 6
+              }
+            },
+            "inputs.input_to_witness_ms.p50": {
+              "direction": "lower",
+              "baseline_median": 0.10375399999975343,
+              "candidate_median": 0.105279999999766,
+              "ratio": {
+                "median_ratio": 0.9912016119234912,
+                "ci95": [
+                  0.9502166667070553,
+                  1.0882797774200146
+                ],
+                "pairs": 6
+              }
+            },
+            "inputs.input_to_witness_ms.p95": {
+              "direction": "lower",
+              "baseline_median": 0.5715364999996382,
+              "candidate_median": 0.7261195000000953,
+              "ratio": {
+                "median_ratio": 1.3231125428274404,
+                "ci95": [
+                  1.0071319863870967,
+                  1.4734388017816342
+                ],
+                "pairs": 6
+              }
+            },
+            "inputs.dispatch_delay_ms.p95": {
+              "direction": "lower",
+              "baseline_median": 0.5390464999991309,
+              "candidate_median": 0.6944034999987707,
+              "ratio": {
+                "median_ratio": 1.362879911927739,
+                "ci95": [
+                  1.0051972611788011,
+                  1.4990892444322306
+                ],
+                "pairs": 6
+              }
+            },
+            "draw_ms.p50": {
+              "direction": "lower",
+              "baseline_median": 1.0527125000000002,
+              "candidate_median": 1.1198125,
+              "ratio": {
+                "median_ratio": 1.0606461346570373,
+                "ci95": [
+                  1.0323887368156481,
+                  1.0657722388180098
+                ],
+                "pairs": 6
+              }
+            },
+            "draw_ms.p95": {
+              "direction": "lower",
+              "baseline_median": 1.244682,
+              "candidate_median": 1.313807,
+              "ratio": {
+                "median_ratio": 1.0544336643690362,
+                "ci95": [
+                  0.9588536318596663,
+                  1.1481908302852564
+                ],
+                "pairs": 6
+              }
+            },
+            "draw_ms.p99": {
+              "direction": "lower",
+              "baseline_median": 1.5168815,
+              "candidate_median": 1.572317,
+              "ratio": {
+                "median_ratio": 1.0268547386152391,
+                "ci95": [
+                  0.9709270408991095,
+                  1.0836027772432812
+                ],
+                "pairs": 6
+              }
+            },
+            "dirty_to_draw_ms.p95": {
+              "direction": "lower",
+              "baseline_median": 16.382582500000353,
+              "candidate_median": 16.38451349999923,
+              "ratio": {
+                "median_ratio": 1.0006546703951955,
+                "ci95": [
+                  0.995926424165889,
+                  1.0038898345854186
+                ],
+                "pairs": 6
+              }
+            },
+            "wake_ms.p99": {
+              "direction": "lower",
+              "baseline_median": 1.222437,
+              "candidate_median": 1.2858475,
+              "ratio": {
+                "median_ratio": 1.0570630653529318,
+                "ci95": [
+                  0.9921962533569109,
+                  1.0881216807317262
+                ],
+                "pairs": 6
+              }
+            },
+            "main_cpu_percent": {
+              "direction": "lower",
+              "baseline_median": 7.795313901289443,
+              "candidate_median": 8.06645067938317,
+              "ratio": {
+                "median_ratio": 1.03583977036058,
+                "ci95": [
+                  0.9892235365180502,
+                  1.0471282241915296
+                ],
+                "pairs": 6
+              }
+            },
+            "process_cpu_cores": {
+              "direction": "lower",
+              "baseline_median": 0.09747645938757862,
+              "candidate_median": 0.10164668823160403,
+              "ratio": {
+                "median_ratio": 1.0455830740428005,
+                "ci95": [
+                  0.9987180069280734,
+                  1.0534775493924546
+                ],
+                "pairs": 6
+              }
+            },
+            "wakeups_per_second": {
+              "direction": "lower",
+              "baseline_median": 1248.977621352911,
+              "candidate_median": 1250.0184187016202,
+              "ratio": {
+                "median_ratio": 1.0006872116903234,
+                "ci95": [
+                  0.9992095844332485,
+                  1.00398856493621
+                ],
+                "pairs": 6
+              }
+            },
+            "frames_per_second": {
+              "direction": "info",
+              "baseline_median": 59.97144836742795,
+              "candidate_median": 59.99757236060899,
+              "ratio": {
+                "median_ratio": 1.0004364112085011,
+                "ci95": [
+                  0.9999981628825657,
+                  1.0008710223234782
+                ],
+                "pairs": 6
+              }
+            },
+            "pss_kib.max": {
+              "direction": "lower",
+              "baseline_median": 379105.5,
+              "candidate_median": 385804.5,
+              "ratio": {
+                "median_ratio": 1.0003006745505718,
+                "ci95": [
+                  0.9894980690273796,
+                  1.0506816604518519
+                ],
+                "pairs": 6
+              }
+            },
+            "rss_kib.max": {
+              "direction": "lower",
+              "baseline_median": 409314.0,
+              "candidate_median": 419886.0,
+              "ratio": {
+                "median_ratio": 1.0104106702048379,
+                "ci95": [
+                  0.9958175664171331,
+                  1.055440584429645
+                ],
+                "pairs": 6
+              }
+            },
+            "slow_frames_16ms": {
+              "direction": "lower",
+              "baseline_median": 0.0,
+              "candidate_median": 0.0,
+              "ratio": null
+            },
+            "inputs.witnessed": {
+              "direction": "higher",
+              "baseline_median": 1200.0,
+              "candidate_median": 1200.0,
+              "ratio": {
+                "median_ratio": 1.0,
+                "ci95": [
+                  1.0,
+                  1.0
+                ],
+                "pairs": 6
+              }
+            },
+            "inputs.superseded": {
+              "direction": "lower",
+              "baseline_median": 0.0,
+              "candidate_median": 0.0,
+              "ratio": null
+            },
+            "inputs.superseded_task_ms": {
+              "direction": "lower",
+              "baseline_median": 0.0,
+              "candidate_median": 0.0,
+              "ratio": null
+            }
+          },
+          "launch": {
+            "spawn_to_first_draw_ms": {
+              "direction": "lower",
+              "baseline_median": 200.2025146484375,
+              "candidate_median": 183.5546875,
+              "ratio": {
+                "median_ratio": 0.9151783009918992,
+                "ci95": [
+                  0.884529792801687,
+                  0.9326192633810602
+                ],
+                "pairs": 6
+              }
+            },
+            "spawn_to_ready_ms": {
+              "direction": "lower",
+              "baseline_median": 278.96533203125,
+              "candidate_median": 222.3951416015625,
+              "ratio": {
+                "median_ratio": 0.796689191749306,
+                "ci95": [
+                  0.7729230081783047,
+                  0.8091173456170163
+                ],
+                "pairs": 6
+              }
+            }
+          }
+        }
+      },
+      "note": "Ratios are candidate/baseline medians over runs with bootstrap 95% intervals. Accept a timing claim only when the interval excludes 1 by more than the calibrated noise; investigate guarded regressions above 5%."
+    }
+  },
+  "observations": {
+    "compat": [
+      {
+        "session": "first",
+        "pair": 1,
+        "scenario": "startup",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 43.2685546875,
+          "spawn_to_first_draw_ms": 874.587890625,
+          "spawn_to_ready_ms": 901.55078125
+        },
+        "phases": {},
+        "raw_directory": "target/profiling/finalization/compat-first/pair-1-startup-baseline"
+      },
+      {
+        "session": "first",
+        "pair": 1,
+        "scenario": "startup",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 42.693603515625,
+          "spawn_to_first_draw_ms": 855.0341796875,
+          "spawn_to_ready_ms": 892.50048828125
+        },
+        "phases": {},
+        "raw_directory": "target/profiling/finalization/compat-first/pair-1-startup-candidate"
+      },
+      {
+        "session": "first",
+        "pair": 1,
+        "scenario": "history-select",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 42.576416015625,
+          "spawn_to_first_draw_ms": 188.725830078125,
+          "spawn_to_ready_ms": 275.50390625
+        },
+        "phases": {
+          "select": {
+            "inputs.input_to_submit_ms.p50": 12.605114999998477,
+            "inputs.input_to_submit_ms.p95": 55.60064799999964,
+            "inputs.input_to_witness_ms.p50": 4.7393190000002505,
+            "inputs.input_to_witness_ms.p95": 33.797844999997324,
+            "inputs.dispatch_delay_ms.p95": 1.1374669999968319,
+            "inputs.apply_ms.p95": 0.118659,
+            "draw_ms.p50": 2.697205,
+            "draw_ms.p95": 18.596268,
+            "draw_ms.p99": 27.255404000000002,
+            "dirty_to_draw_ms.p95": 21.36199399999896,
+            "wake_ms.p99": 26.246935999999998,
+            "main_cpu_percent": 15.733164960646844,
+            "process_cpu_cores": 0.20079222788247164,
+            "wakeups_per_second": 957.7022355234624,
+            "frames_per_second": 40.19330533827948,
+            "pss_kib.max": 400833,
+            "rss_kib.max": 435600,
+            "slow_frames_16ms": 76,
+            "inputs.witnessed": 240,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-first/pair-1-history-select-baseline"
+      },
+      {
+        "session": "first",
+        "pair": 1,
+        "scenario": "history-select",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 46.970947265625,
+          "spawn_to_first_draw_ms": 188.80810546875,
+          "spawn_to_ready_ms": 227.837646484375
+        },
+        "phases": {
+          "select": {
+            "inputs.input_to_submit_ms.p50": 8.082884999999806,
+            "inputs.input_to_submit_ms.p95": 10.006596999999601,
+            "inputs.input_to_witness_ms.p50": 3.5901089999997566,
+            "inputs.input_to_witness_ms.p95": 4.855138000000807,
+            "inputs.dispatch_delay_ms.p95": 0.09758400000100664,
+            "inputs.apply_ms.p95": 0.03275,
+            "draw_ms.p50": 0.995162,
+            "draw_ms.p95": 3.864585,
+            "draw_ms.p99": 4.37639,
+            "dirty_to_draw_ms.p95": 14.465238000000681,
+            "wake_ms.p99": 2.981334,
+            "main_cpu_percent": 8.393126714524417,
+            "process_cpu_cores": 0.10355429029715926,
+            "wakeups_per_second": 1005.9061532232475,
+            "frames_per_second": 41.70065023414225,
+            "pss_kib.max": 400021,
+            "rss_kib.max": 434592,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 240,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-first/pair-1-history-select-candidate"
+      },
+      {
+        "session": "first",
+        "pair": 1,
+        "scenario": "history-scroll",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 39.107421875,
+          "spawn_to_first_draw_ms": 185.97998046875,
+          "spawn_to_ready_ms": 274.049560546875
+        },
+        "phases": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": 9.945632999999361,
+            "inputs.input_to_submit_ms.p95": 17.38853399999789,
+            "inputs.input_to_witness_ms.p50": 0.08683399999972607,
+            "inputs.input_to_witness_ms.p95": 0.8057769999995799,
+            "inputs.dispatch_delay_ms.p95": 0.7765369999997347,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.157152,
+            "draw_ms.p95": 1.389075,
+            "draw_ms.p99": 1.6230280000000001,
+            "dirty_to_draw_ms.p95": 16.377197000001615,
+            "wake_ms.p99": 1.316055,
+            "main_cpu_percent": 8.253207618232109,
+            "process_cpu_cores": 0.10373115378489937,
+            "wakeups_per_second": 1250.7683593309853,
+            "frames_per_second": 59.99726532985889,
+            "pss_kib.max": 387432,
+            "rss_kib.max": 420948,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 1200,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-first/pair-1-history-scroll-baseline"
+      },
+      {
+        "session": "first",
+        "pair": 1,
+        "scenario": "history-scroll",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 42.415771484375,
+          "spawn_to_first_draw_ms": 182.214111328125,
+          "spawn_to_ready_ms": 220.365966796875
+        },
+        "phases": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": 9.94713499999989,
+            "inputs.input_to_submit_ms.p95": 17.36636400000134,
+            "inputs.input_to_witness_ms.p50": 0.09811699999954726,
+            "inputs.input_to_witness_ms.p95": 0.8242750000008527,
+            "inputs.dispatch_delay_ms.p95": 0.7932749999999942,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.136782,
+            "draw_ms.p95": 1.351994,
+            "draw_ms.p99": 1.614917,
+            "dirty_to_draw_ms.p95": 16.370168999999805,
+            "wake_ms.p99": 1.285543,
+            "main_cpu_percent": 8.201684581191286,
+            "process_cpu_cores": 0.10216781723171235,
+            "wakeups_per_second": 1253.3280599588225,
+            "frames_per_second": 59.99752940494945,
+            "pss_kib.max": 388950,
+            "rss_kib.max": 422412,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 1200,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-first/pair-1-history-scroll-candidate"
+      },
+      {
+        "session": "first",
+        "pair": 1,
+        "scenario": "terminal-output",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 43.62646484375,
+          "spawn_to_first_draw_ms": 187.15283203125,
+          "spawn_to_ready_ms": 273.966552734375
+        },
+        "phases": {
+          "scroll_with_output": {
+            "inputs.input_to_submit_ms.p50": 10.326257999999143,
+            "inputs.input_to_submit_ms.p95": 17.835931999999957,
+            "inputs.input_to_witness_ms.p50": 0.08776099999977305,
+            "inputs.input_to_witness_ms.p95": 1.363746999999421,
+            "inputs.dispatch_delay_ms.p95": 1.3262370000011288,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.371844,
+            "draw_ms.p95": 3.072901,
+            "draw_ms.p99": 3.917779,
+            "dirty_to_draw_ms.p95": 16.51019499999984,
+            "wake_ms.p99": 1.575976,
+            "main_cpu_percent": 8.470335096597774,
+            "process_cpu_cores": 0.23182489905356676,
+            "wakeups_per_second": 1733.8309510972506,
+            "frames_per_second": 59.992524552375734,
+            "pss_kib.max": 390889,
+            "rss_kib.max": 425752,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 400,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          },
+          "output_settling": {
+            "inputs.input_to_submit_ms.p50": null,
+            "inputs.input_to_submit_ms.p95": null,
+            "inputs.input_to_witness_ms.p50": null,
+            "inputs.input_to_witness_ms.p95": null,
+            "inputs.dispatch_delay_ms.p95": null,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.123381,
+            "draw_ms.p95": 1.353553,
+            "draw_ms.p99": 1.377674,
+            "dirty_to_draw_ms.p95": 11.457312999998976,
+            "wake_ms.p99": 0.209203,
+            "main_cpu_percent": 4.620635926015955,
+            "process_cpu_cores": 0.012999897300811317,
+            "wakeups_per_second": 669.6947094117958,
+            "frames_per_second": 1.9999842001248194,
+            "pss_kib.max": 390897,
+            "rss_kib.max": 425760,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 0,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-first/pair-1-terminal-output-baseline"
+      },
+      {
+        "session": "first",
+        "pair": 1,
+        "scenario": "terminal-output",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 39.905517578125,
+          "spawn_to_first_draw_ms": 170.74267578125,
+          "spawn_to_ready_ms": 209.96240234375
+        },
+        "phases": {
+          "scroll_with_output": {
+            "inputs.input_to_submit_ms.p50": 10.317956999999296,
+            "inputs.input_to_submit_ms.p95": 17.727742999999464,
+            "inputs.input_to_witness_ms.p50": 0.10524199999963457,
+            "inputs.input_to_witness_ms.p95": 1.045546999999715,
+            "inputs.dispatch_delay_ms.p95": 1.0054760000002716,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.379933,
+            "draw_ms.p95": 3.1536899999999997,
+            "draw_ms.p99": 3.9694179999999997,
+            "dirty_to_draw_ms.p95": 16.679118999999446,
+            "wake_ms.p99": 2.301781,
+            "main_cpu_percent": 7.491934835120726,
+            "process_cpu_cores": 0.2647196995787169,
+            "wakeups_per_second": 2317.002246253479,
+            "frames_per_second": 59.992689312809794,
+            "pss_kib.max": 405489,
+            "rss_kib.max": 439220,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 400,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          },
+          "output_settling": {
+            "inputs.input_to_submit_ms.p50": null,
+            "inputs.input_to_submit_ms.p95": null,
+            "inputs.input_to_witness_ms.p50": null,
+            "inputs.input_to_witness_ms.p95": null,
+            "inputs.dispatch_delay_ms.p95": null,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.237761,
+            "draw_ms.p95": 1.404523,
+            "draw_ms.p99": 1.404523,
+            "dirty_to_draw_ms.p95": 14.689706999999544,
+            "wake_ms.p99": 0.037700000000000004,
+            "main_cpu_percent": 4.529058367554391,
+            "process_cpu_cores": 0.01099989383122471,
+            "wakeups_per_second": 647.4937505198188,
+            "frames_per_second": 0.7999922786345253,
+            "pss_kib.max": 405497,
+            "rss_kib.max": 439228,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 0,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-first/pair-1-terminal-output-candidate"
+      },
+      {
+        "session": "first",
+        "pair": 1,
+        "scenario": "idle",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 43.802978515625,
+          "spawn_to_first_draw_ms": 213.515625,
+          "spawn_to_ready_ms": 301.199951171875
+        },
+        "phases": {
+          "idle": {
+            "inputs.input_to_submit_ms.p50": null,
+            "inputs.input_to_submit_ms.p95": null,
+            "inputs.input_to_witness_ms.p50": null,
+            "inputs.input_to_witness_ms.p95": null,
+            "inputs.dispatch_delay_ms.p95": null,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.464582,
+            "draw_ms.p95": 1.464582,
+            "draw_ms.p99": 1.464582,
+            "dirty_to_draw_ms.p95": 1.4868919999935315,
+            "wake_ms.p99": 0.08456100000000001,
+            "main_cpu_percent": 0.08105718435639772,
+            "process_cpu_cores": 0.002999994582809783,
+            "wakeups_per_second": 135.41642214071933,
+            "frames_per_second": 0.016666636571165457,
+            "pss_kib.max": 330684,
+            "rss_kib.max": 365268,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 0,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-first/pair-1-idle-baseline"
+      },
+      {
+        "session": "first",
+        "pair": 1,
+        "scenario": "idle",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 42.140625,
+          "spawn_to_first_draw_ms": 180.99755859375,
+          "spawn_to_ready_ms": 219.363037109375
+        },
+        "phases": {
+          "idle": {
+            "inputs.input_to_submit_ms.p50": null,
+            "inputs.input_to_submit_ms.p95": null,
+            "inputs.input_to_witness_ms.p50": null,
+            "inputs.input_to_witness_ms.p95": null,
+            "inputs.dispatch_delay_ms.p95": null,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 2.7037799999999996,
+            "draw_ms.p95": 2.7037799999999996,
+            "draw_ms.p99": 2.7037799999999996,
+            "dirty_to_draw_ms.p95": 2.736140000008163,
+            "wake_ms.p99": 0.079971,
+            "main_cpu_percent": 0.08156786425912838,
+            "process_cpu_cores": 0.0029999953524072003,
+            "wakeups_per_second": 134.89979101324377,
+            "frames_per_second": 0.016666640846706667,
+            "pss_kib.max": 319988,
+            "rss_kib.max": 353128,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 0,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-first/pair-1-idle-candidate"
+      },
+      {
+        "session": "first",
+        "pair": 2,
+        "scenario": "startup",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 42.110107421875,
+          "spawn_to_first_draw_ms": 196.44384765625,
+          "spawn_to_ready_ms": 233.248046875
+        },
+        "phases": {},
+        "raw_directory": "target/profiling/finalization/compat-first/pair-2-startup-candidate"
+      },
+      {
+        "session": "first",
+        "pair": 2,
+        "scenario": "startup",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 42.458251953125,
+          "spawn_to_first_draw_ms": 192.70751953125,
+          "spawn_to_ready_ms": 276.5625
+        },
+        "phases": {},
+        "raw_directory": "target/profiling/finalization/compat-first/pair-2-startup-baseline"
+      },
+      {
+        "session": "first",
+        "pair": 2,
+        "scenario": "history-select",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 44.197998046875,
+          "spawn_to_first_draw_ms": 180.176025390625,
+          "spawn_to_ready_ms": 219.736083984375
+        },
+        "phases": {
+          "select": {
+            "inputs.input_to_submit_ms.p50": 8.209021999999095,
+            "inputs.input_to_submit_ms.p95": 10.07151199999862,
+            "inputs.input_to_witness_ms.p50": 3.7336149999973713,
+            "inputs.input_to_witness_ms.p95": 4.88651899999968,
+            "inputs.dispatch_delay_ms.p95": 0.10227200000008452,
+            "inputs.apply_ms.p95": 0.03151,
+            "draw_ms.p50": 0.9867969999999999,
+            "draw_ms.p95": 3.8065949999999997,
+            "draw_ms.p99": 4.2661299999999995,
+            "dirty_to_draw_ms.p95": 14.511612000000241,
+            "wake_ms.p99": 2.92177,
+            "main_cpu_percent": 8.500141367826894,
+            "process_cpu_cores": 0.10355434577410476,
+            "wakeups_per_second": 1007.5802977037304,
+            "frames_per_second": 41.7006725743533,
+            "pss_kib.max": 412720,
+            "rss_kib.max": 446200,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 240,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-first/pair-2-history-select-candidate"
+      },
+      {
+        "session": "first",
+        "pair": 2,
+        "scenario": "history-select",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 42.9453125,
+          "spawn_to_first_draw_ms": 195.3955078125,
+          "spawn_to_ready_ms": 281.281005859375
+        },
+        "phases": {
+          "select": {
+            "inputs.input_to_submit_ms.p50": 8.190113000000565,
+            "inputs.input_to_submit_ms.p95": 10.106638000000203,
+            "inputs.input_to_witness_ms.p50": 3.6944120000007388,
+            "inputs.input_to_witness_ms.p95": 4.953131000000212,
+            "inputs.dispatch_delay_ms.p95": 0.0997719999995752,
+            "inputs.apply_ms.p95": 0.03239,
+            "draw_ms.p50": 0.9683269999999999,
+            "draw_ms.p95": 3.8586240000000003,
+            "draw_ms.p99": 4.272908,
+            "dirty_to_draw_ms.p95": 14.385913000000073,
+            "wake_ms.p99": 2.915699,
+            "main_cpu_percent": 8.462606740386464,
+            "process_cpu_cores": 0.10355408501673018,
+            "wakeups_per_second": 1005.8692924739559,
+            "frames_per_second": 41.700567569026695,
+            "pss_kib.max": 391067,
+            "rss_kib.max": 426600,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 240,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-first/pair-2-history-select-baseline"
+      },
+      {
+        "session": "first",
+        "pair": 2,
+        "scenario": "history-scroll",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 42.437255859375,
+          "spawn_to_first_draw_ms": 191.593994140625,
+          "spawn_to_ready_ms": 230.0517578125
+        },
+        "phases": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": 9.844041999998808,
+            "inputs.input_to_submit_ms.p95": 17.389243000001443,
+            "inputs.input_to_witness_ms.p50": 0.09986800000115181,
+            "inputs.input_to_witness_ms.p95": 0.7069269999992684,
+            "inputs.dispatch_delay_ms.p95": 0.6778459999986808,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.123977,
+            "draw_ms.p95": 1.294318,
+            "draw_ms.p99": 1.47339,
+            "dirty_to_draw_ms.p95": 16.35100799999782,
+            "wake_ms.p99": 1.245787,
+            "main_cpu_percent": 8.037469060530208,
+            "process_cpu_cores": 0.10060426135054641,
+            "wakeups_per_second": 1253.018256137013,
+            "frames_per_second": 59.99767088833106,
+            "pss_kib.max": 375921,
+            "rss_kib.max": 410708,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 1200,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-first/pair-2-history-scroll-candidate"
+      },
+      {
+        "session": "first",
+        "pair": 2,
+        "scenario": "history-scroll",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 43.10693359375,
+          "spawn_to_first_draw_ms": 191.8720703125,
+          "spawn_to_ready_ms": 279.306884765625
+        },
+        "phases": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": 9.941451999999117,
+            "inputs.input_to_submit_ms.p95": 17.337847999999212,
+            "inputs.input_to_witness_ms.p50": 0.10763799999767798,
+            "inputs.input_to_witness_ms.p95": 0.6896129999986442,
+            "inputs.dispatch_delay_ms.p95": 0.6603929999982938,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.142037,
+            "draw_ms.p95": 1.370198,
+            "draw_ms.p99": 1.5903589999999999,
+            "dirty_to_draw_ms.p95": 16.404414999999062,
+            "wake_ms.p99": 1.3046380000000002,
+            "main_cpu_percent": 8.198378289809582,
+            "process_cpu_cores": 0.10216794995759267,
+            "wakeups_per_second": 1249.472326777294,
+            "frames_per_second": 59.99760734754549,
+            "pss_kib.max": 387140,
+            "rss_kib.max": 421796,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 1200,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-first/pair-2-history-scroll-baseline"
+      },
+      {
+        "session": "first",
+        "pair": 2,
+        "scenario": "terminal-output",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 43.409912109375,
+          "spawn_to_first_draw_ms": 179.699951171875,
+          "spawn_to_ready_ms": 219.636474609375
+        },
+        "phases": {
+          "scroll_with_output": {
+            "inputs.input_to_submit_ms.p50": 10.302612999999837,
+            "inputs.input_to_submit_ms.p95": 17.555994000000283,
+            "inputs.input_to_witness_ms.p50": 0.08923399999912363,
+            "inputs.input_to_witness_ms.p95": 1.0216309999996156,
+            "inputs.dispatch_delay_ms.p95": 0.9923109999999724,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.347828,
+            "draw_ms.p95": 3.1097770000000002,
+            "draw_ms.p99": 3.805441,
+            "dirty_to_draw_ms.p95": 16.55750199999966,
+            "wake_ms.p99": 2.130492,
+            "main_cpu_percent": 7.332087501648861,
+            "process_cpu_cores": 0.2631548112829968,
+            "wakeups_per_second": 2218.958962282698,
+            "frames_per_second": 59.99303138177844,
+            "pss_kib.max": 395229,
+            "rss_kib.max": 429828,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 400,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          },
+          "output_settling": {
+            "inputs.input_to_submit_ms.p50": null,
+            "inputs.input_to_submit_ms.p95": null,
+            "inputs.input_to_witness_ms.p50": null,
+            "inputs.input_to_witness_ms.p95": null,
+            "inputs.dispatch_delay_ms.p95": null,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.217327,
+            "draw_ms.p95": 1.421328,
+            "draw_ms.p99": 1.421328,
+            "dirty_to_draw_ms.p95": 15.312715000001845,
+            "wake_ms.p99": 0.18201099999999998,
+            "main_cpu_percent": 4.397315710528903,
+            "process_cpu_cores": 0.009999927091531533,
+            "wakeups_per_second": 645.1952959456167,
+            "frames_per_second": 0.7999941673225255,
+            "pss_kib.max": 395237,
+            "rss_kib.max": 429836,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 0,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-first/pair-2-terminal-output-candidate"
+      },
+      {
+        "session": "first",
+        "pair": 2,
+        "scenario": "terminal-output",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 42.822021484375,
+          "spawn_to_first_draw_ms": 196.994384765625,
+          "spawn_to_ready_ms": 283.818115234375
+        },
+        "phases": {
+          "scroll_with_output": {
+            "inputs.input_to_submit_ms.p50": 10.004486000000725,
+            "inputs.input_to_submit_ms.p95": 17.63755400000082,
+            "inputs.input_to_witness_ms.p50": 0.09518600000046717,
+            "inputs.input_to_witness_ms.p95": 1.159762999999657,
+            "inputs.dispatch_delay_ms.p95": 1.1121220000004541,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.3974669999999998,
+            "draw_ms.p95": 3.126327,
+            "draw_ms.p99": 3.97408,
+            "dirty_to_draw_ms.p95": 16.566687000000456,
+            "wake_ms.p99": 1.542018,
+            "main_cpu_percent": 8.36456463681125,
+            "process_cpu_cores": 0.23339193139015302,
+            "wakeups_per_second": 2059.4879959179407,
+            "frames_per_second": 59.99269108887826,
+            "pss_kib.max": 394200,
+            "rss_kib.max": 429056,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 400,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          },
+          "output_settling": {
+            "inputs.input_to_submit_ms.p50": null,
+            "inputs.input_to_submit_ms.p95": null,
+            "inputs.input_to_witness_ms.p50": null,
+            "inputs.input_to_witness_ms.p95": null,
+            "inputs.dispatch_delay_ms.p95": null,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.275926,
+            "draw_ms.p95": 1.463907,
+            "draw_ms.p99": 1.486888,
+            "dirty_to_draw_ms.p95": 11.89038299999811,
+            "wake_ms.p99": 0.07394,
+            "main_cpu_percent": 4.787416671851037,
+            "process_cpu_cores": 0.011999895483310333,
+            "wakeups_per_second": 670.5941592589918,
+            "frames_per_second": 1.9999825805517204,
+            "pss_kib.max": 394208,
+            "rss_kib.max": 429064,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 0,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-first/pair-2-terminal-output-baseline"
+      },
+      {
+        "session": "first",
+        "pair": 2,
+        "scenario": "idle",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 41.415283203125,
+          "spawn_to_first_draw_ms": 177.651611328125,
+          "spawn_to_ready_ms": 215.076416015625
+        },
+        "phases": {
+          "idle": {
+            "inputs.input_to_submit_ms.p50": null,
+            "inputs.input_to_submit_ms.p95": null,
+            "inputs.input_to_witness_ms.p50": null,
+            "inputs.input_to_witness_ms.p95": null,
+            "inputs.dispatch_delay_ms.p95": null,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.562357,
+            "draw_ms.p95": 1.562357,
+            "draw_ms.p99": 1.562357,
+            "dirty_to_draw_ms.p95": 1.5861970000041765,
+            "wake_ms.p99": 0.05667,
+            "main_cpu_percent": 0.07897399873042779,
+            "process_cpu_cores": 0.002999994447960275,
+            "wakeups_per_second": 135.16641651643238,
+            "frames_per_second": 0.01666663582200153,
+            "pss_kib.max": 324461,
+            "rss_kib.max": 357668,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 0,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-first/pair-2-idle-candidate"
+      },
+      {
+        "session": "first",
+        "pair": 2,
+        "scenario": "idle",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 42.380126953125,
+          "spawn_to_first_draw_ms": 194.30126953125,
+          "spawn_to_ready_ms": 280.98291015625
+        },
+        "phases": {
+          "idle": {
+            "inputs.input_to_submit_ms.p50": null,
+            "inputs.input_to_submit_ms.p95": null,
+            "inputs.input_to_witness_ms.p50": null,
+            "inputs.input_to_witness_ms.p95": null,
+            "inputs.dispatch_delay_ms.p95": null,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.5984960000000001,
+            "draw_ms.p95": 1.5984960000000001,
+            "draw_ms.p99": 1.5984960000000001,
+            "dirty_to_draw_ms.p95": 1.6169559999980265,
+            "wake_ms.p99": 2.069668,
+            "main_cpu_percent": 0.08538481815456546,
+            "process_cpu_cores": 0.0038333255416519493,
+            "wakeups_per_second": 136.83305520418477,
+            "frames_per_second": 0.01666663278979108,
+            "pss_kib.max": 311629,
+            "rss_kib.max": 344848,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 0,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-first/pair-2-idle-baseline"
+      },
+      {
+        "session": "first",
+        "pair": 3,
+        "scenario": "startup",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 52.58740234375,
+          "spawn_to_first_draw_ms": 204.769775390625,
+          "spawn_to_ready_ms": 290.772705078125
+        },
+        "phases": {},
+        "raw_directory": "target/profiling/finalization/compat-first/pair-3-startup-baseline"
+      },
+      {
+        "session": "first",
+        "pair": 3,
+        "scenario": "startup",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 50.15087890625,
+          "spawn_to_first_draw_ms": 189.51025390625,
+          "spawn_to_ready_ms": 228.440673828125
+        },
+        "phases": {},
+        "raw_directory": "target/profiling/finalization/compat-first/pair-3-startup-candidate"
+      },
+      {
+        "session": "first",
+        "pair": 3,
+        "scenario": "history-select",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 52.614501953125,
+          "spawn_to_first_draw_ms": 205.237548828125,
+          "spawn_to_ready_ms": 292.54150390625
+        },
+        "phases": {
+          "select": {
+            "inputs.input_to_submit_ms.p50": 8.50811899999826,
+            "inputs.input_to_submit_ms.p95": 10.623931000001903,
+            "inputs.input_to_witness_ms.p50": 3.953676999999516,
+            "inputs.input_to_witness_ms.p95": 5.304661000000124,
+            "inputs.dispatch_delay_ms.p95": 0.09092099999998027,
+            "inputs.apply_ms.p95": 0.033721,
+            "draw_ms.p50": 1.100825,
+            "draw_ms.p95": 4.118265,
+            "draw_ms.p99": 4.8285480000000005,
+            "dirty_to_draw_ms.p95": 14.253783000000112,
+            "wake_ms.p99": 3.2642919999999997,
+            "main_cpu_percent": 9.110599172863328,
+            "process_cpu_cores": 0.10983015302909796,
+            "wakeups_per_second": 1003.0805309505141,
+            "frames_per_second": 41.7005914358099,
+            "pss_kib.max": 407004,
+            "rss_kib.max": 441544,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 240,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-first/pair-3-history-select-baseline"
+      },
+      {
+        "session": "first",
+        "pair": 3,
+        "scenario": "history-select",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 51.707275390625,
+          "spawn_to_first_draw_ms": 187.109619140625,
+          "spawn_to_ready_ms": 226.0380859375
+        },
+        "phases": {
+          "select": {
+            "inputs.input_to_submit_ms.p50": 8.514777000000322,
+            "inputs.input_to_submit_ms.p95": 10.510431999999128,
+            "inputs.input_to_witness_ms.p50": 4.004762000000483,
+            "inputs.input_to_witness_ms.p95": 5.182778999998845,
+            "inputs.dispatch_delay_ms.p95": 0.0895900000000438,
+            "inputs.apply_ms.p95": 0.0332,
+            "draw_ms.p50": 1.142964,
+            "draw_ms.p95": 4.133934,
+            "draw_ms.p99": 4.562285999999999,
+            "dirty_to_draw_ms.p95": 14.348408999998355,
+            "wake_ms.p99": 3.213691,
+            "main_cpu_percent": 8.803789577510017,
+            "process_cpu_cores": 0.10773830625989732,
+            "wakeups_per_second": 1006.3943274710928,
+            "frames_per_second": 41.70065187276285,
+            "pss_kib.max": 410160,
+            "rss_kib.max": 444812,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 240,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-first/pair-3-history-select-candidate"
+      },
+      {
+        "session": "first",
+        "pair": 3,
+        "scenario": "history-scroll",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 42.93115234375,
+          "spawn_to_first_draw_ms": 195.6083984375,
+          "spawn_to_ready_ms": 283.223388671875
+        },
+        "phases": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": 9.979161999999633,
+            "inputs.input_to_submit_ms.p95": 17.545070999996824,
+            "inputs.input_to_witness_ms.p50": 0.10045700000046054,
+            "inputs.input_to_witness_ms.p95": 0.9048960000000079,
+            "inputs.dispatch_delay_ms.p95": 0.8700059999991936,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.222754,
+            "draw_ms.p95": 1.578456,
+            "draw_ms.p99": 1.806955,
+            "dirty_to_draw_ms.p95": 16.377784999998767,
+            "wake_ms.p99": 1.4584249999999999,
+            "main_cpu_percent": 8.595131723501499,
+            "process_cpu_cores": 0.11050799733637029,
+            "wakeups_per_second": 1246.6553133474677,
+            "frames_per_second": 59.997502327434994,
+            "pss_kib.max": 385646,
+            "rss_kib.max": 420004,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 1200,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-first/pair-3-history-scroll-baseline"
+      },
+      {
+        "session": "first",
+        "pair": 3,
+        "scenario": "history-scroll",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 44.028564453125,
+          "spawn_to_first_draw_ms": 188.980712890625,
+          "spawn_to_ready_ms": 226.84814453125
+        },
+        "phases": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": 9.87155900000107,
+            "inputs.input_to_submit_ms.p95": 17.266810000000987,
+            "inputs.input_to_witness_ms.p50": 0.09815300000082061,
+            "inputs.input_to_witness_ms.p95": 0.7689359999999397,
+            "inputs.dispatch_delay_ms.p95": 0.7357150000002548,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.1233440000000001,
+            "draw_ms.p95": 1.401484,
+            "draw_ms.p99": 1.604554,
+            "dirty_to_draw_ms.p95": 16.38181099999929,
+            "wake_ms.p99": 1.291974,
+            "main_cpu_percent": 8.175105343918059,
+            "process_cpu_cores": 0.1026892523497516,
+            "wakeups_per_second": 1250.567438133447,
+            "frames_per_second": 59.99762916475334,
+            "pss_kib.max": 386550,
+            "rss_kib.max": 420160,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 1200,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-first/pair-3-history-scroll-candidate"
+      },
+      {
+        "session": "first",
+        "pair": 3,
+        "scenario": "terminal-output",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 45.376953125,
+          "spawn_to_first_draw_ms": 208.29248046875,
+          "spawn_to_ready_ms": 294.394775390625
+        },
+        "phases": {
+          "scroll_with_output": {
+            "inputs.input_to_submit_ms.p50": 12.56009400000039,
+            "inputs.input_to_submit_ms.p95": 25.2586339999998,
+            "inputs.input_to_witness_ms.p50": 0.1253630000010162,
+            "inputs.input_to_witness_ms.p95": 8.851799999999457,
+            "inputs.dispatch_delay_ms.p95": 8.756349999999657,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 2.100556,
+            "draw_ms.p95": 9.97489,
+            "draw_ms.p99": 18.254676,
+            "dirty_to_draw_ms.p95": 17.56875299999956,
+            "wake_ms.p99": 3.982422,
+            "main_cpu_percent": 16.05208206803189,
+            "process_cpu_cores": 0.4259391793854016,
+            "wakeups_per_second": 3070.0505925922057,
+            "frames_per_second": 59.036423025108974,
+            "pss_kib.max": 400302,
+            "rss_kib.max": 435060,
+            "slow_frames_16ms": 5,
+            "inputs.witnessed": 400,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          },
+          "output_settling": {
+            "inputs.input_to_submit_ms.p50": null,
+            "inputs.input_to_submit_ms.p95": null,
+            "inputs.input_to_witness_ms.p50": null,
+            "inputs.input_to_witness_ms.p95": null,
+            "inputs.dispatch_delay_ms.p95": null,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.3360539999999999,
+            "draw_ms.p95": 4.904315,
+            "draw_ms.p99": 6.75187,
+            "dirty_to_draw_ms.p95": 10.077119999999923,
+            "wake_ms.p99": 0.460831,
+            "main_cpu_percent": 7.278184257634531,
+            "process_cpu_cores": 0.019999772870579392,
+            "wakeups_per_second": 662.4924763379432,
+            "frames_per_second": 1.999977287057942,
+            "pss_kib.max": 400310,
+            "rss_kib.max": 435068,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 0,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-first/pair-3-terminal-output-baseline"
+      },
+      {
+        "session": "first",
+        "pair": 3,
+        "scenario": "terminal-output",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 45.888671875,
+          "spawn_to_first_draw_ms": 199.665283203125,
+          "spawn_to_ready_ms": 239.327392578125
+        },
+        "phases": {
+          "scroll_with_output": {
+            "inputs.input_to_submit_ms.p50": 10.132403999999951,
+            "inputs.input_to_submit_ms.p95": 17.733530999999857,
+            "inputs.input_to_witness_ms.p50": 0.08550199999990582,
+            "inputs.input_to_witness_ms.p95": 1.0569279999999708,
+            "inputs.dispatch_delay_ms.p95": 1.0257310000015423,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.3669140000000002,
+            "draw_ms.p95": 3.4900700000000002,
+            "draw_ms.p99": 6.73535,
+            "dirty_to_draw_ms.p95": 16.731119000000945,
+            "wake_ms.p99": 3.088269,
+            "main_cpu_percent": 8.476357449804732,
+            "process_cpu_cores": 0.26628667916775384,
+            "wakeups_per_second": 2403.158959877458,
+            "frames_per_second": 59.99282242426453,
+            "pss_kib.max": 397619,
+            "rss_kib.max": 431232,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 400,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          },
+          "output_settling": {
+            "inputs.input_to_submit_ms.p50": null,
+            "inputs.input_to_submit_ms.p95": null,
+            "inputs.input_to_witness_ms.p50": null,
+            "inputs.input_to_witness_ms.p95": null,
+            "inputs.dispatch_delay_ms.p95": null,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.184034,
+            "draw_ms.p95": 1.457184,
+            "draw_ms.p99": 1.457184,
+            "dirty_to_draw_ms.p95": 12.225594999999885,
+            "wake_ms.p99": 0.07564,
+            "main_cpu_percent": 4.515938007078166,
+            "process_cpu_cores": 0.009999939543365513,
+            "wakeups_per_second": 641.1961235205962,
+            "frames_per_second": 0.7999951634692404,
+            "pss_kib.max": 397623,
+            "rss_kib.max": 431236,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 0,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-first/pair-3-terminal-output-candidate"
+      },
+      {
+        "session": "first",
+        "pair": 3,
+        "scenario": "idle",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 46.016357421875,
+          "spawn_to_first_draw_ms": 199.34326171875,
+          "spawn_to_ready_ms": 286.994873046875
+        },
+        "phases": {
+          "idle": {
+            "inputs.input_to_submit_ms.p50": null,
+            "inputs.input_to_submit_ms.p95": null,
+            "inputs.input_to_witness_ms.p50": null,
+            "inputs.input_to_witness_ms.p95": null,
+            "inputs.dispatch_delay_ms.p95": null,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 2.997657,
+            "draw_ms.p95": 2.997657,
+            "draw_ms.p99": 2.997657,
+            "dirty_to_draw_ms.p95": 3.1601879999943776,
+            "wake_ms.p99": 1.1475520000000001,
+            "main_cpu_percent": 0.08336227812109791,
+            "process_cpu_cores": 0.004666658396103546,
+            "wakeups_per_second": 134.999760744424,
+            "frames_per_second": 0.016666637128941238,
+            "pss_kib.max": 322995,
+            "rss_kib.max": 356412,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 0,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-first/pair-3-idle-baseline"
+      },
+      {
+        "session": "first",
+        "pair": 3,
+        "scenario": "idle",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 56.623291015625,
+          "spawn_to_first_draw_ms": 204.090576171875,
+          "spawn_to_ready_ms": 243.9755859375
+        },
+        "phases": {
+          "idle": {
+            "inputs.input_to_submit_ms.p50": null,
+            "inputs.input_to_submit_ms.p95": null,
+            "inputs.input_to_witness_ms.p50": null,
+            "inputs.input_to_witness_ms.p95": null,
+            "inputs.dispatch_delay_ms.p95": null,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.740823,
+            "draw_ms.p95": 1.740823,
+            "draw_ms.p99": 1.740823,
+            "dirty_to_draw_ms.p95": 1.7629529999976512,
+            "wake_ms.p99": 0.310481,
+            "main_cpu_percent": 0.06590039824699004,
+            "process_cpu_cores": 0.003499993322012742,
+            "wakeups_per_second": 134.8997426112911,
+            "frames_per_second": 0.016666634866727342,
+            "pss_kib.max": 321843,
+            "rss_kib.max": 354920,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 0,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-first/pair-3-idle-candidate"
+      },
+      {
+        "session": "second",
+        "pair": 1,
+        "scenario": "startup",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 44.99755859375,
+          "spawn_to_first_draw_ms": 202.295654296875,
+          "spawn_to_ready_ms": 241.2607421875
+        },
+        "phases": {},
+        "raw_directory": "target/profiling/finalization/compat-second/pair-1-startup-candidate"
+      },
+      {
+        "session": "second",
+        "pair": 1,
+        "scenario": "startup",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 45.437744140625,
+          "spawn_to_first_draw_ms": 215.6298828125,
+          "spawn_to_ready_ms": 301.02197265625
+        },
+        "phases": {},
+        "raw_directory": "target/profiling/finalization/compat-second/pair-1-startup-baseline"
+      },
+      {
+        "session": "second",
+        "pair": 1,
+        "scenario": "history-select",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 45.222412109375,
+          "spawn_to_first_draw_ms": 200.807373046875,
+          "spawn_to_ready_ms": 239.92333984375
+        },
+        "phases": {
+          "select": {
+            "inputs.input_to_submit_ms.p50": 7.897488000000521,
+            "inputs.input_to_submit_ms.p95": 9.969867999999224,
+            "inputs.input_to_witness_ms.p50": 3.4808279999997467,
+            "inputs.input_to_witness_ms.p95": 4.746778000000631,
+            "inputs.dispatch_delay_ms.p95": 0.09455700000034994,
+            "inputs.apply_ms.p95": 0.031561,
+            "draw_ms.p50": 0.9784010000000001,
+            "draw_ms.p95": 3.725394,
+            "draw_ms.p99": 4.216635,
+            "dirty_to_draw_ms.p95": 14.511518000000251,
+            "wake_ms.p99": 2.718613,
+            "main_cpu_percent": 8.310875089161486,
+            "process_cpu_cores": 0.10181062365917143,
+            "wakeups_per_second": 1007.8903075738591,
+            "frames_per_second": 41.7005157179346,
+            "pss_kib.max": 404673,
+            "rss_kib.max": 439236,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 240,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-second/pair-1-history-select-candidate"
+      },
+      {
+        "session": "second",
+        "pair": 1,
+        "scenario": "history-select",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 42.90576171875,
+          "spawn_to_first_draw_ms": 185.181640625,
+          "spawn_to_ready_ms": 273.2978515625
+        },
+        "phases": {
+          "select": {
+            "inputs.input_to_submit_ms.p50": 7.949047000000064,
+            "inputs.input_to_submit_ms.p95": 10.151341000000684,
+            "inputs.input_to_witness_ms.p50": 3.501965999999811,
+            "inputs.input_to_witness_ms.p95": 4.819859999999608,
+            "inputs.dispatch_delay_ms.p95": 0.08621800000037183,
+            "inputs.apply_ms.p95": 0.02809,
+            "draw_ms.p50": 1.024582,
+            "draw_ms.p95": 3.775094,
+            "draw_ms.p99": 4.331375,
+            "dirty_to_draw_ms.p95": 14.49117699999988,
+            "wake_ms.p99": 2.666823,
+            "main_cpu_percent": 8.29319896257743,
+            "process_cpu_cores": 0.10111335554220104,
+            "wakeups_per_second": 1006.0081542962505,
+            "frames_per_second": 41.7005424925767,
+            "pss_kib.max": 401757,
+            "rss_kib.max": 436404,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 240,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-second/pair-1-history-select-baseline"
+      },
+      {
+        "session": "second",
+        "pair": 1,
+        "scenario": "history-scroll",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 48.242431640625,
+          "spawn_to_first_draw_ms": 212.60546875,
+          "spawn_to_ready_ms": 250.9765625
+        },
+        "phases": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": 9.692549999999756,
+            "inputs.input_to_submit_ms.p95": 17.28747300000032,
+            "inputs.input_to_witness_ms.p50": 0.1068989999985206,
+            "inputs.input_to_witness_ms.p95": 0.7345900000000256,
+            "inputs.dispatch_delay_ms.p95": 0.6937399999987974,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.125081,
+            "draw_ms.p95": 1.480561,
+            "draw_ms.p99": 1.669912,
+            "dirty_to_draw_ms.p95": 16.402168000004167,
+            "wake_ms.p99": 1.289531,
+            "main_cpu_percent": 8.373065688923639,
+            "process_cpu_cores": 0.1032104948703473,
+            "wakeups_per_second": 1250.8799219210728,
+            "frames_per_second": 59.997615957459466,
+            "pss_kib.max": 390513,
+            "rss_kib.max": 424088,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 1200,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-second/pair-1-history-scroll-candidate"
+      },
+      {
+        "session": "second",
+        "pair": 1,
+        "scenario": "history-scroll",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 41.80078125,
+          "spawn_to_first_draw_ms": 195.115966796875,
+          "spawn_to_ready_ms": 283.06787109375
+        },
+        "phases": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": 10.000038000000131,
+            "inputs.input_to_submit_ms.p95": 17.441123000000516,
+            "inputs.input_to_witness_ms.p50": 0.117087999999967,
+            "inputs.input_to_witness_ms.p95": 0.8645329999999376,
+            "inputs.dispatch_delay_ms.p95": 0.829171999999744,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.213351,
+            "draw_ms.p95": 1.637442,
+            "draw_ms.p99": 1.713271,
+            "dirty_to_draw_ms.p95": 16.36106800000016,
+            "wake_ms.p99": 1.4845220000000001,
+            "main_cpu_percent": 8.767883667688352,
+            "process_cpu_cores": 0.11102931678646139,
+            "wakeups_per_second": 1242.642198531668,
+            "frames_per_second": 59.94540577672798,
+            "pss_kib.max": 386456,
+            "rss_kib.max": 419868,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 1200,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-second/pair-1-history-scroll-baseline"
+      },
+      {
+        "session": "second",
+        "pair": 1,
+        "scenario": "terminal-output",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 42.767578125,
+          "spawn_to_first_draw_ms": 182.5390625,
+          "spawn_to_ready_ms": 222.10546875
+        },
+        "phases": {
+          "scroll_with_output": {
+            "inputs.input_to_submit_ms.p50": 10.561017999999422,
+            "inputs.input_to_submit_ms.p95": 18.19111900000098,
+            "inputs.input_to_witness_ms.p50": 0.0999229999997624,
+            "inputs.input_to_witness_ms.p95": 1.5233589999998003,
+            "inputs.dispatch_delay_ms.p95": 1.4670790000000125,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.402031,
+            "draw_ms.p95": 2.911593,
+            "draw_ms.p99": 3.715334,
+            "dirty_to_draw_ms.p95": 16.614387000000534,
+            "wake_ms.p99": 2.196333,
+            "main_cpu_percent": 7.478713187262667,
+            "process_cpu_cores": 0.26941896936366894,
+            "wakeups_per_second": 2447.6400088817973,
+            "frames_per_second": 59.992712364119306,
+            "pss_kib.max": 403099,
+            "rss_kib.max": 438112,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 400,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          },
+          "output_settling": {
+            "inputs.input_to_submit_ms.p50": null,
+            "inputs.input_to_submit_ms.p95": null,
+            "inputs.input_to_witness_ms.p50": null,
+            "inputs.input_to_witness_ms.p95": null,
+            "inputs.dispatch_delay_ms.p95": null,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.2762310000000001,
+            "draw_ms.p95": 1.4199110000000001,
+            "draw_ms.p99": 1.4199110000000001,
+            "dirty_to_draw_ms.p95": 15.226584999998522,
+            "wake_ms.p99": 0.037020000000000004,
+            "main_cpu_percent": 4.6396934347397085,
+            "process_cpu_cores": 0.011999879508009839,
+            "wakeups_per_second": 647.1935014653325,
+            "frames_per_second": 0.7999919672006581,
+            "pss_kib.max": 403107,
+            "rss_kib.max": 438120,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 0,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-second/pair-1-terminal-output-candidate"
+      },
+      {
+        "session": "second",
+        "pair": 1,
+        "scenario": "terminal-output",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 43.788818359375,
+          "spawn_to_first_draw_ms": 200.321533203125,
+          "spawn_to_ready_ms": 287.541748046875
+        },
+        "phases": {
+          "scroll_with_output": {
+            "inputs.input_to_submit_ms.p50": 10.722891999999774,
+            "inputs.input_to_submit_ms.p95": 18.114949000000706,
+            "inputs.input_to_witness_ms.p50": 0.09442200000012235,
+            "inputs.input_to_witness_ms.p95": 1.494988000000376,
+            "inputs.dispatch_delay_ms.p95": 1.446367999999893,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.416041,
+            "draw_ms.p95": 3.302003,
+            "draw_ms.p99": 4.0188239999999995,
+            "dirty_to_draw_ms.p95": 16.611636000000544,
+            "wake_ms.p99": 1.6066909999999999,
+            "main_cpu_percent": 8.770777484473633,
+            "process_cpu_cores": 0.24122276890456534,
+            "wakeups_per_second": 2268.433856672673,
+            "frames_per_second": 59.992415902888666,
+            "pss_kib.max": 395106,
+            "rss_kib.max": 429248,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 400,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          },
+          "output_settling": {
+            "inputs.input_to_submit_ms.p50": null,
+            "inputs.input_to_submit_ms.p95": null,
+            "inputs.input_to_witness_ms.p50": null,
+            "inputs.input_to_witness_ms.p95": null,
+            "inputs.dispatch_delay_ms.p95": null,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.3841109999999999,
+            "draw_ms.p95": 4.538793999999999,
+            "draw_ms.p99": 6.162865,
+            "dirty_to_draw_ms.p95": 13.163362999999663,
+            "wake_ms.p99": 1.00032,
+            "main_cpu_percent": 5.34536239274517,
+            "process_cpu_cores": 0.018999826143990844,
+            "wakeups_per_second": 689.8936871968045,
+            "frames_per_second": 1.9999816993674577,
+            "pss_kib.max": 395110,
+            "rss_kib.max": 429252,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 0,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-second/pair-1-terminal-output-baseline"
+      },
+      {
+        "session": "second",
+        "pair": 1,
+        "scenario": "idle",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 42.017822265625,
+          "spawn_to_first_draw_ms": 197.759521484375,
+          "spawn_to_ready_ms": 234.193359375
+        },
+        "phases": {
+          "idle": {
+            "inputs.input_to_submit_ms.p50": null,
+            "inputs.input_to_submit_ms.p95": null,
+            "inputs.input_to_witness_ms.p50": null,
+            "inputs.input_to_witness_ms.p95": null,
+            "inputs.dispatch_delay_ms.p95": null,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.435382,
+            "draw_ms.p95": 1.435382,
+            "draw_ms.p99": 1.435382,
+            "dirty_to_draw_ms.p95": 1.454091999999946,
+            "wake_ms.p99": 1.015661,
+            "main_cpu_percent": 0.08157560493289248,
+            "process_cpu_cores": 0.0033333271184004766,
+            "wakeups_per_second": 135.5830805409394,
+            "frames_per_second": 0.016666635592002384,
+            "pss_kib.max": 315605,
+            "rss_kib.max": 349000,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 0,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-second/pair-1-idle-candidate"
+      },
+      {
+        "session": "second",
+        "pair": 1,
+        "scenario": "idle",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 43.8056640625,
+          "spawn_to_first_draw_ms": 196.317138671875,
+          "spawn_to_ready_ms": 283.332763671875
+        },
+        "phases": {
+          "idle": {
+            "inputs.input_to_submit_ms.p50": null,
+            "inputs.input_to_submit_ms.p95": null,
+            "inputs.input_to_witness_ms.p50": null,
+            "inputs.input_to_witness_ms.p95": null,
+            "inputs.dispatch_delay_ms.p95": null,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.6770820000000002,
+            "draw_ms.p95": 1.6770820000000002,
+            "draw_ms.p99": 1.6770820000000002,
+            "dirty_to_draw_ms.p95": 1.7015620000020135,
+            "wake_ms.p99": 0.08886,
+            "main_cpu_percent": 0.0840527479630562,
+            "process_cpu_cores": 0.002999995502756742,
+            "wakeups_per_second": 135.48313023283083,
+            "frames_per_second": 0.016666641681981897,
+            "pss_kib.max": 325965,
+            "rss_kib.max": 361248,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 0,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-second/pair-1-idle-baseline"
+      },
+      {
+        "session": "second",
+        "pair": 2,
+        "scenario": "startup",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 42.921630859375,
+          "spawn_to_first_draw_ms": 200.79248046875,
+          "spawn_to_ready_ms": 288.471435546875
+        },
+        "phases": {},
+        "raw_directory": "target/profiling/finalization/compat-second/pair-2-startup-baseline"
+      },
+      {
+        "session": "second",
+        "pair": 2,
+        "scenario": "startup",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 44.792724609375,
+          "spawn_to_first_draw_ms": 191.790771484375,
+          "spawn_to_ready_ms": 232.038818359375
+        },
+        "phases": {},
+        "raw_directory": "target/profiling/finalization/compat-second/pair-2-startup-candidate"
+      },
+      {
+        "session": "second",
+        "pair": 2,
+        "scenario": "history-select",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 39.8486328125,
+          "spawn_to_first_draw_ms": 189.24365234375,
+          "spawn_to_ready_ms": 276.340087890625
+        },
+        "phases": {
+          "select": {
+            "inputs.input_to_submit_ms.p50": 8.099914000000354,
+            "inputs.input_to_submit_ms.p95": 9.866793000001053,
+            "inputs.input_to_witness_ms.p50": 3.6819759999998496,
+            "inputs.input_to_witness_ms.p95": 4.823190999999497,
+            "inputs.dispatch_delay_ms.p95": 0.14791299999978946,
+            "inputs.apply_ms.p95": 0.03045,
+            "draw_ms.p50": 0.964631,
+            "draw_ms.p95": 3.743353,
+            "draw_ms.p99": 4.2133329999999996,
+            "dirty_to_draw_ms.p95": 14.526980000000549,
+            "wake_ms.p99": 2.7690520000000003,
+            "main_cpu_percent": 8.276548508258756,
+            "process_cpu_cores": 0.1014623909092198,
+            "wakeups_per_second": 1005.1052724192713,
+            "frames_per_second": 41.700693995679345,
+            "pss_kib.max": 395535,
+            "rss_kib.max": 430068,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 240,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-second/pair-2-history-select-baseline"
+      },
+      {
+        "session": "second",
+        "pair": 2,
+        "scenario": "history-select",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 43.29541015625,
+          "spawn_to_first_draw_ms": 182.88916015625,
+          "spawn_to_ready_ms": 220.7001953125
+        },
+        "phases": {
+          "select": {
+            "inputs.input_to_submit_ms.p50": 8.141520999997738,
+            "inputs.input_to_submit_ms.p95": 10.075125999999727,
+            "inputs.input_to_witness_ms.p50": 3.7013690000003407,
+            "inputs.input_to_witness_ms.p95": 4.860233000000335,
+            "inputs.dispatch_delay_ms.p95": 0.15126500000042142,
+            "inputs.apply_ms.p95": 0.0312,
+            "draw_ms.p50": 1.148141,
+            "draw_ms.p95": 3.847792,
+            "draw_ms.p99": 4.3205029999999995,
+            "dirty_to_draw_ms.p95": 14.378000000000611,
+            "wake_ms.p99": 2.9515420000000003,
+            "main_cpu_percent": 8.624500204522306,
+            "process_cpu_cores": 0.10599495968883531,
+            "wakeups_per_second": 1004.3719765778256,
+            "frames_per_second": 41.700648614423365,
+            "pss_kib.max": 411501,
+            "rss_kib.max": 446128,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 240,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-second/pair-2-history-select-candidate"
+      },
+      {
+        "session": "second",
+        "pair": 2,
+        "scenario": "history-scroll",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 43.76806640625,
+          "spawn_to_first_draw_ms": 193.529296875,
+          "spawn_to_ready_ms": 281.24951171875
+        },
+        "phases": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": 9.957966999998462,
+            "inputs.input_to_submit_ms.p95": 17.30331500000102,
+            "inputs.input_to_witness_ms.p50": 0.09295299999939743,
+            "inputs.input_to_witness_ms.p95": 0.7956360000025597,
+            "inputs.dispatch_delay_ms.p95": 0.7641709999988961,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.141111,
+            "draw_ms.p95": 1.3357009999999998,
+            "draw_ms.p99": 1.538271,
+            "dirty_to_draw_ms.p95": 16.42648100000224,
+            "wake_ms.p99": 1.3085609999999999,
+            "main_cpu_percent": 8.173648267566968,
+            "process_cpu_cores": 0.10268891200164935,
+            "wakeups_per_second": 1250.771798720597,
+            "frames_per_second": 59.945303960353684,
+            "pss_kib.max": 379941,
+            "rss_kib.max": 414516,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 1200,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-second/pair-2-history-scroll-baseline"
+      },
+      {
+        "session": "second",
+        "pair": 2,
+        "scenario": "history-scroll",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 42.744140625,
+          "spawn_to_first_draw_ms": 183.51416015625,
+          "spawn_to_ready_ms": 222.247314453125
+        },
+        "phases": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": 9.83482499999809,
+            "inputs.input_to_submit_ms.p95": 17.36841899999854,
+            "inputs.input_to_witness_ms.p50": 0.09656700000050478,
+            "inputs.input_to_witness_ms.p95": 0.7071609999984503,
+            "inputs.dispatch_delay_ms.p95": 0.6784310000002733,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.112451,
+            "draw_ms.p95": 1.340131,
+            "draw_ms.p99": 1.600291,
+            "dirty_to_draw_ms.p95": 16.37909000000036,
+            "wake_ms.p99": 1.252291,
+            "main_cpu_percent": 8.073883218404195,
+            "process_cpu_cores": 0.10008286306435862,
+            "wakeups_per_second": 1250.8794088309448,
+            "frames_per_second": 59.99759134743582,
+            "pss_kib.max": 380925,
+            "rss_kib.max": 414380,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 1200,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-second/pair-2-history-scroll-candidate"
+      },
+      {
+        "session": "second",
+        "pair": 2,
+        "scenario": "terminal-output",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 45.71533203125,
+          "spawn_to_first_draw_ms": 193.009765625,
+          "spawn_to_ready_ms": 279.93798828125
+        },
+        "phases": {
+          "scroll_with_output": {
+            "inputs.input_to_submit_ms.p50": 10.4127380000009,
+            "inputs.input_to_submit_ms.p95": 17.707671999998638,
+            "inputs.input_to_witness_ms.p50": 0.10718599999927392,
+            "inputs.input_to_witness_ms.p95": 1.0696900000002643,
+            "inputs.dispatch_delay_ms.p95": 1.039890000000014,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.3647,
+            "draw_ms.p95": 3.126042,
+            "draw_ms.p99": 3.7777119999999997,
+            "dirty_to_draw_ms.p95": 16.523799999999937,
+            "wake_ms.p99": 1.4909109999999999,
+            "main_cpu_percent": 8.192027382933013,
+            "process_cpu_cores": 0.22868362048712654,
+            "wakeups_per_second": 1744.7307182233578,
+            "frames_per_second": 59.99029222367771,
+            "pss_kib.max": 379535,
+            "rss_kib.max": 415228,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 400,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          },
+          "output_settling": {
+            "inputs.input_to_submit_ms.p50": null,
+            "inputs.input_to_submit_ms.p95": null,
+            "inputs.input_to_witness_ms.p50": null,
+            "inputs.input_to_witness_ms.p95": null,
+            "inputs.dispatch_delay_ms.p95": null,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.2097,
+            "draw_ms.p95": 1.3455,
+            "draw_ms.p99": 1.3500109999999999,
+            "dirty_to_draw_ms.p95": 11.202336999998806,
+            "wake_ms.p99": 0.24571,
+            "main_cpu_percent": 4.628772347397695,
+            "process_cpu_cores": 0.013999870011206958,
+            "wakeups_per_second": 670.79377167983,
+            "frames_per_second": 1.9999814301724208,
+            "pss_kib.max": 381591,
+            "rss_kib.max": 417284,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 0,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-second/pair-2-terminal-output-baseline"
+      },
+      {
+        "session": "second",
+        "pair": 2,
+        "scenario": "terminal-output",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 43.07080078125,
+          "spawn_to_first_draw_ms": 171.037353515625,
+          "spawn_to_ready_ms": 209.84423828125
+        },
+        "phases": {
+          "scroll_with_output": {
+            "inputs.input_to_submit_ms.p50": 10.324012000000948,
+            "inputs.input_to_submit_ms.p95": 17.709576000001107,
+            "inputs.input_to_witness_ms.p50": 0.08867500000087603,
+            "inputs.input_to_witness_ms.p95": 1.1550399999996444,
+            "inputs.dispatch_delay_ms.p95": 1.1184699999994336,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.366701,
+            "draw_ms.p95": 3.022201,
+            "draw_ms.p99": 3.860592,
+            "dirty_to_draw_ms.p95": 16.668468999999277,
+            "wake_ms.p99": 2.333142,
+            "main_cpu_percent": 7.223151451095599,
+            "process_cpu_cores": 0.2600205382829834,
+            "wakeups_per_second": 2015.94236608554,
+            "frames_per_second": 59.992690459266655,
+            "pss_kib.max": 391771,
+            "rss_kib.max": 426508,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 400,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          },
+          "output_settling": {
+            "inputs.input_to_submit_ms.p50": null,
+            "inputs.input_to_submit_ms.p95": null,
+            "inputs.input_to_witness_ms.p50": null,
+            "inputs.input_to_witness_ms.p95": null,
+            "inputs.dispatch_delay_ms.p95": null,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.29634,
+            "draw_ms.p95": 1.422961,
+            "draw_ms.p99": 1.422961,
+            "dirty_to_draw_ms.p95": 14.510858999999982,
+            "wake_ms.p99": 0.245091,
+            "main_cpu_percent": 4.467787765076183,
+            "process_cpu_cores": 0.010999904435030242,
+            "wakeups_per_second": 645.1943946801382,
+            "frames_per_second": 0.7999930498203821,
+            "pss_kib.max": 391779,
+            "rss_kib.max": 426516,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 0,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-second/pair-2-terminal-output-candidate"
+      },
+      {
+        "session": "second",
+        "pair": 2,
+        "scenario": "idle",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 42.70703125,
+          "spawn_to_first_draw_ms": 198.93896484375,
+          "spawn_to_ready_ms": 284.220458984375
+        },
+        "phases": {
+          "idle": {
+            "inputs.input_to_submit_ms.p50": null,
+            "inputs.input_to_submit_ms.p95": null,
+            "inputs.input_to_witness_ms.p50": null,
+            "inputs.input_to_witness_ms.p95": null,
+            "inputs.dispatch_delay_ms.p95": null,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.4823600000000001,
+            "draw_ms.p95": 1.4823600000000001,
+            "draw_ms.p99": 1.4823600000000001,
+            "dirty_to_draw_ms.p95": 1.5048299999980372,
+            "wake_ms.p99": 0.287881,
+            "main_cpu_percent": 0.07707586022648068,
+            "process_cpu_cores": 0.0029999960708051465,
+            "wakeups_per_second": 137.6164864257672,
+            "frames_per_second": 0.01666664483780637,
+            "pss_kib.max": 313933,
+            "rss_kib.max": 347048,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 0,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-second/pair-2-idle-baseline"
+      },
+      {
+        "session": "second",
+        "pair": 2,
+        "scenario": "idle",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 42.9951171875,
+          "spawn_to_first_draw_ms": 176.455810546875,
+          "spawn_to_ready_ms": 216.662841796875
+        },
+        "phases": {
+          "idle": {
+            "inputs.input_to_submit_ms.p50": null,
+            "inputs.input_to_submit_ms.p95": null,
+            "inputs.input_to_witness_ms.p50": null,
+            "inputs.input_to_witness_ms.p95": null,
+            "inputs.dispatch_delay_ms.p95": null,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.4331610000000001,
+            "draw_ms.p95": 1.4331610000000001,
+            "draw_ms.p99": 1.4331610000000001,
+            "dirty_to_draw_ms.p95": 1.4526909999985946,
+            "wake_ms.p99": 0.28088,
+            "main_cpu_percent": 0.0731587824016998,
+            "process_cpu_cores": 0.0031666553314127974,
+            "wakeups_per_second": 135.24951586534132,
+            "frames_per_second": 0.016666607007435778,
+            "pss_kib.max": 322133,
+            "rss_kib.max": 355520,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 0,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-second/pair-2-idle-candidate"
+      },
+      {
+        "session": "second",
+        "pair": 3,
+        "scenario": "startup",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 43.746337890625,
+          "spawn_to_first_draw_ms": 179.51904296875,
+          "spawn_to_ready_ms": 219.3974609375
+        },
+        "phases": {},
+        "raw_directory": "target/profiling/finalization/compat-second/pair-3-startup-candidate"
+      },
+      {
+        "session": "second",
+        "pair": 3,
+        "scenario": "startup",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 42.538330078125,
+          "spawn_to_first_draw_ms": 194.15625,
+          "spawn_to_ready_ms": 281.862548828125
+        },
+        "phases": {},
+        "raw_directory": "target/profiling/finalization/compat-second/pair-3-startup-baseline"
+      },
+      {
+        "session": "second",
+        "pair": 3,
+        "scenario": "history-select",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 41.936279296875,
+          "spawn_to_first_draw_ms": 173.251953125,
+          "spawn_to_ready_ms": 213.552001953125
+        },
+        "phases": {
+          "select": {
+            "inputs.input_to_submit_ms.p50": 7.951721000001271,
+            "inputs.input_to_submit_ms.p95": 10.058152999998129,
+            "inputs.input_to_witness_ms.p50": 3.55900400000246,
+            "inputs.input_to_witness_ms.p95": 4.891795999999886,
+            "inputs.dispatch_delay_ms.p95": 0.2090969999999288,
+            "inputs.apply_ms.p95": 0.03002,
+            "draw_ms.p50": 0.95183,
+            "draw_ms.p95": 3.660592,
+            "draw_ms.p99": 4.178762,
+            "dirty_to_draw_ms.p95": 14.582216000000699,
+            "wake_ms.p99": 2.875041,
+            "main_cpu_percent": 8.16217585338056,
+            "process_cpu_cores": 0.10111367820985145,
+            "wakeups_per_second": 1006.5692331862763,
+            "frames_per_second": 41.70067556516632,
+            "pss_kib.max": 409286,
+            "rss_kib.max": 442580,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 240,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-second/pair-3-history-select-candidate"
+      },
+      {
+        "session": "second",
+        "pair": 3,
+        "scenario": "history-select",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 39.070068359375,
+          "spawn_to_first_draw_ms": 195.491943359375,
+          "spawn_to_ready_ms": 283.648681640625
+        },
+        "phases": {
+          "select": {
+            "inputs.input_to_submit_ms.p50": 7.929081999998743,
+            "inputs.input_to_submit_ms.p95": 10.003748999999516,
+            "inputs.input_to_witness_ms.p50": 3.5510880000001634,
+            "inputs.input_to_witness_ms.p95": 4.873332999999548,
+            "inputs.dispatch_delay_ms.p95": 0.13288699999975506,
+            "inputs.apply_ms.p95": 0.02896,
+            "draw_ms.p50": 0.93506,
+            "draw_ms.p95": 3.6961310000000003,
+            "draw_ms.p99": 4.189662,
+            "dirty_to_draw_ms.p95": 14.582806000002165,
+            "wake_ms.p99": 2.847162,
+            "main_cpu_percent": 8.23256085959717,
+            "process_cpu_cores": 0.10111366765800428,
+            "wakeups_per_second": 1006.7085952722613,
+            "frames_per_second": 41.70067121343901,
+            "pss_kib.max": 408890,
+            "rss_kib.max": 442892,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 240,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-second/pair-3-history-select-baseline"
+      },
+      {
+        "session": "second",
+        "pair": 3,
+        "scenario": "history-scroll",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 39.949951171875,
+          "spawn_to_first_draw_ms": 179.539306640625,
+          "spawn_to_ready_ms": 219.195068359375
+        },
+        "phases": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": 9.901547999998002,
+            "inputs.input_to_submit_ms.p95": 17.279759999997623,
+            "inputs.input_to_witness_ms.p50": 0.10671499999989464,
+            "inputs.input_to_witness_ms.p95": 0.7087919999994483,
+            "inputs.dispatch_delay_ms.p95": 0.6769509999994625,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.1179409999999999,
+            "draw_ms.p95": 1.3528209999999998,
+            "draw_ms.p99": 1.6133600000000001,
+            "dirty_to_draw_ms.p95": 16.400746999999683,
+            "wake_ms.p99": 1.33589,
+            "main_cpu_percent": 8.109080908463548,
+            "process_cpu_cores": 0.10268924464702432,
+            "wakeups_per_second": 1251.2971156100605,
+            "frames_per_second": 59.99762466432741,
+            "pss_kib.max": 384266,
+            "rss_kib.max": 419800,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 1200,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-second/pair-3-history-scroll-candidate"
+      },
+      {
+        "session": "second",
+        "pair": 3,
+        "scenario": "history-scroll",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 46.80126953125,
+          "spawn_to_first_draw_ms": 208.67578125,
+          "spawn_to_ready_ms": 294.26953125
+        },
+        "phases": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": 9.981352999999217,
+            "inputs.input_to_submit_ms.p95": 17.39464500000031,
+            "inputs.input_to_witness_ms.p50": 0.10298400000101537,
+            "inputs.input_to_witness_ms.p95": 0.7376050000002579,
+            "inputs.dispatch_delay_ms.p95": 0.7084750000003623,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.14579,
+            "draw_ms.p95": 1.34411,
+            "draw_ms.p99": 1.5719,
+            "dirty_to_draw_ms.p95": 16.422826000000896,
+            "wake_ms.p99": 1.281831,
+            "main_cpu_percent": 8.218131477988512,
+            "process_cpu_cores": 0.10320981837704442,
+            "wakeups_per_second": 1247.848405115185,
+            "frames_per_second": 59.94509653212175,
+            "pss_kib.max": 378293,
+            "rss_kib.max": 413044,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 1200,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-second/pair-3-history-scroll-baseline"
+      },
+      {
+        "session": "second",
+        "pair": 3,
+        "scenario": "terminal-output",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 41.664794921875,
+          "spawn_to_first_draw_ms": 179.73974609375,
+          "spawn_to_ready_ms": 218.710693359375
+        },
+        "phases": {
+          "scroll_with_output": {
+            "inputs.input_to_submit_ms.p50": 9.937024999999267,
+            "inputs.input_to_submit_ms.p95": 17.69407300000057,
+            "inputs.input_to_witness_ms.p50": 0.10762100000101782,
+            "inputs.input_to_witness_ms.p95": 1.1875159999999596,
+            "inputs.dispatch_delay_ms.p95": 1.1585360000008222,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.31787,
+            "draw_ms.p95": 3.167331,
+            "draw_ms.p99": 3.9605819999999996,
+            "dirty_to_draw_ms.p95": 16.511876999999913,
+            "wake_ms.p99": 2.465411,
+            "main_cpu_percent": 7.451879847773608,
+            "process_cpu_cores": 0.263152575213059,
+            "wakeups_per_second": 2517.4929695382643,
+            "frames_per_second": 59.99252161107238,
+            "pss_kib.max": 401132,
+            "rss_kib.max": 435840,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 400,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          },
+          "output_settling": {
+            "inputs.input_to_submit_ms.p50": null,
+            "inputs.input_to_submit_ms.p95": null,
+            "inputs.input_to_witness_ms.p50": null,
+            "inputs.input_to_witness_ms.p95": null,
+            "inputs.dispatch_delay_ms.p95": null,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.2110109999999998,
+            "draw_ms.p95": 1.3735600000000001,
+            "draw_ms.p99": 1.3735600000000001,
+            "dirty_to_draw_ms.p95": 14.495075000000725,
+            "wake_ms.p99": 0.2635,
+            "main_cpu_percent": 4.3366920312613955,
+            "process_cpu_cores": 0.010999869574546444,
+            "wakeups_per_second": 644.7923546970505,
+            "frames_per_second": 0.7999905145124696,
+            "pss_kib.max": 401140,
+            "rss_kib.max": 435848,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 0,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-second/pair-3-terminal-output-candidate"
+      },
+      {
+        "session": "second",
+        "pair": 3,
+        "scenario": "terminal-output",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 42.526123046875,
+          "spawn_to_first_draw_ms": 192.996826171875,
+          "spawn_to_ready_ms": 280.06884765625
+        },
+        "phases": {
+          "scroll_with_output": {
+            "inputs.input_to_submit_ms.p50": 10.077076999999917,
+            "inputs.input_to_submit_ms.p95": 17.82334600000013,
+            "inputs.input_to_witness_ms.p50": 0.1001670000005106,
+            "inputs.input_to_witness_ms.p95": 1.237678000001324,
+            "inputs.dispatch_delay_ms.p95": 1.2042680000013206,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.3727800000000001,
+            "draw_ms.p95": 3.231161,
+            "draw_ms.p99": 3.700282,
+            "dirty_to_draw_ms.p95": 16.685985999999502,
+            "wake_ms.p99": 1.530281,
+            "main_cpu_percent": 8.255667280036603,
+            "process_cpu_cores": 0.23182559640459727,
+            "wakeups_per_second": 1790.0695376430658,
+            "frames_per_second": 59.99270501551401,
+            "pss_kib.max": 379866,
+            "rss_kib.max": 414580,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 400,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          },
+          "output_settling": {
+            "inputs.input_to_submit_ms.p50": null,
+            "inputs.input_to_submit_ms.p95": null,
+            "inputs.input_to_witness_ms.p50": null,
+            "inputs.input_to_witness_ms.p95": null,
+            "inputs.dispatch_delay_ms.p95": null,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.2575500000000002,
+            "draw_ms.p95": 1.44062,
+            "draw_ms.p99": 1.443511,
+            "dirty_to_draw_ms.p95": 11.123373999998876,
+            "wake_ms.p99": 0.18760000000000002,
+            "main_cpu_percent": 4.749429097250806,
+            "process_cpu_cores": 0.012999560997025381,
+            "wakeups_per_second": 671.6773170539966,
+            "frames_per_second": 1.9999324610808296,
+            "pss_kib.max": 381922,
+            "rss_kib.max": 416636,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 0,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-second/pair-3-terminal-output-baseline"
+      },
+      {
+        "session": "second",
+        "pair": 3,
+        "scenario": "idle",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 42.946044921875,
+          "spawn_to_first_draw_ms": 190.83251953125,
+          "spawn_to_ready_ms": 228.828369140625
+        },
+        "phases": {
+          "idle": {
+            "inputs.input_to_submit_ms.p50": null,
+            "inputs.input_to_submit_ms.p95": null,
+            "inputs.input_to_witness_ms.p50": null,
+            "inputs.input_to_witness_ms.p95": null,
+            "inputs.dispatch_delay_ms.p95": null,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.417405,
+            "draw_ms.p95": 1.417405,
+            "draw_ms.p99": 1.417405,
+            "dirty_to_draw_ms.p95": 1.4410449999995762,
+            "wake_ms.p99": 0.27865,
+            "main_cpu_percent": 0.08148696480223447,
+            "process_cpu_cores": 0.0029999957625559855,
+            "wakeups_per_second": 134.43314344875878,
+            "frames_per_second": 0.01666664312531103,
+            "pss_kib.max": 313681,
+            "rss_kib.max": 346688,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 0,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-second/pair-3-idle-candidate"
+      },
+      {
+        "session": "second",
+        "pair": 3,
+        "scenario": "idle",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 43.268798828125,
+          "spawn_to_first_draw_ms": 191.3525390625,
+          "spawn_to_ready_ms": 278.272705078125
+        },
+        "phases": {
+          "idle": {
+            "inputs.input_to_submit_ms.p50": null,
+            "inputs.input_to_submit_ms.p95": null,
+            "inputs.input_to_witness_ms.p50": null,
+            "inputs.input_to_witness_ms.p95": null,
+            "inputs.dispatch_delay_ms.p95": null,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.530645,
+            "draw_ms.p95": 1.530645,
+            "draw_ms.p99": 1.530645,
+            "dirty_to_draw_ms.p95": 1.5628450000003795,
+            "wake_ms.p99": 0.145379,
+            "main_cpu_percent": 0.07944184060381429,
+            "process_cpu_cores": 0.002999995023008258,
+            "wakeups_per_second": 134.96644275733814,
+            "frames_per_second": 0.016666639016712538,
+            "pss_kib.max": 326197,
+            "rss_kib.max": 359572,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 0,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/compat-second/pair-3-idle-baseline"
+      }
+    ],
+    "dev": [
+      {
+        "session": "first",
+        "pair": 1,
+        "scenario": "startup",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 30.81689453125,
+          "spawn_to_first_draw_ms": 829.55322265625,
+          "spawn_to_ready_ms": 909.535400390625
+        },
+        "phases": {},
+        "raw_directory": "target/profiling/finalization/dev-first/pair-1-startup-baseline"
+      },
+      {
+        "session": "first",
+        "pair": 1,
+        "scenario": "startup",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 39.164794921875,
+          "spawn_to_first_draw_ms": 177.440673828125,
+          "spawn_to_ready_ms": 215.3681640625
+        },
+        "phases": {},
+        "raw_directory": "target/profiling/finalization/dev-first/pair-1-startup-candidate"
+      },
+      {
+        "session": "first",
+        "pair": 1,
+        "scenario": "history-scroll",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 35.197265625,
+          "spawn_to_first_draw_ms": 194.88525390625,
+          "spawn_to_ready_ms": 273.799072265625
+        },
+        "phases": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": 9.608224999999948,
+            "inputs.input_to_submit_ms.p95": 17.351864999999634,
+            "inputs.input_to_witness_ms.p50": 0.10845700000027136,
+            "inputs.input_to_witness_ms.p95": 0.7123169999995298,
+            "inputs.dispatch_delay_ms.p95": 0.6838470000002417,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.0526870000000002,
+            "draw_ms.p95": 1.206106,
+            "draw_ms.p99": 1.517096,
+            "dirty_to_draw_ms.p95": 16.363092999999935,
+            "wake_ms.p99": 1.226356,
+            "main_cpu_percent": 7.8113056800846685,
+            "process_cpu_cores": 0.0974763677803965,
+            "wakeups_per_second": 1251.7633667799153,
+            "frames_per_second": 59.945359864949715,
+            "pss_kib.max": 377181,
+            "rss_kib.max": 407136,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 1200,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/dev-first/pair-1-history-scroll-baseline"
+      },
+      {
+        "session": "first",
+        "pair": 1,
+        "scenario": "history-scroll",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 44.081787109375,
+          "spawn_to_first_draw_ms": 181.96142578125,
+          "spawn_to_ready_ms": 220.78076171875
+        },
+        "phases": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": 9.8516639999998,
+            "inputs.input_to_submit_ms.p95": 17.222132999999303,
+            "inputs.input_to_witness_ms.p50": 0.10904399999981251,
+            "inputs.input_to_witness_ms.p95": 0.5812910000004194,
+            "inputs.dispatch_delay_ms.p95": 0.5488369999993665,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.1098569999999999,
+            "draw_ms.p95": 1.291166,
+            "draw_ms.p99": 1.435456,
+            "dirty_to_draw_ms.p95": 16.402595000001384,
+            "wake_ms.p99": 1.2779969999999998,
+            "main_cpu_percent": 7.981199930831123,
+            "process_cpu_cores": 0.10060408615939566,
+            "wakeups_per_second": 1250.9310153643407,
+            "frames_per_second": 59.99756640904893,
+            "pss_kib.max": 376116,
+            "rss_kib.max": 409600,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 1200,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/dev-first/pair-1-history-scroll-candidate"
+      },
+      {
+        "session": "first",
+        "pair": 2,
+        "scenario": "startup",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 43.066650390625,
+          "spawn_to_first_draw_ms": 176.46240234375,
+          "spawn_to_ready_ms": 216.799072265625
+        },
+        "phases": {},
+        "raw_directory": "target/profiling/finalization/dev-first/pair-2-startup-candidate"
+      },
+      {
+        "session": "first",
+        "pair": 2,
+        "scenario": "startup",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 55.481689453125,
+          "spawn_to_first_draw_ms": 220.08740234375,
+          "spawn_to_ready_ms": 300.912109375
+        },
+        "phases": {},
+        "raw_directory": "target/profiling/finalization/dev-first/pair-2-startup-baseline"
+      },
+      {
+        "session": "first",
+        "pair": 2,
+        "scenario": "history-scroll",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 46.8046875,
+          "spawn_to_first_draw_ms": 185.42919921875,
+          "spawn_to_ready_ms": 224.93017578125
+        },
+        "phases": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": 9.886175000000094,
+            "inputs.input_to_submit_ms.p95": 17.2343250000049,
+            "inputs.input_to_witness_ms.p50": 0.10793199999989156,
+            "inputs.input_to_witness_ms.p95": 0.7852210000000923,
+            "inputs.dispatch_delay_ms.p95": 0.7538879999992787,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.124477,
+            "draw_ms.p95": 1.307677,
+            "draw_ms.p99": 1.523636,
+            "dirty_to_draw_ms.p95": 16.390786999998454,
+            "wake_ms.p99": 1.271776,
+            "main_cpu_percent": 8.069632256100157,
+            "process_cpu_cores": 0.10164664909433138,
+            "wakeups_per_second": 1248.7421157455399,
+            "frames_per_second": 59.997586209013036,
+            "pss_kib.max": 389412,
+            "rss_kib.max": 424200,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 1200,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/dev-first/pair-2-history-scroll-candidate"
+      },
+      {
+        "session": "first",
+        "pair": 2,
+        "scenario": "history-scroll",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 35.22900390625,
+          "spawn_to_first_draw_ms": 199.0537109375,
+          "spawn_to_ready_ms": 277.050537109375
+        },
+        "phases": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": 9.929038000000219,
+            "inputs.input_to_submit_ms.p95": 17.261492999999973,
+            "inputs.input_to_witness_ms.p50": 0.11396400000012363,
+            "inputs.input_to_witness_ms.p95": 0.6071200000005774,
+            "inputs.dispatch_delay_ms.p95": 0.5704700000005687,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.112827,
+            "draw_ms.p95": 1.473336,
+            "draw_ms.p99": 1.530266,
+            "dirty_to_draw_ms.p95": 16.349899000000732,
+            "wake_ms.p99": 1.3375970000000001,
+            "main_cpu_percent": 8.43488571690866,
+            "process_cpu_cores": 0.10529522621706283,
+            "wakeups_per_second": 1240.763499824132,
+            "frames_per_second": 59.99742840388085,
+            "pss_kib.max": 376854,
+            "rss_kib.max": 406868,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 1200,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/dev-first/pair-2-history-scroll-baseline"
+      },
+      {
+        "session": "first",
+        "pair": 3,
+        "scenario": "startup",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 34.542724609375,
+          "spawn_to_first_draw_ms": 196.844970703125,
+          "spawn_to_ready_ms": 275.717041015625
+        },
+        "phases": {},
+        "raw_directory": "target/profiling/finalization/dev-first/pair-3-startup-baseline"
+      },
+      {
+        "session": "first",
+        "pair": 3,
+        "scenario": "startup",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 43.426025390625,
+          "spawn_to_first_draw_ms": 181.597412109375,
+          "spawn_to_ready_ms": 219.69873046875
+        },
+        "phases": {},
+        "raw_directory": "target/profiling/finalization/dev-first/pair-3-startup-candidate"
+      },
+      {
+        "session": "first",
+        "pair": 3,
+        "scenario": "history-scroll",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 36.326904296875,
+          "spawn_to_first_draw_ms": 204.1044921875,
+          "spawn_to_ready_ms": 283.20556640625
+        },
+        "phases": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": 9.812230000001364,
+            "inputs.input_to_submit_ms.p95": 17.210637999996834,
+            "inputs.input_to_witness_ms.p50": 0.10122099999716738,
+            "inputs.input_to_witness_ms.p95": 0.5359529999986989,
+            "inputs.dispatch_delay_ms.p95": 0.5076229999976931,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.049377,
+            "draw_ms.p95": 1.249316,
+            "draw_ms.p99": 1.473497,
+            "dirty_to_draw_ms.p95": 16.408230000000003,
+            "wake_ms.p99": 1.231217,
+            "main_cpu_percent": 7.779322122494218,
+            "process_cpu_cores": 0.09695527921357704,
+            "wakeups_per_second": 1251.2443667971522,
+            "frames_per_second": 59.945468330975054,
+            "pss_kib.max": 376631,
+            "rss_kib.max": 407776,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 1200,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/dev-first/pair-3-history-scroll-baseline"
+      },
+      {
+        "session": "first",
+        "pair": 3,
+        "scenario": "history-scroll",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 45.157958984375,
+          "spawn_to_first_draw_ms": 185.14794921875,
+          "spawn_to_ready_ms": 224.009521484375
+        },
+        "phases": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": 9.885431999999128,
+            "inputs.input_to_submit_ms.p95": 17.442086999999447,
+            "inputs.input_to_witness_ms.p50": 0.098891999999978,
+            "inputs.input_to_witness_ms.p95": 0.7446860000000015,
+            "inputs.dispatch_delay_ms.p95": 0.7128240000001824,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.118087,
+            "draw_ms.p95": 1.2869769999999998,
+            "draw_ms.p99": 1.581597,
+            "dirty_to_draw_ms.p95": 16.390102999997907,
+            "wake_ms.p99": 1.272587,
+            "main_cpu_percent": 8.038831163603888,
+            "process_cpu_cores": 0.10164672736887667,
+            "wakeups_per_second": 1250.0983670566154,
+            "frames_per_second": 59.99763241106515,
+            "pss_kib.max": 402257,
+            "rss_kib.max": 435620,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 1200,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/dev-first/pair-3-history-scroll-candidate"
+      },
+      {
+        "session": "second",
+        "pair": 1,
+        "scenario": "startup",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 43.524658203125,
+          "spawn_to_first_draw_ms": 181.225830078125,
+          "spawn_to_ready_ms": 220.6171875
+        },
+        "phases": {},
+        "raw_directory": "target/profiling/finalization/dev-second/pair-1-startup-candidate"
+      },
+      {
+        "session": "second",
+        "pair": 1,
+        "scenario": "startup",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 35.73095703125,
+          "spawn_to_first_draw_ms": 200.65185546875,
+          "spawn_to_ready_ms": 280.994873046875
+        },
+        "phases": {},
+        "raw_directory": "target/profiling/finalization/dev-second/pair-1-startup-baseline"
+      },
+      {
+        "session": "second",
+        "pair": 1,
+        "scenario": "history-scroll",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 42.79638671875,
+          "spawn_to_first_draw_ms": 186.3193359375,
+          "spawn_to_ready_ms": 225.378173828125
+        },
+        "phases": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": 9.945765000002211,
+            "inputs.input_to_submit_ms.p95": 17.30487600000015,
+            "inputs.input_to_witness_ms.p50": 0.09973600000012084,
+            "inputs.input_to_witness_ms.p95": 0.7075530000001891,
+            "inputs.dispatch_delay_ms.p95": 0.675982999997359,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.117867,
+            "draw_ms.p95": 1.319937,
+            "draw_ms.p99": 1.574017,
+            "dirty_to_draw_ms.p95": 16.378924000000552,
+            "wake_ms.p99": 1.293698,
+            "main_cpu_percent": 8.063269102666185,
+            "process_cpu_cores": 0.10164644135184613,
+            "wakeups_per_second": 1249.9384703466249,
+            "frames_per_second": 59.997463587679434,
+            "pss_kib.max": 379081,
+            "rss_kib.max": 412548,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 1200,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/dev-second/pair-1-history-scroll-candidate"
+      },
+      {
+        "session": "second",
+        "pair": 1,
+        "scenario": "history-scroll",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 35.233642578125,
+          "spawn_to_first_draw_ms": 201.811767578125,
+          "spawn_to_ready_ms": 280.880126953125
+        },
+        "phases": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": 9.623270000000048,
+            "inputs.input_to_submit_ms.p95": 17.155760999999984,
+            "inputs.input_to_witness_ms.p50": 0.10461500000019441,
+            "inputs.input_to_witness_ms.p95": 0.5230010000013863,
+            "inputs.dispatch_delay_ms.p95": 0.47998999999981606,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.052738,
+            "draw_ms.p95": 1.240048,
+            "draw_ms.p99": 1.5459759999999998,
+            "dirty_to_draw_ms.p95": 16.29291600000215,
+            "wake_ms.p99": 1.196628,
+            "main_cpu_percent": 7.76568258380552,
+            "process_cpu_cores": 0.09747655099476074,
+            "wakeups_per_second": 1248.2211177115191,
+            "frames_per_second": 59.997599034743104,
+            "pss_kib.max": 382502,
+            "rss_kib.max": 413728,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 1200,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/dev-second/pair-1-history-scroll-baseline"
+      },
+      {
+        "session": "second",
+        "pair": 2,
+        "scenario": "startup",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 35.6455078125,
+          "spawn_to_first_draw_ms": 198.081298828125,
+          "spawn_to_ready_ms": 277.138916015625
+        },
+        "phases": {},
+        "raw_directory": "target/profiling/finalization/dev-second/pair-2-startup-baseline"
+      },
+      {
+        "session": "second",
+        "pair": 2,
+        "scenario": "startup",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 43.58349609375,
+          "spawn_to_first_draw_ms": 186.776123046875,
+          "spawn_to_ready_ms": 226.405029296875
+        },
+        "phases": {},
+        "raw_directory": "target/profiling/finalization/dev-second/pair-2-startup-candidate"
+      },
+      {
+        "session": "second",
+        "pair": 2,
+        "scenario": "history-scroll",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 36.24609375,
+          "spawn_to_first_draw_ms": 201.351318359375,
+          "spawn_to_ready_ms": 281.042724609375
+        },
+        "phases": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": 9.863467999999557,
+            "inputs.input_to_submit_ms.p95": 17.279727000001003,
+            "inputs.input_to_witness_ms.p50": 0.09137300000020332,
+            "inputs.input_to_witness_ms.p95": 0.6472009999997681,
+            "inputs.dispatch_delay_ms.p95": 0.6177409999982046,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.052408,
+            "draw_ms.p95": 1.277788,
+            "draw_ms.p99": 1.516667,
+            "dirty_to_draw_ms.p95": 16.40828699999929,
+            "wake_ms.p99": 1.215827,
+            "main_cpu_percent": 7.748954652286989,
+            "process_cpu_cores": 0.09695507702106912,
+            "wakeups_per_second": 1248.2184270680223,
+            "frames_per_second": 59.94534331947822,
+            "pss_kib.max": 394026,
+            "rss_kib.max": 425196,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 1200,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/dev-second/pair-2-history-scroll-baseline"
+      },
+      {
+        "session": "second",
+        "pair": 2,
+        "scenario": "history-scroll",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 43.06298828125,
+          "spawn_to_first_draw_ms": 176.904296875,
+          "spawn_to_ready_ms": 215.20068359375
+        },
+        "phases": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": 9.904534999999669,
+            "inputs.input_to_submit_ms.p95": 17.425427000000127,
+            "inputs.input_to_witness_ms.p50": 0.10622700000021723,
+            "inputs.input_to_witness_ms.p95": 0.7754810000005818,
+            "inputs.dispatch_delay_ms.p95": 0.7461210000001302,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.121938,
+            "draw_ms.p95": 1.334577,
+            "draw_ms.p99": 1.5706170000000002,
+            "dirty_to_draw_ms.p95": 16.35592899999756,
+            "wake_ms.p99": 1.303387,
+            "main_cpu_percent": 8.076629495858032,
+            "process_cpu_cores": 0.10216787657540155,
+            "wakeups_per_second": 1250.1490734223753,
+            "frames_per_second": 59.99756425422816,
+            "pss_kib.max": 389274,
+            "rss_kib.max": 422852,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 1200,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/dev-second/pair-2-history-scroll-candidate"
+      },
+      {
+        "session": "second",
+        "pair": 3,
+        "scenario": "startup",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 40.95166015625,
+          "spawn_to_first_draw_ms": 173.9091796875,
+          "spawn_to_ready_ms": 214.218994140625
+        },
+        "phases": {},
+        "raw_directory": "target/profiling/finalization/dev-second/pair-3-startup-candidate"
+      },
+      {
+        "session": "second",
+        "pair": 3,
+        "scenario": "startup",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 32.2529296875,
+          "spawn_to_first_draw_ms": 199.81787109375,
+          "spawn_to_ready_ms": 277.01806640625
+        },
+        "phases": {},
+        "raw_directory": "target/profiling/finalization/dev-second/pair-3-startup-baseline"
+      },
+      {
+        "session": "second",
+        "pair": 3,
+        "scenario": "history-scroll",
+        "variant": "candidate",
+        "startup": {
+          "spawn_to_probe_ms": 43.111328125,
+          "spawn_to_first_draw_ms": 175.958251953125,
+          "spawn_to_ready_ms": 215.1103515625
+        },
+        "phases": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": 9.844278999999915,
+            "inputs.input_to_submit_ms.p95": 17.38391600000068,
+            "inputs.input_to_witness_ms.p50": 0.10433299999931478,
+            "inputs.input_to_witness_ms.p95": 0.6936140000016167,
+            "inputs.dispatch_delay_ms.p95": 0.6623670000008133,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.1215380000000001,
+            "draw_ms.p95": 1.499037,
+            "draw_ms.p99": 1.589547,
+            "dirty_to_draw_ms.p95": 16.320780000000013,
+            "wake_ms.p99": 1.334428,
+            "main_cpu_percent": 8.224169454599293,
+            "process_cpu_cores": 0.10321043011128993,
+            "wakeups_per_second": 1249.7323545041295,
+            "frames_per_second": 59.997578312169054,
+            "pss_kib.max": 382335,
+            "rss_kib.max": 416920,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 1200,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/dev-second/pair-3-history-scroll-candidate"
+      },
+      {
+        "session": "second",
+        "pair": 3,
+        "scenario": "history-scroll",
+        "variant": "baseline",
+        "startup": {
+          "spawn_to_probe_ms": 36.42041015625,
+          "spawn_to_first_draw_ms": 197.6005859375,
+          "spawn_to_ready_ms": 275.73876953125
+        },
+        "phases": {
+          "scroll": {
+            "inputs.input_to_submit_ms.p50": 9.711743999999271,
+            "inputs.input_to_submit_ms.p95": 17.07781299999988,
+            "inputs.input_to_witness_ms.p50": 0.10289299999931245,
+            "inputs.input_to_witness_ms.p95": 0.4453620000022056,
+            "inputs.dispatch_delay_ms.p95": 0.4166220000006433,
+            "inputs.apply_ms.p95": null,
+            "draw_ms.p50": 1.0586280000000001,
+            "draw_ms.p95": 1.222848,
+            "draw_ms.p99": 1.453177,
+            "dirty_to_draw_ms.p95": 16.40207200000077,
+            "wake_ms.p99": 1.218518,
+            "main_cpu_percent": 7.817873626620399,
+            "process_cpu_cores": 0.0979979209588859,
+            "wakeups_per_second": 1249.7341249943029,
+            "frames_per_second": 59.99766331046685,
+            "pss_kib.max": 381030,
+            "rss_kib.max": 410852,
+            "slow_frames_16ms": 0,
+            "inputs.witnessed": 1200,
+            "inputs.superseded": 0,
+            "inputs.superseded_task_ms": 0
+          }
+        },
+        "raw_directory": "target/profiling/finalization/dev-second/pair-3-history-scroll-baseline"
+      }
+    ]
+  },
+  "terminal_sampled_process_cpu": {
+    "metric": "last sampled process cpu_s minus first sampled process cpu_s across the entire capture; excludes child CPU",
+    "baseline_median_seconds": 2.41,
+    "candidate_median_seconds": 2.35,
+    "ratio": {
+      "median_ratio": 0.9625605117565699,
+      "ci95": [
+        0.812805411518682,
+        0.9791836663830968
+      ],
+      "pairs": 6
+    },
+    "pairs": [
+      {
+        "baseline_seconds": 2.41,
+        "candidate_seconds": 2.34
+      },
+      {
+        "baseline_seconds": 2.41,
+        "candidate_seconds": 2.35
+      },
+      {
+        "baseline_seconds": 3.69,
+        "candidate_seconds": 2.57
+      },
+      {
+        "baseline_seconds": 2.54,
+        "candidate_seconds": 2.36
+      },
+      {
+        "baseline_seconds": 2.4,
+        "candidate_seconds": 2.29
+      },
+      {
+        "baseline_seconds": 2.39,
+        "candidate_seconds": 2.35
+      }
+    ],
+    "limitation": "Scroll is witnessed; terminal output completion/byte counts are not. This is a whole-capture guard, not an isolated terminal throughput claim."
+  }
+}

@@ -1,0 +1,201 @@
+{
+  "gitcomet_base": "6b4eed45c6c141376fd494ee615d415525552989",
+  "reviewed_source": "516a38608eb2a89dc2c66257f7392fb8f5aa11ea",
+  "compatibility_baseline": "5d74edfaa3281715b8d533d3b4c2eca2262c1fac",
+  "gpui_base": "0b416666cf8cb67ded66a9fc093a2e674c40edd0",
+  "gpui_pin": "80c32256b87ff82b13373b297388ea730c5da4df",
+  "native_validation": {
+    "macos": "pending; user deferred fresh native checks",
+    "windows": "pending; user deferred fresh native checks"
+  },
+  "application": [
+    {
+      "source": "98738917341656453fb042ad2a689740425a7c24",
+      "final": "93f3ab278f6f6eeee511ad7047afb8fce7621e7a",
+      "disposition": "application"
+    },
+    {
+      "source": "faf0174f3c52c3d7c3abcffe316276f41c6f3e22",
+      "final": "5b242fa104c08603edbb44aa44e04185525e378a",
+      "disposition": "structural; no macOS timing benefit claimed"
+    },
+    {
+      "source": "c17a4f11d6a1693cb29a1a00a8191e722b032133",
+      "final": "f066b35d65cc3f326b9073403ac79ff4057078c4",
+      "disposition": "bounded queued work; no macOS timing benefit claimed"
+    },
+    {
+      "source": "9a11c19cc3bc22dcb6362818bffbc314f7dca81a",
+      "final": "09cc6ccef143d11c8f11fa4c150b5f9418169256",
+      "disposition": "application"
+    },
+    {
+      "source": "3ff7d6101a30b8bc7d7607a986a7e5ffd0c9e00a",
+      "final": "86182818cc2357a229c4942fc8017c8cd6b0ce8d",
+      "disposition": "includes 40fa5079 and 2510d221 portability fixes",
+      "folded_sources": [
+        "40fa50793d6fc3c8b90f48d265c96728410c3917",
+        "2510d221a5b9be083a9bf9df7c193f20619d974d"
+      ]
+    },
+    {
+      "source": "3a8fe01e18a7a1b3e3910d9bba2d74340f30c1c9",
+      "final": "95bff357a5e00ecf53de74fb3f669250262b6902",
+      "disposition": "application"
+    },
+    {
+      "source": "531bf500abaeb8a241828294e90fa22d995bc5f2",
+      "final": "b1d51f0e9c214b9d1f8cda3792f9191c2611dfb7",
+      "disposition": "Python test isolation"
+    },
+    {
+      "source": "78f59b2c1c80bdb56ea243b823a6c8685846ded1",
+      "final": "0c93e12be9f60ca9174add9745d1f80397f25b1e",
+      "disposition": "application"
+    },
+    {
+      "source": "f7d2ebc86c48294025e340d94b44c7f33f242cf9",
+      "final": "2a49e497c7c5b9251c434f3983212d04f9986348",
+      "disposition": "application"
+    },
+    {
+      "source": "9c28d8ce4ed3fa39c44a35f3fca4e4ae5c37e93c",
+      "final": "8dfb2b55aae7ef85ae129ee3727594be621945f6",
+      "disposition": "application"
+    },
+    {
+      "source": "5f9a51942f4081119d495b295d85d3df7a004e33",
+      "final": "9110406c83c9a051fa8e240e27bbfc1d51fa09ae",
+      "disposition": "visible ten-second caret idle policy"
+    },
+    {
+      "source": "c7939624daefba868a75220ad0cc96e9eab7cb48",
+      "final": "943fe014036b288d822845197cf62a6fd7317167",
+      "disposition": "only Windows error 1314 may skip symlink fixtures"
+    },
+    {
+      "source": "73658b926b5e68cb6dc6da9d82d380d92986011e",
+      "final": "e99eeadaf16e373f988a16e2e5c4299a36889f09",
+      "disposition": "restored-tab reuse"
+    }
+  ],
+  "framework": [
+    {
+      "source": "edd5f1a4ed153865688717780d73ce5f31e46e54",
+      "final": "49125d63b4b3acfd1fc3486787ec9be1de4ca654",
+      "disposition": "precompiled Metal with fallback"
+    },
+    {
+      "source": "bc2b2ca3806b0903fb54bb4b7b3dcd9791cf9489",
+      "final": "505816444c5cd341f33d554690dc5276706a0e7b",
+      "disposition": "fixed-rate presentation policy"
+    },
+    {
+      "source": "8eb03f978a3df373b4d0ff5e0f198edf98cd375c",
+      "final": "e3c1706b735cf5d5a4603b3ff4eaefc4f7ca164d",
+      "disposition": "opt-in WGPU; includes 7b7d81f6, 1b3e5252 and c7d3c347",
+      "folded_sources": [
+        "7b7d81f6b62d1d3be5f1844a5be27ba3b04adf2c",
+        "1b3e5252952edf6ac17a8104b6dae8a8ac1c2e39",
+        "c7d3c3474b793470de0769d00f16bee7192b09a5"
+      ]
+    },
+    {
+      "source": "efefb02e39ec4bbf67719c00f9677a9517a2c3c0",
+      "final": "37b0d3d2c2813881f45fc40b7eed53f0a108114b",
+      "disposition": "opt-in Direct3D; fresh native proof pending"
+    },
+    {
+      "source": "934c5c1f5e25850e68bdbab8a1d824c78c155e72",
+      "final": "be74171c5f7c6375a111c98bdd245dc56f126e00",
+      "disposition": "opt-in Windows fixed-refresh; native proof pending"
+    },
+    {
+      "source": "9fc8282d606208c46edc3dc509dd24f5a5595c58",
+      "final": "1538c3c85c580d0a254dc944ed730ea94c5ed2c2",
+      "disposition": "native Windows lint/build fixes"
+    }
+  ],
+  "not_replayed": [
+    {
+      "source": "f070ffd3bc98177cb8d666856329f5794ad86b12",
+      "reason": "updated fork already stores shaped lines as shared backend layouts; old inline decoration representation no longer exists"
+    },
+    {
+      "source": "3ec504dbbd5fa9ad3772ba1764d4c0690111aa2e",
+      "reason": "Core Text/font-kit layout was replaced by Parley; copying the old descriptor patch would restore a retired engine. Native font memory equivalence remains pending."
+    },
+    {
+      "source": "c1a733a4677bdaa414f282de75781fceec4664e5",
+      "reason": "GPUI vendoring intentionally omitted"
+    },
+    {
+      "source": "2c8a6f15afbd77c8cdc79c8b7996910e3c1ba5ed",
+      "reason": "GPUI vendoring intentionally omitted"
+    },
+    {
+      "source": "f67e73e4edc13bfcdd218e86d0d523ffa6175155",
+      "reason": "already included in dev baseline"
+    }
+  ],
+  "application_support": [
+    {
+      "final": "5d74edfaa3281715b8d533d3b4c2eca2262c1fac",
+      "purpose": "adapt to upgraded text backend without vendoring"
+    },
+    {
+      "final": "e36ecf43f930e28e28c35d107522ad7820df27de",
+      "purpose": "pin final published fork revision"
+    },
+    {
+      "final": "3b0fea823a925d93841f016d5ceaf31c12e134bb",
+      "purpose": "resolve configured nextest report store with reused build metadata"
+    },
+    {
+      "final": "3d45af33ac6a2583befcb1b6e602362a3ba713a7",
+      "purpose": "pin the final fork after its 21-job hosted matrix passed"
+    }
+  ],
+  "framework_support": [
+    {
+      "final": "738e96bd58db4f41748dad8cb595b7651b3458ed",
+      "purpose": "cap-height metrics"
+    },
+    {
+      "final": "3c8df570bad91680ab787d992025caf7d154f804",
+      "purpose": "canvas truncation and alignment"
+    },
+    {
+      "final": "1fefe724236df3aff619adaab174c786693e56eb",
+      "purpose": "real text system injection for tests"
+    },
+    {
+      "final": "4e56fe637d9b9a060fa06e0cd9706c22a06c5643",
+      "purpose": "independent custom text layouts"
+    },
+    {
+      "final": "d47817bdbbd148c10d975d4de6038ce73e333514",
+      "purpose": "reproducible paired GPU footprint probe"
+    },
+    {
+      "final": "2ff80e614dd8196eb103232611d06d5e2a749d86",
+      "purpose": "native branch CI triggers"
+    },
+    {
+      "final": "58eaec912a5956ed53787f5dd8a351af90e64cec",
+      "purpose": "preserve oversized-word cluster wrapping"
+    },
+    {
+      "final": "c30b8df1999c25acb2c0dc04fc890d16e414dd23",
+      "purpose": "current Rust macro lint fixes"
+    },
+    {
+      "final": "fdb60b0950bf29be87fd7f19ff3990f31cf85bac",
+      "purpose": "synchronous shader build-script lint scopes"
+    },
+    {
+      "final": "80c32256b87ff82b13373b297388ea730c5da4df",
+      "purpose": "restore upgrades software gradient rounding tolerance; cfg(test) only"
+    }
+  ]
+}
