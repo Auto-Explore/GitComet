@@ -2038,25 +2038,6 @@ pub(super) fn schedule_load_hover_commit_message(
     );
 }
 
-pub(super) fn schedule_load_commit_details(
-    executor: &TaskExecutor,
-    repos: &RepoMap,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    commit_id: gitcomet_core::domain::CommitId,
-) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        send_or_log(
-            &msg_tx,
-            Msg::Internal(crate::msg::InternalMsg::CommitDetailsLoaded {
-                repo_id,
-                commit_id: commit_id.clone(),
-                result: repo.commit_details(&commit_id),
-            }),
-        );
-    });
-}
-
 pub(super) fn schedule_verify_commit_signatures(
     executor: &TaskExecutor,
     repos: &RepoMap,
