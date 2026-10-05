@@ -1168,7 +1168,9 @@ mod tests {
         std::fs::write(&remote, b"theirs\n").unwrap();
 
         let output = run_custom_mergetool_command(
-            r#"cmd /D /S /C "copy /Y "%REMOTE%" "%MERGED%" >NUL""#,
+            // Cargo can grow PATH beyond cmd's 8191-character environment
+            // limit. Resolve the nested shell independently of that PATH.
+            r#""%ComSpec%" /D /S /C "copy /Y "%REMOTE%" "%MERGED%" >NUL""#,
             workdir,
             Path::new("base.txt"),
             Path::new("local.txt"),

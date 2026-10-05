@@ -27,21 +27,30 @@ impl TopologyCache {
         cancellation: &LogWalkCancellation,
         generation: u64,
     ) -> gix::ExnResult<Arc<Topology>> {
-        if let Some(cached) = self
-            .0
-            .lock()
-            .expect("log topology cache")
+        // Serialize initial bootstrap builds too, before windows request their
+        // full index. Waiters can leave promptly when their request is cancelled.
+        let mut slot = loop {
+            check_cancelled(cancellation)?;
+            match self.0.try_lock() {
+                Ok(slot) => break slot,
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    std::thread::sleep(std::time::Duration::from_millis(5))
+                }
+                Err(std::sync::TryLockError::Poisoned(error)) => break error.into_inner(),
+            }
+        };
+        if let Some(cached) = slot
             .as_ref()
             .filter(|cached| cached.generation == generation && cached.tips == tips)
         {
             return Ok(Arc::clone(&cached.topology));
         }
-        // Never hold a lock during I/O. A cancelled or failed build cannot
-        // replace the last complete snapshot. Only one snapshot is retained;
+        // A cancelled or failed build cannot replace the last complete
+        // snapshot. Only one snapshot is retained;
         // active walks pin their own immutable table across ref changes.
         let topology = Arc::new(Topology::build(repo, tips, cancellation)?);
         check_cancelled(cancellation)?;
-        *self.0.lock().expect("log topology cache") = Some(CachedTopology {
+        *slot = Some(CachedTopology {
             generation,
             tips: tips.to_vec(),
             topology: Arc::clone(&topology),
