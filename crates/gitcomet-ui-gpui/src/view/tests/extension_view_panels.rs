@@ -59,6 +59,22 @@ impl Extension for Panels {
                 SidebarTabDescriptor::new("Changed files", view("panels_files"))
                     .with_view(review)
                     .opens_with_view(),
+            )
+            // A view whose own details tab replaces the pane's Details.
+            .repository_view(
+                "inspect",
+                RepositoryViewDescriptor::new(
+                    "Inspect",
+                    "icons/history.svg",
+                    view("panels_inspect"),
+                )
+                .replaces_details(),
+            )
+            .details_tab(
+                "facts",
+                DetailsTabDescriptor::new("Facts", view("panels_facts"))
+                    .with_view(ViewTarget::Extension(id("inspect")))
+                    .opens_with_view(),
             );
     }
 }
@@ -161,6 +177,36 @@ fn a_views_own_tabs_open_with_it_and_give_way_when_it_is_left(cx: &mut gpui::Tes
     assert!(shows(cx, "panels_notes"));
     click(cx, "repository_view_history");
     assert!(shows(cx, "panels_always"));
+}
+
+/// A view that replaces Details lists only contributed tabs while it shows,
+/// and Details comes back, selected as before, when it is left.
+#[gpui::test]
+fn a_view_can_replace_the_details_tab(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (_view, cx) = open_view(cx);
+    assert!(shows(cx, "details_tab_details"));
+
+    click(cx, "repository_view_1");
+    assert!(shows(cx, "panels_inspect"));
+    assert!(!shows(cx, "details_tab_details"), "no Details in Inspect");
+    assert!(shows(cx, "details_tab_3"), "its own tab");
+    assert!(shows(cx, "panels_facts"), "and that tab shows");
+    assert!(shows(cx, "details_tab_1"), "tabs for every view stay");
+    click(cx, "details_tab_1");
+    assert!(shows(cx, "panels_always"));
+    click(cx, "details_tab_3");
+    assert!(shows(cx, "panels_facts"));
+
+    // Review keeps Details beside its own tab.
+    click(cx, "repository_view_0");
+    assert!(shows(cx, "details_tab_details"));
+    assert!(shows(cx, "panels_notes"));
+
+    click(cx, "repository_view_history");
+    assert!(shows(cx, "details_tab_details"));
+    assert!(!shows(cx, "panels_facts"));
+    assert!(!shows(cx, "details_tab_3"));
 }
 
 /// The sidebar's own tabs and a contributed one, clicked in turn. Each click
