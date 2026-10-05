@@ -708,13 +708,16 @@ fn a_pane_shows_the_first_change_of_each_file_it_is_given(cx: &mut gpui::TestApp
     );
 }
 
-/// F1/F4 in an extension view step the hosted pane the user is in, as its
+/// F1/F4 and Alt+Left/Right step the hosted pane the user is in, as its
 /// own arrows do, and never move History's diff behind the view.
 #[gpui::test]
 fn the_file_keys_in_an_extension_view_step_its_pane_not_history(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (_dir, store, view, cx) = open_repository(cx);
-    cx.update(|_window, app| crate::app::bind_app_keys_for_test(app));
+    cx.update(|_window, app| {
+        crate::app::bind_app_keys_for_test(app);
+        crate::app::install_global_diff_navigation_actions_for_test(app);
+    });
     let (list_id, changes) = open_changes_view(cx, &view, &store);
     let current = |cx: &mut gpui::VisualTestContext| {
         cx.update(|_window, app| {
@@ -726,8 +729,10 @@ fn the_file_keys_in_an_extension_view_step_its_pane_not_history(cx: &mut gpui::T
         })
     };
     // No pane yet: the keys have nothing to act on.
-    cx.simulate_keystrokes("f4");
-    publish(cx, &view, store.snapshot());
+    for key in ["f4", "alt-right", "alt-down"] {
+        cx.simulate_keystrokes(key);
+        publish(cx, &view, store.snapshot());
+    }
     assert!(store.snapshot().repos[0].diff_state.diff_target.is_none());
 
     click_debug_selector(
@@ -739,8 +744,34 @@ fn the_file_keys_in_an_extension_view_step_its_pane_not_history(cx: &mut gpui::T
             && row_drawn(cx, first_session(&store), 0)
     });
     assert_eq!(current(cx), Some(PathBuf::from("a.rs")));
-    // Into the diff, then F4 and F1.
     let id = first_session(&store);
+    // File arrows work from the selected view's root, outside the diff.
+    cx.update(|window, app| {
+        let focus = view.read(app).repository_view_focus.clone();
+        window.focus(&focus, app);
+    });
+    for (key, path) in [("alt-right", "b.rs"), ("alt-left", "a.rs")] {
+        cx.simulate_keystrokes(key);
+        settle(cx, &view, &store, key, |cx| {
+            current(cx) == Some(PathBuf::from(path))
+        });
+    }
+    cx.update(|window, app| {
+        let focus = app.focus_handle();
+        window.focus(&focus, app);
+    });
+    for (key, path) in [("alt-right", "b.rs"), ("alt-left", "a.rs")] {
+        cx.simulate_keystrokes(key);
+        settle(cx, &view, &store, key, |cx| {
+            current(cx) == Some(PathBuf::from(path))
+        });
+    }
+    // The example also mounts a previous pane after a file step. Keep
+    // clicking the original current pane, and wait for its loaded rows.
+    settle(cx, &view, &store, "a.rs rows after file steps", |cx| {
+        row_drawn(cx, id, 0)
+    });
+    // Into the diff, then F4 and F1.
     click_debug_selector(cx, selector(format!("hosted_diff_{id}_row_0")));
     publish(cx, &view, store.snapshot());
     cx.simulate_keystrokes("f4");
@@ -774,6 +805,147 @@ fn the_file_keys_in_an_extension_view_step_its_pane_not_history(cx: &mut gpui::T
     assert!(pane.contains(&next.center()));
     assert!(next.center().y > pane.center().y, "{next:?} in {pane:?}");
     assert!(cx.debug_bounds("diff_bar_stage").is_none());
+}
+
+#[gpui::test]
+fn alt_change_keys_reach_the_visible_pane_without_diff_focus(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (dir, store, view, cx) = open_repository(cx);
+    std::fs::write(
+        dir.path().join("a.rs"),
+        numbered("a", 30, Some(3)).replace("a 20\n", "a edited 20\n"),
+    )
+    .unwrap();
+    cx.update(|_, app| {
+        crate::app::bind_app_keys_for_test(app);
+        crate::app::install_global_diff_navigation_actions_for_test(app);
+    });
+    let (list_id, changes) = open_changes_view(cx, &view, &store);
+    click_debug_selector(
+        cx,
+        selector(format!("hosted_file_list_{list_id}_file_a.rs")),
+    );
+    settle(cx, &view, &store, "the pane's rows", |cx| {
+        store.snapshot().repos[0].diff_sessions.len() == 1
+            && row_drawn(cx, first_session(&store), 0)
+    });
+    let pane = cx.update(|_, app| changes.read(app).current().cloned().unwrap());
+    let renderer = hosted_renderer(cx, &pane);
+    let stops = cx.update(|_, app| renderer.read(app).diff_nav_entries());
+    assert_eq!(stops.len(), 2);
+    for detached in [false, true] {
+        let focus = cx.update(|window, app| {
+            renderer.update(app, |pane, _| pane.diff_selection_anchor = Some(stops[0]));
+            let focus = if detached {
+                app.focus_handle()
+            } else {
+                view.read(app).repository_view_focus.clone()
+            };
+            window.focus(&focus, app);
+            focus
+        });
+        publish(cx, &view, store.snapshot());
+        for (key, stop) in [("alt-down", stops[1]), ("alt-up", stops[0])] {
+            cx.simulate_keystrokes(key);
+            publish(cx, &view, store.snapshot());
+            assert_eq!(
+                cx.update(|_, app| renderer.read(app).diff_selection_anchor),
+                Some(stop),
+                "{key}, detached focus: {detached}"
+            );
+            assert!(cx.update(|window, _| focus.is_focused(window)));
+        }
+    }
+    assert!(store.snapshot().repos[0].diff_state.diff_target.is_none());
+}
+
+#[gpui::test]
+fn comparison_blame_toggles_retries_and_follows_the_file(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::domain::BlameSource;
+    let _guard = crate::test_support::lock_visual_test();
+    let (dir, store, view, cx) = open_repository(cx);
+    let from = head(dir.path());
+    let (list_id, changes) = open_changes_view(cx, &view, &store);
+    click_debug_selector(
+        cx,
+        selector(format!("hosted_file_list_{list_id}_file_a.rs")),
+    );
+    settle(cx, &view, &store, "the comparison", |cx| {
+        store.snapshot().repos[0].diff_sessions.len() == 1
+            && row_drawn(cx, first_session(&store), 0)
+    });
+    let id = gitcomet_state::diff_session::DiffViewId(first_session(&store));
+    let pane = cx.update(|_, app| changes.read(app).current().cloned().unwrap());
+    let renderer = hosted_renderer(cx, &pane);
+    assert!(!cx.update(|_, app| renderer.read(app).annotate_enabled));
+    click_debug_selector(cx, "diff_annotate");
+    let ready = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| {
+            let pane = renderer.read(app);
+            pane.annotation_active()
+                && pane.blame_matches_rendered_target()
+                && matches!(&pane.active_repo().unwrap().diff_state.blame, Loadable::Ready(lines) if !lines.is_empty())
+        })
+    };
+    settle(cx, &view, &store, "working-tree comparison blame", ready);
+    assert_eq!(
+        store.snapshot().repos[0].diff_sessions[&id].blame_source,
+        Some(BlameSource::WorkingTree(DiffArea::Unstaged))
+    );
+
+    // A matching failed load must retry on an explicit off/on toggle.
+    let mut failed = (*store.snapshot()).clone();
+    let session = Arc::make_mut(&mut failed.repos[0].diff_sessions)
+        .get_mut(&id)
+        .unwrap();
+    session.blame = Loadable::Error("temporary blame failure".into());
+    session.rev += 1;
+    let failed = Arc::new(failed);
+    store.replace_snapshot_for_test(failed.clone());
+    publish(cx, &view, failed);
+    click_debug_selector(cx, "diff_annotate");
+    click_debug_selector(cx, "diff_annotate");
+    settle(cx, &view, &store, "blame retry", ready);
+
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-q", "-m", "edits"]);
+    let to = head(dir.path());
+    cx.update(|_, app| {
+        pane.set_target(
+            DiffTarget::commit_range(
+                CommitId(from.into()),
+                Some(CommitId(to.clone().into())),
+                Some("b.rs".into()),
+            ),
+            app,
+        );
+    });
+    settle(cx, &view, &store, "committed comparison blame", |cx| {
+        ready(cx)
+            && store.snapshot().repos[0].diff_sessions[&id]
+                .blame_path
+                .as_deref()
+                == Some(Path::new("b.rs"))
+    });
+    assert_eq!(
+        store.snapshot().repos[0].diff_sessions[&id].blame_source,
+        Some(BlameSource::Revision(Some(to)))
+    );
+    assert!(matches!(
+        store.snapshot().repos[0].diff_state.blame,
+        Loadable::NotLoaded
+    ));
+}
+
+fn hosted_renderer(
+    cx: &mut gpui::VisualTestContext,
+    pane: &DiffPane,
+) -> gpui::Entity<MainPaneView> {
+    let view = pane
+        .view()
+        .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+        .unwrap();
+    cx.update(|_, app| view.read(app).renderer().cloned().unwrap())
 }
 
 /// A bar's owner position, and whether each file arrow is enabled.

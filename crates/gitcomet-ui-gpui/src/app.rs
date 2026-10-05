@@ -2,16 +2,17 @@ use crate::assets::GitCometAssets;
 use crate::launch_guard::{UiLaunchError, run_with_panic_guard};
 use crate::ui_scale;
 use crate::view::{
-    DiffNextFile, DiffNextSearchMatchOrChange, DiffPrevFile, DiffPrevSearchMatchOrChange,
-    FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
-    GitCometViewMode, HistoryFindPrevious, InitialRepositoryLaunchMode, LocateFileInExplorer,
-    MainPaneView, OpenActiveViewSearch, OpenRemoteInBrowser, PopoverPromptDismiss,
-    PopoverPromptTabNext, PopoverPromptTabPrev, PushUpstreamRemoteClose, PushUpstreamRemoteNext,
-    PushUpstreamRemoteOpenOrSelect, PushUpstreamRemotePrev, SettingsWindowView, StartupCrashReport,
-    TerminalCopy, TerminalPaste, TerminalSelectAll, TextInputCommitSubmit, TextInputDiffNextChange,
-    TextInputDiffNextFile, TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevChange,
-    TextInputDiffPrevFile, TextInputDiffPrevSearchMatchOrChange, ToggleCommandPalette,
-    WorkspaceBootstrap, is_diff_shortcut_candidate,
+    DiffNextChange, DiffNextFile, DiffNextSearchMatchOrChange, DiffPrevChange, DiffPrevFile,
+    DiffPrevSearchMatchOrChange, FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView,
+    GitCometViewConfig, GitCometViewMode, HistoryFindPrevious, InitialRepositoryLaunchMode,
+    LocateFileInExplorer, MainPaneView, OpenActiveViewSearch, OpenRemoteInBrowser,
+    PopoverPromptDismiss, PopoverPromptTabNext, PopoverPromptTabPrev, PushUpstreamRemoteClose,
+    PushUpstreamRemoteNext, PushUpstreamRemoteOpenOrSelect, PushUpstreamRemotePrev,
+    SettingsWindowView, StartupCrashReport, TerminalCopy, TerminalPaste, TerminalSelectAll,
+    TextInputCommitSubmit, TextInputDiffNextChange, TextInputDiffNextFile,
+    TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevChange, TextInputDiffPrevFile,
+    TextInputDiffPrevSearchMatchOrChange, ToggleCommandPalette, WorkspaceBootstrap,
+    is_diff_shortcut_candidate,
 };
 use gitcomet_core::identity::{self, WindowKind};
 use gitcomet_core::path_utils::canonicalize_or_original;
@@ -104,6 +105,11 @@ pub(crate) fn bind_text_input_keys_for_test(cx: &mut App) {
 #[cfg(test)]
 pub(crate) fn bind_app_keys_for_test(cx: &mut App) {
     bind_app_keys(cx);
+}
+
+#[cfg(test)]
+pub(crate) fn install_global_diff_navigation_actions_for_test(cx: &mut App) {
+    bindings::install_global_diff_navigation_actions(cx);
 }
 
 #[cfg(test)]

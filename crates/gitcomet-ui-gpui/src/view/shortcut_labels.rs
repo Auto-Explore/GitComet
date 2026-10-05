@@ -31,6 +31,16 @@ fn alt_shortcut_for(suffix: &str, is_macos: bool) -> String {
     }
 }
 
+/// The keys for every diff surface's previous-file button.
+pub(crate) fn previous_file_shortcuts() -> Vec<gpui::SharedString> {
+    vec!["F1".into(), alt_shortcut("Left").into()]
+}
+
+/// The keys for every diff surface's next-file button.
+pub(crate) fn next_file_shortcuts() -> Vec<gpui::SharedString> {
+    vec!["F4".into(), alt_shortcut("Right").into()]
+}
+
 /// The keys for every diff surface's previous-change button.
 pub(crate) fn previous_change_shortcuts() -> Vec<gpui::SharedString> {
     vec!["F2".into(), "Shift+F7".into(), alt_shortcut("Up").into()]

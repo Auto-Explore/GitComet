@@ -250,7 +250,7 @@ impl MainPaneView {
             let arrow = |id: &'static str,
                          icon: &'static str,
                          label: &'static str,
-                         key: &'static str,
+                         keys: Vec<SharedString>,
                          delta: i8,
                          enabled: bool,
                          cx: &mut gpui::Context<Self>| {
@@ -261,7 +261,7 @@ impl MainPaneView {
                         }
                     })
                     .debug_selector(move || id.to_string())
-                    .gitcomet_tooltip_keyed(theme, label.into(), vec![key.into()])
+                    .gitcomet_tooltip_keyed(theme, label.into(), keys)
             };
             let position = nav.position.map(|(index, count)| {
                 div()
@@ -285,7 +285,7 @@ impl MainPaneView {
                     "diff_prev_file",
                     "icons/arrow_left.svg",
                     "Previous file",
-                    "F1",
+                    crate::view::shortcut_labels::previous_file_shortcuts(),
                     -1,
                     nav.can_prev,
                     cx,
@@ -294,7 +294,7 @@ impl MainPaneView {
                     "diff_next_file",
                     "icons/arrow_right.svg",
                     "Next file",
-                    "F4",
+                    crate::view::shortcut_labels::next_file_shortcuts(),
                     1,
                     nav.can_next,
                     cx,

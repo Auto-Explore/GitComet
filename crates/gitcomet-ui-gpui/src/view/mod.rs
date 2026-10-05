@@ -107,6 +107,8 @@ actions!(
         DiffNextFile,
         DiffPrevSearchMatchOrChange,
         DiffNextSearchMatchOrChange,
+        DiffPrevChange,
+        DiffNextChange,
         TextInputCommitSubmit,
         TextInputDiffPrevFile,
         TextInputDiffNextFile,

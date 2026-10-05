@@ -3152,16 +3152,36 @@ impl GitCometView {
         });
     }
 
-    pub(super) fn defer_adjacent_diff_file_navigation(
+    pub(crate) fn defer_adjacent_diff_file_navigation(
         &self,
         direction: i8,
         cx: &mut gpui::Context<Self>,
     ) {
+        if !self.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
+            return;
+        }
         self.defer_text_input_main_pane_action(cx, move |pane, window, cx| {
             let Some(repo_id) = pane.active_repo_id() else {
                 return false;
             };
             pane.try_select_adjacent_diff_file(repo_id, direction, window, cx)
+        });
+    }
+
+    pub(crate) fn defer_diff_change_navigation(
+        &self,
+        previous: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
+            return;
+        }
+        self.defer_text_input_main_pane_action(cx, move |pane, _window, cx| {
+            if previous {
+                pane.navigate_prev_diff_change(cx)
+            } else {
+                pane.navigate_next_diff_change(cx)
+            }
         });
     }
 

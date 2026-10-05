@@ -693,6 +693,14 @@ impl Render for GitCometView {
                     cx.stop_propagation();
                 }),
             )
+            .on_action(cx.listener(|this, _: &DiffPrevChange, _window, cx| {
+                this.defer_diff_change_navigation(true, cx);
+                cx.stop_propagation();
+            }))
+            .on_action(cx.listener(|this, _: &DiffNextChange, _window, cx| {
+                this.defer_diff_change_navigation(false, cx);
+                cx.stop_propagation();
+            }))
             .on_action(
                 cx.listener(|this, _: &TextInputDiffPrevChange, _window, cx| {
                     this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
