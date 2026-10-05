@@ -23,10 +23,11 @@ pub enum Work {
     PickerFilterItem,
     LogWalkObjectRead,
     LogTopologyBuild,
+    HistoryIndexBuild,
 }
 
 impl Work {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::IndexObjectRead,
         Self::RangeObjectRead,
         Self::GraphTransition,
@@ -44,6 +45,7 @@ impl Work {
         Self::PickerFilterItem,
         Self::LogWalkObjectRead,
         Self::LogTopologyBuild,
+        Self::HistoryIndexBuild,
     ];
 
     pub fn name(self) -> &'static str {
@@ -65,6 +67,7 @@ impl Work {
             Self::PickerFilterItem => "picker_filter_item",
             Self::LogWalkObjectRead => "log_walk_object_read",
             Self::LogTopologyBuild => "log_topology_build",
+            Self::HistoryIndexBuild => "history_index_build",
         }
     }
 }
@@ -79,7 +82,7 @@ pub fn snapshot() -> [u64; Work::ALL.len()] {
 
 #[cfg(any(test, feature = "benchmarks"))]
 thread_local! {
-    static COUNTS: std::cell::Cell<Option<[u64; Work::ALL.len()]>> = const { std::cell::Cell::new(None) };
+    static COUNTS: std::cell::RefCell<Option<CaptureContext>> = const { std::cell::RefCell::new(None) };
 }
 
 #[inline]
@@ -94,31 +97,80 @@ pub fn record_many(work: Work, amount: u64) {
     }
     #[cfg(any(test, feature = "benchmarks"))]
     COUNTS.with(|counts| {
-        if let Some(mut value) = counts.get() {
-            value[work as usize] += amount;
-            counts.set(Some(value));
+        if let Some(value) = counts.borrow().as_ref() {
+            value[work as usize].fetch_add(amount, Ordering::Relaxed);
         }
     });
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
-pub struct Capture(Option<[u64; Work::ALL.len()]>);
+pub type CaptureContext = std::sync::Arc<[AtomicU64; Work::ALL.len()]>;
+
+#[cfg(any(test, feature = "benchmarks"))]
+pub struct Capture(Option<CaptureContext>);
+
+/// Pass a diagnostic capture to work that moves to a background queue.
+#[cfg(any(test, feature = "benchmarks"))]
+pub fn capture_context() -> Option<CaptureContext> {
+    COUNTS.with(|counts| counts.borrow().clone())
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+pub fn attach_capture(context: Option<CaptureContext>) -> Capture {
+    Capture(COUNTS.with(|counts| counts.replace(context)))
+}
 
 #[cfg(any(test, feature = "benchmarks"))]
 pub fn capture() -> Capture {
-    Capture(COUNTS.with(|counts| counts.replace(Some([0; Work::ALL.len()]))))
+    attach_capture(Some(std::sync::Arc::new(std::array::from_fn(|_| {
+        AtomicU64::new(0)
+    }))))
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
 pub fn count(work: Work) -> u64 {
-    COUNTS.with(|counts| counts.get().unwrap_or_default()[work as usize])
+    COUNTS.with(|counts| {
+        counts
+            .borrow()
+            .as_ref()
+            .map_or(0, |value| value[work as usize].load(Ordering::Relaxed))
+    })
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
 impl Drop for Capture {
     fn drop(&mut self) {
-        COUNTS.with(|counts| counts.set(self.0));
+        COUNTS.with(|counts| counts.replace(self.0.take()));
     }
+}
+
+/// Preserve optional structural diagnostics when a reader moves to a worker.
+/// Shipping builds compile out the capture and attachment entirely.
+#[doc(hidden)]
+pub fn with_capture_context<T>(work: impl FnOnce() -> T) -> impl FnOnce() -> T {
+    #[cfg(any(test, feature = "benchmarks"))]
+    let context = capture_context();
+    move || {
+        #[cfg(any(test, feature = "benchmarks"))]
+        let _capture = attach_capture(context);
+        work()
+    }
+}
+
+// Read on demand in opt-in phase diagnostics, never on the row paint path.
+type MemoryProvider = fn() -> (usize, usize, usize);
+static SHARED_MEMORY: std::sync::OnceLock<MemoryProvider> = std::sync::OnceLock::new();
+
+#[doc(hidden)]
+pub fn register_shared_memory_provider(provider: MemoryProvider) {
+    let _ = SHARED_MEMORY.set(provider);
+}
+
+/// Optional retained bytes, caller-pinned bytes, optional retained rows.
+/// Pinned and retained ownership can overlap and must not be added together.
+#[doc(hidden)]
+pub fn shared_memory() -> Option<(usize, usize, usize)> {
+    SHARED_MEMORY.get().map(|provider| provider())
 }
 
 #[cfg(test)]

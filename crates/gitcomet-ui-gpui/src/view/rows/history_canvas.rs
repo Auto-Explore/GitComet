@@ -3,8 +3,8 @@ use crate::kit::interaction_paint::InteractionPaint;
 use crate::view::panes::HistoryRowHoverArea;
 use gitcomet_state::msg::CommitSelectMode;
 use gpui::{
-    Bounds, ContentMask, CursorStyle, DispatchPhase, HitboxBehavior, MouseButton, TruncateFrom,
-    fill, point, px, size,
+    Bounds, ContentMask, CursorStyle, DispatchPhase, MouseButton, TruncateFrom, fill, point, px,
+    size,
 };
 use palette::IntoColor;
 use rustc_hash::FxHasher;
@@ -1211,7 +1211,7 @@ pub(super) fn history_commit_row_canvas(
     selected_branch: Option<SelectedHistoryBranch>,
     selected_lane: Option<super::history_graph_paint::SelectedLane>,
     lane_branch_name: Option<SharedString>,
-    author: HistoryTextVm,
+    author: HistoryAuthorVm,
     summary: HistoryTextVm,
     when: HistoryTextVm,
     // Raw commit time, so the date cell's tooltip can be rendered in full
@@ -1224,9 +1224,15 @@ pub(super) fn history_commit_row_canvas(
     row_paint: InteractionPaint,
     annotation: gitcomet_extension_api::HistoryRowAnnotation,
 ) -> AnyElement {
+    let interaction = row_paint.clone();
+    let prepaint_interaction = row_paint.clone();
     super::canvas::keyed_canvas(
         ("history_commit_row_canvas", row_id),
-        move |bounds, window, _cx| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+        move |_, _, _| {
+            prepaint_interaction
+                .canvas_hitbox()
+                .expect("canvas interaction prepaint")
+        },
         move |bounds, hitbox, window, cx| {
             let Some(graph_row) = graph_rows.get(graph_row_ix) else {
                 return;
@@ -1660,8 +1666,7 @@ pub(super) fn history_commit_row_canvas(
                         .corner_radii(avatar_d * 0.5),
                     );
 
-                    let initials: SharedString =
-                        components::author_initials(author.as_ref()).into();
+                    let initials = author.initials.shared();
                     let initials_font = scaled_px(components::AVATAR_FONT_PX);
                     let initials_line_height = initials_style
                         .line_height
@@ -1670,8 +1675,8 @@ pub(super) fn history_commit_row_canvas(
                         window,
                         &initials_style,
                         initials_font,
-                        &initials,
-                        fx_hash_str(initials.as_ref()),
+                        initials,
+                        author.initials.text_hash(),
                         avatar_d,
                         identity_color,
                         None,
@@ -2051,6 +2056,7 @@ pub(super) fn history_commit_row_canvas(
     )
     .h_full()
     .w_full()
+    .track_interaction(interaction)
     .into_any_element()
 }
 

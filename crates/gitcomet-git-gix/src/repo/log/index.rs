@@ -6,6 +6,23 @@ use gitcomet_core::services::HistorySnapshot;
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in super::super) struct HistoryQuery {
+    pub common: u64,
+    pub generation: u64,
+    pub mode: HistoryMode,
+    pub author: Option<AuthorFilter>,
+    pub exclusions: gitcomet_core::services::HistoryRefFilter,
+    pub tips: Arc<[gix::ObjectId]>,
+    pub shallow: ShallowSnapshot,
+}
+
+impl HistoryQuery {
+    pub fn snapshot(&self) -> HistorySnapshot {
+        HistorySnapshot(format!("gix-history:{self:?}").into())
+    }
+}
+
 impl GixRepo {
     pub(in super::super) fn build_history_index_impl(
         &self,
@@ -14,30 +31,73 @@ impl GixRepo {
         cancellation: &CancellationToken,
         on_progress: &mut dyn FnMut(HistoryIndexProgress),
     ) -> Result<Option<HistoryIndexHandle>> {
+        cancellation.check_cancelled()?;
+        let (store, shared) = self.fresh_history_store()?;
+        let query = self.resolve_history_query(
+            &store.to_thread_local(),
+            shared.id,
+            shared.common.id,
+            mode,
+            author,
+            cancellation,
+        )?;
+        shared
+            .index(store, query, cancellation, on_progress)
+            .map(Some)
+    }
+
+    pub(in super::super) fn resolve_history_query(
+        &self,
+        repo: &gix::Repository,
+        generation: u64,
+        common: u64,
+        mode: HistoryMode,
+        author: Option<&str>,
+        cancellation: &CancellationToken,
+    ) -> Result<HistoryQuery> {
+        let shallow = shallow_snapshot(repo)?;
+        let tips = if mode == HistoryMode::AllBranches {
+            self.all_branches_tips(repo, Some(cancellation))?
+        } else {
+            Arc::from(gix_head_id_or_none(repo)?.into_iter().collect::<Vec<_>>())
+        };
+        Ok(HistoryQuery {
+            common,
+            generation,
+            mode,
+            author: AuthorFilter::new(author),
+            exclusions: self.history_ref_filter.clone(),
+            tips,
+            shallow,
+        })
+    }
+
+    pub(in super::super) fn build_resolved_history_index(
+        store: &gix::ThreadSafeRepository,
+        query: &HistoryQuery,
+        snapshot: HistorySnapshot,
+        topology_cache: &TopologyCache,
+        cancellation: &CancellationToken,
+        on_progress: &mut dyn FnMut(HistoryIndexProgress),
+    ) -> Result<HistoryIndexHandle> {
         let _trace = gitcomet_core::git_ops_trace::scope(
             gitcomet_core::git_ops_trace::GitOpTraceKind::LogWalk,
         );
         cancellation.check_cancelled()?;
-        let (store, generation) = self.thread_safe_repo();
+        gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::HistoryIndexBuild);
         let repo = store.to_thread_local();
-        let shallow = shallow_snapshot(&repo)?;
-        let tips = if mode == HistoryMode::AllBranches {
-            self.all_branches_tips(&repo, Some(cancellation))?
-        } else {
-            Arc::from(gix_head_id_or_none(&repo)?.into_iter().collect::<Vec<_>>())
-        };
-        let author = AuthorFilter::new(author);
-        let snapshot = HistorySnapshot(format!("{mode:?}|{author:?}|{tips:?}|{shallow:?}").into());
+        let mode = query.mode;
+        let author = &query.author;
         let mut builder =
             HistoryIndexBuilder::new(snapshot, mode, repo.object_hash().len_in_bytes())?;
         let mut walk = new_log_paged_walk(
-            &store,
-            tips.iter().copied(),
+            store,
+            query.tips.iter().copied(),
             mode,
-            &shallow,
+            &query.shallow,
             Some(cancellation),
             None,
-            Some((&self.log_topology_cache, generation)),
+            Some((topology_cache, query.generation)),
         )?;
         let mut decode_buf = Vec::new();
         let mut scanned = 0u64;
@@ -131,7 +191,7 @@ impl GixRepo {
         })?;
         drop(topology);
         drop(decode_buf);
-        builder.finish(cancellation).map(Some)
+        builder.finish(cancellation)
     }
 
     pub(in super::super) fn read_history_range_impl(
@@ -146,6 +206,8 @@ impl GixRepo {
                 "history range is outside its snapshot".into(),
             )));
         }
+        let (_, shared) = self.fresh_history_store()?;
+        self.validate_history_store(index, &shared)?;
         let repo = self.range_reader_repo()?;
         let mut decode = CommitDecodeState::default();
         let mut header_buf = Vec::new();

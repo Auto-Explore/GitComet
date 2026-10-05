@@ -2971,7 +2971,7 @@ fn build_history_base_cache(
             .into()
     };
     let has_stash_tips = !stash_tips.is_empty();
-    let mut author_cache: FxHashMap<&str, HistoryTextVm> =
+    let mut author_cache: FxHashMap<&str, HistoryAuthorVm> =
         FxHashMap::with_capacity_and_hasher(64, Default::default());
     let mut row_vms = Vec::with_capacity(visible_indices.len());
     if has_stash_tips {
@@ -2983,7 +2983,7 @@ fn build_history_base_cache(
             let commit_id = commit.id.as_ref();
             let author = author_cache
                 .entry(commit.author.as_ref())
-                .or_insert_with(|| HistoryTextVm::new(commit.author.clone().into()))
+                .or_insert_with(|| HistoryAuthorVm::new(commit.author.clone().into()))
                 .clone();
             let (is_stash, summary) =
                 match next_history_stash_tip_for_commit_ix(&stash_tips, &mut next_stash_tip_ix, ix)
@@ -3014,7 +3014,7 @@ fn build_history_base_cache(
             };
             let author = author_cache
                 .entry(commit.author.as_ref())
-                .or_insert_with(|| HistoryTextVm::new(commit.author.clone().into()))
+                .or_insert_with(|| HistoryAuthorVm::new(commit.author.clone().into()))
                 .clone();
             row_vms.push(HistoryBaseRowVm {
                 author,

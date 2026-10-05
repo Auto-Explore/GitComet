@@ -93,10 +93,15 @@ pub(super) fn panel(
             .style(components::ButtonStyle::Danger)
             .on_click(theme, cx, move |this, _e, window, cx| {
                 let root_view = this.root_view.clone();
-                let _ = root_view.update(cx, |root, cx| {
-                    root.confirm_terminal_shutdown(prompt.clone(), window, cx);
-                });
+                let prompt = prompt.clone();
                 this.close_popover(cx);
+                // Later close guards read this host. Release its update lease
+                // before checking them or closing the window that owns it.
+                window.defer(cx, move |window, cx| {
+                    let _ = root_view.update(cx, |root, cx| {
+                        root.confirm_terminal_shutdown(prompt, window, cx);
+                    });
+                });
             }),
         cx,
     )

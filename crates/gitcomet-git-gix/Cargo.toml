@@ -21,6 +21,10 @@ required-features = ["benchmarks"]
 name = "operation-context-probe"
 required-features = ["benchmarks"]
 
+[[example]]
+name = "interaction-probe"
+required-features = ["benchmarks"]
+
 # Cargo builds this fixture for integration tests. Application packages depend
 # only on this package's library, so it is not part of application distributions.
 [[bin]]
@@ -42,6 +46,7 @@ lru = { workspace = true }
 memchr = { workspace = true }
 rustc-hash = { workspace = true }
 rustix = { workspace = true }
+same-file = "1.0.6"
 serde_json = { workspace = true }
 smallvec = { workspace = true }
 tempfile = { workspace = true }

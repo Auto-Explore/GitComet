@@ -1,4 +1,31 @@
-# Vendored tree-sitter grammars
+# Vendored dependencies
+
+## GPUI compact text storage
+
+`gpui/` is the `crates/gpui` crate from Havunen/gpui-ce revision
+`2ba9c0718644c28852f898402d92b40ba5cc4b57`. Its upstream licenses are included.
+The root Cargo patch substitutes this crate while the platform, renderer and
+supporting crates remain pinned to that same revision. Its manifest expands
+upstream workspace dependencies and lint settings so it builds in this workspace.
+It explicitly lists the portable integration tests, excluding
+`renderer_source_audit`, which requires the upstream sibling renderer sources.
+The vendored crate's unit tests, including the text regressions, remain in
+workspace CI.
+
+The source changes are confined to `src/text_system.rs` and
+`src/text_system/line.rs`: decoration storage is empty, one inline run, or a
+shared array of multiple runs. Shaped and wrapped lines use the same internal
+representation; wrapping no longer reserves 32 decorations unconditionally.
+`ShapedLine` measures 128 bytes on x86-64, versus 2,984 bytes upstream. GitComet's
+text-cache entry limits are unchanged. Run
+`cargo test -p gpui-ce --lib text_system` for shaping, highlighting, wrapping,
+splitting and a 65-run Unicode regression. The latter also prints the layout
+size with `-- --nocapture`.
+
+Keep future updates based on the pinned upstream crate and reapply this small
+source delta, or remove the patch once upstream provides equivalent storage.
+
+## Tree-sitter grammars
 
 Each `tree-sitter-*` directory here is a grammar GitComet compiles from source
 rather than pulling from crates.io. Every one of them carries its reason in its

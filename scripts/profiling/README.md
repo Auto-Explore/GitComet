@@ -649,6 +649,95 @@ packed-tile boundaries, transparent damage, popup removal and resize. The broade
 wgpu suite currently has three pre-existing alpha-contract failures reproduced
 on the unmodified dependency; record these separately from the new regressions.
 
+### Linux comparison of GPUI 325cedb (2026-10-05)
+
+The requested `325cedb8a5c57104578f557d4652b1e5800e01b3` was compared with the
+current `2ba9c0718644c28852f898402d92b40ba5cc4b57`. Both release executables
+include the repository-sharing review fixes and the compact text patch. Only
+the GPUI revision, its profiler implementation and the reported revision
+constant differ in executable sources. The candidate was built in an isolated
+worktree; the main workspace dependency pin was preserved.
+This four-window workload confirmed that the new scratch-pool expiry releases
+unused textures, but did not establish a meaningful Linux gain with shipping
+defaults. The revision was not promoted to the main workspace.
+
+Five alternating pairs per setting use four windows on the same 204,001-commit
+repository, at 1400 x 900 in isolated Mutter Wayland sessions. The host has a
+Ryzen 9 5950X and a GTX 1080 using hardware Vulkan, NVIDIA 580.178.04. Settings
+are all experiments disabled, and
+`cropped-paths,shared-resources,pooled-targets` enabled together. Connector quads
+remain disabled. GPU diagnostics use 240 selection/scroll inputs and 480 hover
+moves; separate clean runs use 120 inputs and 240 hover moves without GPU
+queries, vendor monitoring or allocation instrumentation. Each additional
+window receives 60 selections after native focus changes.
+
+All 40 captures passed the scenario and window-isolation checks. The 20 clean
+captures passed every `max(5%, 1 ms)` input-to-draw, input-to-submit and CPU draw
+p95 guard for both revision comparisons. Comparing the candidate with and
+without the flags also passed those clean guards. Values below are medians of
+the five per-run measurements, shown as baseline to candidate:
+
+| Setting | Selection input-to-draw p95 (ms) | Scroll input-to-draw p95 (ms) | Hover draw p95 (ms) | Settled process PSS (MiB) |
+| --- | ---: | ---: | ---: | ---: |
+| Default | 18.99 → 18.93 | 17.04 → 17.08 | 1.55 → 1.56 | 538.1 → 534.1 |
+| Cropping + sharing + pooling | 18.97 → 18.95 | 16.88 → 17.12 | 1.52 → 1.58 | 530.6 → 526.6 |
+
+Startup to indexed readiness was 813 → 815 ms at defaults and 815 → 811 ms
+with flags. The roughly 4 MiB PSS median differences have overlapping run
+ranges; they do not establish a consistent memory reduction. File descriptors
+remained at 134 for both revisions/settings. The raw runs and all focus-phase
+guards remain in the analysis.
+
+All 20 GPU captures completed. Across their 120 active phases, 20,817 frames
+had timestamps: coverage was 100%, every phase had at least 110 timed frames,
+and there were no query drops, record drops or submission gaps. Optional device
+retention peaked at 13.18 MiB, below the 32 MiB limit. The allocation estimates
+show a concrete pooling improvement: the current revision still retained
+13.18 MiB at the end of selection and at the final settled frame sample in
+every run, while the candidate retained zero in all five runs. The new expiry
+therefore releases unused scratch textures as intended. Both revisions had the
+same peak retention, and driver-reported app framebuffer memory remained
+205 MB with pooling enabled. This benefit requires the opt-in pool; default
+rendering retained no optional textures on either revision.
+
+Automatic GPU clocks prevent attributing the raw timing differences to the
+revision: memory clocks alternated between 405/810 and 5,005 MHz in both
+executables. For example, default hover time was about 5.54 ms at the lower
+memory clock and 1.32 ms at the higher clock for both revisions. The analysis
+retains every capture and fails the GPU comparison when paired graphics or
+memory clocks differ by more than 5%. The following high-clock hover groups
+are descriptive only, with two baseline and three candidate samples; they do
+not replace the five-pair acceptance gate.
+
+| Setting | Baseline hover GPU p50 | Candidate hover GPU p50 | Baseline app framebuffer | Candidate app framebuffer |
+| --- | ---: | ---: | ---: | ---: |
+| Default | 1.319 ms | 1.319 ms | 269 MB | 269 MB |
+| Cropping + sharing + pooling | 0.917 ms | 0.915 ms | 205 MB | 205 MB |
+
+Hover groups use steady sampled graphics/memory clocks of 1,721/5,005 MHz.
+Framebuffer values are medians across all five settled runs per side, in
+NVIDIA `pmon`'s reported MB units. The memory reduction from these existing
+flags is present in both revisions. Process SM activity also differed with
+clocks and does not establish reduced work. Missing utilization samples in
+short phases stay unavailable; whole-device utilization and board power are
+not attributed to GitComet.
+
+The candidate passed 51 shared renderer tests and all four upstream source
+audits. Its native wgpu suite passed 54 tests, ignored one, and failed three
+existing alpha-contract cases, which also failed on the current revision:
+`quad_backgrounds_match_legacy_metal_pixels`,
+`quad_border_backgrounds_use_the_fill_coordinate_space`, and
+`underline_opacity_is_applied_once`. New optimization fixtures and resource
+lifetime tests passed. macOS font loading/Metal shader startup and native
+Windows behavior were not measured on this host. Frozen macOS controls and
+shipping GPU/allocator defaults remain unchanged.
+
+Captures, native test logs, source archives, hashes and frozen executables are
+under `target/performance/gpui-325cedb/`. `measurements.json` preserves the
+individual runs; `analysis.json` includes clean latency comparisons, memory,
+GPU coverage/budgets and clock diagnostics. `measure.py` and `analyze.py` in
+that directory reproduce the comparison with the frozen executables.
+
 ## GUI and process captures
 
 For a responsiveness report, first use **Settings → Environment → Copy

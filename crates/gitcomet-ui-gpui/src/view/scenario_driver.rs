@@ -496,6 +496,16 @@ impl Driver {
                 })
                 .collect();
             record("scenario_work", json!({"phase": name, "counts": counts}));
+            if let Some((retained_bytes, pinned_bytes, retained_rows)) =
+                history_perf::shared_memory()
+            {
+                record(
+                    "scenario_history_memory",
+                    json!({"phase": name,
+                    "retained_bytes": retained_bytes, "caller_pinned_bytes": pinned_bytes,
+                    "retained_rows": retained_rows}),
+                );
+            }
             #[cfg(feature = "perf-alloc")]
             {
                 let metrics =
@@ -577,16 +587,21 @@ impl Driver {
             }
             Step::Paste { text, witness } => {
                 cx.update(|cx| {
-                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.clone()))
+                    self.view.update(cx, |_, cx| {
+                        crate::clipboard::write_text(
+                            cx,
+                            text.clone(),
+                            crate::clipboard::CopySource::TextInputShortcut,
+                        )
+                    })
                 });
                 // Native clipboard ownership is asynchronous (Wayland needs
                 // a compositor offer). Finish setup before timing the shortcut.
                 let deadline = Instant::now() + Duration::from_secs(5);
                 while !cx.update(|cx| {
-                    cx.read_from_clipboard()
-                        .and_then(|item| item.text())
-                        .as_ref()
-                        == Some(text)
+                    self.view.update(cx, |_, cx| {
+                        crate::clipboard::read_text(cx).as_ref() == Some(text)
+                    })
                 }) {
                     if Instant::now() >= deadline {
                         return Err("clipboard did not accept scenario text; check native input focus/ownership".into());

@@ -11,6 +11,7 @@ impl GixRepo {
         author: Option<&AuthorFilter>,
     ) -> super::LogPageCacheKey {
         super::LogPageCacheKey {
+            generation: self.store_generation(),
             mode,
             seed,
             shallow: shallow.clone(),
@@ -31,6 +32,7 @@ impl GixRepo {
             .next_cursor
             .as_ref()
             .map(|cursor| super::LogPageCacheKey {
+                generation: key.generation,
                 mode: key.mode,
                 seed: key.seed.clone(),
                 shallow: key.shallow.clone(),
@@ -488,13 +490,49 @@ impl GixRepo {
         cursor: Option<&LogCursor>,
         cancellation: Option<&CancellationToken>,
         author: Option<&AuthorFilter>,
+        chunks: Option<&mut ChunkEmitter<'_>>,
+    ) -> Result<LogPage> {
+        if tips.is_empty() {
+            return Ok(empty_log_page());
+        }
+
+        let owned = self.store.read().expect("repo store");
+        let store = owned.repo.clone();
+        let shared = owned.shared.clone();
+        drop(owned);
+        self.log_paged_page_from_store(
+            &store,
+            &shared,
+            mode,
+            tips,
+            shallow,
+            limit,
+            cursor,
+            cancellation,
+            author,
+            chunks,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn log_paged_page_from_store(
+        &self,
+        store: &gix::ThreadSafeRepository,
+        shared: &super::super::shared::SharedStore,
+        mode: HistoryMode,
+        tips: Arc<[gix::ObjectId]>,
+        shallow: &super::ShallowSnapshot,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: Option<&CancellationToken>,
+        author: Option<&AuthorFilter>,
         mut chunks: Option<&mut ChunkEmitter<'_>>,
     ) -> Result<LogPage> {
         if tips.is_empty() {
             return Ok(empty_log_page());
         }
 
-        let (store, generation) = self.thread_safe_repo();
+        let generation = shared.mapping_id;
         let cached_walk_state = cursor
             .and_then(|cursor| cursor.resume_token.as_deref())
             .and_then(|token| {
@@ -516,25 +554,25 @@ impl GixRepo {
             (Some(walk_state), _) => (walk_state, None),
             (None, Some(resume_tip)) => (
                 new_log_paged_walk(
-                    &store,
+                    store,
                     [resume_tip],
                     mode,
                     shallow,
                     cancellation,
                     chunks.as_deref_mut(),
-                    Some((&self.log_topology_cache, generation)),
+                    Some((&shared.topology, shared.id)),
                 )?,
                 None,
             ),
             (None, None) => (
                 new_log_paged_walk(
-                    &store,
+                    store,
                     tips.iter().copied(),
                     mode,
                     shallow,
                     cancellation,
                     chunks.as_deref_mut(),
-                    Some((&self.log_topology_cache, generation)),
+                    Some((&shared.topology, shared.id)),
                 )?,
                 cursor.map(|cursor| CursorGate::new(Some(cursor))),
             ),
@@ -545,7 +583,7 @@ impl GixRepo {
         walk_state.cancellation.replace(cancellation);
 
         let (commits, has_more) = log_page_from_paged_walk_state(
-            &store,
+            store,
             &mut walk_state,
             limit,
             cursor_gate.as_mut(),

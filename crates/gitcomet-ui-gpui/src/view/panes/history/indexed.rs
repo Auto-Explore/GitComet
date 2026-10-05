@@ -1036,7 +1036,7 @@ impl HistoryView {
                                 &commit.summary
                             };
                             HistoryBaseRowVm {
-                                author: HistoryTextVm::new(commit.author.clone().into()),
+                                author: HistoryAuthorVm::new(commit.author.clone().into()),
                                 summary: HistoryTextVm::new(
                                     if summary == commit.summary.as_ref() {
                                         commit.summary.clone().into()
