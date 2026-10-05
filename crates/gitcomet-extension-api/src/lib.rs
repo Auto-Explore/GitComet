@@ -53,11 +53,11 @@ pub use host::{
 pub use id::{ContributionId, ExtensionId, IdError};
 pub use lifecycle::{HostNotifier, ShellEvent, Slot, SlotSignal, WindowExtension};
 pub use panes::{
-    DiffAnnotation, DiffAnnotations, DiffFileNavigation, DiffGutterAction, DiffInset, DiffLayout,
-    DiffLegendItem, DiffLineRange, DiffLineSide, DiffPane, DiffPaneEvent, DiffPaneEventHandler,
-    DiffPaneOptions, DiffPanePolicy, DiffRowDecor, DiffRowDecorProvider, DiffRowStyle,
-    DiffScrollAnchor, DiffSelectionAction, DiffSelectionRun, DiffSnapshot, FileList, FileListMode,
-    FileSelected,
+    DiffAnnotation, DiffAnnotations, DiffBar, DiffBarItem, DiffBarItemStyle, DiffBarRun,
+    DiffFileNavigation, DiffFilePosition, DiffGutterAction, DiffInset, DiffLayout, DiffLegendItem,
+    DiffLineRange, DiffLineSide, DiffPane, DiffPaneEvent, DiffPaneEventHandler, DiffPaneOptions,
+    DiffPanePolicy, DiffRowDecor, DiffRowDecorProvider, DiffRowStyle, DiffScrollAnchor,
+    DiffSelectionAction, DiffSelectionRun, DiffSnapshot, FileList, FileListMode, FileSelected,
 };
 pub use registry::{
     KeyBindingDeclaration, MenuItemDeclaration, Registrar, RegistrationError, Registry,

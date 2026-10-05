@@ -30,8 +30,19 @@ enum PaneSource {
     Snapshot(DiffSnapshot),
 }
 
+/// Orders panes by when the user last engaged with them, for routing the
+/// diff keys (F1–F4, F7) to the one in front of them.
+static ENGAGED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn next_engaged() -> u64 {
+    ENGAGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
+}
+
 pub(crate) struct DiffPaneView {
     host: WindowHost,
+    /// Bumped when the pane is given a file and when its diff takes focus.
+    engaged: u64,
+    _focus_in: Option<gpui::Subscription>,
     root: Option<WeakEntity<GitCometView>>,
     renderer: Option<Entity<MainPaneView>>,
     renderer_model: Option<Entity<AppUiModel>>,
@@ -106,6 +117,8 @@ impl DiffPaneView {
         }
         Self {
             host,
+            engaged: next_engaged(),
+            _focus_in: None,
             root: None,
             renderer: None,
             renderer_model: None,
@@ -296,8 +309,23 @@ impl DiffPaneView {
             }
             cx.notify();
         }));
+        // Focus in the diff makes this the pane the diff keys go to.
+        let focus = renderer.read(cx).diff_panel_focus_handle.clone();
+        self._focus_in = Some(cx.on_focus_in(&focus, window, |this, _, _| {
+            this.engaged = next_engaged();
+        }));
         self.renderer = Some(renderer);
         self.renderer_model = Some(model);
+    }
+
+    /// The renderer that draws this pane, once it exists.
+    pub(in crate::view) fn renderer(&self) -> Option<&Entity<MainPaneView>> {
+        self.renderer.as_ref()
+    }
+
+    /// When the user last gave this pane a file or focused its diff.
+    pub(in crate::view) fn engaged(&self) -> u64 {
+        self.engaged
     }
 
     fn snapshot_state(&self, snapshot: &DiffSnapshot) -> Arc<AppState> {
@@ -377,6 +405,7 @@ impl DiffPaneView {
 
     /// Clears what the pane showed, dropping any build still running for it.
     fn reset(&mut self, path: Option<&std::path::Path>) {
+        self.engaged = next_engaged();
         self.language = path.and_then(crate::view::rows::diff_syntax_language_for_path);
         self.build = None;
         self.building_rev = None;
@@ -1540,6 +1569,13 @@ impl DiffPaneImpl for HostedDiffPane {
     ) {
         self.entity.update(cx, |pane, cx| {
             pane.options.file_navigation = navigation;
+            pane.sync_decor(cx);
+            cx.notify();
+        });
+    }
+    fn set_bar(&self, bar: gitcomet_extension_api::DiffBar, cx: &mut App) {
+        self.entity.update(cx, |pane, cx| {
+            pane.options.bar = bar;
             pane.sync_decor(cx);
             cx.notify();
         });

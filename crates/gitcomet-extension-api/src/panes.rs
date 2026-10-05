@@ -335,6 +335,8 @@ pub struct DiffPaneOptions {
     /// annotation. Both need [`DiffPanePolicy::line_action`].
     pub on_annotation_click: Option<DiffGutterAction>,
     pub selection_actions: Vec<DiffSelectionAction>,
+    /// The bottom bar's place in the owner's list and its buttons.
+    pub bar: DiffBar,
 }
 
 /// File navigation belongs to the pane's owner and its ordered file list.
@@ -342,6 +344,150 @@ pub struct DiffPaneOptions {
 pub struct DiffFileNavigation {
     pub previous: Option<crate::HostedAction>,
     pub next: Option<crate::HostedAction>,
+}
+
+/// Where the shown file sits in its owner's list: zero-based `index` of
+/// `count`. The bar shows it as "3 of 43 files" and disables the file arrows
+/// at either end.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct DiffFilePosition {
+    pub index: usize,
+    pub count: usize,
+}
+
+impl DiffFilePosition {
+    pub fn new(index: usize, count: usize) -> Self {
+        Self { index, count }
+    }
+}
+
+/// How a bar button is drawn.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum DiffBarItemStyle {
+    #[default]
+    Default,
+    /// The bar's main action, filled with the accent colour.
+    Primary,
+}
+
+/// Runs a bar button, with the selected lines when there are any.
+pub type DiffBarRun = Rc<dyn Fn(Option<DiffLineRange>, &mut App)>;
+
+/// A button in the pane's bottom bar, right of the file arrows. Its run is
+/// deferred, so it may update or replace the view that owns the pane.
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct DiffBarItem {
+    /// Unique within the bar; the element's debug selector is
+    /// `diff_bar_{id}`.
+    pub id: SharedString,
+    pub label: SharedString,
+    /// An icon asset path, drawn before the label.
+    pub icon: Option<SharedString>,
+    /// The key that runs the same thing, shown as keycaps, in gpui keystroke
+    /// syntax such as `"c"` or `"secondary-enter"`. Display only: the owner
+    /// binds the key.
+    pub shortcut: Option<SharedString>,
+    /// The tooltip's text; the label by default.
+    pub tooltip: Option<SharedString>,
+    pub style: DiffBarItemStyle,
+    pub enabled: bool,
+    /// Disabled until lines are selected; `run` then receives them.
+    pub needs_selection: bool,
+    pub run: DiffBarRun,
+}
+
+impl DiffBarItem {
+    pub fn new(
+        id: impl Into<SharedString>,
+        label: impl Into<SharedString>,
+        run: impl Fn(Option<DiffLineRange>, &mut App) + 'static,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            icon: None,
+            shortcut: None,
+            tooltip: None,
+            style: DiffBarItemStyle::Default,
+            enabled: true,
+            needs_selection: false,
+            run: Rc::new(run),
+        }
+    }
+
+    pub fn with_icon(mut self, icon: impl Into<SharedString>) -> Self {
+        self.icon = Some(icon.into());
+        self
+    }
+
+    pub fn with_shortcut(mut self, keystrokes: impl Into<SharedString>) -> Self {
+        self.shortcut = Some(keystrokes.into());
+        self
+    }
+
+    pub fn with_tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
+        self.tooltip = Some(tooltip.into());
+        self
+    }
+
+    pub fn primary(mut self) -> Self {
+        self.style = DiffBarItemStyle::Primary;
+        self
+    }
+
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    pub fn needs_selection(mut self) -> Self {
+        self.needs_selection = true;
+        self
+    }
+}
+
+impl std::fmt::Debug for DiffBarItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DiffBarItem")
+            .field("id", &self.id)
+            .field("label", &self.label)
+            .field("icon", &self.icon)
+            .field("shortcut", &self.shortcut)
+            .field("tooltip", &self.tooltip)
+            .field("style", &self.style)
+            .field("enabled", &self.enabled)
+            .field("needs_selection", &self.needs_selection)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The pane's bottom bar, as its owner fills it: where the file sits in the
+/// owner's list, and buttons for what the owner does with it. The host draws
+/// the file arrows from [`DiffFileNavigation`] and its own format controls.
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
+pub struct DiffBar {
+    pub position: Option<DiffFilePosition>,
+    pub items: Vec<DiffBarItem>,
+}
+
+impl DiffBar {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_position(mut self, index: usize, count: usize) -> Self {
+        self.position = Some(DiffFilePosition::new(index, count));
+        self
+    }
+
+    pub fn with_item(mut self, item: DiffBarItem) -> Self {
+        self.items.push(item);
+        self
+    }
 }
 
 /// Two texts compared without a repository, such as the files a difftool
@@ -415,6 +561,10 @@ pub trait DiffPaneImpl {
     fn scroll_anchor(&self, cx: &App) -> Option<DiffScrollAnchor>;
     fn restore_scroll_anchor(&self, anchor: DiffScrollAnchor, cx: &mut App);
     fn set_file_navigation(&self, navigation: DiffFileNavigation, cx: &mut App);
+    /// Replaces the bottom bar's position and buttons.
+    fn set_bar(&self, bar: DiffBar, cx: &mut App) {
+        let _ = (bar, cx);
+    }
 }
 
 /// An owning handle to a hosted diff pane. Mount [`DiffPane::view`] in a view
@@ -503,6 +653,11 @@ impl DiffPane {
     }
     pub fn set_file_navigation(&self, navigation: DiffFileNavigation, cx: &mut App) {
         self.0.set_file_navigation(navigation, cx);
+    }
+    /// Replaces the bottom bar's position and buttons, as
+    /// [`DiffPaneOptions::bar`] set them at creation.
+    pub fn set_bar(&self, bar: DiffBar, cx: &mut App) {
+        self.0.set_bar(bar, cx);
     }
 }
 

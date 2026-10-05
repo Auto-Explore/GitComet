@@ -37,19 +37,14 @@ fn conflict_output_post_layout_scroll_y(gutter_y: Pixels, editor_max_y: Pixels) 
 
 impl MainPaneView {
     /// Toolbar controls for simple conflict strategies (binary, keep/delete,
-    /// decision-only): file navigation plus resolved counts.
+    /// decision-only): resolved counts. File navigation is in the bottom bar.
     pub(super) fn conflict_toolbar_simple_controls(
         &self,
         mut controls: gpui::Div,
-        prev_file_btn: Option<AnyElement>,
-        next_file_btn: Option<AnyElement>,
         theme: AppTheme,
     ) -> gpui::Div {
         // Binary, keep/delete, and decision-only conflicts handle actions
-        // inline in their dedicated panels; only show file navigation.
-        controls = controls
-            .when_some(prev_file_btn, |d, btn| d.child(btn))
-            .when_some(next_file_btn, |d, btn| d.child(btn));
+        // inline in their dedicated panels.
         let conflict_count = self.conflict_resolver_conflict_count();
         if conflict_count > 0 {
             let resolved_count = self.conflict_resolver_resolved_count();
@@ -82,8 +77,6 @@ impl MainPaneView {
     pub(super) fn conflict_toolbar_full_controls(
         &self,
         mut controls: gpui::Div,
-        prev_file_btn: Option<AnyElement>,
-        next_file_btn: Option<AnyElement>,
         conflict_rendered_preview_active: bool,
         repo_id: Option<RepoId>,
         conflict_target_path: &Option<std::path::PathBuf>,
@@ -99,7 +92,6 @@ impl MainPaneView {
         );
         let active_pick_state = self.conflict_resolver_active_pick_state();
         controls = controls
-            .when_some(prev_file_btn, |d, btn| d.child(btn))
             .when(!conflict_rendered_preview_active, |d| {
                 let can_nav_prev = self.conflict_has_prev();
                 let can_nav_next = self.conflict_has_next();
@@ -319,8 +311,7 @@ impl MainPaneView {
                             ))
                     }
                 },
-            )
-            .when_some(next_file_btn, |d, btn| d.child(btn));
+            );
 
         if let (Some(repo_id), Some(path)) = (repo_id, conflict_target_path.clone()) {
             let total = self.conflict_resolver_conflict_count();

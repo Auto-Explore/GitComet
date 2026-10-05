@@ -391,8 +391,21 @@ fn comparison_diff_steps_through_range_files_with_arrows_and_f1_f4(cx: &mut gpui
     // Where a row click leaves focus.
     focus_diff_panel(cx, &view);
 
-    assert!(cx.debug_bounds("diff_prev_file").is_some());
-    assert!(cx.debug_bounds("diff_next_file").is_some());
+    assert_eq!(drawn_file_arrows(cx, &view), Some((true, true)));
+    assert_eq!(
+        diff_bar_position(cx, &view).as_deref(),
+        Some("2 of 3 files")
+    );
+    assert!(
+        cx.debug_bounds("diff_bar_stage").is_none(),
+        "a comparison has nothing to stage"
+    );
+    // The header's icon knows the file from the comparison's list.
+    assert!(cx.debug_bounds("diff_title_icon").is_some());
+    assert_eq!(
+        cx.update(|_window, app| view.read(app).main_pane.read(app).rendered_file_kind()),
+        Some(FileStatusKind::Modified)
+    );
 
     cx.simulate_keystrokes("f4");
     draw_and_drain_test_window(cx);
@@ -406,16 +419,32 @@ fn comparison_diff_steps_through_range_files_with_arrows_and_f1_f4(cx: &mut gpui
         Some(range_target(&files[2].path)),
         "expected F4 to open the next comparison file"
     );
-    assert!(
-        cx.debug_bounds("diff_next_file").is_none(),
+    assert_eq!(
+        drawn_file_arrows(cx, &view),
+        Some((true, false)),
         "the last comparison file has no next file"
+    );
+    assert_eq!(
+        diff_bar_position(cx, &view).as_deref(),
+        Some("3 of 3 files")
+    );
+    // A click on the disabled arrow goes nowhere.
+    let next = cx
+        .debug_bounds("diff_next_file")
+        .expect("disabled, not hidden");
+    cx.simulate_click(next.center(), gpui::Modifiers::default());
+    draw_and_drain_test_window(cx);
+    sync_store_snapshot(cx, &view);
+    assert_eq!(
+        cx.update(|_window, app| view.read(app).state.repos[0].diff_state.diff_target.clone()),
+        Some(range_target(&files[2].path))
     );
 
     cx.simulate_keystrokes("f1");
     draw_and_drain_test_window(cx);
     wait_until_store_diff_target_path(cx, &view, files[1].path.as_path());
     sync_store_snapshot(cx, &view);
-    assert!(cx.debug_bounds("diff_next_file").is_some());
+    assert_eq!(drawn_file_arrows(cx, &view), Some((true, true)));
 }
 
 #[gpui::test]
@@ -1068,4 +1097,58 @@ fn switching_change_tracking_view_restores_diff_panel_focus_for_adjacent_navigat
         moved,
         "expected adjacent navigation to keep working immediately after switching to split view"
     );
+}
+
+/// Every control on the diff's header and bar names its keys in its tooltip.
+#[gpui::test]
+fn the_diff_controls_name_their_keys(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70568);
+    let commit_id = CommitId("abcdef001122338c".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_control_keys",
+        std::process::id()
+    ));
+    let first = std::path::PathBuf::from("src/first.rs");
+    let second = std::path::PathBuf::from("src/second.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        &[first.clone(), second],
+        &first,
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    cx.simulate_resize(gpui::size(px(1600.0), px(900.0)));
+    draw_and_drain_test_window(cx);
+
+    let alt = crate::view::shortcut_labels::alt_shortcut;
+    for (selector, expected) in [
+        ("diff_next_file", "Next file (F4)".to_string()),
+        ("diff_bar_stage", "Stage this file (Space)".to_string()),
+        (
+            "diff_prev_hunk",
+            format!("Previous change (F2 / Shift+F7 / {})", alt("Up")),
+        ),
+        ("diff_split", format!("Split diff view ({})", alt("S"))),
+        (
+            "diff_edit",
+            format!("Edit the working-tree file ({})", alt("E")),
+        ),
+    ] {
+        let bounds = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("expected {selector} to render"));
+        cx.simulate_mouse_move(bounds.center(), None, Modifiers::default());
+        crate::view::test_support::wait_for_native_tooltip(cx);
+        assert_eq!(
+            crate::view::test_support::tooltip_text(cx, &view).as_deref(),
+            Some(expected.as_str()),
+            "{selector}"
+        );
+    }
 }

@@ -64,71 +64,115 @@ impl MainPaneView {
         )
     }
 
+    /// How the shown file changed, for the header's icon: from the status
+    /// entry, the inline diff's entry, or the commit's or comparison's file
+    /// list. `None` when no list knows the file.
+    pub(in crate::view) fn rendered_file_kind(&self) -> Option<FileStatusKind> {
+        let repo = self.active_repo()?;
+        match self.rendered_diff_target()? {
+            DiffTarget::WorkingTree { path, area, .. } => {
+                if self.is_inline_submodule_diff_active() {
+                    self.selected_inline_submodule_diff_entry()
+                        .map(|entry| entry.kind)
+                } else {
+                    repo.status_entry_for_path(*area, path.as_path())
+                        .map(|entry| entry.kind)
+                }
+            }
+            DiffTarget::Commit {
+                commit_id, path, ..
+            } => match &repo.history_state.commit_details {
+                Loadable::Ready(details) if &details.id == commit_id => details
+                    .files
+                    .iter()
+                    .find(|file| &file.path == path)
+                    .map(|file| file.kind),
+                _ => None,
+            },
+            DiffTarget::CommitRange {
+                path: Some(path), ..
+            } => match &repo.history_state.range_files {
+                Loadable::Ready(files) => files
+                    .iter()
+                    .find(|file| &file.path == path)
+                    .map(|file| file.kind),
+                _ => None,
+            },
+            DiffTarget::CommitRange { path: None, .. } => None,
+        }
+    }
+
     pub(super) fn diff_panel_title(
         &self,
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let ui_scale = crate::ui_scale::UiScale::current(cx);
+        let header_bg = if self.is_file_preview_active() && self.historical_browse_content_active()
+        {
+            crate::theme::historical_header_bg(theme, crate::theme::content_header_bg(theme))
+        } else {
+            crate::theme::content_header_bg(theme)
+        };
         self.rendered_diff_target()
-            .map(|t| {
-                let (icon, color, text): (Option<&'static str>, gpui::Rgba, SharedString) = match t
-                {
-                    DiffTarget::WorkingTree { path, area, .. } => {
-                        let kind = if self.is_inline_submodule_diff_active() {
-                            self.selected_inline_submodule_diff_entry()
-                                .map(|entry| entry.kind)
-                        } else {
-                            self.active_repo().and_then(|repo| {
-                                repo.status_entry_for_path(*area, path.as_path())
-                                    .map(|entry| entry.kind)
-                            })
-                        };
-
-                        let (icon, color) = match kind.unwrap_or(FileStatusKind::Modified) {
-                            FileStatusKind::Untracked | FileStatusKind::Added => {
-                                ("icons/plus.svg", theme.colors.status.success.foreground)
-                            }
-                            FileStatusKind::Modified => {
-                                ("icons/pencil.svg", theme.colors.status.warning.foreground)
-                            }
-                            FileStatusKind::Deleted => {
-                                ("icons/minus.svg", theme.colors.status.danger.foreground)
-                            }
-                            FileStatusKind::Renamed => {
-                                ("icons/swap.svg", theme.colors.accent.foreground)
-                            }
-                            FileStatusKind::Conflicted => {
-                                ("icons/warning.svg", theme.colors.status.danger.foreground)
-                            }
-                        };
-                        (Some(icon), color, self.cached_path_display(path))
+            .map(|target| {
+                // The file lists' icon: the file's type, its change badged on
+                // the corner. A whole comparison has no single file.
+                let path = match target {
+                    DiffTarget::WorkingTree { path, .. } | DiffTarget::Commit { path, .. } => {
+                        Some(path)
                     }
-                    DiffTarget::Commit {
-                        commit_id: _, path, ..
-                    } => (
-                        Some("icons/pencil.svg"),
-                        theme.colors.foreground.secondary,
-                        self.cached_path_display(path),
-                    ),
-                    DiffTarget::CommitRange {
-                        from_commit_id: _,
-                        to_commit_id: _,
-                        path,
-                        ..
-                    } => match path {
-                        Some(path) => (
-                            Some("icons/swap.svg"),
-                            theme.colors.accent.foreground,
-                            self.cached_path_display(path),
-                        ),
-                        None => (
-                            Some("icons/swap.svg"),
-                            theme.colors.accent.foreground,
-                            "Commit range".into(),
-                        ),
-                    },
+                    DiffTarget::CommitRange { path, .. } => path.as_ref(),
                 };
+                let (icon, text): (AnyElement, SharedString) = match path {
+                    Some(path) => {
+                        let kind = self
+                            .rendered_file_kind()
+                            .unwrap_or(FileStatusKind::Modified);
+                        let (icon, color) = crate::view::rows::file_row_icon(path, kind, &theme);
+                        let badge = crate::view::rows::file_row_kind_badge(kind, &theme);
+                        (
+                            crate::view::rows::file_row_icon_slot(
+                                icon,
+                                color,
+                                badge,
+                                crate::view::rows::FileRowBadgeDisc::still(header_bg),
+                                14.0,
+                                16.0,
+                                ui_scale.percent(),
+                            )
+                            .debug_selector(|| "diff_title_icon".to_string())
+                            .into_any_element(),
+                            self.cached_path_display(path),
+                        )
+                    }
+                    None => (
+                        div()
+                            .w(ui_scale.px(16.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(svg_icon(
+                                "icons/swap.svg",
+                                theme.colors.accent.foreground,
+                                ui_scale.px(14.0),
+                            ))
+                            .into_any_element(),
+                        "Commit range".into(),
+                    ),
+                };
+                // The folder in grey, the name in full contrast, and the name
+                // kept in view when the path is cut short.
+                let name_start = text.rfind(['/', '\\']).map_or(0, |ix| ix + 1);
+                let folder = gpui::HighlightStyle {
+                    color: Some(palette::IntoColor::into_color(
+                        theme.colors.foreground.secondary,
+                    )),
+                    font_weight: Some(FontWeight::NORMAL),
+                    ..gpui::HighlightStyle::default()
+                };
+                let name =
+                    (path.is_some() && name_start < text.len()).then(|| name_start..text.len());
 
                 div()
                     .flex()
@@ -136,16 +180,7 @@ impl MainPaneView {
                     .gap_2()
                     .min_w(px(0.0))
                     .overflow_hidden()
-                    .child(
-                        div()
-                            .w(ui_scale.px(16.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .when_some(icon, |this, icon| {
-                                this.child(svg_icon(icon, color, ui_scale.px(14.0)))
-                            }),
-                    )
+                    .child(icon)
                     .child(
                         div()
                             .flex_1()
@@ -158,6 +193,8 @@ impl MainPaneView {
                                 // pane the colour it found there was black.
                                 components::TruncatedText::path(text, theme.ui_text(14.0))
                                     .text_color(theme.colors.foreground.primary)
+                                    .highlights((name_start > 0).then_some((0..name_start, folder)))
+                                    .focus_range(name)
                                     .id(("diff_title_path", 0usize))
                                     .full_text_tooltip(self.tooltip_host.clone())
                                     .render(cx),
@@ -363,128 +400,5 @@ impl MainPaneView {
                 )
             })
             .into_any_element()
-    }
-
-    /// The Previous/Next file buttons (F1 / F4).
-    ///
-    /// A side is `None` — not merely disabled — when there is no file to step
-    /// to. A disabled arrow reads as "there is more here, but not right now",
-    /// which is wrong for the two states that produce it: a file opened from the
-    /// explorer has no navigation list at all, and the ends of a list have no
-    /// neighbour on that side. Both showed a pair of permanently dead arrows.
-    pub(super) fn diff_prev_next_file_buttons(
-        &self,
-        repo_id: Option<RepoId>,
-        borderless: bool,
-        theme: AppTheme,
-        cx: &mut gpui::Context<Self>,
-    ) -> (Option<AnyElement>, Option<AnyElement>) {
-        let Some(repo_id) = repo_id else {
-            return (None, None);
-        };
-        let scaled_px = crate::ui_scale::scaler(crate::ui_scale::current(cx).percent);
-
-        let inline_neighbors = self.inline_diff_file_neighbors(repo_id, cx);
-        let (has_prev, has_next) = if let Some(decor) = &self.hosted_decor {
-            (
-                self.store.policy.file_navigation
-                    && decor.options.file_navigation.previous.is_some(),
-                self.store.policy.file_navigation && decor.options.file_navigation.next.is_some(),
-            )
-        } else if let Some((prev_ix, next_ix)) = inline_neighbors {
-            (prev_ix.is_some(), next_ix.is_some())
-        } else if self.active_repo().is_some_and(|repo| {
-            matches!(
-                self.bound_diff_state(repo).diff_target,
-                Some(DiffTarget::WorkingTree { .. })
-            )
-        }) {
-            let change_tracking_view = self.active_change_tracking_view(cx);
-            let status_section_order =
-                self.active_status_section_order(repo_id, change_tracking_view, cx);
-            self.active_repo()
-                .and_then(|repo| {
-                    status_nav::status_navigation_neighbors(
-                        repo,
-                        self.bound_diff_state(repo).diff_target.as_ref()?,
-                        change_tracking_view,
-                        status_section_order.as_deref(),
-                    )
-                })
-                .unwrap_or((false, false))
-        } else {
-            let file_list_source_indices = self.active_file_list_source_indices(repo_id, cx);
-            let change_tracking_view = self.active_change_tracking_view(cx);
-            let Some(repo) = self.active_repo() else {
-                return (None, None);
-            };
-            let Some(diff_target) = self.bound_diff_state(repo).diff_target.as_ref() else {
-                return (None, None);
-            };
-            (
-                status_nav::adjacent_diff_file_target_for_repo(
-                    repo,
-                    diff_target,
-                    change_tracking_view,
-                    -1,
-                    file_list_source_indices.as_deref(),
-                    None,
-                )
-                .is_some(),
-                status_nav::adjacent_diff_file_target_for_repo(
-                    repo,
-                    diff_target,
-                    change_tracking_view,
-                    1,
-                    file_list_source_indices.as_deref(),
-                    None,
-                )
-                .is_some(),
-            )
-        };
-
-        let button = |id: &'static str,
-                      icon: &'static str,
-                      tooltip: &'static str,
-                      delta: i8,
-                      cx: &mut gpui::Context<Self>| {
-            let btn = components::Button::new(id, "")
-                .start_slot(svg_icon(
-                    icon,
-                    theme.colors.foreground.primary,
-                    scaled_px(14.0),
-                ))
-                .style(components::ButtonStyle::Outlined);
-            let btn = if borderless { btn.borderless() } else { btn };
-            btn.on_click(theme, cx, move |this, _e, window, cx| {
-                if this.try_select_adjacent_diff_file(repo_id, delta, window, cx) {
-                    cx.notify();
-                }
-            })
-            .debug_selector(move || id.to_string())
-            .gitcomet_tooltip(theme, SharedString::from(tooltip))
-            .into_any_element()
-        };
-
-        (
-            has_prev.then(|| {
-                button(
-                    "diff_prev_file",
-                    "icons/arrow_left.svg",
-                    "Previous file (F1)",
-                    -1,
-                    cx,
-                )
-            }),
-            has_next.then(|| {
-                button(
-                    "diff_next_file",
-                    "icons/arrow_right.svg",
-                    "Next file (F4)",
-                    1,
-                    cx,
-                )
-            }),
-        )
     }
 }

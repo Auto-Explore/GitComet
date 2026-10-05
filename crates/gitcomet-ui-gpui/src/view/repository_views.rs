@@ -815,7 +815,12 @@ impl GitCometView {
             .zip(self.active_repo())
             .and_then(|(router, repo)| router.active_view(repo));
         match active {
-            Some(view) => div().size_full().child(view).into_any_element(),
+            // The scope `diff_shortcut_target` searches for hosted panes.
+            Some(view) => div()
+                .size_full()
+                .track_focus(&self.repository_view_focus)
+                .child(view)
+                .into_any_element(),
             None => history(),
         }
     }

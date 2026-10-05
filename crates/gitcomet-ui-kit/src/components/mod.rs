@@ -1,6 +1,7 @@
 //! Generic components built on the kit's interaction primitives.
 
 mod avatar;
+mod bottom_bar;
 mod button;
 mod containers;
 mod context_menu;
@@ -16,6 +17,7 @@ mod picker_prompt;
 mod quick_search_bar;
 mod repository_badge;
 mod resize_grip;
+mod segmented_control;
 mod settings_rows;
 mod shortcut_keys;
 mod skeleton;
@@ -35,6 +37,7 @@ pub use avatar::{
     AVATAR_DIAMETER_PX, AVATAR_FONT_PX, author_avatar, author_color, author_initials,
     initials_paint_origin_y,
 };
+pub use bottom_bar::{BarButton, bottom_bar, nav_arrow_button};
 pub use button::{Button, ButtonStyle, inline_icon_button};
 pub use containers::{
     ScrollContainer, content_header_bar, empty_state, empty_state_message, progress_bar,
@@ -76,6 +79,7 @@ pub use repository_badge::{
     REPOSITORY_BADGE_SIZE_PX, repository_initials, repository_initials_box,
 };
 pub use resize_grip::{ResizeGripAxis, resize_grip, resize_grip_hover_tint};
+pub use segmented_control::{Segment, SegmentedControl};
 pub use settings_rows::{
     SETTINGS_NAV_COLUMN_WIDTH_PX, settings_card, settings_card_with_action,
     settings_detail_container, settings_dropdown_background, settings_dropdown_border_color,
@@ -83,7 +87,7 @@ pub use settings_rows::{
     settings_row_separator_color, settings_subsection_heading, settings_summary_row,
     settings_summary_row_with_value_prefix, settings_toggle_row,
 };
-pub use shortcut_keys::shortcut_keys;
+pub use shortcut_keys::{shortcut_keys, shortcut_keys_compact};
 pub use skeleton::skeleton;
 pub use split_button::{SplitButton, SplitButtonStyle};
 pub use tab::Tab;
