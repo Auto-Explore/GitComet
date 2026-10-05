@@ -484,20 +484,20 @@ impl<V: 'static + Render> TestAppWindow<V> {
 
     /// Simulate a platform frame request.
     pub fn simulate_request_frame(&mut self, options: RequestFrameOptions) {
-        let window_id = self.handle.window_id();
-        let test_window = {
-            let mut app = self.app.borrow_mut();
-            app.windows
-                .get_mut(window_id)
-                .and_then(|window| window.as_mut())
-                .and_then(|window| window.platform_window.as_test().cloned())
-        };
-
-        if let Some(test_window) = test_window {
+        if let Some(test_window) = self.test_window() {
             test_window.simulate_request_frame(options);
         }
 
         self.background_executor.run_until_parked();
+    }
+
+    fn test_window(&self) -> Option<crate::TestWindow> {
+        let window_id = self.handle.window_id();
+        let mut app = self.app.borrow_mut();
+        app.windows
+            .get_mut(window_id)
+            .and_then(|window| window.as_mut())
+            .and_then(|window| window.platform_window.as_test().cloned())
     }
 
     /// Force a redraw of the window.
@@ -525,7 +525,7 @@ impl<V> Clone for TestAppWindow<V> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AnyView, FocusHandle, Focusable, StyleRefinement, div, prelude::*, px};
+    use crate::{AnyView, FocusHandle, Focusable, StyleRefinement, div, point, prelude::*, px};
     use std::cell::Cell;
 
     struct Counter {
@@ -596,6 +596,40 @@ mod tests {
 
         drop(window);
         app.update(|cx| cx.shutdown());
+    }
+
+    struct MoveInvalidator;
+
+    impl Render for MoveInvalidator {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size(px(100.))
+                .on_mouse_move(cx.listener(|_, _, _, cx| cx.notify()))
+        }
+    }
+
+    #[test]
+    fn unchanged_frames_after_fast_input_are_presented_only_on_variable_refresh_displays() {
+        for fixed_refresh_rate in [false, true] {
+            let mut app = TestApp::new();
+            let mut window = app.open_window(|_, _| MoveInvalidator);
+            let platform_window = window.test_window().unwrap();
+            platform_window.set_fixed_refresh_rate(fixed_refresh_rate);
+            // Faster than 60 moves a second, each one invalidating the view.
+            for x in 0..8 {
+                window.simulate_mouse_move(point(px(10. + x as f32), px(10.)));
+            }
+            window.simulate_request_frame(RequestFrameOptions::default());
+            let drawn = platform_window.presents();
+            for _ in 0..3 {
+                window.simulate_request_frame(RequestFrameOptions::default());
+            }
+            assert_eq!(
+                platform_window.presents() - drawn,
+                if fixed_refresh_rate { 0 } else { 3 },
+                "fixed refresh rate: {fixed_refresh_rate}"
+            );
+        }
     }
 
     #[test]

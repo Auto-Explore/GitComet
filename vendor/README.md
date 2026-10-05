@@ -45,6 +45,16 @@ shader entry point is missing. Set `GPUI_RENDER_REQUIRE_METALLIB=1` to fail a
 build that cannot precompile. Test: `cargo test -p gpui_ce_apple --lib
 precompiled_libraries_load_with_their_entry_points`.
 
+### Unchanged frames on fixed-refresh displays
+
+After high-rate input, `gpui/src/window.rs` presented the last scene every
+frame for a second so that variable-refresh displays keep their rate; each
+present renders the whole scene again. `PlatformWindow::has_fixed_refresh_rate`
+(`gpui/src/platform.rs`, implemented in `gpui_macos/src/window.rs` from
+NSScreen's refresh interval range) lets fixed-rate displays skip those
+presents. Other platforms report `false` and keep presenting. Test: `cargo test
+-p gpui-ce --lib --features test-support unchanged_frames_after_fast_input`.
+
 ## GPUI cropped WGPU path targets
 
 `gpui_wgpu/` and `gpui_render/` come from the same `46e1ede` revision above,

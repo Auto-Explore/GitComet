@@ -52,6 +52,8 @@ pub(crate) struct TestWindowState {
     start_external_drag_result: bool,
     can_start_external_drag: bool,
     modifiers: crate::Modifiers,
+    fixed_refresh_rate: bool,
+    presents: usize,
 }
 
 #[derive(Clone)]
@@ -119,8 +121,22 @@ impl TestWindow {
             start_external_drag_result: false,
             can_start_external_drag: true,
             modifiers: crate::Modifiers::default(),
+            fixed_refresh_rate: false,
+            presents: 0,
         })))
     }
+
+    /// Reports this window's display as refreshing at one fixed rate.
+    pub fn set_fixed_refresh_rate(&self, fixed: bool) {
+        self.0.lock().fixed_refresh_rate = fixed;
+    }
+
+    /// Returns how many frames were handed to the platform, drawn or
+    /// re-presented.
+    pub fn presents(&self) -> usize {
+        self.0.lock().presents
+    }
+
     pub fn simulate_scheduled_frame(&self) -> bool {
         let callback = {
             let mut state = self.0.lock();
@@ -478,12 +494,17 @@ impl PlatformWindow for TestWindow {
     fn draw(&self, scene: &Scene) {
         let scale_factor = self.scale_factor();
         let mut state = self.0.lock();
+        state.presents += 1;
         state.frame_callback_pending = true;
         state.frame_scheduled = true;
         let device_size: Size<DevicePixels> = state.bounds.size.to_device_pixels(scale_factor);
         if let Some(renderer) = &mut state.renderer {
             renderer.render_scene(scene, device_size).warn_on_err();
         }
+    }
+
+    fn has_fixed_refresh_rate(&self) -> bool {
+        self.0.lock().fixed_refresh_rate
     }
 
     fn sprite_atlas(&self) -> sync::Arc<dyn crate::PlatformAtlas> {

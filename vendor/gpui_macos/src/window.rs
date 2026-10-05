@@ -864,6 +864,26 @@ struct MacWindowState {
 }
 
 impl MacWindowState {
+    /// Variable-refresh screens (ProMotion, adaptive sync) report a range of
+    /// refresh intervals; a fixed-rate screen reports one.
+    fn has_fixed_refresh_rate(&self) -> bool {
+        unsafe {
+            let screen: ObjcId = msg_send![self.native_window, screen];
+            if screen == NIL {
+                return false;
+            }
+            // NSScreen reports its refresh range since macOS 12.
+            let reports_range: Bool =
+                msg_send![screen, respondsToSelector: sel!(minimumRefreshInterval)];
+            if !reports_range.as_bool() {
+                return false;
+            }
+            let shortest: f64 = msg_send![screen, minimumRefreshInterval];
+            let longest: f64 = msg_send![screen, maximumRefreshInterval];
+            longest > 0.0 && longest - shortest < 1e-6
+        }
+    }
+
     fn next_frame_request(&mut self) -> RequestFrameOptions {
         RequestFrameOptions {
             force_render: mem::take(&mut self.force_render_pending),
@@ -1928,6 +1948,10 @@ impl PlatformWindow for MacWindow {
     fn is_subpixel_rendering_supported(&self) -> bool {
         // CoreGraphics rasterization and the retired Metal renderer are grayscale-only on macOS.
         false
+    }
+
+    fn has_fixed_refresh_rate(&self) -> bool {
+        self.0.as_ref().lock().has_fixed_refresh_rate()
     }
 
     fn set_edited(&mut self, edited: bool) {
