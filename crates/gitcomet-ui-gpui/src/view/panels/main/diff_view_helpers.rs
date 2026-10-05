@@ -152,6 +152,9 @@ impl MainPaneView {
                             .min_w(px(0.0))
                             .text_size(theme.ui_text(14.0))
                             .font_weight(FontWeight::BOLD)
+                            // Its own colour: a hosted pane's enclosing view
+                            // may set none, and the default is black.
+                            .text_color(theme.colors.foreground.primary)
                             .child(
                                 components::TruncatedText::path(text, theme.ui_text(14.0))
                                     .id(("diff_title_path", 0usize))

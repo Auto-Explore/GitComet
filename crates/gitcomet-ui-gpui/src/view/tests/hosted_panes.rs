@@ -63,6 +63,22 @@ fn open_repository_with(
     gpui::Entity<GitCometView>,
     &mut gpui::VisualTestContext,
 ) {
+    open_repository_of(cx, backend, 30, [3, 20])
+}
+
+/// [`open_repository_with`] with `lines` lines in each file, `a.rs` edited
+/// at `edits[0]` and `b.rs` at `edits[1]`.
+fn open_repository_of(
+    cx: &mut gpui::TestAppContext,
+    backend: Arc<dyn gitcomet_core::services::GitBackend>,
+    lines: usize,
+    edits: [usize; 2],
+) -> (
+    tempfile::TempDir,
+    AppStore,
+    gpui::Entity<GitCometView>,
+    &mut gpui::VisualTestContext,
+) {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
     git(root, &["init", "-q", "-b", "main"]);
@@ -71,12 +87,12 @@ fn open_repository_with(
     git(root, &["config", "commit.gpgsign", "false"]);
     // Same bytes under any user or system config (Windows CI sets autocrlf).
     git(root, &["config", "core.autocrlf", "false"]);
-    std::fs::write(root.join("a.rs"), numbered("a", 30, None)).unwrap();
-    std::fs::write(root.join("b.rs"), numbered("b", 30, None)).unwrap();
+    std::fs::write(root.join("a.rs"), numbered("a", lines, None)).unwrap();
+    std::fs::write(root.join("b.rs"), numbered("b", lines, None)).unwrap();
     git(root, &["add", "."]);
     git(root, &["commit", "-q", "-m", "init"]);
-    std::fs::write(root.join("a.rs"), numbered("a", 30, Some(3))).unwrap();
-    std::fs::write(root.join("b.rs"), numbered("b", 30, Some(20))).unwrap();
+    std::fs::write(root.join("a.rs"), numbered("a", lines, Some(edits[0]))).unwrap();
+    std::fs::write(root.join("b.rs"), numbered("b", lines, Some(edits[1]))).unwrap();
 
     install_example(cx);
     let repo = gitcomet_git_gix::GixBackend.open(root).expect("open repo");
@@ -590,6 +606,87 @@ fn the_example_changes_view_shows_picks_in_two_panes(cx: &mut gpui::TestAppConte
     click_debug_selector(cx, "repository_view_history");
     publish(cx, &view, store.snapshot());
     assert_eq!(store.snapshot().repos[0].diff_sessions.len(), 2);
+}
+
+/// Whether display row `row` of pane `id` is drawn: in its visible window.
+fn row_drawn(cx: &mut gpui::VisualTestContext, id: u64, row: usize) -> bool {
+    cx.debug_bounds(selector(format!("hosted_diff_{id}_row_{row}")))
+        .is_some()
+}
+
+/// A pane opened on a long file, and the same pane given another one, each
+/// show the file's first change rather than its first line, as History's
+/// diff does.
+#[gpui::test]
+fn a_pane_shows_the_first_change_of_each_file_it_is_given(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (_dir, store, view, cx) = open_repository_of(cx, Arc::new(TestBackend), 400, [300, 250]);
+    let (list_id, changes) = open_changes_view(cx, &view, &store);
+    let current = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            changes
+                .read(app)
+                .current()
+                .and_then(|pane| pane.target(app))
+                .and_then(|target| target.file_path().map(Path::to_path_buf))
+        })
+    };
+    click_debug_selector(
+        cx,
+        selector(format!("hosted_file_list_{list_id}_file_a.rs")),
+    );
+    settle(cx, &view, &store, "a.rs at its change", |cx| {
+        store.snapshot().repos[0].diff_sessions.len() == 1
+            && store.snapshot().repos[0]
+                .diff_sessions
+                .keys()
+                .all(|id| row_drawn(cx, id.0, 300))
+    });
+    let first = store.snapshot().repos[0]
+        .diff_sessions
+        .keys()
+        .next()
+        .unwrap()
+        .0;
+    assert!(!row_drawn(cx, first, 0), "not at the top");
+
+    // The same pane, given b.rs.
+    click_debug_selector(
+        cx,
+        selector(format!("hosted_file_list_{list_id}_file_b.rs")),
+    );
+    settle(cx, &view, &store, "b.rs in the first pane", |_| {
+        store.snapshot().repos[0].diff_sessions.len() == 2
+    });
+    assert_eq!(current(cx), Some(PathBuf::from("b.rs")));
+    settle(cx, &view, &store, "b.rs at its change", |cx| {
+        row_drawn(cx, first, 250)
+    });
+    assert!(!row_drawn(cx, first, 300), "not where a.rs was");
+
+    // A line asked for once the file is in wins over its first change.
+    let pane = cx.update(|_window, app| changes.read(app).current().cloned().unwrap());
+    cx.update(|_window, app| {
+        pane.set_target(
+            DiffTarget::working_tree("a.rs".into(), DiffArea::Unstaged),
+            app,
+        );
+    });
+    settle(cx, &view, &store, "a.rs again, at its change", |cx| {
+        row_drawn(cx, first, 300)
+    });
+    cx.update(|_window, app| pane.reveal(DiffLineSide::New, 60, app));
+    settle(cx, &view, &store, "a.rs at the line asked for", |cx| {
+        row_drawn(cx, first, 59)
+    });
+    for _ in 0..5 {
+        publish(cx, &view, store.snapshot());
+    }
+    assert!(row_drawn(cx, first, 59));
+    assert!(
+        !row_drawn(cx, first, 300),
+        "the first change did not take over"
+    );
 }
 
 #[gpui::test]

@@ -275,6 +275,9 @@ impl DiffPaneView {
                     .map(px)
                     .unwrap_or(window.viewport_size().width),
             );
+            // Like History's diff, the first file opens at its first change,
+            // unless a line was asked for already.
+            pane.diff_autoscroll_pending = self.pending_reveal.is_none();
             pane
         });
         self.renderer_subscription = Some(cx.observe(&renderer, |this, renderer, cx| {
@@ -690,6 +693,9 @@ impl DiffPaneView {
                 repo.diff_state = Default::default();
             }
             model.update(cx, |model, cx| model.set_state(Arc::new(state), cx));
+            // Each file opens at its first change once its rows are in; a
+            // reveal asked for before then cancels it.
+            renderer.update(cx, |pane, _| pane.diff_autoscroll_pending = true);
         }
         self.emit(DiffPaneEvent::TargetChanged(Some(target)), cx);
         cx.notify();
@@ -723,6 +729,8 @@ impl DiffPaneView {
         self.pending_scroll_top = top;
         if let Some(renderer) = &self.renderer {
             let found = renderer.update(cx, |pane, cx| {
+                // The line asked for, not the first change.
+                pane.diff_autoscroll_pending = false;
                 let found = pane.hosted_reveal_at(side, line, top);
                 cx.notify();
                 found
@@ -1271,6 +1279,9 @@ impl Render for DiffPaneView {
             .flex()
             .flex_col()
             .bg(theme.colors.surface.canvas)
+            // A pane may be mounted anywhere; its text should not depend on
+            // what encloses it.
+            .text_color(theme.colors.foreground.primary)
             .children(legend)
             .children(actions)
             .when_some(status, |pane, status| {
