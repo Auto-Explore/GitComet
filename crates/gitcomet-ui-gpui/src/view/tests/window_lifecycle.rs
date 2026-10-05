@@ -691,6 +691,47 @@ fn explicit_initial_repository_mode_seeds_empty_session() {
     ));
 }
 
+#[gpui::test]
+fn restored_active_repository_is_not_reopened_before_view_snapshot_arrives(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let store_for_state = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.run_until_parked();
+
+    let path = PathBuf::from("/repos/restored-before-view-sync");
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: path.clone(),
+        },
+    );
+    repo.open = Loadable::Ready(());
+    let restored = Arc::new(AppState {
+        repos: vec![repo].into(),
+        active_repo: Some(RepoId(1)),
+        git_runtime: available_git_runtime_state(),
+        ..AppState::test_default()
+    });
+
+    cx.update(|_window, app| {
+        store_for_state.replace_snapshot_for_test(Arc::clone(&restored));
+        view.update(app, |this, cx| {
+            assert!(this.state.repos.is_empty(), "view is still stale");
+            this.activate_or_open_repo_path(path, cx);
+            assert!(
+                this.pending_repo_open_reservations.is_empty(),
+                "selecting the restored active tab must not reserve another open"
+            );
+            assert!(this.deferred_repo_bootstrap.is_none());
+        });
+    });
+    assert!(Arc::ptr_eq(&store_for_state.snapshot(), &restored));
+}
+
 #[test]
 fn splash_backdrop_embedded_png_decodes() {
     for is_dark in [true, false] {
