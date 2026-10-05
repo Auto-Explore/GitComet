@@ -13,7 +13,7 @@ use gpui_render::{
         BlurAxis, BlurKernel, BlurUniforms, FilterCompositeClip,
         GAUSSIAN_CUTOFF_STANDARD_DEVIATIONS, downsampled_dimension,
     },
-    path_types::{PathRasterizationVertex, PathSprite},
+    path_types::{PathRasterizationVertex, PathSprite, path_target_extent},
     shaders::{
         common::{FontRasterizationUniforms, GlobalUniforms, ShaderBool, SurfaceColorFormat},
         interface as shader_interface,
@@ -77,6 +77,7 @@ pub(crate) struct DirectXRenderer {
     active_render_target: Option<ID3D11RenderTargetView>,
     path_rasterization_vertices: Vec<PathRasterizationVertex>,
     path_sprites: Vec<PathSprite>,
+    crop_path_targets: bool,
 }
 
 /// Direct3D objects
@@ -117,6 +118,8 @@ struct CachedSurfaceView {
 }
 
 struct PathResources {
+    width: u32,
+    height: u32,
     texture: ID3D11Texture2D,
     srv: Option<ID3D11ShaderResourceView>,
     msaa_texture: ID3D11Texture2D,
@@ -129,6 +132,8 @@ impl PathResources {
         let (msaa_texture, msaa_view) =
             create_path_intermediate_msaa_texture_and_view(device, width, height)?;
         Ok(Self {
+            width,
+            height,
             texture,
             srv,
             msaa_texture,
@@ -368,6 +373,8 @@ impl DirectXRenderer {
             active_render_target: None,
             path_rasterization_vertices: Vec::new(),
             path_sprites: Vec::new(),
+            crop_path_targets: std::env::var("GPUI_GPU_EXPERIMENTS")
+                .is_ok_and(|value| value.split(',').any(|part| part.trim() == "cropped-paths")),
         })
     }
 
@@ -544,7 +551,7 @@ impl DirectXRenderer {
         let resources = self.resources.as_mut().context("resources missing")?;
         resources.retain_surface_views(&scene.surfaces);
         if requirements.uses_path_target {
-            resources.ensure_path_resources(device)?;
+            resources.ensure_path_resources(device, scene, self.crop_path_targets)?;
         }
         if use_offscreen {
             resources.ensure_blur_resources(device, requirements.isolated_target_count)?;
@@ -1573,13 +1580,37 @@ impl DirectXResources {
         )
     }
 
-    fn ensure_path_resources(&mut self, device: &ID3D11Device) -> Result<()> {
-        if self.path.is_none() {
-            self.path = Some(PathResources::new(
-                device,
+    fn ensure_path_resources(
+        &mut self,
+        device: &ID3D11Device,
+        scene: &Scene,
+        crop: bool,
+    ) -> Result<()> {
+        let (mut width, mut height) = if crop {
+            path_target_extent(
+                scene.paths.iter().map(|path| path.clipped_bounds()),
                 self.viewport.Width as u32,
                 self.viewport.Height as u32,
-            )?);
+            )
+        } else {
+            (self.viewport.Width as u32, self.viewport.Height as u32)
+        };
+        if let Some(path) = &self.path {
+            if path.width >= width && path.height >= height {
+                return Ok(());
+            }
+            width = width.max(path.width);
+            height = height.max(path.height);
+        }
+        // Keep the full viewport and globals during rasterization: the paths
+        // still use window coordinates. The smaller attachment clips them;
+        // the shared fragment shader samples using its actual dimensions.
+        self.path = Some(PathResources::new(device, width, height)?);
+        if std::env::var_os("GPUI_PROFILE_PATH_TARGET").is_some() {
+            eprintln!(
+                "GPUI D3D11 path target {width}x{height}, viewport {}x{}, samples {PATH_MULTISAMPLE_COUNT}",
+                self.viewport.Width, self.viewport.Height
+            );
         }
         Ok(())
     }
@@ -2878,9 +2909,10 @@ mod tests {
     use anyhow::Result;
     use gpui::{
         AtlasKey, AtlasTile, BorderStyle, Bounds, ContentMask, Corners, DevicePixels, Edges,
-        ImageId, MonochromeSprite, PlatformAtlas, Point, PolychromeSprite, PrimitiveBatch, Quad,
-        RenderCommand, RenderImageParams, RenderSvgParams, ScaledPixels, Scene, ShaderBool, Size,
-        WindowBackgroundAppearance, hsla, rgb, rgb_to_hsla, solid_background,
+        ImageId, MonochromeSprite, PathBuilder, PlatformAtlas, Point, PolychromeSprite,
+        PrimitiveBatch, Quad, RenderCommand, RenderImageParams, RenderSvgParams, ScaledPixels,
+        Scene, ShaderBool, Size, WindowBackgroundAppearance, hsla, point, px, rgb, rgb_to_hsla,
+        size, solid_background,
     };
     use std::borrow::Cow;
     use windows_core::{Interface, w};
@@ -2946,6 +2978,151 @@ mod tests {
             bounds: scaled(0.0, 0.0, 200.0, 100.0),
             ..Default::default()
         }
+    }
+
+    fn gradient_triangle(
+        x: f32,
+        y: f32,
+        mask: ContentMask<ScaledPixels>,
+    ) -> gpui::Path<ScaledPixels> {
+        let mut builder = PathBuilder::fill();
+        builder.move_to(point(px(x), px(y)));
+        builder.line_to(point(px(x + 40.0), px(y)));
+        builder.line_to(point(px(x), px(y + 40.0)));
+        builder.close();
+        let mut path = builder.build().unwrap().scale(1.0);
+        path.content_mask = mask;
+        path.color = gpui::linear_gradient(
+            90.0,
+            gpui::linear_color_stop(rgb(0xff0000), 0.0),
+            gpui::linear_color_stop(rgb(0x00ff00), 1.0),
+        );
+        path
+    }
+
+    #[test]
+    fn cropped_path_targets_match_full_viewport_pixels_when_growing_and_resizing() -> Result<()> {
+        let window = HiddenWindow::new()?;
+        let cropped_window = HiddenWindow::new()?;
+        let devices = DirectXDevices::with_debug_layer(false)?;
+        let mut full = DirectXRenderer::new(window.0, &devices, true)?;
+        let mut cropped = DirectXRenderer::new(cropped_window.0, &devices, true)?;
+        full.crop_path_targets = false;
+        cropped.crop_path_targets = true;
+        let mask = ContentMask {
+            bounds: scaled(0.0, 0.0, 1024.0, 640.0),
+            ..Default::default()
+        };
+        let mut previous_extent = (0, 0);
+        for (x, y, width, height) in [
+            (24.0, 16.0, 512, 320),
+            (16.25, 16.5, 512, 320),
+            (180.25, 120.5, 512, 320),
+            (16.25, 16.5, 512, 320),
+            (40.25, 35.5, 360, 240),
+        ] {
+            let resized = full.width != width || full.height != height;
+            let target = size(DevicePixels(width as i32), DevicePixels(height as i32));
+            full.resize(target)?;
+            cropped.resize(target)?;
+            let mut scene = Scene::default();
+            scene.insert_primitive(gradient_triangle(x, y, mask));
+            // Include an offscreen path so a combined sprite spans the empty
+            // gap outside the cropped attachment.
+            scene.insert_primitive(Quad {
+                bounds: scaled(0.0, 0.0, 1.0, 1.0),
+                content_mask: mask,
+                background: solid_background(gpui::black()),
+                ..Default::default()
+            });
+            scene.insert_primitive(gradient_triangle(800.0, 10.0, mask));
+            let mut curve = PathBuilder::stroke(px(1.6));
+            curve.move_to(point(px(-10.0), px(30.0)));
+            curve.cubic_bezier_to(
+                point(px(40.0), px(70.0)),
+                point(px(24.0), px(22.0)),
+                point(px(5.0), px(60.0)),
+            );
+            let mut curve = curve.build().unwrap().scale(1.0);
+            curve.content_mask = ContentMask {
+                bounds: scaled(0.0, 0.0, 30.0, 60.0),
+                ..Default::default()
+            };
+            curve.color = solid_background(gpui::black());
+            scene.insert_primitive(curve);
+            scene.finish();
+            let expected = full.render_to_image(&scene, WindowBackgroundAppearance::Opaque)?;
+            let actual = cropped.render_to_image(&scene, WindowBackgroundAppearance::Opaque)?;
+            let inside = actual.get_pixel(x as u32 + 8, y as u32 + 8);
+            assert!(
+                inside[0] > 100 && inside[2] < 20,
+                "gradient path must render"
+            );
+            if x == 24.0 {
+                assert_ne!(
+                    scene.paths.first().unwrap().order,
+                    scene.paths.last().unwrap().order,
+                    "overlap must exercise the combined-sprite path"
+                );
+                assert!(
+                    expected.get_pixel(63, 16)[2] < 250,
+                    "the last target column must contain color to expose edge clamping"
+                );
+            }
+            assert_eq!(
+                actual.get_pixel(300, 16),
+                expected.get_pixel(300, 16),
+                "no clamped edge smear"
+            );
+            let max_diff = actual
+                .as_raw()
+                .iter()
+                .zip(expected.as_raw())
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap();
+            assert!(
+                max_diff <= 1,
+                "cropped rendering changed a pixel by {max_diff}"
+            );
+            let path = cropped.resources.as_ref().unwrap().path.as_ref().unwrap();
+            assert!(path.width < width && path.height < height);
+            if !resized {
+                assert!(path.width >= previous_extent.0 && path.height >= previous_extent.1);
+            }
+            previous_extent = (path.width, path.height);
+            if let Ok(directory) = std::env::var("GPUI_PATH_TEST_IMAGES") {
+                actual.save(
+                    std::path::Path::new(&directory).join(format!("d3d-cropped-{width}-{x}.png")),
+                )?;
+                expected.save(
+                    std::path::Path::new(&directory).join(format!("d3d-full-{width}-{x}.png")),
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn cropped_path_target_extent_ignores_offscreen_geometry_and_rounds_up() {
+        use super::path_target_extent;
+        assert_eq!(
+            path_target_extent(
+                [
+                    scaled(-10.0, -10.0, 75.25, 140.5),
+                    scaled(900.0, 20.0, 80.0, 80.0)
+                ]
+                .into_iter(),
+                512,
+                320
+            ),
+            (128, 192)
+        );
+        assert_eq!(
+            path_target_extent([scaled(500.0, 310.0, 100.0, 100.0)].into_iter(), 512, 320),
+            (512, 320)
+        );
+        assert_eq!(path_target_extent(std::iter::empty(), 32, 20), (32, 20));
     }
 
     fn dashed_border_scene(dash_length: f32, dash_gap: f32) -> Scene {

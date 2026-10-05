@@ -8,6 +8,7 @@ use collections::FxHashMap;
 
 use crate::WgpuContext;
 use gpui_render::blur::downsampled_dimension;
+use gpui_render::path_types::path_target_extent;
 use gpui_render::shaders::{
     blur::BlurUniforms,
     common::{FontRasterizationUniforms, GlobalUniforms},
@@ -363,38 +364,6 @@ impl WgpuRenderer {
         }
         true
     }
-}
-
-// Keep the origin at (0, 0): rasterization and gradient coordinates stay in
-// window pixels. Only the unused right/bottom part of the target is omitted.
-// Sampling uses the actual texture dimensions, independently of the viewport.
-fn path_target_extent(
-    bounds: impl Iterator<Item = gpui::Bounds<gpui::ScaledPixels>>,
-    viewport_width: u32,
-    viewport_height: u32,
-) -> (u32, u32) {
-    let (right, bottom) = bounds.fold((0.0_f32, 0.0_f32), |(right, bottom), bounds| {
-        if bounds.right().0 <= 0.0
-            || bounds.bottom().0 <= 0.0
-            || bounds.left().0 >= viewport_width as f32
-            || bounds.top().0 >= viewport_height as f32
-        {
-            return (right, bottom);
-        }
-        (right.max(bounds.right().0), bottom.max(bounds.bottom().0))
-    });
-    let padded = |value: f32, limit: u32| {
-        (value.ceil() as u32)
-            .max(1)
-            .saturating_add(63)
-            .div_euclid(64)
-            .saturating_mul(64)
-            .min(limit.max(1))
-    };
-    (
-        padded(right, viewport_width),
-        padded(bottom, viewport_height),
-    )
 }
 
 fn sampled_render_texture(

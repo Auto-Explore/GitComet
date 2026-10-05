@@ -34,6 +34,27 @@ dependencies and lint settings are expanded. Keeping it here allows native
 Windows renderer changes without upgrading the pinned GPUI revision. Run
 `cargo test -p gpui_ce_windows --lib` on Windows for its platform tests.
 
+### Cropped Direct3D path targets
+
+`src/directx_renderer.rs` can use smaller path colour and four-sample MSAA
+attachments with `GPUI_GPU_EXPERIMENTS=cropped-paths`. This is **disabled by
+default**. It uses the same visible-bounds calculation as WGPU, now shared in
+`gpui_render/src/path_types.rs`; window coordinates, gradients and the full
+viewport stay unchanged. Capacity grows in 64-pixel blocks and resets on
+resize. Set `GPUI_PROFILE_PATH_TARGET=1` to log allocated target dimensions.
+
+The native GPU pixel comparison covers gradients, fractional coordinates,
+negative and offscreen geometry, clipping, attachment growth, resize, and
+combined sprites extending past a coloured attachment edge:
+
+```sh
+cargo test -p gpui_ce_windows --lib cropped_path_targets
+```
+
+Windows already compiles its Direct3D shaders at build time and loads system
+fonts through DirectWrite. The macOS shader-precompilation and font-file fixes
+do not need equivalent Windows changes.
+
 ## GPUI macOS platform
 
 `gpui_apple/` (the Metal renderer) and `gpui_macos/` (windows, text system)
@@ -84,8 +105,8 @@ texture invalidates its old bind groups. The shader returns transparent samples
 outside the cropped target.
 
 Enable this measured Linux optimization with
-`GPUI_GPU_EXPERIMENTS=cropped-paths`. It remains **disabled by default** pending
-native validation on the other backends. No batching, path caching, pooling,
+`GPUI_GPU_EXPERIMENTS=cropped-paths`. It remains **disabled by default**. The
+native Direct3D implementation and validation are described above. No batching, path caching, pooling,
 partial-redraw changes, SVG mask substitutions or dependency upgrades are included.
 
 The isolated Linux/Vulkan prototype on a GTX 1080 reduced settled framebuffer
@@ -99,7 +120,8 @@ extents until a resize; driver residency can grow as more scenes are exercised.
 
 The implementation is the measured crop patch plus the opt-in guard. Rendering source
 changes are limited to `gpui_wgpu/src/wgpu_renderer.rs`, its `resources.rs`, `frame.rs` and
-`headless.rs` modules, and `gpui_render/src/shaders/paths.rs`. Test/benchmark
+`headless.rs` modules, and `gpui_render/src/shaders/paths.rs`. The bounds helper
+is shared with Direct3D in `gpui_render/src/path_types.rs`. Test/benchmark
 font paths reuse the vendored GPUI fixtures with their font licenses. Its GPU pixel comparison
 runs both modes explicitly and covers gradients, fractional geometry, negative
 coordinates, clipping, target growth, resize and transparent out-of-range samples:

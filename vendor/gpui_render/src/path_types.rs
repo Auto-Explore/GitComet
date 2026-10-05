@@ -33,6 +33,39 @@ pub const STORAGE_ABI: &[StorageAbi] = &[
     storage_abi::<PathRasterizationVertex>(),
 ];
 
+/// Texture extent from the viewport origin through the visible path bounds.
+/// Round up to 64 pixels to avoid reallocating for small geometry changes.
+/// Rasterization and gradient coordinates remain in window pixels; sampling
+/// uses the attachment's actual dimensions independently of the viewport.
+pub fn path_target_extent(
+    bounds: impl Iterator<Item = Bounds<ScaledPixels>>,
+    viewport_width: u32,
+    viewport_height: u32,
+) -> (u32, u32) {
+    let (right, bottom) = bounds.fold((0.0_f32, 0.0_f32), |(right, bottom), bounds| {
+        if bounds.right().0 <= 0.0
+            || bounds.bottom().0 <= 0.0
+            || bounds.left().0 >= viewport_width as f32
+            || bounds.top().0 >= viewport_height as f32
+        {
+            return (right, bottom);
+        }
+        (right.max(bounds.right().0), bottom.max(bounds.bottom().0))
+    });
+    let padded = |value: f32, limit: u32| {
+        (value.ceil() as u32)
+            .max(1)
+            .saturating_add(63)
+            .div_euclid(64)
+            .saturating_mul(64)
+            .min(limit.max(1))
+    };
+    (
+        padded(right, viewport_width),
+        padded(bottom, viewport_height),
+    )
+}
+
 pub fn rasterization_vertex_count(paths: &[Path<ScaledPixels>]) -> usize {
     paths.iter().map(|path| path.vertices.len()).sum()
 }
