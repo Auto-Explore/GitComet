@@ -34,6 +34,17 @@ workspace dependencies. They are vendored so the macOS fixes below can change
 them; their source deltas are listed per fix. Unit tests run with
 `cargo test -p gpui_ce_apple -p gpui_ce_macos --lib`.
 
+### Precompiled Metal shaders
+
+`gpui_render/build.rs` compiles each generated MSL module into a metallib with
+Apple's Metal Toolchain when it is installed (`xcrun metal`), targeting
+`MACOSX_DEPLOYMENT_TARGET` (default 10.15); `src/artifacts.rs` embeds the
+libraries. `gpui_apple/src/metal_renderer.rs` loads them and compiles the MSL
+at runtime, as before, when a build has no library, the OS rejects it, or a
+shader entry point is missing. Set `GPUI_RENDER_REQUIRE_METALLIB=1` to fail a
+build that cannot precompile. Test: `cargo test -p gpui_ce_apple --lib
+precompiled_libraries_load_with_their_entry_points`.
+
 ## GPUI cropped WGPU path targets
 
 `gpui_wgpu/` and `gpui_render/` come from the same `46e1ede` revision above,

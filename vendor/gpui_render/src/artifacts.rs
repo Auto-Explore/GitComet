@@ -141,6 +141,9 @@ pub struct NativeShader {
     /// GLSL ES 3.00, using the same downlevel transport.
     pub gles_300: GlslShader<Gles300>,
     pub msl: &'static str,
+    /// `msl`, precompiled when the build had Apple's Metal Toolchain. Loading it
+    /// skips Metal's runtime source compiler.
+    pub metallib: Option<&'static [u8]>,
 }
 
 include!(concat!(env!("OUT_DIR"), "/native_shaders.rs"));

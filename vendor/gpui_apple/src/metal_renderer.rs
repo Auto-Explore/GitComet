@@ -346,26 +346,48 @@ impl MetalRenderer {
         // https://developer.apple.com/documentation/metal/mtlgpufamily
         let is_apple_gpu = device.supports_family(MTLGPUFamily::Apple1);
 
-        // Compile the Naga-generated MSL with the device's runtime compiler, deduplicating
-        // per source so each module compiles exactly once.
+        // Load each Naga-generated module once: precompiled when the build had Apple's
+        // Metal Toolchain, otherwise (or if this OS rejects the library) compiled from
+        // MSL by the device's runtime compiler. Deduplicated per source.
         let mut libraries: Vec<(&'static str, metal::Library)> = Vec::new();
-        let mut library_for = |source: &'static str| -> metal::Library {
+        let mut library_for = |shader: &'static NativeShader| -> metal::Library {
             if let Some((_, library)) = libraries
                 .iter()
-                .find(|(registered, _)| *registered == source)
+                .find(|(registered, _)| *registered == shader.msl)
             {
                 return library.clone();
             }
-            let library = device
-                .new_library_with_source(source, &metal::CompileOptions::new())
-                .unwrap_or_else(|error| panic!("error building metal library: {error}"));
-            libraries.push((source, library.clone()));
+            let precompiled = shader.metallib.and_then(|bytes| {
+                device
+                    .new_library_with_data(bytes)
+                    // A library that loads can still lack a function this OS
+                    // accepts; the pipeline builders would then panic.
+                    .and_then(|library| {
+                        for entry in [shader.vertex_entry, shader.fragment_entry] {
+                            library.get_function(entry, None)?;
+                        }
+                        Ok(library)
+                    })
+                    .inspect_err(|error| {
+                        log::warn!(
+                            "precompiled metal library {} is unusable, compiling MSL: {error}",
+                            shader.label
+                        )
+                    })
+                    .ok()
+            });
+            let library = precompiled.unwrap_or_else(|| {
+                device
+                    .new_library_with_source(shader.msl, &metal::CompileOptions::new())
+                    .unwrap_or_else(|error| panic!("error building metal library: {error}"))
+            });
+            libraries.push((shader.msl, library.clone()));
             library
         };
 
         let mut pipeline = |label: &str| -> (&'static NativeShader, metal::Library) {
             let shader = native_shader(label);
-            (shader, library_for(shader.msl))
+            (shader, library_for(shader))
         };
 
         let (path_rasterization_shader, path_rasterization_library) =
@@ -2132,6 +2154,25 @@ mod tests {
         pattern_slash, px, solid_background, white,
     };
     use std::borrow::Cow;
+
+    #[test]
+    fn precompiled_libraries_load_with_their_entry_points() {
+        let device = metal::Device::system_default().expect("Metal device");
+        // Builds without the Metal Toolchain embed no libraries and compile MSL.
+        for shader in NATIVE_SHADERS {
+            let Some(bytes) = shader.metallib else {
+                continue;
+            };
+            let library = device
+                .new_library_with_data(bytes)
+                .unwrap_or_else(|error| panic!("{}: {error}", shader.label));
+            for entry in [shader.vertex_entry, shader.fragment_entry] {
+                library
+                    .get_function(entry, None)
+                    .unwrap_or_else(|error| panic!("{} {entry}: {error}", shader.label));
+            }
+        }
+    }
 
     #[test]
     fn intermediate_textures_follow_scene_requirements() {
