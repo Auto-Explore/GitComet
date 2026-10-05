@@ -26,6 +26,14 @@ size with `-- --nocapture`.
 Keep future updates based on the pinned upstream crate and reapply this small
 source delta, or remove the patch once upstream provides equivalent storage.
 
+## GPUI Windows platform
+
+`gpui_windows/` is the native Direct3D 11 and DirectWrite platform from the
+same `46e1ede` revision. Its upstream license is included and workspace
+dependencies and lint settings are expanded. Keeping it here allows native
+Windows renderer changes without upgrading the pinned GPUI revision. Run
+`cargo test -p gpui_ce_windows --lib` on Windows for its platform tests.
+
 ## GPUI macOS platform
 
 `gpui_apple/` (the Metal renderer) and `gpui_macos/` (windows, text system)

@@ -4121,7 +4121,6 @@ dependencies = [
 [[package]]
 name = "gpui_ce_windows"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=46e1ede350cc95071b389e83831e18e7d114bbaf#46e1ede350cc95071b389e83831e18e7d114bbaf"
 dependencies = [
  "accesskit",
  "accesskit_windows",

@@ -6,6 +6,7 @@ members = [
   "vendor/gpui_macos",
   "vendor/gpui_render",
   "vendor/gpui_wgpu",
+  "vendor/gpui_windows",
   "crates/gitcomet",
   "crates/gitcomet-app",
   "crates/gitcomet-core",
@@ -423,3 +424,4 @@ gpui_ce_apple = { path = "vendor/gpui_apple" }
 gpui_ce_macos = { path = "vendor/gpui_macos" }
 gpui_ce_render = { path = "vendor/gpui_render" }
 gpui_ce_wgpu = { path = "vendor/gpui_wgpu" }
+gpui_ce_windows = { path = "vendor/gpui_windows" }
