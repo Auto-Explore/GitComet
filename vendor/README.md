@@ -26,6 +26,14 @@ size with `-- --nocapture`.
 Keep future updates based on the pinned upstream crate and reapply this small
 source delta, or remove the patch once upstream provides equivalent storage.
 
+## GPUI macOS platform
+
+`gpui_apple/` (the Metal renderer) and `gpui_macos/` (windows, text system)
+come from the same `46e1ede` revision, with upstream licenses and expanded
+workspace dependencies. They are vendored so the macOS fixes below can change
+them; their source deltas are listed per fix. Unit tests run with
+`cargo test -p gpui_ce_apple -p gpui_ce_macos --lib`.
+
 ## GPUI cropped WGPU path targets
 
 `gpui_wgpu/` and `gpui_render/` come from the same `46e1ede` revision above,

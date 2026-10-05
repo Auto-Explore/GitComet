@@ -2,6 +2,8 @@
 resolver = "3"
 members = [
   "vendor/gpui",
+  "vendor/gpui_apple",
+  "vendor/gpui_macos",
   "vendor/gpui_render",
   "vendor/gpui_wgpu",
   "crates/gitcomet",
@@ -417,5 +419,7 @@ opt-level = 0
 # Compact text decorations and opt-in WGPU path cropping at the dev revision.
 [patch."https://github.com/Havunen/gpui-ce.git"]
 gpui-ce = { path = "vendor/gpui" }
+gpui_ce_apple = { path = "vendor/gpui_apple" }
+gpui_ce_macos = { path = "vendor/gpui_macos" }
 gpui_ce_render = { path = "vendor/gpui_render" }
 gpui_ce_wgpu = { path = "vendor/gpui_wgpu" }
