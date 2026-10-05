@@ -338,6 +338,9 @@ impl DirectXRenderer {
 
         let devices = DirectXRendererDevices::new(directx_devices, disable_direct_composition)
             .context("Creating DirectX devices")?;
+        // PlatformWindow's atlas API requires Arc. The native COM atlas stays
+        // on the UI thread and deliberately does not implement Send or Sync.
+        #[allow(clippy::arc_with_non_send_sync)]
         let atlas = Arc::new(DirectXAtlas::new(&devices.device, &devices.device_context));
 
         let resources = DirectXResources::new(&devices, 1, 1, hwnd, disable_direct_composition)
@@ -600,7 +603,7 @@ impl DirectXRenderer {
                 }
                 ctx.OMSetRenderTargets(Some(slice::from_ref(&scene_rtv)), None);
             }
-            self.active_render_target = scene_rtv.clone();
+            self.active_render_target = scene_rtv;
         } else {
             self.active_render_target = swapchain_rtv.clone();
         }

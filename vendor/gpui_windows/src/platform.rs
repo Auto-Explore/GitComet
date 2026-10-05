@@ -1310,7 +1310,7 @@ fn open_target_in_explorer(target: &Path) -> Result<()> {
 
     let highlight = [file_item as *const _];
     unsafe { SHOpenFolderAndSelectItems(dir_item as _, Some(&highlight), 0).ok() }.or_else(|err| {
-        if err.code().0 == ERROR_FILE_NOT_FOUND as i32 {
+        if err.code().0 == ERROR_FILE_NOT_FOUND {
             // On some systems, the above call mysteriously fails with "file not
             // found" even though the file is there.  In these cases, ShellExecute()
             // seems to work as a fallback (although it won't select the file).
@@ -1438,7 +1438,7 @@ fn load_icon() -> Result<HICON> {
     };
     let handle = unsafe {
         LoadImageW(
-            Some(module.into()),
+            Some(module),
             windows_core::PCWSTR(1 as _),
             IMAGE_ICON as u32,
             0,

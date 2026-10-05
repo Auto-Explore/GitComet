@@ -34,6 +34,12 @@ dependencies and lint settings are expanded. Keeping it here allows native
 Windows renderer changes without upgrading the pinned GPUI revision. Run
 `cargo test -p gpui_ce_windows --lib` on Windows for its platform tests.
 
+Windows lint cleanup removes redundant casts/conversions and a render-target
+clone in the platform sources. The thread-confined COM atlas retains the
+`Arc` required by GPUI's platform API, with a local Clippy exception explaining
+that constraint. The Direct3D compiler source name in `gpui_render/build.rs`
+uses a native C string literal.
+
 ### Cropped Direct3D path targets
 
 `src/directx_renderer.rs` can use smaller path colour and four-sample MSAA

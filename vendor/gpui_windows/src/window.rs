@@ -536,7 +536,7 @@ impl WindowsWindow {
                 CW_USEDEFAULT,
                 parent_hwnd,
                 None,
-                Some(hinstance.into()),
+                Some(hinstance),
                 Some(&context as *const _ as *const _),
             )
             .ok()
@@ -1506,7 +1506,7 @@ fn register_window_class(icon_handle: HICON) {
             hIcon: icon_handle,
             lpszClassName: PCWSTR(WINDOW_CLASS_NAME.as_ptr()),
             style: ((CS_HREDRAW | CS_VREDRAW) as u32),
-            hInstance: get_module_handle().into(),
+            hInstance: get_module_handle(),
             hbrBackground: unsafe { CreateSolidBrush(COLORREF(0x00000000)) },
             ..Default::default()
         };

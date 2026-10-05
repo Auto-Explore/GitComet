@@ -795,7 +795,7 @@ impl WindowsWindowInner {
                 let dpi = GetDpiForWindow(handle);
                 (*params).rgrc[0].top += get_frame_thicknessx(dpi);
             }
-            Some(result.0 as isize)
+            Some(result.0)
         }
     }
 

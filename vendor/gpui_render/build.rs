@@ -1157,7 +1157,7 @@ fn write_dx11_bytecode(
             D3DCompile(
                 source.as_ptr().cast(),
                 source.len(),
-                PCSTR::from_raw(b"gpui_shaders.hlsl\0".as_ptr()),
+                PCSTR::from_raw(c"gpui_shaders.hlsl".as_ptr().cast()),
                 None,
                 None::<&ID3DInclude>,
                 PCSTR::from_raw(entry.as_ptr().cast()),

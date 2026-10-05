@@ -94,7 +94,7 @@ fn create_destination_list() -> anyhow::Result<(ICustomDestinationList, Vec<Smal
                     .ok()?
             };
             let len = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
-            String::from_utf16_lossy(&buffer[..len as usize])
+            String::from_utf16_lossy(&buffer[..len])
         };
         let args = description.split('\n').map(PathBuf::from).collect();
 
