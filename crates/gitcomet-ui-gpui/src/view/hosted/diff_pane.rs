@@ -1573,6 +1573,13 @@ impl DiffPaneImpl for HostedDiffPane {
             cx.notify();
         });
     }
+    fn set_bar(&self, bar: gitcomet_extension_api::DiffBar, cx: &mut App) {
+        self.entity.update(cx, |pane, cx| {
+            pane.options.bar = bar;
+            pane.sync_decor(cx);
+            cx.notify();
+        });
+    }
     fn scroll_anchor(&self, cx: &App) -> Option<DiffScrollAnchor> {
         let pane = self.entity.read(cx);
         if let Some(renderer) = &pane.renderer {

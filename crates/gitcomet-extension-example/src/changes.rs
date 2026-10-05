@@ -12,10 +12,11 @@
 
 use gitcomet_core::domain::{CommitId, DiffTarget};
 use gitcomet_extension_api::{
-    ChangeSource, DiffAnnotation, DiffAnnotations, DiffFileNavigation, DiffInset, DiffLegendItem,
-    DiffLineRange, DiffLineSide, DiffPane, DiffPaneOptions, DiffPanePolicy, DiffSelectionAction,
-    FileList, FileListFilterChip, FileListGroups, FileListMarks, FileListMode, FileListVisible,
-    HostedAction, PopOutWindow, RepositoryViewContext, RepositoryWatch, RowGlyph, RowMark,
+    ChangeSource, DiffAnnotation, DiffAnnotations, DiffBar, DiffBarItem, DiffFileNavigation,
+    DiffInset, DiffLegendItem, DiffLineRange, DiffLineSide, DiffPane, DiffPaneOptions,
+    DiffPanePolicy, FileList, FileListFilterChip, FileListGroups, FileListMarks, FileListMode,
+    FileListVisible, HostedAction, PopOutWindow, RepositoryViewContext, RepositoryWatch, RowGlyph,
+    RowMark,
 };
 use gitcomet_ui_kit::components::Button;
 use gitcomet_ui_kit::gpui::prelude::*;
@@ -194,10 +195,9 @@ impl ChangesView {
     }
 
     /// Options for the current pane: gutter flags (a flag's own click
-    /// removes it) and selection notes.
+    /// removes it) and the bar.
     fn current_options(&self, cx: &mut Context<Self>) -> DiffPaneOptions {
         let view = cx.weak_entity();
-        let noted = view.clone();
         let (back, ahead) = (view.clone(), view.clone());
         let toggle: gitcomet_extension_api::DiffGutterAction = Rc::new(move |side, line, cx| {
             let _ = view.update(cx, |this, cx| this.toggle_flag(side, line, cx));
@@ -215,11 +215,38 @@ impl ChangesView {
             },
             on_gutter_click: Some(Rc::clone(&toggle)),
             on_annotation_click: Some(toggle),
-            selection_actions: vec![DiffSelectionAction::new("Add note", move |range, cx| {
-                add_note(&noted, range, cx);
-            })],
+            bar: self.current_bar(cx),
             ..DiffPaneOptions::default()
         }
+    }
+
+    /// The pane's bar: where the file sits in the list as drawn, and a note
+    /// under the selected lines.
+    fn current_bar(&self, cx: &mut Context<Self>) -> DiffBar {
+        let noted = cx.weak_entity();
+        let bar = DiffBar::new().with_item(
+            DiffBarItem::new("note", "Add note", move |range, cx| {
+                if let Some(range) = range {
+                    add_note(&noted, range, cx);
+                }
+            })
+            .with_icon("icons/pencil.svg")
+            .with_tooltip("Add a note under the selected lines")
+            .needs_selection(),
+        );
+        match self.position(cx) {
+            Some((index, count)) => bar.with_position(index, count),
+            None => bar,
+        }
+    }
+
+    /// The current file's place in the list as drawn, and the list's length.
+    fn position(&self, cx: &App) -> Option<(usize, usize)> {
+        let list = self.list.as_ref().ok()?;
+        let paths = list.ordered_paths(cx);
+        let current = self.current_path.as_ref()?;
+        let index = paths.iter().position(|path| path == current)?;
+        Some((index, paths.len()))
     }
 
     /// The list, and the file `direction` places from the current one in
@@ -374,6 +401,8 @@ impl ChangesView {
         self.show_flags(cx);
         current.set_insets(Vec::new(), cx);
         current.set_target(target, cx);
+        let bar = self.current_bar(cx);
+        current.set_bar(bar, cx);
         cx.notify();
     }
 }

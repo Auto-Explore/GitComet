@@ -83,6 +83,12 @@ impl Shortcut {
 
 /// `secondary-shift-k g` → "Ctrl+Shift+K G" (Cmd on macOS). The modifiers
 /// come from GPUI's parse, which resolves `secondary` for this platform.
+/// An extension's keystrokes, in GPUI syntax like `secondary-shift-k`, as
+/// this platform names them.
+pub(crate) fn keystrokes_display(source: &str) -> String {
+    keystrokes_label(source, cfg!(target_os = "macos"))
+}
+
 fn keystrokes_label(source: &str, is_macos: bool) -> String {
     let chords: Vec<String> = source
         .split_whitespace()

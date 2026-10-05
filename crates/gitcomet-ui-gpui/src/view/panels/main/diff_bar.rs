@@ -65,14 +65,21 @@ impl MainPaneView {
             return None;
         }
         if self.store.binding.is_some() {
-            // A hosted pane steps through its owner's list.
-            let navigation = &self.hosted_decor.as_ref()?.options.file_navigation;
+            // A hosted pane steps through its owner's list, and the owner
+            // says where in it the file is.
+            let options = &self.hosted_decor.as_ref()?.options;
+            let navigation = &options.file_navigation;
             let (prev, next) = (navigation.previous.is_some(), navigation.next.is_some());
+            let position = options
+                .bar
+                .position
+                .filter(|position| position.index < position.count)
+                .map(|position| (position.index, position.count));
             return (prev || next).then_some(DiffBarNav {
-                position: None,
+                position,
                 context: None,
-                can_prev: prev,
-                can_next: next,
+                can_prev: prev && position.is_none_or(|(index, _)| index > 0),
+                can_next: next && position.is_none_or(|(index, count)| index + 1 < count),
             });
         }
         let place = self.diff_file_place(repo_id, cx)?;
@@ -160,6 +167,66 @@ impl MainPaneView {
             .into_any_element()
     }
 
+    /// A hosted pane's own buttons, as its owner set them. An item that
+    /// needs a selection waits for one and is run with it.
+    fn hosted_bar_items(
+        &self,
+        theme: AppTheme,
+        scale: crate::ui_scale::UiScale,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let Some(decor) = self.hosted_decor.as_ref() else {
+            return Vec::new();
+        };
+        let selection = self.hosted_selection();
+        decor
+            .options
+            .bar
+            .items
+            .iter()
+            .map(|item| {
+                let id: SharedString = format!("diff_bar_{}", item.id).into();
+                let enabled = item.enabled && (!item.needs_selection || selection.is_some());
+                let shortcut = item
+                    .shortcut
+                    .as_deref()
+                    .map(crate::view::shortcut_labels::keystrokes_display);
+                let mut button = components::BarButton::new(id.clone(), item.label.clone())
+                    .primary(matches!(
+                        item.style,
+                        gitcomet_extension_api::DiffBarItemStyle::Primary
+                    ))
+                    .enabled(enabled);
+                if let Some(icon) = item.icon.clone() {
+                    button = button.icon(icon);
+                }
+                if let Some(shortcut) = shortcut.clone() {
+                    button = button.shortcut(shortcut);
+                }
+                let run = std::rc::Rc::clone(&item.run);
+                let tooltip = item.tooltip.clone().unwrap_or_else(|| item.label.clone());
+                let selector = id.clone();
+                button
+                    .into_button(theme, scale)
+                    .on_click(theme, cx, move |this, _e, _window, cx| {
+                        if !enabled {
+                            return;
+                        }
+                        let run = std::rc::Rc::clone(&run);
+                        let selection = this.hosted_selection();
+                        cx.defer(move |cx| run(selection, cx));
+                    })
+                    .debug_selector(move || selector.to_string())
+                    .gitcomet_tooltip_keyed(
+                        theme,
+                        tooltip,
+                        shortcut.into_iter().map(SharedString::from).collect(),
+                    )
+                    .into_any_element()
+            })
+            .collect()
+    }
+
     /// The diff's bottom bar: the file arrows and "3 of 43 files" on the
     /// left, the actions for what is shown on the right, and the file's
     /// format chips at the end. `None` when it would be empty.
@@ -173,10 +240,11 @@ impl MainPaneView {
         let nav = self.diff_bar_nav(repo_id, cx);
         let chips = self.text_format_chips(cx);
         let stage = repo_id.and_then(|repo_id| self.stage_action(repo_id, cx));
-        let actions: Vec<AnyElement> = stage
+        let mut actions: Vec<AnyElement> = stage
             .map(|action| self.stage_button(action, theme, scale, cx))
             .into_iter()
             .collect();
+        actions.extend(self.hosted_bar_items(theme, scale, cx));
         if nav.is_none() && chips.is_none() && actions.is_empty() {
             return None;
         }
