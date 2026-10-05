@@ -297,6 +297,42 @@ fn window_blur_stops_terminal_input_and_live_caret(cx: &mut gpui::TestAppContext
 }
 
 #[gpui::test]
+fn idle_terminal_caret_stops_blinking_until_the_next_keystroke(cx: &mut gpui::TestAppContext) {
+    let _visual = crate::test_support::lock_visual_test();
+    let (fixture, cx) = fixture(cx);
+    cx.update(|window, _| window.activate());
+    cx.run_until_parked();
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        refresh_and_draw(cx);
+        cx.run_until_parked();
+        cx.update(|_, app| assert!(fixture.viewport.read(app).cursor_blink_task_scheduled));
+
+        // Each blink redraws the window, so an idle caret rests, shown.
+        cx.executor().advance_clock(Duration::from_millis(
+            TERMINAL_CARET_BLINK_TIMEOUT_MS + TERMINAL_CARET_BLINK_INTERVAL_MS,
+        ));
+        cx.run_until_parked();
+        refresh_and_draw(cx);
+        cx.update(|_, app| {
+            let viewport = fixture.viewport.read(app);
+            assert!(viewport.cursor_blink_active);
+            assert!(!viewport.cursor_blink_task_scheduled);
+            assert!(viewport.cursor_blink_visible);
+        });
+
+        cx.simulate_keystrokes("x");
+        assert_eq!(fixture.take_input(), b"x");
+        cx.update(|_, app| {
+            assert!(
+                fixture.viewport.read(app).cursor_blink_task_scheduled,
+                "typing blinks again"
+            );
+        });
+        cx.deactivate_window();
+    });
+}
+
+#[gpui::test]
 fn main_window_focus_shortcut_works_after_blur(cx: &mut gpui::TestAppContext) {
     let _visual = crate::test_support::lock_visual_test();
     let (root, _, cx) = test_root_view_with_active_repo(cx);

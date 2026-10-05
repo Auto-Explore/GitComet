@@ -525,7 +525,7 @@ impl TextInput {
         }
         self.selection.undo_stack.clear();
         self.selection.redo_stack.clear();
-        self.interaction.cursor_blink_visible = true;
+        self.show_cursor();
         self.invalidate_layout_caches();
         if self.multiline && self.soft_wrap {
             self.request_wrap_recompute();
@@ -607,7 +607,7 @@ impl TextInput {
         self.selection.range = next;
         self.selection.reversed = false;
         self.interaction.vertical_motion_x = None;
-        self.interaction.cursor_blink_visible = true;
+        self.show_cursor();
         if autoscroll {
             self.queue_cursor_autoscroll();
         }
@@ -2373,7 +2373,7 @@ impl TextInput {
         }
         self.selection.marked_range.take();
         self.interaction.vertical_motion_x = None;
-        self.interaction.cursor_blink_visible = true;
+        self.show_cursor();
         self.invalidate_layout_caches_preserving_wrap_rows();
         self.note_text_edit_for_highlights(&range, &inserted);
         if !preserve_view {
@@ -2506,7 +2506,7 @@ impl TextInput {
         self.selection.range = offset..offset;
         self.selection.reversed = false;
         self.interaction.vertical_motion_x = None;
-        self.interaction.cursor_blink_visible = true;
+        self.show_cursor();
         cx.notify();
     }
 
@@ -2536,7 +2536,7 @@ impl TextInput {
             self.selection.range = self.selection.range.end..self.selection.range.start;
         }
         self.interaction.vertical_motion_x = None;
-        self.interaction.cursor_blink_visible = true;
+        self.show_cursor();
         cx.notify();
     }
 
@@ -2626,7 +2626,7 @@ impl TextInput {
             self.selection_owner.adopt(window, cx);
         }
         self.interaction.vertical_motion_x = None;
-        self.interaction.cursor_blink_visible = true;
+        self.show_cursor();
         self.end_mouse_drag();
         self.invalidate_layout_caches_preserving_wrap_rows();
         if let Some(delta) = text_edit_delta {
@@ -2918,7 +2918,7 @@ impl TextInput {
         self.interaction.took_press = true;
         cx.stop_propagation();
         window.focus(&self.focus_handle, cx);
-        self.interaction.cursor_blink_visible = true;
+        self.show_cursor();
         let index = self.try_index_for_mouse_position(event.position);
         self.interaction.vertical_motion_x = None;
 
@@ -3050,7 +3050,7 @@ impl TextInput {
         crate::press_gesture::claim_press(cx);
         cx.stop_propagation();
         window.focus(&self.focus_handle, cx);
-        self.interaction.cursor_blink_visible = true;
+        self.show_cursor();
         self.end_mouse_drag();
         self.interaction.vertical_motion_x = None;
 
@@ -3358,7 +3358,7 @@ impl TextInput {
         self.selection.range = next;
         self.selection.reversed = reversed;
         self.interaction.vertical_motion_x = None;
-        self.interaction.cursor_blink_visible = true;
+        self.show_cursor();
         cx.notify();
     }
 
@@ -3530,7 +3530,7 @@ impl EntityInputHandler for TextInput {
         self.selection.reversed = false;
         self.selection.marked_range.take();
         self.interaction.vertical_motion_x = None;
-        self.interaction.cursor_blink_visible = true;
+        self.show_cursor();
         self.invalidate_layout_caches_preserving_wrap_rows();
         self.note_text_edit_for_highlights(&range, &inserted);
         self.queue_cursor_autoscroll();
@@ -3581,7 +3581,7 @@ impl EntityInputHandler for TextInput {
         self.selection.reversed = false;
 
         self.interaction.vertical_motion_x = None;
-        self.interaction.cursor_blink_visible = true;
+        self.show_cursor();
         // Like `unmark_text`: this can end the composition leaving a highlight.
         // Self-guards on `marked_range`, so a composing input is left alone.
         self.clear_selection_on_ownership_loss(cx);
