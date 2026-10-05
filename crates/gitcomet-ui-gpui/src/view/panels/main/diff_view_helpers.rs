@@ -141,6 +141,7 @@ impl MainPaneView {
                                 16.0,
                                 ui_scale.percent(),
                             )
+                            .h(ui_scale.px(20.0))
                             .debug_selector(|| "diff_title_icon".to_string())
                             .into_any_element(),
                             self.cached_path_display(path),
@@ -178,6 +179,7 @@ impl MainPaneView {
                     .flex()
                     .items_center()
                     .gap_2()
+                    .line_height(ui_scale.px(20.0))
                     .min_w(px(0.0))
                     .overflow_hidden()
                     .child(icon)
@@ -185,6 +187,10 @@ impl MainPaneView {
                         div()
                             .flex_1()
                             .min_w(px(0.0))
+                            .h(ui_scale.px(20.0))
+                            .flex()
+                            .items_center()
+                            .debug_selector(|| "diff_title_text".to_string())
                             .text_size(theme.ui_text(14.0))
                             .font_weight(FontWeight::BOLD)
                             .child(
@@ -214,7 +220,7 @@ impl MainPaneView {
             })
     }
 
-    /// Revision controls shown next to the file path in the file content
+    /// Revision controls in the bottom bar of the file content
     /// viewer: back/forward through the cross-file viewer history, plus a
     /// clickable commit-SHA badge that opens the file-history menu. Returns
     /// `None` outside the file content viewer (diff and merge views).
@@ -230,8 +236,8 @@ impl MainPaneView {
         let repo_id = repo.id;
         let can_back = repo.navigation.view_history.can_back();
         let can_forward = repo.navigation.view_history.can_forward();
-        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
-        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
+        let scale = crate::ui_scale::UiScale::current(cx);
+        let scaled_px = crate::ui_scale::scaler(scale.percent());
 
         let (badge_label, path): (SharedString, std::path::PathBuf) =
             match self.rendered_diff_target()? {
@@ -256,16 +262,13 @@ impl MainPaneView {
         // Monospace label so the badge keeps a constant width as the SHA changes.
         let badge = div()
             .id("viewer_revision_badge")
+            .debug_selector(|| "viewer_revision_badge".to_string())
             .flex()
             .items_center()
             .gap_1()
             .px_1()
-            .h(components::control_height(
-                ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
-            ))
+            .h(components::control_height(scale))
             .rounded(px(theme.radii.row))
-            .border_1()
-            .border_color(theme.colors.stroke.default)
             .cursor(CursorStyle::PointingHand)
             .control_interaction(
                 controls::InteractionStyle::header(theme),
@@ -301,35 +304,35 @@ impl MainPaneView {
             )
             .gitcomet_tooltip(theme, "Show file history".into());
 
-        let back_btn = components::Button::new("viewer_nav_back", "")
-            .start_slot(svg_icon(
-                "icons/arrow_left.svg",
-                theme.colors.foreground.primary,
-                scaled_px(14.0),
-            ))
-            .style(components::ButtonStyle::Outlined)
-            .disabled(!can_back)
-            .on_click(theme, cx, move |this, _e, _w, cx| {
-                this.store.dispatch(Msg::ViewerNavBack { repo_id });
-                cx.notify();
-            })
-            .gitcomet_tooltip(theme, "Back to previous file version".into());
+        let back_btn = components::nav_arrow_button(
+            "viewer_nav_back",
+            "icons/arrow_left.svg",
+            theme,
+            scale,
+            can_back,
+        )
+        .on_click(theme, cx, move |this, _e, _w, cx| {
+            this.store.dispatch(Msg::ViewerNavBack { repo_id });
+            cx.notify();
+        })
+        .debug_selector(|| "viewer_nav_back".to_string())
+        .gitcomet_tooltip(theme, "Back to previous file version".into());
 
-        let forward_btn = components::Button::new("viewer_nav_forward", "")
-            .start_slot(svg_icon(
-                "icons/arrow_right.svg",
-                theme.colors.foreground.primary,
-                scaled_px(14.0),
-            ))
-            .style(components::ButtonStyle::Outlined)
-            .disabled(!can_forward)
-            .on_click(theme, cx, move |this, _e, _w, cx| {
-                this.store.dispatch(Msg::ViewerNavForward { repo_id });
-                cx.notify();
-            })
-            .gitcomet_tooltip(theme, "Forward to next file version".into());
+        let forward_btn = components::nav_arrow_button(
+            "viewer_nav_forward",
+            "icons/arrow_right.svg",
+            theme,
+            scale,
+            can_forward,
+        )
+        .on_click(theme, cx, move |this, _e, _w, cx| {
+            this.store.dispatch(Msg::ViewerNavForward { repo_id });
+            cx.notify();
+        })
+        .debug_selector(|| "viewer_nav_forward".to_string())
+        .gitcomet_tooltip(theme, "Forward to next file version".into());
 
-        // Badge first (immediately next to the path), then back/forward.
+        // Keep the revision badge and its history arrows together.
         Some(
             div()
                 .flex()
@@ -363,42 +366,5 @@ impl MainPaneView {
         );
 
         (added > 0 || removed > 0).then_some((added, removed))
-    }
-
-    pub(super) fn split_column_header_label(
-        label: &'static str,
-        count: Option<usize>,
-        prefix: char,
-        color: gpui::Rgba,
-    ) -> AnyElement {
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap_2()
-            .min_w(px(0.0))
-            .child(
-                div()
-                    .min_w(px(0.0))
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .child(label),
-            )
-            .when(count.is_some_and(|count| count > 0), |this| {
-                let count = count.unwrap_or_default();
-                let debug_selector = match prefix {
-                    '-' => "diff_split_header_removed_stat",
-                    '+' => "diff_split_header_added_stat",
-                    _ => "diff_split_header_stat",
-                };
-                this.child(
-                    div()
-                        .debug_selector(move || debug_selector.to_string())
-                        .flex_none()
-                        .text_color(color)
-                        .child(format!("{prefix}{count}")),
-                )
-            })
-            .into_any_element()
     }
 }

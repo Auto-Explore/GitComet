@@ -946,3 +946,40 @@ fn the_bar_stage_button_takes_the_selected_files(cx: &mut gpui::TestAppContext) 
         "staging the selection must consume it"
     );
 }
+
+/// Editing owns the bottom-right action: staging must disappear for either area.
+#[gpui::test]
+fn edit_mode_hides_stage_and_unstage(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(70569);
+    let commit_id = CommitId("abcdef001122338d".into());
+    let directory = tempfile::tempdir().unwrap();
+    let path = std::path::PathBuf::from("file.rs");
+    std::fs::write(directory.path().join(&path), "contents\n").unwrap();
+    for area in [DiffArea::Unstaged, DiffArea::Staged] {
+        for editing in [false, true, false] {
+            let mut repo = simple_worktree_repo(
+                repo_id,
+                directory.path(),
+                &commit_id,
+                std::slice::from_ref(&path),
+                &path,
+            );
+            let target = DiffTarget::working_tree(path.clone(), area);
+            repo.diff_state.diff_target = Some(target.clone());
+            repo.diff_state.diff = Loadable::Ready(simple_hunk_diff(target).into());
+            repo.diff_state.edit_mode = editing;
+            repo.diff_state.content_preview = editing;
+            apply_state(cx, &view, app_state_with_active_repo(repo));
+            draw_and_drain_test_window(cx);
+            assert_eq!(
+                cx.debug_bounds("diff_bar_stage").is_some(),
+                !editing,
+                "{area:?}, editing: {editing}"
+            );
+        }
+    }
+}

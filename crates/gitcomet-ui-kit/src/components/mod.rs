@@ -89,7 +89,7 @@ pub use settings_rows::{
 };
 pub use shortcut_keys::{shortcut_keys, shortcut_keys_compact};
 pub use skeleton::skeleton;
-pub use split_button::{SplitButton, SplitButtonStyle};
+pub use split_button::{SplitButton, SplitButtonStyle, filled_action_frame};
 pub use tab::Tab;
 pub use tab_bar::{TabBar, TabBarScroll};
 pub use text_fade::{FadingText, trailing_fade};

@@ -5,7 +5,7 @@ use crate::view::mod_helpers::TextFormatMenuSection;
 
 impl MainPaneView {
     /// The file view's format chips, `[encoding ▾] [line ending ▾] [Tab ▾]`,
-    /// at the end of the diff's bottom bar. Only shown when the view knows
+    /// centred in the diff's bottom bar. Only shown when the view knows
     /// how the file was read.
     pub(super) fn text_format_chips(&self, cx: &mut gpui::Context<Self>) -> Option<AnyElement> {
         let status = self.text_format_status()?;
