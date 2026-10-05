@@ -41,7 +41,7 @@ pub use contributions::{
     GateDecision, MenuLocation, Navigate, NavigationAvailability, RepositoryEntryGate,
     RepositoryEntryRequest, RepositoryViewContext, RepositoryViewDescriptor, SettingsPageContext,
     SettingsPageDescriptor, SettingsTarget, SidebarSectionDescriptor, SidebarTabDescriptor,
-    StatusItemDescriptor, ViewBuilder, ViewNavigation, ViewTarget, WindowGateDescriptor,
+    StatusItemDescriptor, ViewBuilder, ViewFocus, ViewNavigation, ViewTarget, WindowGateDescriptor,
     WindowGatePredicate,
 };
 /// Revision-pinned state types hosted panes take.

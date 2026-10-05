@@ -720,6 +720,12 @@ impl DiffPaneView {
             let mut state = (*renderer.read(cx).store.snapshot()).clone();
             for repo in &mut state.repos {
                 repo.diff_state = Default::default();
+                // Keep the selected file's chrome mounted while its new
+                // session catches up. Clearing the target hid the bar for
+                // the frame between the pick and the store notification.
+                repo.diff_state.diff_target = Some(target.clone());
+                repo.diff_state.diff = Loadable::Loading;
+                repo.diff_state.diff_file = Loadable::Loading;
             }
             model.update(cx, |model, cx| model.set_state(Arc::new(state), cx));
             // Each file opens at its first change once its rows are in; a

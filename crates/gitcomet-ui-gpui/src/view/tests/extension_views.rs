@@ -367,3 +367,131 @@ fn views_under_more_share_one_tab_that_names_the_selected_one(cx: &mut gpui::Tes
     assert!(cx.debug_bounds("repository_view_more_underline").is_none());
     assert!(cx.debug_bounds("repository_view_more_icon").is_none());
 }
+
+struct KeyboardView {
+    focus: gpui::FocusHandle,
+    input: gpui::Entity<components::TextInput>,
+}
+impl gpui::Focusable for KeyboardView {
+    fn focus_handle(&self, _: &App) -> gpui::FocusHandle {
+        self.focus.clone()
+    }
+}
+impl gpui::Render for KeyboardView {
+    fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .track_focus(&self.focus)
+            .child(self.input.clone())
+    }
+}
+struct KeyboardViews;
+impl Extension for KeyboardViews {
+    fn id(&self) -> ExtensionId {
+        ExtensionId::new("com.example.keyboard").unwrap()
+    }
+    fn register(&self, registrar: &mut Registrar) {
+        for (id, more) in [("first", false), ("second", true)] {
+            let descriptor =
+                RepositoryViewDescriptor::new(id, "icons/history.svg", |_, window, app| {
+                    app.new(|cx| KeyboardView {
+                        focus: cx.focus_handle(),
+                        input: cx
+                            .new(|cx| components::TextInput::new(Default::default(), window, cx)),
+                    })
+                    .into()
+                })
+                .with_focus::<KeyboardView>();
+            registrar.repository_view(
+                id,
+                if more {
+                    descriptor.under_more()
+                } else {
+                    descriptor
+                },
+            );
+        }
+    }
+}
+
+#[gpui::test]
+fn switching_views_focuses_the_selected_view_once(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let registry = Registry::build(vec![Box::new(KeyboardViews)]).unwrap();
+    let (view, cx) = open_view(cx, registry, Path::new("/tmp/extension-keyboard"));
+    // Simulate a keyboard command invoked while History's commit box holds
+    // focus. That field disappears as the selected view opens.
+    cx.update(|window, app| {
+        let input = view
+            .read(app)
+            .details_pane
+            .read(app)
+            .commit_message_input
+            .clone();
+        window.focus(&input.read(app).focus_handle(), app);
+        view.update(app, |view, cx| {
+            view.select_routed_view(
+                crate::view::repository_views::RoutedArea::Main,
+                Some(0),
+                window,
+                cx,
+            )
+        });
+        let router = view.read(app).repository_views.as_ref().unwrap();
+        let repo = view.read(app).active_repo().unwrap();
+        let selected = router
+            .built(repo, 0)
+            .unwrap()
+            .downcast::<KeyboardView>()
+            .unwrap();
+        assert!(
+            selected.read(app).focus.is_focused(window),
+            "focus moves before the first frame"
+        );
+    });
+    test_support::redraw(cx);
+    let selected = cx.update(|_, app| {
+        let root = view.read(app);
+        root.repository_views
+            .as_ref()
+            .unwrap()
+            .built(root.active_repo().unwrap(), 0)
+            .unwrap()
+            .downcast::<KeyboardView>()
+            .unwrap()
+    });
+    let input = selected.read_with(cx, |view, _| view.input.clone());
+    cx.update(|window, app| window.focus(&input.read(app).focus_handle(), app));
+    test_support::redraw(cx);
+    assert!(
+        cx.update(|window, app| input.read(app).focus_handle().is_focused(window)),
+        "redraw leaves the field alone"
+    );
+    // A view selected through More must keep focus after its menu closes.
+    click_debug_selector(cx, "repository_view_more");
+    test_support::redraw(cx);
+    click_debug_selector(cx, "context_menu_second");
+    test_support::redraw(cx);
+    assert!(cx.update(|window, app| {
+        let root = view.read(app);
+        root.repository_views
+            .as_ref()
+            .unwrap()
+            .built(root.active_repo().unwrap(), 1)
+            .unwrap()
+            .downcast::<KeyboardView>()
+            .unwrap()
+            .read(app)
+            .focus
+            .is_focused(window)
+    }));
+    click_debug_selector(cx, "repository_view_history");
+    test_support::redraw(cx);
+    assert!(cx.update(|window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .diff_panel_focus_handle
+            .is_focused(window)
+    }));
+}

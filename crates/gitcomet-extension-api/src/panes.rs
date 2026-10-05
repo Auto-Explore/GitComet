@@ -360,6 +360,14 @@ impl DiffFilePosition {
     pub fn new(index: usize, count: usize) -> Self {
         Self { index, count }
     }
+
+    /// The count's label, shared by the host and extension bars.
+    pub fn label(self) -> String {
+        match self.count {
+            1 => "1 of 1 file".to_string(),
+            n => format!("{} of {n} files", self.index + 1),
+        }
+    }
 }
 
 /// How a bar button is drawn.
@@ -682,6 +690,13 @@ pub type FileSelected = Rc<dyn Fn(&CommitFileChange, DiffTarget, &mut App)>;
 #[doc(hidden)]
 pub trait FileListImpl {
     fn view(&self) -> AnyView;
+    fn observe(
+        &self,
+        _on_change: Rc<dyn Fn(&mut App)>,
+        _cx: &mut App,
+    ) -> Option<gitcomet_ui_kit::gpui::Subscription> {
+        None
+    }
     fn set_source(&self, source: ChangeSource, cx: &mut App);
     fn set_mode(&self, mode: FileListMode, cx: &mut App);
     fn set_sort(&self, sort: crate::FileListSort, cx: &mut App);
@@ -706,6 +721,14 @@ pub trait FileListImpl {
 pub struct FileList(Rc<dyn FileListImpl>);
 
 impl FileList {
+    /// Observe list changes, including the user's sort, layout and filters.
+    pub fn observe(
+        &self,
+        on_change: impl Fn(&mut App) + 'static,
+        cx: &mut App,
+    ) -> Option<gitcomet_ui_kit::gpui::Subscription> {
+        self.0.observe(Rc::new(on_change), cx)
+    }
     pub fn set_sort(&self, sort: crate::FileListSort, cx: &mut App) {
         self.0.set_sort(sort, cx)
     }

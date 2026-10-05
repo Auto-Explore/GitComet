@@ -680,6 +680,16 @@ fn a_pane_shows_the_first_change_of_each_file_it_is_given(cx: &mut gpui::TestApp
             DiffTarget::working_tree("a.rs".into(), DiffArea::Unstaged),
             app,
         );
+        let pane_view = pane
+            .view()
+            .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+            .unwrap();
+        let renderer = pane_view.read(app).renderer().unwrap().read(app);
+        assert_eq!(
+            renderer.active_content(),
+            crate::view::panes::main::MainPaneContent::Diff,
+            "the loading frame keeps the diff and its bar mounted"
+        );
     });
     settle(cx, &view, &store, "a.rs again, at its change", |cx| {
         row_drawn(cx, first, 300)
@@ -1862,7 +1872,8 @@ fn a_pane_draws_its_owners_bar(cx: &mut gpui::TestAppContext) {
                 bar: DiffBar::new()
                     .with_position(0, 5)
                     .with_item(item("note").needs_selection().with_shortcut("c"))
-                    .with_item(item("done").primary()),
+                    .with_item(item("done").primary())
+                    .with_item(item("disabled").enabled(false)),
                 layout: gitcomet_extension_api::DiffLayout::Inline,
                 ..DiffPaneOptions::default()
             },
@@ -1901,6 +1912,7 @@ fn a_pane_draws_its_owners_bar(cx: &mut gpui::TestAppContext) {
     // No selection yet: the note waits; the other runs without one.
     click_with(cx, "diff_bar_note", gpui::Modifiers::default());
     click_with(cx, "diff_bar_done", gpui::Modifiers::default());
+    click_with(cx, "diff_bar_disabled", gpui::Modifiers::default());
     cx.run_until_parked();
     assert_eq!(*runs.borrow(), vec![("done", None)]);
 
@@ -1924,4 +1936,58 @@ fn a_pane_draws_its_owners_bar(cx: &mut gpui::TestAppContext) {
     draw(cx);
     assert!(cx.debug_bounds("diff_bar_note").is_none());
     assert!(cx.debug_bounds("diff_bar_other").is_some());
+}
+
+#[gpui::test]
+fn list_observers_follow_sort_layout_and_filter(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (_dir, store, view, cx) = open_repository(cx);
+    let (host, repository) = cx.update(|_, app| {
+        let host = view.read(app).extension_window.as_ref().unwrap().host();
+        let repository = host.active_repository(app).unwrap().unwrap();
+        (host, repository)
+    });
+    let list = cx.update(|_, app| {
+        host.create_file_list(
+            &repository,
+            ChangeSource::comparison(CommitId("HEAD".into()), None, Default::default()),
+            |_, _, _| {},
+            app,
+        )
+        .unwrap()
+    });
+    settle(cx, &view, &store, "observed list loaded", |cx| {
+        cx.update(|_, app| !list.is_loading(app) && list.ordered_paths(app).len() == 2)
+    });
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let subscription = cx.update(|_, app| {
+        let paths = list.clone();
+        let seen = seen.clone();
+        list.observe(
+            move |app| seen.borrow_mut().push(paths.ordered_paths(app)),
+            app,
+        )
+        .unwrap()
+    });
+    for mode in [
+        gitcomet_extension_api::FileListMode::Flat,
+        gitcomet_extension_api::FileListMode::Tree,
+    ] {
+        seen.borrow_mut().clear();
+        cx.update(|_, app| list.set_mode(mode, app));
+        cx.run_until_parked();
+        assert!(!seen.borrow().is_empty(), "layout changes notify the owner");
+    }
+    seen.borrow_mut().clear();
+    cx.update(|_, app| list.set_sort(gitcomet_extension_api::FileListSort::PathDescending, app));
+    cx.run_until_parked();
+    assert_eq!(
+        seen.borrow().last(),
+        Some(&vec![PathBuf::from("b.rs"), PathBuf::from("a.rs")])
+    );
+    seen.borrow_mut().clear();
+    cx.update(|_, app| list.set_filter("a.rs", app));
+    cx.run_until_parked();
+    assert_eq!(seen.borrow().last(), Some(&vec![PathBuf::from("a.rs")]));
+    drop(subscription);
 }
