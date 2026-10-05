@@ -1,9 +1,10 @@
-use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use gpui::{
     Bounds, ContentMask, Corners, DevicePixels, PlatformHeadlessRenderer, Point, Quad,
     ScaledPixels, Scene, ShaderBool, Size, Underline, solid_background, white,
 };
 use gpui_ce_wgpu::WgpuHeadlessRenderer;
+use std::hint::black_box;
 
 const TARGET_SIZE: Size<DevicePixels> = Size {
     width: DevicePixels(1280),

@@ -1,0 +1,52 @@
+# Vendored from gpui-ce 46e1ede; see vendor/README.md.
+[package]
+name = "gpui_ce_windows"
+version = "0.1.0"
+description = "A community fork of Zed's GPU-accelerated UI framework"
+edition = "2024"
+publish = true
+license = "Apache-2.0"
+
+[lints]
+rust = { "unexpected_cfgs" = { "level" = "allow" } }
+clippy = { "dbg_macro" = "deny", "todo" = "deny", "declare_interior_mutable_const" = "deny", "redundant_clone" = "deny", "disallowed_methods" = "deny", "style" = { "level" = "allow", "priority" = -1 }, "type_complexity" = "allow", "let_underscore_future" = "allow", "single_range_in_vec_init" = "allow", "too_many_arguments" = "allow", "large_enum_variant" = "allow", "nonminimal_bool" = "allow" }
+
+[lib]
+path = "src/gpui_windows.rs"
+
+[features]
+default = ["gpui/default"]
+test-support = ["gpui/test-support"]
+screen-capture = ["gpui/screen-capture"]
+
+[dependencies]
+gpui = { git = "https://github.com/Havunen/gpui-ce.git", rev = "46e1ede350cc95071b389e83831e18e7d114bbaf", package = "gpui-ce", default-features = false }
+gpui_render = { version = "0.1.0", package = "gpui_ce_render", git = "https://github.com/Havunen/gpui-ce.git", rev = "46e1ede350cc95071b389e83831e18e7d114bbaf" }
+wgsl-rs = { git = "https://github.com/schell/wgsl-rs", rev = "b2de16a1b81e67d76bc265c296184f882864badb", default-features = false, features = ["validation"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+accesskit = { version = "0.25", features = ["enumn"] }
+accesskit_windows = "0.35"
+anyhow = "1"
+collections = { version = "0.2.2", package = "gpui_ce_collections", git = "https://github.com/Havunen/gpui-ce.git", rev = "46e1ede350cc95071b389e83831e18e7d114bbaf" }
+dunce = "1.0"
+etagere = "0.3"
+futures = "0.3"
+gpui_util = { version = "0.2.6", package = "gpui_ce_util", git = "https://github.com/Havunen/gpui-ce.git", rev = "46e1ede350cc95071b389e83831e18e7d114bbaf" }
+image = "0.25"
+itertools = "0.15"
+log = { version = "0.4", features = ["kv_unstable_serde", "serde"] }
+parking_lot = "0.12"
+rand = "0.10"
+raw-window-handle = "0.6"
+smallvec = { version = "1", features = ["union", "const_new"] }
+uuid = { version = "1", features = ["v4", "v5", "v7", "serde"] }
+windows-collections = "0.100"
+windows-core = "0.100"
+windows-numerics = "0.100"
+windows-registry = "0.100"
+windows-version = "0.100"
+
+# Dependency crates do not inherit cfg(test); expose the matching test-only APIs.
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }

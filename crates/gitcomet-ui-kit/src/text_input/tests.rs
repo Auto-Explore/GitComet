@@ -102,6 +102,54 @@ fn window_blur_stops_text_input_until_deliberately_refocused(cx: &mut gpui::Test
 }
 
 #[gpui::test]
+fn idle_caret_stops_blinking_until_the_next_edit(cx: &mut gpui::TestAppContext) {
+    use super::render::{CURSOR_BLINK_INTERVAL, CURSOR_BLINK_TIMEOUT};
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        let (input, cx) = cx.add_window_view(|window, cx| {
+            window.activate();
+            TextInput::new(TextInputOptions::default(), window, cx)
+        });
+        cx.update(|window, app| {
+            input.update(app, |input, cx| window.focus(&input.focus_handle, cx));
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+        cx.executor()
+            .advance_clock(CURSOR_BLINK_TIMEOUT - CURSOR_BLINK_INTERVAL);
+        cx.run_until_parked();
+        cx.update(|_, app| {
+            assert!(input.read(app).interaction.cursor_blink_task.is_some());
+        });
+
+        // Each blink redraws the window, so an idle caret rests, shown.
+        cx.executor().advance_clock(CURSOR_BLINK_INTERVAL * 2);
+        cx.run_until_parked();
+        crate::test_support::refresh_and_draw(cx);
+        cx.update(|_, app| {
+            let input = input.read(app);
+            assert!(input.interaction.cursor_blink_task.is_none());
+            assert!(input.interaction.cursor_blink_visible);
+        });
+
+        cx.simulate_keystrokes("a");
+        crate::test_support::refresh_and_draw(cx);
+        cx.executor().advance_clock(CURSOR_BLINK_INTERVAL);
+        cx.run_until_parked();
+        cx.update(|_, app| {
+            let input = input.read(app);
+            assert_eq!(input.text(), "a");
+            assert!(input.interaction.cursor_blink_task.is_some());
+            assert!(
+                !input.interaction.cursor_blink_visible,
+                "typing blinks again"
+            );
+        });
+        // Stop the live task before leaving this test window behind.
+        cx.deactivate_window();
+    });
+}
+
+#[gpui::test]
 fn control_blur_cancels_caret_and_drag_without_losing_selection(cx: &mut gpui::TestAppContext) {
     let (input, cx) = multiline_input(cx);
     cx.update(|window, _| window.activate());

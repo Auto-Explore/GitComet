@@ -395,7 +395,9 @@ class LiveUiMeasurementTests(unittest.TestCase):
 
 class CacheTests(unittest.TestCase):
     def test_local_worktree_manifests_do_not_change_cache_keys(self):
+        # Keep the Rust probe mock separate from subprocess calls in platform.
         with tempfile.TemporaryDirectory() as directory, patch.object(cache, "ROOT", Path(directory)), \
+                patch.object(cache.platform, "platform", return_value="test-platform"), \
                 patch.object(cache.subprocess, "check_output", return_value=b"rustc test"):
             root = Path(directory)
             (root / "Cargo.toml").write_text('[package]\nname = "fixture"\nversion = "0.1.0"\n')
@@ -1355,6 +1357,7 @@ class ApplicationProbeTests(unittest.TestCase):
                     patch.dict(os.environ, {}, clear=True), \
                     patch.object(sys, "argv", ["application-probe.py", "--profiles", "ci-test"]), \
                     patch.object(application_probe.runner, "REPORTS", Path(directory)), \
+                    patch.object(application_probe.platform, "platform", return_value="fixture-os"), \
                     patch.object(application_probe.subprocess, "check_output", return_value="fixture",
                                  side_effect=RuntimeError("metadata failed") if failure == "metadata" else None), \
                     patch.object(application_probe.runner, "run", side_effect=RuntimeError("build failed")):

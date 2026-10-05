@@ -1773,13 +1773,6 @@ impl Window {
                         .log_err();
                 }
 
-                // Keep presenting if input was recently arriving at a high rate (>= 60fps).
-                // Once high-rate input is detected, we sustain presentation for 1 second
-                // to prevent display underclocking during active input.
-                let needs_present = request_frame_options.require_presentation
-                    || needs_present.get()
-                    || input_rate_tracker.borrow_mut().is_high_rate();
-
                 if invalidator.is_dirty() || force_render {
                     measure("frame duration", || {
                         handle
@@ -1795,7 +1788,20 @@ impl Window {
                             })
                             .log_err();
                     })
-                } else if needs_present {
+                } else if request_frame_options.require_presentation
+                    || needs_present.get()
+                    // Keep presenting if input was recently arriving at a high rate
+                    // (>= 60fps). Once high-rate input is detected, we sustain
+                    // presentation for 1 second to prevent display underclocking
+                    // during active input. A fixed-rate display cannot underclock,
+                    // and each present renders the whole frame again, so it skips this.
+                    || (input_rate_tracker.borrow_mut().is_high_rate()
+                        && !handle
+                            .update(&mut cx, |_, window, _| {
+                                window.platform_window.has_fixed_refresh_rate()
+                            })
+                            .unwrap_or(false))
+                {
                     handle
                         .update(&mut cx, |_, window, _| window.present())
                         .log_err();

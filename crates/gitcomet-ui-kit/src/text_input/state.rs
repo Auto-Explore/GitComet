@@ -833,6 +833,8 @@ pub(super) struct InteractionState {
     pub(super) has_focus: bool,
     pub(super) cursor_blink_visible: bool,
     pub(super) cursor_blink_task: Option<gpui::Task<()>>,
+    /// Blinks since the caret last moved, the text changed or focus arrived.
+    pub(super) cursor_idle_blinks: u32,
     pub(super) focus_subscriptions: Option<[gpui::Subscription; 2]>,
     pub(super) enter_pressed: bool,
     pub(super) escape_pressed: bool,
@@ -874,6 +876,7 @@ impl InteractionState {
             has_focus: false,
             cursor_blink_visible: true,
             cursor_blink_task: None,
+            cursor_idle_blinks: 0,
             focus_subscriptions: None,
             enter_pressed: false,
             escape_pressed: false,

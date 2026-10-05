@@ -1,0 +1,92 @@
+# Vendored from gpui-ce 46e1ede350cc95071b389e83831e18e7d114bbaf.
+# Workspace dependencies expanded without changing their source.
+
+[package]
+name = "gpui_ce_macos"
+version = "0.1.0"
+description = "A community fork of Zed's GPU-accelerated UI framework"
+edition = "2024"
+publish = true
+license = "Apache-2.0"
+
+[lints]
+rust = { "unexpected_cfgs" = { "level" = "allow" } }
+clippy = { "dbg_macro" = "deny", "todo" = "deny", "declare_interior_mutable_const" = "deny", "redundant_clone" = "deny", "disallowed_methods" = "deny", "style" = { "level" = "allow", "priority" = -1 }, "type_complexity" = "allow", "let_underscore_future" = "allow", "single_range_in_vec_init" = "allow", "too_many_arguments" = "allow", "large_enum_variant" = "allow", "nonminimal_bool" = "allow" }
+
+[lib]
+path = "src/gpui_macos.rs"
+
+[features]
+default = ["gpui/default"]
+bench-support = ["gpui/bench-support", "gpui_apple/bench-support"]
+test-support = [
+  "gpui/test-support",
+  "gpui_apple/test-support",
+  "gpui_wgpu?/test-support",
+]
+font-kit = ["dep:font-kit"]
+screen-capture = [
+  "gpui/screen-capture",
+  "dep:core-video",
+  "dep:objc2-core-media",
+  "dep:objc2-screen-capture-kit",
+]
+# Draw windows with the WGPU renderer instead of Metal, so applications can
+# share its device and composite their own WGPU textures (with gpui's
+# `custom-gpu` feature).
+wgpu = ["dep:gpui_wgpu"]
+
+[dependencies]
+gpui = { "version" = "0.2.2", "package" = "gpui-ce", "git" = "https://github.com/Havunen/gpui-ce.git", "rev" = "46e1ede350cc95071b389e83831e18e7d114bbaf" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+accesskit = { "version" = "0.25", "features" = ["enumn"] }
+accesskit_macos = { "version" = "0.27" }
+anyhow = { "version" = "1" }
+async-task = { "version" = "4.7" }
+block = { "version" = "0.1" }
+block2 = { "version" = "0.6" }
+collections = { "version" = "0.2.2", "package" = "gpui_ce_collections", "git" = "https://github.com/Havunen/gpui-ce.git", "rev" = "46e1ede350cc95071b389e83831e18e7d114bbaf" }
+core-foundation = { "version" = "0.10" }
+core-foundation-sys = { "version" = "0.8" }
+core-graphics = { "version" = "0.25" }
+core-text = { "version" = "22" }
+core-video = { "version" = "0.6", "features" = ["metal"], "optional" = true }
+ctor = { "version" = "1.0" }
+dispatch2 = { "version" = "0.3" }
+etagere = { "version" = "0.3" }
+font-kit = { "version" = "0.14.3-1", "package" = "font-kit", "features" = ["freetype-bundled"], "optional" = true, "git" = "https://github.com/Havunen/font-kit", "rev" = "cc6f86949e40ef3a5e9b2063f8127cdcb72d7ac4" }
+foreign-types = { "version" = "0.5" }
+futures = { "version" = "0.3" }
+gpui_apple = { "version" = "0.1.0", "package" = "gpui_ce_apple", "git" = "https://github.com/Havunen/gpui-ce.git", "rev" = "46e1ede350cc95071b389e83831e18e7d114bbaf" }
+gpui_util = { "version" = "0.2.6", "package" = "gpui_ce_util", "git" = "https://github.com/Havunen/gpui-ce.git", "rev" = "46e1ede350cc95071b389e83831e18e7d114bbaf" }
+gpui_wgpu = { "version" = "0.1.0", "package" = "gpui_ce_wgpu", "optional" = true, "git" = "https://github.com/Havunen/gpui-ce.git", "rev" = "46e1ede350cc95071b389e83831e18e7d114bbaf" }
+image = { "version" = "0.25" }
+itertools = { "version" = "0.15" }
+libc = { "version" = "0.2" }
+log = { "version" = "0.4", "features" = ["kv_unstable_serde", "serde"] }
+mach2 = { "version" = "0.7" }
+media = { "version" = "0.2.2", "package" = "gpui_ce_media", "git" = "https://github.com/Havunen/gpui-ce.git", "rev" = "46e1ede350cc95071b389e83831e18e7d114bbaf" }
+metal = { "version" = "0.33" }
+objc2 = { "version" = "0.6" }
+objc2-app-kit = { "version" = "0.3", "default-features" = false, "features" = ["objc2-core-foundation", "objc2-core-graphics", "NSAlert", "NSApplication", "NSDocumentController", "NSAppearance", "NSButton", "NSCell", "NSControl", "NSEvent", "NSGraphics", "NSHapticFeedback", "NSCursor", "NSPanel", "NSMenu", "NSMenuItem", "NSOpenPanel", "NSSavePanel", "NSScroller", "NSWorkspace", "NSVisualEffectView", "NSPasteboard", "NSPasteboardItem", "NSResponder", "NSRunningApplication", "NSScreen", "NSTextInputClient", "NSView", "NSWindow", "block2"] }
+objc2-foundation = { "version" = "=0.3.2", "default-features" = false, "features" = ["NSArray", "NSAutoreleasePool", "NSAttributedString", "NSBundle", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSGeometry", "NSNotification", "NSNull", "NSObjCRuntime", "NSObject", "NSProcessInfo", "NSRange", "NSRunLoop", "NSSet", "NSString", "NSThread", "NSURL", "NSUndoManager", "NSUserDefaults", "NSValue", "objc2-core-foundation", "std"] }
+objc2-core-media = { "version" = "0.3", "default-features" = false, "features" = ["CMSampleBuffer", "objc2"], "optional" = true }
+objc2-screen-capture-kit = { "version" = "0.3", "default-features" = false, "features" = ["std", "SCShareableContent", "SCStream", "block2", "dispatch2", "objc2-core-foundation", "objc2-core-graphics", "objc2-core-media"], "optional" = true }
+objc2-user-notifications = { "version" = "0.3" }
+palette = { "version" = "0.7", "features" = ["serializing"] }
+parking_lot = { "version" = "0.12" }
+pathfinder_geometry = { "version" = "0.5" }
+raw-window-handle = { "version" = "0.6" }
+semver = { "version" = "1", "features" = ["serde"] }
+smallvec = { "version" = "1", "features" = ["union", "const_new"] }
+strum = { "version" = "0.28", "features" = ["derive"] }
+uuid = { "version" = "1", "features" = ["v4", "v5", "v7", "serde"] }
+url = { "version" = "2" }
+
+# The macOS test-only window implementation depends on test-only APIs from both
+# GPUI and the extracted renderer. A dependency does not inherit this crate's
+# `cfg(test)`, so dev-dependencies enable those APIs only for test builds.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui = { "version" = "0.2.2", "package" = "gpui-ce", "features" = ["test-support"], "git" = "https://github.com/Havunen/gpui-ce.git", "rev" = "46e1ede350cc95071b389e83831e18e7d114bbaf" }
+gpui_apple = { "version" = "0.1.0", "package" = "gpui_ce_apple", "features" = ["test-support"], "git" = "https://github.com/Havunen/gpui-ce.git", "rev" = "46e1ede350cc95071b389e83831e18e7d114bbaf" }

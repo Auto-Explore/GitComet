@@ -196,7 +196,12 @@ fn linked_worktrees_share_matching_queries_and_isolate_heads_filters_and_options
     let main = GixBackend.open(dir.path()).unwrap();
     let other = GixBackend.open(&linked).unwrap();
     assert!(!Arc::ptr_eq(&main, &other));
-    assert_eq!(other.spec().workdir, linked);
+    // Compare canonical paths on both sides: macOS can resolve /private/var,
+    // and Windows canonicalization adds a verbatim path prefix.
+    assert_eq!(
+        other.spec().workdir.canonicalize().unwrap(),
+        linked.canonicalize().unwrap()
+    );
     let all = index(&*main, HistoryMode::AllBranches, None);
     let linked_all = index(&*other, HistoryMode::AllBranches, None);
     assert!(Arc::ptr_eq(&all, &linked_all));
@@ -307,11 +312,21 @@ fn repository_replacement_and_a_hundred_reopens_release_owners() {
     run_git(&path, &["init", "-q", "-b", "master"]);
     fast_import_linear_history(&path, 10);
     let old = GixBackend.open(&path).unwrap();
+    #[cfg(windows)]
+    {
+        // Windows cannot rename an ancestor of an open directory handle,
+        // including the identities that prevent filesystem-ID reuse. Check
+        // that closing the owner releases those handles before replacement.
+        let weak = Arc::downgrade(&old);
+        drop(old);
+        assert!(weak.upgrade().is_none());
+    }
     std::fs::rename(&path, dir.path().join("old")).unwrap();
     std::fs::create_dir(&path).unwrap();
     run_git(&path, &["init", "-q", "-b", "master"]);
     fast_import_linear_history(&path, 20);
     let replacement = GixBackend.open(&path).unwrap();
+    #[cfg(not(windows))]
     assert!(!Arc::ptr_eq(&old, &replacement));
     assert_eq!(
         index(&*replacement, HistoryMode::FullReachable, None).len(),
@@ -447,7 +462,10 @@ fn moving_and_removing_a_worktree_never_reuses_its_old_command_directory() {
     assert!(GixBackend.open(&linked).is_err());
     let new = GixBackend.open(&moved).unwrap();
     assert!(!Arc::ptr_eq(&old, &new));
-    assert_eq!(new.spec().workdir, moved);
+    assert_eq!(
+        new.spec().workdir.canonicalize().unwrap(),
+        moved.canonicalize().unwrap()
+    );
     assert!(Arc::ptr_eq(
         &all,
         &index(&*new, HistoryMode::AllBranches, None)

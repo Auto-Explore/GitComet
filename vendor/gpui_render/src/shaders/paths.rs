@@ -83,7 +83,7 @@ pub mod path {
         #[builtin(position)]
         pub position: Vec4f,
         #[location(0)]
-        pub texture_coords: Vec2f,
+        pub viewport_position: Vec2f,
     }
 
     #[vertex]
@@ -95,24 +95,25 @@ pub mod path {
         let vertex = rectangle_vertex(vertex_id, sprite.bounds);
         PathVarying {
             position: vertex.clip_position,
-            texture_coords: vertex.viewport_position
-                / vec2f(
-                    texture_dimensions(PATH_TEXTURE).x as f32,
-                    texture_dimensions(PATH_TEXTURE).y as f32,
-                ),
+            viewport_position: vertex.viewport_position,
         }
     }
 
     #[fragment]
     pub fn fragment_path(input: PathVarying) -> Vec4f {
-        let color = texture_sample(PATH_TEXTURE, PATH_SAMPLER, input.texture_coords);
+        // Normalize by the target's own size (a cropped target is smaller than
+        // the viewport), read here: Metal binds the path texture to the
+        // fragment stage only, so the vertex stage would read a 0x0 size.
+        let size = texture_dimensions(PATH_TEXTURE);
+        let texture_coords = input.viewport_position / vec2f(size.x as f32, size.y as f32);
+        let color = texture_sample(PATH_TEXTURE, PATH_SAMPLER, texture_coords);
         // Combined path sprites can span off-screen paths and the empty gaps
         // between paths. Sampling beyond a cropped target must not smear its
         // last texel through that gap (the sampler clamps to its edge).
-        if input.texture_coords.x < 0.0
-            || input.texture_coords.y < 0.0
-            || input.texture_coords.x >= 1.0
-            || input.texture_coords.y >= 1.0
+        if texture_coords.x < 0.0
+            || texture_coords.y < 0.0
+            || texture_coords.x >= 1.0
+            || texture_coords.y >= 1.0
         {
             return transparent();
         }

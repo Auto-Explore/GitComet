@@ -460,8 +460,32 @@ mod tests {
     }
 
     #[cfg(all(feature = "test-support", not(target_family = "wasm")))]
+    fn opaque_black_quad(width: f32, height: f32) -> Quad {
+        let bounds = Bounds {
+            origin: Point {
+                x: ScaledPixels(0.0),
+                y: ScaledPixels(0.0),
+            },
+            size: Size {
+                width: ScaledPixels(width),
+                height: ScaledPixels(height),
+            },
+        };
+        Quad {
+            bounds,
+            content_mask: gpui::ContentMask {
+                bounds,
+                ..Default::default()
+            },
+            background: gpui::solid_background(gpui::hsla(0.0, 0.0, 0.0, 1.0)),
+            ..Default::default()
+        }
+    }
+
+    #[cfg(all(feature = "test-support", not(target_family = "wasm")))]
     #[test]
     fn underline_opacity_is_applied_once() -> anyhow::Result<()> {
+        let _gpu_test_guard = crate::test_gpu::guard();
         let context = WgpuContext::new_headless(None)?;
         let size = Size {
             width: DevicePixels(3),
@@ -480,7 +504,9 @@ mod tests {
         };
         let mut scene = Scene::default();
         // Forces a non-zero first-instance index in the mixed-type arena.
-        scene.insert_primitive(Quad::default());
+        // The retired Metal baseline clears to black. Paint that background
+        // explicitly so Windows' white clear colour does not change the fixture.
+        scene.insert_primitive(opaque_black_quad(3.0, 3.0));
         scene.insert_primitive(Underline {
             order: 0,
             padding: 0,
@@ -508,6 +534,7 @@ mod tests {
     #[cfg(all(feature = "test-support", not(target_family = "wasm")))]
     #[test]
     fn configurable_dashes_reach_both_wgpu_quad_pipelines() -> anyhow::Result<()> {
+        let _gpu_test_guard = crate::test_gpu::guard();
         let context = WgpuContext::new_headless(None)?;
         let size = Size {
             width: DevicePixels(40),
@@ -529,9 +556,25 @@ mod tests {
         Ok(())
     }
 
+    /// Gradients add up to two units of dither per channel, seeded by a sine
+    /// hash of the pixel position (`gradient_dither`). The software rasterizer
+    /// CI renders with computes that hash identically everywhere, so gradient
+    /// pixels are byte-exact there. Hardware GPUs (Apple's, through wgpu on
+    /// macOS) evaluate it differently, so two renderings of a gradient can
+    /// differ by twice the dither plus rounding.
+    #[cfg(all(feature = "test-support", not(target_family = "wasm")))]
+    fn gradient_tolerance(context: &WgpuContext) -> u8 {
+        if context.adapter.get_info().device_type == wgpu::DeviceType::Cpu {
+            0
+        } else {
+            5
+        }
+    }
+
     #[cfg(all(feature = "test-support", not(target_family = "wasm")))]
     #[test]
     fn quad_backgrounds_match_legacy_metal_pixels() -> anyhow::Result<()> {
+        let _gpu_test_guard = crate::test_gpu::guard();
         const LEGACY: &[u8] = &[
             255, 0, 0, 255, 255, 0, 0, 255, 0, 0, 0, 255, 38, 110, 217, 255, 255, 0, 0, 255, 255,
             0, 0, 255, 38, 110, 217, 255, 0, 0, 0, 255, 10, 34, 4, 255, 57, 196, 22, 255, 193, 114,
@@ -549,6 +592,7 @@ mod tests {
             },
         };
         let mut scene = Scene::default();
+        scene.insert_primitive(opaque_black_quad(4.0, 4.0));
         for (order, (bounds, background)) in [
             (
                 bounds(0.0, 0.0),
@@ -587,6 +631,7 @@ mod tests {
         }
         scene.finish();
         let context = WgpuContext::new_headless(None)?;
+        let gradient_tolerance = gradient_tolerance(&context);
         let mut renderer = WgpuRenderer::new_headless(
             &context,
             Size {
@@ -596,12 +641,16 @@ mod tests {
         )?;
         let actual = renderer.render_to_image(&scene)?;
         for (index, (actual, expected)) in actual.as_raw().iter().zip(LEGACY).enumerate() {
-            assert_eq!(
-                actual,
-                expected,
-                "legacy mismatch at pixel ({}, {}), channel {}",
-                (index / 4) % 4,
-                (index / 4) / 4,
+            let (x, y) = ((index / 4) % 4, (index / 4) / 4);
+            // The gradient quad covers the bottom-right 2x2 pixels.
+            let tolerance = if x >= 2 && y >= 2 {
+                gradient_tolerance
+            } else {
+                0
+            };
+            assert!(
+                actual.abs_diff(*expected) <= tolerance,
+                "legacy mismatch at pixel ({x}, {y}), channel {}: got {actual}, expected {expected} ± {tolerance}",
                 index % 4
             );
         }
@@ -612,7 +661,9 @@ mod tests {
     #[cfg(all(feature = "test-support", not(target_family = "wasm")))]
     #[test]
     fn quad_border_backgrounds_use_the_fill_coordinate_space() -> anyhow::Result<()> {
+        let _gpu_test_guard = crate::test_gpu::guard();
         let context = WgpuContext::new_headless(None)?;
+        let gradient_tolerance = gradient_tolerance(&context).max(1);
         let size = Size {
             width: DevicePixels(12),
             height: DevicePixels(12),
@@ -629,19 +680,38 @@ mod tests {
         };
         let render = |quad| -> anyhow::Result<image::RgbaImage> {
             let mut scene = Scene::default();
+            // A white background exposes unwanted fills behind transparent
+            // pattern pixels and keeps the comparison independent of OS clears.
+            scene.insert_primitive(Quad {
+                bounds,
+                content_mask: gpui::ContentMask {
+                    bounds,
+                    ..Default::default()
+                },
+                background: gpui::solid_background(gpui::hsla(0.0, 0.0, 1.0, 1.0)),
+                ..Default::default()
+            });
             scene.insert_primitive(quad);
             scene.finish();
             let mut renderer = WgpuRenderer::new_headless(&context, size)?;
             renderer.render_to_image(&scene)
         };
+        // Fills and patterns compare within one unit everywhere; gradients
+        // carry dither (see `gradient_tolerance`).
         let backgrounds = [
-            gpui::solid_background(gpui::hsla(0.0, 1.0, 0.5, 1.0)),
-            gpui::checkerboard(gpui::hsla(0.6, 0.7, 0.5, 1.0), 2.0),
-            gpui::pattern_slash(gpui::hsla(0.3, 0.8, 0.5, 1.0), 2.0, 2.0),
-            gpui::linear_gradient(
-                90.0,
-                gpui::linear_color_stop(gpui::hsla(0.8, 0.9, 0.4, 1.0), 0.0),
-                gpui::linear_color_stop(gpui::hsla(0.1, 0.8, 0.6, 1.0), 1.0),
+            (gpui::solid_background(gpui::hsla(0.0, 1.0, 0.5, 1.0)), 1),
+            (gpui::checkerboard(gpui::hsla(0.6, 0.7, 0.5, 1.0), 2.0), 1),
+            (
+                gpui::pattern_slash(gpui::hsla(0.3, 0.8, 0.5, 1.0), 2.0, 2.0),
+                1,
+            ),
+            (
+                gpui::linear_gradient(
+                    90.0,
+                    gpui::linear_color_stop(gpui::hsla(0.8, 0.9, 0.4, 1.0), 0.0),
+                    gpui::linear_color_stop(gpui::hsla(0.1, 0.8, 0.6, 1.0), 1.0),
+                ),
+                gradient_tolerance,
             ),
         ];
         let border_samples = [
@@ -655,7 +725,7 @@ mod tests {
             (10, 10),
         ];
 
-        for background in backgrounds {
+        for (background, tolerance) in backgrounds {
             let filled = render(Quad {
                 bounds,
                 content_mask: gpui::ContentMask {
@@ -672,6 +742,7 @@ mod tests {
                     ..Default::default()
                 },
                 border_color: background,
+                background: gpui::solid_background(gpui::hsla(0.0, 0.0, 0.0, 0.0)),
                 border_widths: gpui::Edges::all(ScaledPixels(4.0)),
                 ..Default::default()
             })?;
@@ -683,14 +754,14 @@ mod tests {
                     border_pixel.iter().zip(fill_pixel.iter()).enumerate()
                 {
                     assert!(
-                        border.abs_diff(*fill) <= 1,
+                        border.abs_diff(*fill) <= tolerance,
                         "border background must sample like a fill at ({x}, {y}), channel {channel}, for {background:?}: got {border_pixel:?}, expected {fill_pixel:?}"
                     );
                 }
             }
             assert_eq!(
                 bordered.get_pixel(6, 6).0,
-                [0, 0, 0, 255],
+                [255, 255, 255, 255],
                 "border background must not paint the quad interior for {background:?}"
             );
         }
@@ -700,6 +771,7 @@ mod tests {
     #[cfg(all(feature = "test-support", not(target_family = "wasm")))]
     #[test]
     fn cached_filter_bindings_accept_frame_local_dynamic_offsets() -> anyhow::Result<()> {
+        let _gpu_test_guard = crate::test_gpu::guard();
         let context = WgpuContext::new_headless(None)?;
         let size = Size {
             width: DevicePixels(4),
@@ -737,6 +809,7 @@ mod tests {
     #[cfg(all(feature = "test-support", not(target_family = "wasm")))]
     #[test]
     fn odd_sized_blur_preserves_edge_symmetry() -> anyhow::Result<()> {
+        let _gpu_test_guard = crate::test_gpu::guard();
         let context = WgpuContext::new_headless(None)?;
         let size = Size {
             width: DevicePixels(5),
@@ -825,6 +898,7 @@ mod tests {
     #[cfg(all(feature = "test-support", not(target_family = "wasm")))]
     #[test]
     fn alternating_instance_batches_fit_the_exact_upload_arena() -> anyhow::Result<()> {
+        let _gpu_test_guard = crate::test_gpu::guard();
         let context = WgpuContext::new_headless(None)?;
         let size = Size {
             width: DevicePixels(1),

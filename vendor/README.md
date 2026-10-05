@@ -26,6 +26,95 @@ size with `-- --nocapture`.
 Keep future updates based on the pinned upstream crate and reapply this small
 source delta, or remove the patch once upstream provides equivalent storage.
 
+## GPUI Windows platform
+
+`gpui_windows/` is the native Direct3D 11 and DirectWrite platform from the
+same `46e1ede` revision. Its upstream license is included and workspace
+dependencies and lint settings are expanded. Keeping it here allows native
+Windows renderer changes without upgrading the pinned GPUI revision. Run
+`cargo test -p gpui_ce_windows --lib` on Windows for its platform tests.
+
+Windows lint cleanup removes redundant casts/conversions and a render-target
+clone in the platform sources. The thread-confined COM atlas retains the
+`Arc` required by GPUI's platform API, with a local Clippy exception explaining
+that constraint. The Direct3D compiler source name in `gpui_render/build.rs`
+uses a native C string literal.
+
+### Cropped Direct3D path targets
+
+`src/directx_renderer.rs` can use smaller path colour and four-sample MSAA
+attachments with `GPUI_GPU_EXPERIMENTS=cropped-paths`. This is **disabled by
+default**. It uses the same visible-bounds calculation as WGPU, now shared in
+`gpui_render/src/path_types.rs`; window coordinates, gradients and the full
+viewport stay unchanged. Capacity grows in 64-pixel blocks and resets on
+resize. Set `GPUI_PROFILE_PATH_TARGET=1` to log allocated target dimensions.
+
+The native GPU pixel comparison covers gradients, fractional coordinates,
+negative and offscreen geometry, clipping, attachment growth, resize, and
+combined sprites extending past a coloured attachment edge:
+
+```sh
+cargo test -p gpui_ce_windows --lib cropped_path_targets
+```
+
+Windows already compiles its Direct3D shaders at build time and loads system
+fonts through DirectWrite. The macOS shader-precompilation and font-file fixes
+do not need equivalent Windows changes.
+
+### Fixed-refresh presentation opt-in
+
+`src/window.rs` implements `PlatformWindow::has_fixed_refresh_rate` with
+`GPUI_GPU_EXPERIMENTS=fixed-refresh`. This explicitly declares that all
+displays used by the process have a fixed refresh rate. The default remains
+`false`: a nominal 60 Hz display mode is not a reliable refresh-range query.
+On declared fixed-rate displays, the shared GPUI policy skips presentations
+of unchanged scenes during the one-second tail after high-rate input. Dirty
+frames and explicitly required presentations retain their existing behavior.
+Use `GPUI_GPU_EXPERIMENTS=cropped-paths,fixed-refresh` to enable both experiments.
+Test the shared policy with `cargo test -p gpui-ce --lib --features test-support
+unchanged_frames_after_fast_input`. The UI probe reports newly drawn frames;
+use the foreground journal or GPU engine counters to assess unchanged presents.
+
+## GPUI macOS platform
+
+`gpui_apple/` (the Metal renderer) and `gpui_macos/` (windows, text system)
+come from the same `46e1ede` revision, with upstream licenses and expanded
+workspace dependencies. They are vendored so the macOS fixes below can change
+them; their source deltas are listed per fix. Unit tests run with
+`cargo test -p gpui_ce_apple -p gpui_ce_macos --lib`.
+
+### Precompiled Metal shaders
+
+`gpui_render/build.rs` compiles each generated MSL module into a metallib with
+Apple's Metal Toolchain when it is installed (`xcrun metal`), targeting
+`MACOSX_DEPLOYMENT_TARGET` (default 10.15); `src/artifacts.rs` embeds the
+libraries. `gpui_apple/src/metal_renderer.rs` loads them and compiles the MSL
+at runtime, as before, when a build has no library, the OS rejects it, or a
+shader entry point is missing. Set `GPUI_RENDER_REQUIRE_METALLIB=1` to fail a
+build that cannot precompile. Test: `cargo test -p gpui_ce_apple --lib
+precompiled_libraries_load_with_their_entry_points`.
+
+### Unchanged frames on fixed-refresh displays
+
+After high-rate input, `gpui/src/window.rs` presented the last scene every
+frame for a second so that variable-refresh displays keep their rate; each
+present renders the whole scene again. `PlatformWindow::has_fixed_refresh_rate`
+(`gpui/src/platform.rs`, implemented in `gpui_macos/src/window.rs` from
+NSScreen's refresh interval range) lets fixed-rate displays skip those
+presents. Windows has the explicit opt-in described above; other platforms
+report `false` and keep presenting. Test: `cargo test
+-p gpui-ce --lib --features test-support unchanged_frames_after_fast_input`.
+
+### macOS fonts without reading their files
+
+`gpui_macos/src/text_system.rs` creates installed families' faces from their
+Core Text descriptors (`create_for_family`) and wraps bundled faces' native
+fonts, instead of having font-kit read every face's file (and, for a
+collection, parse every face in it) to keep a copy nothing reads;
+`src/open_type.rs` follows. Named instances of variable fonts load as distinct
+faces. Test: `cargo test -p gpui_ce_macos --features font-kit --lib
+installed_families`.
+
 ## GPUI cropped WGPU path targets
 
 `gpui_wgpu/` and `gpui_render/` come from the same `46e1ede` revision above,
@@ -37,8 +126,8 @@ texture invalidates its old bind groups. The shader returns transparent samples
 outside the cropped target.
 
 Enable this measured Linux optimization with
-`GPUI_GPU_EXPERIMENTS=cropped-paths`. It remains **disabled by default** pending
-native validation on the other backends. No batching, path caching, pooling,
+`GPUI_GPU_EXPERIMENTS=cropped-paths`. It remains **disabled by default**. The
+native Direct3D implementation and validation are described above. No batching, path caching, pooling,
 partial-redraw changes, SVG mask substitutions or dependency upgrades are included.
 
 The isolated Linux/Vulkan prototype on a GTX 1080 reduced settled framebuffer
@@ -52,7 +141,8 @@ extents until a resize; driver residency can grow as more scenes are exercised.
 
 The implementation is the measured crop patch plus the opt-in guard. Rendering source
 changes are limited to `gpui_wgpu/src/wgpu_renderer.rs`, its `resources.rs`, `frame.rs` and
-`headless.rs` modules, and `gpui_render/src/shaders/paths.rs`. Test/benchmark
+`headless.rs` modules, and `gpui_render/src/shaders/paths.rs`. The bounds helper
+is shared with Direct3D in `gpui_render/src/path_types.rs`. Test/benchmark
 font paths reuse the vendored GPUI fixtures with their font licenses. Its GPU pixel comparison
 runs both modes explicitly and covers gradients, fractional geometry, negative
 coordinates, clipping, target growth, resize and transparent out-of-range samples:
@@ -60,6 +150,12 @@ coordinates, clipping, target growth, resize and transparent out-of-range sample
 ```sh
 cargo test -p gpui_ce_wgpu --features test-support --lib cropped_path_targets
 ```
+
+The GPU fixtures paint their baseline backgrounds explicitly so the platform's
+clear colour does not affect pixel comparisons. On Windows, a test-only mutex
+serializes independent GPU devices through teardown after an intermittent DX12
+test-process heap failure. CPU tests retain parallel execution. Run all renderer
+fixtures with `cargo test -p gpui_ce_wgpu --features test-support --lib`.
 
 ## Tree-sitter grammars
 

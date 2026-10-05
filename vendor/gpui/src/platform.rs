@@ -934,6 +934,14 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn on_button_layout_changed(&self, _callback: Box<dyn FnMut()>) {}
     fn draw(&self, scene: &Scene);
     fn schedule_frame(&self) {}
+    /// Whether the display showing this window refreshes at one fixed rate.
+    /// Presenting unchanged frames during input keeps variable-refresh
+    /// displays (ProMotion, adaptive sync) from lowering their rate; on a
+    /// fixed-rate display it only renders the same frame again. `false` when
+    /// unknown.
+    fn has_fixed_refresh_rate(&self) -> bool {
+        false
+    }
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas>;
     fn is_subpixel_rendering_supported(&self) -> bool;
 

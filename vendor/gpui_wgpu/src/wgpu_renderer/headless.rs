@@ -261,6 +261,7 @@ mod path_target_tests {
 
     #[test]
     fn cropped_path_targets_match_full_viewport_pixels_when_growing_and_resizing() {
+        let _gpu_test_guard = crate::test_gpu::guard();
         let context = WgpuContext::new_headless(None).expect("hardware or software GPU");
         let target = size(DevicePixels(512), DevicePixels(320));
         let mask = ContentMask {
