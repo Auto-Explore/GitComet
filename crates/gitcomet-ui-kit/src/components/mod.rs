@@ -15,6 +15,7 @@ mod picker_prompt;
 mod quick_search_bar;
 mod repository_badge;
 mod resize_grip;
+mod segmented_control;
 mod settings_rows;
 mod shortcut_keys;
 mod skeleton;
@@ -74,6 +75,7 @@ pub use repository_badge::{
     REPOSITORY_BADGE_SIZE_PX, repository_initials, repository_initials_box,
 };
 pub use resize_grip::{ResizeGripAxis, resize_grip, resize_grip_hover_tint};
+pub use segmented_control::{Segment, SegmentedControl};
 pub use settings_rows::{
     SETTINGS_NAV_COLUMN_WIDTH_PX, settings_card, settings_card_with_action,
     settings_detail_container, settings_dropdown_background, settings_dropdown_border_color,

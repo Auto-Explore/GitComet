@@ -2756,25 +2756,13 @@ impl PopoverHost {
                         .id(("context_menu_label", ix))
                         .into_any_element(),
                         ContextMenuItem::Segmented { label, segments } => {
-                            // Same construction as the toolbar's Inline/Split style
-                            // toggles: one bordered pill, dividers between segments,
-                            // the active one filled.
-                            let mut control = div()
-                                .id(("context_menu_segmented", ix))
-                                .flex()
-                                .items_center()
-                                .h(components::control_height(ui_scale))
-                                .rounded(px(theme.radii.row))
-                                .border_1()
-                                .border_color(theme.colors.stroke.default)
-                                .overflow_hidden()
-                                .p(px(1.0));
-                            for (seg_ix, segment) in segments.into_iter().enumerate() {
-                                if seg_ix > 0 {
-                                    control = control.child(
-                                        div().h_full().w(px(1.0)).bg(theme.colors.stroke.default),
-                                    );
-                                }
+                            // The kit's segmented control, as the diff toolbar's
+                            // Inline/Split uses.
+                            let mut control = components::SegmentedControl::new(
+                                SharedString::from(format!("context_menu_segmented_{ix}")),
+                            );
+                            let mut actions = Vec::with_capacity(segments.len());
+                            for segment in segments {
                                 let ContextMenuSegment {
                                     id,
                                     label,
@@ -2782,25 +2770,28 @@ impl PopoverHost {
                                     selected,
                                     action,
                                 } = segment;
-                                let debug_selector = id.clone();
-                                let mut button = components::Button::new(id, label)
-                                    .borderless()
-                                    .style(components::ButtonStyle::Subtle)
-                                    .selected(selected)
-                                    .selected_bg(theme.colors.interaction.pressed_background)
-                                    .on_click(theme, cx, move |this, _e, window, cx| {
+                                actions.push(action);
+                                let mut part =
+                                    components::Segment::new(id, label).selected(selected);
+                                if let Some(tooltip) = tooltip {
+                                    part = part.tooltip(tooltip, Vec::new());
+                                }
+                                control = control.segment(part);
+                            }
+                            let control = control.render(
+                                theme,
+                                ui_scale,
+                                cx,
+                                move |this, index, window, cx| {
+                                    if let Some(action) = actions.get(index) {
                                         this.context_menu_activate_action(
                                             action.clone(),
                                             window,
                                             cx,
                                         );
-                                    })
-                                    .debug_selector(move || debug_selector.to_string());
-                                if let Some(tooltip) = tooltip {
-                                    button = button.gitcomet_tooltip(theme, tooltip);
-                                }
-                                control = control.child(button);
-                            }
+                                    }
+                                },
+                            );
                             components::context_menu_label(
                                 theme,
                                 ui_scale,
