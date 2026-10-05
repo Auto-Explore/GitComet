@@ -702,6 +702,7 @@ mod tests {
 
     #[test]
     fn generated_layouts_create_every_pipeline_and_bind_group() -> anyhow::Result<()> {
+        let _gpu_test_guard = crate::test_gpu::guard();
         let context = WgpuContext::new_headless(None)?;
         let device = &context.device;
         let tier = context.renderer_tier();
@@ -768,6 +769,7 @@ mod tests {
     /// The downlevel artifacts must also build and bind against a real device.
     #[test]
     fn downlevel_tier_builds_pipelines_and_data_texture_arena() -> anyhow::Result<()> {
+        let _gpu_test_guard = crate::test_gpu::guard();
         use super::super::buffers::{InstanceBufferArena, InstanceTransport};
         use gpui::Quad;
 

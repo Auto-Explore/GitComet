@@ -3,6 +3,9 @@ mod wgpu_atlas;
 mod wgpu_context;
 mod wgpu_renderer;
 
+#[cfg(all(test, not(target_family = "wasm")))]
+mod test_gpu;
+
 pub(crate) use gpui::collections;
 
 pub use cosmic_text_system::*;

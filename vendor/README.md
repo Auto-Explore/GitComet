@@ -72,8 +72,8 @@ of unchanged scenes during the one-second tail after high-rate input. Dirty
 frames and explicitly required presentations retain their existing behavior.
 Use `GPUI_GPU_EXPERIMENTS=cropped-paths,fixed-refresh` to enable both experiments.
 Test the shared policy with `cargo test -p gpui-ce --lib --features test-support
-unchanged_frames_after_fast_input` and measure native presentations with the
-UI probe.
+unchanged_frames_after_fast_input`. The UI probe reports newly drawn frames;
+use the foreground journal or GPU engine counters to assess unchanged presents.
 
 ## GPUI macOS platform
 
@@ -150,6 +150,12 @@ coordinates, clipping, target growth, resize and transparent out-of-range sample
 ```sh
 cargo test -p gpui_ce_wgpu --features test-support --lib cropped_path_targets
 ```
+
+The GPU fixtures paint their baseline backgrounds explicitly so the platform's
+clear colour does not affect pixel comparisons. On Windows, a test-only mutex
+serializes independent GPU devices through teardown after an intermittent DX12
+test-process heap failure. CPU tests retain parallel execution. Run all renderer
+fixtures with `cargo test -p gpui_ce_wgpu --features test-support --lib`.
 
 ## Tree-sitter grammars
 
