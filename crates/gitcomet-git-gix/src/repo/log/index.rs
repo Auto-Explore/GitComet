@@ -18,7 +18,7 @@ impl GixRepo {
             gitcomet_core::git_ops_trace::GitOpTraceKind::LogWalk,
         );
         cancellation.check_cancelled()?;
-        let (store, _) = self.thread_safe_repo();
+        let (store, generation) = self.thread_safe_repo();
         let repo = store.to_thread_local();
         let shallow = shallow_snapshot(&repo)?;
         let tips = if mode == HistoryMode::AllBranches {
@@ -37,6 +37,7 @@ impl GixRepo {
             &shallow,
             Some(cancellation),
             None,
+            Some((&self.log_topology_cache, generation)),
         )?;
         let mut decode_buf = Vec::new();
         let mut scanned = 0u64;
@@ -93,9 +94,8 @@ impl GixRepo {
             scanned,
             matched: builder.len() as u64,
         });
-        // The topo walk retains two hash maps covering the entire history.
-        // Drop them and its commit graph before stash classification opens
-        // another graph and possibly maps packs to read commit messages.
+        // Release the traversal's maps or shared topology before stash
+        // classification opens a graph and reads candidate messages.
         drop(walk);
         drop(decode_buf);
 

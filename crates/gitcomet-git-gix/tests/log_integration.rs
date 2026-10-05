@@ -16,6 +16,8 @@ mod authors;
 mod ref_filter;
 #[path = "log_integration/snapshot_refresh.rs"]
 mod snapshot_refresh;
+#[path = "log_integration/topology.rs"]
+mod topology;
 
 fn run_git(repo: &Path, args: &[&str]) {
     run_git_with_env(repo, args, &[]);

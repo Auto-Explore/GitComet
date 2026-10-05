@@ -235,11 +235,12 @@ type LogPagedWalkFilter = Box<dyn FnMut(&gix::oid) -> bool + Send>;
 enum LogPagedWalk {
     CommitTime(gix::traverse::commit::Simple<gix::OdbHandleArc, LogPagedWalkFilter>),
     DateOrder(gix::traverse::commit::Topo<log::CancellableLogWalkFind, LogPagedWalkFilter>),
+    CachedDateOrder(log::TopologyWalk),
 }
 
 impl LogPagedWalk {
     fn is_date_order(&self) -> bool {
-        matches!(self, Self::DateOrder(_))
+        matches!(self, Self::DateOrder(_) | Self::CachedDateOrder(_))
     }
 }
 
@@ -253,6 +254,7 @@ impl Iterator for LogPagedWalk {
         match self {
             Self::CommitTime(walk) => walk.next().map(|info| info.map_err(Into::into)),
             Self::DateOrder(walk) => walk.next().map(|info| info.map_err(Into::into)),
+            Self::CachedDateOrder(walk) => walk.next().map(Ok),
         }
     }
 }
@@ -498,6 +500,7 @@ pub(crate) struct GixRepo {
         std::sync::Mutex<rustc_hash::FxHashMap<u64, text_decode::TextFormatMemoEntry>>,
     log_file_follow_cache: std::sync::Mutex<Vec<LogFileFollowCacheEntry>>,
     log_paged_walk_cache: std::sync::Mutex<LogPagedWalkCache>,
+    log_topology_cache: log::TopologyCache,
     line_stats_memo: std::sync::Mutex<line_stats::LineStatsMemo>,
     /// Stats the worktree walk found stale but content-clean; see
     /// [`status::StatRefreshedIndex`].
@@ -544,6 +547,7 @@ impl GixRepo {
             text_format_memo: std::sync::Mutex::default(),
             log_file_follow_cache: std::sync::Mutex::new(Vec::new()),
             log_paged_walk_cache: std::sync::Mutex::new(LogPagedWalkCache::default()),
+            log_topology_cache: Default::default(),
             line_stats_memo: std::sync::Mutex::default(),
             stat_refreshed_index: std::sync::Mutex::new(None),
             staged_line_stats_cache: std::sync::Mutex::new(None),
@@ -606,6 +610,7 @@ impl GixRepo {
             .expect("log paged walk cache")
             .entries
             .clear();
+        self.log_topology_cache.clear();
         Ok(())
     }
 
