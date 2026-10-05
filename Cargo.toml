@@ -2,6 +2,8 @@
 resolver = "3"
 members = [
   "vendor/gpui",
+  "vendor/gpui_render",
+  "vendor/gpui_wgpu",
   "crates/gitcomet",
   "crates/gitcomet-app",
   "crates/gitcomet-core",
@@ -412,6 +414,8 @@ inherits = "ci-bench"
 [profile.ci-bench-candidate.package.gitcomet-ui-gpui]
 opt-level = 0
 
-# Compact text decorations; platform/rendering crates retain the dev revision.
+# Compact text decorations and opt-in WGPU path cropping at the dev revision.
 [patch."https://github.com/Havunen/gpui-ce.git"]
 gpui-ce = { path = "vendor/gpui" }
+gpui_ce_render = { path = "vendor/gpui_render" }
+gpui_ce_wgpu = { path = "vendor/gpui_wgpu" }

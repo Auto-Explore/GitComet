@@ -1,0 +1,91 @@
+# Vendored from gpui-ce 46e1ede350cc95071b389e83831e18e7d114bbaf.
+# Workspace dependencies/lints expanded without changing their source.
+
+[package]
+name = "gpui_ce_wgpu"
+version = "0.1.0"
+description = "A community fork of Zed's GPU-accelerated UI framework"
+edition = "2024"
+publish = true
+license = "Apache-2.0"
+
+[lints]
+rust = { "unexpected_cfgs" = { "level" = "allow" } }
+clippy = { "dbg_macro" = "deny", "todo" = "deny", "declare_interior_mutable_const" = "deny", "redundant_clone" = "deny", "disallowed_methods" = "deny", "style" = { "level" = "allow", "priority" = -1 }, "type_complexity" = "allow", "let_underscore_future" = "allow", "single_range_in_vec_init" = "allow", "too_many_arguments" = "allow", "large_enum_variant" = "allow", "nonminimal_bool" = "allow" }
+
+[lib]
+path = "src/gpui_wgpu.rs"
+
+[features]
+default = []
+font-kit = ["dep:font-kit"]
+test-support = ["gpui/test-support", "dep:image"]
+custom-gpu = ["gpui/custom-gpu"]
+wgpu-surfaces = ["gpui/wgpu-surfaces"]
+
+[dependencies]
+gpui = { "path" = "../gpui", "version" = "0.2.2", "package" = "gpui-ce", "default-features" = false }
+gpui_render = { "version" = "0.1.0", "package" = "gpui_ce_render", "git" = "https://github.com/Havunen/gpui-ce.git", "rev" = "46e1ede350cc95071b389e83831e18e7d114bbaf" }
+anyhow = { "version" = "1" }
+collections = { "version" = "0.2.2", "package" = "gpui_ce_collections", "git" = "https://github.com/Havunen/gpui-ce.git", "rev" = "46e1ede350cc95071b389e83831e18e7d114bbaf" }
+cosmic-text = { "version" = "0.19" }
+etagere = { "version" = "0.3" }
+itertools = { "version" = "0.15" }
+image = { "version" = "0.25", "optional" = true }
+log = { "version" = "0.4", "features" = ["kv_unstable_serde", "serde"] }
+parking_lot = { "version" = "0.12" }
+profiling = { "version" = "1" }
+raw-window-handle = { "version" = "0.6" }
+smallvec = { "version" = "1", "features" = ["union", "const_new"] }
+swash = { "version" = "0.2" }
+unicode-bidi = { "version" = "0.3", "default-features" = false, "features" = ["hardcoded-data"] }
+unicode-segmentation = { "version" = "1.13" }
+gpui_util = { "version" = "0.2.6", "package" = "gpui_ce_util", "git" = "https://github.com/Havunen/gpui-ce.git", "rev" = "46e1ede350cc95071b389e83831e18e7d114bbaf" }
+wgpu = { "version" = "=29.0.4" }
+wgsl-rs = { "git" = "https://github.com/schell/wgsl-rs", "rev" = "b2de16a1b81e67d76bc265c296184f882864badb", "default-features" = false, "features" = ["validation"] }
+font-kit = { "git" = "https://github.com/Havunen/font-kit", "rev" = "cc6f86949e40ef3a5e9b2063f8127cdcb72d7ac4", "package" = "font-kit", "version" = "0.14.3-1", "optional" = true, "features" = ["freetype-bundled"] }
+
+[target."cfg(not(target_family = \"wasm\"))".dependencies]
+pollster = { "version" = "1" }
+
+[target."cfg(target_os = \"macos\")".dependencies]
+core-foundation = { "version" = "0.10" }
+core-video = { "version" = "0.6", "features" = ["metal"] }
+metal = { "version" = "0.33" }
+objc2 = { "version" = "0.6" }
+objc2-metal = "0.3"
+
+[target."cfg(target_os = \"windows\")".dependencies]
+windows-core = { "version" = "0.100" }
+
+[target."cfg(target_family = \"wasm\")".dependencies]
+web-sys = { "version" = "0.3", "features" = ["HtmlCanvasElement"] }
+wgpu = { "version" = "=29.0.4", "features" = ["webgl"] }
+wasm-bindgen = { "version" = "0.2" }
+wasm-bindgen-futures = { "version" = "0.4" }
+js-sys = { "version" = "0.3" }
+
+[target."cfg(target_os = \"linux\")".dev-dependencies]
+wayland-backend = { "version" = "0.3.15", "features" = ["client_system", "dlopen", "rwh_06"] }
+wayland-client = "0.31.11"
+wayland-protocols = { "version" = "0.32.9", "features" = ["client"] }
+
+[dev-dependencies]
+bytemuck = { "version" = "1", "features" = ["derive"] }
+criterion = { "version" = "0.8", "features" = ["html_reports"] }
+env_logger = { "version" = "0.11" }
+gpui_platform = { "version" = "0.1.0", "package" = "gpui_ce_platform", "features" = ["font-kit", "wayland", "x11"], "git" = "https://github.com/Havunen/gpui-ce.git", "rev" = "46e1ede350cc95071b389e83831e18e7d114bbaf" }
+naga = { "version" = "=29.0.4", "features" = ["wgsl-in"] }
+
+[[example]]
+name = "custom_gpu"
+required-features = ["custom-gpu"]
+
+[[bench]]
+name = "layout_line"
+harness = false
+
+[[bench]]
+name = "renderer"
+harness = false
+required-features = ["test-support"]

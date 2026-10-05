@@ -4,8 +4,9 @@
 
 `gpui/` is the `crates/gpui` crate from Havunen/gpui-ce revision
 `46e1ede350cc95071b389e83831e18e7d114bbaf`. Its upstream licenses are included.
-The root Cargo patch substitutes this crate while the platform, renderer and
-supporting crates remain pinned to that same revision. Its manifest expands
+The root Cargo patch substitutes this crate while the platform and supporting
+crates remain pinned to that same revision. The renderer patches described
+below also use that revision. Its manifest expands
 upstream workspace dependencies and lint settings so it builds in this workspace.
 It explicitly lists the portable integration tests, excluding
 `renderer_source_audit`, which requires the upstream sibling renderer sources.
@@ -25,7 +26,42 @@ size with `-- --nocapture`.
 Keep future updates based on the pinned upstream crate and reapply this small
 source delta, or remove the patch once upstream provides equivalent storage.
 
-# Tree-sitter grammars
+## GPUI cropped WGPU path targets
+
+`gpui_wgpu/` and `gpui_render/` come from the same `46e1ede` revision above,
+with upstream licenses and expanded workspace dependencies. The source delta
+crops path colour/MSAA textures to the visible path bounds, grows capacity in
+64-pixel blocks, and samples using the actual texture dimensions. Coordinates,
+clipping, gradients and four-sample antialiasing are preserved; replacing a
+texture invalidates its old bind groups. The shader returns transparent samples
+outside the cropped target.
+
+Enable this measured Linux optimization with
+`GPUI_GPU_EXPERIMENTS=cropped-paths`. It remains **disabled by default** pending
+native validation on the other backends. No batching, path caching, pooling,
+partial-redraw changes, SVG mask substitutions or dependency upgrades are included.
+
+The isolated Linux/Vulkan prototype on a GTX 1080 reduced settled framebuffer
+memory from 143 to 117 NVIDIA MB for one 2560x1440 window, and 271 to 207 MB for
+four 1400x900 windows. The small one-window case stayed at 87 MB. There were two
+pairs at each visible-graph single-window size and one pair for four windows;
+this is memory evidence, not a five-pair cross-platform latency promotion. A
+single matched-clock hover pair showed less GPU activity, which does not
+establish a general GPU-time improvement. The prototype retains peak target
+extents until a resize; driver residency can grow as more scenes are exercised.
+
+The implementation is the measured crop patch plus the opt-in guard. Rendering source
+changes are limited to `gpui_wgpu/src/wgpu_renderer.rs`, its `resources.rs`, `frame.rs` and
+`headless.rs` modules, and `gpui_render/src/shaders/paths.rs`. Test/benchmark
+font paths reuse the vendored GPUI fixtures with their font licenses. Its GPU pixel comparison
+runs both modes explicitly and covers gradients, fractional geometry, negative
+coordinates, clipping, target growth, resize and transparent out-of-range samples:
+
+```sh
+cargo test -p gpui_ce_wgpu --features test-support --lib cropped_path_targets
+```
+
+## Tree-sitter grammars
 
 Each `tree-sitter-*` directory here is a grammar GitComet compiles from source
 rather than pulling from crates.io. Every one of them carries its reason in its

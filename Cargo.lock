@@ -3993,7 +3993,6 @@ dependencies = [
 [[package]]
 name = "gpui_ce_render"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=46e1ede350cc95071b389e83831e18e7d114bbaf#46e1ede350cc95071b389e83831e18e7d114bbaf"
 dependencies = [
  "gpui-ce",
  "naga 24.0.0",
@@ -4075,22 +4074,27 @@ dependencies = [
 [[package]]
 name = "gpui_ce_wgpu"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=46e1ede350cc95071b389e83831e18e7d114bbaf#46e1ede350cc95071b389e83831e18e7d114bbaf"
 dependencies = [
  "anyhow",
+ "bytemuck",
  "core-foundation",
  "core-video",
  "cosmic-text",
+ "criterion",
+ "env_logger",
  "etagere",
  "font-kit",
  "gpui-ce",
  "gpui_ce_collections",
+ "gpui_ce_platform",
  "gpui_ce_render",
  "gpui_ce_util",
+ "image",
  "itertools 0.15.0",
  "js-sys",
  "log",
  "metal",
+ "naga 29.0.4",
  "objc2 0.6.4",
  "objc2-metal 0.3.2",
  "parking_lot",
@@ -4103,6 +4107,9 @@ dependencies = [
  "unicode-segmentation",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
  "web-sys",
  "wgpu",
  "wgsl-rs",
@@ -9075,6 +9082,7 @@ dependencies = [
  "cc",
  "downcast-rs",
  "log",
+ "raw-window-handle",
  "rustix",
  "scoped-tls",
  "smallvec",
