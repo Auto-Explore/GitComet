@@ -142,6 +142,9 @@ impl MainPaneView {
                                 ui_scale.percent(),
                             )
                             .h(ui_scale.px(20.0))
+                            // Centre the visible glyph against the path text,
+                            // which sits below the centre of its line box.
+                            .pt(ui_scale.px(4.0))
                             .debug_selector(|| "diff_title_icon".to_string())
                             .into_any_element(),
                             self.cached_path_display(path),
