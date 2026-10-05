@@ -529,6 +529,21 @@ mod tests {
         Ok(())
     }
 
+    /// Gradients add up to two units of dither per channel, seeded by a sine
+    /// hash of the pixel position (`gradient_dither`). The software rasterizer
+    /// CI renders with computes that hash identically everywhere, so gradient
+    /// pixels are byte-exact there. Hardware GPUs (Apple's, through wgpu on
+    /// macOS) evaluate it differently, so two renderings of a gradient can
+    /// differ by twice the dither plus rounding.
+    #[cfg(all(feature = "test-support", not(target_family = "wasm")))]
+    fn gradient_tolerance(context: &WgpuContext) -> u8 {
+        if context.adapter.get_info().device_type == wgpu::DeviceType::Cpu {
+            0
+        } else {
+            5
+        }
+    }
+
     #[cfg(all(feature = "test-support", not(target_family = "wasm")))]
     #[test]
     fn quad_backgrounds_match_legacy_metal_pixels() -> anyhow::Result<()> {
@@ -587,6 +602,7 @@ mod tests {
         }
         scene.finish();
         let context = WgpuContext::new_headless(None)?;
+        let gradient_tolerance = gradient_tolerance(&context);
         let mut renderer = WgpuRenderer::new_headless(
             &context,
             Size {
@@ -596,12 +612,16 @@ mod tests {
         )?;
         let actual = renderer.render_to_image(&scene)?;
         for (index, (actual, expected)) in actual.as_raw().iter().zip(LEGACY).enumerate() {
-            assert_eq!(
-                actual,
-                expected,
-                "legacy mismatch at pixel ({}, {}), channel {}",
-                (index / 4) % 4,
-                (index / 4) / 4,
+            let (x, y) = ((index / 4) % 4, (index / 4) / 4);
+            // The gradient quad covers the bottom-right 2x2 pixels.
+            let tolerance = if x >= 2 && y >= 2 {
+                gradient_tolerance
+            } else {
+                0
+            };
+            assert!(
+                actual.abs_diff(*expected) <= tolerance,
+                "legacy mismatch at pixel ({x}, {y}), channel {}: got {actual}, expected {expected} ± {tolerance}",
                 index % 4
             );
         }
@@ -613,6 +633,7 @@ mod tests {
     #[test]
     fn quad_border_backgrounds_use_the_fill_coordinate_space() -> anyhow::Result<()> {
         let context = WgpuContext::new_headless(None)?;
+        let gradient_tolerance = gradient_tolerance(&context).max(1);
         let size = Size {
             width: DevicePixels(12),
             height: DevicePixels(12),
@@ -634,14 +655,22 @@ mod tests {
             let mut renderer = WgpuRenderer::new_headless(&context, size)?;
             renderer.render_to_image(&scene)
         };
+        // Fills and patterns compare within one unit everywhere; gradients
+        // carry dither (see `gradient_tolerance`).
         let backgrounds = [
-            gpui::solid_background(gpui::hsla(0.0, 1.0, 0.5, 1.0)),
-            gpui::checkerboard(gpui::hsla(0.6, 0.7, 0.5, 1.0), 2.0),
-            gpui::pattern_slash(gpui::hsla(0.3, 0.8, 0.5, 1.0), 2.0, 2.0),
-            gpui::linear_gradient(
-                90.0,
-                gpui::linear_color_stop(gpui::hsla(0.8, 0.9, 0.4, 1.0), 0.0),
-                gpui::linear_color_stop(gpui::hsla(0.1, 0.8, 0.6, 1.0), 1.0),
+            (gpui::solid_background(gpui::hsla(0.0, 1.0, 0.5, 1.0)), 1),
+            (gpui::checkerboard(gpui::hsla(0.6, 0.7, 0.5, 1.0), 2.0), 1),
+            (
+                gpui::pattern_slash(gpui::hsla(0.3, 0.8, 0.5, 1.0), 2.0, 2.0),
+                1,
+            ),
+            (
+                gpui::linear_gradient(
+                    90.0,
+                    gpui::linear_color_stop(gpui::hsla(0.8, 0.9, 0.4, 1.0), 0.0),
+                    gpui::linear_color_stop(gpui::hsla(0.1, 0.8, 0.6, 1.0), 1.0),
+                ),
+                gradient_tolerance,
             ),
         ];
         let border_samples = [
@@ -655,7 +684,7 @@ mod tests {
             (10, 10),
         ];
 
-        for background in backgrounds {
+        for (background, tolerance) in backgrounds {
             let filled = render(Quad {
                 bounds,
                 content_mask: gpui::ContentMask {
@@ -683,7 +712,7 @@ mod tests {
                     border_pixel.iter().zip(fill_pixel.iter()).enumerate()
                 {
                     assert!(
-                        border.abs_diff(*fill) <= 1,
+                        border.abs_diff(*fill) <= tolerance,
                         "border background must sample like a fill at ({x}, {y}), channel {channel}, for {background:?}: got {border_pixel:?}, expected {fill_pixel:?}"
                     );
                 }
