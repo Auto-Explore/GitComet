@@ -321,8 +321,7 @@ impl WorkspaceEdit {
             | Self::CommitPaths { name, .. } => Some(name),
             Self::Reorder { first, .. } => Some(first),
             Self::SetTarget { .. } => None,
-            Self::AssignFile { branch, .. }
-            | Self::AssignHunk { branch, .. } => branch.as_deref(),
+            Self::AssignFile { branch, .. } | Self::AssignHunk { branch, .. } => branch.as_deref(),
         }
     }
 
@@ -392,7 +391,10 @@ mod tests {
 
     #[test]
     fn set_state_derives_stacks() {
-        let workspace = loaded(&[("api", None, BranchApplyState::Applied), ("ui", Some("api"), BranchApplyState::Applied)]);
+        let workspace = loaded(&[
+            ("api", None, BranchApplyState::Applied),
+            ("ui", Some("api"), BranchApplyState::Applied),
+        ]);
         assert_eq!(workspace.stacks.len(), 1);
         assert_eq!(workspace.total_count(), 2);
         assert_eq!(workspace.applied_count(), 2);
@@ -400,7 +402,10 @@ mod tests {
 
     #[test]
     fn unapplied_branches_are_counted_separately() {
-        let workspace = loaded(&[("api", None, BranchApplyState::Applied), ("parked", None, BranchApplyState::Unapplied)]);
+        let workspace = loaded(&[
+            ("api", None, BranchApplyState::Applied),
+            ("parked", None, BranchApplyState::Unapplied),
+        ]);
         assert_eq!(workspace.total_count(), 2);
         assert_eq!(workspace.applied_count(), 1);
     }
@@ -423,10 +428,8 @@ mod tests {
         index.set(PathBuf::from("src/b.rs"), None);
         workspace.assignments = Arc::new(index);
 
-        let files = workspace.files_by_branch(&[
-            PathBuf::from("src/a.rs"),
-            PathBuf::from("src/b.rs"),
-        ]);
+        let files =
+            workspace.files_by_branch(&[PathBuf::from("src/a.rs"), PathBuf::from("src/b.rs")]);
         assert_eq!(files[0].branch.as_deref(), Some("api"));
         assert_eq!(files[1].branch, None);
     }
@@ -444,7 +447,10 @@ mod tests {
 
     #[test]
     fn summary_counts_cover_assigned_and_unassigned_files() {
-        let mut workspace = loaded(&[("api", None, BranchApplyState::Applied), ("ui", None, BranchApplyState::Applied)]);
+        let mut workspace = loaded(&[
+            ("api", None, BranchApplyState::Applied),
+            ("ui", None, BranchApplyState::Applied),
+        ]);
         let mut index = AssignmentIndex::new();
         index.set(PathBuf::from("a.rs"), Some("api".into()));
         index.set(PathBuf::from("b.rs"), Some("api".into()));
@@ -469,7 +475,10 @@ mod tests {
         // A split file has no single branch, so `branch` is `None` — but
         // reporting that as unassigned would send the user looking for a file
         // that two branches are already committing.
-        let mut workspace = loaded(&[("api", None, BranchApplyState::Applied), ("ui", None, BranchApplyState::Applied)]);
+        let mut workspace = loaded(&[
+            ("api", None, BranchApplyState::Applied),
+            ("ui", None, BranchApplyState::Applied),
+        ]);
         let mut index = AssignmentIndex::new();
         let first = gitcomet_core::workspace::HunkFingerprint::of(&["api\n"], 1);
         let second = gitcomet_core::workspace::HunkFingerprint::of(&["ui\n"], 1);
@@ -579,46 +588,59 @@ mod tests {
             .branch_name(),
             Some("api")
         );
-        assert_eq!(WorkspaceEdit::SetTarget { target: "x".into() }.branch_name(), None);
+        assert_eq!(
+            WorkspaceEdit::SetTarget { target: "x".into() }.branch_name(),
+            None
+        );
     }
 
     #[test]
     fn edits_that_move_the_applied_set_are_marked() {
-        assert!(WorkspaceEdit::SetApplied {
-            name: "a".into(),
-            applied: BranchApplyState::Applied,
-        }
-        .changes_applied_set());
+        assert!(
+            WorkspaceEdit::SetApplied {
+                name: "a".into(),
+                applied: BranchApplyState::Applied,
+            }
+            .changes_applied_set()
+        );
         assert!(WorkspaceEdit::SetTarget { target: "x".into() }.changes_applied_set());
         // A new branch is applied by default, and a removed one stops
         // contributing, so both have to be replayed into the workspace branch.
         assert!(WorkspaceEdit::Create { name: "a".into() }.changes_applied_set());
         assert!(WorkspaceEdit::Remove { name: "a".into() }.changes_applied_set());
-        assert!(!WorkspaceEdit::Reorder {
-            first: "a".into(),
-            second: "b".into(),
-        }
-        .changes_applied_set());
-        assert!(!WorkspaceEdit::AssignFile {
-            path: PathBuf::from("a.rs"),
-            branch: Some("a".into()),
-        }
-        .changes_applied_set());
+        assert!(
+            !WorkspaceEdit::Reorder {
+                first: "a".into(),
+                second: "b".into(),
+            }
+            .changes_applied_set()
+        );
+        assert!(
+            !WorkspaceEdit::AssignFile {
+                path: PathBuf::from("a.rs"),
+                branch: Some("a".into()),
+            }
+            .changes_applied_set()
+        );
     }
 
     #[test]
     fn only_base_moves_rewrite_history() {
-        assert!(WorkspaceEdit::SetParent {
-            name: "a".into(),
-            parent: None,
-        }
-        .rewrites_history());
+        assert!(
+            WorkspaceEdit::SetParent {
+                name: "a".into(),
+                parent: None,
+            }
+            .rewrites_history()
+        );
         assert!(!WorkspaceEdit::Create { name: "a".into() }.rewrites_history());
-        assert!(!WorkspaceEdit::AssignFile {
-            path: PathBuf::from("a.rs"),
-            branch: None,
-        }
-        .rewrites_history());
+        assert!(
+            !WorkspaceEdit::AssignFile {
+                path: PathBuf::from("a.rs"),
+                branch: None,
+            }
+            .rewrites_history()
+        );
     }
 
     #[test]
@@ -637,12 +659,14 @@ mod tests {
     #[test]
     fn inserting_a_branch_moves_the_applied_set() {
         // A new branch is applied by default, like any other creation.
-        assert!(WorkspaceEdit::InsertRelativeTo {
-            name: "b".into(),
-            anchor: "a".into(),
-            below: true,
-        }
-        .changes_applied_set());
+        assert!(
+            WorkspaceEdit::InsertRelativeTo {
+                name: "b".into(),
+                anchor: "a".into(),
+                below: true,
+            }
+            .changes_applied_set()
+        );
         assert_eq!(
             WorkspaceEdit::InsertRelativeTo {
                 name: "b".into(),
@@ -657,17 +681,21 @@ mod tests {
 
     #[test]
     fn only_committing_produces_a_commit() {
-        assert!(WorkspaceEdit::CommitPaths {
-            name: "a".into(),
-            message: "m".into(),
-            paths: vec![PathBuf::from("a.rs")],
-        }
-        .produces_commit());
-        assert!(!WorkspaceEdit::SetApplied {
-            name: "a".into(),
-            applied: BranchApplyState::Applied,
-        }
-        .produces_commit());
+        assert!(
+            WorkspaceEdit::CommitPaths {
+                name: "a".into(),
+                message: "m".into(),
+                paths: vec![PathBuf::from("a.rs")],
+            }
+            .produces_commit()
+        );
+        assert!(
+            !WorkspaceEdit::SetApplied {
+                name: "a".into(),
+                applied: BranchApplyState::Applied,
+            }
+            .produces_commit()
+        );
         assert_eq!(
             WorkspaceEdit::CommitPaths {
                 name: "a".into(),
@@ -687,10 +715,7 @@ mod tests {
             paths: Arc::new(Vec::new()),
             message: "conflict".into(),
         };
-        assert_eq!(
-            conflict.summary(),
-            "feature/ui conflicts with feature/api"
-        );
+        assert_eq!(conflict.summary(), "feature/ui conflicts with feature/api");
 
         let alone = WorkspaceConflict {
             branch: "feature/ui".into(),

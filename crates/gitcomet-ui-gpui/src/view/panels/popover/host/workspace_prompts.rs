@@ -33,7 +33,11 @@ impl PopoverHost {
         let seed = match kind {
             WorkspacePromptKind::SetParent => self
                 .workspace_state(repo_id)
-                .and_then(|state| state.get(&prompt.branch).and_then(|branch| branch.parent.clone()))
+                .and_then(|state| {
+                    state
+                        .get(&prompt.branch)
+                        .and_then(|branch| branch.parent.clone())
+                })
                 .unwrap_or_default(),
             // Deliberately empty, unlike the single-file commit. There is no
             // honest one-word summary of an entire branch's changes, and a
@@ -81,7 +85,8 @@ impl PopoverHost {
         let Some(edit) = self.workspace_prompt_edit(repo_id, kind, &value) else {
             return;
         };
-        self.store.dispatch(Msg::ApplyWorkspaceEdit { repo_id, edit });
+        self.store
+            .dispatch(Msg::ApplyWorkspaceEdit { repo_id, edit });
         self.dismiss_prompt_popover(window, cx);
     }
 
@@ -150,8 +155,7 @@ impl PopoverHost {
         state: Option<&gitcomet_core::workspace::WorkspaceState>,
     ) -> String {
         let is_taken = |name: &str| {
-            state.is_some_and(|state| state.contains(name))
-                || self.knows_git_branch(repo_id, name)
+            state.is_some_and(|state| state.contains(name)) || self.knows_git_branch(repo_id, name)
         };
         free_branch_name(value.trim(), &is_taken)
     }
@@ -417,11 +421,7 @@ mod tests {
         free_branch_name(value, &|name| taken(name) || in_workspace(name))
     }
 
-    fn edit(
-        kind: WorkspacePromptKind,
-        branch: &str,
-        value: &str,
-    ) -> Option<WorkspaceEdit> {
+    fn edit(kind: WorkspacePromptKind, branch: &str, value: &str) -> Option<WorkspaceEdit> {
         edit_for(
             kind,
             branch,

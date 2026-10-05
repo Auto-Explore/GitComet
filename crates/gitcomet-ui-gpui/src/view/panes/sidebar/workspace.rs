@@ -49,7 +49,9 @@ pub(in crate::view) struct WorkspaceSiblings {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::view) enum WorkspaceRow {
     /// The target branch every independent branch is built on.
-    Target { name: String },
+    Target {
+        name: String,
+    },
     /// The first branch of a stack: the line it stands on.
     StackBase {
         name: String,
@@ -67,7 +69,9 @@ pub(in crate::view) enum WorkspaceRow {
         siblings: WorkspaceSiblings,
     },
     /// The count line above the file list.
-    Summary { text: String },
+    Summary {
+        text: String,
+    },
     /// A changed file, labelled with the branch it is assigned to.
     File {
         path: PathBuf,
@@ -77,9 +81,13 @@ pub(in crate::view) enum WorkspaceRow {
         split: Vec<String>,
         indented: bool,
     },
-    Placeholder { message: String },
+    Placeholder {
+        message: String,
+    },
     /// The conflict banner, when the last apply failed.
-    Conflict { message: String },
+    Conflict {
+        message: String,
+    },
 }
 
 /// The whole workspace list, computed once per change rather than per frame.
@@ -405,15 +413,9 @@ impl SidebarPaneView {
                         Arc::clone(&store),
                         cx,
                     ),
-                    WorkspaceRow::Summary { text } => render_summary_row(
-                        theme,
-                        row_height,
-                        ix,
-                        text.clone(),
-                        busy,
-                        repo_id,
-                        cx,
-                    ),
+                    WorkspaceRow::Summary { text } => {
+                        render_summary_row(theme, row_height, ix, text.clone(), busy, repo_id, cx)
+                    }
                     WorkspaceRow::File {
                         path,
                         branch,
@@ -532,25 +534,25 @@ fn render_target_row(
         px(0.0),
         theme.colors.surface.chrome,
     )
-        .child(
-            components::FadingText::new(
-                div()
-                    .text_size(theme.ui_text(12.0))
-                    .text_color(theme.colors.foreground.secondary)
-                    .child(name),
-                theme.colors.surface.chrome,
-            )
-            .render(ui_scale_percent)
-            .flex_1(),
-        )
-        .child(
+    .child(
+        components::FadingText::new(
             div()
                 .text_size(theme.ui_text(12.0))
                 .text_color(theme.colors.foreground.secondary)
-                .child("target"),
+                .child(name),
+            theme.colors.surface.chrome,
         )
-        .child(set_target)
-        .into_any_element()
+        .render(ui_scale_percent)
+        .flex_1(),
+    )
+    .child(
+        div()
+            .text_size(theme.ui_text(12.0))
+            .text_color(theme.colors.foreground.secondary)
+            .child("target"),
+    )
+    .child(set_target)
+    .into_any_element()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -581,20 +583,20 @@ fn render_branch_row(
     let toggle_store = Arc::clone(&store);
     let toggle_name = name.clone();
     let apply = components::Button::new(format!("workspace_apply_{name}"), apply_label(state))
-    .style(components::ButtonStyle::Subtle)
-    .disabled(busy)
-    .on_click(theme, cx, move |_, _, _, _| {
-        toggle_store.dispatch(Msg::SetWorkspaceBranchApplied {
-            repo_id,
-            name: toggle_name.clone(),
-            applied: if state.is_applied() {
-                BranchApplyState::Unapplied
-            } else {
-                BranchApplyState::Applied
-            },
-        });
-    })
-    .gitcomet_tooltip(theme, tooltip);
+        .style(components::ButtonStyle::Subtle)
+        .disabled(busy)
+        .on_click(theme, cx, move |_, _, _, _| {
+            toggle_store.dispatch(Msg::SetWorkspaceBranchApplied {
+                repo_id,
+                name: toggle_name.clone(),
+                applied: if state.is_applied() {
+                    BranchApplyState::Unapplied
+                } else {
+                    BranchApplyState::Applied
+                },
+            });
+        })
+        .gitcomet_tooltip(theme, tooltip);
 
     let push_store = Arc::clone(&store);
     let push_name = name.clone();
@@ -676,35 +678,35 @@ fn render_branch_row(
     };
     let surface = theme.colors.surface.chrome;
 
-    let indent = ui_scale::design_px_from_percent(
-        depth as f32 * STACK_INDENT_PX,
-        ui_scale_percent,
-    );
+    let indent = ui_scale::design_px_from_percent(depth as f32 * STACK_INDENT_PX, ui_scale_percent);
     row_frame(theme, row_height, index, indent, surface)
         .child(
             components::FadingText::new(
-                div().text_size(theme.ui_text(14.0)).text_color(color).child(label),
+                div()
+                    .text_size(theme.ui_text(14.0))
+                    .text_color(color)
+                    .child(label),
                 surface,
             )
             .render(ui_scale_percent)
             .flex_1(),
         )
-    .child(
-        div()
-            .text_size(theme.ui_text(12.0))
-            .text_color(theme.colors.foreground.secondary)
-            .child(if file_count > 0 {
-                SharedString::from(file_count.to_string())
-            } else {
-                SharedString::from("—")
-            }),
-    )
-    .child(push)
-    .child(apply)
-    .child(up)
-    .child(down)
-    .child(actions)
-    .into_any_element()
+        .child(
+            div()
+                .text_size(theme.ui_text(12.0))
+                .text_color(theme.colors.foreground.secondary)
+                .child(if file_count > 0 {
+                    SharedString::from(file_count.to_string())
+                } else {
+                    SharedString::from("—")
+                }),
+        )
+        .child(push)
+        .child(apply)
+        .child(up)
+        .child(down)
+        .child(actions)
+        .into_any_element()
 }
 
 /// Which way a branch's arrow moves it within its stack.
@@ -820,15 +822,15 @@ fn render_summary_row(
         px(0.0),
         theme.colors.surface.chrome,
     )
-        .child(
-            div()
-                .text_size(theme.ui_text(12.0))
-                .text_color(theme.colors.foreground.secondary)
-                .child(text)
-                .flex_1(),
-        )
-        .child(create)
-        .into_any_element()
+    .child(
+        div()
+            .text_size(theme.ui_text(12.0))
+            .text_color(theme.colors.foreground.secondary)
+            .child(text)
+            .flex_1(),
+    )
+    .child(create)
+    .into_any_element()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -889,10 +891,7 @@ fn render_file_row(
         })
         .gitcomet_tooltip(
             theme,
-            SharedString::from(format!(
-                "Commit {} to {branch}",
-                commit_path.display()
-            )),
+            SharedString::from(format!("Commit {} to {branch}", commit_path.display())),
         )
     });
 
@@ -906,7 +905,10 @@ fn render_file_row(
         (Some(branch), _) => format!("Commit {label} to a different branch than {branch}"),
         (None, [only]) => format!("Commit all of {label} to {only} instead of only part of it"),
         (None, []) => format!("Say which branch commits {label}"),
-        (None, many) => format!("Commit all of {label} to one branch instead of {}", many.join(" + ")),
+        (None, many) => format!(
+            "Commit all of {label} to one branch instead of {}",
+            many.join(" + ")
+        ),
     };
     let assign_path = path.clone();
     let assign_branch = branch.clone();
@@ -1011,15 +1013,15 @@ fn render_conflict_row(
         px(0.0),
         theme.colors.surface.chrome,
     )
-        .row_accent(theme.colors.status.warning.foreground)
-        .child(
-            div()
-                .text_size(theme.ui_text(13.0))
-                .text_color(theme.colors.status.warning.foreground)
-                .child(message),
-        )
-        .child(dismiss)
-        .into_any_element()
+    .row_accent(theme.colors.status.warning.foreground)
+    .child(
+        div()
+            .text_size(theme.ui_text(13.0))
+            .text_color(theme.colors.status.warning.foreground)
+            .child(message),
+    )
+    .child(dismiss)
+    .into_any_element()
 }
 
 /// Row height for the workspace list, matching the branch tree's rhythm so the
@@ -1069,12 +1071,10 @@ mod tests {
 
     #[test]
     fn rows_start_with_the_target_then_the_stacks() {
-        let repo = repo_with(
-            WorkspaceState::new("main").with_branches(vec![
-                VirtualBranch::new("api"),
-                VirtualBranch::new("ui").with_parent("api"),
-            ]),
-        );
+        let repo = repo_with(WorkspaceState::new("main").with_branches(vec![
+            VirtualBranch::new("api"),
+            VirtualBranch::new("ui").with_parent("api"),
+        ]));
         let presentation = WorkspacePresentation::build(Some(&repo));
         assert_eq!(
             names(&presentation),
@@ -1087,7 +1087,8 @@ mod tests {
     fn a_workspace_the_working_directory_is_not_on_says_so() {
         // Without this the tab happily lists applied branches while the user's
         // files contain none of them, which reads as the feature being broken.
-        let repo = repo_with(WorkspaceState::new("main").with_branches(vec![VirtualBranch::new("api")]));
+        let repo =
+            repo_with(WorkspaceState::new("main").with_branches(vec![VirtualBranch::new("api")]));
         let mut repo = repo;
         repo.workspace.active = false;
 
@@ -1106,7 +1107,8 @@ mod tests {
     fn a_workspace_the_working_directory_is_on_says_nothing_about_it() {
         // The other half of the notice: a workspace in its normal state must not
         // carry a permanent warning at the top of the tab.
-        let repo = repo_with(WorkspaceState::new("main").with_branches(vec![VirtualBranch::new("api")]));
+        let repo =
+            repo_with(WorkspaceState::new("main").with_branches(vec![VirtualBranch::new("api")]));
         let presentation = WorkspacePresentation::build(Some(&repo));
         assert!(
             presentation.rows.iter().all(|row| !matches!(
@@ -1123,13 +1125,11 @@ mod tests {
 
     #[test]
     fn a_stacked_branch_reports_its_depth() {
-        let repo = repo_with(
-            WorkspaceState::new("main").with_branches(vec![
-                VirtualBranch::new("api"),
-                VirtualBranch::new("ui").with_parent("api"),
-                VirtualBranch::new("e2e").with_parent("ui"),
-            ]),
-        );
+        let repo = repo_with(WorkspaceState::new("main").with_branches(vec![
+            VirtualBranch::new("api"),
+            VirtualBranch::new("ui").with_parent("api"),
+            VirtualBranch::new("e2e").with_parent("ui"),
+        ]));
         let presentation = WorkspacePresentation::build(Some(&repo));
         let depths: Vec<_> = presentation
             .rows
@@ -1188,9 +1188,8 @@ mod tests {
 
     #[test]
     fn a_conflict_is_shown_before_the_branches() {
-        let mut repo = repo_with(WorkspaceState::new("main").with_branches(vec![VirtualBranch::new(
-            "api",
-        )]));
+        let mut repo =
+            repo_with(WorkspaceState::new("main").with_branches(vec![VirtualBranch::new("api")]));
         repo.workspace.conflict = Some(gitcomet_state::model::WorkspaceConflict {
             branch: "api".into(),
             against: Some("ui".into()),
@@ -1219,29 +1218,35 @@ mod tests {
 
     #[test]
     fn a_branch_knows_the_siblings_it_can_swap_with() {
-        let repo = repo_with(
-            WorkspaceState::new("main").with_branches(vec![
-                VirtualBranch::new("api"),
-                VirtualBranch::new("ui").with_parent("api"),
-                VirtualBranch::new("docs").with_parent("ui"),
-            ]),
-        );
+        let repo = repo_with(WorkspaceState::new("main").with_branches(vec![
+            VirtualBranch::new("api"),
+            VirtualBranch::new("ui").with_parent("api"),
+            VirtualBranch::new("docs").with_parent("ui"),
+        ]));
         let presentation = WorkspacePresentation::build(Some(&repo));
         let siblings: Vec<_> = presentation
             .rows
             .iter()
             .filter_map(|row| match row {
                 WorkspaceRow::StackBase { name, siblings, .. }
-                | WorkspaceRow::Branch { name, siblings, .. } => Some((name.clone(), siblings.clone())),
+                | WorkspaceRow::Branch { name, siblings, .. } => {
+                    Some((name.clone(), siblings.clone()))
+                }
                 _ => None,
             })
             .collect();
         assert_eq!(siblings.len(), 3);
-        assert_eq!(siblings[0].1.above, None, "the stack base has nothing above it");
+        assert_eq!(
+            siblings[0].1.above, None,
+            "the stack base has nothing above it"
+        );
         assert_eq!(siblings[0].1.below.as_deref(), Some("ui"));
         assert_eq!(siblings[1].1.above.as_deref(), Some("api"));
         assert_eq!(siblings[1].1.below.as_deref(), Some("docs"));
-        assert_eq!(siblings[2].1.below, None, "the top of the stack has nothing below it");
+        assert_eq!(
+            siblings[2].1.below, None,
+            "the top of the stack has nothing below it"
+        );
     }
 
     #[test]
@@ -1267,8 +1272,7 @@ mod tests {
 
         let applied = VirtualBranch::new("feature/api");
         assert!(apply_tooltip(&applied).contains("Unapply"));
-        let unapplied = VirtualBranch::new("feature/api")
-            .with_applied(BranchApplyState::Unapplied);
+        let unapplied = VirtualBranch::new("feature/api").with_applied(BranchApplyState::Unapplied);
         assert!(apply_tooltip(&unapplied).contains("Apply"));
     }
 }

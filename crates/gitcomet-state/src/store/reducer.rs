@@ -2388,12 +2388,8 @@ fn reduce_inner(
         Msg::CommitWorkspaceFile { repo_id, path } => {
             workspace::commit_single_file(state, repo_id, path)
         }
-        Msg::DismissWorkspaceConflict { repo_id } => {
-            workspace::dismiss_conflict(state, repo_id)
-        }
-        Msg::PushWorkspaceBranch { repo_id, name } => {
-            workspace::push_branch(state, repo_id, name)
-        }
+        Msg::DismissWorkspaceConflict { repo_id } => workspace::dismiss_conflict(state, repo_id),
+        Msg::PushWorkspaceBranch { repo_id, name } => workspace::push_branch(state, repo_id, name),
         Msg::Internal(crate::msg::InternalMsg::WorkspaceLoaded {
             repo_id,
             result,
@@ -2410,9 +2406,7 @@ fn reduce_inner(
             active,
             checkout_base,
             result,
-        }) => workspace::workspace_active_finished(
-            state, repo_id, active, checkout_base, result,
-        ),
+        }) => workspace::workspace_active_finished(state, repo_id, active, checkout_base, result),
         Msg::Internal(crate::msg::InternalMsg::WorkspaceAssignFinished {
             repo_id,
             path,

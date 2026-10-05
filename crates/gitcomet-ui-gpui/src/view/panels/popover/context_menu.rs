@@ -2148,7 +2148,11 @@ impl PopoverHost {
                 self.open_popover_at(
                     PopoverKind::WorkspacePrompt {
                         repo_id,
-                        prompt: workspace_prompt::assign_hunk_prompt(&path, hunk, branch.as_deref()),
+                        prompt: workspace_prompt::assign_hunk_prompt(
+                            &path,
+                            hunk,
+                            branch.as_deref(),
+                        ),
                     },
                     anchor,
                     window,

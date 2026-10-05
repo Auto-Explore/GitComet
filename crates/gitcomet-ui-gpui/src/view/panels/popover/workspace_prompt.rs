@@ -207,7 +207,10 @@ pub(super) fn panel(
 
     if kind == WorkspacePromptKind::BranchActions {
         for action in branch_actions() {
-            let action_id = format!("workspace_action_{}", action_label(action).replace(' ', "_"));
+            let action_id = format!(
+                "workspace_action_{}",
+                action_label(action).replace(' ', "_")
+            );
             body = body.child(
                 components::Button::new(action_id, action_label(action))
                     .style(components::ButtonStyle::Subtle)
@@ -222,43 +225,40 @@ pub(super) fn panel(
             );
         }
     } else if kind.asks_for_text() {
-        body = body
-            .child(input_label(theme, kind.field_label()))
-            .child(
-                div()
-                    .px_2()
-                    .pb_1()
-                    .w_full()
-                    .min_w(px(0.0))
-                    .child(this.create_branch_input.clone()),
-            );
+        body = body.child(input_label(theme, kind.field_label())).child(
+            div()
+                .px_2()
+                .pb_1()
+                .w_full()
+                .min_w(px(0.0))
+                .child(this.create_branch_input.clone()),
+        );
     }
 
-    body.child(super::popover_rule(theme))
-        .child(
-            super::prompt_footer_row()
-                .child(
-                    cancel_button("workspace_prompt_cancel", "workspace_prompt_cancel_hint", theme)
-                        .focus_handle(this.create_branch_from_ref_focus.cancel.clone())
-                        .on_click(theme, cx, |this, _e, window, cx| {
-                            this.dismiss_prompt_popover(window, cx);
-                        }),
+    body.child(super::popover_rule(theme)).child(
+        super::prompt_footer_row()
+            .child(
+                cancel_button(
+                    "workspace_prompt_cancel",
+                    "workspace_prompt_cancel_hint",
+                    theme,
                 )
-                .child(
-                    components::Button::new("workspace_prompt_go", kind.confirm_label())
-                        .focus_handle(this.create_branch_from_ref_focus.submit.clone())
-                        .separated_end_slot(hotkey_hint(
-                            theme,
-                            "workspace_prompt_go_hint",
-                            "Enter",
-                        ))
-                        .style(components::ButtonStyle::Filled)
-                        .disabled(!this.can_submit_workspace_prompt(cx))
-                        .on_click(theme, cx, |this, _e, window, cx| {
-                            this.submit_workspace_prompt(window, cx);
-                        }),
-                ),
-        )
+                .focus_handle(this.create_branch_from_ref_focus.cancel.clone())
+                .on_click(theme, cx, |this, _e, window, cx| {
+                    this.dismiss_prompt_popover(window, cx);
+                }),
+            )
+            .child(
+                components::Button::new("workspace_prompt_go", kind.confirm_label())
+                    .focus_handle(this.create_branch_from_ref_focus.submit.clone())
+                    .separated_end_slot(hotkey_hint(theme, "workspace_prompt_go_hint", "Enter"))
+                    .style(components::ButtonStyle::Filled)
+                    .disabled(!this.can_submit_workspace_prompt(cx))
+                    .on_click(theme, cx, |this, _e, window, cx| {
+                        this.submit_workspace_prompt(window, cx);
+                    }),
+            ),
+    )
 }
 
 #[cfg(test)]
@@ -369,9 +369,15 @@ mod tests {
     fn the_assign_prompt_carries_the_file_and_its_current_branch() {
         let prompt = assign_file_prompt(std::path::Path::new("src/lib.rs"), Some("feature/api"));
         assert_eq!(prompt.kind, WorkspacePromptKind::AssignFile);
-        assert_eq!(prompt.path.as_deref(), Some(std::path::Path::new("src/lib.rs")));
+        assert_eq!(
+            prompt.path.as_deref(),
+            Some(std::path::Path::new("src/lib.rs"))
+        );
         assert_eq!(prompt.value, "feature/api");
-        assert!(prompt.branch.is_empty(), "the branch is typed, not captured");
+        assert!(
+            prompt.branch.is_empty(),
+            "the branch is typed, not captured"
+        );
 
         // An unassigned file opens on an empty field, which is also how it is
         // put back.
@@ -432,12 +438,7 @@ mod tests {
 
     #[test]
     fn the_detail_line_names_the_branch_and_says_history_is_rewritten() {
-        let line = detail_line(
-            WorkspacePromptKind::SetParent,
-            "feature/api",
-            None,
-            "main",
-        );
+        let line = detail_line(WorkspacePromptKind::SetParent, "feature/api", None, "main");
         assert!(line.contains("feature/api"), "{line}");
         assert!(line.contains("rebased"), "{line}");
     }

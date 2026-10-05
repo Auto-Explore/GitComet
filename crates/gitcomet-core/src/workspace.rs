@@ -160,7 +160,10 @@ impl Stack {
     }
 
     pub fn applied_count(&self) -> usize {
-        self.branches.iter().filter(|m| m.branch.is_applied()).count()
+        self.branches
+            .iter()
+            .filter(|m| m.branch.is_applied())
+            .count()
     }
 }
 
@@ -246,12 +249,18 @@ impl WorkspaceState {
     /// root, so it is left out and reported by [`Self::validate`].
     fn topological_order(&self) -> Result<Vec<String>> {
         let mut ordered = Vec::with_capacity(self.branches.len());
-        let mut roots: Vec<&VirtualBranch> =
-            self.branches.iter().filter(|b| b.is_independent()).collect();
+        let mut roots: Vec<&VirtualBranch> = self
+            .branches
+            .iter()
+            .filter(|b| b.is_independent())
+            .collect();
         roots.sort_by_key(|b| b.order.unwrap_or(u32::MAX));
 
-        let mut remaining: Vec<&VirtualBranch> =
-            self.branches.iter().filter(|b| !b.is_independent()).collect();
+        let mut remaining: Vec<&VirtualBranch> = self
+            .branches
+            .iter()
+            .filter(|b| !b.is_independent())
+            .collect();
         remaining.sort_by_key(|b| b.order.unwrap_or(u32::MAX));
 
         for root in roots {
@@ -683,9 +692,7 @@ fn validate_branch_name(name: &str) -> Result<()> {
         return Err(workspace_error("a workspace branch needs a name".into()));
     }
     if name.starts_with('-') {
-        return Err(workspace_error(format!(
-            "'{name}' cannot start with '-'"
-        )));
+        return Err(workspace_error(format!("'{name}' cannot start with '-'")));
     }
     if !name.is_ascii() {
         return Err(workspace_error(format!(
@@ -788,7 +795,9 @@ pub struct AssignmentIndex {
 /// the same fingerprint, and both follow the assignment. That is deliberate:
 /// they are indistinguishable to a user reading the file, and picking one would
 /// be a coin flip dressed up as precision.
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Ord, PartialOrd, Serialize, Deserialize,
+)]
 pub struct HunkFingerprint {
     /// FNV-1a over the hunk's new-side lines.
     ///
@@ -859,7 +868,7 @@ pub const HUNK_CONTEXT_LINES: usize = 3;
 /// run of changed lines, but the runs git would print under one `@@` header.
 /// See [`HUNK_CONTEXT_LINES`].
 pub fn hunk_spans(old: &str, new: &str) -> Vec<HunkSpan> {
-    use crate::file_diff::{side_by_side_plan, FileDiffPlanRun};
+    use crate::file_diff::{FileDiffPlanRun, side_by_side_plan};
 
     let new_lines: Vec<&str> = new.split_inclusive('\n').collect();
     let plan = side_by_side_plan(old, new);
@@ -937,10 +946,12 @@ fn merge_neighbouring_changes(spans: Vec<HunkSpan>, new_lines: &[&str]) -> Vec<H
     let max_gap = 2 * HUNK_CONTEXT_LINES;
     let mut groups: Vec<Vec<HunkSpan>> = Vec::new();
     for span in spans {
-        let gap = groups.last().and_then(|group| group.last()).map_or(
-            max_gap + 1,
-            |prev| span.base_range.start.saturating_sub(prev.base_range.end),
-        );
+        let gap = groups
+            .last()
+            .and_then(|group| group.last())
+            .map_or(max_gap + 1, |prev| {
+                span.base_range.start.saturating_sub(prev.base_range.end)
+            });
         if gap <= max_gap
             && let Some(group) = groups.last_mut()
         {
@@ -961,9 +972,8 @@ fn merge_neighbouring_changes(spans: Vec<HunkSpan>, new_lines: &[&str]) -> Vec<H
             // A replacement touches both sides; a pure insertion or removal
             // touches one. See the function docs for why only replacements
             // contribute when the group has any.
-            let is_replacement = |span: &HunkSpan| {
-                !span.base_range.is_empty() && !span.new_range.is_empty()
-            };
+            let is_replacement =
+                |span: &HunkSpan| !span.base_range.is_empty() && !span.new_range.is_empty();
             let has_replacement = group.iter().any(is_replacement);
             let contributing: Vec<&HunkSpan> = group
                 .iter()
@@ -1125,7 +1135,9 @@ mod hunks_as_string_keys {
         raw.into_iter()
             .map(|(key, branch)| {
                 let fingerprint = decode(&key).ok_or_else(|| {
-                    D::Error::custom(format!("hunk fingerprint key {key:?} is not content:new:base"))
+                    D::Error::custom(format!(
+                        "hunk fingerprint key {key:?} is not content:new:base"
+                    ))
                 })?;
                 Ok((fingerprint, branch))
             })
@@ -1166,7 +1178,9 @@ impl FileAssignments {
     }
 
     pub fn hunks(&self) -> impl Iterator<Item = (HunkFingerprint, &str)> {
-        self.hunks.iter().map(|(key, branch)| (*key, branch.as_str()))
+        self.hunks
+            .iter()
+            .map(|(key, branch)| (*key, branch.as_str()))
     }
 
     pub fn hunk_branches(&self) -> impl Iterator<Item = &str> {
@@ -1197,7 +1211,8 @@ impl FileAssignments {
     /// rewritten no longer matches and goes.
     pub fn retain_hunks(&mut self, current: &[HunkSpan], state: &WorkspaceState) {
         self.hunks.retain(|fingerprint, branch| {
-            state.get(branch).is_some() && current.iter().any(|span| span.fingerprint == *fingerprint)
+            state.get(branch).is_some()
+                && current.iter().any(|span| span.fingerprint == *fingerprint)
         });
     }
 
@@ -1226,7 +1241,8 @@ impl AssignmentIndex {
 
     /// Assign the whole file, dropping any per-hunk split.
     pub fn set(&mut self, path: impl Into<PathBuf>, branch: Option<String>) {
-        self.entries.insert(path.into(), FileAssignments::whole(branch));
+        self.entries
+            .insert(path.into(), FileAssignments::whole(branch));
     }
 
     pub fn remove(&mut self, path: &Path) {
@@ -1294,7 +1310,9 @@ impl AssignmentIndex {
             .iter()
             .filter(|(_, assignments)| {
                 assignments.branch() == Some(branch)
-                    || assignments.hunk_branches().any(|assigned| assigned == branch)
+                    || assignments
+                        .hunk_branches()
+                        .any(|assigned| assigned == branch)
             })
             .map(|(path, _)| path.as_path())
             .collect()
@@ -1370,10 +1388,14 @@ mod tests {
 
     #[test]
     fn independent_branches_are_ordered_by_declaration() {
-        let state = workspace()
-            .with_branches(vec![vb("a"), vb("b"), vb("c")]);
+        let state = workspace().with_branches(vec![vb("a"), vb("b"), vb("c")]);
         assert_eq!(state.application_order().unwrap().len(), 3);
-        let names: Vec<_> = state.application_order().unwrap().iter().map(|b| b.name.as_str()).collect();
+        let names: Vec<_> = state
+            .application_order()
+            .unwrap()
+            .iter()
+            .map(|b| b.name.as_str())
+            .collect();
         assert_eq!(names, ["a", "b", "c"]);
     }
 
@@ -1454,10 +1476,8 @@ mod tests {
 
     #[test]
     fn order_controls_sibling_ordering() {
-        let state = workspace().with_branches(vec![
-            vb("second").with_order(1),
-            vb("first").with_order(0),
-        ]);
+        let state =
+            workspace().with_branches(vec![vb("second").with_order(1), vb("first").with_order(0)]);
         let stacks = state.stacks().unwrap();
         // Two roots are two stacks, and `order` is what decides which one
         // comes first: without it the declaration order ("second" first)
@@ -1469,10 +1489,8 @@ mod tests {
 
     #[test]
     fn a_cycle_is_rejected_by_validate() {
-        let state = workspace().with_branches(vec![
-            vb("a").with_parent("b"),
-            vb("b").with_parent("a"),
-        ]);
+        let state =
+            workspace().with_branches(vec![vb("a").with_parent("b"), vb("b").with_parent("a")]);
         assert!(state.validate().is_err());
     }
 
@@ -1639,10 +1657,7 @@ mod tests {
 
     #[test]
     fn reorder_across_stacks_is_refused() {
-        let mut state = workspace().with_branches(vec![
-            vb("api"),
-            vb("ui").with_parent("api"),
-        ]);
+        let mut state = workspace().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
         assert!(state.reorder("api", "ui").is_err());
     }
 
@@ -1666,20 +1681,20 @@ mod tests {
 
     #[test]
     fn move_to_stack_below_a_sibling_stacks_on_that_sibling() {
-        let mut state =
-            workspace().with_branches(vec![vb("api"), vb("e2e").with_parent("api")]);
-        state.move_to_stack("e2e", "main", Some("api"), true).unwrap();
+        let mut state = workspace().with_branches(vec![vb("api"), vb("e2e").with_parent("api")]);
+        state
+            .move_to_stack("e2e", "main", Some("api"), true)
+            .unwrap();
         assert_eq!(state.get("e2e").unwrap().parent.as_deref(), Some("api"));
     }
 
     #[test]
     fn move_to_stack_above_a_sibling_takes_its_place() {
-        let mut state = workspace().with_branches(vec![
-            vb("api"),
-            vb("e2e").with_parent("api"),
-            vb("other"),
-        ]);
-        state.move_to_stack("other", "main", Some("api"), false).unwrap();
+        let mut state =
+            workspace().with_branches(vec![vb("api"), vb("e2e").with_parent("api"), vb("other")]);
+        state
+            .move_to_stack("other", "main", Some("api"), false)
+            .unwrap();
         assert_eq!(state.get("other").unwrap().parent, None);
         assert_eq!(state.get("e2e").unwrap().parent.as_deref(), Some("api"));
     }
@@ -1691,7 +1706,11 @@ mod tests {
             vb("ui").with_parent("api"),
             vb("e2e").with_parent("ui"),
         ]);
-        assert!(state.move_to_stack("api", "main", Some("e2e"), true).is_err());
+        assert!(
+            state
+                .move_to_stack("api", "main", Some("e2e"), true)
+                .is_err()
+        );
         assert_eq!(state.get("api").unwrap().parent, None);
     }
 
@@ -1701,7 +1720,11 @@ mod tests {
         // stack base instead would put the branch somewhere the user never
         // asked for and report the move as done.
         let mut state = workspace().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
-        assert!(state.move_to_stack("api", "main", Some("gone"), false).is_err());
+        assert!(
+            state
+                .move_to_stack("api", "main", Some("gone"), false)
+                .is_err()
+        );
         assert_eq!(state.get("api").unwrap().parent, None);
     }
 
@@ -1715,7 +1738,9 @@ mod tests {
     #[test]
     fn set_applied_toggles_a_branch_without_disturbing_the_stack() {
         let mut state = workspace().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
-        state.set_applied("ui", BranchApplyState::Unapplied).unwrap();
+        state
+            .set_applied("ui", BranchApplyState::Unapplied)
+            .unwrap();
         assert!(!state.get("ui").unwrap().is_applied());
         assert_eq!(state.get("ui").unwrap().parent.as_deref(), Some("api"));
         state.set_applied("ui", BranchApplyState::Applied).unwrap();
@@ -1725,7 +1750,11 @@ mod tests {
     #[test]
     fn set_applied_rejects_an_unknown_branch() {
         let mut state = workspace();
-        assert!(state.set_applied("ghost", BranchApplyState::Applied).is_err());
+        assert!(
+            state
+                .set_applied("ghost", BranchApplyState::Applied)
+                .is_err()
+        );
     }
 
     #[test]
@@ -1810,10 +1839,13 @@ mod tests {
     #[test]
     fn a_separate_edit_produces_its_own_hunk() {
         let base = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\n";
-        let working =
-            "one\nTWO\nthree\nfour\nfive\nsix\nseven\neight\nnine\nTEN\neleven\n";
+        let working = "one\nTWO\nthree\nfour\nfive\nsix\nseven\neight\nnine\nTEN\neleven\n";
         let spans = hunk_spans(base, working);
-        assert_eq!(spans.len(), 2, "two edits further apart than git's context, two hunks");
+        assert_eq!(
+            spans.len(),
+            2,
+            "two edits further apart than git's context, two hunks"
+        );
         assert_eq!(spans[0].base_range, 1..2, "line two");
         assert_eq!(spans[1].base_range, 9..10, "line ten");
     }
@@ -1907,7 +1939,11 @@ mod tests {
         let base = "one\ntwo\nthree\nfour\n";
         let working = "ONE\ntwo\nTHREE\nfour\n";
         let spans = hunk_spans(base, working);
-        assert_eq!(spans.len(), 1, "one hunk, so this really is the merged shape");
+        assert_eq!(
+            spans.len(),
+            1,
+            "one hunk, so this really is the merged shape"
+        );
 
         assert_eq!(
             synthesize_for_branch(base, working, &spans, &|_| true),
@@ -1982,13 +2018,21 @@ mod tests {
         // this pins the boundary at 6 lines, the value `git diff` was observed
         // to use at its default context.
         let base: String = (1..=20).map(|n| format!("line{n}\n")).collect();
-        let close = base.replacen("line1\n", "LINE1\n", 1).replacen("line8\n", "LINE8\n", 1);
+        let close = base
+            .replacen("line1\n", "LINE1\n", 1)
+            .replacen("line8\n", "LINE8\n", 1);
         let spans = hunk_spans(&base, &close);
         assert_eq!(spans.len(), 1, "6 unchanged lines between them is one hunk");
 
-        let far = base.replacen("line1\n", "LINE1\n", 1).replacen("line9\n", "LINE9\n", 1);
+        let far = base
+            .replacen("line1\n", "LINE1\n", 1)
+            .replacen("line9\n", "LINE9\n", 1);
         let spans = hunk_spans(&base, &far);
-        assert_eq!(spans.len(), 2, "7 unchanged lines between them is two hunks");
+        assert_eq!(
+            spans.len(),
+            2,
+            "7 unchanged lines between them is two hunks"
+        );
     }
 
     #[test]
@@ -1998,7 +2042,11 @@ mod tests {
         let spans = hunk_spans(base, working);
         let mut index = AssignmentIndex::new();
         index.set(PathBuf::from("a.rs"), Some("api".into()));
-        index.set_hunk(PathBuf::from("a.rs"), spans[0].fingerprint, Some("ui".into()));
+        index.set_hunk(
+            PathBuf::from("a.rs"),
+            spans[0].fingerprint,
+            Some("ui".into()),
+        );
 
         let file = index.file(Path::new("a.rs")).unwrap();
         assert_eq!(file.branch(), None, "the file is split, not whole");
@@ -2025,7 +2073,10 @@ mod tests {
         );
 
         let api = synthesize_for_branch(base, working, &spans, &|_| true);
-        assert_eq!(api, working, "keeping every hunk reproduces the working tree");
+        assert_eq!(
+            api, working,
+            "keeping every hunk reproduces the working tree"
+        );
 
         let neither = synthesize_for_branch(base, working, &spans, &|_| false);
         assert_eq!(neither, base, "keeping none reproduces the base");
@@ -2068,7 +2119,11 @@ mod tests {
         let base = "a\r\nb\r\nc\r\nd\r\ne\r\nf\r\ng\r\nh\r\ni\r\nj\r\n";
         let working = "A\r\nb\r\nc\r\nd\r\ne\r\nf\r\ng\r\nh\r\ni\r\nJ\r\n";
         let spans = hunk_spans(base, working);
-        assert_eq!(spans.len(), 2, "further apart than git's context, so two hunks");
+        assert_eq!(
+            spans.len(),
+            2,
+            "further apart than git's context, so two hunks"
+        );
 
         let one = synthesize_for_branch(base, working, &spans, &|f| f == spans[0].fingerprint);
         assert_eq!(one, "A\r\nb\r\nc\r\nd\r\ne\r\nf\r\ng\r\nh\r\ni\r\nj\r\n");
@@ -2079,7 +2134,10 @@ mod tests {
         );
 
         let other = synthesize_for_branch(base, working, &spans, &|_| false);
-        assert_eq!(other, base, "and reverting a hunk gives the base byte for byte");
+        assert_eq!(
+            other, base,
+            "and reverting a hunk gives the base byte for byte"
+        );
     }
 
     #[test]
@@ -2096,7 +2154,10 @@ mod tests {
             "a deletion produces no new lines to put in a branch's copy"
         );
 
-        assert_eq!(synthesize_for_branch(base, working, &spans, &|_| true), working);
+        assert_eq!(
+            synthesize_for_branch(base, working, &spans, &|_| true),
+            working
+        );
         assert_eq!(
             synthesize_for_branch(base, working, &spans, &|_| false),
             base,
@@ -2112,9 +2173,15 @@ mod tests {
         let working = "one\ntwo\n";
         let spans = hunk_spans(base, working);
         assert_eq!(spans.len(), 1);
-        assert!(spans[0].base_range.is_empty(), "there was nothing to replace");
+        assert!(
+            spans[0].base_range.is_empty(),
+            "there was nothing to replace"
+        );
 
-        assert_eq!(synthesize_for_branch(base, working, &spans, &|_| true), working);
+        assert_eq!(
+            synthesize_for_branch(base, working, &spans, &|_| true),
+            working
+        );
         assert_eq!(
             synthesize_for_branch(base, working, &spans, &|_| false),
             "",
@@ -2129,8 +2196,14 @@ mod tests {
         let base = "one\ntwo";
         let working = "ONE\ntwo";
         let spans = hunk_spans(base, working);
-        assert_eq!(synthesize_for_branch(base, working, &spans, &|_| true), working);
-        assert_eq!(synthesize_for_branch(base, working, &spans, &|_| false), base);
+        assert_eq!(
+            synthesize_for_branch(base, working, &spans, &|_| true),
+            working
+        );
+        assert_eq!(
+            synthesize_for_branch(base, working, &spans, &|_| false),
+            base
+        );
     }
 
     #[test]
@@ -2305,7 +2378,9 @@ mod tests {
         );
         assert_eq!(
             only(2),
-            working.replacen("ONE\n", "l1\n", 1).replacen("TEN\n", "l10\n", 1)
+            working
+                .replacen("ONE\n", "l1\n", 1)
+                .replacen("TEN\n", "l10\n", 1)
         );
     }
 
@@ -2338,11 +2413,14 @@ mod tests {
             (PathBuf::from("m.rs"), None),
         ]);
         let paths: Vec<_> = index.paths().map(|(path, _)| path.to_path_buf()).collect();
-        assert_eq!(paths, [
-            PathBuf::from("a.rs"),
-            PathBuf::from("m.rs"),
-            PathBuf::from("z.rs")
-        ]);
+        assert_eq!(
+            paths,
+            [
+                PathBuf::from("a.rs"),
+                PathBuf::from("m.rs"),
+                PathBuf::from("z.rs")
+            ]
+        );
         assert_eq!(index.branch_of(Path::new("m.rs")), None);
     }
 
@@ -2360,7 +2438,9 @@ mod tests {
 
         index.retain(&state, &|_| true, None);
 
-        let file = index.file(Path::new("a.rs")).expect("the file is still changed");
+        let file = index
+            .file(Path::new("a.rs"))
+            .expect("the file is still changed");
         assert_eq!(file.hunk_branch(kept), Some("api"));
         assert!(
             file.hunk_branch(orphan).is_none(),
@@ -2397,8 +2477,7 @@ mod tests {
         // The create prompt asks this before it will use a name: creating a
         // branch whose name is spoken for fails on the backend with a Git error
         // the user can do nothing about.
-        let state = workspace()
-            .with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
+        let state = workspace().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
 
         assert!(state.contains("api"));
         assert!(
@@ -2422,12 +2501,18 @@ mod tests {
 
     #[test]
     fn a_branch_reports_whether_anything_is_stacked_on_it() {
-        let state = workspace()
-            .with_branches(vec![vb("api"), vb("ui").with_parent("api"), vb("docs")]);
+        let state =
+            workspace().with_branches(vec![vb("api"), vb("ui").with_parent("api"), vb("docs")]);
         let stacks = state.stacks().unwrap();
         assert!(stacks[0].contains("api"));
-        assert!(stacks[0].contains("ui"), "a child belongs to its parent's stack");
-        assert!(!stacks[0].contains("docs"), "an independent branch starts its own");
+        assert!(
+            stacks[0].contains("ui"),
+            "a child belongs to its parent's stack"
+        );
+        assert!(
+            !stacks[0].contains("docs"),
+            "an independent branch starts its own"
+        );
         assert!(workspace().stacks().unwrap().is_empty(), "nothing to stack");
     }
 
@@ -2466,10 +2551,15 @@ mod tests {
         // The names are the user's; only their base moves, and rebasing them is
         // the backend's job — this only has to say what the base now is.
         let mut state = workspace().with_branches(vec![vb("api"), vb("ui").with_parent("api")]);
-        state.set_target("release/2.3").expect("a target nobody has claimed");
+        state
+            .set_target("release/2.3")
+            .expect("a target nobody has claimed");
 
         assert_eq!(state.target, "release/2.3");
-        assert_eq!(state.get("api").unwrap().base_branch(&state.target), "release/2.3");
+        assert_eq!(
+            state.get("api").unwrap().base_branch(&state.target),
+            "release/2.3"
+        );
         assert_eq!(state.get("ui").unwrap().base_branch(&state.target), "api");
     }
 }

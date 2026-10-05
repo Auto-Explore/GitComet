@@ -67,11 +67,11 @@ mod tag_push;
 mod terminal_shutdown_confirm;
 mod unsaved_file_edits_confirm;
 mod upstream_picker;
+pub(in crate::view) mod workspace_prompt;
 mod worktree_add_prompt;
 mod worktree_badge_picker;
 mod worktree_picker;
 mod worktree_remove_confirm;
-pub(in crate::view) mod workspace_prompt;
 
 #[derive(Clone, Debug)]
 enum PopoverAnchor {

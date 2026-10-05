@@ -1991,9 +1991,9 @@ impl PopoverHost {
                     let theme = self.theme;
                     // A branch row opens on its action list; the workspace-level
                     // kinds open straight on their field.
-                    self.workspace_prompt_kind =
-                        (prompt.kind == WorkspacePromptKind::BranchActions)
-                            .then_some(WorkspacePromptKind::BranchActions);
+                    self.workspace_prompt_kind = (prompt.kind
+                        == WorkspacePromptKind::BranchActions)
+                        .then_some(WorkspacePromptKind::BranchActions);
                     let value = prompt.value.clone();
                     self.create_branch_input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();

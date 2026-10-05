@@ -898,9 +898,7 @@ fn fill_set_active_repo_inline_impl(
     if changed {
         append_cancel_loads_for_deactivated_repo(state, previous_active, effects);
     }
-    if changed
-        && let Some(previous) = previous_active
-    {
+    if changed && let Some(previous) = previous_active {
         // The checkout belongs to the repository, but the tab that explains it
         // belongs to the window. Switching repositories leaves the sidebar on
         // Workspace, so without this the repository the user just walked away

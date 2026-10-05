@@ -99,7 +99,8 @@ pub(super) fn schedule_apply_workspace_edit(
         repo_id,
         msg_tx,
         move |repo, msg_tx| {
-            let result = apply_edit(repo.as_ref(), &edit).map(|outcome| outcome.unwrap_or_default());
+            let result =
+                apply_edit(repo.as_ref(), &edit).map(|outcome| outcome.unwrap_or_default());
             send_or_log(
                 &msg_tx,
                 Msg::Internal(InternalMsg::WorkspaceEditFinished {
@@ -215,12 +216,7 @@ fn apply_edit(
             below,
         } => {
             let before = state.get(name).and_then(|b| b.parent.clone());
-            state.move_to_stack(
-                name,
-                stack_base,
-                relative_to.as_deref(),
-                *below,
-            )?;
+            state.move_to_stack(name, stack_base, relative_to.as_deref(), *below)?;
             repo.write_workspace(&state)?;
             // Only a change of stack needs history rewritten; a reorder inside
             // the same stack does not.

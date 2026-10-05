@@ -387,7 +387,9 @@ pub(super) fn schedule_effect(
             }
         }
         Effect::ApplyWorkspaceEdit { repo_id, edit } => {
-            workspace_effects::schedule_apply_workspace_edit(executor, repos, msg_tx, repo_id, edit);
+            workspace_effects::schedule_apply_workspace_edit(
+                executor, repos, msg_tx, repo_id, edit,
+            );
         }
         Effect::EnterWorkspace {
             repo_id,
@@ -426,7 +428,9 @@ pub(super) fn schedule_effect(
             );
         }
         Effect::PushWorkspaceBranch { repo_id, name } => {
-            workspace_effects::schedule_push_workspace_branch(executor, repos, msg_tx, repo_id, name);
+            workspace_effects::schedule_push_workspace_branch(
+                executor, repos, msg_tx, repo_id, name,
+            );
         }
         Effect::LoadRemotes { repo_id } => {
             if let Some((msg_tx, cancellation)) =

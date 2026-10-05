@@ -2244,7 +2244,11 @@ pub trait GitRepository: Send + Sync {
     /// The workspace pushes virtual branches as ordinary branches; this exists
     /// so the UI can say what a push would do before it does it, and so a
     /// stacked branch's PR base is known without opening a browser.
-    fn virtual_branch_push_target(&self, name: &str, workspace: &crate::workspace::WorkspaceState) -> Option<String> {
+    fn virtual_branch_push_target(
+        &self,
+        name: &str,
+        workspace: &crate::workspace::WorkspaceState,
+    ) -> Option<String> {
         let _ = (name, workspace);
         None
     }

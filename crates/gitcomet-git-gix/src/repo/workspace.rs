@@ -18,8 +18,8 @@ use gitcomet_core::domain::CommitId;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CommandOutput, CommitOperationOutcome, Result};
 use gitcomet_core::workspace::{
-    hunk_spans, synthesize_for_branch, AssignmentIndex, VirtualBranch, WORKSPACE_BRANCH,
-    WORKSPACE_REF_PREFIX, WorkspaceState,
+    AssignmentIndex, VirtualBranch, WORKSPACE_BRANCH, WORKSPACE_REF_PREFIX, WorkspaceState,
+    hunk_spans, synthesize_for_branch,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -206,11 +206,7 @@ impl GixRepo {
                 ))));
             }
         };
-        let commit = self.commit_tree(
-            &tree,
-            &[&onto_id],
-            &format!("Rebase {name} onto {onto}"),
-        )?;
+        let commit = self.commit_tree(&tree, &[&onto_id], &format!("Rebase {name} onto {onto}"))?;
 
         let mut cmd = self.git_plumbing();
         cmd.arg("update-ref")
@@ -247,8 +243,9 @@ impl GixRepo {
         if let Ok(Some(branch)) = self.current_branch_name()
             && is_workspace_branch(branch.trim())
         {
+            let product = gitcomet_core::identity::current().display_name();
             return Err(Error::new(ErrorKind::Backend(format!(
-                "'{branch}' is GitComet's own branch and is rebuilt from the applied \
+                "'{branch}' is {product}'s own branch and is rebuilt from the applied \
                  branches, so {action} here would be undone by the next apply. Use \
                  the Workspace tab: it works on the branch each change belongs to, \
                  and pushes a named branch rather than HEAD."
@@ -291,10 +288,11 @@ impl GixRepo {
             // virtual branches happen to be applied.
             .arg("--no-recurse-submodules")
             .arg(WORKSPACE_BRANCH);
+        let product = gitcomet_core::identity::current().display_name();
         run_git_simple(cmd, "git checkout").map_err(|error| {
             Error::new(ErrorKind::Backend(format!(
                 "could not switch the working directory to the workspace: {error}\n\n\
-                 GitComet will not discard uncommitted changes. Commit or stash \
+                 {product} will not discard uncommitted changes. Commit or stash \
                  them, then try again."
             )))
         })?;
@@ -309,13 +307,12 @@ impl GixRepo {
     pub(super) fn leave_workspace_impl(&self, onto: &str) -> Result<()> {
         self.require_revision(onto)?;
         let mut cmd = self.git_plumbing();
-        cmd.arg("checkout")
-            .arg("--no-recurse-submodules")
-            .arg(onto);
+        cmd.arg("checkout").arg("--no-recurse-submodules").arg(onto);
+        let product = gitcomet_core::identity::current().display_name();
         run_git_simple(cmd, "git checkout").map_err(|error| {
             Error::new(ErrorKind::Backend(format!(
                 "could not switch back to '{onto}': {error}\n\n\
-                 GitComet will not discard uncommitted changes. Commit or stash \
+                 {product} will not discard uncommitted changes. Commit or stash \
                  them, then try again."
             )))
         })
@@ -347,10 +344,11 @@ impl GixRepo {
             .arg("-m")
             .arg(old_tip.as_ref())
             .arg(new_tip.as_ref());
+        let product = gitcomet_core::identity::current().display_name();
         run_git_simple(cmd, "git read-tree").map_err(|error| {
             Error::new(ErrorKind::Backend(format!(
                 "could not update the working directory: {error}\n\n\
-                 GitComet will not discard uncommitted changes. Commit or stash \
+                 {product} will not discard uncommitted changes. Commit or stash \
                  the files above, then try again."
             )))
         })
@@ -416,7 +414,10 @@ impl GixRepo {
         // sync leaves the index and the working tree exactly as they were, and
         // with the ref still on the old tree the two cannot disagree.
         let previous = self.resolve_revision(WORKSPACE_BRANCH)?;
-        if let Some(previous) = previous.as_ref().filter(|_| self.workspace_is_checked_out()) {
+        if let Some(previous) = previous
+            .as_ref()
+            .filter(|_| self.workspace_is_checked_out())
+        {
             self.sync_workspace_workdir_impl(previous, &head)?;
         }
 
@@ -464,8 +465,7 @@ impl GixRepo {
 
         let applied = state.application_order()?;
         let names: Vec<&str> = applied.iter().map(|b| b.name.as_str()).collect();
-        self.update_workspace_branch_impl(&names)
-            .map(|_| ())
+        self.update_workspace_branch_impl(&names).map(|_| ())
     }
 
     // ── Assigning and committing ─────────────────────────────────
@@ -478,7 +478,9 @@ impl GixRepo {
     ) -> Result<CommitOperationOutcome> {
         let state = self.read_workspace_impl()?;
         let branch = state.get(name).ok_or_else(|| {
-            Error::new(ErrorKind::Backend(format!("'{name}' is not a workspace branch")))
+            Error::new(ErrorKind::Backend(format!(
+                "'{name}' is not a workspace branch"
+            )))
         })?;
         let base = branch.base_branch(&state.target).to_string();
         let base_id = self.require_revision(&base)?;
@@ -500,11 +502,7 @@ impl GixRepo {
 
         let assignments = self.read_assignments_impl()?;
         let tree = self.commit_paths_tree(&index_path, &base_id, paths, name, &assignments)?;
-        let commit = self.commit_tree(
-            &tree,
-            &[&base_id],
-            message,
-        )?;
+        let commit = self.commit_tree(&tree, &[&base_id], message)?;
 
         let mut cmd = self.git_plumbing();
         cmd.arg("update-ref")
@@ -626,10 +624,9 @@ impl GixRepo {
         // That is the whole point of keying on content: the assignment was made
         // from a diff against something else, and it still resolves.
         let keep = |fingerprint: gitcomet_core::workspace::HunkFingerprint| {
-            mine.iter()
-                .any(|(assigned, assigned_branch)| {
-                    *assigned == fingerprint && *assigned_branch == branch
-                })
+            mine.iter().any(|(assigned, assigned_branch)| {
+                *assigned == fingerprint && *assigned_branch == branch
+            })
         };
         let synthesized = synthesize_for_branch(base_text, working_text, &spans, &keep);
 
@@ -689,11 +686,7 @@ impl GixRepo {
     /// quietly turn an executable into a regular one.
     fn path_mode(&self, base_id: &CommitId, path: &Path) -> Result<&'static str> {
         let mut staged = self.git_plumbing();
-        staged
-            .arg("ls-files")
-            .arg("-s")
-            .arg("--")
-            .arg(path);
+        staged.arg("ls-files").arg("-s").arg("--").arg(path);
         if let Ok(out) = run_git_capture(staged, "git ls-files")
             && let Some(mode) = parse_mode(&out)
         {
@@ -757,11 +750,21 @@ impl GixRepo {
             .arg(from.as_ref())
             .arg(to.as_ref());
         let out = run_git_capture(cmd, "git diff --name-only")?;
-        Ok(out.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect())
+        Ok(out
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect())
     }
 
     /// Create a commit from `tree` with the given parents.
-    fn commit_tree(&self, tree: &CommitId, parents: &[&CommitId], message: &str) -> Result<CommitId> {
+    fn commit_tree(
+        &self,
+        tree: &CommitId,
+        parents: &[&CommitId],
+        message: &str,
+    ) -> Result<CommitId> {
         let mut cmd = self.git_plumbing();
         cmd.arg("commit-tree").arg(tree.as_ref());
         for parent in parents {
@@ -1061,10 +1064,8 @@ mod tests {
 
         git(root, &["checkout", &default_branch]);
 
-        let state = WorkspaceState::new(&default_branch).with_branches(vec![
-            VirtualBranch::new("api"),
-            VirtualBranch::new("ui"),
-        ]);
+        let state = WorkspaceState::new(&default_branch)
+            .with_branches(vec![VirtualBranch::new("api"), VirtualBranch::new("ui")]);
         let repo = open_repo(root);
         repo.write_workspace(&state).expect("write workspace");
         (temp, repo, default_branch)
@@ -1201,10 +1202,7 @@ mod tests {
         // that the branch it was adding does not fit, because the others are
         // already one merged tree by the time it runs.
         let (temp, repo, _) = repo_with_two_branches();
-        git(
-            temp.path(),
-            &["checkout", "api"],
-        );
+        git(temp.path(), &["checkout", "api"]);
         std::fs::write(temp.path().join("moved.txt"), "from-api\n").unwrap();
         git(temp.path(), &["commit", "-am", "clash"]);
 
@@ -1268,7 +1266,10 @@ mod tests {
             )))
         };
 
-        assert!(merge_tree_conflicted(&failed(1)), "1 is git's conflict code");
+        assert!(
+            merge_tree_conflicted(&failed(1)),
+            "1 is git's conflict code"
+        );
         assert!(!merge_tree_conflicted(&failed(129)), "129 is a usage error");
         assert!(
             !merge_tree_conflicted(&Error::new(ErrorKind::Backend("nope".to_string()))),
@@ -1317,11 +1318,17 @@ mod tests {
             .arg(root)
             .arg("merge-tree")
             .arg("--write-tree")
-            .arg(format!("--merge-base={}", merge_base_of(&repo, &left, &right)))
+            .arg(format!(
+                "--merge-base={}",
+                merge_base_of(&repo, &left, &right)
+            ))
             .arg(left.as_ref())
             .arg(right.as_ref());
         let output = cmd.output().expect("run git");
-        assert!(!output.status.success(), "this conflict has to fail the merge");
+        assert!(
+            !output.status.success(),
+            "this conflict has to fail the merge"
+        );
 
         let error = Error::new(ErrorKind::Git(gitcomet_core::error::GitFailure::new(
             "git merge-tree",
@@ -1353,7 +1360,10 @@ mod tests {
     fn the_state_file_sits_inside_the_workspace_directory() {
         let dir = PathBuf::from("/repo/.git").join(WORKSPACE_DIR);
         assert!(dir.ends_with(WORKSPACE_DIR));
-        assert_eq!(dir.join(WORKSPACE_STATE_FILE).file_name().unwrap(), "workspace.json");
+        assert_eq!(
+            dir.join(WORKSPACE_STATE_FILE).file_name().unwrap(),
+            "workspace.json"
+        );
     }
 
     #[test]
@@ -1389,9 +1399,18 @@ mod tests {
         git(root, &["commit", "-m", "base"]);
 
         let repo = open_repo(root);
-        let base = repo.resolve_revision("HEAD").expect("resolve").expect("a base");
-        assert_eq!(repo.path_mode(&base, Path::new("run.sh")).unwrap(), "100755");
-        assert_eq!(repo.path_mode(&base, Path::new("plain.txt")).unwrap(), "100644");
+        let base = repo
+            .resolve_revision("HEAD")
+            .expect("resolve")
+            .expect("a base");
+        assert_eq!(
+            repo.path_mode(&base, Path::new("run.sh")).unwrap(),
+            "100755"
+        );
+        assert_eq!(
+            repo.path_mode(&base, Path::new("plain.txt")).unwrap(),
+            "100644"
+        );
         assert_eq!(
             repo.path_mode(&base, Path::new("new.txt")).unwrap(),
             "100644",
@@ -1444,7 +1463,10 @@ mod tests {
             .resolve_revision("right")
             .expect("resolve")
             .expect("right exists");
-        assert_ne!(left, right, "they have to be siblings for this to mean anything");
+        assert_ne!(
+            left, right,
+            "they have to be siblings for this to mean anything"
+        );
         assert_eq!(
             merge_base_of(&repo, &left, &right),
             base.as_ref(),
@@ -1466,7 +1488,10 @@ mod tests {
         git(root, &["add", "-A"]);
         git(root, &["commit", "-m", "lonely"]);
 
-        let api = repo.resolve_revision("api").expect("resolve").expect("api exists");
+        let api = repo
+            .resolve_revision("api")
+            .expect("resolve")
+            .expect("api exists");
         let lonely = repo
             .resolve_revision("lonely")
             .expect("resolve")
@@ -1548,10 +1573,7 @@ mod tests {
             .arg("show")
             .arg(format!("{revision}:{path}"));
         let output = cmd.output().expect("run git");
-        assert!(
-            output.status.success(),
-            "git show {revision}:{path} failed"
-        );
+        assert!(output.status.success(), "git show {revision}:{path} failed");
         String::from_utf8_lossy(&output.stdout).into_owned()
     }
 
@@ -1560,7 +1582,11 @@ mod tests {
         let spans = hunk_spans(SPLIT_BASE, SPLIT_WORKING);
         let mut index = AssignmentIndex::new();
         for (span, branch) in spans.iter().zip(["api", "ui"]) {
-            index.set_hunk(Path::new("shared.txt"), span.fingerprint, Some(branch.into()));
+            index.set_hunk(
+                Path::new("shared.txt"),
+                span.fingerprint,
+                Some(branch.into()),
+            );
         }
         repo.write_workspace_assignments(&index)
             .expect("write assignments");
@@ -1648,7 +1674,9 @@ mod tests {
         let root = temp.path();
         std::fs::write(root.join("shared.txt"), SPLIT_WORKING).unwrap();
         let mut state = repo.read_workspace().expect("read workspace");
-        state.set_parent("ui", Some("api")).expect("stack ui on api");
+        state
+            .set_parent("ui", Some("api"))
+            .expect("stack ui on api");
         repo.write_workspace(&state).expect("write workspace");
         assign_the_two_hunks(&repo);
 
@@ -1672,7 +1700,8 @@ mod tests {
         std::fs::write(root.join("mine.txt"), "y\n").unwrap();
         let mut index = AssignmentIndex::new();
         index.set(Path::new("mine.txt"), Some("api".into()));
-        repo.write_workspace_assignments(&index).expect("write assignments");
+        repo.write_workspace_assignments(&index)
+            .expect("write assignments");
 
         repo.commit_paths_to_virtual_branch("api", "just the new file", &[Path::new("mine.txt")])
             .expect("commit");
@@ -1692,8 +1721,12 @@ mod tests {
         let root = temp.path();
         std::fs::remove_file(root.join("shared.txt")).unwrap();
 
-        repo.commit_paths_to_virtual_branch("api", "drop the shared file", &[Path::new("shared.txt")])
-            .expect("commit");
+        repo.commit_paths_to_virtual_branch(
+            "api",
+            "drop the shared file",
+            &[Path::new("shared.txt")],
+        )
+        .expect("commit");
 
         assert_eq!(
             git(root, &["ls-tree", "--name-only", "api"]),
@@ -1701,7 +1734,11 @@ mod tests {
             "the deletion has to land on the branch too"
         );
         assert!(
-            !root.join(".git").join("gitcomet").join("commit-index").exists(),
+            !root
+                .join(".git")
+                .join("gitcomet")
+                .join("commit-index")
+                .exists(),
             "the temporary index has to be cleaned up"
         );
     }
@@ -1751,16 +1788,19 @@ mod tests {
 
         let default_branch = git(root, &["symbolic-ref", "--short", "HEAD"]);
         git(root, &["branch", "api"]);
-        let state = WorkspaceState::new(&default_branch).with_branches(vec![VirtualBranch::new("api")]);
+        let state =
+            WorkspaceState::new(&default_branch).with_branches(vec![VirtualBranch::new("api")]);
         let repo = open_repo(root);
         repo.write_workspace(&state).expect("write workspace");
 
         std::fs::write(root.join("run.sh"), "#!/bin/sh\necho bye\n").unwrap();
         let mut index = AssignmentIndex::new();
         index.set(Path::new("run.sh"), Some("api".into()));
-        repo.write_workspace_assignments(&index).expect("write assignments");
+        repo.write_workspace_assignments(&index)
+            .expect("write assignments");
 
-        repo.commit_paths_to_virtual_branch("api", "shout", &[Path::new("run.sh")]).expect("commit");
+        repo.commit_paths_to_virtual_branch("api", "shout", &[Path::new("run.sh")])
+            .expect("commit");
 
         let entry = git(root, &["ls-tree", "api", "--", "run.sh"]);
         assert!(
@@ -1778,11 +1818,18 @@ mod tests {
         let root = temp.path();
         std::fs::write(root.join("mine.txt"), "y\n").unwrap();
 
-        let result =
-            repo.commit_paths_to_virtual_branch("nowhere", "m", &[Path::new("mine.txt")]);
-        assert!(result.is_err(), "a branch the workspace does not have is an error");
+        let result = repo.commit_paths_to_virtual_branch("nowhere", "m", &[Path::new("mine.txt")]);
         assert!(
-            !root.join(".git").join("refs").join("heads").join("nowhere").exists(),
+            result.is_err(),
+            "a branch the workspace does not have is an error"
+        );
+        assert!(
+            !root
+                .join(".git")
+                .join("refs")
+                .join("heads")
+                .join("nowhere")
+                .exists(),
             "a refused commit must not create the ref either"
         );
     }
@@ -1944,8 +1991,7 @@ mod tests {
         let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
 
-        repo.update_workspace_branch(&["api", "ui"])
-            .expect("first");
+        repo.update_workspace_branch(&["api", "ui"]).expect("first");
         let tree = format!("{WORKSPACE_BRANCH}^{{tree}}");
         let tree_after_first = git(root, &["rev-parse", &tree]);
         let commits_after_first = workspace_log(root).lines().count();
@@ -1964,8 +2010,7 @@ mod tests {
             "and it changed the tree it points at"
         );
         assert_eq!(
-            commits_after_first,
-            3,
+            commits_after_first, 3,
             "the base plus one commit per applied branch, and nothing else"
         );
     }
@@ -2006,7 +2051,14 @@ mod tests {
             "and so does the file they clash on: {message}"
         );
         assert!(
-            !git_succeeds(root, &["rev-parse", "--verify", &format!("refs/heads/{WORKSPACE_BRANCH}")]),
+            !git_succeeds(
+                root,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    &format!("refs/heads/{WORKSPACE_BRANCH}")
+                ]
+            ),
             "a refused rebuild must not leave a half-built branch behind"
         );
         assert_eq!(
@@ -2023,7 +2075,8 @@ mod tests {
         let ui_parent_before = git(root, &["rev-parse", "ui^"]);
         let next = git(root, &["rev-parse", "next"]);
 
-        repo.update_workspace_target("next").expect("move the target");
+        repo.update_workspace_target("next")
+            .expect("move the target");
 
         assert_eq!(repo.read_workspace().expect("read").target, "next");
         assert_eq!(
@@ -2046,7 +2099,9 @@ mod tests {
         let (_temp, repo, _) = repo_with_two_branches();
         std::fs::write(repo.workspace_state_path(), b"{ this is not json").expect("corrupt it");
 
-        let state = repo.read_workspace().expect("a corrupt file is not an error");
+        let state = repo
+            .read_workspace()
+            .expect("a corrupt file is not an error");
         assert!(
             state.branches.is_empty(),
             "the branches are gone from the file, so they are gone here too"
@@ -2138,7 +2193,10 @@ mod tests {
         repo.create_virtual_branch("feature", &target)
             .expect("create");
 
-        assert!(git_succeeds(&root, &["rev-parse", "--verify", "refs/heads/feature"]));
+        assert!(git_succeeds(
+            &root,
+            &["rev-parse", "--verify", "refs/heads/feature"]
+        ));
         assert!(
             !git_succeeds(&root, &["rev-parse", "--abbrev-ref", "feature@{upstream}"]),
             "a branch nobody pushed has to track nothing"
@@ -2188,7 +2246,8 @@ mod tests {
         let remote_path = remote.path().to_string_lossy().into_owned();
         git(root, &["remote", "add", "origin", &remote_path]);
 
-        let state = WorkspaceState::new(&default_branch).with_branches(vec![VirtualBranch::new("api")]);
+        let state =
+            WorkspaceState::new(&default_branch).with_branches(vec![VirtualBranch::new("api")]);
         let repo = open_repo(root);
         repo.write_workspace(&state).expect("write workspace");
         (temp, remote, repo)
@@ -2211,7 +2270,10 @@ mod tests {
         );
         let head = git(root, &["symbolic-ref", "--short", "HEAD"]);
         assert!(
-            !git_succeeds(remote.path(), &["rev-parse", "--verify", &format!("refs/heads/{head}")]),
+            !git_succeeds(
+                remote.path(),
+                &["rev-parse", "--verify", &format!("refs/heads/{head}")]
+            ),
             "and not whichever branch the working directory happens to be on"
         );
     }
@@ -2248,7 +2310,9 @@ mod tests {
         let (_temp, repo, _) = repo_with_two_branches();
         let mut state = repo.read_workspace().expect("read");
         let target = state.target.clone();
-        state.set_parent("ui", Some("api")).expect("stack ui on api");
+        state
+            .set_parent("ui", Some("api"))
+            .expect("stack ui on api");
 
         assert_eq!(
             repo.virtual_branch_push_target("api", &state).as_deref(),
@@ -2340,7 +2404,11 @@ mod tests {
         repo.update_workspace_branch(&["api", "ui"]).expect("build");
         assert!(git_succeeds(
             root,
-            &["rev-parse", "--verify", &format!("refs/heads/{WORKSPACE_BRANCH}")]
+            &[
+                "rev-parse",
+                "--verify",
+                &format!("refs/heads/{WORKSPACE_BRANCH}")
+            ]
         ));
 
         let branches: Vec<String> = repo
@@ -2371,7 +2439,9 @@ mod tests {
         std::fs::write(root.join("shared.txt"), "edited\na2\na3\n").expect("edit");
         git(root, &["add", "-A"]);
 
-        let error = repo.commit("a message").expect_err("the workspace branch is not commit-able");
+        let error = repo
+            .commit("a message")
+            .expect_err("the workspace branch is not commit-able");
         assert!(
             format!("{error}").contains("Workspace tab"),
             "the message has to say where to commit instead: {error}"
@@ -2417,18 +2487,26 @@ mod tests {
         let root = temp.path();
         repo.enter_workspace().expect("enter");
 
-        let error = repo.push().expect_err("the workspace branch is not the user's to publish");
+        let error = repo
+            .push()
+            .expect_err("the workspace branch is not the user's to publish");
         let message = format!("{error}");
         assert!(
             message.contains("gitcomet/workspace") && message.contains("Workspace tab"),
             "the message has to name the branch and say what to do instead: {message}"
         );
         assert!(
-            !git_succeeds(remote.path(), &["rev-parse", "--verify", "refs/heads/gitcomet/workspace"]),
+            !git_succeeds(
+                remote.path(),
+                &["rev-parse", "--verify", "refs/heads/gitcomet/workspace"]
+            ),
             "nothing may have reached the remote"
         );
         assert!(
-            !git_succeeds(root, &["config", "--get", "branch.gitcomet/workspace.remote"]),
+            !git_succeeds(
+                root,
+                &["config", "--get", "branch.gitcomet/workspace.remote"]
+            ),
             "and no upstream may have been configured"
         );
     }
@@ -2449,7 +2527,10 @@ mod tests {
             &["rev-parse", "--verify", "refs/heads/api"]
         ));
         assert!(
-            !git_succeeds(remote.path(), &["rev-parse", "--verify", "refs/heads/gitcomet/workspace"]),
+            !git_succeeds(
+                remote.path(),
+                &["rev-parse", "--verify", "refs/heads/gitcomet/workspace"]
+            ),
             "pushing a branch must not drag HEAD along with it"
         );
     }
@@ -2494,7 +2575,10 @@ mod tests {
         let root = temp.path();
         let before = git(root, &["rev-parse", WORKSPACE_BRANCH]);
 
-        assert_refused(repo.cherry_pick_with_output(&tip, true, None), "a cherry-pick");
+        assert_refused(
+            repo.cherry_pick_with_output(&tip, true, None),
+            "a cherry-pick",
+        );
 
         assert_eq!(
             git(root, &["rev-parse", WORKSPACE_BRANCH]),
@@ -2653,7 +2737,10 @@ mod tests {
         let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
         repo.enter_workspace().expect("enter");
-        let tip = repo.resolve_revision(WORKSPACE_BRANCH).expect("resolve").expect("tip");
+        let tip = repo
+            .resolve_revision(WORKSPACE_BRANCH)
+            .expect("resolve")
+            .expect("tip");
 
         std::fs::write(root.join("shared.txt"), "mine\na2\na3\n").expect("edit");
         repo.sync_workspace_workdir_impl(&tip, &tip)

@@ -102,11 +102,7 @@ impl GitRepository for WorkspaceRepo {
         &self.spec
     }
 
-    fn log_head_page(
-        &self,
-        _limit: usize,
-        _cursor: Option<&LogCursor>,
-    ) -> Result<Arc<LogPage>> {
+    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<Arc<LogPage>> {
         unexpected("log_head_page")
     }
 
@@ -356,13 +352,8 @@ fn creating_a_branch_creates_it_at_the_target_and_puts_it_in_the_workspace() {
     // A branch nobody has committed to yet still has to show up as a branch, or
     // the working directory would not change when it is created.
     let repo = Arc::new(WorkspaceRepo::new(vec![]));
-    let outcome = apply(
-        &repo,
-        WorkspaceEdit::Create {
-            name: "api".into(),
-        },
-    )
-    .expect("the edit failed");
+    let outcome =
+        apply(&repo, WorkspaceEdit::Create { name: "api".into() }).expect("the edit failed");
 
     let calls = repo.calls();
     assert_eq!(calls.created, [("api".to_string(), "main".to_string())]);
@@ -407,10 +398,7 @@ fn inserting_above_an_anchor_stacks_on_it_and_replays_nothing() {
         calls.rebased.is_empty(),
         "no branch changed base, so nothing may be rewritten"
     );
-    assert_eq!(
-        calls.rebuilds,
-        [vec!["api".to_string(), "ui".to_string()]]
-    );
+    assert_eq!(calls.rebuilds, [vec!["api".to_string(), "ui".to_string()]]);
 }
 
 #[test]
@@ -441,7 +429,10 @@ fn inserting_below_an_anchor_takes_its_place_and_replays_it() {
         "the anchor now sits on the branch that displaced it"
     );
     let written = repo.last_write();
-    assert_eq!(written.get("api").and_then(|b| b.parent.clone()).as_deref(), Some("ui"));
+    assert_eq!(
+        written.get("api").and_then(|b| b.parent.clone()).as_deref(),
+        Some("ui")
+    );
     assert_eq!(written.get("ui").and_then(|b| b.parent.clone()), None);
     assert_eq!(
         calls.rebuilds,
@@ -455,7 +446,10 @@ fn inserting_below_a_stacked_anchor_keeps_the_stack_the_same_depth() {
     // The anchor had a parent, so the branch displacing it inherits that parent
     // instead of jumping to the target — otherwise the stack loses a level and
     // everything above the anchor would be pulled down with it.
-    let repo = Arc::new(WorkspaceRepo::new(vec![applied("base"), stacked("api", "base")]));
+    let repo = Arc::new(WorkspaceRepo::new(vec![
+        applied("base"),
+        stacked("api", "base"),
+    ]));
     apply(
         &repo,
         WorkspaceEdit::InsertRelativeTo {
@@ -496,8 +490,14 @@ fn inserting_next_to_a_branch_that_is_not_there_changes_nothing() {
     assert!(result.is_err(), "a missing anchor has to be refused");
 
     let calls = repo.calls();
-    assert!(calls.created.is_empty(), "nothing may be created on a base that does not exist");
-    assert!(calls.writes.is_empty(), "a refused edit must not write the state");
+    assert!(
+        calls.created.is_empty(),
+        "nothing may be created on a base that does not exist"
+    );
+    assert!(
+        calls.writes.is_empty(),
+        "a refused edit must not write the state"
+    );
     assert!(calls.rebuilds.is_empty());
 }
 
@@ -550,7 +550,10 @@ fn stacking_a_branch_replays_it_onto_its_new_base() {
 
 #[test]
 fn detaching_a_branch_replays_it_onto_the_target() {
-    let repo = Arc::new(WorkspaceRepo::new(vec![applied("api"), stacked("ui", "api")]));
+    let repo = Arc::new(WorkspaceRepo::new(vec![
+        applied("api"),
+        stacked("ui", "api"),
+    ]));
     apply(
         &repo,
         WorkspaceEdit::SetParent {
@@ -585,10 +588,7 @@ fn moving_into_another_stack_rebases_onto_the_new_base() {
 
     let calls = repo.calls();
     assert_eq!(calls.rebased, [("ui".to_string(), "api".to_string())]);
-    assert_eq!(
-        calls.rebuilds,
-        [vec!["api".to_string(), "ui".to_string()]]
-    );
+    assert_eq!(calls.rebuilds, [vec!["api".to_string(), "ui".to_string()]]);
 }
 
 #[test]
@@ -596,7 +596,10 @@ fn a_move_that_leaves_the_base_alone_does_not_rewrite_anything() {
     // Moving a branch to where it already is is what a drag produces when the
     // row does not actually move. Replaying it anyway would rewrite commits
     // that did not need rewriting, for a gesture that changed nothing.
-    let repo = Arc::new(WorkspaceRepo::new(vec![applied("api"), stacked("ui", "api")]));
+    let repo = Arc::new(WorkspaceRepo::new(vec![
+        applied("api"),
+        stacked("ui", "api"),
+    ]));
     let outcome = apply(
         &repo,
         WorkspaceEdit::MoveToStack {
@@ -609,7 +612,10 @@ fn a_move_that_leaves_the_base_alone_does_not_rewrite_anything() {
     .expect("the edit failed");
 
     let calls = repo.calls();
-    assert!(calls.rebased.is_empty(), "no base moved, so no commits move");
+    assert!(
+        calls.rebased.is_empty(),
+        "no base moved, so no commits move"
+    );
     assert!(calls.rebuilds.is_empty(), "nothing about the tree changed");
     assert!(
         outcome.post_head.is_none(),
@@ -630,7 +636,11 @@ fn reordering_two_siblings_writes_the_state_and_stops_there() {
     .expect("the edit failed");
 
     let calls = repo.calls();
-    assert_eq!(calls.writes.len(), 1, "the new positions have to be written");
+    assert_eq!(
+        calls.writes.len(),
+        1,
+        "the new positions have to be written"
+    );
     assert!(
         calls.rebuilds.is_empty(),
         "reordering changes which commit is applied first, not what is applied"
@@ -642,7 +652,10 @@ fn reordering_two_siblings_writes_the_state_and_stops_there() {
 fn removing_a_branch_takes_its_work_out_without_deleting_the_branch() {
     // The user removed a branch from the workspace, not from their repository:
     // deleting the ref would throw away commits they may still want.
-    let repo = Arc::new(WorkspaceRepo::new(vec![applied("api"), stacked("ui", "api")]));
+    let repo = Arc::new(WorkspaceRepo::new(vec![
+        applied("api"),
+        stacked("ui", "api"),
+    ]));
     apply(&repo, WorkspaceEdit::Remove { name: "ui".into() }).expect("the edit failed");
 
     let calls = repo.calls();
@@ -678,7 +691,12 @@ fn a_refused_edit_writes_nothing_and_rebuilds_nothing() {
     // The stored state must keep describing what Git actually has. Writing a
     // half-applied edit would leave it claiming a branch exists that does not.
     let repo = Arc::new(WorkspaceRepo::new(vec![applied("api")]));
-    let result = apply(&repo, WorkspaceEdit::Remove { name: "gone".into() });
+    let result = apply(
+        &repo,
+        WorkspaceEdit::Remove {
+            name: "gone".into(),
+        },
+    );
     assert!(result.is_err());
 
     let calls = repo.calls();
@@ -686,7 +704,11 @@ fn a_refused_edit_writes_nothing_and_rebuilds_nothing() {
     assert!(calls.rebuilds.is_empty());
     let stored = repo.stored();
     assert_eq!(
-        stored.branches.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(),
+        stored
+            .branches
+            .iter()
+            .map(|b| b.name.as_str())
+            .collect::<Vec<_>>(),
         ["api"],
         "a refused edit has to leave the stored state exactly as it was"
     );
@@ -708,7 +730,10 @@ fn pointing_the_workspace_at_another_target_is_the_backends_job() {
 
     let calls = repo.calls();
     assert_eq!(calls.targets, ["release/2.3".to_string()]);
-    assert_eq!(calls.reads, 3, "one to start, one to read the move back, one to rebuild");
+    assert_eq!(
+        calls.reads, 3,
+        "one to start, one to read the move back, one to rebuild"
+    );
     assert!(
         calls.writes.is_empty(),
         "the backend wrote the target itself; writing it again would be a guess"
@@ -767,7 +792,10 @@ fn assigning_a_file_never_reaches_git_at_all() {
     .expect("the edit failed");
 
     let calls = repo.calls();
-    assert_eq!(calls.reads, 0, "the assignment index does not need the workspace");
+    assert_eq!(
+        calls.reads, 0,
+        "the assignment index does not need the workspace"
+    );
     assert!(calls.writes.is_empty());
     assert!(calls.rebuilds.is_empty());
     assert!(calls.created.is_empty());
@@ -788,7 +816,10 @@ fn assigning_a_hunk_is_also_only_bookkeeping() {
     .expect("the edit failed");
 
     let calls = repo.calls();
-    assert_eq!(calls.reads, 0, "the assignment index does not need the workspace");
+    assert_eq!(
+        calls.reads, 0,
+        "the assignment index does not need the workspace"
+    );
     assert!(calls.writes.is_empty());
     assert!(calls.rebuilds.is_empty());
     assert!(outcome.post_head.is_none());
@@ -849,7 +880,13 @@ fn assigning_one_hunk_splits_the_file_it_belongs_to() {
             },
         );
         assert!(
-            matches!(msg, Msg::Internal(crate::msg::InternalMsg::WorkspaceAssignFinished { result: Ok(()), .. })),
+            matches!(
+                msg,
+                Msg::Internal(crate::msg::InternalMsg::WorkspaceAssignFinished {
+                    result: Ok(()),
+                    ..
+                })
+            ),
             "assigning to '{branch}' failed: {msg:?}"
         );
     }
@@ -944,9 +981,7 @@ fn an_edit_for_a_repository_that_is_gone_is_reported_not_dropped() {
         &FxHashMap::default(),
         Effect::ApplyWorkspaceEdit {
             repo_id: RepoId(404),
-            edit: WorkspaceEdit::Create {
-                name: "api".into(),
-            },
+            edit: WorkspaceEdit::Create { name: "api".into() },
         },
     );
     assert!(

@@ -37,7 +37,9 @@ fn run_against_unconfigured(
         let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
         repos.insert(
             repo_id,
-            Arc::new(UnconfiguredRepository::new(std::path::PathBuf::from("/repo"))),
+            Arc::new(UnconfiguredRepository::new(std::path::PathBuf::from(
+                "/repo",
+            ))),
         );
         repos
     };

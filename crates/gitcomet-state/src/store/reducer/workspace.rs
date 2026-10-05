@@ -36,7 +36,12 @@ pub(super) fn set_branch_applied(
 ) -> Vec<Effect> {
     // Applying or unapplying always rewrites `gitcomet/workspace`, so it takes
     // the same busy gate as a stack change.
-    apply_edit(state, repo_id, WorkspaceEdit::SetApplied { name, applied }, true)
+    apply_edit(
+        state,
+        repo_id,
+        WorkspaceEdit::SetApplied { name, applied },
+        true,
+    )
 }
 
 /// Any other workspace edit from the UI.
@@ -52,9 +57,7 @@ pub(super) fn apply_workspace_edit(
     // Matched by reference so the edit survives for `rewrites_history` and for
     // the effect below; the assignment owns copies rather than the fields.
     let assignment = match &edit {
-        WorkspaceEdit::AssignFile { path, branch } => {
-            Some((path.clone(), None, branch.clone()))
-        }
+        WorkspaceEdit::AssignFile { path, branch } => Some((path.clone(), None, branch.clone())),
         WorkspaceEdit::AssignHunk { path, hunk, branch } => {
             Some((path.clone(), Some(*hunk), branch.clone()))
         }
@@ -230,10 +233,7 @@ pub(super) fn push_branch(state: &mut AppState, repo_id: RepoId, name: String) -
 /// The branch to return to is read here rather than in the effect, because it
 /// is the reducer that sees the repository state and the effect that has
 /// already queued a command by the time anybody could ask.
-pub(super) fn enter_workspace(
-    state: &mut AppState,
-    repo_id: RepoId,
-) -> Vec<Effect> {
+pub(super) fn enter_workspace(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
     let Some(repo) = repo_mut(state, repo_id) else {
         return Vec::new();
     };
@@ -525,11 +525,7 @@ pub(super) fn workspace_push_finished(
 
     match result {
         Ok(_) => {
-            push_notification(
-                state,
-                AppNotificationKind::Info,
-                format!("Pushed '{name}'"),
-            );
+            push_notification(state, AppNotificationKind::Info, format!("Pushed '{name}'"));
             vec![Effect::LoadBranches { repo_id }]
         }
         Err(error) => {
@@ -562,12 +558,10 @@ mod tests {
         };
         let mut repo = RepoState::new_opening(RepoId(1), spec);
         let mut workspace = WorkspaceRepoState::default();
-        workspace.set_state(
-            WorkspaceState::new("main").with_branches(vec![
-                VirtualBranch::new("api"),
-                VirtualBranch::new("ui").with_parent("api"),
-            ]),
-        );
+        workspace.set_state(WorkspaceState::new("main").with_branches(vec![
+            VirtualBranch::new("api"),
+            VirtualBranch::new("ui").with_parent("api"),
+        ]));
         repo.workspace = workspace;
         state.repos.push(repo);
         state
@@ -580,10 +574,7 @@ mod tests {
         assert_eq!(effects.len(), 1);
         assert!(matches!(effects[0], Effect::LoadWorkspace { .. }));
         assert!(state.repos[0].workspace.busy.loading);
-        assert!(matches!(
-            state.repos[0].workspace.state,
-            Loadable::Loading
-        ));
+        assert!(matches!(state.repos[0].workspace.state, Loadable::Loading));
     }
 
     #[test]
@@ -656,13 +647,11 @@ mod tests {
         // changed the same lines" is something the user can act on, where the
         // git-native message only says a merge failed.
         let mut state = repo_with_workspace();
-        let error = gitcomet_core::error::Error::new(
-            gitcomet_core::error::ErrorKind::Backend(
-                "'ui' conflicts with 'api' in src/auth.ts\n\n\
+        let error = gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Backend(
+            "'ui' conflicts with 'api' in src/auth.ts\n\n\
                  Both are applied, and both changed the same lines."
-                    .into(),
-            ),
-        );
+                .into(),
+        ));
         workspace_edit_finished(
             &mut state,
             RepoId(1),
@@ -686,13 +675,11 @@ mod tests {
         // git named no partner, so the banner falls back rather than inventing
         // one — and must not read a branch name out of unrelated prose.
         let mut state = repo_with_workspace();
-        let error = gitcomet_core::error::Error::new(
-            gitcomet_core::error::ErrorKind::Backend(
-                "'ui' could not be applied: it conflicts with the branches already \
+        let error = gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Backend(
+            "'ui' could not be applied: it conflicts with the branches already \
                  in the workspace, in files git did not name"
-                    .into(),
-            ),
-        );
+                .into(),
+        ));
         workspace_edit_finished(
             &mut state,
             RepoId(1),
@@ -789,12 +776,13 @@ mod tests {
             RepoId(2),
         );
         assert!(
-            effects
-                .iter()
-                .any(|effect| matches!(
-                    effect,
-                    Effect::LeaveWorkspace { repo_id: RepoId(1), .. }
-                )),
+            effects.iter().any(|effect| matches!(
+                effect,
+                Effect::LeaveWorkspace {
+                    repo_id: RepoId(1),
+                    ..
+                }
+            )),
             "the repository left behind has to be handed its working directory back"
         );
     }
@@ -846,8 +834,7 @@ mod tests {
             "moving HEAD under the user is its own kind of busy"
         );
         assert_ne!(
-            state.repos[0].workspace.rev,
-            before_rev,
+            state.repos[0].workspace.rev, before_rev,
             "the presentation is cached on this counter, so a switch that does not bump it would leave the tab describing a working directory that has moved"
         );
     }
@@ -875,7 +862,10 @@ mod tests {
         state.repos[0].head_branch = Loadable::Ready(String::new());
         assert!(matches!(
             &enter_workspace(&mut state, RepoId(1))[0],
-            Effect::EnterWorkspace { checkout_base: None, .. }
+            Effect::EnterWorkspace {
+                checkout_base: None,
+                ..
+            }
         ));
     }
 
@@ -964,17 +954,19 @@ mod tests {
         let mut state = repo_with_workspace();
         let effects = workspace_active_finished(&mut state, RepoId(1), true, None, Ok(()));
         assert_ne!(
-            state.repos[0].workspace.rev,
-            0,
+            state.repos[0].workspace.rev, 0,
             "the switch has to reach the cached presentation, which only sees this counter"
         );
-        assert!(effects.iter().any(|effect| matches!(
-            effect,
-            Effect::LoadWorktreeStatus { repo_id: RepoId(1) }
-        )));
-        assert!(effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::LoadBranches { repo_id: RepoId(1) })));
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadWorktreeStatus { repo_id: RepoId(1) }))
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadBranches { repo_id: RepoId(1) }))
+        );
     }
 
     #[test]
@@ -1031,7 +1023,10 @@ mod tests {
             Ok(()),
         );
         assert_eq!(
-            state.repos[0].workspace.assignments.branch_of(Path::new("a.rs")),
+            state.repos[0]
+                .workspace
+                .assignments
+                .branch_of(Path::new("a.rs")),
             Some("api"),
             "the row has to update without waiting for the next load"
         );
@@ -1131,12 +1126,16 @@ mod tests {
             },
             Ok(gitcomet_core::services::CommitOperationOutcome::default()),
         );
-        assert!(effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::LoadWorktreeStatus { .. })));
-        assert!(effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::LoadWorkspace { .. })));
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadWorktreeStatus { .. }))
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadWorkspace { .. }))
+        );
         assert!(state.repos[0].workspace.conflict.is_none());
         assert!(!state.repos[0].workspace.busy.any());
     }
@@ -1221,10 +1220,7 @@ mod tests {
             Some("feature/api"),
             "src/lib.rs",
         ));
-        assert_eq!(
-            conflict.paths.as_ref(),
-            &[PathBuf::from("src/lib.rs")]
-        );
+        assert_eq!(conflict.paths.as_ref(), &[PathBuf::from("src/lib.rs")]);
         assert_eq!(conflict.against.as_deref(), Some("feature/api"));
     }
 
@@ -1272,13 +1268,17 @@ mod tests {
         index.set(PathBuf::from("b.rs"), Some("api".into()));
         state.repos[0].workspace.assignments = Arc::new(index);
 
-        let effects =
-            commit_single_file(&mut state, RepoId(1), PathBuf::from("a.rs"));
+        let effects = commit_single_file(&mut state, RepoId(1), PathBuf::from("a.rs"));
         assert_eq!(effects.len(), 1);
         match &effects[0] {
             Effect::ApplyWorkspaceEdit {
                 repo_id,
-                edit: WorkspaceEdit::CommitPaths { name, message, paths },
+                edit:
+                    WorkspaceEdit::CommitPaths {
+                        name,
+                        message,
+                        paths,
+                    },
             } => {
                 assert_eq!(*repo_id, RepoId(1));
                 assert_eq!(name, "api");
@@ -1301,8 +1301,7 @@ mod tests {
     #[test]
     fn committing_a_file_that_is_on_no_branch_says_so_instead_of_committing_it_anywhere() {
         let mut state = repo_with_workspace();
-        let effects =
-            commit_single_file(&mut state, RepoId(1), PathBuf::from("a.rs"));
+        let effects = commit_single_file(&mut state, RepoId(1), PathBuf::from("a.rs"));
 
         assert!(effects.is_empty(), "there is nowhere for it to go");
         assert_eq!(state.notifications.len(), 1);
@@ -1333,10 +1332,12 @@ mod tests {
         );
         state.repos[0].workspace.assignments = Arc::new(index);
 
-        let effects =
-            commit_single_file(&mut state, RepoId(1), PathBuf::from("a.rs"));
+        let effects = commit_single_file(&mut state, RepoId(1), PathBuf::from("a.rs"));
 
-        assert!(effects.is_empty(), "a split file has no single branch to commit to");
+        assert!(
+            effects.is_empty(),
+            "a split file has no single branch to commit to"
+        );
         assert_eq!(state.notifications.len(), 1);
     }
 
@@ -1349,8 +1350,7 @@ mod tests {
         index.set(PathBuf::from("a.rs"), Some("vanished".into()));
         state.repos[0].workspace.assignments = Arc::new(index);
 
-        let effects =
-            commit_single_file(&mut state, RepoId(1), PathBuf::from("a.rs"));
+        let effects = commit_single_file(&mut state, RepoId(1), PathBuf::from("a.rs"));
 
         assert!(effects.is_empty());
         assert_eq!(state.notifications.len(), 1);
@@ -1366,8 +1366,7 @@ mod tests {
         state.repos[0].workspace.assignments = Arc::new(index);
         state.repos[0].workspace.busy.mutating = true;
 
-        let effects =
-            commit_single_file(&mut state, RepoId(1), PathBuf::from("a.rs"));
+        let effects = commit_single_file(&mut state, RepoId(1), PathBuf::from("a.rs"));
 
         assert!(effects.is_empty());
         assert!(

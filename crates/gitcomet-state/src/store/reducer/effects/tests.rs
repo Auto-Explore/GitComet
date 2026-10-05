@@ -2269,7 +2269,8 @@ fn opening_the_workspace_tab_moves_the_working_directory_onto_it() {
     mark_repo_open_ready(&mut state, repo_id);
     // Already loaded, so the switch is not deferred behind a load.
     let repo = repo_mut(&mut state, repo_id);
-    repo.workspace.set_state(gitcomet_core::workspace::WorkspaceState::new("main"));
+    repo.workspace
+        .set_state(gitcomet_core::workspace::WorkspaceState::new("main"));
     repo.head_branch = Loadable::Ready("main".into());
 
     let effects = set_sidebar_mode(&mut state, SidebarMode::Workspace);
@@ -2289,7 +2290,8 @@ fn leaving_the_workspace_tab_hands_the_working_directory_back() {
     state.active_repo = Some(repo_id);
     state.sidebar_mode = SidebarMode::Workspace;
     let repo = repo_mut(&mut state, repo_id);
-    repo.workspace.set_state(gitcomet_core::workspace::WorkspaceState::new("main"));
+    repo.workspace
+        .set_state(gitcomet_core::workspace::WorkspaceState::new("main"));
     repo.workspace.active = true;
     repo.workspace.checkout_base = Some("main".into());
 
@@ -2309,7 +2311,8 @@ fn opening_the_workspace_tab_twice_does_not_switch_again() {
     state.active_repo = Some(repo_id);
     state.sidebar_mode = SidebarMode::Workspace;
     let repo = repo_mut(&mut state, repo_id);
-    repo.workspace.set_state(gitcomet_core::workspace::WorkspaceState::new("main"));
+    repo.workspace
+        .set_state(gitcomet_core::workspace::WorkspaceState::new("main"));
     repo.workspace.active = true;
 
     assert!(

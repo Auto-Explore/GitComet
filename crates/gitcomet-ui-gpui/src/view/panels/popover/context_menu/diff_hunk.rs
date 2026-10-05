@@ -112,9 +112,7 @@ pub(super) fn model(
     let fingerprint = pane
         .rendered_patch_diff_loadable()
         .and_then(Loadable::ready)
-        .and_then(|diff| {
-            crate::view::diff_utils::hunk_fingerprint(diff.lines.as_slice(), src_ix)
-        });
+        .and_then(|diff| crate::view::diff_utils::hunk_fingerprint(diff.lines.as_slice(), src_ix));
     if let Some(action) = workspace_assign_action(repo_id, src_ix, diff_target, fingerprint) {
         items.push(ContextMenuItem::Separator);
         items.push(ContextMenuItem::Entry {

@@ -656,8 +656,7 @@ pub(super) fn hunk_fingerprint(
     }
     let produced: Vec<&str> = produced.iter().map(String::as_str).collect();
     Some(gitcomet_core::workspace::HunkFingerprint::of(
-        &produced,
-        removed,
+        &produced, removed,
     ))
 }
 
