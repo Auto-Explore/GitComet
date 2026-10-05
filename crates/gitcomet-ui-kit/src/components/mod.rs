@@ -1,6 +1,7 @@
 //! Generic components built on the kit's interaction primitives.
 
 mod avatar;
+mod bottom_bar;
 mod button;
 mod containers;
 mod context_menu;
@@ -35,6 +36,7 @@ pub use avatar::{
     AVATAR_DIAMETER_PX, AVATAR_FONT_PX, author_avatar, author_color, author_initials,
     initials_paint_origin_y,
 };
+pub use bottom_bar::{BarButton, bottom_bar, nav_arrow_button};
 pub use button::{Button, ButtonStyle, inline_icon_button};
 pub use containers::{
     ScrollContainer, content_header_bar, empty_state, empty_state_message, progress_bar,
