@@ -55,6 +55,16 @@ NSScreen's refresh interval range) lets fixed-rate displays skip those
 presents. Other platforms report `false` and keep presenting. Test: `cargo test
 -p gpui-ce --lib --features test-support unchanged_frames_after_fast_input`.
 
+### macOS fonts without reading their files
+
+`gpui_macos/src/text_system.rs` creates installed families' faces from their
+Core Text descriptors (`create_for_family`) and wraps bundled faces' native
+fonts, instead of having font-kit read every face's file (and, for a
+collection, parse every face in it) to keep a copy nothing reads;
+`src/open_type.rs` follows. Named instances of variable fonts load as distinct
+faces. Test: `cargo test -p gpui_ce_macos --features font-kit --lib
+installed_families`.
+
 ## GPUI cropped WGPU path targets
 
 `gpui_wgpu/` and `gpui_render/` come from the same `46e1ede` revision above,

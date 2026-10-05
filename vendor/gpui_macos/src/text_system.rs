@@ -16,7 +16,7 @@ use core_graphics::{
 };
 use core_text::{
     font::CTFont,
-    font_collection::CTFontCollectionRef,
+    font_collection::{self, CTFontCollectionRef},
     font_descriptor::{
         CTFontDescriptor, kCTFontSlantTrait, kCTFontSymbolicTrait, kCTFontWeightTrait,
         kCTFontWidthTrait,
@@ -30,7 +30,6 @@ use font_kit::{
     hinting::HintingOptions,
     metrics::Metrics,
     properties::{Style as FontkitStyle, Weight as FontkitWeight},
-    source::SystemSource,
     sources::mem::MemSource,
 };
 use gpui::{
@@ -65,7 +64,6 @@ struct FontKey {
 
 struct MacTextSystemState {
     memory_source: MemSource,
-    system_source: SystemSource,
     fonts: Vec<FontKitFont>,
     font_selections: HashMap<Font, FontId>,
     font_ids_by_postscript_name: HashMap<String, FontId>,
@@ -78,7 +76,6 @@ impl MacTextSystem {
     pub fn new() -> Self {
         Self(RwLock::new(MacTextSystemState {
             memory_source: MemSource::empty(),
-            system_source: SystemSource::new(),
             fonts: Vec::new(),
             font_selections: HashMap::default(),
             font_ids_by_postscript_name: HashMap::default(),
@@ -253,6 +250,36 @@ fn font_smoothing_allowed_by_user() -> bool {
     })
 }
 
+/// CoreText reads glyphs from the font itself, so these fonts never carry their
+/// file's bytes: font-kit would read the whole file for every face (and, for a
+/// collection, parse every face in it) just to keep a copy nothing here reads.
+fn load_without_reading_font_files(handle: &Handle) -> Result<FontKitFont> {
+    if let Some(native) = handle.native_as::<CTFont>() {
+        // SAFETY: the handle holds a valid, retained Core Text font.
+        return Ok(unsafe { FontKitFont::from_core_text_font_no_path(native.clone()) });
+    }
+    Ok(handle.load()?)
+}
+
+/// An installed family's faces, as `SystemSource::select_family_by_name`
+/// finds them, but created from their descriptors rather than their files.
+fn installed_family_fonts(name: &str) -> Result<Vec<FontKitFont>> {
+    let Some(descriptors) = font_collection::create_for_family(name)
+        .and_then(|collection| collection.get_descriptors())
+        .filter(|descriptors| !descriptors.is_empty())
+    else {
+        return Err(anyhow!("no installed font family named {name:?}"));
+    };
+    Ok(descriptors
+        .iter()
+        .map(|descriptor| {
+            let native = core_text::font::new_from_descriptor(&descriptor, 16.0);
+            // SAFETY: `native` is a valid Core Text font created just above.
+            unsafe { FontKitFont::from_core_text_font_no_path(native) }
+        })
+        .collect())
+}
+
 impl MacTextSystemState {
     fn add_fonts(&mut self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
         let fonts = fonts
@@ -284,13 +311,15 @@ impl MacTextSystemState {
 
         let mut font_ids = SmallVec::new();
         let mut postscript_names_seen = HashSet::default();
-        let family = self
-            .memory_source
-            .select_family_by_name(name)
-            .or_else(|_| self.system_source.select_family_by_name(name))?;
-        for font in family.fonts() {
-            let mut font = font.load()?;
-
+        let fonts = match self.memory_source.select_family_by_name(name) {
+            Ok(family) => family
+                .fonts()
+                .iter()
+                .map(load_without_reading_font_files)
+                .collect::<Result<Vec<_>>>()?,
+            Err(_) => installed_family_fonts(name)?,
+        };
+        for mut font in fonts {
             apply_features_and_fallbacks(&mut font, features, fallbacks)?;
             // This block contains a precautionary fix to guard against loading fonts
             // that might cause panics due to `.unwrap()`s up the chain.
@@ -825,6 +854,47 @@ mod tests {
         // There's no glyph for \u{feff}
         assert_eq!(layout.runs[0].glyphs[0].id, GlyphId(68u32)); // a
         assert_eq!(layout.runs[0].glyphs[1].id, GlyphId(69u32)); // b
+    }
+
+    #[test]
+    fn installed_families_load_every_face_without_reading_their_files() {
+        let fonts = MacTextSystem::new();
+        // Helvetica ships as a collection: several faces in one file.
+        let helvetica = font("Helvetica");
+        let regular = fonts.font_id(&helvetica).unwrap();
+        let bold = fonts
+            .font_id(&gpui::Font {
+                weight: gpui::FontWeight::BOLD,
+                ..helvetica.clone()
+            })
+            .unwrap();
+        let oblique = fonts
+            .font_id(&gpui::Font {
+                style: gpui::FontStyle::Italic,
+                ..helvetica
+            })
+            .unwrap();
+        // A variable font's named instances load as distinct faces. Loading
+        // from its file would collapse all of them into the default instance.
+        fonts.font_id(&font("Skia")).unwrap();
+        {
+            let state = fonts.0.read();
+            let name = |id: gpui::FontId| state.fonts[id.0].postscript_name().unwrap();
+            assert_eq!(name(regular), "Helvetica");
+            assert_eq!(name(bold), "Helvetica-Bold");
+            assert_eq!(name(oblique), "Helvetica-Oblique");
+            let skia: collections::HashSet<_> = state
+                .fonts
+                .iter()
+                .filter_map(|font| font.postscript_name())
+                .filter(|name| name.starts_with("Skia"))
+                .collect();
+            assert!(skia.len() > 1, "Skia instances: {skia:?}");
+            // Core Text shapes and rasterizes from the installed font, so no
+            // face keeps a copy of its file.
+            assert!(state.fonts.iter().all(|f| f.copy_font_data().is_none()));
+        }
+        assert!(fonts.font_id(&font("GPUI Test No Such Family")).is_err());
     }
 
     #[test]

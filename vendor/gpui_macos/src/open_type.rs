@@ -68,7 +68,9 @@ pub fn apply_features_and_fallbacks(
             new_descriptor.as_concrete_TypeRef(),
         );
         let new_font = CTFont::wrap_under_create_rule(new_font);
-        *font = font_kit::font::Font::from_native_font(&new_font);
+        // Not `from_native_font`: that reads the whole font file again, for
+        // bytes the text system never uses.
+        *font = font_kit::font::Font::from_core_text_font_no_path(new_font);
 
         Ok(())
     }
