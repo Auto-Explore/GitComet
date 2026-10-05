@@ -73,25 +73,6 @@ impl Focusable for MainPaneView {
 }
 
 impl MainPaneView {
-    /// Labels for the split-diff column headers, matched to what is actually
-    /// being compared — conflict views keep their own local/remote wording.
-    pub(in crate::view) fn split_diff_pane_labels(&self) -> (&'static str, &'static str) {
-        let repo = self.active_repo();
-        let target = repo.and_then(|repo| match &self.bound_diff_state(repo).diff {
-            Loadable::Ready(diff) => Some(&diff.target),
-            _ => self.bound_diff_state(repo).diff_target.as_ref(),
-        });
-        match target {
-            Some(DiffTarget::Commit { .. }) => ("Parent", "This commit"),
-            Some(DiffTarget::CommitRange { .. }) => ("From commit", "To commit"),
-            Some(DiffTarget::WorkingTree {
-                area: DiffArea::Staged,
-                ..
-            }) => ("HEAD", "Staged"),
-            Some(DiffTarget::WorkingTree { .. }) | None => ("Index", "Working tree"),
-        }
-    }
-
     /// A thin vertical drag handle at the annotation column's right edge that
     /// resizes the column. Positioned absolutely; the caller's container must
     /// be `relative()`.
@@ -1754,7 +1735,6 @@ impl MainPaneView {
         // Intentionally no outer panel header; keep diff controls in the inner header.
 
         let title = self.diff_panel_title(theme, cx);
-        let viewer_nav = self.diff_viewer_nav_cluster(theme, cx);
         // What the pane shows, as every other question about it answers it.
         let surface = self.main_pane_surface();
         let inline_submodule_diff_active = surface.inline_submodule_diff;
@@ -2074,60 +2054,38 @@ impl MainPaneView {
 
         if !is_conflict_resolver && let Some(preview_kind) = rendered_view_toggle_kind {
             let preview_mode = self.rendered_preview_modes.get(preview_kind);
+            let scale =
+                ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics);
             controls = controls.child(
-                div()
-                    .id(preview_kind.toggle_id())
-                    .debug_selector(move || preview_kind.toggle_id().to_string())
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        components::Button::new(
+                components::SegmentedControl::new(preview_kind.toggle_id())
+                    .segment(
+                        components::Segment::new(
                             preview_kind.rendered_button_id(),
                             preview_kind.rendered_label(),
                         )
-                        .style(if preview_mode == RenderedPreviewMode::Rendered {
-                            components::ButtonStyle::Filled
-                        } else {
-                            components::ButtonStyle::Outlined
-                        })
-                        .on_click(
-                            theme,
-                            cx,
-                            move |this, _e, window, cx| {
-                                this.rendered_preview_modes
-                                    .set(preview_kind, RenderedPreviewMode::Rendered);
-                                // Rendered rows and source lines are different
-                                // row spaces, so an open search has to rescan
-                                // rather than keep indices into the old one.
-                                this.diff_search_recompute_matches();
-                                this.restore_diff_panel_focus_after_toolbar_action(window, cx);
-                                cx.notify();
-                            },
-                        ),
+                        .selected(preview_mode == RenderedPreviewMode::Rendered)
+                        .tooltip("Show rendered preview", Vec::new()),
                     )
-                    .child(
-                        components::Button::new(
+                    .segment(
+                        components::Segment::new(
                             preview_kind.source_button_id(),
                             preview_kind.source_label(),
                         )
-                        .style(if preview_mode == RenderedPreviewMode::Source {
-                            components::ButtonStyle::Filled
+                        .selected(preview_mode == RenderedPreviewMode::Source)
+                        .tooltip("Show source text", Vec::new()),
+                    )
+                    .render(theme, scale, cx, move |this, index, window, cx| {
+                        let mode = if index == 0 {
+                            RenderedPreviewMode::Rendered
                         } else {
-                            components::ButtonStyle::Outlined
-                        })
-                        .on_click(
-                            theme,
-                            cx,
-                            move |this, _e, window, cx| {
-                                this.rendered_preview_modes
-                                    .set(preview_kind, RenderedPreviewMode::Source);
-                                this.diff_search_recompute_matches();
-                                this.restore_diff_panel_focus_after_toolbar_action(window, cx);
-                                cx.notify();
-                            },
-                        ),
-                    ),
+                            RenderedPreviewMode::Source
+                        };
+                        this.rendered_preview_modes.set(preview_kind, mode);
+                        // Rendered rows and source lines use different row spaces.
+                        this.diff_search_recompute_matches();
+                        this.restore_diff_panel_focus_after_toolbar_action(window, cx);
+                        cx.notify();
+                    }),
             );
         }
 
@@ -2241,8 +2199,7 @@ impl MainPaneView {
                     .gap_2()
                     .min_w(px(0.0))
                     .overflow_hidden()
-                    .child(div().min_w(px(0.0)).overflow_hidden().child(title))
-                    .when_some(viewer_nav, |d, cluster| d.child(cluster)),
+                    .child(div().min_w(px(0.0)).overflow_hidden().child(title)),
             )
             .child(
                 // Right-anchor the controls and clip from the leading edge so a

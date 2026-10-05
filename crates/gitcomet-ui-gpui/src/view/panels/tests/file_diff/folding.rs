@@ -818,7 +818,7 @@ fn collapsed_diff_split_file_switch_resets_expanded_context(cx: &mut gpui::TestA
 }
 
 #[gpui::test]
-fn collapsed_diff_split_header_shows_stats_without_file_header(cx: &mut gpui::TestAppContext) {
+fn collapsed_diff_split_bar_shows_stats_without_column_headers(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -837,6 +837,7 @@ fn collapsed_diff_split_header_shows_stats_without_file_header(cx: &mut gpui::Te
         new_text,
     );
     draw_and_drain_test_window(cx);
+    assert!(cx.debug_bounds("diff_split_columns_header").is_none());
 
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
@@ -848,16 +849,16 @@ fn collapsed_diff_split_header_shows_stats_without_file_header(cx: &mut gpui::Te
         assert_eq!(
             pane.collapsed_diff_total_file_stat(),
             Some((1, 1)),
-            "fixture should expose one added and one removed row for the split header counters"
+            "fixture should expose one added and one removed row for the bottom bar counters"
         );
     });
     assert!(
-        cx.debug_bounds("diff_split_header_removed_stat").is_some(),
-        "expected the removed counter to be rendered in the left (before) pane header"
+        cx.debug_bounds("diff_bar_removed_stat").is_some(),
+        "expected the removed counter to be rendered in the bottom bar"
     );
     assert!(
-        cx.debug_bounds("diff_split_header_added_stat").is_some(),
-        "expected the added counter to be rendered in the right (after) pane header"
+        cx.debug_bounds("diff_bar_added_stat").is_some(),
+        "expected the added counter to be rendered in the bottom bar"
     );
 }
 

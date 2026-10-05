@@ -101,6 +101,7 @@ impl MainPaneView {
             || !matches!(self.view_mode, GitCometViewMode::Normal)
             || self.is_inline_submodule_diff_active()
             || self.is_conflict_resolver_active()
+            || self.is_file_editor_active()
         {
             return None;
         }
@@ -133,34 +134,26 @@ impl MainPaneView {
         scale: crate::ui_scale::UiScale,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        // In the editor Space types a space, so the key is not offered there.
-        let shortcut = (!self.is_file_editor_active()).then_some("Space");
+        let text = theme.colors.foreground.primary;
         let icon = match action.area {
             DiffArea::Unstaged => "icons/plus.svg",
             DiffArea::Staged => "icons/minus.svg",
         };
-        let mut button = components::BarButton::new("diff_bar_stage", action.label())
-            .icon(icon)
-            .primary(true);
-        if let Some(shortcut) = shortcut {
-            button = button.shortcut(shortcut);
-        }
-        button
-            .into_button(theme, scale)
+        let button = components::Button::new("diff_bar_stage", action.label())
+            .style(components::ButtonStyle::Subtle)
+            .bg(theme.colors.surface.raised)
+            .start_slot(svg_icon(icon, text, scale.px(14.0)))
+            .end_slot(components::shortcut_keys_compact("Space", text, scale))
             .on_click(theme, cx, |this, _e, window, cx| {
                 this.toggle_stage_shown_file(window, cx);
-                // Back to the diff, so the next Space stages the next file.
-                if !this.is_file_editor_active() {
-                    window.focus(&this.diff_panel_focus_handle, cx);
-                }
+                window.focus(&this.diff_panel_focus_handle, cx);
                 cx.notify();
             })
             .debug_selector(|| "diff_bar_stage".to_string())
-            .gitcomet_tooltip_keyed(
-                theme,
-                action.tooltip().into(),
-                shortcut.into_iter().map(SharedString::from).collect(),
-            )
+            .gitcomet_tooltip_keyed(theme, action.tooltip().into(), vec!["Space".into()]);
+        components::filled_action_frame(theme, scale)
+            .debug_selector(|| "diff_bar_stage_frame".to_string())
+            .child(button)
             .into_any_element()
     }
 
@@ -225,8 +218,8 @@ impl MainPaneView {
     }
 
     /// The diff's bottom bar: the file arrows and "3 of 43 files" on the
-    /// left, the actions for what is shown on the right, and the file's
-    /// format chips at the end. `None` when it would be empty.
+    /// left, format chips centred, and actions at the right. File-history
+    /// controls sit beside file navigation. `None` when it would be empty.
     pub(super) fn diff_bar(
         &self,
         repo_id: Option<RepoId>,
@@ -236,13 +229,23 @@ impl MainPaneView {
         let scale = crate::ui_scale::UiScale::current(cx);
         let nav = self.diff_bar_nav(repo_id, cx);
         let chips = self.text_format_chips(cx);
+        let viewer_nav = self.diff_viewer_nav_cluster(theme, cx);
+        let stats = (self.diff_view == DiffViewMode::Split
+            && self.is_collapsed_diff_projection_active())
+        .then(|| self.collapsed_diff_total_file_stat())
+        .flatten();
         let stage = repo_id.and_then(|repo_id| self.stage_action(repo_id, cx));
         let mut actions: Vec<AnyElement> = stage
             .map(|action| self.stage_button(action, theme, scale, cx))
             .into_iter()
             .collect();
         actions.extend(self.hosted_bar_items(theme, scale, cx));
-        if nav.is_none() && chips.is_none() && actions.is_empty() {
+        if nav.is_none()
+            && viewer_nav.is_none()
+            && stats.is_none()
+            && chips.is_none()
+            && actions.is_empty()
+        {
             return None;
         }
 
@@ -302,35 +305,65 @@ impl MainPaneView {
                 .children(position)
         });
 
-        let has_actions = !actions.is_empty();
-        let divider = (has_actions && chips.is_some()).then(|| {
+        let stats = stats.map(|(added, removed)| {
             div()
+                .flex()
                 .flex_none()
-                .h(scale.px(16.0))
-                .w(px(1.0))
-                .bg(theme.colors.stroke.subtle)
+                .items_center()
+                .gap(scale.px(6.0))
+                .text_size(theme.ui_text(12.0))
+                .child(
+                    div()
+                        .debug_selector(|| "diff_bar_removed_stat".to_string())
+                        .text_color(theme.colors.diff.removed.foreground)
+                        .child(format!("-{removed}")),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "diff_bar_added_stat".to_string())
+                        .text_color(theme.colors.diff.added.foreground)
+                        .child(format!("+{added}")),
+                )
         });
+        // Equal-width side slots keep the format strip at the bar's centre
+        // regardless of how much navigation or how many actions are present.
         Some(
             components::bottom_bar(theme, scale)
                 .id("diff_bottom_bar")
                 .debug_selector(|| "diff_bottom_bar".to_string())
-                .children(nav)
-                .child(div().flex_1().min_w(px(0.0)))
-                .when(has_actions, |bar| {
-                    bar.child(
-                        div()
-                            .id("diff_bar_actions")
-                            .flex()
-                            .items_center()
-                            .justify_end()
-                            .min_w(px(0.0))
-                            .overflow_hidden()
-                            .gap(scale.px(4.0))
-                            .children(actions),
-                    )
-                })
-                .children(divider)
+                .child(
+                    div()
+                        .flex()
+                        .flex_1()
+                        .flex_basis(px(0.0))
+                        .min_w(px(0.0))
+                        .items_center()
+                        .overflow_hidden()
+                        .gap(scale.px(6.0))
+                        .children(nav)
+                        .children(viewer_nav)
+                        .children(stats),
+                )
                 .children(chips)
+                .child(
+                    div()
+                        .id("diff_bar_actions")
+                        .flex()
+                        .flex_1()
+                        .flex_basis(px(0.0))
+                        .min_w(px(0.0))
+                        .items_center()
+                        .justify_end()
+                        .overflow_hidden()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_none()
+                                .items_center()
+                                .gap(scale.px(4.0))
+                                .children(actions),
+                        ),
+                )
                 .into_any_element(),
         )
     }

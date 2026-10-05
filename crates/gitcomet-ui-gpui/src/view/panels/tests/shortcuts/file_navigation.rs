@@ -402,6 +402,12 @@ fn comparison_diff_steps_through_range_files_with_arrows_and_f1_f4(cx: &mut gpui
     );
     // The header's icon knows the file from the comparison's list.
     assert!(cx.debug_bounds("diff_title_icon").is_some());
+    let icon = cx.debug_bounds("diff_title_icon").unwrap();
+    let text = cx.debug_bounds("diff_title_text").unwrap();
+    assert!(
+        (f32::from(icon.center().y - text.center().y)).abs() < 1.0,
+        "file icon and path share a centre: {icon:?}, {text:?}"
+    );
     assert_eq!(
         cx.update(|_window, app| view.read(app).main_pane.read(app).rendered_file_kind()),
         Some(FileStatusKind::Modified)
@@ -1115,16 +1121,52 @@ fn the_diff_controls_name_their_keys(cx: &mut gpui::TestAppContext) {
     ));
     let first = std::path::PathBuf::from("src/first.rs");
     let second = std::path::PathBuf::from("src/second.rs");
-    let repo = simple_worktree_repo(
+    let mut repo = simple_worktree_repo(
         repo_id,
         &workdir,
         &commit_id,
         &[first.clone(), second],
         &first,
     );
+    // Format controls require resolved source metadata, as real loads supply.
+    std::fs::create_dir_all(&workdir).unwrap();
+    let source = |name: &str, contents: &str| {
+        let path = workdir.join(name);
+        std::fs::write(&path, contents).unwrap();
+        gitcomet_core::domain::FileDiffTextSource::new(path).with_format(
+            gitcomet_core::text_format::SideTextFormat::utf8(
+                gitcomet_core::text_format::LineEndingStats {
+                    lf: 1,
+                    ..Default::default()
+                },
+            ),
+        )
+    };
+    repo.diff_state.diff_file = Loadable::Ready(Some(Arc::new(
+        gitcomet_core::domain::FileDiffText::new_sources(
+            first.clone(),
+            Some(source("old.rs", "old\n")),
+            Some(source("new.rs", "new\n")),
+        ),
+    )));
+    repo.diff_state.diff_file_rev = 1;
     apply_state(cx, &view, app_state_with_active_repo(repo));
     cx.simulate_resize(gpui::size(px(1600.0), px(900.0)));
     draw_and_drain_test_window(cx);
+
+    let bar = cx.debug_bounds("diff_bottom_bar").unwrap();
+    let format = cx
+        .debug_bounds("text_format_strip")
+        .expect("the format items");
+    let stage = cx.debug_bounds("diff_bar_stage_frame").unwrap();
+    assert!(
+        (f32::from(bar.center().x - format.center().x)).abs() < 1.0,
+        "format items centred: {format:?} in {bar:?}"
+    );
+    assert!(
+        (f32::from(bar.right() - stage.right()) - 8.0).abs() < 1.0,
+        "Stage at the right edge: {stage:?} in {bar:?}"
+    );
 
     let alt = crate::view::shortcut_labels::alt_shortcut;
     for (selector, expected) in [
