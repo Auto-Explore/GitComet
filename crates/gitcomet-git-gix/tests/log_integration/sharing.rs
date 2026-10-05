@@ -196,7 +196,8 @@ fn linked_worktrees_share_matching_queries_and_isolate_heads_filters_and_options
     let main = GixBackend.open(dir.path()).unwrap();
     let other = GixBackend.open(&linked).unwrap();
     assert!(!Arc::ptr_eq(&main, &other));
-    assert_eq!(other.spec().workdir, linked);
+    // Git records linked worktrees canonically (/private/var on macOS).
+    assert_eq!(other.spec().workdir, linked.canonicalize().unwrap());
     let all = index(&*main, HistoryMode::AllBranches, None);
     let linked_all = index(&*other, HistoryMode::AllBranches, None);
     assert!(Arc::ptr_eq(&all, &linked_all));
@@ -447,7 +448,7 @@ fn moving_and_removing_a_worktree_never_reuses_its_old_command_directory() {
     assert!(GixBackend.open(&linked).is_err());
     let new = GixBackend.open(&moved).unwrap();
     assert!(!Arc::ptr_eq(&old, &new));
-    assert_eq!(new.spec().workdir, moved);
+    assert_eq!(new.spec().workdir, moved.canonicalize().unwrap());
     assert!(Arc::ptr_eq(
         &all,
         &index(&*new, HistoryMode::AllBranches, None)
