@@ -2229,7 +2229,11 @@ impl MainPaneView {
                     .items_center()
                     .justify_end()
                     .overflow_hidden()
-                    .child(controls.flex_none()),
+                    .child(
+                        controls
+                            .flex_none()
+                            .when(has_change_navigation, |d| d.gap_0()),
+                    ),
             );
 
         let (old_large, new_large) = if !is_file_editor
