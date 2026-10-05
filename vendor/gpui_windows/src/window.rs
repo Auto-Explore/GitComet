@@ -5,7 +5,7 @@ use std::{
     num::NonZeroIsize,
     path::PathBuf,
     rc::{Rc, Weak},
-    sync::{Arc, Once, atomic::AtomicBool},
+    sync::{Arc, Once, OnceLock, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 
@@ -1031,6 +1031,18 @@ impl PlatformWindow for WindowsWindow {
 
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
         self.state.callbacks.request_frame.set(Some(callback));
+    }
+
+    fn has_fixed_refresh_rate(&self) -> bool {
+        // GPUI's Windows display descriptor does not expose a refresh range.
+        // Preserve variable-refresh behavior unless the operator explicitly
+        // declares all displays used by this process to have a fixed rate.
+        // Cache the opt-in so repeated presentations never read the environment.
+        static FIXED_REFRESH: OnceLock<bool> = OnceLock::new();
+        *FIXED_REFRESH.get_or_init(|| {
+            std::env::var("GPUI_GPU_EXPERIMENTS")
+                .is_ok_and(|value| value.split(',').any(|part| part.trim() == "fixed-refresh"))
+        })
     }
 
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>) {

@@ -55,6 +55,20 @@ Windows already compiles its Direct3D shaders at build time and loads system
 fonts through DirectWrite. The macOS shader-precompilation and font-file fixes
 do not need equivalent Windows changes.
 
+### Fixed-refresh presentation opt-in
+
+`src/window.rs` implements `PlatformWindow::has_fixed_refresh_rate` with
+`GPUI_GPU_EXPERIMENTS=fixed-refresh`. This explicitly declares that all
+displays used by the process have a fixed refresh rate. The default remains
+`false`: a nominal 60 Hz display mode is not a reliable refresh-range query.
+On declared fixed-rate displays, the shared GPUI policy skips presentations
+of unchanged scenes during the one-second tail after high-rate input. Dirty
+frames and explicitly required presentations retain their existing behavior.
+Use `GPUI_GPU_EXPERIMENTS=cropped-paths,fixed-refresh` to enable both experiments.
+Test the shared policy with `cargo test -p gpui-ce --lib --features test-support
+unchanged_frames_after_fast_input` and measure native presentations with the
+UI probe.
+
 ## GPUI macOS platform
 
 `gpui_apple/` (the Metal renderer) and `gpui_macos/` (windows, text system)
@@ -81,7 +95,8 @@ frame for a second so that variable-refresh displays keep their rate; each
 present renders the whole scene again. `PlatformWindow::has_fixed_refresh_rate`
 (`gpui/src/platform.rs`, implemented in `gpui_macos/src/window.rs` from
 NSScreen's refresh interval range) lets fixed-rate displays skip those
-presents. Other platforms report `false` and keep presenting. Test: `cargo test
+presents. Windows has the explicit opt-in described above; other platforms
+report `false` and keep presenting. Test: `cargo test
 -p gpui-ce --lib --features test-support unchanged_frames_after_fast_input`.
 
 ### macOS fonts without reading their files
