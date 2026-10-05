@@ -9,13 +9,16 @@
 //! break an extension.
 
 use crate::host::{RepositoryHandle, WindowHost};
-use gitcomet_ui_kit::gpui::{AnyView, App, SharedString, Window};
+use gitcomet_ui_kit::gpui::{AnyView, App, FocusHandle, Focusable, SharedString, Window};
 use gitcomet_ui_kit::theme::AppTheme;
 use std::path::PathBuf;
 use std::rc::Rc;
 
 /// Builds a contribution's view for one window or repository.
 pub type ViewBuilder<C> = Rc<dyn Fn(C, &mut Window, &mut App) -> AnyView>;
+
+/// The keyboard scope of a built repository view.
+pub type ViewFocus = Rc<dyn Fn(&AnyView, &App) -> Option<FocusHandle>>;
 
 /// Runs a command.
 pub type CommandHandler = Rc<dyn Fn(CommandContext, &mut Window, &mut App)>;
@@ -36,6 +39,8 @@ pub struct RepositoryViewDescriptor {
     pub title: SharedString,
     pub icon: SharedString,
     pub build: ViewBuilder<RepositoryViewContext>,
+    /// Focused by the host when the user switches to this view.
+    pub focus: Option<ViewFocus>,
     /// Navigation belongs to the selected view, including mouse side buttons.
     pub navigation: Option<ViewNavigation>,
     /// The action bar's context while the view is selected: shown after
@@ -60,6 +65,7 @@ impl RepositoryViewDescriptor {
             title: title.into(),
             icon: icon.into(),
             build: Rc::new(build),
+            focus: None,
             navigation: None,
             action_bar: None,
             under_more: false,
@@ -69,6 +75,18 @@ impl RepositoryViewDescriptor {
 
     pub fn with_navigation(mut self, navigation: ViewNavigation) -> Self {
         self.navigation = Some(navigation);
+        self
+    }
+
+    /// Give the keyboard to the built view of type `V` on selection. The
+    /// host does this once per view switch, never on redraw or activation.
+    pub fn with_focus<V: Focusable + 'static>(mut self) -> Self {
+        self.focus = Some(Rc::new(|view, cx| {
+            view.clone()
+                .downcast::<V>()
+                .ok()
+                .map(|view| view.read(cx).focus_handle(cx))
+        }));
         self
     }
 

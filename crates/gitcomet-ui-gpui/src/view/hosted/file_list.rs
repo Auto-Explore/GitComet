@@ -818,6 +818,9 @@ pub(crate) struct HostedFileList {
 }
 
 impl FileListImpl for HostedFileList {
+    fn observe(&self, on_change: Rc<dyn Fn(&mut App)>, cx: &mut App) -> Option<gpui::Subscription> {
+        Some(cx.observe(&self.entity, move |_, cx| on_change(cx)))
+    }
     fn view(&self) -> gpui::AnyView {
         self.entity.clone().into()
     }

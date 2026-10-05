@@ -46,10 +46,7 @@ impl StageAction {
 
 /// "3 of 43 files".
 pub(in crate::view) fn position_label(index: usize, count: usize) -> String {
-    match count {
-        1 => "1 of 1 file".to_string(),
-        n => format!("{} of {n} files", index + 1),
-    }
+    gitcomet_extension_api::DiffFilePosition::new(index, count).label()
 }
 
 impl MainPaneView {

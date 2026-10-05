@@ -753,6 +753,22 @@ impl GitCometView {
         }
         if matches!(area, RoutedArea::Main) {
             self.follow_view(&repo, window, cx);
+            // The old view may have hidden the field that held focus. Give
+            // it to the newly selected view even before its first frame.
+            let focus = self.repository_views.as_ref().and_then(|router| {
+                let index = router.selected(&repo)?;
+                let (_, descriptor) = router.views.get(index)?;
+                let view = router.built(&repo, index)?;
+                descriptor.focus.as_ref()?.as_ref()(&view, cx)
+            });
+            if let Some(focus) = focus {
+                window.focus(&focus, cx);
+            } else if index.is_some() {
+                window.focus(&self.repository_view_focus, cx);
+            } else {
+                let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
+                window.focus(&focus, cx);
+            }
         }
         self.sync_sidebar_tabs(cx);
         self.sync_extension_navigation(cx);
