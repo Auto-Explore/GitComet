@@ -12,13 +12,12 @@
 //! stutter in a long stack list.
 
 use super::*;
-use crate::kit::interaction::ControlInteractionExt as _;
-use crate::view::components::InteractiveRowExt as _;
 use crate::view::panels::popover::workspace_prompt::{
     assign_file_prompt, commit_file_prompt, default_commit_message,
 };
 use gitcomet_core::workspace::{BranchApplyState, VirtualBranch};
 use gitcomet_state::model::{Loadable, WorkspaceEdit};
+use gpui::{Div, Stateful};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -495,24 +494,29 @@ fn render_target_row(
     let set_target = components::Button::new("workspace_set_target", "Change")
         .style(components::ButtonStyle::Subtle)
         .disabled(busy)
-        .on_click(theme, cx, move |this, event, window, cx| {
-            this.open_popover_at(
-                PopoverKind::WorkspacePrompt {
-                    repo_id,
-                    prompt: WorkspacePrompt {
-                        kind: WorkspacePromptKind::SetTarget,
-                        branch: String::new(),
-                        path: None,
-                        hunk: None,
-                        // Opens on the current target so the common case is an
-                        // edit rather than a retype.
-                        value: name.clone(),
+        .on_click(theme, cx, {
+            // Cloned for the prompt: the tooltip and the row label below both
+            // need the name after the closure has taken its copy.
+            let prompt_name = name.clone();
+            move |this, event, window, cx| {
+                this.open_popover_at(
+                    PopoverKind::WorkspacePrompt {
+                        repo_id,
+                        prompt: WorkspacePrompt {
+                            kind: WorkspacePromptKind::SetTarget,
+                            branch: String::new(),
+                            path: None,
+                            hunk: None,
+                            // Opens on the current target so the common case is an
+                            // edit rather than a retype.
+                            value: prompt_name.clone(),
+                        },
                     },
-                },
-                event.position(),
-                window,
-                cx,
-            );
+                    event.position(),
+                    window,
+                    cx,
+                );
+            }
         })
         .gitcomet_tooltip(
             theme,
@@ -637,22 +641,27 @@ fn render_branch_row(
     let actions = components::Button::new(format!("workspace_actions_{name}"), "⋯")
         .style(components::ButtonStyle::Subtle)
         .disabled(busy)
-        .on_click(theme, cx, move |this, event, window, cx| {
-            this.open_popover_at(
-                PopoverKind::WorkspacePrompt {
-                    repo_id,
-                    prompt: WorkspacePrompt {
-                        kind: WorkspacePromptKind::BranchActions,
-                        branch: name.clone(),
-                        path: None,
-                        hunk: None,
-                        value: String::new(),
+        .on_click(theme, cx, {
+            // Cloned for the prompt: the tooltip and the row label below both
+            // need the name after the closure has taken its copy.
+            let prompt_name = name.clone();
+            move |this, event, window, cx| {
+                this.open_popover_at(
+                    PopoverKind::WorkspacePrompt {
+                        repo_id,
+                        prompt: WorkspacePrompt {
+                            kind: WorkspacePromptKind::BranchActions,
+                            branch: prompt_name.clone(),
+                            path: None,
+                            hunk: None,
+                            value: String::new(),
+                        },
                     },
-                },
-                event.position(),
-                window,
-                cx,
-            );
+                    event.position(),
+                    window,
+                    cx,
+                );
+            }
         })
         .gitcomet_tooltip(theme, SharedString::from(format!("Actions for {name}")));
 
@@ -863,16 +872,20 @@ fn render_file_row(
         )
         .style(components::ButtonStyle::Subtle)
         .disabled(busy)
-        .on_click(theme, cx, move |this, event, window, cx| {
-            this.open_popover_at(
-                PopoverKind::WorkspacePrompt {
-                    repo_id,
-                    prompt: commit_file_prompt(&commit_path, &message),
-                },
-                event.position(),
-                window,
-                cx,
-            );
+        .on_click(theme, cx, {
+            // Cloned for the prompt: the tooltip below still names the path.
+            let prompt_path = commit_path.clone();
+            move |this, event, window, cx| {
+                this.open_popover_at(
+                    PopoverKind::WorkspacePrompt {
+                        repo_id,
+                        prompt: commit_file_prompt(&prompt_path, &message),
+                    },
+                    event.position(),
+                    window,
+                    cx,
+                );
+            }
         })
         .gitcomet_tooltip(
             theme,
@@ -892,7 +905,7 @@ fn render_file_row(
     let assign_tooltip = match (&branch, split.as_slice()) {
         (Some(branch), _) => format!("Commit {label} to a different branch than {branch}"),
         (None, [only]) => format!("Commit all of {label} to {only} instead of only part of it"),
-        (None, many) if many.is_empty() => format!("Say which branch commits {label}"),
+        (None, []) => format!("Say which branch commits {label}"),
         (None, many) => format!("Commit all of {label} to one branch instead of {}", many.join(" + ")),
     };
     let assign_path = path.clone();
@@ -942,7 +955,7 @@ fn render_file_row(
                 // "api + ui" rather than a count, because the count is not what
                 // the user needs to know to go and look at a hunk.
                 (None, [only]) => only.clone(),
-                (None, many) if many.is_empty() => "Unassigned".into(),
+                (None, []) => "Unassigned".into(),
                 (None, many) => many.join(" + "),
             }),
     );

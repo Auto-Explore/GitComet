@@ -29,12 +29,12 @@ impl GitBackend for Backend {
 /// single message it produced.
 fn run_against_unconfigured(
     effect: Effect,
-) -> std::result::Result<Msg, std::sync::mpsc::RecvError> {
+) -> std::result::Result<Msg, std::sync::mpsc::RecvTimeoutError> {
     let repo_id = RepoId(7);
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
     let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
+        let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
         repos.insert(
             repo_id,
             Arc::new(UnconfiguredRepository::new(std::path::PathBuf::from("/repo"))),

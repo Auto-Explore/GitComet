@@ -1401,7 +1401,7 @@ mod tests {
                 sent,
                 Some(Msg::Internal(InternalMsg::WorkspaceActiveFinished {
                     active: true,
-                    checkout_base: Some(base),
+                    checkout_base: Some(ref base),
                     result: Err(_),
                     ..
                 })) if base == "main"
@@ -1441,7 +1441,7 @@ mod tests {
             matches!(
                 sent,
                 Some(Msg::Internal(InternalMsg::WorkspaceAssignFinished {
-                    branch: Some(branch),
+                    branch: Some(ref branch),
                     result: Err(_),
                     ..
                 })) if branch == "api"

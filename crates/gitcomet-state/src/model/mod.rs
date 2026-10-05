@@ -22,8 +22,11 @@ pub use workspace::*;
 
 pub type Shared<T> = Arc<T>;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum Loadable<T> {
+    /// Nothing has been requested yet. This is also the `Default`, so a fresh
+    /// state starts out not-loaded rather than loading or failed.
+    #[default]
     NotLoaded,
     Loading,
     Ready(T),

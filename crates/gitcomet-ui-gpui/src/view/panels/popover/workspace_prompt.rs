@@ -20,10 +20,10 @@ fn detail_line(
     value: &str,
 ) -> SharedString {
     match kind {
-        WorkspacePromptKind::Create => format!(
+        WorkspacePromptKind::Create => {
             "The new branch starts from the workspace target, with no commits of its own yet."
-        )
-        .into(),
+                .into()
+        }
         WorkspacePromptKind::CreateAbove => format!(
             "The new branch is stacked on {branch}, so it starts from {branch}'s tip. Nothing already in the stack moves."
         )

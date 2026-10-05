@@ -261,7 +261,7 @@ impl GitRepository for WorkspaceRepo {
         calls
             .rebuilds
             .push(applied.iter().map(|name| name.to_string()).collect());
-        Ok(CommitId(format!("workspace-{rebuild}")))
+        Ok(CommitId(format!("workspace-{rebuild}").into()))
     }
 
     fn update_workspace_target(&self, target: &str) -> Result<()> {
@@ -295,7 +295,7 @@ impl GitRepository for WorkspaceRepo {
         Ok(CommitOperationOutcome {
             local_branch: Some(name.to_string()),
             pre_head: None,
-            post_head: Some(CommitId(format!("{name}-commit"))),
+            post_head: Some(CommitId(format!("{name}-commit").into())),
         })
     }
 
@@ -376,7 +376,7 @@ fn creating_a_branch_creates_it_at_the_target_and_puts_it_in_the_workspace() {
         "the state file has to claim the branch exists"
     );
     assert_eq!(
-        outcome.post_head.map(|id| id.0),
+        outcome.post_head.map(|id| id.0.to_string()),
         Some("workspace-0".to_string()),
         "the caller is told what the workspace branch now points at"
     );
@@ -745,7 +745,7 @@ fn committing_paths_goes_to_the_branch_and_does_not_rebuild() {
     );
     assert!(calls.rebuilds.is_empty());
     assert_eq!(
-        outcome.post_head.map(|id| id.0),
+        outcome.post_head.map(|id| id.0.to_string()),
         Some("api-commit".to_string()),
         "the commit is on the branch, not on the workspace"
     );
@@ -767,7 +767,7 @@ fn assigning_a_file_never_reaches_git_at_all() {
     .expect("the edit failed");
 
     let calls = repo.calls();
-    assert!(calls.reads.is_empty(), "the assignment index does not need the workspace");
+    assert_eq!(calls.reads, 0, "the assignment index does not need the workspace");
     assert!(calls.writes.is_empty());
     assert!(calls.rebuilds.is_empty());
     assert!(calls.created.is_empty());
@@ -788,7 +788,7 @@ fn assigning_a_hunk_is_also_only_bookkeeping() {
     .expect("the edit failed");
 
     let calls = repo.calls();
-    assert!(calls.reads.is_empty(), "the assignment index does not need the workspace");
+    assert_eq!(calls.reads, 0, "the assignment index does not need the workspace");
     assert!(calls.writes.is_empty());
     assert!(calls.rebuilds.is_empty());
     assert!(outcome.post_head.is_none());
@@ -926,9 +926,9 @@ fn pushing_a_virtual_branch_reports_the_branch_it_pushed() {
             msg,
             Msg::Internal(crate::msg::InternalMsg::WorkspacePushFinished {
                 repo_id: REPO_ID,
-                name: ref name,
+                ref name,
                 result: Ok(_),
-            } if name == "api"
+            }) if name == "api"
         ),
         "the row has to know which push finished, got {msg:?}"
     );

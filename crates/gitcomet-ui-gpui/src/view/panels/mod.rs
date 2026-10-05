@@ -599,7 +599,7 @@ pub(in crate::view) enum ContextMenuAction {
     /// screen, so the user can say which virtual branch commits it.
     AssignHunkToWorkspace {
         repo_id: RepoId,
-        path: PathBuf,
+        path: std::path::PathBuf,
         hunk: gitcomet_core::workspace::HunkFingerprint,
     },
     UnstageHunk {

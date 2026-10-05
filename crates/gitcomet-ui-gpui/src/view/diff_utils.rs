@@ -592,6 +592,15 @@ fn unified_patch_capacity<T: UnifiedDiffLine>(
 /// base — the branch's, not `HEAD`'s — and only the change itself is the same
 /// on both sides.
 ///
+/// The hunk body is split into the change groups git folded into the `@@` —
+/// runs of `+`/`-` lines separated by context — and a group that only adds or
+/// only removes is left out of the fingerprint when another group in the same
+/// hunk is a replacement (touches both sides). Whether the diff also happened
+/// to show a pure insertion above depends on which base it was taken against,
+/// and the backend's [`gitcomet_core::workspace::hunk_spans`] applies the same
+/// rule, so the two sides agree on the hunk's identity either way. A hunk with
+/// no replacement at all is fingerprinted by everything it contains.
+///
 /// The line text is reassembled from the diff's `+`/`-` prefixes to match what
 /// the backend sees when it reads the file: a CRLF file's lines end `\r\n` on
 /// both sides, because the diff line keeps its CR and the newline is added
@@ -604,18 +613,46 @@ pub(super) fn hunk_fingerprint(
 
     let (_, _, hunk_end) = unified_patch_file_and_hunk_bounds(diff, hunk_src_ix)?;
     let body = diff.get(hunk_src_ix + 1..hunk_end)?;
-    let mut produced: Vec<String> = Vec::new();
-    let mut removed = 0usize;
+    // One entry per change group: the lines it adds and how many it removes.
+    // A non-add/remove line (context) closes the open group.
+    let mut groups: Vec<(Vec<String>, usize)> = Vec::new();
+    let mut open = false;
     for line in body {
         let text = line.text();
         match line.kind() {
             DiffLineKind::Add => {
+                if !open {
+                    groups.push((Vec::new(), 0));
+                    open = true;
+                }
                 let added = text.strip_prefix('+').unwrap_or(text);
-                produced.push(format!("{added}\n"));
+                if let Some((produced, _)) = groups.last_mut() {
+                    produced.push(format!("{added}\n"));
+                }
             }
-            DiffLineKind::Remove => removed += 1,
-            _ => {}
+            DiffLineKind::Remove => {
+                if !open {
+                    groups.push((Vec::new(), 0));
+                    open = true;
+                }
+                if let Some((_, removed)) = groups.last_mut() {
+                    *removed += 1;
+                }
+            }
+            _ => open = false,
         }
+    }
+    let has_replacement = groups
+        .iter()
+        .any(|(added, removed)| !added.is_empty() && *removed > 0);
+    let mut produced: Vec<String> = Vec::new();
+    let mut removed = 0usize;
+    for (added, group_removed) in &groups {
+        if has_replacement && (added.is_empty() || *group_removed == 0) {
+            continue;
+        }
+        produced.extend(added.iter().cloned());
+        removed += group_removed;
     }
     let produced: Vec<&str> = produced.iter().map(String::as_str).collect();
     Some(gitcomet_core::workspace::HunkFingerprint::of(

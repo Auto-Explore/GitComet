@@ -350,6 +350,7 @@ impl RepoState {
             feedback: RepoFeedbackState::default(),
             pending: RepoPendingState::default(),
             load_epoch: 0,
+            workspace: WorkspaceRepoState::default(),
         }
     }
 

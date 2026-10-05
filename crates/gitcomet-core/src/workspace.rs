@@ -22,7 +22,8 @@
 //! Everything here is pure data plus validation. Nothing in this module talks
 //! to Git; see [`crate::services`] for the operations that do.
 
-use crate::error::{Error, ErrorKind, Result};
+use crate::error::{Error, ErrorKind};
+use crate::services::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -234,7 +235,7 @@ impl WorkspaceState {
         Ok(ordered
             .into_iter()
             .filter(|name| self.get(name).is_some_and(VirtualBranch::is_applied))
-            .filter_map(|name| self.get(name))
+            .filter_map(|name| self.get(&name))
             .collect())
     }
 
@@ -372,7 +373,13 @@ impl WorkspaceState {
                     branch.name, parent
                 )));
             }
-            if self.reaches(branch, parent) {
+            // A loop exists when `parent`'s own ancestor chain comes back
+            // around to `branch` — walking `branch`'s chain instead would find
+            // the edge just added and reject every stacking edit.
+            if self
+                .get(parent)
+                .is_some_and(|parent_branch| self.reaches(parent_branch, &branch.name))
+            {
                 return Err(workspace_error(format!(
                     "branch '{}' is stacked on '{}', which already depends on it",
                     branch.name, parent
@@ -508,6 +515,9 @@ impl WorkspaceState {
                 }
             }
         };
+        // Stacking onto the target means independent: the target is not a
+        // workspace branch and `validate` would refuse it as a parent.
+        let parent = parent.filter(|parent| parent != &self.target);
         self.set_parent(name, parent.as_deref())
     }
 
@@ -648,7 +658,9 @@ impl WorkspaceState {
     pub fn set_target(&mut self, target: impl Into<String>) -> Result<()> {
         let target = target.into();
         if target.is_empty() {
-            return Err(workspace_error("the workspace target cannot be empty"));
+            return Err(workspace_error(
+                "the workspace target cannot be empty".into(),
+            ));
         }
         if self.branches.iter().any(|b| b.name == target) {
             return Err(workspace_error(format!(
@@ -776,7 +788,7 @@ pub struct AssignmentIndex {
 /// the same fingerprint, and both follow the assignment. That is deliberate:
 /// they are indistinguishable to a user reading the file, and picking one would
 /// be a coin flip dressed up as precision.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct HunkFingerprint {
     /// FNV-1a over the hunk's new-side lines.
     ///
@@ -857,10 +869,10 @@ pub fn hunk_spans(old: &str, new: &str) -> Vec<HunkSpan> {
     // little context between them are folded together later, once the gap is
     // known.
     let mut open: Option<(usize, usize, usize, usize)> = None;
-    // The base line the next change starts at, 1-based. Context runs move it;
-    // insertions do not, which is what anchors a pure insertion to the line it
-    // sits in front of.
-    let mut base_pos = 1usize;
+    // The base line the next change starts at, 0-based (plan runs are
+    // 0-based). Context runs move it; insertions do not, which is what anchors
+    // a pure insertion to the line it sits in front of.
+    let mut base_pos = 0usize;
 
     for run in &plan.runs {
         let (start, base_lines, new_start, new_lines) = match run {
@@ -912,6 +924,15 @@ pub fn hunk_spans(old: &str, new: &str) -> Vec<HunkSpan> {
 /// versions agree on, so hashing it would make a change's identity depend on its
 /// neighbours — and the view, which can only read the `+` lines out of a git
 /// hunk, could never reproduce that hash.
+///
+/// The same reasoning extends to a pure insertion or removal the merge folded
+/// in beside a replacement: whether the diff also happened to show a line added
+/// above depends on which base the two sides are diffing (the view diffs `HEAD`,
+/// a commit diffs the branch's base), so a hunk containing both is fingerprinted
+/// by its replacements alone. A group with no replacement at all — a purely
+/// added or purely removed hunk — is fingerprinted by everything it contains,
+/// because there is nothing else to key on. The view applies the same rule to
+/// the change groups inside the `@@` it rendered.
 fn merge_neighbouring_changes(spans: Vec<HunkSpan>, new_lines: &[&str]) -> Vec<HunkSpan> {
     let max_gap = 2 * HUNK_CONTEXT_LINES;
     let mut groups: Vec<Vec<HunkSpan>> = Vec::new();
@@ -920,11 +941,11 @@ fn merge_neighbouring_changes(spans: Vec<HunkSpan>, new_lines: &[&str]) -> Vec<H
             max_gap + 1,
             |prev| span.base_range.start.saturating_sub(prev.base_range.end),
         );
-        if gap <= max_gap {
-            if let Some(group) = groups.last_mut() {
-                group.push(span);
-                continue;
-            }
+        if gap <= max_gap
+            && let Some(group) = groups.last_mut()
+        {
+            group.push(span);
+            continue;
         }
         groups.push(vec![span]);
     }
@@ -937,7 +958,18 @@ fn merge_neighbouring_changes(spans: Vec<HunkSpan>, new_lines: &[&str]) -> Vec<H
                 merged.base_range.end = merged.base_range.end.max(span.base_range.end);
                 merged.new_range.end = merged.new_range.end.max(span.new_range.end);
             }
-            let produced: Vec<&str> = group
+            // A replacement touches both sides; a pure insertion or removal
+            // touches one. See the function docs for why only replacements
+            // contribute when the group has any.
+            let is_replacement = |span: &HunkSpan| {
+                !span.base_range.is_empty() && !span.new_range.is_empty()
+            };
+            let has_replacement = group.iter().any(is_replacement);
+            let contributing: Vec<&HunkSpan> = group
+                .iter()
+                .filter(|span| !has_replacement || is_replacement(span))
+                .collect();
+            let produced: Vec<&str> = contributing
                 .iter()
                 .flat_map(|span| {
                     new_lines
@@ -946,7 +978,7 @@ fn merge_neighbouring_changes(spans: Vec<HunkSpan>, new_lines: &[&str]) -> Vec<H
                         .unwrap_or_default()
                 })
                 .collect();
-            let base_lines: usize = group.iter().map(|span| span.base_range.len()).sum();
+            let base_lines: usize = contributing.iter().map(|span| span.base_range.len()).sum();
             merged.fingerprint = HunkFingerprint::of(&produced, base_lines);
             merged
         })
@@ -961,18 +993,10 @@ fn close_span(
     let Some((base_start, base_lines, new_start, new_lines)) = open else {
         return;
     };
-    // Pure insertions start one line past what they follow, which is exactly
-    // what makes the range the empty one at the line they sit in front of.
-    let base_range = if base_lines == 0 {
-        base_start..base_start
-    } else {
-        (base_start - 1)..(base_start - 1 + base_lines)
-    };
-    let new_range = if new_lines == 0 {
-        new_start..new_start
-    } else {
-        (new_start - 1)..(new_start - 1 + new_lines)
-    };
+    // A pure insertion is an empty range at the line it sits in front of;
+    // plan runs are 0-based, so the ranges are taken as-is.
+    let base_range = base_start..base_start + base_lines;
+    let new_range = new_start..new_start + new_lines;
     let produced: Vec<&str> = file_lines
         .get(new_range.clone())
         .map(<[&str]>::to_vec)
@@ -1053,9 +1077,75 @@ pub fn synthesize_for_branch(
 pub struct FileAssignments {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     whole: Option<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    // A fingerprint is a struct, and serde_json only accepts string map keys:
+    // serializing the derive directly fails with "key must be a string",
+    // which would lose every split assignment the moment the file is written.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        with = "hunks_as_string_keys"
+    )]
     hunks: BTreeMap<HunkFingerprint, String>,
 }
+
+/// `hunks` as a JSON object keyed by `"<content>:<new_lines>:<base_lines>"`.
+///
+/// The on-disk assignment file is JSON, whose map keys must be strings, while
+/// [`HunkFingerprint`] is a three-field struct. Encoding the key as text keeps
+/// the file an object a human can read and round-trips exactly: all three
+/// fields are part of the identity, so nothing is lost in the encoding.
+mod hunks_as_string_keys {
+    use std::collections::BTreeMap;
+
+    use serde::de::Error as _;
+    use serde::ser::SerializeMap;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    use super::HunkFingerprint;
+
+    pub fn serialize<S: Serializer>(
+        map: &BTreeMap<HunkFingerprint, String>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        let mut out = serializer.serialize_map(Some(map.len()))?;
+        for (fingerprint, branch) in map {
+            let key = format!(
+                "{}:{}:{}",
+                fingerprint.content, fingerprint.new_lines, fingerprint.base_lines
+            );
+            out.serialize_entry(&key, branch)?;
+        }
+        out.end()
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<BTreeMap<HunkFingerprint, String>, D::Error> {
+        let raw = BTreeMap::<String, String>::deserialize(deserializer)?;
+        raw.into_iter()
+            .map(|(key, branch)| {
+                let fingerprint = decode(&key).ok_or_else(|| {
+                    D::Error::custom(format!("hunk fingerprint key {key:?} is not content:new:base"))
+                })?;
+                Ok((fingerprint, branch))
+            })
+            .collect()
+    }
+
+    fn decode(key: &str) -> Option<HunkFingerprint> {
+        let (content, rest) = key.split_once(':')?;
+        let (new_lines, base_lines) = rest.split_once(':')?;
+        Some(HunkFingerprint {
+            content: content.parse().ok()?,
+            new_lines: new_lines.parse().ok()?,
+            base_lines: base_lines.parse().ok()?,
+        })
+    }
+}
+
+/// The optional hunk lookup [`FileAssignments::retain`] takes: the hunks a
+/// path currently has, or nothing when the caller has no diff to hand.
+type HunkLookup<'a> = Option<&'a dyn Fn(&Path) -> Vec<HunkSpan>>;
 
 impl FileAssignments {
     /// The whole file belongs to `branch`.
@@ -1184,7 +1274,7 @@ impl AssignmentIndex {
     /// so the answer is filtered through the workspace state. A split file has
     /// no single branch and so has no answer here; callers that care read
     /// [`AssignmentIndex::file`].
-    pub fn resolve(&self, path: &Path, state: &WorkspaceState) -> Option<&str> {
+    pub fn resolve<'a>(&self, path: &Path, state: &'a WorkspaceState) -> Option<&'a str> {
         let branch = self.branch_of(path)?;
         state.get(branch).map(|b| b.name.as_str())
     }
@@ -1217,16 +1307,27 @@ impl AssignmentIndex {
     /// can be dropped when the change they named is gone. Without it hunk
     /// assignments are kept, which is the right answer for a caller that has
     /// no diff to hand.
+    ///
+    /// A split file whose hunks were pruned stays as a row with nothing
+    /// assigned when at least one of its hunks named a branch that still
+    /// exists — the path is still changed, it just has nothing to act on. It
+    /// leaves with its branches when every branch it named is gone.
     pub fn retain(
         &mut self,
         state: &WorkspaceState,
         changed: &dyn Fn(&Path) -> bool,
-        hunks_of: Option<&dyn Fn(&Path) -> Vec<HunkSpan>>,
+        hunks_of: HunkLookup<'_>,
     ) {
         self.entries.retain(|path, assignments| {
             if !changed(path) {
                 return false;
             }
+            // Judged before pruning: once the hunks are gone the reason they
+            // were dropped — a dead branch or a reverted change — is no longer
+            // visible, and the two have to end up in different places.
+            let had_live_hunk = assignments
+                .hunk_branches()
+                .any(|branch| state.get(branch).is_some());
             if !assignments.hunks.is_empty() {
                 match hunks_of {
                     Some(hunks_of) => assignments.retain_hunks(&hunks_of(path), state),
@@ -1240,9 +1341,7 @@ impl AssignmentIndex {
                 }
             }
             let Some(branch) = assignments.whole.as_ref() else {
-                // A split file survives while it still has a hunk on a live
-                // branch.
-                return assignments.hunk_branches().any(|b| state.get(b).is_some());
+                return had_live_hunk;
             };
             state.get(branch).is_some()
         });
@@ -1360,8 +1459,12 @@ mod tests {
             vb("first").with_order(0),
         ]);
         let stacks = state.stacks().unwrap();
+        // Two roots are two stacks, and `order` is what decides which one
+        // comes first: without it the declaration order ("second" first)
+        // would win.
+        assert_eq!(stacks.len(), 2);
         assert_eq!(stacks[0].branches[0].branch.name, "first");
-        assert_eq!(stacks[0].branches[1].branch.name, "second");
+        assert_eq!(stacks[1].branches[0].branch.name, "second");
     }
 
     #[test]
@@ -1393,7 +1496,7 @@ mod tests {
 
     #[test]
     fn the_workspace_reserved_namespace_is_rejected() {
-        let state = workspace().with_branches(vec![vb("gitcomet/workspace")]);
+        let mut state = workspace().with_branches(vec![vb("gitcomet/workspace")]);
         assert!(state.validate().is_err());
         assert!(state.push_branch(vb("gitcomet/other")).is_err());
     }
@@ -1433,7 +1536,7 @@ mod tests {
     #[test]
     fn valid_branch_names_are_accepted() {
         for name in [
-            "main",
+            "hotfix",
             "feature/api",
             "feature/api/v2",
             "fix-1.2",
@@ -1824,8 +1927,8 @@ mod tests {
         // the user cannot tell these apart in the file either, so picking one
         // would be a coin flip dressed up as precision. Pinned so that if the
         // scheme ever changes, this is a decision rather than a surprise.
-        let base = "alpha\nbeta\nMOVE ME\ngamma\nMOVE ME\n";
-        let working = "alpha\nbeta\nmoved\ngamma\nmoved\n";
+        let base = "MOVE ME\nalpha\nbeta\ngamma\ndelta\nepsilon\nzeta\neta\ntheta\nMOVE ME\n";
+        let working = "moved\nalpha\nbeta\ngamma\ndelta\nepsilon\nzeta\neta\ntheta\nmoved\n";
         let spans = hunk_spans(base, working);
         assert_eq!(spans.len(), 2, "the two edits are far apart");
         assert_eq!(

@@ -92,6 +92,7 @@ pub(super) fn schedule_apply_workspace_edit(
     edit: WorkspaceEdit,
 ) {
     let command_edit = edit.clone();
+    let fallback_edit = edit.clone();
     spawn_with_repo_or_else(
         executor,
         repos,
@@ -113,7 +114,7 @@ pub(super) fn schedule_apply_workspace_edit(
                 &msg_tx,
                 Msg::Internal(InternalMsg::WorkspaceEditFinished {
                     repo_id,
-                    edit: command_edit,
+                    edit: fallback_edit,
                     result: Err(missing_repo_error(repo_id)),
                 }),
             );
@@ -233,6 +234,12 @@ fn apply_edit(
             }
             return Ok(None);
         }
+        WorkspaceEdit::AssignFile { .. } | WorkspaceEdit::AssignHunk { .. } => {
+            // Unreachable: the guard above sends both here only if it is ever
+            // reordered. Assignments take the fast path and never reach Git, so
+            // answering `None` keeps the meaning identical.
+            return Ok(None);
+        }
         WorkspaceEdit::Reorder { first, second } => {
             state.reorder(first, second)?;
         }
@@ -247,8 +254,11 @@ fn apply_edit(
         WorkspaceEdit::SetTarget { target } => {
             repo.update_workspace_target(target)?;
             // `update_workspace_target` wrote the state on the backend; read it
-            // back so the reducer's copy matches what Git actually did.
-            state = repo.read_workspace()?;
+            // back so the reducer's copy matches what Git actually did. The
+            // value itself is not used here — the rebuild re-reads it — but the
+            // read is what makes a failed backend write surface as this edit's
+            // error rather than as a stale state the view keeps rendering.
+            let _ = repo.read_workspace()?;
             return rebuild_workspace(repo).map(Some);
         }
         WorkspaceEdit::CommitPaths {
@@ -321,7 +331,7 @@ pub(super) fn schedule_enter_workspace(
                     repo_id,
                     active: true,
                     checkout_base,
-                    result: missing_repo_error(repo_id),
+                    result: Err(missing_repo_error(repo_id)),
                 }),
             );
         },
@@ -386,7 +396,7 @@ pub(super) fn schedule_leave_workspace(
                     repo_id,
                     active: false,
                     checkout_base: None,
-                    result: missing_repo_error(repo_id),
+                    result: Err(missing_repo_error(repo_id)),
                 }),
             );
         },
@@ -406,6 +416,8 @@ pub(super) fn schedule_assign_workspace_file(
     let command_path = path.clone();
     let command_hunk = hunk;
     let command_branch = branch.clone();
+    let fallback_path = path.clone();
+    let fallback_branch = branch.clone();
     spawn_with_repo_or_else(
         executor,
         repos,
@@ -436,9 +448,9 @@ pub(super) fn schedule_assign_workspace_file(
                 &msg_tx,
                 Msg::Internal(InternalMsg::WorkspaceAssignFinished {
                     repo_id,
-                    path: command_path,
+                    path: fallback_path,
                     hunk: command_hunk,
-                    branch: command_branch,
+                    branch: fallback_branch,
                     result: Err(missing_repo_error(repo_id)),
                 }),
             );
@@ -459,6 +471,7 @@ pub(super) fn schedule_push_workspace_branch(
     name: String,
 ) {
     let command_name = name.clone();
+    let fallback_name = name.clone();
     spawn_with_repo_or_else(
         executor,
         repos,
@@ -480,7 +493,7 @@ pub(super) fn schedule_push_workspace_branch(
                 &msg_tx,
                 Msg::Internal(InternalMsg::WorkspacePushFinished {
                     repo_id,
-                    name: command_name,
+                    name: fallback_name,
                     result: Err(missing_repo_error(repo_id)),
                 }),
             );

@@ -13,7 +13,7 @@ use crate::model::{
 };
 use crate::msg::Effect;
 use gitcomet_core::workspace::{AssignmentIndex, BranchApplyState, WorkspaceState};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// The Workspace view asks for its data; nothing else does, so a repository
@@ -48,9 +48,16 @@ pub(super) fn apply_workspace_edit(
     // A file assignment writes only the assignment index, so it gets its own
     // effect rather than going through the workspace rewrite path. Hunk
     // assignments take the same road: they write the same file.
-    let assignment = match edit {
-        WorkspaceEdit::AssignFile { path, branch } => Some((path, None, branch)),
-        WorkspaceEdit::AssignHunk { path, hunk, branch } => Some((path, Some(hunk), branch)),
+    //
+    // Matched by reference so the edit survives for `rewrites_history` and for
+    // the effect below; the assignment owns copies rather than the fields.
+    let assignment = match &edit {
+        WorkspaceEdit::AssignFile { path, branch } => {
+            Some((path.clone(), None, branch.clone()))
+        }
+        WorkspaceEdit::AssignHunk { path, hunk, branch } => {
+            Some((path.clone(), Some(*hunk), branch.clone()))
+        }
         _ => None,
     };
     if let Some((path, hunk, branch)) = assignment {
@@ -240,9 +247,11 @@ pub(super) fn enter_workspace(
         return Vec::new();
     }
     let checkout_base = match &repo.head_branch {
-        Loadable::Ready(branch) => Some(branch.clone()),
-        // Detached HEAD, or not loaded yet: there is no branch to go back to,
-        // and leaving then falls back to the workspace target.
+        // A detached HEAD reports its name as "HEAD" — and an empty name is
+        // no branch either. Not loaded is the same answer from less
+        // information. Either way there is no branch to go back to, and
+        // leaving then falls back to the workspace target.
+        Loadable::Ready(branch) if !branch.is_empty() && branch != "HEAD" => Some(branch.clone()),
         _ => None,
     };
     repo.workspace.busy.switching = true;
@@ -383,10 +392,10 @@ pub(super) fn workspace_loaded(
             repo.workspace.set_state(loaded.clone());
             repo.workspace.workspace_commit = match &workspace_commit {
                 Ok(commit) => Loadable::Ready(commit.clone()),
-                Err(error) => Loadable::Error(error.clone()),
+                Err(error) => Loadable::Error(error.to_string()),
             };
         }
-        Err(error) => repo.workspace.state = Loadable::Error(error.clone()),
+        Err(error) => repo.workspace.state = Loadable::Error(error.to_string()),
     };
     if let Ok(mut index) = assignments {
         // A branch that was removed from the workspace must not leave its file
@@ -544,6 +553,7 @@ mod tests {
     use crate::model::{RepoState, WorkspaceRepoState};
     use gitcomet_core::domain::RepoSpec;
     use gitcomet_core::workspace::VirtualBranch;
+    use std::path::Path;
 
     fn repo_with_workspace() -> AppState {
         let mut state = AppState::test_default();
@@ -1012,7 +1022,7 @@ mod tests {
     #[test]
     fn a_finished_assignment_lands_in_the_store_without_a_reload() {
         let mut state = repo_with_workspace();
-        workspace::workspace_assign_finished(
+        workspace_assign_finished(
             &mut state,
             RepoId(1),
             PathBuf::from("a.rs"),
@@ -1031,7 +1041,7 @@ mod tests {
     #[test]
     fn a_failed_assignment_reloads_rather_than_guessing() {
         let mut state = repo_with_workspace();
-        let effects = workspace::workspace_assign_finished(
+        let effects = workspace_assign_finished(
             &mut state,
             RepoId(1),
             PathBuf::from("a.rs"),
@@ -1159,7 +1169,6 @@ mod tests {
         assert!(!state.repos[0].workspace.busy.mutating);
     }
 
-    #[test]
     /// The conflict message the backend builds, copied from
     /// `gitcomet_gix::repo::workspace::conflict_message` so these tests exercise
     /// the shape that really arrives. Nothing enforces that the two stay in
@@ -1367,6 +1376,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn messages_for_an_unknown_repository_are_ignored() {
         let mut state = repo_with_workspace();
         let effects = load_workspace(&mut state, RepoId(99));

@@ -132,7 +132,7 @@ impl PopoverHost {
             value.trim(),
             &in_workspace,
             &free_name,
-            |name| self.knows_git_branch(repo_id, name),
+            &|name| self.knows_git_branch(repo_id, name),
             &assignment_of,
             &paths_for,
         )
@@ -296,9 +296,7 @@ fn edit_for(
         WorkspacePromptKind::AssignFile => {
             // An empty field is not a missing answer here: it is how a file
             // goes back to the unassigned bucket.
-            let Some(path) = path else {
-                return None;
-            };
+            let path = path?;
             if !value.is_empty() && !in_workspace(value) {
                 return None;
             }
@@ -323,9 +321,7 @@ fn edit_for(
             }
         }
         WorkspacePromptKind::CommitMessage => {
-            let Some(path) = path else {
-                return None;
-            };
+            let path = path?;
             // A commit with no message is one Git will refuse to describe, so
             // the prompt opens on the synthesised default rather than empty and
             // the user can accept it or replace it.
@@ -337,9 +333,7 @@ fn edit_for(
             // opened: a file can be reassigned while its commit dialog is up,
             // and committing to the branch it used to belong to would put the
             // change somewhere the user is no longer looking.
-            let Some(name) = assignment_of(path) else {
-                return None;
-            };
+            let name = assignment_of(path)?;
             WorkspaceEdit::CommitPaths {
                 name,
                 message: message.to_string(),
@@ -414,8 +408,13 @@ mod tests {
         move |name: &str| names.iter().any(|known| known == name)
     }
 
+    /// The name the prompt would create, under the same rule the real one
+    /// uses: a name the workspace already lists is taken too, not only a
+    /// name some other branch holds.
     fn free(value: &str) -> String {
-        free_branch_name(value, &taken())
+        let taken = taken();
+        let in_workspace = membership();
+        free_branch_name(value, &|name| taken(name) || in_workspace(name))
     }
 
     fn edit(
@@ -690,7 +689,11 @@ mod tests {
         // not a silent no-op — so this pins the other half of the claim: that
         // each kind really does resolve to something, and that the ones that
         // submit nothing are only the ones meant to.
-        let in_workspace = membership();
+        // Everything the dialog could be handed exists: `x` names a
+        // workspace branch, a real branch and a hunk of the file, and the
+        // branch has an assigned path to commit.
+        let member = membership();
+        let in_workspace = |name: &str| name == "x" || member(name);
         let free = |name: &str| name.to_string();
 
         for kind in ALL_KINDS {
@@ -698,13 +701,21 @@ mod tests {
                 kind,
                 "api",
                 Some(std::path::Path::new("src/lib.rs")),
-                None,
+                Some(gitcomet_core::workspace::HunkFingerprint::default()),
                 "x",
                 &in_workspace,
                 &free,
-                &|_| false,
+                // The repository does hold the branch the field names, so
+                // every kind that needs an existing answer gets one.
+                &|_| true,
                 &|_| Some("api".to_string()),
-                &|_| Vec::new(),
+                &|branch: &str| {
+                    if branch == "api" {
+                        vec![std::path::PathBuf::from("src/lib.rs")]
+                    } else {
+                        Vec::new()
+                    }
+                },
             );
             if kind == WorkspacePromptKind::BranchActions {
                 assert!(

@@ -48,7 +48,7 @@ fn diff_hunk_primary_action(
 /// Pure, so the rule can be tested without standing up a popover host.
 fn workspace_assign_action(
     repo_id: RepoId,
-    src_ix: usize,
+    _src_ix: usize,
     diff_target: Option<&DiffTarget>,
     fingerprint: Option<gitcomet_core::workspace::HunkFingerprint>,
 ) -> Option<ContextMenuAction> {
@@ -111,7 +111,8 @@ pub(super) fn model(
     // diff, where "which branch commits this" has no answer.
     let fingerprint = pane
         .rendered_patch_diff_loadable()
-        .and_then(|Loadable::Ready(diff)| {
+        .and_then(Loadable::ready)
+        .and_then(|diff| {
             crate::view::diff_utils::hunk_fingerprint(diff.lines.as_slice(), src_ix)
         });
     if let Some(action) = workspace_assign_action(repo_id, src_ix, diff_target, fingerprint) {

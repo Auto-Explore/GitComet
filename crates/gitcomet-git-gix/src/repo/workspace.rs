@@ -15,8 +15,8 @@
 //! intermediate state.
 
 use gitcomet_core::domain::CommitId;
-use gitcomet_core::error::{Error, ErrorKind, Result};
-use gitcomet_core::services::{CommandOutput, CommitOperationOutcome};
+use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::services::{CommandOutput, CommitOperationOutcome, Result};
 use gitcomet_core::workspace::{
     hunk_spans, synthesize_for_branch, AssignmentIndex, VirtualBranch, WORKSPACE_BRANCH,
     WORKSPACE_REF_PREFIX, WorkspaceState,
@@ -214,7 +214,7 @@ impl GixRepo {
 
         let mut cmd = self.git_plumbing();
         cmd.arg("update-ref")
-            .arg(&format!("refs/heads/{name}"))
+            .arg(format!("refs/heads/{name}"))
             .arg(commit.as_ref())
             .arg(branch_id.as_ref());
         run_git_simple(cmd, "git update-ref")?;
@@ -334,6 +334,7 @@ impl GixRepo {
     /// refusal leaves both exactly as they were. Callers must therefore do this
     /// *before* moving the workspace ref, not after, or the two would disagree.
     pub(super) fn sync_workspace_workdir_impl(
+        &self,
         old_tip: &CommitId,
         new_tip: &CommitId,
     ) -> Result<()> {
@@ -450,7 +451,8 @@ impl GixRepo {
         state.set_target(target)?;
         self.write_workspace_impl(&state)?;
 
-        let target_id = self.require_revision(&state.target)?;
+        // Fail before anything is rebased if the new target does not exist.
+        self.require_revision(&state.target)?;
         // Only independent branches move with the target. A stacked branch is
         // rebased by `rebase_virtual_branch_impl` when its base moves, so
         // rebasing it here too would replay it twice.
@@ -489,7 +491,12 @@ impl GixRepo {
         // Not `.ok()`: if the directory cannot be made, every later `GIT_INDEX_FILE`
         // command fails with a git error that says nothing about the real
         // problem, and the user is left guessing at their repository.
-        std::fs::create_dir_all(self.workspace_dir())?;
+        std::fs::create_dir_all(self.workspace_dir()).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!(
+                "creating the workspace directory {}: {e}",
+                self.workspace_dir().display()
+            )))
+        })?;
 
         let assignments = self.read_assignments_impl()?;
         let tree = self.commit_paths_tree(&index_path, &base_id, paths, name, &assignments)?;
@@ -597,7 +604,12 @@ impl GixRepo {
         assignments: &AssignmentIndex,
     ) -> Result<()> {
         let base_bytes = self.blob_at(base_id, path)?;
-        let working_bytes = std::fs::read(self.spec().workdir.join(path))?;
+        let working_bytes = std::fs::read(self.spec.workdir.join(path)).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!(
+                "reading {} from the working tree: {e}",
+                path.display()
+            )))
+        })?;
         let (Ok(base_text), Ok(working_text)) = (
             std::str::from_utf8(&base_bytes),
             std::str::from_utf8(&working_bytes),
@@ -616,13 +628,18 @@ impl GixRepo {
         let keep = |fingerprint: gitcomet_core::workspace::HunkFingerprint| {
             mine.iter()
                 .any(|(assigned, assigned_branch)| {
-                    *assigned == fingerprint && assigned_branch == branch
+                    *assigned == fingerprint && *assigned_branch == branch
                 })
         };
         let synthesized = synthesize_for_branch(base_text, working_text, &spans, &keep);
 
         let scratch = index_path.with_extension("blob");
-        std::fs::write(&scratch, synthesized.as_bytes())?;
+        std::fs::write(&scratch, synthesized.as_bytes()).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!(
+                "writing {}: {e}",
+                scratch.display()
+            )))
+        })?;
         let blob = self.hash_object(&scratch);
         let _ = std::fs::remove_file(&scratch);
         let blob = blob?;
@@ -786,42 +803,42 @@ impl GixRepo {
         crate::util::run_git_simple(cmd, &label)?;
         Ok(CommandOutput::empty_success(label))
     }
-}
 
-/// Which already-applied branch is the one `name` conflicts with.
-///
-/// The conflict is over paths, and a branch is only in the way if it changed
-/// some of the same ones. Whichever already-merged branch overlaps the most is
-/// the best answer the merge can give, and saying "feature/ui conflicts with
-/// feature/api" is the difference between a message the user can act on and one
-/// they have to go and guess at.
-fn blames_conflict_on(
-    &self,
-    name: &str,
-    merged: &[&str],
-    target_id: &CommitId,
-) -> Option<String> {
-    let branch_id = self.resolve_revision(name).ok()??;
-    let wanted: Vec<String> = self
-        .changed_paths(target_id, &branch_id)
-        .unwrap_or_default();
-    if wanted.is_empty() {
-        return None;
+    /// Which already-applied branch is the one `name` conflicts with.
+    ///
+    /// The conflict is over paths, and a branch is only in the way if it changed
+    /// some of the same ones. Whichever already-merged branch overlaps the most is
+    /// the best answer the merge can give, and saying "feature/ui conflicts with
+    /// feature/api" is the difference between a message the user can act on and one
+    /// they have to go and guess at.
+    fn blames_conflict_on(
+        &self,
+        name: &str,
+        merged: &[&str],
+        target_id: &CommitId,
+    ) -> Option<String> {
+        let branch_id = self.resolve_revision(name).ok()??;
+        let wanted: Vec<String> = self
+            .changed_paths(target_id, &branch_id)
+            .unwrap_or_default();
+        if wanted.is_empty() {
+            return None;
+        }
+        merged
+            .iter()
+            .filter_map(|other| {
+                let other_id = self.resolve_revision(other).ok()??;
+                let overlap = self
+                    .changed_paths(target_id, &other_id)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|path| wanted.contains(path))
+                    .count();
+                (overlap > 0).then(|| (overlap, (*other).to_string()))
+            })
+            .max_by_key(|(overlap, _)| *overlap)
+            .map(|(_, name)| name)
     }
-    merged
-        .iter()
-        .filter_map(|other| {
-            let other_id = self.resolve_revision(other).ok()??;
-            let overlap = self
-                .changed_paths(target_id, &other_id)
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|path| wanted.contains(path))
-                .count();
-            (overlap > 0).then(|| (overlap, (*other).to_string()))
-        })
-        .max_by_key(|(overlap, _)| *overlap)
-        .map(|(_, name)| name)
 }
 
 /// The conflict as the user is shown it: which branch, against which, where.
@@ -989,6 +1006,25 @@ mod tests {
         String::from_utf8_lossy(&output.stdout).trim().to_string()
     }
 
+    /// The executable bit a fixture needs git to record.
+    ///
+    /// The working copy gets a real `+x` where the platform has one, because
+    /// with `core.filemode=true` (Linux) `git add` reads the mode from the
+    /// file. The index is also told explicitly, because with
+    /// `core.filemode=false` (Windows) the bit cannot be learned from the
+    /// filesystem at all — `update-index --chmod=+x` is the only way to stage
+    /// `100755` there.
+    fn make_executable(path: &Path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod +x");
+        }
+        #[cfg(not(unix))]
+        let _ = path;
+    }
+
     /// A repository with two virtual branches whose changes touch different
     /// files, so applying and unapplying one is visible in the other's absence.
     fn repo_with_two_branches() -> (tempfile::TempDir, GixRepo, String) {
@@ -1006,17 +1042,23 @@ mod tests {
         std::fs::write(root.join("mine.txt"), "y\n").unwrap();
         git(root, &["add", "-A"]);
         git(root, &["commit", "-m", "base"]);
+        // Captured while HEAD is still the target: taking it after the branch
+        // checkouts below would name `api` as both the target and a branch,
+        // which `write_workspace` refuses.
+        let default_branch = git(root, &["symbolic-ref", "--short", "HEAD"]);
 
+        // Two siblings off the target, one change each — that is what makes
+        // applying and unapplying either one independently observable.
         git(root, &["branch", "api"]);
+        git(root, &["branch", "ui"]);
         git(root, &["checkout", "api"]);
         std::fs::write(root.join("shared.txt"), "a1\nAPI\na3\n").unwrap();
         git(root, &["commit", "-am", "api"]);
 
-        git(root, &["branch", "ui"]);
+        git(root, &["checkout", "ui"]);
         std::fs::write(root.join("moved.txt"), "ui-x\n").unwrap();
         git(root, &["commit", "-am", "ui"]);
 
-        let default_branch = git(root, &["symbolic-ref", "--short", "HEAD"]);
         git(root, &["checkout", &default_branch]);
 
         let state = WorkspaceState::new(&default_branch).with_branches(vec![
@@ -1171,7 +1213,7 @@ mod tests {
             .expect_err("api and ui now change the same line");
         let message = error.to_string();
         assert!(
-            message.contains("'api' conflicts with 'ui'"),
+            message.contains("'ui' conflicts with 'api'"),
             "the message names both branches, got: {message}"
         );
         assert!(
@@ -1275,7 +1317,7 @@ mod tests {
             .arg(root)
             .arg("merge-tree")
             .arg("--write-tree")
-            .arg(format!("--merge-base={}", repo.merge_base_of(&left, &right)))
+            .arg(format!("--merge-base={}", merge_base_of(&repo, &left, &right)))
             .arg(left.as_ref())
             .arg(right.as_ref());
         let output = cmd.output().expect("run git");
@@ -1284,7 +1326,7 @@ mod tests {
         let error = Error::new(ErrorKind::Git(gitcomet_core::error::GitFailure::new(
             "git merge-tree",
             gitcomet_core::error::GitFailureId::CommandFailed,
-            Some(output.status.code()),
+            output.status.code(),
             output.stdout,
             output.stderr,
             None,
@@ -1309,7 +1351,7 @@ mod tests {
 
     #[test]
     fn the_state_file_sits_inside_the_workspace_directory() {
-        let dir = PathBuf::new("/repo/.git").join(WORKSPACE_DIR);
+        let dir = PathBuf::from("/repo/.git").join(WORKSPACE_DIR);
         assert!(dir.ends_with(WORKSPACE_DIR));
         assert_eq!(dir.join(WORKSPACE_STATE_FILE).file_name().unwrap(), "workspace.json");
     }
@@ -1341,7 +1383,9 @@ mod tests {
         git(root, &["config", "user.email", "test@example.com"]);
         std::fs::write(root.join("run.sh"), "#!/bin/sh\n").unwrap();
         std::fs::write(root.join("plain.txt"), "text\n").unwrap();
+        make_executable(&root.join("run.sh"));
         git(root, &["add", "-A"]);
+        git(root, &["update-index", "--chmod=+x", "run.sh"]);
         git(root, &["commit", "-m", "base"]);
 
         let repo = open_repo(root);
@@ -1369,6 +1413,10 @@ mod tests {
         std::fs::write(root.join("base.txt"), "b\n").unwrap();
         git(root, &["add", "-A"]);
         git(root, &["commit", "-m", "base"]);
+        // Before any `checkout -b`: afterwards HEAD is on the new branch and
+        // the target would come out as `left`, making the second branch a
+        // child of the first rather than a sibling.
+        let default_branch = git(root, &["symbolic-ref", "--short", "HEAD"]);
 
         let repo = open_repo(root);
         let base = repo
@@ -1378,13 +1426,15 @@ mod tests {
 
         git(root, &["checkout", "-b", "left"]);
         std::fs::write(root.join("left.txt"), "l\n").unwrap();
-        git(root, &["commit", "-am", "left"]);
-
-        let default_branch = git(root, &["symbolic-ref", "--short", "HEAD"]);
+        // A new file is untracked: `commit -am` only picks up tracked paths
+        // and would fail with "nothing to commit" on stderr's silence.
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-m", "left"]);
         git(root, &["checkout", &default_branch]);
         git(root, &["checkout", "-b", "right"]);
         std::fs::write(root.join("right.txt"), "r\n").unwrap();
-        git(root, &["commit", "-am", "right"]);
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-m", "right"]);
 
         let left = repo
             .resolve_revision("left")
@@ -1523,8 +1573,11 @@ mod tests {
         // "split a file between two branches" would be impossible and the
         // assignments would silently do nothing.
         assert_eq!(hunk_spans(SPLIT_BASE, SPLIT_WORKING).len(), 2);
+        // Edits at line 1 and line 8: six unchanged lines between them, which
+        // is exactly `2 * HUNK_CONTEXT_LINES`, so the contexts touch and git
+        // prints a single `@@`.
         assert_eq!(
-            hunk_spans(SPLIT_BASE, "API\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nL9\nl10\n").len(),
+            hunk_spans(SPLIT_BASE, "API\nl2\nl3\nl4\nl5\nl6\nl7\nL8\nl9\nl10\n").len(),
             1,
             "edits within git's context are one hunk, not two"
         );
@@ -1644,7 +1697,7 @@ mod tests {
 
         assert_eq!(
             git(root, &["ls-tree", "--name-only", "api"]),
-            "other.txt\n",
+            "other.txt",
             "the deletion has to land on the branch too"
         );
         assert!(
@@ -1691,7 +1744,9 @@ mod tests {
         git(root, &["config", "user.name", "Test User"]);
         git(root, &["config", "user.email", "test@example.com"]);
         std::fs::write(root.join("run.sh"), "#!/bin/sh\necho hi\n").unwrap();
+        make_executable(&root.join("run.sh"));
         git(root, &["add", "-A"]);
+        git(root, &["update-index", "--chmod=+x", "run.sh"]);
         git(root, &["commit", "-m", "base"]);
 
         let default_branch = git(root, &["symbolic-ref", "--short", "HEAD"]);
@@ -1800,17 +1855,21 @@ mod tests {
 
         git(root, &["checkout", "-b", "api"]);
         std::fs::write(root.join("api.txt"), "api\n").unwrap();
-        git(root, &["commit", "-am", "api"]);
+        // New files are untracked; `commit -am` alone stages nothing and fails.
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-m", "api"]);
         git(root, &["checkout", "-b", "ui"]);
         std::fs::write(root.join("ui.txt"), "ui\n").unwrap();
-        git(root, &["commit", "-am", "ui"]);
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-m", "ui"]);
         git(root, &["checkout", &default_branch]);
 
         // A second target that moved too, so pointing the workspace at it is a
         // real change rather than a rename.
         git(root, &["checkout", "-b", "next"]);
         std::fs::write(root.join("next.txt"), "next\n").unwrap();
-        git(root, &["commit", "-am", "next"]);
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-m", "next"]);
         git(root, &["checkout", &default_branch]);
 
         let state = WorkspaceState::new(&default_branch).with_branches(vec![
@@ -2094,12 +2153,12 @@ mod tests {
         let root = repo.spec().workdir.clone();
 
         assert!(
-            repo.create_virtual_branch("api", "no-such-branch")
+            repo.create_virtual_branch("feature", "no-such-branch")
                 .is_err(),
             "a base that does not name a commit cannot be built on"
         );
         assert!(
-            !git_succeeds(&root, &["rev-parse", "--verify", "refs/heads/api"]),
+            !git_succeeds(&root, &["rev-parse", "--verify", "refs/heads/feature"]),
             "a refused creation must not leave the ref behind"
         );
     }
@@ -2254,7 +2313,7 @@ mod tests {
     #[test]
     fn only_the_workspace_branch_counts_as_being_in_the_workspace() {
         let (temp, repo, default_branch) = repo_with_two_branches();
-        let root = temp.path();
+        let _root = temp.path();
 
         assert!(
             !repo.workspace_is_checked_out(),
@@ -2335,7 +2394,7 @@ mod tests {
     #[test]
     fn amending_a_commit_on_the_workspace_branch_is_refused_too() {
         let (temp, repo, _) = repo_with_two_branches();
-        let root = temp.path();
+        let _root = temp.path();
         repo.enter_workspace().expect("enter");
 
         let error = repo
@@ -2380,7 +2439,7 @@ mod tests {
         // that one names the ref, so it is exactly the action the user wants
         // while they are in here.
         let (temp, remote, repo) = repo_with_a_remote();
-        let root = temp.path();
+        let _root = temp.path();
         repo.enter_workspace().expect("enter");
 
         repo.push_virtual_branch("api").expect("push the branch");
@@ -2399,7 +2458,7 @@ mod tests {
     /// on `api` to point history operations at.
     fn repo_inside_the_workspace() -> (tempfile::TempDir, GixRepo, CommitId) {
         let (temp, repo, _) = repo_with_two_branches();
-        let root = temp.path();
+        let _root = temp.path();
         repo.enter_workspace().expect("enter");
         let api_tip = repo
             .resolve_revision("api")
@@ -2416,7 +2475,7 @@ mod tests {
     /// next rebuild discards it. Listing them one by one is the point — a guard
     /// that covers six operations and not the seventh is indistinguishable from
     /// one that covers none.
-    fn assert_refused(result: std::result::Result<CommandOutput>, action: &str) {
+    fn assert_refused(result: Result<CommandOutput>, action: &str) {
         let error = result.expect_err("the workspace branch is not the user's to rewrite");
         let message = format!("{error}");
         assert!(
@@ -2572,7 +2631,10 @@ mod tests {
         // here would break the workflow the Workspace view sits next to.
         let (temp, repo, _) = repo_with_two_branches();
         let root = temp.path();
-        std::fs::write(root.join("mine.txt"), "y\n").expect("edit");
+        // An edit that actually changes the file: the fixture already contains
+        // `mine.txt`, and rewriting identical bytes leaves git with nothing to
+        // commit.
+        std::fs::write(root.join("mine.txt"), "y\nordinary work\n").expect("edit");
         git(root, &["add", "-A"]);
 
         repo.commit("ordinary work").expect("commit");
