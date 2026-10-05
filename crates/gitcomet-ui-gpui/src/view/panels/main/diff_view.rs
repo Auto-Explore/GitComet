@@ -892,7 +892,7 @@ impl MainPaneView {
                     if !self.store.policy.allow_annotate {
                         return false;
                     }
-                    self.annotate_enabled = next;
+                    self.set_annotate_enabled(next, cx);
                     handled = true;
                     let root_view = self.root_view.clone();
                     let bound = self.store.binding.is_some();
@@ -912,14 +912,12 @@ impl MainPaneView {
                 }
                 "left" => {
                     if let Some(repo_id) = self.active_repo_id() {
-                        self.store.dispatch(Msg::GlobalNavBack { repo_id });
-                        handled = true;
+                        handled = self.try_select_adjacent_diff_file(repo_id, -1, window, cx);
                     }
                 }
                 "right" => {
                     if let Some(repo_id) = self.active_repo_id() {
-                        self.store.dispatch(Msg::GlobalNavForward { repo_id });
-                        handled = true;
+                        handled = self.try_select_adjacent_diff_file(repo_id, 1, window, cx);
                     }
                 }
                 _ => {}
@@ -1283,7 +1281,7 @@ impl MainPaneView {
                 if !this.store.policy.allow_annotate {
                     return;
                 }
-                this.annotate_enabled = next;
+                this.set_annotate_enabled(next, cx);
                 cx.notify();
                 this.restore_diff_panel_focus_after_toolbar_action(window, cx);
                 let root_view = this.root_view.clone();

@@ -1128,7 +1128,14 @@ fn the_diff_controls_name_their_keys(cx: &mut gpui::TestAppContext) {
 
     let alt = crate::view::shortcut_labels::alt_shortcut;
     for (selector, expected) in [
-        ("diff_next_file", "Next file (F4)".to_string()),
+        (
+            "diff_prev_file",
+            format!("Previous file (F1 / {})", alt("Left")),
+        ),
+        (
+            "diff_next_file",
+            format!("Next file (F4 / {})", alt("Right")),
+        ),
         ("diff_bar_stage", "Stage this file (Space)".to_string()),
         (
             "diff_prev_hunk",
