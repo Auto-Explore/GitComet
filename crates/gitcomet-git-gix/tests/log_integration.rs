@@ -14,6 +14,8 @@ use std::sync::Arc;
 mod authors;
 #[path = "log_integration/ref_filter.rs"]
 mod ref_filter;
+#[path = "log_integration/sharing.rs"]
+mod sharing;
 #[path = "log_integration/snapshot_refresh.rs"]
 mod snapshot_refresh;
 #[path = "log_integration/topology.rs"]

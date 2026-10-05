@@ -42,6 +42,7 @@ lru = { workspace = true }
 memchr = { workspace = true }
 rustc-hash = { workspace = true }
 rustix = { workspace = true }
+same-file = "1.0.6"
 serde_json = { workspace = true }
 smallvec = { workspace = true }
 tempfile = { workspace = true }

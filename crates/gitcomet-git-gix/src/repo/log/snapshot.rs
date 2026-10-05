@@ -1,7 +1,5 @@
 use super::*;
-use gitcomet_core::services::{
-    HistoryReadRequest, HistoryReadResult, HistorySnapshot, refresh_history_page,
-};
+use gitcomet_core::services::{HistoryReadRequest, HistoryReadResult, refresh_history_page};
 
 impl GixRepo {
     pub(in super::super) fn read_history_impl(
@@ -13,18 +11,20 @@ impl GixRepo {
         on_chunk: &mut dyn FnMut(LogChunk),
     ) -> Result<HistoryReadResult> {
         cancellation.check_cancelled()?;
-        let repo = self.repo();
-        let shallow = shallow_snapshot(&repo)?;
-        let tips = if mode == HistoryMode::AllBranches {
-            self.all_branches_tips(&repo, Some(cancellation))?
-        } else {
-            Arc::from(gix_head_id_or_none(&repo)?.into_iter().collect::<Vec<_>>())
-        };
-        let author = AuthorFilter::new(author);
-        // These are exact, unambiguous Debug encodings of typed inputs, not a
-        // sampled hash or filesystem timestamp. The same captured values feed
-        // every batch below, even if refs change while the walk is running.
-        let snapshot = HistorySnapshot(format!("{mode:?}|{author:?}|{tips:?}|{shallow:?}").into());
+        let (store, shared) = self.fresh_history_store()?;
+        let repo = store.to_thread_local();
+        let query = self.resolve_history_query(
+            &repo,
+            shared.id,
+            shared.common.id,
+            mode,
+            author,
+            cancellation,
+        )?;
+        let snapshot = shared.snapshot(&query);
+        let tips = query.tips;
+        let shallow = query.shallow;
+        let author = query.author;
         cancellation.check_cancelled()?;
         match request {
             HistoryReadRequest::Refresh {
@@ -51,7 +51,7 @@ impl GixRepo {
             super::super::LogPageSeed::Head(tips.first().copied())
         };
         let read = |limit, cursor: Option<&LogCursor>, chunks| {
-            let key = self.log_page_cache_key(
+            let mut key = self.log_page_cache_key(
                 mode,
                 seed.clone(),
                 &shallow,
@@ -59,10 +59,13 @@ impl GixRepo {
                 cursor,
                 author.as_ref(),
             );
+            key.generation = shared.mapping_id;
             if let Some(page) = self.cached_log_page(&key) {
                 return Ok(page);
             }
-            let page = self.log_paged_page(
+            let page = self.log_paged_page_from_store(
+                &store,
+                &shared,
                 mode,
                 Arc::clone(&tips),
                 &shallow,
