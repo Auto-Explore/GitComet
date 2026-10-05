@@ -698,6 +698,63 @@ fn a_pane_shows_the_first_change_of_each_file_it_is_given(cx: &mut gpui::TestApp
     );
 }
 
+/// F1/F4 in an extension view step the hosted pane the user is in, as its
+/// own arrows do, and never move History's diff behind the view.
+#[gpui::test]
+fn the_file_keys_in_an_extension_view_step_its_pane_not_history(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (_dir, store, view, cx) = open_repository(cx);
+    cx.update(|_window, app| crate::app::bind_app_keys_for_test(app));
+    let (list_id, changes) = open_changes_view(cx, &view, &store);
+    let current = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            changes
+                .read(app)
+                .current()
+                .and_then(|pane| pane.target(app))
+                .and_then(|target| target.file_path().map(Path::to_path_buf))
+        })
+    };
+    // No pane yet: the keys have nothing to act on.
+    cx.simulate_keystrokes("f4");
+    publish(cx, &view, store.snapshot());
+    assert!(store.snapshot().repos[0].diff_state.diff_target.is_none());
+
+    click_debug_selector(
+        cx,
+        selector(format!("hosted_file_list_{list_id}_file_a.rs")),
+    );
+    settle(cx, &view, &store, "a.rs in the pane", |cx| {
+        store.snapshot().repos[0].diff_sessions.len() == 1
+            && row_drawn(cx, first_session(&store), 0)
+    });
+    assert_eq!(current(cx), Some(PathBuf::from("a.rs")));
+    // Into the diff, then F4 and F1.
+    let id = first_session(&store);
+    click_debug_selector(cx, selector(format!("hosted_diff_{id}_row_0")));
+    publish(cx, &view, store.snapshot());
+    cx.simulate_keystrokes("f4");
+    settle(cx, &view, &store, "F4 to b.rs", |cx| {
+        current(cx) == Some(PathBuf::from("b.rs"))
+    });
+    cx.simulate_keystrokes("f1");
+    settle(cx, &view, &store, "F1 back to a.rs", |cx| {
+        current(cx) == Some(PathBuf::from("a.rs"))
+    });
+    assert!(
+        store.snapshot().repos[0].diff_state.diff_target.is_none(),
+        "History's diff did not move"
+    );
+}
+
+fn first_session(store: &AppStore) -> u64 {
+    store.snapshot().repos[0]
+        .diff_sessions
+        .keys()
+        .next()
+        .map_or(0, |id| id.0)
+}
+
 #[gpui::test]
 fn snapshot_panes_diff_texts_without_a_repository(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();

@@ -12,10 +12,10 @@
 
 use gitcomet_core::domain::{CommitId, DiffTarget};
 use gitcomet_extension_api::{
-    ChangeSource, DiffAnnotation, DiffAnnotations, DiffInset, DiffLegendItem, DiffLineRange,
-    DiffLineSide, DiffPane, DiffPaneOptions, DiffPanePolicy, DiffSelectionAction, FileList,
-    FileListFilterChip, FileListGroups, FileListMarks, FileListMode, FileListVisible, HostedAction,
-    PopOutWindow, RepositoryViewContext, RepositoryWatch, RowGlyph, RowMark,
+    ChangeSource, DiffAnnotation, DiffAnnotations, DiffFileNavigation, DiffInset, DiffLegendItem,
+    DiffLineRange, DiffLineSide, DiffPane, DiffPaneOptions, DiffPanePolicy, DiffSelectionAction,
+    FileList, FileListFilterChip, FileListGroups, FileListMarks, FileListMode, FileListVisible,
+    HostedAction, PopOutWindow, RepositoryViewContext, RepositoryWatch, RowGlyph, RowMark,
 };
 use gitcomet_ui_kit::components::Button;
 use gitcomet_ui_kit::gpui::prelude::*;
@@ -198,10 +198,21 @@ impl ChangesView {
     fn current_options(&self, cx: &mut Context<Self>) -> DiffPaneOptions {
         let view = cx.weak_entity();
         let noted = view.clone();
+        let (back, ahead) = (view.clone(), view.clone());
         let toggle: gitcomet_extension_api::DiffGutterAction = Rc::new(move |side, line, cx| {
             let _ = view.update(cx, |this, cx| this.toggle_flag(side, line, cx));
         });
         DiffPaneOptions {
+            // Previous and next follow the list's drawn order, from the
+            // pane's file arrows and F1/F4.
+            file_navigation: DiffFileNavigation {
+                previous: Some(HostedAction::new("Previous file", move |cx| {
+                    step(&back, -1, cx);
+                })),
+                next: Some(HostedAction::new("Next file", move |cx| {
+                    step(&ahead, 1, cx);
+                })),
+            },
             on_gutter_click: Some(Rc::clone(&toggle)),
             on_annotation_click: Some(toggle),
             selection_actions: vec![DiffSelectionAction::new("Add note", move |range, cx| {
@@ -209,6 +220,23 @@ impl ChangesView {
             })],
             ..DiffPaneOptions::default()
         }
+    }
+
+    /// The list, and the file `direction` places from the current one in
+    /// its drawn order.
+    fn neighbour(&self, direction: i8, cx: &App) -> Option<(FileList, PathBuf)> {
+        let list = self.list.as_ref().ok()?;
+        let paths = list.ordered_paths(cx);
+        let at = self
+            .current_path
+            .as_ref()
+            .and_then(|current| paths.iter().position(|path| path == current));
+        let next = match (at, direction) {
+            (Some(at), d) if d < 0 => at.checked_sub(1)?,
+            (Some(at), _) => at + 1,
+            (None, _) => 0,
+        };
+        Some((list.clone(), paths.get(next)?.clone()))
     }
 
     /// The current file's flagged lines.
@@ -347,6 +375,15 @@ impl ChangesView {
         current.set_insets(Vec::new(), cx);
         current.set_target(target, cx);
         cx.notify();
+    }
+}
+
+/// Picks the file `direction` places from the current one, as a click on it
+/// would. The list is told outside the view's update: picking a file calls
+/// back into the view.
+fn step(view: &WeakEntity<ChangesView>, direction: i8, cx: &mut App) {
+    if let Ok(Some((list, path))) = view.read_with(cx, |this, cx| this.neighbour(direction, cx)) {
+        list.select_path(&path, cx);
     }
 }
 

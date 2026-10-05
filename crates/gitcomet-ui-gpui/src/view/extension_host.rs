@@ -272,7 +272,13 @@ struct HostWindow {
     theme: Rc<std::cell::Cell<AppTheme>>,
     observers: Rc<StateObservers>,
     bottom_panels: super::extension_panels::SharedBottomPanels,
+    diff_panes: SharedDiffPanes,
 }
+
+/// The hosted diff panes extensions made in one window, so the diff keys
+/// can find the one in front of the user.
+type SharedDiffPanes =
+    Rc<std::cell::RefCell<Vec<WeakEntity<super::hosted::diff_pane::DiffPaneView>>>>;
 
 /// State observers of one window, notified at most once per update cycle.
 #[derive(Default)]
@@ -393,6 +399,13 @@ impl HostWindow {
     }
 
     /// This window's `WindowHost`, for panes that observe it.
+    /// Keeps a weak handle to a pane made here, dropping dead ones.
+    fn remember_diff_pane(&self, pane: &Entity<super::hosted::diff_pane::DiffPaneView>) {
+        let mut panes = self.diff_panes.borrow_mut();
+        panes.retain(|pane| pane.upgrade().is_some());
+        panes.push(pane.downgrade());
+    }
+
     fn host(&self) -> Result<WindowHost, HostError> {
         self.observers
             .host
@@ -580,6 +593,7 @@ impl WindowHostImpl for HostWindow {
             pane.attach_root(self.view.clone());
             pane
         });
+        self.remember_diff_pane(&entity);
         Ok(gitcomet_extension_api::DiffPane::new(Rc::new(
             super::hosted::diff_pane::HostedDiffPane { entity },
         )))
@@ -598,6 +612,7 @@ impl WindowHostImpl for HostWindow {
             pane.attach_root(self.view.clone());
             pane
         });
+        self.remember_diff_pane(&entity);
         Ok(gitcomet_extension_api::DiffPane::new(Rc::new(
             super::hosted::diff_pane::HostedDiffPane { entity },
         )))
@@ -902,6 +917,7 @@ pub(in crate::view) struct ExtensionWindow {
     theme: Rc<std::cell::Cell<AppTheme>>,
     observers: Rc<StateObservers>,
     bottom_panels: super::extension_panels::SharedBottomPanels,
+    diff_panes: SharedDiffPanes,
 }
 
 impl ExtensionWindow {
@@ -919,6 +935,7 @@ impl ExtensionWindow {
             (kind == gitcomet_core::identity::WindowKind::FocusedDiff)
                 .then(|| Rc::new(Registry::default()))
         })?;
+        let diff_panes: SharedDiffPanes = Rc::default();
         let bottom_panels = Rc::new(std::cell::RefCell::new(
             super::extension_panels::BottomPanels::new(registry.bottom_panels()),
         ));
@@ -963,6 +980,7 @@ impl ExtensionWindow {
             theme: Rc::clone(&theme),
             observers: Rc::clone(&observers),
             bottom_panels: Rc::clone(&bottom_panels),
+            diff_panes: Rc::clone(&diff_panes),
         });
         *observers.host.borrow_mut() = Some(Rc::downgrade(&host_window));
         let closing_host = Rc::downgrade(&host_window);
@@ -985,6 +1003,7 @@ impl ExtensionWindow {
                 *host.state.borrow_mut() = Arc::default();
                 host.observers.observers.borrow_mut().clear();
                 *host.bottom_panels.borrow_mut() = Default::default();
+                host.diff_panes.borrow_mut().clear();
             }
         });
         Some(Self {
@@ -997,7 +1016,34 @@ impl ExtensionWindow {
             theme,
             observers,
             bottom_panels,
+            diff_panes,
         })
+    }
+
+    /// The renderer of the hosted diff pane the diff keys should act on:
+    /// among the panes drawn inside `scope` in the last frame, the one
+    /// holding focus, else the one engaged with most recently.
+    pub(in crate::view) fn diff_pane_for_keys(
+        &self,
+        scope: &gpui::FocusHandle,
+        window: &Window,
+        cx: &App,
+    ) -> Option<Entity<MainPaneView>> {
+        let mut panes = self.diff_panes.borrow_mut();
+        panes.retain(|pane| pane.upgrade().is_some());
+        panes
+            .iter()
+            .filter_map(|pane| {
+                let pane = pane.upgrade()?;
+                let pane = pane.read(cx);
+                let renderer = pane.renderer()?.clone();
+                let focus = renderer.read(cx).diff_panel_focus_handle.clone();
+                scope
+                    .contains(&focus, window)
+                    .then(|| (focus.contains_focused(window, cx), pane.engaged(), renderer))
+            })
+            .max_by_key(|(focused, engaged, _)| (*focused, *engaged))
+            .map(|(_, _, renderer)| renderer)
     }
 
     pub(in crate::view) fn host(&self) -> WindowHost {

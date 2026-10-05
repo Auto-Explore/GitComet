@@ -1897,6 +1897,7 @@ impl GitCometView {
             window_gates: super::window_gates::WindowGates::new(cx),
             window_gated: false,
             extension_window,
+            repository_view_focus: cx.focus_handle(),
             repository_views: Self::repository_view_router(cx),
             details_tabs: Self::details_tab_router(cx),
             sidebar_tabs: Self::sidebar_tab_router(cx),
@@ -3088,6 +3089,29 @@ impl GitCometView {
         Ok(())
     }
 
+    /// The diff the diff keys (F1–F4, F7, Alt+Up/Down) act on: History's,
+    /// unless an extension's repository view is selected. Then it is the
+    /// hosted diff pane inside that view the user is engaged with, and with
+    /// none there the keys do nothing, rather than move History's hidden
+    /// selection.
+    pub(super) fn diff_shortcut_target(
+        &self,
+        window: &Window,
+        cx: &App,
+    ) -> Option<Entity<MainPaneView>> {
+        let extension_view_selected = self
+            .repository_views
+            .as_ref()
+            .zip(self.active_repo())
+            .is_some_and(|(router, repo)| router.selected(repo).is_some());
+        if !extension_view_selected || self.documents_active {
+            return Some(self.main_pane.clone());
+        }
+        self.extension_window
+            .as_ref()?
+            .diff_pane_for_keys(&self.repository_view_focus, window, cx)
+    }
+
     pub(super) fn defer_text_input_main_pane_action<F>(
         &self,
         cx: &mut gpui::Context<Self>,
@@ -3096,11 +3120,16 @@ impl GitCometView {
         F: FnOnce(&mut MainPaneView, &mut Window, &mut gpui::Context<MainPaneView>) -> bool
             + 'static,
     {
-        let main_pane = self.main_pane.clone();
+        let view = cx.weak_entity();
         let window_handle = self.window_handle;
         cx.defer(move |cx| {
             let _ = window_handle.update(cx, |_, window, cx| {
-                main_pane.update(cx, |pane, cx| {
+                let Ok(Some(pane)) =
+                    view.read_with(cx, |view, cx| view.diff_shortcut_target(window, cx))
+                else {
+                    return;
+                };
+                pane.update(cx, |pane, cx| {
                     if action(pane, window, cx) {
                         cx.notify();
                         window.refresh();
