@@ -2366,7 +2366,12 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
     };
     for (effect, expected_messages) in effect_specs {
         let kind: &'static str = (&effect).into();
-        let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state.clone())));
+        let mut effect_state = state.clone();
+        if let Effect::LoadCommitDetails { commit_id, .. } = &effect {
+            // A detail load is useful only while its commit is selected.
+            effect_state.repos[0].set_selected_commit(Some(commit_id.clone()));
+        }
+        let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(effect_state)));
         let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
         super::super::effects::schedule_effect(
             executors,
