@@ -391,8 +391,15 @@ fn comparison_diff_steps_through_range_files_with_arrows_and_f1_f4(cx: &mut gpui
     // Where a row click leaves focus.
     focus_diff_panel(cx, &view);
 
-    assert!(cx.debug_bounds("diff_prev_file").is_some());
-    assert!(cx.debug_bounds("diff_next_file").is_some());
+    assert_eq!(drawn_file_arrows(cx, &view), Some((true, true)));
+    assert_eq!(
+        diff_bar_position(cx, &view).as_deref(),
+        Some("2 of 3 files")
+    );
+    assert!(
+        cx.debug_bounds("diff_bar_stage").is_none(),
+        "a comparison has nothing to stage"
+    );
 
     cx.simulate_keystrokes("f4");
     draw_and_drain_test_window(cx);
@@ -406,16 +413,32 @@ fn comparison_diff_steps_through_range_files_with_arrows_and_f1_f4(cx: &mut gpui
         Some(range_target(&files[2].path)),
         "expected F4 to open the next comparison file"
     );
-    assert!(
-        cx.debug_bounds("diff_next_file").is_none(),
+    assert_eq!(
+        drawn_file_arrows(cx, &view),
+        Some((true, false)),
         "the last comparison file has no next file"
+    );
+    assert_eq!(
+        diff_bar_position(cx, &view).as_deref(),
+        Some("3 of 3 files")
+    );
+    // A click on the disabled arrow goes nowhere.
+    let next = cx
+        .debug_bounds("diff_next_file")
+        .expect("disabled, not hidden");
+    cx.simulate_click(next.center(), gpui::Modifiers::default());
+    draw_and_drain_test_window(cx);
+    sync_store_snapshot(cx, &view);
+    assert_eq!(
+        cx.update(|_window, app| view.read(app).state.repos[0].diff_state.diff_target.clone()),
+        Some(range_target(&files[2].path))
     );
 
     cx.simulate_keystrokes("f1");
     draw_and_drain_test_window(cx);
     wait_until_store_diff_target_path(cx, &view, files[1].path.as_path());
     sync_store_snapshot(cx, &view);
-    assert!(cx.debug_bounds("diff_next_file").is_some());
+    assert_eq!(drawn_file_arrows(cx, &view), Some((true, true)));
 }
 
 #[gpui::test]

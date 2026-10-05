@@ -4,9 +4,10 @@ use crate::view::components::{ControlInteractionExt, InteractionState, Interacti
 use crate::view::mod_helpers::TextFormatMenuSection;
 
 impl MainPaneView {
-    /// The strip under a file view: `[encoding ▾] [line ending ▾]`. Only
-    /// shown when the view knows how the file was read.
-    pub(super) fn text_format_strip(&self, cx: &mut gpui::Context<Self>) -> Option<AnyElement> {
+    /// The file view's format chips, `[encoding ▾] [line ending ▾] [Tab ▾]`,
+    /// at the end of the diff's bottom bar. Only shown when the view knows
+    /// how the file was read.
+    pub(super) fn text_format_chips(&self, cx: &mut gpui::Context<Self>) -> Option<AnyElement> {
         let status = self.text_format_status()?;
         let theme = self.theme;
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
@@ -103,14 +104,9 @@ impl MainPaneView {
                 .id("text_format_strip")
                 .debug_selector(|| "text_format_strip".to_string())
                 .flex()
+                .flex_none()
                 .items_center()
-                .justify_end()
                 .gap_1()
-                .px_2()
-                .py_0p5()
-                .bg(crate::theme::content_header_bg(theme))
-                .border_t_1()
-                .border_color(theme.colors.stroke.default)
                 .child(encoding)
                 .when_some(line_ending, |d, chip| d.child(chip))
                 .child(tab)

@@ -745,6 +745,17 @@ fn the_file_keys_in_an_extension_view_step_its_pane_not_history(cx: &mut gpui::T
         store.snapshot().repos[0].diff_state.diff_target.is_none(),
         "History's diff did not move"
     );
+    // The pane's file arrows are at its foot, in its bottom bar, not in its
+    // header; History's Stage is not there.
+    let pane = cx
+        .debug_bounds(selector(format!("hosted_diff_{id}")))
+        .expect("the current pane");
+    let next = cx
+        .debug_bounds("diff_next_file")
+        .expect("the pane's next-file arrow");
+    assert!(pane.contains(&next.center()));
+    assert!(next.center().y > pane.center().y, "{next:?} in {pane:?}");
+    assert!(cx.debug_bounds("diff_bar_stage").is_none());
 }
 
 fn first_session(store: &AppStore) -> u64 {

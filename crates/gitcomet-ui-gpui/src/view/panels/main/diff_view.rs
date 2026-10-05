@@ -175,6 +175,120 @@ impl MainPaneView {
             .into_any_element()
     }
 
+    /// Stages the shown working-tree file, or unstages it, and opens the next
+    /// file of its section: Space, and the bottom bar's Stage button. A
+    /// multi-file status selection wins over the shown file, and conflict
+    /// markers ask first. `false` when the shown diff is not a working-tree
+    /// file.
+    pub(in crate::view) fn toggle_stage_shown_file(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if self.is_inline_submodule_diff_active() {
+            return false;
+        }
+        let Some(repo_id) = self.active_repo_id() else {
+            return false;
+        };
+        let Some(repo) = self.active_repo() else {
+            return false;
+        };
+        let Some(diff_target) = self.bound_diff_state(repo).diff_target.clone() else {
+            return false;
+        };
+        let DiffTarget::WorkingTree { path, area, .. } = &diff_target else {
+            return false;
+        };
+        let path = path.clone();
+        let area = *area;
+        let change_tracking_view = self.active_change_tracking_view(cx);
+        let status_section_order =
+            self.active_status_section_order(repo_id, change_tracking_view, cx);
+        let next_path_in_section = status_nav::status_navigation_context_for_repo(
+            repo,
+            &diff_target,
+            change_tracking_view,
+            status_section_order.as_deref(),
+        )
+        .and_then(|navigation| navigation.next_or_prev_path());
+        let status_ready = repo.status_entries_for_area(area).is_some();
+
+        // A multi-file status selection wins over the single shown file, so
+        // the shortcut matches what the status row button and context menu
+        // already do with the same selection.
+        if let Some(paths) = self.status_selection_for_shortcut(repo_id, area, &path, cx) {
+            if self.confirm_stage_conflict_markers(repo_id, area, paths.clone(), true, window, cx) {
+                return true;
+            }
+            self.clear_status_selection_for_shortcut(repo_id, cx);
+            crate::view::status_actions::stage_or_unstage_paths(&self.store, repo_id, area, paths);
+            self.rebuild_diff_cache(cx);
+            return true;
+        }
+
+        let consumes_selection =
+            self.status_single_selection_for_shortcut(repo_id, area, &path, cx);
+        if self.confirm_stage_conflict_markers(
+            repo_id,
+            area,
+            vec![path.clone()],
+            consumes_selection,
+            window,
+            cx,
+        ) {
+            return true;
+        }
+
+        if consumes_selection {
+            self.clear_status_selection_for_shortcut(repo_id, cx);
+        }
+        match (status_ready, area) {
+            (true, DiffArea::Unstaged) => {
+                self.store.dispatch(Msg::StagePath {
+                    repo_id,
+                    path: path.clone(),
+                });
+                if let Some(next_path) = next_path_in_section {
+                    self.store.dispatch(Msg::SelectDiff {
+                        repo_id,
+                        target: DiffTarget::working_tree(next_path, DiffArea::Unstaged),
+                    });
+                } else {
+                    self.clear_diff_selection_or_exit(repo_id, cx);
+                }
+            }
+            (true, DiffArea::Staged) => {
+                self.store.dispatch(Msg::UnstagePath {
+                    repo_id,
+                    path: path.clone(),
+                });
+                if let Some(next_path) = next_path_in_section {
+                    self.store.dispatch(Msg::SelectDiff {
+                        repo_id,
+                        target: DiffTarget::working_tree(next_path, DiffArea::Staged),
+                    });
+                } else {
+                    self.clear_diff_selection_or_exit(repo_id, cx);
+                }
+            }
+            (false, DiffArea::Unstaged) => {
+                self.store.dispatch(Msg::StagePath {
+                    repo_id,
+                    path: path.clone(),
+                });
+            }
+            (false, DiffArea::Staged) => {
+                self.store.dispatch(Msg::UnstagePath {
+                    repo_id,
+                    path: path.clone(),
+                });
+            }
+        }
+        self.rebuild_diff_cache(cx);
+        true
+    }
+
     pub(crate) fn handle_diff_shortcut(
         &mut self,
         keystroke: &gpui::Keystroke,
@@ -362,7 +476,6 @@ impl MainPaneView {
             && !mods.alt
             && !mods.platform
             && !mods.function
-            && !self.is_inline_submodule_diff_active()
             && !self
                 .diff_raw_input
                 .read(cx)
@@ -373,110 +486,8 @@ impl MainPaneView {
                 .read(cx)
                 .focus_handle()
                 .is_focused(window)
-            && let Some(repo_id) = self.active_repo_id()
-            && let Some(repo) = self.active_repo()
-            && let Some(diff_target) = self.bound_diff_state(repo).diff_target.clone()
-            && let DiffTarget::WorkingTree { path, area, .. } = &diff_target
         {
-            let path = path.clone();
-            let area = *area;
-            let change_tracking_view = self.active_change_tracking_view(cx);
-            let status_section_order =
-                self.active_status_section_order(repo_id, change_tracking_view, cx);
-            let next_path_in_section = status_nav::status_navigation_context_for_repo(
-                repo,
-                &diff_target,
-                change_tracking_view,
-                status_section_order.as_deref(),
-            )
-            .and_then(|navigation| navigation.next_or_prev_path());
-            let status_ready = repo.status_entries_for_area(area).is_some();
-
-            // A multi-file status selection wins over the single shown file, so
-            // the shortcut matches what the status row button and context menu
-            // already do with the same selection.
-            if let Some(paths) = self.status_selection_for_shortcut(repo_id, area, &path, cx) {
-                if self.confirm_stage_conflict_markers(
-                    repo_id,
-                    area,
-                    paths.clone(),
-                    true,
-                    window,
-                    cx,
-                ) {
-                    return true;
-                }
-                self.clear_status_selection_for_shortcut(repo_id, cx);
-                crate::view::status_actions::stage_or_unstage_paths(
-                    &self.store,
-                    repo_id,
-                    area,
-                    paths,
-                );
-                self.rebuild_diff_cache(cx);
-                return true;
-            }
-
-            let consumes_selection =
-                self.status_single_selection_for_shortcut(repo_id, area, &path, cx);
-            if self.confirm_stage_conflict_markers(
-                repo_id,
-                area,
-                vec![path.clone()],
-                consumes_selection,
-                window,
-                cx,
-            ) {
-                return true;
-            }
-
-            if consumes_selection {
-                self.clear_status_selection_for_shortcut(repo_id, cx);
-            }
-            match (status_ready, area) {
-                (true, DiffArea::Unstaged) => {
-                    self.store.dispatch(Msg::StagePath {
-                        repo_id,
-                        path: path.clone(),
-                    });
-                    if let Some(next_path) = next_path_in_section {
-                        self.store.dispatch(Msg::SelectDiff {
-                            repo_id,
-                            target: DiffTarget::working_tree(next_path, DiffArea::Unstaged),
-                        });
-                    } else {
-                        self.clear_diff_selection_or_exit(repo_id, cx);
-                    }
-                }
-                (true, DiffArea::Staged) => {
-                    self.store.dispatch(Msg::UnstagePath {
-                        repo_id,
-                        path: path.clone(),
-                    });
-                    if let Some(next_path) = next_path_in_section {
-                        self.store.dispatch(Msg::SelectDiff {
-                            repo_id,
-                            target: DiffTarget::working_tree(next_path, DiffArea::Staged),
-                        });
-                    } else {
-                        self.clear_diff_selection_or_exit(repo_id, cx);
-                    }
-                }
-                (false, DiffArea::Unstaged) => {
-                    self.store.dispatch(Msg::StagePath {
-                        repo_id,
-                        path: path.clone(),
-                    });
-                }
-                (false, DiffArea::Staged) => {
-                    self.store.dispatch(Msg::UnstagePath {
-                        repo_id,
-                        path: path.clone(),
-                    });
-                }
-            }
-            self.rebuild_diff_cache(cx);
-            handled = true;
+            handled = self.toggle_stage_shown_file(window, cx);
         }
 
         if !handled
@@ -1842,13 +1853,6 @@ impl MainPaneView {
                 || self.rendered_preview_modes.get(RenderedPreviewKind::Svg)
                     == RenderedPreviewMode::Rendered);
 
-        let (prev_file_btn, next_file_btn) =
-            if self.store.policy.file_navigation && show_diff_file_navigation(self.view_mode) {
-                self.diff_prev_next_file_buttons(repo_id, is_conflict_resolver, theme, cx)
-            } else {
-                (None, None)
-            };
-
         let mut controls = div().flex().items_center().gap_1();
         if self.is_inline_submodule_diff_active()
             && let Some(repo_id) = repo_id
@@ -1873,17 +1877,10 @@ impl MainPaneView {
             )
         );
         if is_conflict_resolver && is_simple_conflict_strategy {
-            controls = self.conflict_toolbar_simple_controls(
-                controls,
-                prev_file_btn,
-                next_file_btn,
-                theme,
-            );
+            controls = self.conflict_toolbar_simple_controls(controls, theme);
         } else if is_conflict_resolver {
             controls = self.conflict_toolbar_full_controls(
                 controls,
-                prev_file_btn,
-                next_file_btn,
                 conflict_rendered_preview_active,
                 repo_id,
                 &conflict_target_path,
@@ -1954,8 +1951,6 @@ impl MainPaneView {
                         ),
                 );
             }
-
-            controls = controls.when_some(prev_file_btn, |d, btn| d.child(btn));
 
             if !is_image_diff_view {
                 let nav_entries = self.diff_nav_entries();
@@ -2089,7 +2084,6 @@ impl MainPaneView {
                 controls = controls
                     .child(prev_hunk_btn)
                     .child(next_hunk_btn)
-                    .when_some(next_file_btn, |d, btn| d.child(btn))
                     .child(view_toggle)
                     .child(diff_edit_btn)
                     .child(diff_annotate_btn)
@@ -2106,8 +2100,6 @@ impl MainPaneView {
                                 .child(self.file_editor_save_button(theme, cx))
                         },
                     );
-            } else {
-                controls = controls.when_some(next_file_btn, |d, btn| d.child(btn));
             }
         } else {
             // File content view (e.g. a file shown at a commit): expose the
@@ -2121,8 +2113,6 @@ impl MainPaneView {
             // under Inline/Split and hunk arrows that navigate a diff which is
             // not on screen.
             controls = controls
-                .when_some(prev_file_btn, |d, btn| d.child(btn))
-                .when_some(next_file_btn, |d, btn| d.child(btn))
                 .child(self.file_edit_toggle_button(
                     theme,
                     annotate_selected_bg,
@@ -2335,7 +2325,7 @@ impl MainPaneView {
             new_large.as_ref(),
         );
         let disk_notice = self.render_file_disk_notice(theme, cx);
-        let text_format_strip = self.text_format_strip(cx);
+        let diff_bar = self.diff_bar(repo_id, cx);
 
         let body: AnyElement = if has_large_file && !show_large_file_content {
             let action = self.large_file_card_actions(
@@ -2902,7 +2892,7 @@ impl MainPaneView {
                     .h_full()
                     .child(body),
             )
-            .when_some(text_format_strip, |d, strip| d.child(strip))
+            .when_some(diff_bar, |d, bar| d.child(bar))
             .when_some(diff_search_overlay, |d, overlay| d.child(overlay))
             .child(DiffTextSelectionTracker { view: cx.entity() })
     }
