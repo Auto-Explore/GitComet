@@ -45,6 +45,9 @@ pub struct RepositoryViewDescriptor {
     /// Listed in the action bar's More menu instead of having a tab of its
     /// own, for a view used less often. While it is selected, More names it.
     pub under_more: bool,
+    /// While the view is selected, the details pane lists only contributed
+    /// tabs: its own Details tab, about History's selection, is not offered.
+    pub replaces_details: bool,
 }
 
 impl RepositoryViewDescriptor {
@@ -60,6 +63,7 @@ impl RepositoryViewDescriptor {
             navigation: None,
             action_bar: None,
             under_more: false,
+            replaces_details: false,
         }
     }
 
@@ -79,6 +83,14 @@ impl RepositoryViewDescriptor {
     /// Lists the view in the action bar's More menu rather than as a tab.
     pub fn under_more(mut self) -> Self {
         self.under_more = true;
+        self
+    }
+
+    /// Hides the details pane's own Details tab while the view is selected,
+    /// for a view whose details tabs (`DetailsTabDescriptor::with_view`)
+    /// say everything about it. One of them should open with the view.
+    pub fn replaces_details(mut self) -> Self {
+        self.replaces_details = true;
         self
     }
 }

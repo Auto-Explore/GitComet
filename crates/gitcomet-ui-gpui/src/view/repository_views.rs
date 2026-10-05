@@ -476,6 +476,16 @@ impl GitCometView {
     }
 
     /// The view `repo` shows in the main area.
+    /// Whether `repo`'s selected view hides the details pane's own tab.
+    fn active_view_replaces_details(&self, repo: &RepoState) -> bool {
+        self.repository_views.as_ref().is_some_and(|router| {
+            router
+                .selected(repo)
+                .and_then(|index| router.views.get(index))
+                .is_some_and(|(_, view)| view.replaces_details)
+        })
+    }
+
     pub(in crate::view) fn active_view_target(&self, repo: &RepoState) -> ViewTarget {
         self.repository_views
             .as_ref()
@@ -758,6 +768,7 @@ impl GitCometView {
         &self,
         tabs: Vec<(usize, SharedString, Option<SharedString>)>,
         selected: Option<usize>,
+        own: bool,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let theme = self.theme;
@@ -768,11 +779,12 @@ impl GitCometView {
             .border_b_1()
             .border_color(theme.colors.stroke.subtle);
         let builtin = ("Details".into(), Some("icons/side_panel_right.svg".into()));
-        let entries = std::iter::once(("details_tab_details".to_string(), builtin, None)).chain(
-            tabs.into_iter().map(|(index, title, icon)| {
+        let entries = own
+            .then(|| ("details_tab_details".to_string(), builtin, None))
+            .into_iter()
+            .chain(tabs.into_iter().map(|(index, title, icon)| {
                 (format!("details_tab_{index}"), (title, icon), Some(index))
-            }),
-        );
+            }));
         for (id, (title, icon), index) in entries {
             let mut tab = components::NavTab::new(id, title).selected(selected == index);
             if let Some(icon) = icon {
@@ -831,8 +843,18 @@ impl GitCometView {
             return None;
         }
         let selected = router.selected(repo);
-        let active = router.active_view(repo);
-        let strip = self.details_strip(tabs, selected, cx);
+        // A view whose tabs replace Details shows one of them; the tab that
+        // opens with it is selected when it opens.
+        let own = !self.active_view_replaces_details(repo);
+        let active = router.active_view(repo).or_else(|| {
+            (!own)
+                .then(|| {
+                    tabs.iter()
+                        .find_map(|(index, ..)| router.built(repo, *index))
+                })
+                .flatten()
+        });
+        let strip = self.details_strip(tabs, selected, own, cx);
         let body = match active {
             Some(view) => div().flex_1().min_h(px(0.0)).child(view).into_any_element(),
             None => details(),
