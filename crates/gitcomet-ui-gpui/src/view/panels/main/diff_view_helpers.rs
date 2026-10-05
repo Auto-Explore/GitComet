@@ -152,11 +152,12 @@ impl MainPaneView {
                             .min_w(px(0.0))
                             .text_size(theme.ui_text(14.0))
                             .font_weight(FontWeight::BOLD)
-                            // Its own colour: a hosted pane's enclosing view
-                            // may set none, and the default is black.
-                            .text_color(theme.colors.foreground.primary)
                             .child(
+                                // Given its colour: the text measures itself
+                                // outside this div's style, and in a hosted
+                                // pane the colour it found there was black.
                                 components::TruncatedText::path(text, theme.ui_text(14.0))
+                                    .text_color(theme.colors.foreground.primary)
                                     .id(("diff_title_path", 0usize))
                                     .full_text_tooltip(self.tooltip_host.clone())
                                     .render(cx),

@@ -649,6 +649,15 @@ fn a_pane_shows_the_first_change_of_each_file_it_is_given(cx: &mut gpui::TestApp
         .unwrap()
         .0;
     assert!(!row_drawn(cx, first, 0), "not at the top");
+    // Opening at a change is not selecting it: the extension is told of
+    // no selection, so it offers no line actions.
+    let selection = cx.update(|_window, app| {
+        changes
+            .read(app)
+            .current()
+            .and_then(|pane| pane.selection(app))
+    });
+    assert_eq!(selection, None);
 
     // The same pane, given b.rs.
     click_debug_selector(
