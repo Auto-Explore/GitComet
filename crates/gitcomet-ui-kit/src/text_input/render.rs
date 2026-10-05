@@ -3,7 +3,23 @@ use super::state::*;
 use super::*;
 use crate::click::PointerClickExt as _;
 
+/// The caret blinks while the input is in use and then rests, shown, as GTK's
+/// `cursor-blink-timeout` does: every blink redraws the whole window.
+pub(super) const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(800);
+pub(super) const CURSOR_BLINK_TIMEOUT: Duration = Duration::from_secs(10);
+
 impl TextInput {
+    /// The caret moved, the text changed or focus arrived: show the caret and
+    /// blink again.
+    pub(super) fn show_cursor(&mut self) {
+        self.interaction.cursor_blink_visible = true;
+        self.interaction.cursor_idle_blinks = 0;
+    }
+
+    fn cursor_blink_timed_out(&self) -> bool {
+        self.interaction.cursor_idle_blinks * CURSOR_BLINK_INTERVAL >= CURSOR_BLINK_TIMEOUT
+    }
+
     fn reset_focus(&mut self, cx: &mut Context<Self>) {
         self.interaction.has_focus = false;
         self.interaction.cursor_blink_visible = true;
@@ -104,7 +120,7 @@ impl Render for TextInput {
 
         if self.interaction.has_focus != is_focused {
             self.interaction.has_focus = is_focused;
-            self.interaction.cursor_blink_visible = true;
+            self.show_cursor();
             if !is_focused {
                 self.reset_focus(cx);
             }
@@ -112,14 +128,13 @@ impl Render for TextInput {
 
         if is_focused
             && self.interaction.cursor_blink_task.is_none()
+            && !self.cursor_blink_timed_out()
             && crate::ui_runtime::current().uses_cursor_blink()
         {
             let task = cx.spawn(
                 async move |input: gpui::WeakEntity<TextInput>, cx: &mut gpui::AsyncApp| {
                     loop {
-                        cx.background_executor()
-                            .timer(Duration::from_millis(800))
-                            .await;
+                        cx.background_executor().timer(CURSOR_BLINK_INTERVAL).await;
                         let should_continue = input
                             .update_in(cx, |input, window, cx| {
                                 if !crate::window_focus::is_active(&input.focus_handle, window) {
@@ -127,14 +142,23 @@ impl Render for TextInput {
                                     return false;
                                 }
 
-                                if input.selection.range.is_empty() {
-                                    input.interaction.cursor_blink_visible =
-                                        !input.interaction.cursor_blink_visible;
-                                } else {
-                                    input.interaction.cursor_blink_visible = true;
+                                input.interaction.cursor_idle_blinks += 1;
+                                let resting = input.cursor_blink_timed_out();
+                                // A selection paints no caret: keep it shown for when
+                                // the selection collapses, without redrawing.
+                                let visible = resting
+                                    || !input.selection.range.is_empty()
+                                    || !input.interaction.cursor_blink_visible;
+                                if visible != input.interaction.cursor_blink_visible {
+                                    input.interaction.cursor_blink_visible = visible;
+                                    cx.notify();
                                 }
-                                cx.notify();
-                                true
+                                if resting {
+                                    // `show_cursor` (an edit or caret move) and the
+                                    // next render start the blink again.
+                                    input.interaction.cursor_blink_task = None;
+                                }
+                                !resting
                             })
                             .unwrap_or(false);
 
