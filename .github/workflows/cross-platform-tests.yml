@@ -261,7 +261,7 @@ jobs:
     steps:
       - name: Install native dependencies
         run: |
-          dnf -y install bash curl findutils fontconfig-devel gcc gcc-c++ git git-annex git-lfs make openssl-devel pkg-config tar which python3 libxcb-devel libxkbcommon-devel libxkbcommon-x11-devel
+          dnf -y install bash clang curl findutils fontconfig-devel gcc gcc-c++ git git-annex git-lfs make openssl-devel pkg-config tar which python3 libxcb-devel libxkbcommon-devel libxkbcommon-x11-devel
           pkg-config --libs --cflags fontconfig
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh
           sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain none
