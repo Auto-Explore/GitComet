@@ -784,6 +784,96 @@ impl WindowHostImpl for HostWindow {
         self.present_dialog(title, content, Some(anchor), cx)
     }
 
+    fn open_file_context_menu(
+        &self,
+        repository: &RepositoryHandle,
+        source: gitcomet_extension_api::ChangeSource,
+        file: gitcomet_core::domain::CommitFileChange,
+        anchor: Point<Pixels>,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.live()?;
+        if repository.window() != self.window_id {
+            return Err(HostError::Unsupported);
+        }
+        let repo_id = repository.repo_id();
+        let path = file.path;
+        let kind = match source {
+            gitcomet_extension_api::ChangeSource::Commit(commit_id) => {
+                PopoverKind::CommitFileMenu {
+                    repo_id,
+                    commit_id,
+                    path,
+                }
+            }
+            gitcomet_extension_api::ChangeSource::Comparison { from, to, .. } => {
+                PopoverKind::CommitRangeFileMenu {
+                    repo_id,
+                    from_commit_id: from,
+                    to_commit_id: to,
+                    path,
+                }
+            }
+            gitcomet_extension_api::ChangeSource::Worktree { area, .. } => {
+                PopoverKind::StatusFileMenu {
+                    repo_id,
+                    area,
+                    path,
+                }
+            }
+            gitcomet_extension_api::ChangeSource::LinkedWorktree {
+                path: workdir,
+                area,
+                ..
+            } if workdir == repository.workdir() => PopoverKind::StatusFileMenu {
+                repo_id,
+                area,
+                path,
+            },
+            gitcomet_extension_api::ChangeSource::LinkedWorktree { path: workdir, .. } => {
+                use gitcomet_extension_api::{HostedAction, HostedMenuItem};
+                let absolute = workdir.join(&path).to_string_lossy().into_owned();
+                let relative = path.to_string_lossy().into_owned();
+                // Linked-worktree files are read-only. Never offer main-checkout
+                // staging or editing actions against a different worktree.
+                self.open_menu(
+                    anchor,
+                    vec![
+                        HostedMenuItem::action(HostedAction::new(
+                            "Copy relative path",
+                            move |cx| {
+                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                    relative.clone(),
+                                ))
+                            },
+                        )),
+                        HostedMenuItem::action(HostedAction::new(
+                            "Copy absolute path",
+                            move |cx| {
+                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                    absolute.clone(),
+                                ))
+                            },
+                        )),
+                    ],
+                    cx,
+                )?;
+                return Ok(());
+            }
+            _ => return Err(HostError::Unsupported),
+        };
+        let weak = self.view.clone();
+        let window_handle = self.window_handle;
+        cx.defer(move |cx| {
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = weak.update(cx, |root, cx| {
+                    root.open_popover_at(kind, anchor, window, cx)
+                });
+            });
+        });
+        Ok(())
+    }
+
     fn open_menu(
         &self,
         anchor: Point<Pixels>,

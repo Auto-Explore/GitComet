@@ -295,6 +295,18 @@ pub trait WindowHostImpl {
         cx: &mut App,
     ) -> Result<DialogHandle, HostError>;
 
+    /// The host's standard actions for a changed-file row.
+    fn open_file_context_menu(
+        &self,
+        _repository: &RepositoryHandle,
+        _source: crate::ChangeSource,
+        _file: gitcomet_core::domain::CommitFileChange,
+        _anchor: gitcomet_ui_kit::gpui::Point<gitcomet_ui_kit::gpui::Pixels>,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unsupported)
+    }
+
     fn open_menu(
         &self,
         anchor: gitcomet_ui_kit::gpui::Point<gitcomet_ui_kit::gpui::Pixels>,
@@ -671,6 +683,19 @@ impl WindowHost {
     ) -> Result<DialogHandle, HostError> {
         self.0
             .open_popover(title.into(), anchor, Box::new(content), cx)
+    }
+
+    /// Open the same file actions as the host's built-in changed-file lists.
+    pub fn open_file_context_menu(
+        &self,
+        repository: &RepositoryHandle,
+        source: crate::ChangeSource,
+        file: gitcomet_core::domain::CommitFileChange,
+        anchor: gitcomet_ui_kit::gpui::Point<gitcomet_ui_kit::gpui::Pixels>,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.0
+            .open_file_context_menu(repository, source, file, anchor, cx)
     }
 
     pub fn open_menu(
