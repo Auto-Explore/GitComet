@@ -894,6 +894,8 @@ impl DiffTextPairMatch {
 }
 
 pub(super) struct DiffTextHitbox {
+    /// A picture represents its entire logical text range as one selectable item.
+    pub(super) atomic: bool,
     pub(super) bounds: Bounds<Pixels>,
     pub(super) layout_key: u64,
     pub(super) source_visible_ix: usize,

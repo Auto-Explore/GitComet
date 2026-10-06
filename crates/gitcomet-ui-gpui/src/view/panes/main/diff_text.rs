@@ -142,6 +142,7 @@ impl MainPaneView {
             .diff_text_hitboxes
             .entry((visible_ix, region))
             .or_insert_with(|| DiffTextHitbox {
+                atomic: false,
                 bounds: cell.bounds,
                 layout_key: 0,
                 source_visible_ix: cell.source_visible_ix,
@@ -305,6 +306,18 @@ impl MainPaneView {
             let cell = Self::diff_text_cell_for_position(hitbox, position)?;
             return self.diff_text_hit_in_hitbox(cell, region, position);
         }
+        if hitbox.atomic {
+            let after = position.y > hitbox.bounds.bottom()
+                || (position.y >= hitbox.bounds.top() && position.x >= hitbox.bounds.center().x);
+            return Some(DiffTextHit {
+                pos: DiffTextPos {
+                    source_visible_ix: hitbox.source_visible_ix,
+                    region,
+                    offset: hitbox.text_start_offset + if after { hitbox.text_len } else { 0 },
+                },
+                past_painted_text: true,
+            });
+        }
         if let Some(wrapped) = &hitbox.wrapped {
             // A wrapped row spans several visual lines, so the click resolves
             // against the layout it was painted with; `Err` is the clamp to the
@@ -388,6 +401,9 @@ impl MainPaneView {
                     .contains(&range.start)
             })?;
             return self.diff_text_bounds_in_hitbox(cell, range, near);
+        }
+        if hitbox.atomic {
+            return Some(hitbox.bounds);
         }
         let local = |offset: usize| {
             offset

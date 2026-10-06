@@ -438,6 +438,7 @@ impl Element for DiffTextSelectionOverlay {
             .read(cx)
             .diff_text_visual_source_range_for_region(self.visible_ix, self.region);
         let hitbox = DiffTextHitbox {
+            atomic: false,
             bounds,
             layout_key,
             source_visible_ix,
