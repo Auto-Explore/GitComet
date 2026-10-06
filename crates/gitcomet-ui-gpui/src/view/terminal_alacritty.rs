@@ -1771,6 +1771,7 @@ mod tests {
             font_size: px(14.0).into(),
             font_style: FontStyle::Normal,
             font_weight: FontWeight::NORMAL,
+            font_width: Default::default(),
             line_height: px(20.0).into(),
             background_color: Some(gpui::Hsla::default()),
             white_space: WhiteSpace::Normal,

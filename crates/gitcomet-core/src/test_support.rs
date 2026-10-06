@@ -20,6 +20,7 @@ use crate::services::{GitRepository, PullMode, Result};
 use std::path::{Path, PathBuf};
 
 pub mod git_fixture;
+pub mod symlink;
 
 fn unsupported<T>() -> Result<T> {
     Err(Error::new(ErrorKind::Unsupported(

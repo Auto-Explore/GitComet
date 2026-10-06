@@ -61,6 +61,7 @@ impl gix::objs::Find for CancellableLogWalkFind {
                     .raise_erased(),
             );
         }
+        gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::LogWalkObjectRead);
         gix::objs::Find::try_find(&self.inner, id, buffer)
     }
 }
@@ -169,6 +170,7 @@ pub(crate) fn new_log_paged_walk(
     shallow: &super::ShallowSnapshot,
     cancellation: Option<&CancellationToken>,
     mut chunks: Option<&mut ChunkEmitter<'_>>,
+    topology_cache: Option<(&TopologyCache, u64)>,
 ) -> Result<super::LogPagedWalkState> {
     let parents = if mode == HistoryMode::FirstParent {
         gix::traverse::commit::Parents::First
@@ -200,23 +202,29 @@ pub(crate) fn new_log_paged_walk(
             .commit_graph_if_enabled()
             .ok()
             .flatten();
-        let find = CancellableLogWalkFind {
-            inner: log_paged_walk_handle(repo),
-            cancellation: walk_cancellation.clone(),
+        let built = if commit_graph.is_none() {
+            TopologyWalk::new(repo, &tips, &walk_cancellation, topology_cache)
+                .map(super::LogPagedWalk::CachedDateOrder)
+        } else {
+            let find = CancellableLogWalkFind {
+                inner: log_paged_walk_handle(repo),
+                cancellation: walk_cancellation.clone(),
+            };
+            gix::traverse::commit::topo::Builder::new(find)
+                .with_predicate(filter)
+                .with_tips(tips.iter().copied())
+                .sorting(gix::traverse::commit::topo::Sorting::DateOrder)
+                .parents(parents)
+                .with_commit_graph(commit_graph)
+                .build()
+                .map(super::LogPagedWalk::DateOrder)
         };
-        match gix::traverse::commit::topo::Builder::new(find)
-            .with_predicate(filter)
-            .with_tips(tips.iter().copied())
-            .sorting(gix::traverse::commit::topo::Sorting::DateOrder)
-            .parents(parents)
-            .with_commit_graph(commit_graph)
-            .build()
-        {
+        match built {
             Ok(walk) => {
                 if let Some(cancellation) = cancellation {
                     cancellation.check_cancelled()?;
                 }
-                super::LogPagedWalk::DateOrder(walk)
+                walk
             }
             // Fall back lazily when a missing ancestor prevents the in-degree pass.
             Err(error) if topo_build_error_is_missing_object(&error) => {

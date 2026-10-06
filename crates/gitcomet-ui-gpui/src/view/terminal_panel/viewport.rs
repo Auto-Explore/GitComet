@@ -261,6 +261,7 @@ impl TerminalViewportView {
             cursor_blink_active: false,
             cursor_blink_task_scheduled: false,
             cursor_blink_seq: 0,
+            cursor_idle_blinks: 0,
             content_epoch: 1,
             last_content: None,
             viewport_bounds: None,
@@ -316,6 +317,12 @@ impl TerminalViewportView {
         self.cursor_blink_seq = self.cursor_blink_seq.wrapping_add(1);
         self.cursor_blink_visible = true;
         self.cursor_blink_hold_until = Instant::now();
+        self.cursor_idle_blinks = 0;
+    }
+
+    fn cursor_blink_timed_out(&self) -> bool {
+        u64::from(self.cursor_idle_blinks) * TERMINAL_CARET_BLINK_INTERVAL_MS
+            >= TERMINAL_CARET_BLINK_TIMEOUT_MS
     }
 
     fn reset_focus(&mut self, cx: &mut gpui::Context<Self>) {
@@ -337,6 +344,7 @@ impl TerminalViewportView {
         if !crate::ui_runtime::current().uses_cursor_blink()
             || !self.cursor_blink_active
             || self.cursor_blink_task_scheduled
+            || self.cursor_blink_timed_out()
         {
             return;
         }
@@ -438,8 +446,11 @@ impl TerminalViewportView {
             self.cursor_blink_visible = true;
             return;
         }
+        self.cursor_idle_blinks = self.cursor_idle_blinks.saturating_add(1);
         let now = Instant::now();
-        if now < self.cursor_blink_hold_until {
+        // Shown while typing, and at rest after the timeout, where ticks stop
+        // until `reset_cursor_blink`.
+        if now < self.cursor_blink_hold_until || self.cursor_blink_timed_out() {
             if !self.cursor_blink_visible {
                 self.cursor_blink_visible = true;
                 cx.notify();
@@ -455,6 +466,7 @@ impl TerminalViewportView {
     pub(super) fn reset_cursor_blink(&mut self, cx: &mut gpui::Context<Self>) {
         let was_visible = self.cursor_blink_visible;
         self.cursor_blink_visible = true;
+        self.cursor_idle_blinks = 0;
         self.cursor_blink_hold_until =
             Instant::now() + Duration::from_millis(TERMINAL_CARET_RESUME_DELAY_MS);
         if !crate::ui_runtime::current().uses_cursor_blink() {
@@ -1398,11 +1410,15 @@ impl TerminalViewportView {
                         &layout.base_style,
                         self.theme,
                     );
-                    let shaped = window.text_system().shape_line(
+                    let shaped = super::painting::shape_terminal_grid_line(
                         text,
-                        layout.metrics.font_size,
                         &runs,
-                        Some(layout.metrics.cell_width),
+                        &content.cells,
+                        grid_row,
+                        cols,
+                        layout.metrics.font_size,
+                        layout.metrics.cell_width,
+                        window,
                     );
                     cache_row.fingerprint = row_fingerprint;
                     cache_row.layout_key = layout.key;

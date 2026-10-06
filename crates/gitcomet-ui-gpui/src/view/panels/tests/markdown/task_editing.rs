@@ -6,6 +6,7 @@ use super::*;
 fn worktree_markdown_preview_draws_task_items_as_editable_checkboxes(
     cx: &mut gpui::TestAppContext,
 ) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -49,6 +50,7 @@ fn worktree_markdown_preview_draws_task_items_as_editable_checkboxes(
 
 #[gpui::test]
 fn toggling_a_task_invalidates_the_file_preview(cx: &mut gpui::TestAppContext) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -108,6 +110,7 @@ fn toggling_a_task_invalidates_the_file_preview(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn a_deleted_file_offers_no_editable_checkboxes(cx: &mut gpui::TestAppContext) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {

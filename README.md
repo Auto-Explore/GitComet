@@ -78,10 +78,10 @@ sudo apt update
 sudo apt install gitcomet
 ```
 
-If you install a Linux tarball or Homebrew binary on Debian, Ubuntu, or WSLg instead of the official `apt` package, install the GUI runtime libraries separately. GitComet draws with Vulkan, or EGL when Vulkan is unavailable, and uses the Wayland libraries in Wayland sessions:
+If you install a Linux tarball or Homebrew binary on Debian, Ubuntu, or WSLg instead of the official `apt` package, install the GUI runtime libraries separately. GitComet uses Fontconfig to discover fonts, draws with Vulkan, or EGL when Vulkan is unavailable, and uses the Wayland libraries in Wayland sessions:
 
 ```bash
-sudo apt install libxcb1 libxkbcommon0 libxkbcommon-x11-0 libvulkan1 libegl1 libwayland-client0 libwayland-egl1
+sudo apt install libfontconfig1 libxcb1 libxkbcommon0 libxkbcommon-x11-0 libvulkan1 libegl1 libwayland-client0 libwayland-egl1
 ```
 
 </details>

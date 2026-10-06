@@ -4,6 +4,10 @@ Profiling and benchmark drivers live here. CI execution, cache management and
 test-runtime reports stay in `scripts/ci/`. Application profiling runs locally;
 it does not add jobs or application builds to the CI test matrix.
 
+The [performance finalization record](../../docs/performance-finalization.md)
+tracks the verified branch, framework fork ports, fresh Linux evidence and the
+deferred macOS/Windows verification checklist.
+
 Run examples from the repository root. Python tools require Python 3.11 or newer;
 use `python3` instead of `python` where appropriate. Build probes with the repo's
 Rust toolchain. LFS fixtures need `git-lfs` on `PATH`. Windows GUI captures need

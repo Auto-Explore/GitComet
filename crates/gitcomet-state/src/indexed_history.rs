@@ -114,7 +114,7 @@ pub enum IndexedHistoryMsg {
         snapshot: HistorySnapshot,
         seq: u64,
         start: usize,
-        result: Result<HistoryRange>,
+        result: Result<Arc<HistoryRange>>,
     },
 }
 
