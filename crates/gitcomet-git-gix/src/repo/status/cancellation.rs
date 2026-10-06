@@ -20,7 +20,10 @@ impl StatusCancellation {
         let interrupt = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let worker = thread::Builder::new()
-            .name("gitcomet-status-cancel".into())
+            .name(format!(
+                "{}-status-cancel",
+                gitcomet_core::identity::current().executable_name()
+            ))
             .spawn({
                 let cancellation = cancellation.clone();
                 let interrupt = Arc::clone(&interrupt);

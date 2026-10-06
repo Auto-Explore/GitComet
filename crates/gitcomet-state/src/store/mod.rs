@@ -39,6 +39,14 @@ use worker_channel::{StoreInstanceId, StoreWorkerCommand, StoreWorkerSender};
 
 pub use reducer_diagnostics::StoreReducerDiagnostics;
 
+// Executor trace labels need a static name; derive it once from the product identity.
+static WORKTREE_SCAN_THREAD_NAME: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "{}-worktree-scan",
+        gitcomet_core::identity::current().executable_name()
+    )
+});
+
 fn canonicalize_path(path: PathBuf) -> PathBuf {
     canonicalize_or_original(path)
 }
@@ -537,7 +545,7 @@ impl AppStore {
             let repo_load_executor =
                 TaskExecutor::named("gitcomet-repo-load", repo_load_worker_threads());
             let worktree_scan_executor: std::sync::LazyLock<TaskExecutor> =
-                std::sync::LazyLock::new(|| TaskExecutor::named("gitcomet-worktree-scan", 1));
+                std::sync::LazyLock::new(|| TaskExecutor::named(&WORKTREE_SCAN_THREAD_NAME, 1));
             let metadata_executor = TaskExecutor::shared_for_store(
                 StoreExecutorPool::Metadata,
                 metadata_worker_threads(),

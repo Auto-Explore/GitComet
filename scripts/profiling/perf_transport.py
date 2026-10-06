@@ -5,7 +5,6 @@ The fixture server is a separate process tree from the measured application.
 """
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import os
 from pathlib import Path
 import subprocess
 import tempfile

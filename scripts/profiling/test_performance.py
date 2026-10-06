@@ -372,7 +372,7 @@ class ScenarioTests(unittest.TestCase):
         self.assertTrue(any(c["scenario"] == "repo-picker" for c in smoke))
         deep = list(performance.cases(corpus, "deep"))
         scenarios = {c["scenario"] for c in deep if c["fixture"] == "history-2000000"}
-        self.assertTrue({"history-jump", "history-reopen", "history-hover-stationary", "history-select-burst"} <= scenarios)
+        self.assertLessEqual({"history-jump", "history-reopen", "history-hover-stationary", "history-select-burst"}, scenarios)
         self.assertTrue(all(c["scenario"] in live.SCENARIOS for c in deep if c["layer"] == "ui"))
 
 

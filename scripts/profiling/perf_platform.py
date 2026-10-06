@@ -16,7 +16,7 @@ import time
 def windows_sample(pid):
     """Query the process directly; starting PowerShell per sample perturbs it."""
     import ctypes as c
-    from ctypes import wintypes as w
+    import ctypes.wintypes as w
     kernel = c.WinDLL("kernel32", use_last_error=True)
     psapi = c.WinDLL("psapi", use_last_error=True)
     kernel.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
@@ -80,6 +80,7 @@ def stop_tree(process):
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
+            # The process group may have already exited; nothing remains to kill.
             pass
     process.wait(timeout=15)
 
