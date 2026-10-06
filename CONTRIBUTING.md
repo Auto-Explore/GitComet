@@ -50,12 +50,27 @@ from string literals: `scripts/ci/identity_literals.py` fails on new ones.
 
 ### Getting started
 
+Linux prerequisites:
+
+- Install Clang (`sudo apt-get install clang` on Ubuntu/Debian, `sudo dnf install clang` on Fedora, or `sudo pacman -S clang` on Arch).
+- Install mold 3.0.0 and its `ld.mold` alias on your `PATH`. The repository installer downloads checksum-pinned upstream binaries for x86_64 and ARM64 Linux:
+
+  ```bash
+  python3 scripts/install-mold.py --bin-dir "$HOME/.local/bin"
+  export PATH="$HOME/.local/bin:$PATH"
+  mold --version
+  ```
+
+Cargo uses `scripts/linux/mold-linker.sh` to select mold through Clang for all Linux build profiles, including tests, coverage, and profiling. CI and Linux releases use the same pinned installer. See the [mold 3.0.0 release](https://github.com/rui314/mold/releases/tag/v3.0.0) for upstream binaries and source installation on other architectures.
+
+To verify the linker after building, run `readelf -p .comment target/debug/gitcomet`; it should include `mold 3.0.0`. To temporarily use the system linker on x86_64 Linux, run `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=cc cargo build` (use `CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER` on ARM64).
+
 Windows prerequisites (Windows 10/11):
 
 - Install Visual Studio 2022 (Community or Build Tools).
 - Install the `Desktop development with C++` workload.
 - Ensure both MSVC tools and Windows 10/11 SDK components are installed.
-- This repo configures Cargo to use `scripts/windows/msvc-linker.cmd` for x64 and ARM64 Windows builds. The wrapper uses the active Rust toolchain's bundled `rust-lld` linker and discovers the MSVC and Windows SDK libraries, so `cargo build` works from a regular PowerShell/CMD shell. No separate LLVM installation is needed; the Visual Studio components above are still required.
+- This repo configures Cargo to use `scripts/windows/windows-lld-linker.cmd` for x64 and ARM64 Windows builds. The wrapper uses the active Rust toolchain's bundled `rust-lld` linker and discovers the MSVC and Windows SDK libraries, so `cargo build` works from a regular PowerShell/CMD shell. No separate LLVM installation is needed; the Visual Studio components above are still required.
 
 Offline-friendly default build (does not build the UI or the Git backend):
 

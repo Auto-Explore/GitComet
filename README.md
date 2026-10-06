@@ -141,6 +141,8 @@ GitComet started from frustration with existing tools on huge codebases like Chr
 
 ### Build from source
 
+On Linux, install Clang and mold first; see [developer setup](CONTRIBUTING.md#getting-started).
+
 ```bash
 cargo build -p gitcomet --features ui-gpui,gix
 cargo run -p gitcomet --features ui-gpui,gix -- /path/to/repo

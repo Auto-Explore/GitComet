@@ -58,8 +58,8 @@ def main():
         actions = {
             "cache-key": (lambda: before.cache_keys("windows-local-workspace-ci-test"),
                           lambda: cache.cache_keys("windows-local-workspace-ci-test")),
-            "linker-launch": (lambda: link(baseline / "scripts/windows/msvc-linker.cmd", clean_env),
-                              lambda: link(runner.ROOT / "scripts/windows/msvc-linker.cmd", linker_env)),
+            "linker-launch": (lambda: link(baseline / "scripts/windows/windows-lld-linker.cmd", clean_env),
+                              lambda: link(runner.ROOT / "scripts/windows/windows-lld-linker.cmd", linker_env)),
         }
         for name, modes in actions.items():
             values = [[], []]
