@@ -13,9 +13,6 @@
 /// dependency so versions cannot drift.
 pub use gpui;
 
-/// The exact GPUI revision used by this kit and its host.
-pub const GPUI_REVISION: &str = "a5c5d1049556043aef36c351025455e1a5762a2a";
-
 pub mod appearance;
 pub mod assets;
 pub mod bundled_fonts;
@@ -89,26 +86,29 @@ pub fn restrict_scroll_to_vertical_axis<E: gpui::Styled>(mut element: E) -> E {
 #[cfg(test)]
 mod version_contract {
     #[test]
-    fn exported_gpui_revision_matches_all_workspace_dependencies() {
+    fn workspace_gpui_dependencies_share_revision() {
         let manifest = include_str!("../../../Cargo.toml");
-        let pins: Vec<_> = manifest
-            .lines()
-            .filter(|line| {
-                [
-                    "gpui = ",
-                    "gpui_platform = ",
-                    "gpui_wgpu = ",
-                    "gpui_parley = ",
-                ]
-                .iter()
-                .any(|prefix| line.starts_with(prefix))
-            })
-            .collect();
-        assert_eq!(pins.len(), 4);
-        for pin in pins {
-            assert!(
-                pin.contains(super::GPUI_REVISION),
-                "GPUI_REVISION must track {pin}"
+        let revision = |dependency: &str| {
+            let prefix = format!("{dependency} = ");
+            let pin = manifest
+                .lines()
+                .find(|line| line.starts_with(&prefix))
+                .unwrap_or_else(|| panic!("missing workspace dependency {dependency}"));
+            let revision = pin
+                .split_once("rev = \"")
+                .and_then(|(_, revision)| revision.split_once('"'))
+                .map(|(revision, _)| revision)
+                .filter(|revision| !revision.is_empty())
+                .unwrap_or_else(|| panic!("missing revision for {dependency}"));
+            revision
+        };
+
+        let gpui_revision = revision("gpui");
+        for dependency in ["gpui_platform", "gpui_wgpu", "gpui_parley"] {
+            assert_eq!(
+                revision(dependency),
+                gpui_revision,
+                "{dependency} must use the same revision as gpui"
             );
         }
     }

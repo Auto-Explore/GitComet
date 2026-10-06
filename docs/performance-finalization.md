@@ -4,7 +4,7 @@ The application series is on `perf/verified_improvements`, based on GitComet
 `dev` at `6b4eed45c6c141376fd494ee615d415525552989`. Framework changes are in
 [`Havunen/gpui-ce`](https://github.com/Havunen/gpui-ce), on the same branch name,
 based on its updated `upgrades` at `0b416666cf8cb67ded66a9fc093a2e674c40edd0`.
-GitComet's four GPUI dependencies and its exported `GPUI_REVISION` pin
+GitComet's four GPUI dependencies pin
 `a5c5d1049556043aef36c351025455e1a5762a2a`. There are no local GPUI path patches
 or vendored GPUI crates. Existing tree-sitter grammar vendoring is unrelated.
 
