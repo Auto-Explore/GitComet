@@ -998,6 +998,7 @@ pub(crate) struct TerminalViewportView {
     pub(crate) cursor_blink_task_scheduled: bool,
     pub(crate) cursor_blink_seq: u64,
     pub(crate) content_epoch: u64,
+    pub(crate) paint_retry_scheduled: bool,
     pub(crate) last_content: Option<super::terminal_alacritty::TerminalContent>,
     pub(crate) viewport_bounds: Option<Bounds<Pixels>>,
     pub(crate) pressed_mouse_button: Option<gpui::MouseButton>,

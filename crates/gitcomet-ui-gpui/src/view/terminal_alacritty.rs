@@ -407,6 +407,7 @@ pub(super) struct TerminalContent {
     pub cells: Vec<IndexedCell>,
     pub mode: TerminalModes,
     pub display_offset: usize,
+    pub history_size: usize,
     pub cursor: TerminalCursor,
     pub cursor_char: char,
     pub terminal_bounds: AlacTerminalBounds,
@@ -735,6 +736,7 @@ pub(super) fn make_terminal_content(term: &Term<GitCometListener>) -> TerminalCo
         cells,
         mode,
         display_offset: content.display_offset,
+        history_size: term.grid().history_size(),
         cursor: TerminalCursor {
             point: cursor_point,
             shape: terminal_cursor_shape(content.cursor.shape),
@@ -2414,6 +2416,7 @@ mod tests {
             cells: vec![],
             mode: TerminalModes::default(),
             display_offset: 0,
+            history_size: 0,
             cursor: TerminalCursor {
                 point: AlacPoint::new(Line(0), Column(0)),
                 shape: TerminalCursorShape::Beam,

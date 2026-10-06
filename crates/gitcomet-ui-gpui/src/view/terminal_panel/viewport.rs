@@ -11,9 +11,11 @@ use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
 use palette::IntoColor;
 
-struct TerminalScrollbarDriver {
-    term_lock: Option<AlacrittyTermLock>,
-    line_height: Pixels,
+pub(super) struct TerminalScrollbarDriver {
+    pub(super) term_lock: Option<AlacrittyTermLock>,
+    pub(super) line_height: Pixels,
+    pub(super) fallback_history: usize,
+    pub(super) fallback_display: usize,
 }
 
 impl ScrollbarDriver for TerminalScrollbarDriver {
@@ -24,7 +26,10 @@ impl ScrollbarDriver for TerminalScrollbarDriver {
         let Some(ref term_lock) = self.term_lock else {
             return px(0.0);
         };
-        (term_lock.lock().grid().history_size() as f32 * self.line_height).max(px(0.0))
+        let history = term_lock
+            .try_lock_unfair()
+            .map_or(self.fallback_history, |term| term.grid().history_size());
+        (history as f32 * self.line_height).max(px(0.0))
     }
 
     fn raw_offset(&self, axis: ScrollbarAxis) -> Pixels {
@@ -34,10 +39,12 @@ impl ScrollbarDriver for TerminalScrollbarDriver {
         let Some(ref term_lock) = self.term_lock else {
             return px(0.0);
         };
-        let term = term_lock.lock();
-        let history = term.grid().history_size() as f32;
-        let display = term.grid().display_offset() as f32;
-        -(history - display) * self.line_height
+        let (history, display) = term_lock
+            .try_lock_unfair()
+            .map_or((self.fallback_history, self.fallback_display), |term| {
+                (term.grid().history_size(), term.grid().display_offset())
+            });
+        -(history as f32 - display as f32) * self.line_height
     }
 
     fn set_axis_offset(&self, axis: ScrollbarAxis, offset: Pixels) {
@@ -262,6 +269,7 @@ impl TerminalViewportView {
             cursor_blink_task_scheduled: false,
             cursor_blink_seq: 0,
             content_epoch: 1,
+            paint_retry_scheduled: false,
             last_content: None,
             viewport_bounds: None,
             pressed_mouse_button: None,
@@ -1327,6 +1335,23 @@ impl TerminalViewportView {
         }
     }
 
+    fn schedule_paint_retry(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.paint_retry_scheduled {
+            return;
+        }
+        self.paint_retry_scheduled = true;
+        cx.spawn(async move |view, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(16))
+                .await;
+            let _ = view.update(cx, |view, cx| {
+                view.paint_retry_scheduled = false;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn build_terminal_canvas_paint_state(
         &mut self,
         bounds: Bounds<Pixels>,
@@ -1338,13 +1363,23 @@ impl TerminalViewportView {
         self.sync_terminal_grid_size(next_size);
         self.sync_cursor_blink_activity(window, cx);
 
-        // Refresh content from alacritty
+        // A PTY batch holds this lock while parsing. Painting must not wait
+        // behind output: retain the last coherent viewport and retry on a frame.
         if let Some(term_lock) = &self.term_lock {
-            let term = term_lock.lock();
-            let content = make_terminal_content(&term);
+            let fresh = term_lock
+                .try_lock_unfair()
+                .map(|term| make_terminal_content(&term));
+            let content = if let Some(content) = fresh {
+                self.last_content = Some(content.clone());
+                content
+            } else {
+                self.schedule_paint_retry(cx);
+                let Some(content) = self.last_content.clone() else {
+                    return TerminalCanvasPaintState::default();
+                };
+                content
+            };
             let display_offset = content.display_offset;
-            self.last_content = Some(content.clone());
-            drop(term);
 
             let rows = next_size.rows;
             let cols = next_size.cols as usize;
@@ -1384,20 +1419,25 @@ impl TerminalViewportView {
             for row in 0..rows {
                 let cache_row = &mut self.render_cache.rows[usize::from(row)];
                 let grid_row = row as i32 - disp_off;
-                let row_fingerprint = terminal_row_fingerprint(&content.cells, grid_row, cols);
+                // Alacritty's display iterator is ordered by row. Bound each
+                // fingerprint/shape pass to its row instead of rescanning the
+                // whole viewport once per row.
+                let first = content
+                    .cells
+                    .partition_point(|cell| cell.point.line.0 < grid_row);
+                let last = content
+                    .cells
+                    .partition_point(|cell| cell.point.line.0 <= grid_row);
+                let cells = &content.cells[first..last];
+                let row_fingerprint = terminal_row_fingerprint(cells, grid_row, cols);
 
                 if rebuild
                     || cache_row.shaped.is_none()
                     || cache_row.fingerprint != row_fingerprint
                     || cache_row.layout_key != layout.key
                 {
-                    let (text, runs, bg_rects) = build_alacritty_row(
-                        &content.cells,
-                        grid_row,
-                        cols,
-                        &layout.base_style,
-                        self.theme,
-                    );
+                    let (text, runs, bg_rects) =
+                        build_alacritty_row(cells, grid_row, cols, &layout.base_style, self.theme);
                     let shaped = window.text_system().shape_line(
                         text,
                         layout.metrics.font_size,
@@ -1714,6 +1754,14 @@ impl Render for TerminalViewportView {
                             TerminalScrollbarDriver {
                                 term_lock: term_lock.clone(),
                                 line_height,
+                                fallback_history: self
+                                    .last_content
+                                    .as_ref()
+                                    .map_or(0, |c| c.history_size),
+                                fallback_display: self
+                                    .last_content
+                                    .as_ref()
+                                    .map_or(0, |c| c.display_offset),
                             },
                         )
                         .always_visible()

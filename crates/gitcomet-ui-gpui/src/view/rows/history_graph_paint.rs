@@ -179,8 +179,6 @@ pub(super) fn paint_history_graph(
     window: &mut Window,
     cx: &mut App,
 ) {
-    use gpui::PathBuilder;
-
     if row.lanes_now.is_empty() {
         return;
     }
@@ -298,13 +296,18 @@ pub(super) fn paint_history_graph(
             );
         } else {
             // A fork whisker has nothing above it, so it stays a bare stub.
-            let mut path = PathBuilder::stroke(stroke_width);
-            path.move_to(point(left + x_for_col(from), y_center));
-            path.line_to(point(left + x_for_col(usize::from(edge.to_col)), y_center));
-            if let Ok(p) = path.build() {
-                gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintPath);
-                window.paint_path(p, color);
-            }
+            let a = left + x_for_col(from);
+            let b = left + x_for_col(usize::from(edge.to_col));
+            gitcomet_core::history_perf::record(
+                gitcomet_core::history_perf::Work::PaintSegmentQuad,
+            );
+            window.paint_quad(fill(
+                Bounds::new(
+                    point(a.min(b), y_center - stroke_width * 0.5),
+                    size((b - a).abs(), stroke_width),
+                ),
+                color,
+            ));
         }
     }
 
@@ -1006,26 +1009,25 @@ fn paint_node_to_lane(
 ) {
     use gpui::PathBuilder;
 
+    if same_x(x_from, x_to) {
+        paint_vertical_segment(left + x_to, y_center, y_bottom, stroke_width, color, window);
+        return;
+    }
     let mut path = PathBuilder::stroke(stroke_width);
     path.move_to(point(left + x_from, y_center));
-
     let dx = x_to - x_from;
-    if same_x(x_from, x_to) {
-        path.line_to(point(left + x_to, y_bottom));
-    } else {
-        let dir = if dx > px(0.0) { 1.0 } else { -1.0 };
-        let r = elbow_radius(preferred_radius, dx, y_bottom - y_center);
-        let turn_x = x_to - r * dir;
-        if (turn_x - x_from).abs() > px(0.05) {
-            path.line_to(point(left + turn_x, y_center));
-        }
-        path.cubic_bezier_to(
-            point(left + x_to, y_center + r),
-            point(left + turn_x + r * (dir * ELBOW_K), y_center),
-            point(left + x_to, y_center + r * (1.0 - ELBOW_K)),
-        );
-        path.line_to(point(left + x_to, y_bottom));
+    let dir = if dx > px(0.0) { 1.0 } else { -1.0 };
+    let r = elbow_radius(preferred_radius, dx, y_bottom - y_center);
+    let turn_x = x_to - r * dir;
+    if (turn_x - x_from).abs() > px(0.05) {
+        path.line_to(point(left + turn_x, y_center));
     }
+    path.cubic_bezier_to(
+        point(left + x_to, y_center + r),
+        point(left + turn_x + r * (dir * ELBOW_K), y_center),
+        point(left + x_to, y_center + r * (1.0 - ELBOW_K)),
+    );
+    path.line_to(point(left + x_to, y_bottom));
 
     if let Ok(p) = path.build() {
         gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintPath);

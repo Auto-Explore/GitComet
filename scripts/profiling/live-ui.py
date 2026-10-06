@@ -203,6 +203,10 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
     steps = {
         # Process start to usable status and history, then quit.
         "startup": [{"do": "wait_ready", "timeout_ms": 180_000}],
+        "settings": ready + [
+            {"do": "phase", "name": "settings_open"},
+            {"do": "command", "id": "open-settings"},
+            {"do": "settle", "ms": 5000}],
         # Build output churning in an ignored directory should cost nothing.
         "ignored-churn": ready + [
             {"do": "phase", "name": "ignored_churn"},
@@ -282,7 +286,7 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
 SCENARIOS = ("startup", "idle", "idle-minimized", "idle-hidden-terminal", "two-windows-idle", "history-select",
              "history-select-burst", "history-scroll", "status-save", "status-burst", "status-touch",
              "ignored-churn",
-             "diff-search", "terminal-output", "lifecycle")
+             "diff-search", "terminal-output", "settings", "lifecycle")
 
 
 # ---------------------------------------------------------------- one run
