@@ -365,6 +365,11 @@ class ScenarioTests(unittest.TestCase):
         self.assertEqual(len(set(paths)), live.PICKER_RECENT_COUNT)
         self.assertTrue(all("GitComet" in p and "company" in p and len(p) > 300 for p in paths))
         self.assertEqual(sum("component-017" in p for p in paths), 1)
+        for repository in (Path("/home/developer/git/GitComet"), Path("/home/developer/git/gitcomet_pro")):
+            name_query = next(s["text"] for s in live.scenario("repo-picker", repository)["steps"]
+                              if s["do"] == "type")
+            self.assertEqual(sum(name_query.casefold() in p.casefold() for p in paths), live.PICKER_RECENT_COUNT)
+            self.assertNotIn(name_query.casefold(), str(repository).casefold())
 
     def test_smoke_covers_typing_and_deep_exercises_large_history(self):
         corpus = {"fixtures": {name: {"kind": "synthetic"} for name in ("history-20000", "history-2000000")}}
