@@ -114,8 +114,12 @@ impl gpui::Element for MarkdownPreviewSharedHighlightsText {
         window: &mut Window,
         cx: &mut App,
     ) -> (gpui::LayoutId, Self::RequestLayoutState) {
-        let mut inner = gpui::StyledText::new(self.text.clone())
-            .with_default_highlights(&window.text_style(), self.highlights.iter().cloned());
+        let runs = crate::text_runs::text_runs_for_highlights(
+            &self.text,
+            &window.text_style(),
+            &self.highlights,
+        );
+        let mut inner = gpui::StyledText::new(self.text.clone()).with_runs(runs);
         let layout = inner.request_layout(id, inspector_id, window, cx);
         self.inner = Some(inner);
         layout

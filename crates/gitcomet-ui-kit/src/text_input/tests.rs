@@ -3,6 +3,7 @@ use super::shaping::*;
 use super::state::*;
 use super::wrap::*;
 use super::*;
+use crate::text_layout::TextLayoutExt as _;
 
 #[gpui::test]
 fn window_blur_stops_text_input_until_deliberately_refocused(cx: &mut gpui::TestAppContext) {
@@ -98,6 +99,54 @@ fn window_blur_stops_text_input_until_deliberately_refocused(cx: &mut gpui::Test
             // Stop the live task before leaving this test window behind.
             cx.deactivate_window();
         }
+    });
+}
+
+#[gpui::test]
+fn idle_caret_stops_blinking_until_the_next_edit(cx: &mut gpui::TestAppContext) {
+    use super::render::{CURSOR_BLINK_INTERVAL, CURSOR_BLINK_TIMEOUT};
+    crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+        let (input, cx) = cx.add_window_view(|window, cx| {
+            window.activate();
+            TextInput::new(TextInputOptions::default(), window, cx)
+        });
+        cx.update(|window, app| {
+            input.update(app, |input, cx| window.focus(&input.focus_handle, cx));
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+        cx.executor()
+            .advance_clock(CURSOR_BLINK_TIMEOUT - CURSOR_BLINK_INTERVAL);
+        cx.run_until_parked();
+        cx.update(|_, app| {
+            assert!(input.read(app).interaction.cursor_blink_task.is_some());
+        });
+
+        // Each blink redraws the window, so an idle caret rests, shown.
+        cx.executor().advance_clock(CURSOR_BLINK_INTERVAL * 2);
+        cx.run_until_parked();
+        crate::test_support::refresh_and_draw(cx);
+        cx.update(|_, app| {
+            let input = input.read(app);
+            assert!(input.interaction.cursor_blink_task.is_none());
+            assert!(input.interaction.cursor_blink_visible);
+        });
+
+        cx.simulate_keystrokes("a");
+        crate::test_support::refresh_and_draw(cx);
+        cx.executor().advance_clock(CURSOR_BLINK_INTERVAL);
+        cx.run_until_parked();
+        cx.update(|_, app| {
+            let input = input.read(app);
+            assert_eq!(input.text(), "a");
+            assert!(input.interaction.cursor_blink_task.is_some());
+            assert!(
+                !input.interaction.cursor_blink_visible,
+                "typing blinks again"
+            );
+        });
+        // Stop the live task before leaving this test window behind.
+        cx.deactivate_window();
     });
 }
 
@@ -1872,11 +1921,11 @@ fn focused_truncated_line_hit_testing_snaps_both_ellipsis_segments_to_hidden_bou
         let runs_five = vec![style.clone().to_run("…aaaaa…".len())];
         let width_four = window
             .text_system()
-            .shape_line("…aaaa…".into(), font_size, &runs_four, None)
+            .shape_line("…aaaa…".into(), font_size, &runs_four)
             .width;
         let width_five = window
             .text_system()
-            .shape_line("…aaaaa…".into(), font_size, &runs_five, None)
+            .shape_line("…aaaaa…".into(), font_size, &runs_five)
             .width;
         let max_width = width_four + (width_five - width_four) / 2.0;
 
@@ -2314,7 +2363,7 @@ fn replace_utf8_range_clears_shaped_row_caches(cx: &mut gpui::TestAppContext) {
                     line_ix: 0,
                     font_size_key: 13,
                 },
-                ShapedLine::default(),
+                EditorLine::default(),
             );
 
             assert_eq!(input.layout.plain_line_cache.len(), 1);

@@ -41,13 +41,15 @@ impl InteractionPaint {
     }
 
     pub fn apply(&self, control: Stateful<Div>) -> Stateful<Div> {
+        // The tracker positions itself over the control: a wrapping div would
+        // add a layout node and a `Div` to every row of every list.
         self.style
             .clone()
             .apply(control, self.state)
             .relative()
-            .child(div().absolute().inset_0().child(Tracker {
+            .child(Tracker {
                 paint: self.clone(),
-            }))
+            })
     }
     /// Apply ordinary control feedback when an existing canvas tracks pointers.
     pub fn apply_with_canvas(&self, control: Stateful<Div>) -> Stateful<Div> {
@@ -143,7 +145,7 @@ impl Element for Tracker {
         cx: &mut App,
     ) -> (LayoutId, ()) {
         let mut style = Style::default();
-        style.refine(&StyleRefinement::default().size_full());
+        style.refine(&StyleRefinement::default().absolute().inset_0().size_full());
         (window.request_layout(style, [], cx), ())
     }
 

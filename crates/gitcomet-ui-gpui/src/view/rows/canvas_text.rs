@@ -85,7 +85,7 @@ pub(super) fn shaped_gutter_line(
         run.color = color.into_color();
         let shaped = window
             .text_system()
-            .shape_line(text.clone(), metrics.font_size, &[run], None);
+            .shape_line(text.clone(), metrics.font_size, &[run]);
 
         cache.borrow_mut().put(key, shaped.clone());
 

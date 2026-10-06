@@ -94,6 +94,7 @@ impl Render for SettingsWindowView {
                 features: crate::font_preferences::applied_font_features(self.use_font_ligatures),
                 fallbacks: None,
                 weight: gpui::FontWeight::default(),
+                width: gpui::FontWidth::default(),
                 style: gpui::FontStyle::default(),
             })
             .text_color(theme.colors.foreground.primary);

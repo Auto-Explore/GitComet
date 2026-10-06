@@ -997,6 +997,8 @@ pub(crate) struct TerminalViewportView {
     pub(crate) cursor_blink_active: bool,
     pub(crate) cursor_blink_task_scheduled: bool,
     pub(crate) cursor_blink_seq: u64,
+    /// Blinks since the last keystroke, click or focus.
+    pub(crate) cursor_idle_blinks: u32,
     pub(crate) content_epoch: u64,
     pub(crate) last_content: Option<super::terminal_alacritty::TerminalContent>,
     pub(crate) viewport_bounds: Option<Bounds<Pixels>>,
