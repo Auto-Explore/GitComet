@@ -43,6 +43,7 @@ def cache_keys(context):
         dependencies.update(json.dumps(declarations, sort_keys=True).encode())
         compatibility.update(json.dumps(manifest.get("profile", {}), sort_keys=True).encode())
     for path in [*sorted((ROOT / ".cargo").glob("*.toml")), ROOT / "rust-toolchain.toml",
+                 ROOT / "scripts/linux/mold-linker.sh", ROOT / "scripts/install-mold.py",
                  ROOT / "scripts/windows/msvc-linker.cmd", ROOT / "scripts/ci/cache.py",
                  ROOT / "scripts/ci/run.py"]:
         if path.exists():
