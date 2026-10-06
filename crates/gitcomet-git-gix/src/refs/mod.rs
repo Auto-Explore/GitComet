@@ -438,7 +438,7 @@ impl<'r> RefsView<'r> {
             .get()
             .ok_or_else(|| failure("reference iterator unavailable"))
     }
-    fn iter(&self, prefix: &'static [u8]) -> Result<RefIter<'_, 'r>> {
+    fn iter<'v>(&'v self, prefix: &'v [u8]) -> Result<RefIter<'v, 'r>> {
         if self.common.is_none() {
             let iter = if prefix == b"refs/" {
                 self.files()?.all()
@@ -463,6 +463,9 @@ impl<'r> RefsView<'r> {
     }
     pub fn all(&self) -> Result<RefIter<'_, 'r>> {
         self.iter(b"refs/")
+    }
+    pub fn prefixed<'v>(&'v self, prefix: &'v [u8]) -> Result<RefIter<'v, 'r>> {
+        self.iter(prefix)
     }
     pub fn local_branches(&self) -> Result<RefIter<'_, 'r>> {
         self.iter(b"refs/heads/")
@@ -489,7 +492,7 @@ impl<'r> RefsView<'r> {
 
 fn records_with_prefix<'v>(
     stack: Option<&'v reftable::Stack>,
-    prefix: &'static [u8],
+    prefix: &'v [u8],
 ) -> impl Iterator<Item = (&'v Vec<u8>, &'v reftable::Record)> {
     use std::ops::Bound::{Included, Unbounded};
     stack

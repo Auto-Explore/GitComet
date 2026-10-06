@@ -1803,8 +1803,7 @@ fn render_row_text(
     } else {
         div().flex_1().min_w(px(0.0))
     };
-    // `gpui` aligns each wrapped line as it paints; the flow text reads the
-    // same style back to place selections and resolve clicks.
+    // The backend uses this style to align both glyphs and selection geometry.
     if let Some(align) = aligned {
         text = text.text_align(align);
     }
@@ -1851,8 +1850,7 @@ fn render_row_text(
             Arc::clone(&styled.highlights),
         )
         // Inline code is set in the editor font; the prose around it is not.
-        .font_family_ranges(code_ranges, context.editor_font_family.clone())
-        .text_align(aligned.unwrap_or_default()),
+        .font_family_ranges(code_ranges, context.editor_font_family.clone()),
     )
     .into_any_element()
 }

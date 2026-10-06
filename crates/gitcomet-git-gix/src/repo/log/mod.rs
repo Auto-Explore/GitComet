@@ -30,12 +30,15 @@ mod index;
 mod reflog;
 mod repo_impl;
 mod snapshot;
+mod topology;
 mod walk;
 
 pub(super) use authors::HistoryAuthorsCache;
 pub(super) use commit_stats::*;
 pub(super) use decode::*;
+pub(super) use index::HistoryQuery;
 pub(super) use reflog::*;
+pub(super) use topology::{TopologyCache, TopologyWalk};
 pub(super) use walk::*;
 
 #[cfg(test)]

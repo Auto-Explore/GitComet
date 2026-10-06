@@ -20,6 +20,7 @@ EOF
 }
 
 linked_allowed=(
+  libfontconfig.so.1
   libxcb.so.1
   libxkbcommon.so.0
   libxkbcommon-x11.so.0

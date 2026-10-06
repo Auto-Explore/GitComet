@@ -916,7 +916,7 @@ fn ensure_layout_cached(
         let run = base_style.to_run(prepared.text.len());
         window
             .text_system()
-            .shape_line(prepared.text.clone(), metrics.font_size, &[run], None)
+            .shape_line(prepared.text.clone(), metrics.font_size, &[run])
     } else {
         let runs = compute_runs(
             prepared.text.as_ref(),
@@ -925,7 +925,7 @@ fn ensure_layout_cached(
         );
         window
             .text_system()
-            .shape_line(prepared.text.clone(), metrics.font_size, &runs, None)
+            .shape_line(prepared.text.clone(), metrics.font_size, &runs)
     };
 
     CONFLICT_TEXT_LAYOUT_CACHE.with(|cache| {

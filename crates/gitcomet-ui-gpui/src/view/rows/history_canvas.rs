@@ -2,6 +2,7 @@ use super::*;
 use crate::kit::interaction_paint::InteractionPaint;
 use crate::view::panes::HistoryRowHoverArea;
 use gitcomet_state::msg::CommitSelectMode;
+use gitcomet_ui_kit::text_layout::TextLayoutExt as _;
 use gpui::{
     Bounds, ContentMask, CursorStyle, DispatchPhase, HitboxBehavior, MouseButton, TruncateFrom,
     fill, point, px, size,
@@ -315,29 +316,28 @@ fn shape_truncated_line_cached_from_with_affix(
         style.font_family = family.into();
     }
     let runs = crate::text_runs::text_runs_for_highlights(text, &style, highlights);
-    let text_system = window.text_system();
+    let text_system = Arc::clone(window.text_system());
     let shaped = if highlights.is_empty() || truncate_from != TruncateFrom::End {
-        let (truncated, runs) = text_system
-            .line_wrapper(style.font(), font_size)
-            .truncate_line(
-                text.clone(),
-                max_width.max(px(0.0)),
-                truncation_affix,
-                &runs,
-                truncate_from,
-            );
-        text_system.shape_line(truncated, font_size, runs.as_ref(), None)
+        let (truncated, runs) = gpui::TextLayout::truncate_line(
+            text.clone(),
+            font_size,
+            max_width.max(px(0.0)),
+            truncation_affix,
+            &runs,
+            truncate_from,
+            window,
+        );
+        text_system.shape_line(truncated, font_size, runs.as_ref())
     } else {
         // The wrapper cuts by base-font widths, so bold matches would
         // overflow and be clipped mid-glyph; cut the shaped line instead.
-        let full = text_system.shape_line(text.clone(), font_size, &runs, None);
+        let full = text_system.shape_line(text.clone(), font_size, &runs);
         let affix = || {
             text_system
                 .shape_line(
                     truncation_affix.into(),
                     font_size,
                     &[style.to_run(truncation_affix.len())],
-                    None,
                 )
                 .width
         };
@@ -360,7 +360,6 @@ fn shape_truncated_line_cached_from_with_affix(
                     format!("{prefix}{truncation_affix}").into(),
                     font_size,
                     &runs,
-                    None,
                 )
             }
         }
@@ -1677,7 +1676,7 @@ pub(super) fn history_commit_row_canvas(
                         None,
                     );
                     let initials_cap_height = initials_shaped
-                        .runs
+                        .paint_fragments
                         .first()
                         .map(|run| window.text_system().cap_height(run.font_id, initials_font))
                         .unwrap_or(initials_font * 0.7);

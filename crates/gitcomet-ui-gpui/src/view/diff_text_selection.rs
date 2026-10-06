@@ -1,5 +1,6 @@
 use super::*;
 use crate::kit::click::PointerClickExt as _;
+use gitcomet_ui_kit::text_layout::TextLayoutExt as _;
 use rustc_hash::FxHasher;
 
 fn diff_text_empty_space_surface(
@@ -406,10 +407,9 @@ impl Element for DiffTextSelectionOverlay {
                     strikethrough: None,
                     letter_spacing: style.letter_spacing,
                 };
-                let layout =
-                    window
-                        .text_system()
-                        .shape_line(self.text.clone(), font_size, &[run], None);
+                let layout = window
+                    .text_system()
+                    .shape_line(self.text.clone(), font_size, &[run]);
                 let x0 = selection
                     .as_ref()
                     .map(|r| layout.x_for_index(r.start.min(self.text.len())));

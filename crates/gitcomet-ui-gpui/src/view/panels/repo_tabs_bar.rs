@@ -151,7 +151,7 @@ fn repo_tab_text_width(label: SharedString, font_size: Pixels, window: &mut Wind
     let run = style.to_run(label.len());
     window
         .text_system()
-        .shape_line(label, font_size, &[run], None)
+        .shape_line(label, font_size, &[run])
         .width
 }
 

@@ -16,6 +16,7 @@ use super::*;
 use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
 use crate::view::panes::main::{DiffChangeSide, DiffHorizontalScrollColumn, FocusedChangeBlockRow};
 use gitcomet_core::domain::{DiffArea, DiffLineKind};
+use gitcomet_ui_kit::text_layout::TextLayoutExt as _;
 use gpui::{
     App, Bounds, CursorStyle, DispatchPhase, HighlightStyle, Hitbox, HitboxBehavior, Pixels,
     Styled, TextStyle, TransformationMatrix, Window, fill, point, px, size,
@@ -1429,7 +1430,6 @@ fn streamed_diff_text_ascii_cell_width(
         STREAMED_DIFF_TEXT_CELL_WIDTH_SAMPLE.into(),
         font_size,
         &[run],
-        None,
     );
     let width = if STREAMED_DIFF_TEXT_CELL_WIDTH_SAMPLE.is_empty() {
         px(0.0)
@@ -3778,12 +3778,10 @@ pub(in crate::view) fn diff_text_wrap_char_width(
     style.font_family = editor_font_family.into();
     let font_size = crate::ui_scale::design_px_from_window(editor_font_size_px as f32, window);
     let run = style.to_run(DIFF_TEXT_WRAP_WIDTH_SAMPLE.len());
-    let layout = window.text_system().shape_line(
-        DIFF_TEXT_WRAP_WIDTH_SAMPLE.into(),
-        font_size,
-        &[run],
-        None,
-    );
+    let layout =
+        window
+            .text_system()
+            .shape_line(DIFF_TEXT_WRAP_WIDTH_SAMPLE.into(), font_size, &[run]);
     if DIFF_TEXT_WRAP_WIDTH_SAMPLE.is_empty() {
         px(1.0)
     } else {
@@ -4324,12 +4322,12 @@ fn ensure_layout_cached(
         let run = base_style.to_run(text.len());
         window
             .text_system()
-            .shape_line(text.clone(), metrics.font_size, &[run], None)
+            .shape_line(text.clone(), metrics.font_size, &[run])
     } else {
         let runs = compute_runs(text.as_ref(), base_style, highlights);
         window
             .text_system()
-            .shape_line(text.clone(), metrics.font_size, &runs, None)
+            .shape_line(text.clone(), metrics.font_size, &runs)
     };
     (layout_key, shaped.clone(), Some(shaped))
 }

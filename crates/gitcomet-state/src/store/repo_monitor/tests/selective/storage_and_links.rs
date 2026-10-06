@@ -195,11 +195,8 @@ fn custom_lfs_storage_sharing_repository_directories_preserves_source_and_git_st
     }
 }
 
-fn link_file(target: &Path, link: &Path) {
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(target, link).unwrap();
-    #[cfg(windows)]
-    std::os::windows::fs::symlink_file(target, link).unwrap();
+fn link_file(target: &Path, link: &Path) -> bool {
+    gitcomet_core::test_support::symlink::file(target, link)
 }
 
 /// External inputs sit outside every native root, so Revalidate alone reloads
@@ -232,7 +229,9 @@ fn symlinked_ignore_input_observes_target_edits_and_link_replacement() {
     let link = normalized(&external.path().canonicalize().unwrap()).join("ignore-link");
     fs::write(&target, "generated/\n").unwrap();
     fs::write(&replacement, "generated/\n").unwrap();
-    link_file(&target, &link);
+    if !link_file(&target, &link) {
+        return;
+    }
     run_git(
         &root,
         &["config", "core.excludesFile", link.to_str().unwrap()],
@@ -258,7 +257,9 @@ fn symlinked_ignore_input_observes_target_edits_and_link_replacement() {
             .worktree
     );
     fs::remove_file(&link).unwrap();
-    link_file(&replacement, &link);
+    if !link_file(&replacement, &link) {
+        return;
+    }
     expect_policy_reload(&monitor);
     monitor.settle();
     fs::write(&ignored, "ignored again").unwrap();
@@ -290,8 +291,12 @@ fn symlinked_ignore_input_observes_missing_target_and_intermediate_link() {
     fs::write(&replacement, "").unwrap();
     let intermediate = normalized(&middle.path().canonicalize().unwrap()).join("intermediate");
     let link = normalized(&external.path().canonicalize().unwrap()).join("ignore-link");
-    link_file(&missing, &intermediate);
-    link_file(&intermediate, &link);
+    if !link_file(&missing, &intermediate) {
+        return;
+    }
+    if !link_file(&intermediate, &link) {
+        return;
+    }
     run_git(
         &root,
         &["config", "core.excludesFile", link.to_str().unwrap()],
@@ -301,7 +306,9 @@ fn symlinked_ignore_input_observes_missing_target_and_intermediate_link() {
     fs::write(&missing, "generated/\n").unwrap();
     expect_policy_reload(&monitor);
     fs::remove_file(&intermediate).unwrap();
-    link_file(&replacement, &intermediate);
+    if !link_file(&replacement, &intermediate) {
+        return;
+    }
     expect_policy_reload(&monitor);
     fs::write(&replacement, "generated/\n").unwrap();
     expect_policy_reload(&monitor);
@@ -315,11 +322,12 @@ fn symlinked_ignore_directory_and_relative_target_keep_healthy_coverage() {
     let target_dir = normalized(&targets.path().canonicalize().unwrap());
     let link = normalized(&external.path().canonicalize().unwrap()).join("linked-directory");
     fs::write(target_dir.join("policy"), "generated/\n").unwrap();
-    link_file(Path::new("policy"), &target_dir.join("ignore"));
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(&target_dir, &link).unwrap();
-    #[cfg(windows)]
-    std::os::windows::fs::symlink_dir(&target_dir, &link).unwrap();
+    if !link_file(Path::new("policy"), &target_dir.join("ignore")) {
+        return;
+    }
+    if !gitcomet_core::test_support::symlink::directory(&target_dir, &link) {
+        return;
+    }
     run_git(
         &root,
         &[

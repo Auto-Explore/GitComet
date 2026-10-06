@@ -1,6 +1,6 @@
 use std::fmt;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 #[error("{kind}")]
 pub struct Error {
     kind: ErrorKind,
@@ -123,7 +123,7 @@ impl fmt::Display for GitFailure {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum ErrorKind {
     #[error("I/O error: {0}")]
     Io(std::io::ErrorKind),
