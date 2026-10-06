@@ -52,6 +52,7 @@ pub(super) fn shape_terminal_grid_line(
     }
     debug_assert_eq!(offset, text.len(), "terminal text and cell source agree");
 
+    let ascii = text.is_ascii();
     let mut shaped = window.text_system().shape_line(text, font_size, runs);
     let mut layout = (**shaped).clone();
     let native = &layout.platform_layout;
@@ -60,9 +61,26 @@ pub(super) fn shape_terminal_grid_line(
     for run in runs {
         run_starts.push(run_starts.last().copied().unwrap_or(0) + run.len);
     }
+    // Plain output usually has one glyph per ASCII cell. Avoid a native
+    // hit test and caret lookup for every glyph in that case. Split font
+    // fragments and ligatures retain the general cluster-aware mapping.
+    let mut seen_runs = vec![false; runs.len()];
+    let ascii_grid = ascii
+        && source.len() == offset
+        && layout.paint_fragments.iter().all(|fragment| {
+            let unique = !seen_runs[fragment.source_run];
+            seen_runs[fragment.source_run] = true;
+            unique && fragment.glyphs.len() == runs[fragment.source_run].len
+        })
+        && seen_runs.into_iter().all(|seen| seen);
     for fragment in &mut layout.paint_fragments {
         let glyphs = Arc::make_mut(&mut fragment.glyphs);
-        for glyph in glyphs {
+        for (glyph_index, glyph) in glyphs.iter_mut().enumerate() {
+            if ascii_grid {
+                let cell = &source[run_starts[fragment.source_run] + glyph_index];
+                glyph.position.x = cell_width * cell.2 as f32;
+                continue;
+            }
             let index = native
                 .byte_index_from_pixel_point(point(glyph.position.x + px(0.001), px(0.5)), px(1.0))
                 .unwrap_or_else(|index| index);
@@ -80,12 +98,16 @@ pub(super) fn shape_terminal_grid_line(
         }
         let start = run_starts[fragment.source_run];
         let end = run_starts[fragment.source_run + 1];
-        let selected = source.iter().filter(|cell| cell.0 < end && cell.1 > start);
-        let columns = selected.fold(None, |range: Option<(usize, usize)>, cell| {
-            Some(range.map_or((cell.2, cell.3), |(start, end)| {
-                (start.min(cell.2), end.max(cell.3))
-            }))
-        });
+        let first = source.partition_point(|cell| cell.1 <= start);
+        let last = source.partition_point(|cell| cell.0 < end);
+        let columns =
+            source[first..last]
+                .iter()
+                .fold(None, |range: Option<(usize, usize)>, cell| {
+                    Some(range.map_or((cell.2, cell.3), |(start, end)| {
+                        (start.min(cell.2), end.max(cell.3))
+                    }))
+                });
         if let Some((start, end)) = columns {
             fragment.x_range = cell_width * start as f32..cell_width * end as f32;
         }
@@ -103,6 +125,74 @@ mod grid_layout_tests {
     use super::*;
     use alacritty_terminal::index::{Column, Line, Point as AlacPoint};
     use alacritty_terminal::term::cell::{Cell, Flags};
+
+    #[gpui::test]
+    fn ascii_with_style_changes_keeps_each_glyph_on_its_cell(cx: &mut gpui::TestAppContext) {
+        gitcomet_ui_kit::test_support::use_real_text_backend(cx);
+        let cx = cx.add_empty_window();
+        cx.update(|window, _| {
+            for family in ["Lilex", "IBM Plex Sans"] {
+                for text in [
+                    "GitComet-terminal-output",
+                    "AV To 1234 /src/main.rs",
+                    "          ",
+                ] {
+                    let cells: Vec<_> = text
+                        .chars()
+                        .enumerate()
+                        .map(|(col, c)| {
+                            let mut cell = Cell {
+                                c,
+                                ..Cell::default()
+                            };
+                            if col % 3 == 0 {
+                                cell.flags.insert(Flags::BOLD);
+                            }
+                            IndexedCell {
+                                point: AlacPoint::new(Line(0), Column(col)),
+                                cell,
+                            }
+                        })
+                        .collect();
+                    let style = gpui::TextStyle {
+                        font_family: family.into(),
+                        ..Default::default()
+                    };
+                    let (text, runs, _) = build_alacritty_row(
+                        &cells,
+                        0,
+                        cells.len(),
+                        &style,
+                        AppTheme::gitcomet_dark(),
+                    );
+                    let shaped = shape_terminal_grid_line(
+                        text,
+                        &runs,
+                        &cells,
+                        0,
+                        cells.len(),
+                        px(12.),
+                        px(16.),
+                        window,
+                    );
+                    let mut positions: Vec<_> = shaped
+                        .paint_fragments
+                        .iter()
+                        .flat_map(|f| f.glyphs.iter())
+                        .map(|g| g.position.x)
+                        .collect();
+                    positions.sort_by(|a, b| f32::from(*a).total_cmp(&f32::from(*b)));
+                    assert_eq!(
+                        positions,
+                        (0..cells.len())
+                            .map(|i| px(i as f32 * 16.))
+                            .collect::<Vec<_>>(),
+                        "{family}"
+                    );
+                }
+            }
+        });
+    }
 
     #[gpui::test]
     fn wide_and_combining_cells_keep_the_authoritative_grid(cx: &mut gpui::TestAppContext) {

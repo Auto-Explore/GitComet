@@ -1,0 +1,112 @@
+[
+  {
+    "repository": "GitComet",
+    "binary_sha256": "137672eb9d1c7fbd394f91ae2e5ab85063ec111c07fae0e73cbcebbdbd41918d",
+    "head": "724d433af8c7c0fa2074ae5bd2f5632fd056c740",
+    "valid": true,
+    "problems": [],
+    "phases": {
+      "scroll_with_output": {
+        "seconds": 6.39025072,
+        "frames": 374,
+        "frames_per_second": 58.52665511690596,
+        "draw_ms": {
+          "count": 374,
+          "mean": 7.145228668449198,
+          "p50": 5.386838,
+          "p95": 16.922373,
+          "p99": 26.06318,
+          "max": 28.681339
+        },
+        "main_cpu_percent": 37.0883030974429,
+        "process_cpu_cores": 1.5678722046036933,
+        "rss_kib": {
+          "count": 25,
+          "mean": 560857.28,
+          "p50": 561604,
+          "p95": 582144,
+          "p99": 582144,
+          "max": 582144
+        }
+      },
+      "output_settling": {
+        "seconds": 10.000314520999998,
+        "frames": 16,
+        "frames_per_second": 1.5999496782227258,
+        "draw_ms": {
+          "count": 16,
+          "mean": 3.5250350625,
+          "p50": 3.117659,
+          "p95": 5.9906880000000005,
+          "p99": 5.9906880000000005,
+          "max": 5.9906880000000005
+        },
+        "main_cpu_percent": 20.614801250258033,
+        "process_cpu_cores": 0.03271182398467115,
+        "rss_kib": {
+          "count": 39,
+          "mean": 582729.641025641,
+          "p50": 582152,
+          "p95": 584200,
+          "p99": 584200,
+          "max": 584200
+        }
+      }
+    }
+  },
+  {
+    "repository": "Pro",
+    "binary_sha256": "137672eb9d1c7fbd394f91ae2e5ab85063ec111c07fae0e73cbcebbdbd41918d",
+    "head": "aabd6dbac811c2515128d84c40ae4c05f3202993",
+    "valid": true,
+    "problems": [],
+    "phases": {
+      "scroll_with_output": {
+        "seconds": 6.384361608000001,
+        "frames": 379,
+        "frames_per_second": 59.363805384251656,
+        "draw_ms": {
+          "count": 379,
+          "mean": 7.263563319261214,
+          "p50": 5.664598,
+          "p95": 16.151354,
+          "p99": 19.956763,
+          "max": 27.53185
+        },
+        "main_cpu_percent": 37.65374995637107,
+        "process_cpu_cores": 1.5672168486637001,
+        "rss_kib": {
+          "count": 25,
+          "mean": 497100.96,
+          "p50": 495232,
+          "p95": 519880,
+          "p99": 519880,
+          "max": 519880
+        }
+      },
+      "output_settling": {
+        "seconds": 10.000299061999998,
+        "frames": 11,
+        "frames_per_second": 1.0999671041637897,
+        "draw_ms": {
+          "count": 11,
+          "mean": 4.425649181818182,
+          "p50": 3.560268,
+          "p95": 7.882227,
+          "p99": 7.882227,
+          "max": 7.882227
+        },
+        "main_cpu_percent": 19.907015116030394,
+        "process_cpu_cores": 0.05127196918134062,
+        "rss_kib": {
+          "count": 39,
+          "mean": 528976.6153846154,
+          "p50": 532524,
+          "p95": 532524,
+          "p99": 532524,
+          "max": 532524
+        }
+      }
+    }
+  }
+]
