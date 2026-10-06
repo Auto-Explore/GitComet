@@ -5,13 +5,20 @@
 /// Replace the default single-line test shaper before creating windows. Bundled
 /// fonts keep wrapping and cluster tests independent of the machine font catalog.
 pub fn use_real_text_backend(cx: &mut gpui::TestAppContext) {
+    use_text_backend(cx, gpui_parley::SystemFonts::Skip);
+}
+
+/// Include the OS font catalog for regressions involving the backend's default
+/// generic font (for example, synthetic direction markers without source runs).
+pub fn use_real_text_backend_with_system_fonts(cx: &mut gpui::TestAppContext) {
+    use_text_backend(cx, gpui_parley::SystemFonts::Load);
+}
+
+fn use_text_backend(cx: &mut gpui::TestAppContext, system_fonts: gpui_parley::SystemFonts) {
     use gpui::PlatformTextSystem as _;
     let system = std::sync::Arc::new(
-        gpui_parley::ParleyTextSystem::new_with_system_font(
-            gpui_parley::SystemFonts::Skip,
-            "IBM Plex Sans",
-        )
-        .with_fallback_families(["IBM Plex Sans", "Lilex"]),
+        gpui_parley::ParleyTextSystem::new_with_system_font(system_fonts, "IBM Plex Sans")
+            .with_fallback_families(["IBM Plex Sans", "Lilex"]),
     );
     system
         .add_fonts(vec![

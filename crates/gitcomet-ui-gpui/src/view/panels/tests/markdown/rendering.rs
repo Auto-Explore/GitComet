@@ -3,6 +3,101 @@
 use super::*;
 
 #[gpui::test]
+fn markdown_empty_cells_and_code_lines_keep_their_selection_layout(cx: &mut gpui::TestAppContext) {
+    gitcomet_ui_kit::test_support::use_real_text_backend_with_system_fonts(cx);
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(480),
+        "markdown_empty_text_layout",
+        "| Left | Middle | Right |\n| :--- | :---: | ---: |\n| | value | |\n| | | |\n\n```rust\nbefore\n\nafter\n```\n",
+    );
+    let rows = table_row_ixs(&fixture);
+    assert_eq!(rows.len(), 3);
+    let empty_code_row = fixture
+        .document
+        .rows
+        .iter()
+        .position(|row| {
+            matches!(
+                row.kind,
+                crate::view::markdown_preview::MarkdownPreviewRowKind::CodeLine { .. }
+            ) && row.text.is_empty()
+        })
+        .expect("fixture has an empty code line");
+
+    // Redrawing exercises the cached backend layout as well as its first build.
+    draw_frames(cx, 2);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        for row_ix in &rows[1..] {
+            let row = pane
+                .diff_text_hitboxes
+                .get(&(*row_ix, DiffTextRegion::Inline))
+                .expect("table row retains selection targets");
+            assert_eq!(row.cells.len(), 3);
+            for cell in &row.cells {
+                assert!(cell.bounds.size.height > px(0.0));
+                let layout = &cell.wrapped.as_ref().expect("cell text layout").layout;
+                assert!(layout.line_layout_for_index(0).is_some());
+                if cell.text_len == 0 {
+                    assert!(cell.painted_text.is_empty());
+                }
+            }
+        }
+        let code = pane
+            .diff_text_hitboxes
+            .get(&(empty_code_row, DiffTextRegion::Inline))
+            .expect("empty code line retains a selection target");
+        assert_eq!(code.text_len, 0);
+        assert!(code.bounds.size.height > px(0.0));
+        assert!(
+            code.wrapped
+                .as_ref()
+                .expect("code text layout")
+                .layout
+                .line_layout_for_index(0)
+                .is_some()
+        );
+    });
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn markdown_empty_shared_highlights_text_keeps_its_line_height(cx: &mut gpui::TestAppContext) {
+    gitcomet_ui_kit::test_support::use_real_text_backend_with_system_fonts(cx);
+    struct EmptyMarkdownText;
+    impl gpui::Render for EmptyMarkdownText {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            div().flex().child(
+                div()
+                    .debug_selector(|| "empty_markdown_shared_text".into())
+                    .child(crate::view::rows::markdown_preview_highlighted_text(
+                        SharedString::default(),
+                        Arc::from(Vec::new()),
+                    )),
+            )
+        }
+    }
+    let (_view, cx) = cx.add_window_view(|_window, _cx| EmptyMarkdownText);
+    draw_frames(cx, 2);
+    let bounds = cx
+        .debug_bounds("empty_markdown_shared_text")
+        .expect("empty text is laid out");
+    assert!(bounds.size.height > px(0.0));
+    assert_eq!(bounds.size.width, px(0.0));
+}
+
+#[gpui::test]
 fn markdown_diff_preview_cache_does_not_rebuild_when_rev_changes_with_identical_payload(
     cx: &mut gpui::TestAppContext,
 ) {

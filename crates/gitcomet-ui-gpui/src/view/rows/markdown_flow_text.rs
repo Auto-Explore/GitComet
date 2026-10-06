@@ -454,8 +454,12 @@ impl gpui::Element for MarkdownFlowText {
                 &self.font_overrides,
             ),
         );
+        // Keep a default run even for empty cells and code lines: Parley adds
+        // a direction marker whose glyphs still need a source style.
+        let runs =
+            crate::text_runs::text_runs_for_highlights(&self.text, &text_style, &self.highlights);
         let mut inner = gpui::StyledText::new(self.text.clone())
-            .with_default_highlights(&text_style, self.highlights.iter().cloned())
+            .with_runs(runs)
             .with_font_family_overrides(self.font_overrides.iter().cloned());
         self.layout = Some(inner.layout().clone());
         let layout = inner.request_layout(id, inspector_id, window, cx);
