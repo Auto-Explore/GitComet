@@ -1839,7 +1839,8 @@ impl MainPaneView {
                         this.store
                             .dispatch(Msg::CloseInlineSubmoduleDiff { repo_id });
                         cx.notify();
-                    }),
+                    })
+                    .debug_selector(|| "inline_foreign_back".to_string()),
             );
         }
         let is_simple_conflict_strategy = matches!(

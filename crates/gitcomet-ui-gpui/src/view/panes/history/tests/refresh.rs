@@ -997,6 +997,13 @@ fn indexed_history_skeleton_waits_300ms_and_hydrates_without_a_minimum_dwell(
             next_cursor: None,
         }),
     );
+    cx.update(|_, app| {
+        let history = view.read(app).main_pane.read(app).history_view.read(app);
+        assert!(
+            history.scenario_indexed_window().is_none(),
+            "bootstrap rows must not satisfy indexed readiness"
+        );
+    });
     install_index(&mut state, index.clone());
     store.replace_snapshot_for_test(Arc::new(state.clone()));
     set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
@@ -1028,6 +1035,11 @@ fn indexed_history_skeleton_waits_300ms_and_hydrates_without_a_minimum_dwell(
     let placeholder = cx
         .debug_bounds("history_skeleton_650")
         .expect("skeleton deadline must repaint without more input");
+    cx.update(|_, app| {
+        let history = view.read(app).main_pane.read(app).history_view.read(app);
+        assert!(matches!(history.scenario_indexed_window(), Some((5000, first, last, false)) if first <= 650 && last > 650),
+            "scrolling to placeholders must not satisfy the jump witness");
+    });
     state.repos[0]
         .history_state
         .indexed
@@ -1056,6 +1068,13 @@ fn indexed_history_skeleton_waits_300ms_and_hydrates_without_a_minimum_dwell(
         cx.debug_bounds("history_row_650").is_some()
     });
     let real = cx.debug_bounds("history_row_650").unwrap();
+    cx.update(|_, app| {
+        let history = view.read(app).main_pane.read(app).history_view.read(app);
+        assert!(
+            matches!(history.scenario_indexed_window(), Some((5000, _, _, true))),
+            "hydrated visible rows must satisfy the jump witness"
+        );
+    });
     assert_eq!(real.size.height, placeholder.size.height);
     assert_eq!(real.origin.y, placeholder.origin.y);
     assert!(cx.debug_bounds("history_skeleton_650").is_none());
@@ -1782,4 +1801,76 @@ fn indexed_history_real_frame_benchmark(cx: &mut gpui::TestAppContext) {
         "GPUI window rebuild request ui_thread_us_min={:.1} median={:.1} max={:.1}",
         rebuild_us[0], rebuild_us[2], rebuild_us[4]
     );
+}
+
+/// A 15px UI font makes the row height fractional (37.43px). Layout snaps each
+/// row's `top` and `h` to device pixels separately, so placing rows at
+/// `k·h − within` left 1px gaps (37px rows, 38px apart at 1x).
+#[gpui::test]
+fn indexed_history_rows_tile_without_gaps_at_a_fractional_row_height(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    cx.update(|app| {
+        crate::appearance::pin_density_for_test(app, crate::appearance::UiDensity::Comfortable);
+        app.update_global::<crate::appearance::Appearance, _>(|appearance, _| {
+            appearance.ui_font_size_px = 15;
+        });
+    });
+    let (index, commits) = indexed_fixture(400);
+    let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));
+    install_index(&mut state, index);
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state));
+    wait_until(cx, "indexed viewport", |cx| {
+        cx.debug_bounds("indexed_history_viewport").is_some()
+    });
+    let raw_height = cx.update(|_, app| {
+        let history = view.read(app).main_pane.read(app).history_view.read(app);
+        crate::view::rows::history_row_height(history.ui_scale())
+    });
+    assert!(
+        f32::from(raw_height).fract() > 0.1,
+        "the fixture needs a fractional row height, got {raw_height:?}"
+    );
+
+    for scale in [1.0, 1.5, 2.0] {
+        cx.update(|window, _| window.set_scale_factor(scale));
+        for delta in [-7.3, -50.6, -404.37] {
+            let bounds = cx.debug_bounds("indexed_history_viewport").unwrap();
+            cx.simulate_event(gpui::ScrollWheelEvent {
+                position: bounds.center(),
+                delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(delta))),
+                ..Default::default()
+            });
+            for _ in 0..2 {
+                cx.update(|window, app| {
+                    window.refresh();
+                    let _ = window.draw(app);
+                });
+                cx.run_until_parked();
+            }
+            let (top, within, _) = logical_top(cx, &view);
+            assert!(
+                within > 0.0,
+                "scroll by {delta} should leave a sub-row offset"
+            );
+            let rows: Vec<_> = (top..top + 12)
+                .map_while(|ix| {
+                    cx.debug_bounds(Box::leak(format!("history_row_{ix}").into_boxed_str()))
+                })
+                .collect();
+            assert!(rows.len() >= 8, "only {} rows laid out", rows.len());
+            let device = |y: Pixels| (f32::from(y) * scale).round();
+            for (ix, pair) in rows.windows(2).enumerate() {
+                assert_eq!(
+                    device(pair[0].bottom()),
+                    device(pair[1].top()),
+                    "scale {scale}, scroll {delta}: rows {} and {} do not meet",
+                    top + ix,
+                    top + ix + 1
+                );
+            }
+        }
+    }
 }

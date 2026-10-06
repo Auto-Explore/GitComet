@@ -1,12 +1,11 @@
 //! Opt-in, thread-local diagnostics for time spent around Git subprocesses.
-//! Enabled only by tests or the `benchmarks` feature. Stages partition a
-//! command's wall time; totals from concurrent commands must not be added.
+//! Captured by tests/the `benchmarks` feature or the opt-in operation trace.
+//! Stages partition a command's wall time; concurrent totals must not be added.
+
+use std::time::Instant;
 
 #[cfg(any(test, feature = "benchmarks"))]
-use std::{
-    cell::RefCell,
-    time::{Duration, Instant},
-};
+use std::{cell::RefCell, time::Duration};
 
 #[cfg(any(test, feature = "benchmarks"))]
 #[derive(Debug)]
@@ -40,6 +39,7 @@ pub fn capture<T>(run: impl FnOnce() -> T) -> (T, Vec<CommandTiming>) {
 }
 
 pub(crate) struct CommandTimer {
+    trace: Option<(Instant, u64)>,
     #[cfg(any(test, feature = "benchmarks"))]
     state: Option<(Instant, Instant, CommandTiming)>,
 }
@@ -48,6 +48,8 @@ impl CommandTimer {
     #[inline]
     pub(crate) fn new(_label: &str) -> Self {
         Self {
+            trace: gitcomet_core::op_trace::enabled()
+                .then(|| (Instant::now(), gitcomet_core::op_trace::next_op())),
             #[cfg(any(test, feature = "benchmarks"))]
             state: RECORDS.with(|records| records.borrow().is_some()).then(|| {
                 let now = Instant::now();
@@ -66,6 +68,16 @@ impl CommandTimer {
 
     #[inline]
     pub(crate) fn stage(&mut self, _stage: &'static str) {
+        if let Some((previous, id)) = self.trace.as_mut() {
+            let now = Instant::now();
+            gitcomet_core::op_trace::record_current(
+                gitcomet_core::op_trace::Stage::CommandStage,
+                _stage,
+                gitcomet_core::op_trace::duration_ns(now.duration_since(*previous)),
+                *id,
+            );
+            *previous = now;
+        }
         #[cfg(any(test, feature = "benchmarks"))]
         if let Some((_, previous, timing)) = self.state.as_mut() {
             let now = Instant::now();
@@ -78,6 +90,14 @@ impl CommandTimer {
 impl Drop for CommandTimer {
     #[inline]
     fn drop(&mut self) {
+        if let Some((previous, id)) = self.trace {
+            gitcomet_core::op_trace::record_current(
+                gitcomet_core::op_trace::Stage::CommandStage,
+                "finish",
+                gitcomet_core::op_trace::duration_ns(previous.elapsed()),
+                id,
+            );
+        }
         #[cfg(any(test, feature = "benchmarks"))]
         if let Some((start, previous, mut timing)) = self.state.take() {
             let now = Instant::now();

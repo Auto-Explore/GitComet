@@ -39,6 +39,14 @@ use worker_channel::{StoreInstanceId, StoreWorkerCommand, StoreWorkerSender};
 
 pub use reducer_diagnostics::StoreReducerDiagnostics;
 
+// Executor trace labels need a static name; derive it once from the product identity.
+static WORKTREE_SCAN_THREAD_NAME: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "{}-worktree-scan",
+        gitcomet_core::identity::current().executable_name()
+    )
+});
+
 fn canonicalize_path(path: PathBuf) -> PathBuf {
     canonicalize_or_original(path)
 }
@@ -170,6 +178,7 @@ struct WorkerLoopContext<'a> {
     thread_msg_tx: &'a StoreWorkerSender,
     executor: &'a TaskExecutor,
     repo_load_executor: &'a TaskExecutor,
+    worktree_scan_executor: &'a std::sync::LazyLock<TaskExecutor>,
     metadata_executor: &'a TaskExecutor,
     signature_executor: &'a TaskExecutor,
     history_find_executor: &'a std::sync::LazyLock<TaskExecutor>,
@@ -378,6 +387,7 @@ impl WorkerLoopContext<'_> {
                 EffectExecutors {
                     executor: self.executor,
                     repo_load_executor: self.repo_load_executor,
+                    worktree_scan_executor: self.worktree_scan_executor,
                     session_persist_executor: self.session_persist_executor,
                     metadata_executor: self.metadata_executor,
                     signature_executor: self.signature_executor,
@@ -534,6 +544,8 @@ impl AppStore {
             );
             let repo_load_executor =
                 TaskExecutor::named("gitcomet-repo-load", repo_load_worker_threads());
+            let worktree_scan_executor: std::sync::LazyLock<TaskExecutor> =
+                std::sync::LazyLock::new(|| TaskExecutor::named(&WORKTREE_SCAN_THREAD_NAME, 1));
             let metadata_executor = TaskExecutor::shared_for_store(
                 StoreExecutorPool::Metadata,
                 metadata_worker_threads(),
@@ -697,6 +709,7 @@ impl AppStore {
                     thread_msg_tx: &thread_msg_tx,
                     executor: &executor,
                     repo_load_executor: &repo_load_executor,
+                    worktree_scan_executor: &worktree_scan_executor,
                     metadata_executor: &metadata_executor,
                     signature_executor: &signature_executor,
                     history_find_executor: &history_find_executor,

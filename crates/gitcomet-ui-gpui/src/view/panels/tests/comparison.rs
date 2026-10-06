@@ -525,7 +525,6 @@ mod worktree_uncommitted {
                 repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
                 repo.worktree_dirty = Loadable::Ready(Arc::new(vec![summary.clone()]));
                 repo.history_state.worktree_selection = Some(worktree_path.clone());
-                repo.diff_state.diff_target = Some(target.clone());
                 repo.diff_state.inline_submodule_diff =
                     Some(gitcomet_state::model::InlineSubmoduleDiffState {
                         origin: gitcomet_state::model::ForeignDiffOrigin::Worktree {

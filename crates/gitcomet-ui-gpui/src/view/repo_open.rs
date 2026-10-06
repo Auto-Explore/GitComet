@@ -210,7 +210,27 @@ impl GitCometView {
     ) {
         if self.repo_id_for_path(&path).is_some() {
             self.activate_repo_path(&path, cx);
-        } else if self
+            return;
+        }
+
+        // The worker can finish restoration before its snapshot reaches the
+        // view. Select that ready tab directly: OpenRepo would refresh its
+        // log/HEAD/divergence again, despite the just-completed initial load.
+        let snapshot = self.store.snapshot();
+        if let Some(repo) = snapshot
+            .repos
+            .iter()
+            .find(|repo| repo.spec.workdir == path && matches!(repo.open, Loadable::Ready(_)))
+        {
+            self.show_repository_canvas(cx);
+            if snapshot.active_repo != Some(repo.id) {
+                self.store.dispatch(Msg::SetActiveRepo { repo_id: repo.id });
+            }
+            cx.notify();
+            return;
+        }
+
+        if self
             .pending_repo_open_reservations
             .get(&path)
             .is_some_and(|pending| !pending.persist_in_workspace)

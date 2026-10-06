@@ -26,6 +26,9 @@ const TERMINAL_CARET_VERTICAL_INSET_PX: f32 = 1.0;
 const TERMINAL_CARET_RADIUS_PX: f32 = 0.0;
 const TERMINAL_CARET_BLINK_INTERVAL_MS: u64 = 530;
 const TERMINAL_CARET_RESUME_DELAY_MS: u64 = 700;
+/// The caret blinks while the terminal is in use and then rests, shown, as
+/// text inputs do: every blink redraws the whole window.
+const TERMINAL_CARET_BLINK_TIMEOUT_MS: u64 = 10_000;
 const TERMINAL_SELECTION_ALPHA: f32 = 0.32;
 const BRACKETED_PASTE_START: &[u8] = b"\x1b[200~";
 const BRACKETED_PASTE_END: &[u8] = b"\x1b[201~";

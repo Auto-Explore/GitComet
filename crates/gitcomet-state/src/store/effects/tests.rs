@@ -97,6 +97,7 @@ fn messages_without_selected_diff_work_skip_the_selection_index() {
         thread_msg_tx: &thread_msg_tx,
         executor: &executor,
         repo_load_executor: &executor,
+        worktree_scan_executor: &std::sync::LazyLock::new(|| TaskExecutor::new(1)),
         metadata_executor: &executor,
         signature_executor: &executor,
         history_find_executor: &std::sync::LazyLock::new(|| TaskExecutor::new(1)),

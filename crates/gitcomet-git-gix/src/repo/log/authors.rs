@@ -13,15 +13,20 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<Arc<[Arc<str>]>> {
         cancellation.check_cancelled()?;
-        let (store, _) = self.thread_safe_repo();
+        let (store, shared) = self.fresh_history_store()?;
+        let generation = shared.id;
         let repo = store.to_thread_local();
-        let shallow = shallow_snapshot(&repo)?;
-        let tips = if mode == HistoryMode::AllBranches {
-            self.all_branches_tips(&repo, Some(cancellation))?
-        } else {
-            Arc::from(gix_head_id_or_none(&repo)?.into_iter().collect::<Vec<_>>())
-        };
-        let snapshot = HistorySnapshot(format!("{mode:?}|{tips:?}|{shallow:?}").into());
+        let query = self.resolve_history_query(
+            &repo,
+            shared.id,
+            shared.common.id,
+            mode,
+            None,
+            cancellation,
+        )?;
+        let snapshot = query.snapshot();
+        let tips = query.tips;
+        let shallow = query.shallow;
         if let Some(cached) = self
             .history_authors_cache
             .lock()
@@ -38,6 +43,7 @@ impl GixRepo {
             &shallow,
             Some(cancellation),
             None,
+            Some((&shared.topology, generation)),
         )?;
         let mut buffer = Vec::new();
         let mut seen = FxHashSet::default();

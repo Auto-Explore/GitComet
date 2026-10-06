@@ -4,6 +4,7 @@
 
 use super::*;
 use gitcomet_core::domain::{ApplyChangeSource, CommitFileChange};
+use std::path::Path;
 
 /// Which changed-file list a row belongs to: its element and selector ids,
 /// and the list whose collapsed directories it toggles.
@@ -418,6 +419,48 @@ impl DetailsPaneView {
     /// Clicking one opens it through the inline foreign-diff machinery — the
     /// same path submodule diffs take — so the diff renders here rather than
     /// forcing a tab switch.
+    /// Resolve against the current scan so sorting or a refresh cannot open a
+    /// different file through a stale display index. Used by clicks and menus.
+    pub(in crate::view) fn open_worktree_file_diff(
+        &mut self,
+        repo_id: RepoId,
+        worktree_path: &Path,
+        target: &DiffTarget,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(repo) = self.active_repo().filter(|repo| repo.id == repo_id) else {
+            return;
+        };
+        let Some(summary) = self
+            .selected_worktree_summary()
+            .filter(|summary| summary.path == worktree_path)
+        else {
+            return;
+        };
+        let inputs = self.cached_worktree_file_inputs(repo_id, repo.worktree_dirty_rev, summary);
+        let Some(selected_ix) = inputs
+            .entries
+            .iter()
+            .position(|entry| &entry.target == target)
+        else {
+            return;
+        };
+        let origin = gitcomet_state::model::ForeignDiffOrigin::Worktree {
+            branch: summary.branch.clone(),
+            detached: summary.detached,
+        };
+        self.focus_diff_panel(window, cx);
+        self.store.dispatch(Msg::OpenInlineSubmoduleDiff {
+            repo_id,
+            origin,
+            submodule_repo_path: worktree_path.to_path_buf(),
+            parent_submodule_path: worktree_path.to_path_buf(),
+            entries: Arc::clone(&inputs.entries),
+            selected_ix,
+        });
+    }
+
     pub(in crate::view) fn render_worktree_file_rows(
         this: &mut Self,
         range: Range<usize>,
@@ -465,10 +508,6 @@ impl DetailsPaneView {
                 .visible_rows(visible_signature)
         });
         let worktree_path = summary.path.clone();
-        let origin = gitcomet_state::model::ForeignDiffOrigin::Worktree {
-            branch: summary.branch.clone(),
-            detached: summary.detached,
-        };
 
         let rows: Vec<(usize, crate::view::rows::FileListRow)> = range
             .filter_map(|row_ix| {
@@ -501,10 +540,13 @@ impl DetailsPaneView {
                 let source_ix = *projection.source_indices.get(ordinal.0)?;
                 let (f, presentation) = files.get(source_ix).zip(file_rows.get(source_ix))?;
                 let selected = selected_ix_now == Some(source_ix);
-                let ix_for_click = source_ix;
-                let inputs_for_click = Arc::clone(&inputs);
+                let target_for_click = inputs.entries.get(source_ix)?.target.clone();
+                let target_for_menu = target_for_click.clone();
+                let worktree_path_for_menu = worktree_path.clone();
+                let menu_invoker =
+                    worktree_file_menu_invoker(repo_id, &worktree_path, &target_for_click);
+                let context_menu_active = active_menu.as_ref() == Some(&menu_invoker);
                 let worktree_path_for_click = worktree_path.clone();
-                let origin_for_click = origin.clone();
 
                 let (row, tooltip) = Self::changed_file_row(
                     ChangedFileRow {
@@ -516,7 +558,7 @@ impl DetailsPaneView {
                         is_tree,
                         depth,
                         selected,
-                        context_menu_active: false,
+                        context_menu_active,
                         path_alignment_group: path_alignment_group.clone(),
                         // Worktree rows show no line counts.
                         diff_stat: false,
@@ -533,19 +575,35 @@ impl DetailsPaneView {
                             if !e.standard_click() {
                                 return;
                             }
-                            this.focus_diff_panel(window, cx);
-                            this.store.dispatch(Msg::OpenInlineSubmoduleDiff {
+                            this.open_worktree_file_diff(
                                 repo_id,
-                                origin: origin_for_click.clone(),
-                                submodule_repo_path: worktree_path_for_click.clone(),
-                                parent_submodule_path: worktree_path_for_click.clone(),
-                                entries: Arc::clone(&inputs_for_click.entries),
-                                selected_ix: ix_for_click,
-                            });
+                                &worktree_path_for_click,
+                                &target_for_click,
+                                window,
+                                cx,
+                            );
                             cx.notify();
                         }),
                     )
-                    .gitcomet_tooltip(theme, tooltip.clone());
+                    .gitcomet_tooltip(theme, tooltip.clone())
+                    .on_pointer_click(
+                        MouseButton::Right,
+                        cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.open_popover_at(
+                                PopoverKind::WorktreeFileMenu {
+                                    repo_id,
+                                    worktree_path: worktree_path_for_menu.clone(),
+                                    target: target_for_menu.clone(),
+                                }
+                                .invoked_by(menu_invoker.clone()),
+                                e.position,
+                                window,
+                                cx,
+                            );
+                            cx.notify();
+                        }),
+                    );
 
                 Some(row.into_any_element())
             })
@@ -789,6 +847,18 @@ fn range_file_menu_invoker(repo_id: RepoId, target: &DiffTarget) -> SharedString
         path.as_deref()
             .unwrap_or(std::path::Path::new(""))
             .display()
+    )
+    .into()
+}
+
+fn worktree_file_menu_invoker(
+    repo_id: RepoId,
+    worktree_path: &Path,
+    target: &DiffTarget,
+) -> SharedString {
+    format!(
+        "worktree_file_menu_{}_{:?}_{target:?}",
+        repo_id.0, worktree_path
     )
     .into()
 }

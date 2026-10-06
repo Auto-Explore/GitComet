@@ -151,7 +151,7 @@ fn repo_tab_text_width(label: SharedString, font_size: Pixels, window: &mut Wind
     let run = style.to_run(label.len());
     window
         .text_system()
-        .shape_line(label, font_size, &[run], None)
+        .shape_line(label, font_size, &[run])
         .width
 }
 
@@ -351,7 +351,9 @@ impl RepoTabsBarView {
 
     fn is_repo_busy(repo: &RepoState) -> bool {
         matches!(repo.open, Loadable::Loading)
-            || repo.loads_in_flight.any_in_flight()
+            || repo
+                .loads_in_flight
+                .is_in_flight(!gitcomet_state::model::RepoLoadsInFlight::WORKTREE_DIRTY)
             || repo.local_actions_in_flight > 0
             || repo.pull_in_flight > 0
             || repo.push_in_flight > 0

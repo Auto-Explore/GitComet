@@ -97,7 +97,7 @@ pub(super) fn worktree_changed(
 ) -> Vec<Effect> {
     let Some(repo) = state
         .repos
-        .iter()
+        .iter_mut()
         .find(|repo| repo.id == repo_id && repo.lifetime() == lifetime)
     else {
         return Vec::new();
@@ -117,7 +117,10 @@ pub(super) fn worktree_changed(
                             .file_path()
                             .is_none_or(|file| change.paths.may_contain(file)))
         });
-    let mut effects = super::effects::load_worktree_dirty(state, repo_id);
+    let mut effects: Vec<_> =
+        super::effects::request_worktree_dirty_path_effect(repo, path.clone())
+            .into_iter()
+            .collect();
     if refresh_diff {
         effects
             .extend(super::diff_selection::refresh_inline_submodule_selected_diff(state, repo_id));

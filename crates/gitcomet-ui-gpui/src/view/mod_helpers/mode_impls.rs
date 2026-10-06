@@ -479,6 +479,11 @@ pub(crate) enum PopoverKind {
         commit_id: CommitId,
         path: std::path::PathBuf,
     },
+    WorktreeFileMenu {
+        repo_id: RepoId,
+        worktree_path: std::path::PathBuf,
+        target: DiffTarget,
+    },
     /// A file row of the comparison view; `to_commit_id` is `None` when the
     /// comparison runs to the working tree.
     CommitRangeFileMenu {
@@ -997,6 +1002,8 @@ pub(crate) struct TerminalViewportView {
     pub(crate) cursor_blink_active: bool,
     pub(crate) cursor_blink_task_scheduled: bool,
     pub(crate) cursor_blink_seq: u64,
+    /// Blinks since the last keystroke, click or focus.
+    pub(crate) cursor_idle_blinks: u32,
     pub(crate) content_epoch: u64,
     pub(crate) paint_retry_scheduled: bool,
     pub(crate) last_content: Option<super::terminal_alacritty::TerminalContent>,

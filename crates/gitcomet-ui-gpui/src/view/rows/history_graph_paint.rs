@@ -186,23 +186,21 @@ pub(super) fn paint_history_graph(
     let lane = |color_ix| lane_wash_color(theme, color_ix, row_ix, selected_lane);
 
     let scaled_px = ui_scale::scaler(ui_scale::UiScale::from_window(window));
-    let stroke_width = scaled_px(1.6);
-    let col_gap = scaled_px(HISTORY_GRAPH_COL_GAP_PX);
-    let margin_x = scaled_px(HISTORY_GRAPH_MARGIN_X_PX);
-    let margin_right = scaled_px(HISTORY_GRAPH_MARGIN_RIGHT_PX);
+    let grid = GraphGrid::new(window);
+    let stroke_width = grid.stroke_width;
+    let col_gap = grid.col_gap;
+    let margin_x = grid.margin_x;
     let node_radius = scaled_px(3.4);
     let node_corner_radius = scaled_px(2.0);
 
-    let elbow_radius = scaled_px(HISTORY_GRAPH_ELBOW_RADIUS_PX);
+    let elbow_radius = grid.elbow_radius;
 
-    let y_top = bounds.top();
-    let y_center = bounds.top() + bounds.size.height / 2.0;
-    let y_bottom = bounds.bottom();
+    let (y_top, y_center, y_bottom) = grid.row_ys(bounds);
 
     // Columns past the edge all land on the edge x, icons included.
-    let edge_x = graph_edge_x(margin_x, margin_right, bounds.size.width);
-    let x_for_col = |col: usize| graph_col_x(col, margin_x, col_gap, edge_x);
-    let left = bounds.left();
+    let edge_x = grid.edge_x(bounds.size.width);
+    let x_for_col = |col: usize| grid.col_x(col, edge_x);
+    let left = grid.snap(bounds.left());
 
     let node_x = x_for_col(usize::from(row.node_col));
     let node_color = lane(row.node_color_ix);
@@ -376,16 +374,13 @@ pub(super) fn paint_history_graph(
     // its bounds are generous enough for the 16px icon nodes.
     let node_layer_half = scaled_px(10.0);
     let node_layer_bounds = Bounds::new(
-        point(
-            bounds.left() + node_x - node_layer_half,
-            y_center - node_layer_half,
-        ),
+        point(left + node_x - node_layer_half, y_center - node_layer_half),
         size(node_layer_half * 2.0, node_layer_half * 2.0),
     );
     window.paint_layer(node_layer_bounds, |window| {
         if is_stash_node {
             paint_icon_node(
-                bounds.left() + node_x,
+                left + node_x,
                 y_center,
                 icons::GIT_STASH_NODE_ICON_PATH,
                 row_background,
@@ -395,7 +390,7 @@ pub(super) fn paint_history_graph(
             );
         } else if row.is_merge {
             paint_icon_node(
-                bounds.left() + node_x,
+                left + node_x,
                 y_center,
                 icons::GIT_MERGE_ICON_PATH,
                 row_background,
@@ -405,7 +400,7 @@ pub(super) fn paint_history_graph(
             );
         } else {
             paint_commit_node(
-                bounds.left() + node_x,
+                left + node_x,
                 y_center,
                 node_radius,
                 node_corner_radius,
@@ -812,22 +807,17 @@ pub(super) fn paint_history_graph_band(
     }
 
     let scaled_px = ui_scale::scaler(ui_scale::UiScale::from_window(window));
-    let stroke_width = scaled_px(1.6);
-    let col_gap = scaled_px(HISTORY_GRAPH_COL_GAP_PX);
-    let margin_x = scaled_px(HISTORY_GRAPH_MARGIN_X_PX);
-    let elbow_radius = scaled_px(HISTORY_GRAPH_ELBOW_RADIUS_PX);
+    let grid = GraphGrid::new(window);
+    let stroke_width = grid.stroke_width;
+    let col_gap = grid.col_gap;
+    let margin_x = grid.margin_x;
+    let elbow_radius = grid.elbow_radius;
 
-    let left = bounds.left();
-    let y_top = bounds.top();
-    let y_center = bounds.top() + bounds.size.height / 2.0;
-    let y_bottom = bounds.bottom();
+    let left = grid.snap(bounds.left());
+    let (y_top, y_center, y_bottom) = grid.row_ys(bounds);
     // Same edge pinning as the commit rows, or the edge line breaks at a band.
-    let edge_x = graph_edge_x(
-        margin_x,
-        scaled_px(HISTORY_GRAPH_MARGIN_RIGHT_PX),
-        bounds.size.width,
-    );
-    let x_for_col = |col: usize| graph_col_x(col, margin_x, col_gap, edge_x);
+    let edge_x = grid.edge_x(bounds.size.width);
+    let x_for_col = |col: usize| grid.col_x(col, edge_x);
 
     // The same wash the commit rows carry into their message border, painted
     // before the lanes so the strokes stay crisp on top of it.
@@ -941,11 +931,77 @@ fn graph_edge_x(margin_x: Pixels, margin_right: Pixels, width: Pixels) -> Pixels
     (width - margin_right).max(margin_x)
 }
 
+/// Design width of a lane stroke.
+const LANE_STROKE_PX: f32 = 1.6;
+
+/// Lane geometry on the device-pixel grid. gpui snaps quads (straight runs) but
+/// not paths (elbows), so off-grid geometry drew one lane at two widths.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct GraphGrid {
+    scale_factor: f32,
+    pub(super) stroke_width: Pixels,
+    pub(super) margin_x: Pixels,
+    pub(super) col_gap: Pixels,
+    margin_right: Pixels,
+    pub(super) elbow_radius: Pixels,
+}
+
+impl GraphGrid {
+    pub(super) fn new(window: &Window) -> Self {
+        Self::for_scale(
+            window.scale_factor(),
+            ui_scale::UiScale::from_window(window),
+        )
+    }
+
+    fn for_scale(scale_factor: f32, scale: ui_scale::UiScale) -> Self {
+        let snap = |design_px: f32| snap_to_device(scale.px(design_px), scale_factor);
+        // An even device width keeps both edges on pixels around a whole-pixel x.
+        let stroke = (scale.scale_f32(LANE_STROKE_PX) * scale_factor / 2.0)
+            .round()
+            .max(1.0)
+            * 2.0;
+        Self {
+            scale_factor,
+            stroke_width: px(stroke / scale_factor),
+            margin_x: snap(HISTORY_GRAPH_MARGIN_X_PX),
+            col_gap: snap(HISTORY_GRAPH_COL_GAP_PX),
+            margin_right: snap(HISTORY_GRAPH_MARGIN_RIGHT_PX),
+            elbow_radius: scale.px(HISTORY_GRAPH_ELBOW_RADIUS_PX),
+        }
+    }
+
+    pub(super) fn snap(self, value: Pixels) -> Pixels {
+        snap_to_device(value, self.scale_factor)
+    }
+
+    pub(super) fn edge_x(self, width: Pixels) -> Pixels {
+        self.snap(graph_edge_x(self.margin_x, self.margin_right, width))
+    }
+
+    pub(super) fn col_x(self, col: usize, edge_x: Pixels) -> Pixels {
+        graph_col_x(col, self.margin_x, self.col_gap, edge_x)
+    }
+
+    /// The row's top, lane centre line and bottom.
+    pub(super) fn row_ys(self, bounds: Bounds<Pixels>) -> (Pixels, Pixels, Pixels) {
+        let top = self.snap(bounds.top());
+        let bottom = self.snap(bounds.bottom());
+        (top, self.snap(top + (bottom - top) / 2.0), bottom)
+    }
+}
+
+/// Rounds to a device pixel the way gpui snaps quads (halves toward zero).
+fn snap_to_device(value: Pixels, scale_factor: f32) -> Pixels {
+    let device = f32::from(value) * scale_factor;
+    px((device.abs() - 0.5).ceil().copysign(device) / scale_factor)
+}
+
 /// A straight vertical run of a lane. A quad rather than a tessellated path:
 /// it is the same rectangle a butt-capped stroke yields, without lyon's per-path
 /// buffers, and verticals are most of what a row draws. Quads paint under any
 /// path in the layer, so only an elbow can now cover a straight run.
-fn paint_vertical_segment(
+pub(super) fn paint_vertical_segment(
     x: Pixels,
     y_from: Pixels,
     y_to: Pixels,
@@ -961,6 +1017,51 @@ fn paint_vertical_segment(
         ),
         color,
     ));
+}
+
+/// Preserve the stroke's butt caps and painter order when a connector is axis aligned.
+/// Nearly collinear connectors still need a path: rounding them to an axis would
+/// move an endpoint at fractional display scales.
+pub(super) fn paint_straight_connector(
+    from: gpui::Point<Pixels>,
+    to: gpui::Point<Pixels>,
+    width: Pixels,
+    color: gpui::Rgba,
+    window: &mut Window,
+) {
+    if from == to || width <= px(0.0) {
+        return;
+    }
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let enabled = cfg!(test)
+        || *ENABLED.get_or_init(|| gitcomet_ui_kit::ui_probe::env_flag("GITCOMET_GPU_GRAPH_QUADS"));
+    let bounds = if !enabled {
+        None
+    } else if from.x == to.x {
+        Some(Bounds::new(
+            point(from.x - width * 0.5, from.y.min(to.y)),
+            size(width, (to.y - from.y).abs()),
+        ))
+    } else if from.y == to.y {
+        Some(Bounds::new(
+            point(from.x.min(to.x), from.y - width * 0.5),
+            size((to.x - from.x).abs(), width),
+        ))
+    } else {
+        None
+    };
+    if let Some(bounds) = bounds {
+        gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintSegmentQuad);
+        window.paint_layer(bounds, |window| window.paint_quad(fill(bounds, color)));
+    } else {
+        let mut path = gpui::PathBuilder::stroke(width);
+        path.move_to(from);
+        path.line_to(to);
+        if let Ok(path) = path.build() {
+            gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintPath);
+            window.paint_path(path, color);
+        }
+    }
 }
 
 /// Whether two x-offsets draw as one line. A connector between them is no elbow.
@@ -1861,6 +1962,62 @@ mod tests {
         );
     }
 
+    /// gpui snaps the quads that draw straight runs but not the paths that draw
+    /// elbows, so an off-grid lane drew 4px solid in one row and 3.2px
+    /// antialiased in the next. Every lane edge has to land on a device pixel.
+    #[test]
+    fn lanes_sit_on_the_device_pixel_grid() {
+        let whole = |value: f32| (value - value.round()).abs() < 1e-3;
+        for scale_factor in [1.0, 1.25, 1.5, 1.75, 2.0, 3.0] {
+            let device = |value: Pixels| f32::from(value) * scale_factor;
+            let from_device = |value: f32| px(value / scale_factor);
+            for &percent in ui_scale::UI_SCALE_PRESETS {
+                let grid =
+                    GraphGrid::for_scale(scale_factor, ui_scale::UiScale::from_percent(percent));
+                let label = format!("scale {scale_factor}, zoom {percent}%");
+
+                let stroke = device(grid.stroke_width);
+                let raw = LANE_STROKE_PX * percent as f32 / 100.0 * scale_factor;
+                assert!(
+                    whole(stroke) && stroke >= 2.0 && (stroke.round() as u32).is_multiple_of(2),
+                    "{label}: stroke {stroke} is not an even device width"
+                );
+                assert!(
+                    (stroke - raw).abs() <= 1.0,
+                    "{label}: stroke {stroke} for {raw}"
+                );
+
+                // Graph cells are laid out on whole device pixels.
+                for width in [41.0, 160.0, 333.0] {
+                    let edge = grid.edge_x(from_device(width * scale_factor));
+                    for col in 0..24 {
+                        let x = device(grid.col_x(col, edge));
+                        assert!(
+                            whole(x - stroke / 2.0) && whole(x + stroke / 2.0),
+                            "{label}: column {col} at {x} with stroke {stroke}"
+                        );
+                    }
+                }
+
+                for height in [37.0, 56.0, 75.0] {
+                    let bounds = Bounds::new(
+                        point(px(0.0), from_device(height * 3.0 + 7.0)),
+                        size(px(100.0), from_device(height)),
+                    );
+                    let (top, center, bottom) = grid.row_ys(bounds);
+                    for y in [top, center, bottom] {
+                        assert!(whole(device(y)), "{label}: row y {} off grid", device(y));
+                    }
+                }
+            }
+        }
+        // Today's straight-lane weight: what a quad snapped to 1.6px drew.
+        for (scale_factor, expected) in [(1.0, 2.0), (1.5, 2.0), (2.0, 4.0), (3.0, 4.0)] {
+            let grid = GraphGrid::for_scale(scale_factor, ui_scale::UiScale::from_percent(100));
+            assert_eq!(f32::from(grid.stroke_width) * scale_factor, expected);
+        }
+    }
+
     #[test]
     fn elbow_radius_fits_a_one_column_jog_at_normal_scale() {
         let r = elbow_radius(px(HISTORY_GRAPH_ELBOW_RADIUS_PX), px(COL_GAP), px(HALF_ROW));
@@ -1904,6 +2061,105 @@ mod tests {
 #[cfg(test)]
 mod coalescing_regressions {
     use super::*;
+
+    #[gpui::test]
+    fn straight_connectors_and_node_exits_do_not_tessellate(cx: &mut gpui::TestAppContext) {
+        use gitcomet_core::history_perf::{self, Work};
+        let _guard = crate::test_support::lock_visual_test();
+        let cx = cx.add_empty_window();
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let _capture = history_perf::capture();
+            cx.draw(
+                point(px(0.0), px(0.0)),
+                size(
+                    gpui::AvailableSpace::Definite(px(120.0)),
+                    gpui::AvailableSpace::Definite(px(80.0)),
+                ),
+                |_, _| {
+                    gpui::canvas(
+                        |_, _, _| (),
+                        move |_, (), window, _| {
+                            let p = |x, y| point(px(x * scale), px(y * scale));
+                            let colour = gpui::rgb(0xabcdef);
+                            // Both fork directions, both vertical directions and the node exit.
+                            for (from, to) in [
+                                (p(10.0, 20.0), p(30.0, 20.0)),
+                                (p(30.0, 25.0), p(10.0, 25.0)),
+                                (p(10.0, 10.0), p(10.0, 30.0)),
+                                (p(20.0, 30.0), p(20.0, 10.0)),
+                            ] {
+                                paint_straight_connector(from, to, px(1.6 * scale), colour, window);
+                            }
+                            paint_node_to_lane(
+                                px(0.0),
+                                px(40.0 * scale),
+                                px(40.0 * scale),
+                                px(10.0 * scale),
+                                px(30.0 * scale),
+                                px(4.0 * scale),
+                                px(1.6 * scale),
+                                colour,
+                                window,
+                            );
+                            // Degenerate strokes contribute no geometry.
+                            paint_straight_connector(
+                                p(5.0, 5.0),
+                                p(5.0, 5.0),
+                                px(1.6),
+                                colour,
+                                window,
+                            );
+                        },
+                    )
+                    .w(px(120.0))
+                    .h(px(80.0))
+                },
+            );
+            assert_eq!(history_perf::count(Work::PaintPath), 0, "scale={scale}");
+            assert_eq!(
+                history_perf::count(Work::PaintSegmentQuad),
+                5,
+                "scale={scale}"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn nearly_collinear_connectors_keep_their_endpoints(cx: &mut gpui::TestAppContext) {
+        use gitcomet_core::history_perf::{self, Work};
+        let _guard = crate::test_support::lock_visual_test();
+        let cx = cx.add_empty_window();
+        let _capture = history_perf::capture();
+        cx.draw(
+            point(px(0.0), px(0.0)),
+            size(
+                gpui::AvailableSpace::Definite(px(60.0)),
+                gpui::AvailableSpace::Definite(px(40.0)),
+            ),
+            |_, _| {
+                gpui::canvas(
+                    |_, _, _| (),
+                    |_, (), window, _| {
+                        paint_node_to_lane(
+                            px(0.0),
+                            px(20.0),
+                            px(20.25),
+                            px(10.0),
+                            px(30.0),
+                            px(4.0),
+                            px(1.6),
+                            gpui::rgb(0xabcdef),
+                            window,
+                        );
+                    },
+                )
+                .w(px(60.0))
+                .h(px(40.0))
+            },
+        );
+        assert_eq!(history_perf::count(Work::PaintPath), 1);
+        assert_eq!(history_perf::count(Work::PaintSegmentQuad), 0);
+    }
 
     #[gpui::test]
     fn indexed_history_actual_paint_paths_are_bounded_by_displayed_columns(

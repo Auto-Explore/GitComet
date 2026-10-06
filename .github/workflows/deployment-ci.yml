@@ -4,6 +4,7 @@ on:
   pull_request:
     branches: ["main", "dev"]
     paths:
+      - ".github/workflows/deployment-ci.yml"
       - ".github/workflows/build-release-artifacts.yml"
       - ".github/workflows/deploy-homebrew-tap.yml"
       - ".github/workflows/deploy-apt-repo.yml"
@@ -40,6 +41,7 @@ on:
   push:
     branches: ["main", "dev"]
     paths:
+      - ".github/workflows/deployment-ci.yml"
       - ".github/workflows/build-release-artifacts.yml"
       - ".github/workflows/deploy-homebrew-tap.yml"
       - ".github/workflows/deploy-apt-repo.yml"
@@ -494,11 +496,30 @@ jobs:
             gitcomet-v0.0.0-rc.1-linux-x86_64/README.md \
             gitcomet-v0.0.0-rc.1-linux-x86_64/gitcomet | LC_ALL=C sort | diff - "$RUNNER_TEMP/tarball.txt"
 
+      # Retry registry failures before running the package checks.
+      - name: Pull Linux smoke test images with retries
+        run: |
+          set -euo pipefail
+          for image in fedora:42 ubuntu:22.04; do
+            for attempt in 1 2 3 4; do
+              if docker pull "$image"; then
+                break
+              fi
+              if [ "$attempt" -eq 4 ]; then
+                echo "::error title=Container image pull failed::Could not pull ${image} after ${attempt} attempts."
+                exit 1
+              fi
+              delay=$((attempt * 5))
+              echo "::warning title=Container image pull retry::Failed to pull ${image} (attempt ${attempt}/4); retrying in ${delay}s."
+              sleep "$delay"
+            done
+          done
+
       # Resolves the hard dependencies (git, the renderer either/or, hicolor)
       # and checks that every weak dependency names a real Fedora package.
       - name: Install the .rpm on Fedora 42
         run: |
-          docker run --rm -i -v "$PWD/dist/linux-ci:/pkgs:ro" fedora:42 bash -euo pipefail -s <<'EOF'
+          docker run --pull=never --rm -i -v "$PWD/dist/linux-ci:/pkgs:ro" fedora:42 bash -euo pipefail -s <<'EOF'
           dnf install -y -q --setopt=install_weak_deps=False /pkgs/gitcomet-0.0.0.rc.1-1.x86_64.rpm
           test "$(rpm -q --queryformat '%{VERSION}' gitcomet)" = "0.0.0~rc.1"
           rpm -qL gitcomet | grep -qx /usr/share/licenses/gitcomet/LICENSE-AGPL-3.0
@@ -517,7 +538,7 @@ jobs:
 
       - name: Install the .deb on Ubuntu 22.04
         run: |
-          docker run --rm -i -v "$PWD/dist/linux-ci:/pkgs:ro" ubuntu:22.04 bash -euo pipefail -s <<'EOF'
+          docker run --pull=never --rm -i -v "$PWD/dist/linux-ci:/pkgs:ro" ubuntu:22.04 bash -euo pipefail -s <<'EOF'
           export DEBIAN_FRONTEND=noninteractive
           apt-get update -qq
           apt-get install -y -qq --no-install-recommends /pkgs/gitcomet_0.0.0.rc.1-1_amd64.deb

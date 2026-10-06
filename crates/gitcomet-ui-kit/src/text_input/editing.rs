@@ -525,7 +525,7 @@ impl TextInput {
         }
         self.selection.undo_stack.clear();
         self.selection.redo_stack.clear();
-        self.interaction.cursor_blink_visible = true;
+        self.show_cursor();
         self.invalidate_layout_caches();
         if self.multiline && self.soft_wrap {
             self.request_wrap_recompute();
@@ -607,7 +607,7 @@ impl TextInput {
         self.selection.range = next;
         self.selection.reversed = false;
         self.interaction.vertical_motion_x = None;
-        self.interaction.cursor_blink_visible = true;
+        self.show_cursor();
         if autoscroll {
             self.queue_cursor_autoscroll();
         }
@@ -1197,7 +1197,7 @@ impl TextInput {
         precomputed_runs: Option<&[TextRun]>,
         shape_style: &TextShapeStyle<'_>,
         window: &mut Window,
-    ) -> ShapedLine {
+    ) -> EditorLine {
         let key = ShapedRowCacheKey {
             line_ix: line.line_ix,
             font_size_key: f32::from(shape_style.font_size).round() as i32,
@@ -1220,16 +1220,14 @@ impl TextInput {
             );
             owned_runs.as_slice()
         };
-        let with_tabs = capped_text.clone();
-        let mut shaped = window.text_system().shape_line(
-            shaping_text_without_tabs(capped_text),
+        let shaped = EditorLine::shape(
+            capped_text,
             shape_style.font_size,
             runs,
             None,
+            self.tab_size,
+            window,
         );
-        if let Some(layout) = apply_tab_stops(&shaped, &with_tabs, self.tab_size) {
-            *shaped = Arc::new(layout);
-        }
         self.layout.plain_line_cache.insert(key, shaped.clone());
         self.trim_shape_caches();
         shaped
@@ -1734,16 +1732,7 @@ impl TextInput {
         }
         let local = offset.saturating_sub(line_start).min(line.len());
 
-        let mut row_end_indices: Vec<usize> = Vec::with_capacity(line.wrap_boundaries().len() + 1);
-        for boundary in line.wrap_boundaries() {
-            let Some(run) = line.unwrapped_layout.runs.get(boundary.run_ix) else {
-                continue;
-            };
-            let Some(glyph) = run.glyphs.get(boundary.glyph_ix) else {
-                continue;
-            };
-            row_end_indices.push(glyph.index);
-        }
+        let mut row_end_indices = line.row_end_indices();
         row_end_indices.sort_unstable();
         row_end_indices.dedup();
         row_end_indices.push(line.len());
@@ -2384,7 +2373,7 @@ impl TextInput {
         }
         self.selection.marked_range.take();
         self.interaction.vertical_motion_x = None;
-        self.interaction.cursor_blink_visible = true;
+        self.show_cursor();
         self.invalidate_layout_caches_preserving_wrap_rows();
         self.note_text_edit_for_highlights(&range, &inserted);
         if !preserve_view {
@@ -2517,7 +2506,7 @@ impl TextInput {
         self.selection.range = offset..offset;
         self.selection.reversed = false;
         self.interaction.vertical_motion_x = None;
-        self.interaction.cursor_blink_visible = true;
+        self.show_cursor();
         cx.notify();
     }
 
@@ -2547,7 +2536,7 @@ impl TextInput {
             self.selection.range = self.selection.range.end..self.selection.range.start;
         }
         self.interaction.vertical_motion_x = None;
-        self.interaction.cursor_blink_visible = true;
+        self.show_cursor();
         cx.notify();
     }
 
@@ -2637,7 +2626,7 @@ impl TextInput {
             self.selection_owner.adopt(window, cx);
         }
         self.interaction.vertical_motion_x = None;
-        self.interaction.cursor_blink_visible = true;
+        self.show_cursor();
         self.end_mouse_drag();
         self.invalidate_layout_caches_preserving_wrap_rows();
         if let Some(delta) = text_edit_delta {
@@ -2738,7 +2727,7 @@ impl TextInput {
 
     fn wrapped_line_for_offset(
         starts: &[usize],
-        lines: &[WrappedLine],
+        lines: &[EditorLine],
         offset: usize,
     ) -> (usize, usize) {
         let mut ix = starts.partition_point(|&s| s <= offset);
@@ -2929,7 +2918,7 @@ impl TextInput {
         self.interaction.took_press = true;
         cx.stop_propagation();
         window.focus(&self.focus_handle, cx);
-        self.interaction.cursor_blink_visible = true;
+        self.show_cursor();
         let index = self.try_index_for_mouse_position(event.position);
         self.interaction.vertical_motion_x = None;
 
@@ -3061,7 +3050,7 @@ impl TextInput {
         crate::press_gesture::claim_press(cx);
         cx.stop_propagation();
         window.focus(&self.focus_handle, cx);
-        self.interaction.cursor_blink_visible = true;
+        self.show_cursor();
         self.end_mouse_drag();
         self.interaction.vertical_motion_x = None;
 
@@ -3369,7 +3358,7 @@ impl TextInput {
         self.selection.range = next;
         self.selection.reversed = reversed;
         self.interaction.vertical_motion_x = None;
-        self.interaction.cursor_blink_visible = true;
+        self.show_cursor();
         cx.notify();
     }
 
@@ -3541,7 +3530,7 @@ impl EntityInputHandler for TextInput {
         self.selection.reversed = false;
         self.selection.marked_range.take();
         self.interaction.vertical_motion_x = None;
-        self.interaction.cursor_blink_visible = true;
+        self.show_cursor();
         self.invalidate_layout_caches_preserving_wrap_rows();
         self.note_text_edit_for_highlights(&range, &inserted);
         self.queue_cursor_autoscroll();
@@ -3592,7 +3581,7 @@ impl EntityInputHandler for TextInput {
         self.selection.reversed = false;
 
         self.interaction.vertical_motion_x = None;
-        self.interaction.cursor_blink_visible = true;
+        self.show_cursor();
         // Like `unmark_text`: this can end the composition leaving a highlight.
         // Self-guards on `marked_range`, so a composing input is left alone.
         self.clear_selection_on_ownership_loss(cx);

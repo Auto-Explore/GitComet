@@ -50,7 +50,27 @@ mod text_format_menu;
 mod ui_scale_picker;
 mod web_link;
 mod worktree;
+mod worktree_file;
 mod worktree_section;
+
+fn resolve_checkout_file_path(
+    workdir: &std::path::Path,
+    path: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    if path.is_absolute()
+        || path.components().any(|c| {
+            matches!(
+                c,
+                std::path::Component::ParentDir
+                    | std::path::Component::Prefix(_)
+                    | std::path::Component::RootDir
+            )
+        })
+    {
+        return Err("Refusing to open path outside repository".to_string());
+    }
+    Ok(normalize_platform_path(workdir.join(path)))
+}
 
 fn normalize_platform_path(path: std::path::PathBuf) -> std::path::PathBuf {
     #[cfg(target_os = "windows")]
@@ -373,23 +393,10 @@ impl PopoverHost {
         repo_id: RepoId,
         path: &std::path::Path,
     ) -> Result<std::path::PathBuf, String> {
-        if path.is_absolute()
-            || path.components().any(|c| {
-                matches!(
-                    c,
-                    std::path::Component::ParentDir
-                        | std::path::Component::Prefix(_)
-                        | std::path::Component::RootDir
-                )
-            })
-        {
-            return Err("Refusing to open path outside repository".to_string());
-        }
-
         let workdir = self
             .workdir_for_repo(repo_id)
             .ok_or_else(|| "Repository is not available".to_string())?;
-        Ok(normalize_platform_path(workdir.join(path)))
+        resolve_checkout_file_path(&workdir, path)
     }
 
     fn open_path_default(&mut self, path: std::path::PathBuf, cx: &mut gpui::Context<Self>) {
@@ -667,6 +674,11 @@ impl PopoverHost {
                 path,
                 cx,
             )),
+            PopoverKind::WorktreeFileMenu {
+                repo_id,
+                worktree_path,
+                target,
+            } => Some(worktree_file::model(self, *repo_id, worktree_path, target)),
             PopoverKind::CommitRangeFileMenu {
                 repo_id,
                 from_commit_id,
@@ -1159,6 +1171,34 @@ impl PopoverHost {
                     self.open_path_default(full_path, cx);
                 }
             }
+            ContextMenuAction::OpenWorktreeDiff {
+                repo_id,
+                worktree_path,
+                target,
+            } => {
+                self.details_pane.update(cx, |pane, cx| {
+                    pane.open_worktree_file_diff(repo_id, &worktree_path, &target, window, cx);
+                });
+            }
+            ContextMenuAction::OpenWorktreeFile {
+                worktree_path,
+                path,
+            } => match resolve_checkout_file_path(&worktree_path, &path) {
+                Ok(path) if path.exists() => self.open_path_default(path, cx),
+                Ok(path) => self.push_toast(
+                    components::ToastKind::Error,
+                    format!("Path not found: {}", path.display()),
+                    cx,
+                ),
+                Err(error) => self.push_toast(components::ToastKind::Error, error, cx),
+            },
+            ContextMenuAction::OpenWorktreeFileLocation {
+                worktree_path,
+                path,
+            } => match resolve_checkout_file_path(&worktree_path, &path) {
+                Ok(path) => self.reveal_path_in_file_manager(path, Some(worktree_path), cx),
+                Err(error) => self.push_toast(components::ToastKind::Error, error, cx),
+            },
             ContextMenuAction::OpenFileLocation { repo_id, path } => {
                 let full_path = match self.resolve_workdir_path(repo_id, &path) {
                     Ok(path) => path,

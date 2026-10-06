@@ -18,6 +18,7 @@ import sys
 import threading
 import time
 import tempfile
+import tomllib
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -361,7 +362,7 @@ def windows_linker_environment():
     started = time.monotonic()
     env = {name: value for name, value in os.environ.items()
            if not name.startswith("GITCOMET_LINKER_")}
-    result = subprocess.run(["cmd.exe", "/d", "/u", "/c", "scripts\\windows\\msvc-linker.cmd",
+    result = subprocess.run(["cmd.exe", "/d", "/u", "/c", "scripts\\windows\\windows-lld-linker.cmd",
                              "--gitcomet-print-env"], cwd=ROOT, env=dict(env),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=True)
     values = dict(line.split("=", 1) for line in result.stdout.decode("utf-16-le").splitlines() if "=" in line)
@@ -573,6 +574,22 @@ def run_parallel(tasks):
         executor.shutdown(wait=True, cancel_futures=True)
 
 
+def nextest_junit_path(profile):
+    """JUnit lives in nextest's configured store, independent of Cargo targets."""
+    config = tomllib.loads((ROOT / ".config/nextest.toml").read_text(encoding="utf-8"))
+    store = ROOT / config.get("store", {}).get("dir", "target/nextest")
+    profiles = config.get("profile", {})
+    visited = set()
+    current = profile
+    while current not in visited:
+        visited.add(current)
+        settings = profiles.get(current, {})
+        if path := settings.get("junit", {}).get("path"):
+            return store / profile / path
+        current = settings.get("inherits", "default")
+    raise ValueError(f"No JUnit path configured for nextest profile: {profile}")
+
+
 def execute(context, schedule="serial", nextest_threads=None, nextest_profile="ci", ui_threads=None, batch_pure_tests="auto"):
     batch_pure_enabled(batch_pure_tests)
     for option, threads in (("nextest", nextest_threads), ("ui", ui_threads)):
@@ -600,11 +617,11 @@ def execute(context, schedule="serial", nextest_threads=None, nextest_profile="c
     def nextest(*, cancel=None, live=True, threads=None):
         if not any(not uses_libtest(packages[suite["package-id"]]) for suite in suites.values()):
             return 0
-        build = json.loads((paths(context) / "binaries.json").read_text(encoding="utf-8"))
-        junit = Path(build["rust-build-meta"]["target-directory"]) / "nextest" / nextest_profile / "junit.xml"
+        junit = nextest_junit_path(nextest_profile)
         junit.unlink(missing_ok=True)
         expression = nextest_filter(batches, gpui_packages(packages))
-        command = ["cargo", "nextest", "run", *reuse_args(context), "--profile", nextest_profile,
+        command = ["cargo", "nextest", "run", *reuse_args(context),
+                   "--profile", nextest_profile,
                    "--ignore-default-filter", *(["-E", expression] if expression else []), "--no-fail-fast"]
         if threads is not None:
             command += ["--test-threads", str(threads)]

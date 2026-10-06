@@ -491,7 +491,13 @@ pub fn start_if_enabled(cx: &mut gpui::App) {
             if LOG.get().is_some_and(|log| log.jsonl) {
                 let mut records: Vec<_> = frames.iter().map(|frame| frame_record(frame, started)).collect();
                 let traced = gitcomet_core::op_trace::drain();
+                let work = gitcomet_core::history_perf::snapshot();
+                let work_units: serde_json::Map<String, serde_json::Value> =
+                    gitcomet_core::history_perf::Work::ALL.iter().enumerate()
+                        .map(|(index, kind)| (kind.name().into(), json!(work[index])))
+                        .collect();
                 records.push(json!({"event": "interval", "at_ms": milliseconds(now.duration_since(started)),
+                    "work_units": work_units,
                     "records_dropped": LOG.get().map(|log| log.dropped.load(Ordering::Relaxed)).unwrap_or(0),
                     "stage_records_dropped": traced.dropped,
                     "wall_ms": milliseconds(now.duration_since(interval_started)), "main_cpu_percent": main_cpu_pct,

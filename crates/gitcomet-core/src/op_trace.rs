@@ -60,6 +60,8 @@ pub enum Stage {
     Applied,
     /// A scenario completion witness held. `label`: witness name.
     Witness,
+    /// Git subprocess stage; `a`: wall time (ns), `b`: command correlation id.
+    CommandStage,
 }
 
 impl Stage {
@@ -75,6 +77,7 @@ impl Stage {
             Self::TaskFinished => "task_finished",
             Self::Applied => "applied",
             Self::Witness => "witness",
+            Self::CommandStage => "command_stage",
         }
     }
 }

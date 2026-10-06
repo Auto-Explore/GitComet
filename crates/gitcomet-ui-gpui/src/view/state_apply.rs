@@ -225,6 +225,12 @@ impl GitCometView {
         next: Arc<AppState>,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
+        note_opened_repos_for_activation(
+            &self.state,
+            &next,
+            &mut self.last_repo_activation_dispatch_at,
+            Instant::now(),
+        );
         let workspace_membership_changed = self.state.active_repo != next.active_repo
             || !Arc::ptr_eq(&self.state.repo_open_failures, &next.repo_open_failures)
             || !self

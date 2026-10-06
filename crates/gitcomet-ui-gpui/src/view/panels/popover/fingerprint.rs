@@ -238,6 +238,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::SidebarAncestorMenu { repo_id, .. }
         | PopoverKind::DeleteBranchesConfirm { repo_id, .. }
         | PopoverKind::CommitFileMenu { repo_id, .. }
+        | PopoverKind::WorktreeFileMenu { repo_id, .. }
         | PopoverKind::CommitRangeFileMenu { repo_id, .. }
         | PopoverKind::FileBrowserFileMenu { repo_id, .. }
         | PopoverKind::FileBrowserFolderMenu { repo_id, .. }
@@ -506,6 +507,11 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         // "Apply change" follows the repo's busy state.
         PopoverKind::CommitFileMenu { .. } => {
             repo.history_rewrite_busy().hash(hasher);
+        }
+        // Foreign-file actions follow the selected checkout and scan membership.
+        PopoverKind::WorktreeFileMenu { .. } => {
+            repo.worktree_dirty_rev.hash(hasher);
+            repo.history_state.worktree_selection_rev.hash(hasher);
         }
         // The submodule flag of a row comes from the loaded file list.
         PopoverKind::CommitRangeFileMenu { .. } => {
@@ -1037,6 +1043,16 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             repo_id.hash(hasher);
             commit_id.hash(hasher);
             path.hash(hasher);
+        }
+        PopoverKind::WorktreeFileMenu {
+            repo_id,
+            worktree_path,
+            target,
+        } => {
+            std::mem::discriminant(kind).hash(hasher);
+            repo_id.hash(hasher);
+            worktree_path.hash(hasher);
+            view_fingerprint::hash_diff_target(target, hasher);
         }
         PopoverKind::CommitRangeFileMenu {
             repo_id,
