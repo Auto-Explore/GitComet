@@ -2,10 +2,11 @@
 
 The application series is on `perf/verified_improvements`, based on GitComet
 `dev` at `6b4eed45c6c141376fd494ee615d415525552989`. Framework changes are in
-[`Havunen/gpui-ce`](https://github.com/Havunen/gpui-ce), on the same branch name,
+[`Havunen/gpui-ce`](https://github.com/Havunen/gpui-ce), initially on the same branch
+name and now continued on `perf/fixes2`,
 based on its updated `upgrades` at `0b416666cf8cb67ded66a9fc093a2e674c40edd0`.
 GitComet's four GPUI dependencies pin
-`a5c5d1049556043aef36c351025455e1a5762a2a`. There are no local GPUI path patches
+`7809c3e18ddb08511a5457f9458bac24a63101c7`. There are no local GPUI path patches
 or vendored GPUI crates. Existing tree-sitter grammar vendoring is unrelated.
 
 This application finalization ran on Linux. **Fresh native GitComet macOS and
@@ -26,6 +27,40 @@ Work was isolated in `GitComet-verified-improvements` and
 `gpui-ce-verified-improvements`. The original `GitComet3` and `gpui-ce2`
 checkouts retain their original branches and contents. No merge to `dev` or
 `upgrades` is part of this work.
+
+## Upstream audit and cleanup
+
+GPUI `9cf592bc20` retains render-time animation state and shaped text across
+cached frames. `7809c3e18d` also retains native window-control hitboxes, rebuilds
+accessibility subtrees while active, and invalidates cached views after font
+registration without losing saved layout ranges. Their regression tests remain.
+
+The cleanup removes Markdown's ignored alignment arguments and duplicate
+alignment field, together with the GPUI getter they alone used. The backend's
+selection geometry already includes alignment; the inherited text style still
+sets the glyph alignment. Canvas truncation, cap-height metrics, atomic custom
+layouts and real text-backend test injection remain in use.
+
+The unverified opt-in Direct3D cropping and Windows fixed-refresh override are
+removed from the framework checkout. Windows uses full-viewport path targets and
+the platform's default unknown-refresh behavior. Native shader/compiler fixes,
+Linux WGPU cropping and macOS fixed-refresh detection remain.
+
+Framework CI uses default parallel tests on Linux and macOS. Windows alone keeps
+serial execution pending diagnosis of its native access violation. The framework
+cleanup follows the pinned cache-fix revision; publish it before advancing the
+application pin again. Historical validation and measurement records below
+retain the revisions actually tested.
+
+Cleanup validation on Linux: the framework workspace passes **1,057 tests, one
+ignored** with default parallel execution; the profiler suite passes **60**;
+GitComet's Markdown suite passes **131, two ignored**, including wrapped,
+centered and right-aligned selection. Strict Clippy passes for GPUI/Parley and
+the application's UI library/tests; one redundant test-only `Vec` conversion
+was removed. Formatting and diff checks pass. Windows library/tests type-check
+for `x86_64-pc-windows-gnu` with `GPUI_RENDER_ALLOW_MISSING_DXBC=1`, which permits
+cross-host type-checking without native shader bytecode. This is not a native
+Windows runtime test; the OS matrix remains the runtime verification gate.
 
 ## Linux cropped-path default follow-up
 
@@ -75,8 +110,8 @@ commits; recovery and portability fixes are folded into the changes they repair.
 | Precompiled Metal shaders | `edd5f1a4` | GPUI `49125d63b4` | Ported to the new generated shader pipeline, with runtime fallback |
 | Fixed-refresh unchanged-frame presentation | `bc2b2ca3` | GPUI `505816444c` | Retained; variable-refresh behavior preserved |
 | Core Text descriptor font loading | `3ec504db` | Not replayed | Updated fork uses Parley; old font engine no longer exists. Native memory equivalence is pending |
-| Cropped Direct3D path targets | `efefb02e` | GPUI `37b0d3d2c2` | Opt-in; fresh native pixel/performance checks pending |
-| Windows fixed-refresh presentation | `934c5c1f` | GPUI `be74171c5f` | Explicit opt-in; fresh native checks pending |
+| Cropped Direct3D path targets | `efefb02e` | GPUI `37b0d3d2c2` | Removed during cleanup; native benefit remained unverified |
+| Windows fixed-refresh presentation | `934c5c1f` | GPUI `be74171c5f` | Removed during cleanup; native benefit remained unverified |
 | Windows native lint and shader label fixes | `9fc8282d` | GPUI `1538c3c85c` | Retained |
 | Windows symlink privilege fixtures | `c7939624` | GitComet `943fe014` | Only error 1314 permits an explicit unavailable-fixture diagnostic |
 | Restored-tab reuse | `73658b92` | GitComet `e99eeada` | Retained |
@@ -274,11 +309,10 @@ python3 scripts/profile-path-targets.py \
 
 Linux enables WGPU path target cropping by default when `GPUI_GPU_EXPERIMENTS`
 is unset. Set `GPUI_GPU_EXPERIMENTS=` for the full-window baseline, or use
-`GPUI_GPU_EXPERIMENTS=cropped-paths` to explicitly enable WGPU/Direct3D cropping
+`GPUI_GPU_EXPERIMENTS=cropped-paths` to explicitly enable WGPU cropping
 on any supported target. Targets retain their growth capacity until a resize.
-Windows also supports `GPUI_GPU_EXPERIMENTS=fixed-refresh` only when the operator
-knows every display used by the process has a fixed rate. Combine the values with commas when
-testing both. Keep separate off/on controls for each feature.
+The native Direct3D renderer uses full-viewport targets and has no experiment
+switches.
 
 ## Deferred native verification
 
@@ -335,15 +369,15 @@ including paths with spaces and non-ASCII characters. Check shared repository
 owners release file handles before fixture cleanup. Error 1314 may mark symlink
 fixtures unavailable; run them again on a host with Developer Mode or the required
 privilege. Exercise native Direct3D and WGPU path pixels with gradients, dithering,
-offsets, clipping, growth and resize in both crop modes. Measure VRAM, CPU and
-input/presentation latency independently. Test fixed-refresh opt-in on a known
-fixed display, and leave it unset on variable-refresh systems. Follow
+offsets, clipping, growth and resize. WGPU alone supports the crop comparison;
+native Direct3D uses full-viewport targets. Measure VRAM, CPU and
+input/presentation latency independently. Follow
 [the existing Windows runtime guide](windows-test-runtime.md) and profiling
 PowerShell/UI-responsiveness drivers.
 
 Carets resting visibly after ten seconds is an intentional behavior change.
-Mac fixed-refresh suppression is display-dependent; Windows suppression and GPU
-target cropping remain opt-in. None of these commits enables broader renderer
+Mac fixed-refresh suppression is display-dependent; WGPU cropping remains opt-in
+outside Linux. None of these commits enables broader renderer
 pooling, batching or cache experiments.
 
 ## Performance test coverage

@@ -711,7 +711,7 @@ fn restored_active_repository_is_not_reopened_before_view_snapshot_arrives(
     );
     repo.open = Loadable::Ready(());
     let restored = Arc::new(AppState {
-        repos: vec![repo].into(),
+        repos: vec![repo],
         active_repo: Some(RepoId(1)),
         git_runtime: available_git_runtime_state(),
         ..AppState::test_default()

@@ -3,7 +3,7 @@
   "reviewed_source": "516a38608eb2a89dc2c66257f7392fb8f5aa11ea",
   "compatibility_baseline": "5d74edfaa3281715b8d533d3b4c2eca2262c1fac",
   "gpui_base": "0b416666cf8cb67ded66a9fc093a2e674c40edd0",
-  "gpui_pin": "a5c5d1049556043aef36c351025455e1a5762a2a",
+  "gpui_pin": "7809c3e18ddb08511a5457f9458bac24a63101c7",
   "native_validation": {
     "macos": "pending; user deferred fresh native checks",
     "windows": "pending; user deferred fresh native checks"
@@ -103,12 +103,12 @@
     {
       "source": "efefb02e39ec4bbf67719c00f9677a9517a2c3c0",
       "final": "37b0d3d2c2813881f45fc40b7eed53f0a108114b",
-      "disposition": "opt-in Direct3D; fresh native proof pending"
+      "disposition": "removed during cleanup; unverified opt-in Direct3D cropping"
     },
     {
       "source": "934c5c1f5e25850e68bdbab8a1d824c78c155e72",
       "final": "be74171c5f7c6375a111c98bdd245dc56f126e00",
-      "disposition": "opt-in Windows fixed-refresh; native proof pending"
+      "disposition": "removed during cleanup; unverified Windows fixed-refresh opt-in"
     },
     {
       "source": "9fc8282d606208c46edc3dc509dd24f5a5595c58",
@@ -163,7 +163,7 @@
     },
     {
       "final": "3c8df570bad91680ab787d992025caf7d154f804",
-      "purpose": "canvas truncation and alignment"
+      "purpose": "canvas truncation; obsolete alignment getter removed during cleanup"
     },
     {
       "final": "1fefe724236df3aff619adaab174c786693e56eb",
@@ -200,6 +200,20 @@
     {
       "final": "a5c5d1049556043aef36c351025455e1a5762a2a",
       "purpose": "enable cropped WGPU path targets by default on Linux, with explicit environment overrides and independent probe controls"
+    },
+    {
+      "final": "9cf592bc20b9a4fd76df8d8787136858be8ec7e5",
+      "purpose": "retain request-layout animation state and text layouts across cached frames"
+    },
+    {
+      "final": "7809c3e18ddb08511a5457f9458bac24a63101c7",
+      "purpose": "retain cached window controls and accessibility; invalidate cached views after font registration"
     }
-  ]
+  ],
+  "cleanup": {
+    "markdown_alignment": "remove ignored alignment arguments, duplicate view field and GPUI getter; use backend selection geometry",
+    "windows_renderer": "restore full-viewport Direct3D path targets and default refresh-rate reporting; preserve native compiler and shader fixes",
+    "test_concurrency": "default parallel tests on Linux and macOS; retain serialization only for the unresolved Windows native access violation",
+    "publication": "framework cleanup follows the pinned cache-fix revision; advance the pin after publishing the cleanup"
+  }
 }

@@ -37,9 +37,6 @@ pub(in crate::view) struct MarkdownFlowText {
     /// Painted ranges set in another font family — inline code, in the editor
     /// font — while the rest of the line keeps the body font.
     font_overrides: Vec<(Range<usize>, SharedString)>,
-    /// The alignment the glyphs are painted with, which the layers beneath
-    /// them follow; the caller sets the same on the text's style.
-    align: gpui::TextAlign,
 }
 
 /// Paint layers for flowing Markdown text, in their visual stacking order.
@@ -81,15 +78,7 @@ impl MarkdownFlowText {
             layout: None,
             cell: None,
             font_overrides: Vec::new(),
-            align: gpui::TextAlign::Left,
         }
-    }
-
-    /// Paint the selection and run backgrounds under `align`, which the
-    /// caller also sets as the text's style for `gpui` to paint the glyphs.
-    pub(in crate::view) fn text_align(mut self, align: gpui::TextAlign) -> Self {
-        self.align = align;
-        self
     }
 
     /// Set `ranges` of the text — in row coordinates, or the cell's own when
@@ -136,13 +125,7 @@ impl MarkdownFlowText {
         }
     }
 
-    fn paint_selection(
-        &self,
-        layout: &gpui::TextLayout,
-        align: gpui::TextAlign,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
+    fn paint_selection(&self, layout: &gpui::TextLayout, window: &mut Window, cx: &mut App) {
         let Some(selected) = self
             .view
             .read(cx)
@@ -168,7 +151,7 @@ impl MarkdownFlowText {
         }
 
         let color = self.view.read(cx).diff_text_selection_color();
-        let rects = markdown_flow_range_rects(layout, align, start, end);
+        let rects = markdown_flow_range_rects(layout, start, end);
         if rects.is_empty() {
             return;
         }
@@ -181,19 +164,14 @@ impl MarkdownFlowText {
     }
 
     /// Paint styled-run backgrounds below the selection layer.
-    fn paint_run_backgrounds(
-        &self,
-        layout: &gpui::TextLayout,
-        align: gpui::TextAlign,
-        window: &mut Window,
-    ) {
+    fn paint_run_backgrounds(&self, layout: &gpui::TextLayout, window: &mut Window) {
         #[cfg(test)]
         record_markdown_flow_paint_phase_for_tests(
             self.row_ix,
             MarkdownFlowPaintPhase::RunBackgrounds,
         );
         for (range, color) in self.run_backgrounds.iter() {
-            for rect in markdown_flow_range_rects(layout, align, range.start, range.end) {
+            for rect in markdown_flow_range_rects(layout, range.start, range.end) {
                 window.paint_quad(fill(rect, *color));
             }
         }
@@ -237,25 +215,19 @@ fn split_markdown_flow_highlight_layers(
 }
 
 /// The rectangles a byte range covers, in window coordinates, for text
-/// painted under `align`.
+/// using the backend's shaped geometry.
 ///
 /// A wrapped row's selection is not one box: each visual line contributes the
-/// slice of the range that falls inside it, measured against the unwrapped
-/// layout the wrap boundaries index into and shifted as `gpui` aligned it.
-///
-/// `gpui` records the alignment as it paints the glyphs, so after paint
-/// `layout.text_align()` is it; a caller painting beneath the glyphs has to
-/// know it already.
+/// slice of the range that falls inside it. The backend includes alignment and
+/// bidirectional positioning in those rectangles.
 pub(in crate::view) fn markdown_flow_range_rects(
     layout: &gpui::TextLayout,
-    align: gpui::TextAlign,
     start: usize,
     end: usize,
 ) -> Vec<Bounds<Pixels>> {
     let Some(line) = layout.line_layout_for_index(start) else {
         return Vec::new();
     };
-    let _ = align; // Alignment is already part of the backend-owned layout.
     let bounds = layout.bounds();
     let origin = bounds.origin;
     let rects = line.selection_bounds(start..end, layout.line_height());
@@ -524,7 +496,6 @@ impl gpui::Element for MarkdownFlowText {
         // computing. The virtualized list this renderer replaced built nothing
         // for such a row at all.
         let on_screen = markdown_flow_row_is_near_viewport(bounds, window);
-        let align = self.align;
         let layout = self
             .layout
             .clone()
@@ -533,9 +504,9 @@ impl gpui::Element for MarkdownFlowText {
         // Background colours were removed from `inner` when the element was
         // built. Painting them here gives us the intended stacking order:
         // code/search background -> selection wash -> crisp text.
-        self.paint_run_backgrounds(&layout, align, window);
+        self.paint_run_backgrounds(&layout, window);
         if on_screen {
-            self.paint_selection(&layout, align, window, cx);
+            self.paint_selection(&layout, window, cx);
         }
         #[cfg(test)]
         record_markdown_flow_paint_phase_for_tests(self.row_ix, MarkdownFlowPaintPhase::Glyphs);

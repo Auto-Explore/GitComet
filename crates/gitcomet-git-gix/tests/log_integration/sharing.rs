@@ -42,6 +42,18 @@ fn page_snapshot(repo: &dyn GitRepository) -> HistorySnapshot {
     }
 }
 
+#[track_caller]
+fn assert_owner_released<T: ?Sized>(weak: &std::sync::Weak<T>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while weak.strong_count() != 0 && std::time::Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    assert!(
+        weak.upgrade().is_none(),
+        "owner remained alive after timeout"
+    );
+}
+
 #[test]
 fn pages_and_shared_indexes_intern_many_tip_snapshots_in_either_order() {
     for index_first in [false, true] {
@@ -319,7 +331,7 @@ fn repository_replacement_and_a_hundred_reopens_release_owners() {
         // that closing the owner releases those handles before replacement.
         let weak = Arc::downgrade(&old);
         drop(old);
-        assert!(weak.upgrade().is_none());
+        assert_owner_released(&weak);
     }
     std::fs::rename(&path, dir.path().join("old")).unwrap();
     std::fs::create_dir(&path).unwrap();
@@ -347,14 +359,13 @@ fn repository_replacement_and_a_hundred_reopens_release_owners() {
         drop(block);
         drop(index);
         drop(repo);
-        // The worker may still be returning after publishing its result.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while weak.1.strong_count() != 0 && std::time::Instant::now() < deadline {
-            std::thread::yield_now();
-        }
-        assert!(weak.0.upgrade().is_none());
-        assert!(weak.1.upgrade().is_none());
-        assert!(weak.2.upgrade().is_none());
+        // Parallel registry readers may temporarily upgrade repository owners,
+        // and the worker may still be returning after publishing its index.
+        // Wait for each owner: releasing the index does not imply the repository
+        // or its retained decoded blocks have finished being dropped.
+        assert_owner_released(&weak.0);
+        assert_owner_released(&weak.1);
+        assert_owner_released(&weak.2);
     }
 }
 

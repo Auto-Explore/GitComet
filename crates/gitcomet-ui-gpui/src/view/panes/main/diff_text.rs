@@ -408,7 +408,6 @@ impl MainPaneView {
             // range that starts a line would otherwise begin on the previous one.
             let rects = rows::markdown_flow_range_rects(
                 &wrapped.layout,
-                wrapped.layout.text_align(),
                 wrapped.painted_offset(start),
                 wrapped.painted_offset(end),
             );

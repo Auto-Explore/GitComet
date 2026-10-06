@@ -2532,9 +2532,8 @@ fn searching_the_merge_tool_preview_scrolls_the_column_holding_the_match(
 #[gpui::test]
 fn aligned_rows_are_highlighted_where_their_lines_are_painted(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    // The highlight is drawn beneath the glyphs, before `gpui` records the
-    // alignment it paints them with; read from the layout then, it sat at the
-    // left of centred text.
+    // Selection geometry must include inherited alignment before glyphs paint.
+    // Cover wrapped centred text and short centred/right-aligned lines.
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
