@@ -276,9 +276,10 @@ pub(super) fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             }))
         }
-        Effect::LoadWorktreeDirty { repo_id, .. } => send(Msg::Internal(
+        Effect::LoadWorktreeDirty { repo_id, scope, .. } => send(Msg::Internal(
             crate::msg::InternalMsg::WorktreeDirtyLoaded {
                 repo_id,
+                scope,
                 result: Err(git_unavailable_error(runtime)),
             },
         )),

@@ -474,6 +474,11 @@ pub(crate) enum PopoverKind {
         commit_id: CommitId,
         path: std::path::PathBuf,
     },
+    WorktreeFileMenu {
+        repo_id: RepoId,
+        worktree_path: std::path::PathBuf,
+        target: DiffTarget,
+    },
     /// A file row of the comparison view; `to_commit_id` is `None` when the
     /// comparison runs to the working tree.
     CommitRangeFileMenu {
