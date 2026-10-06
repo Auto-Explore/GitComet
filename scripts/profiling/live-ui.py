@@ -192,6 +192,7 @@ def file_text(repository, path):
 
 
 PICKER_RECENT_COUNT = 40
+PICKER_NAME_QUERY = "GitComet-perf-picker"
 # The version-3 session migrates into one workspace containing the active repo.
 PICKER_UNFILTERED_COUNT = PICKER_RECENT_COUNT + 2
 
@@ -200,7 +201,7 @@ def picker_recent_paths():
     # Stable lengths across runs, independent of artifact directory names.
     # These are display-only paths: scenarios never open or create them.
     root = "C:/performance" if os.name == "nt" else "/performance"
-    return [f"{root}/company/{'directory/' * (32 if ix % 2 else 96)}component-{ix:03}/GitComet-{ix:03}"
+    return [f"{root}/company/{'directory/' * (32 if ix % 2 else 96)}component-{ix:03}/{PICKER_NAME_QUERY}-{ix:03}"
             for ix in range(PICKER_RECENT_COUNT)]
 
 
@@ -220,8 +221,10 @@ def picker_scenario(ready):
             expect("", PICKER_UNFILTERED_COUNT),
             {"do": "settle", "ms": 750},
             {"do": "phase", "name": f"picker_name_{shortcut}"},
-            {"do": "type", "text": "GitComet", "interval_ms": 80, "witness": witness},
-            expect("GitComet", PICKER_RECENT_COUNT), {"do": "settle", "ms": 750},
+            # A fixture-specific name excludes the active repository/workspace
+            # when surveying the real GitComet and GitComet Pro checkouts.
+            {"do": "type", "text": PICKER_NAME_QUERY, "interval_ms": 80, "witness": witness},
+            expect(PICKER_NAME_QUERY, PICKER_RECENT_COUNT), {"do": "settle", "ms": 750},
             {"do": "phase", "name": f"picker_path_{shortcut}"},
             key("secondary-a"), key("backspace", witnessed=True),
             {"do": "type", "text": "company", "interval_ms": 80, "witness": witness},
