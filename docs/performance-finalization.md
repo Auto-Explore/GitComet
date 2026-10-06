@@ -5,7 +5,7 @@ The application series is on `perf/verified_improvements`, based on GitComet
 [`Havunen/gpui-ce`](https://github.com/Havunen/gpui-ce), on the same branch name,
 based on its updated `upgrades` at `0b416666cf8cb67ded66a9fc093a2e674c40edd0`.
 GitComet's four GPUI dependencies and its exported `GPUI_REVISION` pin
-`80c32256b87ff82b13373b297388ea730c5da4df`. There are no local GPUI path patches
+`a5c5d1049556043aef36c351025455e1a5762a2a`. There are no local GPUI path patches
 or vendored GPUI crates. Existing tree-sitter grammar vendoring is unrelated.
 
 This application finalization ran on Linux. **Fresh native GitComet macOS and
@@ -16,8 +16,8 @@ the Windows fixes in the source series are historical evidence, not results
 from the updated fork. The supplied Windows prose duplicated the macOS review;
 the actual Windows changes were identified from repository history.
 
-The final GPUI revision separately passed all **21 hosted workflow jobs**,
-including macOS ARM/Intel, Windows x64/ARM, Linux and headless configurations.
+The preceding GPUI revision `80c32256b8` separately passed all **21 hosted workflow
+jobs**, including macOS ARM/Intel, Windows x64/ARM, Linux and headless configurations.
 [The job record](performance/finalization-gpui-hosted-validation.json) pins the
 revision and links every result. These are framework build/test checks, not native
 GitComet application checks or platform performance measurements.
@@ -26,6 +26,29 @@ Work was isolated in `GitComet-verified-improvements` and
 `gpui-ce-verified-improvements`. The original `GitComet3` and `gpui-ce2`
 checkouts retain their original branches and contents. No merge to `dev` or
 `upgrades` is part of this work.
+
+## Linux cropped-path default follow-up
+
+GPUI `a5c5d10495` enables cropped WGPU path targets by default on Linux when
+`GPUI_GPU_EXPERIMENTS` is unset. Other targets retain opt-in behavior. An explicit
+experiment list overrides the platform default: `GPUI_GPU_EXPERIMENTS=` selects
+full-window path targets, while `GPUI_GPU_EXPERIMENTS=cropped-paths` selects cropped
+targets. This decision is cached at renderer initialization, outside the draw path.
+The GPU footprint probe now selects both modes explicitly so its baseline remains
+uncropped after the default change.
+
+The local WGPU suite passes in both modes: **31 passed, one ignored** per run,
+including pixel comparisons during target growth and resize. Formatting and
+strict renderer Clippy pass; the previously documented XIM warnings remain outside
+the scoped lint check. GitComet's CLI and UI-kit pass an all-target check with
+`--locked` and the new fork pin. The updated footprint probe reproduces
+**132 → 68 MiB (−48.5%)** in all six alternating pairs; a separate process with
+the environment variable unset also measures **68 MiB**, confirming the Linux
+default selects the cropped allocation. [The follow-up evidence](performance/linux-default-cropped-paths.json)
+records the new revision, binary hash, explicit controls and default-mode samples.
+The earlier validation inventory and application latency captures below predate
+this default change and retain their original revisions.
+Fresh native GitComet macOS/Windows checks remain deferred.
 
 ## Commit disposition
 
@@ -43,7 +66,7 @@ commits; recovery and portability fixes are folded into the changes they repair.
 | Compact shaped lines | `f070ffd3` | Updated GPUI shared layouts | Old inline decoration representation has been replaced; patch is superseded |
 | Shared repository reads and history indexes | `3ff7d610` | GitComet `86182818` | Retained with `40fa5079` canonical-path and `2510d221` Windows handle/shell fixes |
 | Binary path truncation | `3a8fe01e` | GitComet `95bff357` | Retained |
-| Cropped WGPU path targets | `8eb03f97` | GPUI `e3c1706b73` | Opt-in; includes Metal sampling, dithering and GPU fixture fixes |
+| Cropped WGPU path targets | `8eb03f97` | GPUI `e3c1706b73` | Linux default after `a5c5d10495`; includes Metal sampling, dithering and GPU fixture fixes |
 | Python platform mock isolation | `531bf500` | GitComet `b1d51f0e` | Retained |
 | Early Git runtime probe | `78f59b2c` | GitComet `0c93e12b` | Retained with duplicate-report, unrun-probe and forced-recheck fixes |
 | LFS unstaged line stats | `f7d2ebc8` | GitComet `2a49e497` | Retained; deleted LFS files keep their counts |
@@ -186,12 +209,13 @@ beyond `max(5%, 1 ms)`. It is a short oscillating scroll, not the native 12,000-
 retention workload. The original reviewed release is frozen for later comparisons
 but was not part of these paired timing claims.
 
-The measured candidate is GitComet `3b0fea82` with GPUI `fdb60b0950`; the final
-GPUI pin `80c32256b8` differs only in `cfg(test)` expectations and comments. The
-final pin was checked with the full UI-kit suite, all-target benchmark compilation,
-local WGPU tests and the 21-job hosted framework matrix. No rendering or application
-behavior changed between the captured release and the final pin. Native GitComet
-builds and performance measurements remain part of the deferred handoff.
+The measured candidate is GitComet `3b0fea82` with GPUI `fdb60b0950`; the
+finalization GPUI pin `80c32256b8` differs only in `cfg(test)` expectations and
+comments. That pin was checked with the full UI-kit suite, all-target benchmark
+compilation, local WGPU tests and the 21-job hosted framework matrix. No rendering or application
+behavior changed between the captured release and that pin. The later Linux
+cropped-path default change is described above. Native GitComet builds and
+performance measurements remain part of the deferred handoff.
 
 ## Reproduction
 
@@ -248,10 +272,12 @@ python3 scripts/profile-path-targets.py \
   --output target/profiling/cropped-paths.json --pairs 3
 ```
 
-Use `GPUI_GPU_EXPERIMENTS=cropped-paths` for opt-in WGPU/Direct3D path target
-cropping. Targets retain their growth capacity until a resize. Windows also
-supports `GPUI_GPU_EXPERIMENTS=fixed-refresh` only when the operator knows every
-display used by the process has a fixed rate. Combine the values with commas when
+Linux enables WGPU path target cropping by default when `GPUI_GPU_EXPERIMENTS`
+is unset. Set `GPUI_GPU_EXPERIMENTS=` for the full-window baseline, or use
+`GPUI_GPU_EXPERIMENTS=cropped-paths` to explicitly enable WGPU/Direct3D cropping
+on any supported target. Targets retain their growth capacity until a resize.
+Windows also supports `GPUI_GPU_EXPERIMENTS=fixed-refresh` only when the operator
+knows every display used by the process has a fixed rate. Combine the values with commas when
 testing both. Keep separate off/on controls for each feature.
 
 ## Deferred native verification
