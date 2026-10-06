@@ -361,7 +361,7 @@ def windows_linker_environment():
     started = time.monotonic()
     env = {name: value for name, value in os.environ.items()
            if not name.startswith("GITCOMET_LINKER_")}
-    result = subprocess.run(["cmd.exe", "/d", "/u", "/c", "scripts\\windows\\msvc-linker.cmd",
+    result = subprocess.run(["cmd.exe", "/d", "/u", "/c", "scripts\\windows\\windows-lld-linker.cmd",
                              "--gitcomet-print-env"], cwd=ROOT, env=dict(env),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=True)
     values = dict(line.split("=", 1) for line in result.stdout.decode("utf-16-le").splitlines() if "=" in line)
