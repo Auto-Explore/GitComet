@@ -1,0 +1,1334 @@
+{
+  "method": "Sequential native development builds; private profiles and Mutter; real checkouts read-only; same native text backend and application code; font dependency opt-level 0 versus 2; warm GPU caches; profiling is diagnostic only.",
+  "profile_evidence": {
+    "artifact": "/tmp/gitcomet-all-views-picker-profile/cpu.data",
+    "interval": "main thread perf clock 400830.50..400831.45 seconds",
+    "samples": 391,
+    "font_table_and_glyph_substitution_samples": 206,
+    "nvidia_driver_samples": 1,
+    "lost_samples_total": 10,
+    "note": "Leaf samples identify the hot dependency family; diagnostic capture adds profiler overhead and is not a latency benchmark."
+  },
+  "runs": [
+    {
+      "variant": "unoptimised-fonts",
+      "repository": "GitComet",
+      "binary_sha256": "137672eb9d1c7fbd394f91ae2e5ab85063ec111c07fae0e73cbcebbdbd41918d",
+      "repository_head": "724d433af8c7c0fa2074ae5bd2f5632fd056c740",
+      "valid": true,
+      "phases": {
+        "picker_open_a": {
+          "draw_ms": {
+            "count": 3,
+            "mean": 60.482401,
+            "p50": 13.225816,
+            "p95": 158.2702,
+            "p99": 158.2702,
+            "max": 158.2702
+          },
+          "frames": 3,
+          "inputs": {
+            "count": 1,
+            "expected_witnesses": 1,
+            "witnessed": 1,
+            "superseded": 0,
+            "superseded_task_ms": 0,
+            "superseded_tasks": 0,
+            "dispatch_delay_ms": {
+              "count": 1,
+              "mean": 0.027469999999993888,
+              "p50": 0.027469999999993888,
+              "p95": 0.027469999999993888,
+              "p99": 0.027469999999993888,
+              "max": 0.027469999999993888
+            },
+            "handler_ms": {
+              "count": 1,
+              "mean": 13.602406,
+              "p50": 13.602406,
+              "p95": 13.602406,
+              "p99": 13.602406,
+              "max": 13.602406
+            },
+            "input_to_witness_ms": {
+              "count": 1,
+              "mean": 15.07899499999985,
+              "p50": 15.07899499999985,
+              "p95": 15.07899499999985,
+              "p99": 15.07899499999985,
+              "max": 15.07899499999985
+            },
+            "input_to_draw_ms": {
+              "count": 1,
+              "mean": 173.45202500000005,
+              "p50": 173.45202500000005,
+              "p95": 173.45202500000005,
+              "p99": 173.45202500000005,
+              "max": 173.45202500000005
+            },
+            "input_to_submit_ms": {
+              "count": 1,
+              "mean": 176.79661400000032,
+              "p50": 176.79661400000032,
+              "p95": 176.79661400000032,
+              "p99": 176.79661400000032,
+              "max": 176.79661400000032
+            },
+            "store_queue_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "reduce_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "task_queue_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "task_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "published_to_applied_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "apply_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            }
+          }
+        },
+        "picker_path_a": {
+          "draw_ms": {
+            "count": 9,
+            "mean": 90.40852688888889,
+            "p50": 17.491755,
+            "p95": 204.156395,
+            "p99": 204.156395,
+            "max": 204.156395
+          },
+          "frames": 9,
+          "inputs": {
+            "count": 9,
+            "expected_witnesses": 8,
+            "witnessed": 8,
+            "superseded": 0,
+            "superseded_task_ms": 0,
+            "superseded_tasks": 0,
+            "dispatch_delay_ms": {
+              "count": 9,
+              "mean": 36.80284133333316,
+              "p50": 0.2075039999999717,
+              "p95": 155.17302800000016,
+              "p99": 155.17302800000016,
+              "max": 155.17302800000016
+            },
+            "handler_ms": {
+              "count": 9,
+              "mean": 42.586741999999994,
+              "p50": 0.15044,
+              "p95": 186.89941,
+              "p99": 186.89941,
+              "max": 186.89941
+            },
+            "input_to_witness_ms": {
+              "count": 8,
+              "mean": 89.63419987499981,
+              "p50": 5.104637999999795,
+              "p95": 340.64648899999975,
+              "p99": 340.64648899999975,
+              "max": 340.64648899999975
+            },
+            "input_to_draw_ms": {
+              "count": 8,
+              "mean": 190.73907287500026,
+              "p50": 20.480673999999453,
+              "p95": 519.6994620000005,
+              "p99": 519.6994620000005,
+              "max": 519.6994620000005
+            },
+            "input_to_submit_ms": {
+              "count": 8,
+              "mean": 262.84401875000015,
+              "p50": 28.51347100000021,
+              "p95": 681.9099120000001,
+              "p99": 681.9099120000001,
+              "max": 681.9099120000001
+            },
+            "store_queue_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "reduce_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "task_queue_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "task_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "published_to_applied_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "apply_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            }
+          }
+        },
+        "picker_path_o": {
+          "draw_ms": {
+            "count": 11,
+            "mean": 4.948605636363637,
+            "p50": 4.999909000000001,
+            "p95": 6.019068,
+            "p99": 6.019068,
+            "max": 6.019068
+          },
+          "frames": 11,
+          "inputs": {
+            "count": 9,
+            "expected_witnesses": 8,
+            "witnessed": 8,
+            "superseded": 0,
+            "superseded_task_ms": 0,
+            "superseded_tasks": 0,
+            "dispatch_delay_ms": {
+              "count": 9,
+              "mean": 0.1653847777781468,
+              "p50": 0.22493799999938346,
+              "p95": 0.2846220000010362,
+              "p99": 0.2846220000010362,
+              "max": 0.2846220000010362
+            },
+            "handler_ms": {
+              "count": 9,
+              "mean": 1.2046762222222223,
+              "p50": 0.16355,
+              "p95": 5.580948,
+              "p99": 5.580948,
+              "max": 5.580948
+            },
+            "input_to_witness_ms": {
+              "count": 8,
+              "mean": 1.8965435000002344,
+              "p50": 0.8052179999995133,
+              "p95": 5.87098800000058,
+              "p99": 5.87098800000058,
+              "max": 5.87098800000058
+            },
+            "input_to_draw_ms": {
+              "count": 8,
+              "mean": 6.7966056250004385,
+              "p50": 6.225040999999692,
+              "p95": 9.987746000000698,
+              "p99": 9.987746000000698,
+              "max": 9.987746000000698
+            },
+            "input_to_submit_ms": {
+              "count": 8,
+              "mean": 9.415337375000036,
+              "p50": 8.360541000000012,
+              "p95": 16.65167400000064,
+              "p99": 16.65167400000064,
+              "max": 16.65167400000064
+            },
+            "store_queue_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "reduce_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "task_queue_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "task_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "published_to_applied_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "apply_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "variant": "optimised-fonts",
+      "repository": "GitComet",
+      "binary_sha256": "fc4913d0bf7f0c24ff6600aa1ee2172e2eee570d9683a3c8d051e31689292365",
+      "repository_head": "724d433af8c7c0fa2074ae5bd2f5632fd056c740",
+      "valid": true,
+      "phases": {
+        "picker_open_a": {
+          "draw_ms": {
+            "count": 3,
+            "mean": 27.726341666666666,
+            "p50": 14.542466000000001,
+            "p95": 60.861791,
+            "p99": 60.861791,
+            "max": 60.861791
+          },
+          "frames": 3,
+          "inputs": {
+            "count": 1,
+            "expected_witnesses": 1,
+            "witnessed": 1,
+            "superseded": 0,
+            "superseded_task_ms": 0,
+            "superseded_tasks": 0,
+            "dispatch_delay_ms": {
+              "count": 1,
+              "mean": 0.023319999999785068,
+              "p50": 0.023319999999785068,
+              "p95": 0.023319999999785068,
+              "p99": 0.023319999999785068,
+              "max": 0.023319999999785068
+            },
+            "handler_ms": {
+              "count": 1,
+              "mean": 14.919895,
+              "p50": 14.919895,
+              "p95": 14.919895,
+              "p99": 14.919895,
+              "max": 14.919895
+            },
+            "input_to_witness_ms": {
+              "count": 1,
+              "mean": 16.412444999999934,
+              "p50": 16.412444999999934,
+              "p95": 16.412444999999934,
+              "p99": 16.412444999999934,
+              "max": 16.412444999999934
+            },
+            "input_to_draw_ms": {
+              "count": 1,
+              "mean": 77.38971599999968,
+              "p50": 77.38971599999968,
+              "p95": 77.38971599999968,
+              "p99": 77.38971599999968,
+              "max": 77.38971599999968
+            },
+            "input_to_submit_ms": {
+              "count": 1,
+              "mean": 80.71804500000007,
+              "p50": 80.71804500000007,
+              "p95": 80.71804500000007,
+              "p99": 80.71804500000007,
+              "max": 80.71804500000007
+            },
+            "store_queue_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "reduce_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "task_queue_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "task_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "published_to_applied_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "apply_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            }
+          }
+        },
+        "picker_path_a": {
+          "draw_ms": {
+            "count": 11,
+            "mean": 26.310228999999996,
+            "p50": 9.987467,
+            "p95": 68.17205899999999,
+            "p99": 68.17205899999999,
+            "max": 68.17205899999999
+          },
+          "frames": 11,
+          "inputs": {
+            "count": 9,
+            "expected_witnesses": 8,
+            "witnessed": 8,
+            "superseded": 0,
+            "superseded_task_ms": 0,
+            "superseded_tasks": 0,
+            "dispatch_delay_ms": {
+              "count": 9,
+              "mean": 0.14264588888909202,
+              "p50": 0.18746600000031322,
+              "p95": 0.25046500000007654,
+              "p99": 0.25046500000007654,
+              "max": 0.25046500000007654
+            },
+            "handler_ms": {
+              "count": 9,
+              "mean": 1.1123851111111112,
+              "p50": 0.09315,
+              "p95": 5.296268,
+              "p99": 5.296268,
+              "max": 5.296268
+            },
+            "input_to_witness_ms": {
+              "count": 8,
+              "mean": 1.7251060000004372,
+              "p50": 0.6425670000007813,
+              "p95": 5.567108000000189,
+              "p99": 5.567108000000189,
+              "max": 5.567108000000189
+            },
+            "input_to_draw_ms": {
+              "count": 8,
+              "mean": 37.10718637500054,
+              "p50": 13.735576000000037,
+              "p95": 68.85970500000076,
+              "p99": 68.85970500000076,
+              "max": 68.85970500000076
+            },
+            "input_to_submit_ms": {
+              "count": 8,
+              "mean": 40.22261175000051,
+              "p50": 21.186863000000812,
+              "p95": 70.86558400000013,
+              "p99": 70.86558400000013,
+              "max": 70.86558400000013
+            },
+            "store_queue_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "reduce_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "task_queue_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "task_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "published_to_applied_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "apply_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            }
+          }
+        },
+        "picker_path_o": {
+          "draw_ms": {
+            "count": 11,
+            "mean": 4.905189272727273,
+            "p50": 4.924408,
+            "p95": 5.748188000000001,
+            "p99": 5.748188000000001,
+            "max": 5.748188000000001
+          },
+          "frames": 11,
+          "inputs": {
+            "count": 9,
+            "expected_witnesses": 8,
+            "witnessed": 8,
+            "superseded": 0,
+            "superseded_task_ms": 0,
+            "superseded_tasks": 0,
+            "dispatch_delay_ms": {
+              "count": 9,
+              "mean": 0.16026244444502583,
+              "p50": 0.22443700000076205,
+              "p95": 0.2562610000004497,
+              "p99": 0.2562610000004497,
+              "max": 0.2562610000004497
+            },
+            "handler_ms": {
+              "count": 9,
+              "mean": 1.2435172222222222,
+              "p50": 0.15404,
+              "p95": 5.976678,
+              "p99": 5.976678,
+              "max": 5.976678
+            },
+            "input_to_witness_ms": {
+              "count": 8,
+              "mean": 1.9090246250004839,
+              "p50": 0.7344850000008591,
+              "p95": 6.269167999998899,
+              "p99": 6.269167999998899,
+              "max": 6.269167999998899
+            },
+            "input_to_draw_ms": {
+              "count": 8,
+              "mean": 6.709266750001234,
+              "p50": 5.763210000000981,
+              "p95": 10.488785999999891,
+              "p99": 10.488785999999891,
+              "max": 10.488785999999891
+            },
+            "input_to_submit_ms": {
+              "count": 8,
+              "mean": 9.520385000000488,
+              "p50": 7.605273000001034,
+              "p95": 16.768114999998943,
+              "p99": 16.768114999998943,
+              "max": 16.768114999998943
+            },
+            "store_queue_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "reduce_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "task_queue_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "task_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "published_to_applied_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "apply_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "variant": "unoptimised-fonts",
+      "repository": "Pro",
+      "binary_sha256": "137672eb9d1c7fbd394f91ae2e5ab85063ec111c07fae0e73cbcebbdbd41918d",
+      "repository_head": "aabd6dbac811c2515128d84c40ae4c05f3202993",
+      "valid": true,
+      "phases": {
+        "picker_open_a": {
+          "draw_ms": {
+            "count": 3,
+            "mean": 63.987853,
+            "p50": 16.003515,
+            "p95": 163.682378,
+            "p99": 163.682378,
+            "max": 163.682378
+          },
+          "frames": 3,
+          "inputs": {
+            "count": 1,
+            "expected_witnesses": 1,
+            "witnessed": 1,
+            "superseded": 0,
+            "superseded_task_ms": 0,
+            "superseded_tasks": 0,
+            "dispatch_delay_ms": {
+              "count": 1,
+              "mean": 0.02278999999998632,
+              "p50": 0.02278999999998632,
+              "p95": 0.02278999999998632,
+              "p99": 0.02278999999998632,
+              "max": 0.02278999999998632
+            },
+            "handler_ms": {
+              "count": 1,
+              "mean": 16.441725,
+              "p50": 16.441725,
+              "p95": 16.441725,
+              "p99": 16.441725,
+              "max": 16.441725
+            },
+            "input_to_witness_ms": {
+              "count": 1,
+              "mean": 17.901004000000285,
+              "p50": 17.901004000000285,
+              "p95": 17.901004000000285,
+              "p99": 17.901004000000285,
+              "max": 17.901004000000285
+            },
+            "input_to_draw_ms": {
+              "count": 1,
+              "mean": 181.68632199999956,
+              "p50": 181.68632199999956,
+              "p95": 181.68632199999956,
+              "p99": 181.68632199999956,
+              "max": 181.68632199999956
+            },
+            "input_to_submit_ms": {
+              "count": 1,
+              "mean": 185.39673100000073,
+              "p50": 185.39673100000073,
+              "p95": 185.39673100000073,
+              "p99": 185.39673100000073,
+              "max": 185.39673100000073
+            },
+            "store_queue_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "reduce_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "task_queue_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "task_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "published_to_applied_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "apply_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            }
+          }
+        },
+        "picker_path_a": {
+          "draw_ms": {
+            "count": 9,
+            "mean": 89.5150838888889,
+            "p50": 15.988275,
+            "p95": 202.343666,
+            "p99": 202.343666,
+            "max": 202.343666
+          },
+          "frames": 9,
+          "inputs": {
+            "count": 9,
+            "expected_witnesses": 8,
+            "witnessed": 8,
+            "superseded": 0,
+            "superseded_task_ms": 0,
+            "superseded_tasks": 0,
+            "dispatch_delay_ms": {
+              "count": 9,
+              "mean": 35.91334288888882,
+              "p50": 0.20607899999959045,
+              "p95": 151.49370999999974,
+              "p99": 151.49370999999974,
+              "max": 151.49370999999974
+            },
+            "handler_ms": {
+              "count": 9,
+              "mean": 42.36223988888889,
+              "p50": 0.13301,
+              "p95": 185.406021,
+              "p99": 185.406021,
+              "max": 185.406021
+            },
+            "input_to_witness_ms": {
+              "count": 8,
+              "mean": 88.36031687499997,
+              "p50": 4.16787899999963,
+              "p95": 334.14599199999975,
+              "p99": 334.14599199999975,
+              "max": 334.14599199999975
+            },
+            "input_to_draw_ms": {
+              "count": 8,
+              "mean": 188.06994150000003,
+              "p50": 19.213474000000133,
+              "p95": 511.33992599999965,
+              "p99": 511.33992599999965,
+              "max": 511.33992599999965
+            },
+            "input_to_submit_ms": {
+              "count": 8,
+              "mean": 259.3989677499999,
+              "p50": 30.34465100000034,
+              "p95": 674.1442749999997,
+              "p99": 674.1442749999997,
+              "max": 674.1442749999997
+            },
+            "store_queue_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "reduce_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "task_queue_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "task_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "published_to_applied_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "apply_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            }
+          }
+        },
+        "picker_path_o": {
+          "draw_ms": {
+            "count": 11,
+            "mean": 5.00978290909091,
+            "p50": 5.120368,
+            "p95": 5.874358,
+            "p99": 5.874358,
+            "max": 5.874358
+          },
+          "frames": 11,
+          "inputs": {
+            "count": 9,
+            "expected_witnesses": 8,
+            "witnessed": 8,
+            "superseded": 0,
+            "superseded_task_ms": 0,
+            "superseded_tasks": 0,
+            "dispatch_delay_ms": {
+              "count": 9,
+              "mean": 0.17868733333347742,
+              "p50": 0.20952800000122807,
+              "p95": 0.46196400000008,
+              "p99": 0.46196400000008,
+              "max": 0.46196400000008
+            },
+            "handler_ms": {
+              "count": 9,
+              "mean": 1.1482206666666666,
+              "p50": 0.14992,
+              "p95": 5.349468,
+              "p99": 5.349468,
+              "max": 5.349468
+            },
+            "input_to_witness_ms": {
+              "count": 8,
+              "mean": 1.8255988750004235,
+              "p50": 0.7503630000010162,
+              "p95": 5.625337999999829,
+              "p99": 5.625337999999829,
+              "max": 5.625337999999829
+            },
+            "input_to_draw_ms": {
+              "count": 8,
+              "mean": 6.784481125000184,
+              "p50": 6.271975999999995,
+              "p95": 9.538747000000512,
+              "p99": 9.538747000000512,
+              "max": 9.538747000000512
+            },
+            "input_to_submit_ms": {
+              "count": 8,
+              "mean": 9.030981624999868,
+              "p50": 8.097266000000673,
+              "p95": 15.373254999998608,
+              "p99": 15.373254999998608,
+              "max": 15.373254999998608
+            },
+            "store_queue_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "reduce_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "task_queue_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "task_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "published_to_applied_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "apply_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "variant": "optimised-fonts",
+      "repository": "Pro",
+      "binary_sha256": "fc4913d0bf7f0c24ff6600aa1ee2172e2eee570d9683a3c8d051e31689292365",
+      "repository_head": "aabd6dbac811c2515128d84c40ae4c05f3202993",
+      "valid": true,
+      "phases": {
+        "picker_open_a": {
+          "draw_ms": {
+            "count": 3,
+            "mean": 28.904697333333335,
+            "p50": 15.516795,
+            "p95": 63.34272000000001,
+            "p99": 63.34272000000001,
+            "max": 63.34272000000001
+          },
+          "frames": 3,
+          "inputs": {
+            "count": 1,
+            "expected_witnesses": 1,
+            "witnessed": 1,
+            "superseded": 0,
+            "superseded_task_ms": 0,
+            "superseded_tasks": 0,
+            "dispatch_delay_ms": {
+              "count": 1,
+              "mean": 0.02507000000014159,
+              "p50": 0.02507000000014159,
+              "p95": 0.02507000000014159,
+              "p99": 0.02507000000014159,
+              "max": 0.02507000000014159
+            },
+            "handler_ms": {
+              "count": 1,
+              "mean": 15.986205,
+              "p50": 15.986205,
+              "p95": 15.986205,
+              "p99": 15.986205,
+              "max": 15.986205
+            },
+            "input_to_witness_ms": {
+              "count": 1,
+              "mean": 17.52214499999991,
+              "p50": 17.52214499999991,
+              "p95": 17.52214499999991,
+              "p99": 17.52214499999991,
+              "max": 17.52214499999991
+            },
+            "input_to_draw_ms": {
+              "count": 1,
+              "mean": 80.97926499999994,
+              "p50": 80.97926499999994,
+              "p95": 80.97926499999994,
+              "p99": 80.97926499999994,
+              "max": 80.97926499999994
+            },
+            "input_to_submit_ms": {
+              "count": 1,
+              "mean": 84.11821400000008,
+              "p50": 84.11821400000008,
+              "p95": 84.11821400000008,
+              "p99": 84.11821400000008,
+              "max": 84.11821400000008
+            },
+            "store_queue_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "reduce_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "task_queue_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "task_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "published_to_applied_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "apply_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            }
+          }
+        },
+        "picker_path_a": {
+          "draw_ms": {
+            "count": 11,
+            "mean": 24.72489981818182,
+            "p50": 9.552897,
+            "p95": 62.997941000000004,
+            "p99": 62.997941000000004,
+            "max": 62.997941000000004
+          },
+          "frames": 11,
+          "inputs": {
+            "count": 9,
+            "expected_witnesses": 8,
+            "witnessed": 8,
+            "superseded": 0,
+            "superseded_task_ms": 0,
+            "superseded_tasks": 0,
+            "dispatch_delay_ms": {
+              "count": 9,
+              "mean": 0.18308300000020003,
+              "p50": 0.22139700000025186,
+              "p95": 0.4475030000003244,
+              "p99": 0.4475030000003244,
+              "max": 0.4475030000003244
+            },
+            "handler_ms": {
+              "count": 9,
+              "mean": 1.1844206666666668,
+              "p50": 0.12096,
+              "p95": 5.678808,
+              "p99": 5.678808,
+              "max": 5.678808
+            },
+            "input_to_witness_ms": {
+              "count": 8,
+              "mean": 1.8666152499999953,
+              "p50": 0.7492359999996552,
+              "p95": 5.961957999999868,
+              "p99": 5.961957999999868,
+              "max": 5.961957999999868
+            },
+            "input_to_draw_ms": {
+              "count": 8,
+              "mean": 34.387240250000104,
+              "p50": 13.155305999999655,
+              "p95": 63.809377000000495,
+              "p99": 63.809377000000495,
+              "max": 63.809377000000495
+            },
+            "input_to_submit_ms": {
+              "count": 8,
+              "mean": 37.234660749999875,
+              "p50": 20.816243999999642,
+              "p95": 65.67756699999973,
+              "p99": 65.67756699999973,
+              "max": 65.67756699999973
+            },
+            "store_queue_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "reduce_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "task_queue_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "task_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "published_to_applied_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "apply_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            }
+          }
+        },
+        "picker_path_o": {
+          "draw_ms": {
+            "count": 11,
+            "mean": 4.706405818181818,
+            "p50": 4.965259,
+            "p95": 5.3165189999999996,
+            "p99": 5.3165189999999996,
+            "max": 5.3165189999999996
+          },
+          "frames": 11,
+          "inputs": {
+            "count": 9,
+            "expected_witnesses": 8,
+            "witnessed": 8,
+            "superseded": 0,
+            "superseded_task_ms": 0,
+            "superseded_tasks": 0,
+            "dispatch_delay_ms": {
+              "count": 9,
+              "mean": 0.1598828888887106,
+              "p50": 0.1947120000004361,
+              "p95": 0.32680099999925005,
+              "p99": 0.32680099999925005,
+              "max": 0.32680099999925005
+            },
+            "handler_ms": {
+              "count": 9,
+              "mean": 1.131623,
+              "p50": 0.12209,
+              "p95": 5.378278,
+              "p99": 5.378278,
+              "max": 5.378278
+            },
+            "input_to_witness_ms": {
+              "count": 8,
+              "mean": 1.7767527499997868,
+              "p50": 0.720181999999113,
+              "p95": 5.652877999998964,
+              "p99": 5.652877999998964,
+              "max": 5.652877999998964
+            },
+            "input_to_draw_ms": {
+              "count": 8,
+              "mean": 6.429236374999846,
+              "p50": 5.728724999999031,
+              "p95": 9.549376999999367,
+              "p99": 9.549376999999367,
+              "max": 9.549376999999367
+            },
+            "input_to_submit_ms": {
+              "count": 8,
+              "mean": 8.707626750000372,
+              "p50": 7.210444999998799,
+              "p95": 16.05309500000112,
+              "p99": 16.05309500000112,
+              "max": 16.05309500000112
+            },
+            "store_queue_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "reduce_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "task_queue_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "task_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "published_to_applied_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            },
+            "apply_ms": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "max": null
+            }
+          }
+        }
+      }
+    }
+  ]
+}
