@@ -36,6 +36,10 @@ fn schedule_effect_with_state_for_test(
         msg_tx,
         effect,
     );
+    // Helper-owned workers must exit before the test can finish: detached
+    // workers can race process teardown on macOS.
+    repo_load_executor.join();
+    metadata_executor.join();
 }
 
 fn schedule_effect_for_test(
@@ -959,6 +963,9 @@ fn run_effect_with_fixture(
         msg_tx,
         effect,
     );
+    // The receiver is unbounded, so all replies can wait until task cleanup
+    // and worker teardown have finished.
+    executor.join();
     msg_rx
 }
 
