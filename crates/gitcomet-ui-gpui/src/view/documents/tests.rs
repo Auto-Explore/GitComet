@@ -1167,23 +1167,18 @@ fn document_picker_open(root: &Entity<GitCometView>, cx: &mut gpui::VisualTestCo
 fn status_bar_documents_button_opens_a_picker_that_opens_typed_paths(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
-    // This fixture opens a standalone file. Temporary directories can inherit
-    // a repository marker (including the sandbox's synthetic /tmp/.git).
-    // Reject those probes as non-repositories, as a real backend rejects the
-    // synthetic marker, instead of TestBackend's generic Unsupported error.
+    use gitcomet_core::error::{Error, ErrorKind};
+    use gitcomet_core::services::{GitBackend, GitRepository};
+
+    // This fixture opens standalone files regardless of ancestor .git entries.
     struct StandaloneBackend;
-    impl gitcomet_core::services::GitBackend for StandaloneBackend {
-        fn open(
-            &self,
-            _: &Path,
-        ) -> gitcomet_core::services::Result<Arc<dyn gitcomet_core::services::GitRepository>>
-        {
-            Err(gitcomet_core::error::Error::new(
-                gitcomet_core::error::ErrorKind::NotARepository,
-            ))
+    impl GitBackend for StandaloneBackend {
+        fn open(&self, _: &Path) -> gitcomet_core::services::Result<Arc<dyn GitRepository>> {
+            Err(Error::new(ErrorKind::NotARepository))
         }
     }
+
+    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(StandaloneBackend));
     let (root, cx) = cx.add_window_view(|window, cx| {
         // Text input only accepts typing in the active window.
@@ -1194,6 +1189,8 @@ fn status_bar_documents_button_opens_a_picker_that_opens_typed_paths(
     let directory = tempfile::tempdir().unwrap();
     let workdir =
         gitcomet_core::path_utils::canonicalize_or_original(directory.path().to_path_buf());
+    // Exercise discovery even when the machine's temporary folder has no .git.
+    std::fs::create_dir(workdir.join(".git")).unwrap();
     let path = workdir.join("notes.md");
     std::fs::write(&path, "# Notes").unwrap();
 
