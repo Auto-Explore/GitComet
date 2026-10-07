@@ -325,6 +325,7 @@ pub(in super::super) struct SidebarPaneView {
     sticky_context: Option<sticky::StickyContext>,
     sidebar_selection_cache: Option<sticky::SelectionCache>,
     pending_sidebar_navigation: Option<sticky::NavigationTarget>,
+    sidebar_scroll_animation: Option<sticky::ScrollAnimation>,
     expanded_branches_visible: bool,
     file_browser_scroll: UniformListScrollHandle,
     file_browser_search_input: Entity<TextInput>,
@@ -454,6 +455,11 @@ impl SidebarPaneView {
                 this.notify_fingerprint.active_repo_id != next_fingerprint.active_repo_id;
 
             this.notify_fingerprint = next_fingerprint;
+            if this.state.sidebar_mode != next.sidebar_mode {
+                this.sidebar_scroll_animation = None;
+                this.pending_sidebar_navigation = None;
+            }
+            this.sync_shared_sidebar_preferences(&next, cx);
             this.state = next;
             if this
                 .explorer_pending_focus
@@ -478,6 +484,7 @@ impl SidebarPaneView {
             if repo_changed {
                 this.sticky_context = None;
                 this.pending_sidebar_navigation = None;
+                this.sidebar_scroll_animation = None;
                 this.branches_scroll
                     .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
                 this.inactive_branches_scroll
@@ -544,6 +551,7 @@ impl SidebarPaneView {
                 if this.branch_filter_query != text {
                     this.sticky_context = None;
                     this.pending_sidebar_navigation = None;
+                    this.sidebar_scroll_animation = None;
                     this.branch_filter_query = text;
                     this.branches_scroll
                         .scroll_to_item(0, gpui::ScrollStrategy::Top);
@@ -586,6 +594,7 @@ impl SidebarPaneView {
             sticky_context: None,
             sidebar_selection_cache: None,
             pending_sidebar_navigation: None,
+            sidebar_scroll_animation: None,
             expanded_branches_visible: false,
             file_browser_scroll: UniformListScrollHandle::default(),
             file_browser_search_input,
@@ -621,6 +630,10 @@ impl SidebarPaneView {
             #[cfg(any(test, feature = "benchmarks"))]
             rendered_rows: 0,
         };
+        let initial_state = Arc::clone(&this.state);
+        this.state = Arc::new(AppState::default());
+        this.sync_shared_sidebar_preferences(&initial_state, cx);
+        this.state = initial_state;
         this.dispatch_sidebar_data_request_if_needed(cx);
         // Reflect any already-active repo's stored search query on first mount.
         this.sync_search_input_with_state(cx);
@@ -650,6 +663,7 @@ impl SidebarPaneView {
                 &mut self.inactive_branches_scroll,
             );
         }
+        self.sidebar_scroll_animation = None;
         self.collapsed_popover_section = section;
         self.sticky_context = None;
         if section.is_some() {
@@ -811,26 +825,72 @@ impl SidebarPaneView {
         self.sidebar_presentation_cache = SidebarPresentationCache::default();
     }
 
-    pub(in super::super) fn saved_sidebar_collapsed_items(
-        &self,
-    ) -> BTreeMap<std::path::PathBuf, BTreeSet<String>> {
-        self.sidebar_collapsed_items_by_repo
-            .iter()
-            .filter(|&(_repo, items)| !items.is_empty())
-            .map(|(repo, items)| {
-                (
-                    repo.clone(),
-                    items
-                        .iter()
-                        .filter(|key| !branch_sidebar::is_top_level_collapse_key(key))
-                        .cloned()
-                        .collect::<BTreeSet<_>>(),
-                )
-            })
-            .filter(|(_, items)| !items.is_empty())
-            .collect()
+    fn sync_shared_sidebar_preferences(&mut self, next: &AppState, cx: &mut gpui::Context<Self>) {
+        let mut changed = false;
+        for repo in &next.repos {
+            let Some(snapshot) = &repo.shared_preferences else {
+                continue;
+            };
+            if self
+                .state
+                .repos
+                .iter()
+                .find(|old| old.id == repo.id)
+                .and_then(|old| old.shared_preferences.as_ref())
+                .is_some_and(|old| old.revision == snapshot.revision && old.key == snapshot.key)
+            {
+                continue;
+            }
+            let path = repo.spec.workdir.clone();
+            self.sidebar_pinned_branches_by_repo
+                .insert(path.clone(), snapshot.preferences.pinned_items.clone());
+            let items = self
+                .sidebar_collapsed_items_by_repo
+                .entry(path)
+                .or_default();
+            items.retain(|key| branch_sidebar::is_top_level_collapse_key(key));
+            items.extend(snapshot.preferences.collapsed_items.iter().cloned());
+            changed = true;
+        }
+        if changed {
+            self.sidebar_presentation_cache = SidebarPresentationCache::default();
+            self.sync_popover_pinned_branches(cx);
+            self.sync_popover_collapsed_items(cx);
+        }
     }
 
+    fn publish_sidebar_collapse_changes(&self, repo_id: RepoId, before: &BTreeSet<String>) {
+        let Some(repo) = self.state.repos.iter().find(|repo| repo.id == repo_id) else {
+            return;
+        };
+        let after = self
+            .sidebar_collapsed_items_by_repo
+            .get(&repo.spec.workdir)
+            .cloned()
+            .unwrap_or_default();
+        let persistent = |key: &&String| !branch_sidebar::is_top_level_collapse_key(key);
+        let added = after
+            .difference(before)
+            .filter(persistent)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let removed = before
+            .difference(&after)
+            .filter(persistent)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if !added.is_empty() || !removed.is_empty() {
+            self.store.dispatch(Msg::UpdateRepositoryPreference {
+                repo_id,
+                update: gitcomet_state::model::RepositoryPreferenceUpdate::CollapseItems {
+                    added,
+                    removed,
+                },
+            });
+        }
+    }
+
+    #[cfg(test)]
     pub(in super::super) fn saved_sidebar_pinned_branches(
         &self,
     ) -> BTreeMap<std::path::PathBuf, BTreeSet<String>> {
@@ -878,7 +938,14 @@ impl SidebarPaneView {
         }
 
         self.sidebar_presentation_cache = SidebarPresentationCache::default();
-        self.schedule_ui_settings_persist(cx);
+        let pinned = self
+            .sidebar_pinned_branches_by_repo
+            .get(&repo_path)
+            .is_some_and(|items| items.contains(&key));
+        self.store.dispatch(Msg::UpdateRepositoryPreference {
+            repo_id,
+            update: gitcomet_state::model::RepositoryPreferenceUpdate::Pin { key, pinned },
+        });
         self.sync_popover_pinned_branches(cx);
         cx.notify();
     }
@@ -916,7 +983,7 @@ impl SidebarPaneView {
             return;
         };
 
-        let before = items.len();
+        let before = items.clone();
         for row in branch_sidebar::matching_pinned_roots(
             repo,
             items,
@@ -928,15 +995,19 @@ impl SidebarPaneView {
                 items.remove(&key);
             }
         }
-        if items.len() == before {
+        if *items == before {
             return;
         }
+        let removed = before.difference(items).cloned().collect();
         if items.is_empty() {
             self.sidebar_pinned_branches_by_repo.remove(&repo_path);
         }
 
         self.sidebar_presentation_cache = SidebarPresentationCache::default();
-        self.schedule_ui_settings_persist(cx);
+        self.store.dispatch(Msg::UpdateRepositoryPreference {
+            repo_id,
+            update: gitcomet_state::model::RepositoryPreferenceUpdate::RemovePins(removed),
+        });
         self.sync_popover_pinned_branches(cx);
         cx.notify();
     }
@@ -991,12 +1062,6 @@ impl SidebarPaneView {
         });
     }
 
-    fn schedule_ui_settings_persist(&mut self, cx: &mut gpui::Context<Self>) {
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.schedule_ui_settings_persist(cx);
-        });
-    }
-
     pub(in super::super) fn toggle_active_repo_collapse_key(
         &mut self,
         collapse_key: SharedString,
@@ -1041,6 +1106,11 @@ impl SidebarPaneView {
             return;
         }
 
+        let before = self
+            .sidebar_collapsed_items_by_repo
+            .get(&repo_path)
+            .cloned()
+            .unwrap_or_default();
         let items = self
             .sidebar_collapsed_items_by_repo
             .entry(repo_path.clone())
@@ -1062,8 +1132,9 @@ impl SidebarPaneView {
         // restore a content anchor. GPUI still clamps a shortened list.
         self.sticky_context = None;
         self.pending_sidebar_navigation = None;
+        self.sidebar_scroll_animation = None;
         self.branches_scroll.0.borrow_mut().deferred_scroll_to_item = None;
-        self.schedule_ui_settings_persist(cx);
+        self.publish_sidebar_collapse_changes(repo_id, &before);
         self.sync_popover_collapsed_items(cx);
         if should_load_submodules_on_expand && expanded_now {
             self.store.dispatch(Msg::LoadSubmodules { repo_id });
@@ -1123,6 +1194,12 @@ impl SidebarPaneView {
         };
 
         let repo_path = repo.spec.workdir.clone();
+        let repo_id = repo.id;
+        let before = self
+            .sidebar_collapsed_items_by_repo
+            .get(&repo_path)
+            .cloned()
+            .unwrap_or_default();
         let items = self
             .sidebar_collapsed_items_by_repo
             .entry(repo_path.clone())
@@ -1148,8 +1225,9 @@ impl SidebarPaneView {
         self.sidebar_presentation_cache = SidebarPresentationCache::default();
         self.sticky_context = None;
         self.pending_sidebar_navigation = None;
+        self.sidebar_scroll_animation = None;
         self.branches_scroll.0.borrow_mut().deferred_scroll_to_item = None;
-        self.schedule_ui_settings_persist(cx);
+        self.publish_sidebar_collapse_changes(repo_id, &before);
         self.sync_popover_collapsed_items(cx);
         self.dispatch_sidebar_data_request_if_needed(cx);
         cx.notify();
@@ -1161,6 +1239,10 @@ impl SidebarPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         self.expanded_branches_visible = visible;
+        if !visible {
+            self.sidebar_scroll_animation = None;
+            self.pending_sidebar_navigation = None;
+        }
         self.dispatch_sidebar_data_request_if_needed(cx);
     }
 
@@ -1620,6 +1702,11 @@ impl SidebarPaneView {
             self.clear_branch_filter(cx);
         }
 
+        let before = self
+            .sidebar_collapsed_items_by_repo
+            .get(&repo_path)
+            .cloned()
+            .unwrap_or_default();
         let collapse_changed = {
             let collapsed_items = self
                 .sidebar_collapsed_items_by_repo
@@ -1637,7 +1724,7 @@ impl SidebarPaneView {
 
         self.sidebar_presentation_cache = SidebarPresentationCache::default();
         if collapse_changed {
-            self.schedule_ui_settings_persist(cx);
+            self.publish_sidebar_collapse_changes(repo_id, &before);
             self.sync_popover_collapsed_items(cx);
             self.dispatch_sidebar_data_request_if_needed(cx);
         }
@@ -1797,6 +1884,7 @@ impl SidebarPaneView {
         });
         self.sticky_context = None;
         self.pending_sidebar_navigation = None;
+        self.sidebar_scroll_animation = None;
         self.branch_filter_query.clear();
         self.sync_popover_branch_filter(cx);
         cx.notify();
@@ -1855,7 +1943,7 @@ impl SidebarPaneView {
                         // measures and renders the first row of this frame.
                         let row_height = window.pixel_snap(row_height);
                         view.update(cx, |this, cx| {
-                            this.prepare_sidebar_scroll(bounds, row_height, cx)
+                            this.prepare_sidebar_scroll(bounds, row_height, window, cx)
                         });
                     },
                     |_, _, _, _| {},
@@ -1874,6 +1962,23 @@ impl SidebarPaneView {
         let panel_body: AnyElement = div()
             .id("branch_sidebar_scroll_container")
             .debug_selector(|| "branch_sidebar_scroll_container".to_string())
+            .on_scroll_wheel(cx.listener(|this, _: &gpui::ScrollWheelEvent, _, cx| {
+                if this.sidebar_scroll_animation.take().is_some() {
+                    cx.notify();
+                }
+            }))
+            .on_mouse_down_all({
+                let view = cx.entity();
+                move |event, phase, hitbox, _, cx| {
+                    if phase == gpui::DispatchPhase::Capture
+                        && hitbox.bounds.contains(&event.position)
+                    {
+                        view.update(cx, |this, _| {
+                            this.sidebar_scroll_animation = None;
+                        });
+                    }
+                }
+            })
             .min_h(px(0.0))
             .relative()
             .flex()
@@ -3870,3 +3975,6 @@ mod explorer_drag_tests;
 
 #[cfg(test)]
 mod explorer_settings_tests;
+
+#[cfg(test)]
+mod repository_preferences_tests;

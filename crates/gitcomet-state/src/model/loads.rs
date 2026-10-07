@@ -138,6 +138,15 @@ impl RepoLoadsInFlight {
         self.line_stats_requested = true;
     }
 
+    /// Retire an obsolete walk without requesting a replacement for an
+    /// inactive tab. Its late replies must not refill the old history page.
+    pub(crate) fn invalidate_log(&mut self) {
+        self.in_flight &= !Self::LOG;
+        self.pending &= !Self::LOG;
+        self.pending_log = None;
+        self.active_log = None;
+    }
+
     /// Called only after both status lanes, including their replays, settle.
     pub(crate) fn start_line_stats(&mut self, status_ready: bool) -> Option<LineStatsGeneration> {
         if self.is_in_flight(Self::WORKTREE_STATUS | Self::STAGED_STATUS)

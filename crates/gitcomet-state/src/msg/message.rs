@@ -251,10 +251,11 @@ pub enum Msg {
         repo_id: RepoId,
         visible: Vec<PathBuf>,
     },
+    /// Only supplied flags change; omitted flags retain their current values.
     SetExplorerVisibility {
         repo_id: RepoId,
-        hidden: bool,
-        ignored: bool,
+        hidden: Option<bool>,
+        ignored: Option<bool>,
     },
     IndexedHistory(crate::indexed_history::IndexedHistoryMsg),
     DiffSession(crate::diff_session::DiffSessionMsg),
@@ -371,6 +372,11 @@ pub enum Msg {
         repo_id: RepoId,
         reason: RepoWatchDegradedReason,
     },
+    UpdateRepositoryPreference {
+        repo_id: RepoId,
+        update: crate::model::RepositoryPreferenceUpdate,
+    },
+    ApplyRepositoryPreferences(crate::model::RepositoryPreferencesSnapshot),
     SetHistoryScope {
         repo_id: RepoId,
         scope: LogScope,
@@ -1299,6 +1305,7 @@ pub enum InternalMsg {
         message: Box<InternalMsg>,
     },
     RepoOpenedOk {
+        preferences: Option<crate::model::RepositoryPreferencesSnapshot>,
         repo_id: RepoId,
         spec: RepoSpec,
         repo: Arc<dyn GitRepository>,

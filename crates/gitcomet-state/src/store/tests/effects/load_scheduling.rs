@@ -1166,10 +1166,15 @@ fn open_repo_effect_emits_repo_opened_ok() {
         .expect("expected RepoOpenedOk");
     match msg {
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            preferences: Some(preferences),
             repo_id: got_repo_id,
             spec,
             repo,
         }) => {
+            assert_eq!(
+                preferences.key,
+                crate::model::RepositoryKey::Worktree(workdir.clone())
+            );
             assert_eq!(got_repo_id, repo_id);
             assert_eq!(spec.workdir, workdir);
             assert_eq!(repo.spec().workdir, workdir);

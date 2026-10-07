@@ -69,6 +69,11 @@ pub enum Effect {
     DiffSession(crate::diff_session::DiffSessionEffect),
     HistoryAuthors(crate::history_authors::HistoryAuthorsEffect),
     HistoryFind(crate::history_find::HistoryFindEffect),
+    UpdateRepositoryPreferences {
+        repo_id: RepoId,
+        key: crate::model::RepositoryKey,
+        update: crate::model::RepositoryPreferenceUpdate,
+    },
     PersistSession {
         repo_id: Option<RepoId>,
         action: &'static str,
