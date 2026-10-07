@@ -1,6 +1,8 @@
 //! Generic components built on the kit's interaction primitives.
 
+mod action_button;
 mod avatar;
+mod bottom_bar;
 mod button;
 mod containers;
 mod context_menu;
@@ -16,6 +18,7 @@ mod picker_prompt;
 mod quick_search_bar;
 mod repository_badge;
 mod resize_grip;
+mod segmented_control;
 mod settings_rows;
 mod shortcut_keys;
 mod skeleton;
@@ -31,10 +34,12 @@ pub use crate::interaction::{
     ControlActivation, ControlInteractionExt, InteractionState, InteractionStyle,
     control_open_background,
 };
+pub use action_button::{ActionAvailability, ActionButton, ActionButtonStyle, ActionRun};
 pub use avatar::{
     AVATAR_DIAMETER_PX, AVATAR_FONT_PX, author_avatar, author_color, author_initials,
     initials_paint_origin_y,
 };
+pub use bottom_bar::{BarButton, bottom_bar, nav_arrow_button};
 pub use button::{Button, ButtonStyle, inline_icon_button};
 pub use containers::{
     ScrollContainer, content_header_bar, empty_state, empty_state_message, progress_bar,
@@ -54,7 +59,7 @@ pub use interstitial::{INTERSTITIAL_CARD_MAX_WIDTH_PX, interstitial, interstitia
 pub use list_layout::{ListLayout, list_layout_button};
 pub use modal::{modal_scrim, modal_surface, popover_surface};
 pub use navigation::{
-    NavTab, navigation_tab, navigation_tab_metrics, navigation_tab_strip, selectable_field,
+    BarTab, NavTab, navigation_tab, navigation_tab_metrics, navigation_tab_strip, selectable_field,
 };
 pub use painted_when::{PaintedWhen, painted_when};
 pub use panel_tab::{on_nested_control_click, panel_tab, panel_tab_close, panel_tab_text_color};
@@ -76,6 +81,7 @@ pub use repository_badge::{
     REPOSITORY_BADGE_SIZE_PX, repository_initials, repository_initials_box,
 };
 pub use resize_grip::{ResizeGripAxis, resize_grip, resize_grip_hover_tint};
+pub use segmented_control::{Segment, SegmentedControl};
 pub use settings_rows::{
     SETTINGS_NAV_COLUMN_WIDTH_PX, settings_card, settings_card_with_action,
     settings_detail_container, settings_dropdown_background, settings_dropdown_border_color,
@@ -83,9 +89,11 @@ pub use settings_rows::{
     settings_row_separator_color, settings_subsection_heading, settings_summary_row,
     settings_summary_row_with_value_prefix, settings_toggle_row,
 };
-pub use shortcut_keys::shortcut_keys;
+pub use shortcut_keys::{
+    keystrokes_display, keystrokes_label_for, shortcut_keys, shortcut_keys_compact,
+};
 pub use skeleton::skeleton;
-pub use split_button::{SplitButton, SplitButtonStyle};
+pub use split_button::{SplitButton, SplitButtonStyle, filled_action_frame};
 pub use tab::Tab;
 pub use tab_bar::{TabBar, TabBarScroll};
 pub use text_fade::{FadingText, trailing_fade};

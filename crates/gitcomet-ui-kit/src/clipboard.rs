@@ -60,7 +60,7 @@ enum ClipboardBackend {
     X11,
 }
 
-pub fn write_text<T: 'static>(cx: &mut gpui::Context<T>, text: String, source: CopySource) {
+pub fn write_text(cx: &mut gpui::App, text: String, source: CopySource) {
     FILE_CLIPBOARD.with(|owned| owned.borrow_mut().take());
     bump_files_revision();
     let backend = clipboard_backend();
