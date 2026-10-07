@@ -1,5 +1,6 @@
 use super::*;
 use crate::kit::drag_autoscroll::{DRAG_AUTOSCROLL_TICK, drag_autoscroll_step};
+use gitcomet_ui_kit::text_layout::TextLayoutExt as _;
 
 #[cfg(test)]
 thread_local! {
@@ -142,6 +143,7 @@ impl MainPaneView {
             .diff_text_hitboxes
             .entry((visible_ix, region))
             .or_insert_with(|| DiffTextHitbox {
+                atomic: false,
                 bounds: cell.bounds,
                 layout_key: 0,
                 source_visible_ix: cell.source_visible_ix,
@@ -305,15 +307,32 @@ impl MainPaneView {
             let cell = Self::diff_text_cell_for_position(hitbox, position)?;
             return self.diff_text_hit_in_hitbox(cell, region, position);
         }
+        if hitbox.atomic {
+            let after = position.y > hitbox.bounds.bottom()
+                || (position.y >= hitbox.bounds.top() && position.x >= hitbox.bounds.center().x);
+            return Some(DiffTextHit {
+                pos: DiffTextPos {
+                    source_visible_ix: hitbox.source_visible_ix,
+                    region,
+                    offset: hitbox.text_start_offset + if after { hitbox.text_len } else { 0 },
+                },
+                past_painted_text: true,
+            });
+        }
         if let Some(wrapped) = &hitbox.wrapped {
             // A wrapped row spans several visual lines, so the click resolves
             // against the layout it was painted with; `Err` is the clamp to the
             // nearest boundary, which is what a drag past the text wants.
-            let (painted_offset, past_painted_text) =
+            let (painted_offset, past_painted_text) = if position.y < hitbox.bounds.top() {
+                (0, true)
+            } else if position.y > hitbox.bounds.bottom() {
+                (wrapped.layout.len(), true)
+            } else {
                 match wrapped.layout.index_for_position(position) {
                     Ok(offset) => (offset, false),
                     Err(offset) => (offset, true),
-                };
+                }
+            };
             return Some(DiffTextHit {
                 pos: DiffTextPos {
                     source_visible_ix: hitbox.source_visible_ix,
@@ -389,6 +408,9 @@ impl MainPaneView {
             })?;
             return self.diff_text_bounds_in_hitbox(cell, range, near);
         }
+        if hitbox.atomic {
+            return Some(hitbox.bounds);
+        }
         let local = |offset: usize| {
             offset
                 .saturating_sub(hitbox.text_start_offset)
@@ -402,7 +424,6 @@ impl MainPaneView {
             // range that starts a line would otherwise begin on the previous one.
             let rects = rows::markdown_flow_range_rects(
                 &wrapped.layout,
-                wrapped.layout.text_align(),
                 wrapped.painted_offset(start),
                 wrapped.painted_offset(end),
             );

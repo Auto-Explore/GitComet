@@ -18,6 +18,12 @@ pub enum FileListSort {
     FileTypeDescending,
     EditSizeAscending,
     EditSizeDescending,
+    /// Files changed the same way next to each other: the largest set of
+    /// files whose removed and added lines match (each line trimmed) first,
+    /// then files whose edit no other file shares, then files with no line
+    /// diff (binary, too large, or a source that reports none). Path order
+    /// applies within each.
+    Edits,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

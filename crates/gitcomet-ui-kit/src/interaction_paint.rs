@@ -41,13 +41,77 @@ impl InteractionPaint {
     }
 
     pub fn apply(&self, control: Stateful<Div>) -> Stateful<Div> {
+        // The tracker positions itself over the control: a wrapping div would
+        // add a layout node and a `Div` to every row of every list.
         self.style
             .clone()
             .apply(control, self.state)
             .relative()
-            .child(div().absolute().inset_0().child(Tracker {
+            .child(Tracker {
                 paint: self.clone(),
-            }))
+            })
+    }
+    /// Apply ordinary control feedback when an existing canvas tracks pointers.
+    pub fn apply_with_canvas(&self, control: Stateful<Div>) -> Stateful<Div> {
+        self.style.clone().apply(control, self.state)
+    }
+
+    /// Reuse the canvas's single hitbox and stable element state.
+    pub fn prepaint_canvas(
+        &self,
+        id: &GlobalElementId,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+    ) -> Hitbox {
+        let pressed = window.with_element_state(id, |pressed: Option<Rc<Cell<bool>>>, _| {
+            let pressed = pressed.unwrap_or_default();
+            (pressed.clone(), pressed)
+        });
+        let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+        *self.pointer.borrow_mut() = Some(PointerState {
+            hitbox: hitbox.clone(),
+            pressed: pressed.clone(),
+        });
+        hitbox
+    }
+
+    pub fn canvas_hitbox(&self) -> Option<Hitbox> {
+        self.pointer
+            .borrow()
+            .as_ref()
+            .map(|pointer| pointer.hitbox.clone())
+    }
+
+    /// Install pointer tracking in the canvas's paint phase, including frames
+    /// subsequently replayed by GPUI's production view cache.
+    pub fn paint_canvas(&self, window: &mut Window) {
+        let pointer = self.pointer.borrow();
+        let Some(pointer) = pointer.as_ref() else {
+            return;
+        };
+        let hitbox = pointer.hitbox.clone();
+        let pressed = pointer.pressed.clone();
+        let pressed_on_down = pressed.clone();
+        window.on_mouse_event(move |_: &MouseDownEvent, phase, window, _| {
+            if phase == DispatchPhase::Bubble
+                && !window.default_prevented()
+                && hitbox.is_hovered(window)
+            {
+                pressed_on_down.set(true);
+                window.refresh();
+            }
+        });
+        let pressed_on_up = pressed.clone();
+        window.on_mouse_event(move |_: &MouseUpEvent, phase, window, _| {
+            if phase == DispatchPhase::Capture && pressed_on_up.replace(false) {
+                window.refresh();
+            }
+        });
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, _| {
+            if phase == DispatchPhase::Capture && !event.dragging() && pressed.replace(false) {
+                window.refresh();
+            }
+        });
     }
 }
 
@@ -81,7 +145,7 @@ impl Element for Tracker {
         cx: &mut App,
     ) -> (LayoutId, ()) {
         let mut style = Style::default();
-        style.refine(&StyleRefinement::default().size_full());
+        style.refine(&StyleRefinement::default().absolute().inset_0().size_full());
         (window.request_layout(style, [], cx), ())
     }
 
@@ -94,18 +158,17 @@ impl Element for Tracker {
         window: &mut Window,
         _: &mut App,
     ) -> Self::PrepaintState {
-        let pressed = window.with_element_state(
-            id.expect("paint tracker has an id"),
-            |pressed: Option<Rc<Cell<bool>>>, _| {
-                let pressed = pressed.unwrap_or_default();
-                (pressed.clone(), pressed)
-            },
-        );
-        let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
-        *self.paint.pointer.borrow_mut() = Some(PointerState {
-            hitbox: hitbox.clone(),
-            pressed: pressed.clone(),
-        });
+        let hitbox =
+            self.paint
+                .prepaint_canvas(id.expect("paint tracker has an id"), bounds, window);
+        let pressed = self
+            .paint
+            .pointer
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .pressed
+            .clone();
         (hitbox, pressed)
     }
 
@@ -119,27 +182,7 @@ impl Element for Tracker {
         window: &mut Window,
         _: &mut App,
     ) {
-        let (hitbox, pressed) = pointer.clone();
-        let pressed_on_down = pressed.clone();
-        window.on_mouse_event(move |_: &MouseDownEvent, phase, window, _| {
-            if phase == DispatchPhase::Bubble
-                && !window.default_prevented()
-                && hitbox.is_hovered(window)
-            {
-                pressed_on_down.set(true);
-                window.refresh();
-            }
-        });
-        let pressed_on_up = pressed.clone();
-        window.on_mouse_event(move |_: &MouseUpEvent, phase, window, _| {
-            if phase == DispatchPhase::Capture && pressed_on_up.replace(false) {
-                window.refresh();
-            }
-        });
-        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, _| {
-            if phase == DispatchPhase::Capture && !event.dragging() && pressed.replace(false) {
-                window.refresh();
-            }
-        });
+        let _ = pointer;
+        self.paint.paint_canvas(window);
     }
 }

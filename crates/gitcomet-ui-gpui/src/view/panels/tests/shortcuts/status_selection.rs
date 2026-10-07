@@ -364,10 +364,7 @@ fn status_select_all_range_tracks_line_stats_and_refresh_prunes_only_missing_fil
                 .map(|(path, additions)| {
                     (
                         path.into(),
-                        gitcomet_core::domain::LineStats {
-                            additions: Some(additions),
-                            deletions: Some(0),
-                        },
+                        gitcomet_core::domain::LineStats::from((Some(additions), Some(0))),
                     )
                 })
                 .collect(),

@@ -506,10 +506,9 @@ mod tests {
         let destination = root.join("destination");
         fs::create_dir_all(destination.join("child")).unwrap();
         let link = root.join("link");
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(destination.join("child"), &link).unwrap();
-        #[cfg(windows)]
-        std::os::windows::fs::symlink_dir(destination.join("child"), &link).unwrap();
+        if !gitcomet_core::test_support::symlink::directory(destination.join("child"), &link) {
+            return;
+        }
         let direct = root.join("ignore");
         let mut links = Vec::new();
         let mut incomplete = false;

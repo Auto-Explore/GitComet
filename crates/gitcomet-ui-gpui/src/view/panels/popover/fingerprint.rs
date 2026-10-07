@@ -59,6 +59,7 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
         PopoverKind::DiffContentModeSettings
         | PopoverKind::TextFormatMenu { .. }
         | PopoverKind::CommitFileSortMenu { .. }
+        | PopoverKind::FileListLayoutMenu { .. }
         | PopoverKind::WebLinkMenu { .. }
         | PopoverKind::LocalFileLinkMenu { .. }
         | PopoverKind::CommitShaLinkMenu { .. }
@@ -218,6 +219,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::DiscardChangesConfirm { repo_id, .. }
         | PopoverKind::DiscardFolderChangesConfirm { repo_id, .. }
         | PopoverKind::FileListFolderMenu { repo_id, .. }
+        | PopoverKind::FileListLayoutMenu { repo_id, .. }
         | PopoverKind::AddToGitignorePrompt { repo_id, .. }
         | PopoverKind::StageConflictMarkersConfirm { repo_id, .. }
         | PopoverKind::PullReconcilePrompt { repo_id }
@@ -236,6 +238,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::SidebarAncestorMenu { repo_id, .. }
         | PopoverKind::DeleteBranchesConfirm { repo_id, .. }
         | PopoverKind::CommitFileMenu { repo_id, .. }
+        | PopoverKind::WorktreeFileMenu { repo_id, .. }
         | PopoverKind::CommitRangeFileMenu { repo_id, .. }
         | PopoverKind::FileBrowserFileMenu { repo_id, .. }
         | PopoverKind::FileBrowserFolderMenu { repo_id, .. }
@@ -505,6 +508,11 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         PopoverKind::CommitFileMenu { .. } => {
             repo.history_rewrite_busy().hash(hasher);
         }
+        // Foreign-file actions follow the selected checkout and scan membership.
+        PopoverKind::WorktreeFileMenu { .. } => {
+            repo.worktree_dirty_rev.hash(hasher);
+            repo.history_state.worktree_selection_rev.hash(hasher);
+        }
         // The submodule flag of a row comes from the loaded file list.
         PopoverKind::CommitRangeFileMenu { .. } => {
             repo.history_state.range_files_rev.hash(hasher);
@@ -538,6 +546,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::TextFormatMenu { .. }
         | PopoverKind::CommitFileSortMenu { .. }
+        | PopoverKind::FileListLayoutMenu { .. }
         | PopoverKind::WebLinkMenu { .. }
         | PopoverKind::LocalFileLinkMenu { .. }
         | PopoverKind::CommitShaLinkMenu { .. }
@@ -663,6 +672,11 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         }
         PopoverKind::CommitFileSortMenu { list } => {
             104u8.hash(hasher);
+            list.hash(hasher);
+        }
+        PopoverKind::FileListLayoutMenu { repo_id, list } => {
+            123u8.hash(hasher);
+            repo_id.hash(hasher);
             list.hash(hasher);
         }
         PopoverKind::WebLinkMenu {
@@ -1029,6 +1043,16 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             repo_id.hash(hasher);
             commit_id.hash(hasher);
             path.hash(hasher);
+        }
+        PopoverKind::WorktreeFileMenu {
+            repo_id,
+            worktree_path,
+            target,
+        } => {
+            std::mem::discriminant(kind).hash(hasher);
+            repo_id.hash(hasher);
+            worktree_path.hash(hasher);
+            view_fingerprint::hash_diff_target(target, hasher);
         }
         PopoverKind::CommitRangeFileMenu {
             repo_id,

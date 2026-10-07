@@ -506,7 +506,9 @@ impl DiffPane {
     }
 }
 
-/// How a file list arranges its files.
+/// How a file list arranges its files. A new list starts in the layout the
+/// user set as the default for changed-file lists, not in this type's
+/// `Default`; [`FileList::set_mode`] overrides it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum FileListMode {
@@ -547,10 +549,20 @@ pub trait FileListImpl {
 
 /// An owning handle to a hosted file list with its own filter, sort,
 /// collapse, selection, and scroll.
+///
+/// Its top row carries the filter chips and the two controls every
+/// changed-file list has: a layout icon in the current layout's shape (a
+/// click steps to the next layout, a right click offers them all) and a sort
+/// menu. The list starts from the user's default layout and sort;
+/// [`Self::set_mode`] and [`Self::set_sort`] override those, and what the
+/// user picks in the controls holds for the life of the list.
 #[derive(Clone)]
 pub struct FileList(Rc<dyn FileListImpl>);
 
 impl FileList {
+    /// Orders the files. A worktree source's line counts and edits come from
+    /// the status lane it lists, so the edit-size and
+    /// [`Edits`](crate::FileListSort::Edits) sorts work there too.
     pub fn set_sort(&self, sort: crate::FileListSort, cx: &mut App) {
         self.0.set_sort(sort, cx)
     }
@@ -590,6 +602,7 @@ impl FileList {
         self.0.set_source(source, cx)
     }
 
+    /// Arranges the files, in place of the user's default layout.
     pub fn set_mode(&self, mode: FileListMode, cx: &mut App) {
         self.0.set_mode(mode, cx)
     }

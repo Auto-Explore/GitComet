@@ -290,6 +290,11 @@ pub(crate) enum PopoverKind {
     CommitFileSortMenu {
         list: crate::view::rows::FileListId,
     },
+    /// Right-click menu of a changed-file list's layout icon.
+    FileListLayoutMenu {
+        repo_id: RepoId,
+        list: crate::view::rows::FileListId,
+    },
     /// Right-click menu of a folder row in a file list's tree view.
     FileListFolderMenu {
         repo_id: RepoId,
@@ -473,6 +478,11 @@ pub(crate) enum PopoverKind {
         repo_id: RepoId,
         commit_id: CommitId,
         path: std::path::PathBuf,
+    },
+    WorktreeFileMenu {
+        repo_id: RepoId,
+        worktree_path: std::path::PathBuf,
+        target: DiffTarget,
     },
     /// A file row of the comparison view; `to_commit_id` is `None` when the
     /// comparison runs to the working tree.
@@ -992,6 +1002,8 @@ pub(crate) struct TerminalViewportView {
     pub(crate) cursor_blink_active: bool,
     pub(crate) cursor_blink_task_scheduled: bool,
     pub(crate) cursor_blink_seq: u64,
+    /// Blinks since the last keystroke, click or focus.
+    pub(crate) cursor_idle_blinks: u32,
     pub(crate) content_epoch: u64,
     pub(crate) last_content: Option<super::terminal_alacritty::TerminalContent>,
     pub(crate) viewport_bounds: Option<Bounds<Pixels>>,
@@ -1440,56 +1452,10 @@ impl ThemeMode {
     }
 }
 
-/// Whether a changed-file list groups by directory. The global default is a
-/// persisted preference; each list may override it transiently.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) enum FileListLayout {
-    #[default]
-    Flat,
-    Tree,
-}
-
-impl FileListLayout {
-    pub(crate) const fn key(self) -> &'static str {
-        match self {
-            Self::Flat => "flat",
-            Self::Tree => "tree",
-        }
-    }
-
-    pub(crate) fn from_key(raw: &str) -> Option<Self> {
-        match raw {
-            "flat" => Some(Self::Flat),
-            "tree" => Some(Self::Tree),
-            _ => None,
-        }
-    }
-
-    pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::Flat => "Flat list",
-            Self::Tree => "Tree",
-        }
-    }
-
-    pub(crate) const fn settings_label(self) -> &'static str {
-        self.label()
-    }
-
-    pub(crate) const fn icon(self) -> &'static str {
-        match self {
-            Self::Flat => "icons/menu.svg",
-            Self::Tree => "icons/list_tree.svg",
-        }
-    }
-
-    pub(crate) const fn toggled(self) -> Self {
-        match self {
-            Self::Flat => Self::Tree,
-            Self::Tree => Self::Flat,
-        }
-    }
-}
+/// How a changed-file list arranges its files: flat, under folders, or under
+/// group headers. The global default is a persisted preference; each list may
+/// override it transiently.
+pub(crate) type FileListLayout = crate::kit::components::ListLayout;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum ChangeTrackingView {

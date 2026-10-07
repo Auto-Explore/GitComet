@@ -45,6 +45,7 @@ runs:
       run: |
         rustup show active-toolchain
         rustc -vV
+    - uses: ./.github/actions/setup-mold
     - name: Compute dependency cache key
       id: key
       shell: bash

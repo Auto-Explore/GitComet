@@ -9,8 +9,8 @@ use gpui::{
     App, Bounds, Context, CursorStyle, Div, Element, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, FocusHandle, Focusable, GlobalElementId, IsZero, LayoutId, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, Rgba, ScrollHandle,
-    ShapedLine, SharedString, Style, TextAlign, TextRun, UTF16Selection, Window, WrappedLine,
-    actions, anchored, deferred, div, fill, point, px, relative, size,
+    SharedString, Style, TextAlign, TextRun, UTF16Selection, Window, actions, anchored, deferred,
+    div, fill, point, px, relative, size,
 };
 use rustc_hash::FxHashMap;
 #[cfg(any(test, feature = "benchmarks"))]
@@ -91,6 +91,8 @@ const TEXT_INPUT_STREAMED_HIGHLIGHT_ESTIMATED_RUNS_PER_VISIBLE_LINE: usize = 2;
 const TEXT_INPUT_INLINE_ACTIVE_HIGHLIGHT_CAPACITY: usize = 8;
 const TEXT_INPUT_INLINE_TEXT_RUN_CAPACITY: usize = 32;
 mod drag;
+mod editor_line;
+use editor_line::EditorLine;
 mod editing;
 mod element;
 mod highlight;

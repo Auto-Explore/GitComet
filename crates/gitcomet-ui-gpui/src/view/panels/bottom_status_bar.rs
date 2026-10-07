@@ -26,7 +26,7 @@ where
 }
 
 fn pro_launch_label(today: jiff::civil::Date) -> SharedString {
-    let launch_date = jiff::civil::date(2026, 10, 7);
+    let launch_date = jiff::civil::date(2026, 11, 9);
     let days = today.duration_until(launch_date).as_secs() / 86_400;
     match days {
         1 => "Pro launches in 1 day".into(),
@@ -744,14 +744,15 @@ mod tests {
         use jiff::civil::date;
 
         for (today, expected) in [
-            (date(2026, 9, 7), "Pro launches in 30 days"),
-            (date(2026, 9, 8), "Pro launches in 29 days"),
-            (date(2026, 10, 6), "Pro launches in 1 day"),
-            (date(2026, 10, 7), "Get Pro!"),
-            (date(2026, 10, 8), "Get Pro!"),
-            (date(2026, 6, 29), "Pro launches in 100 days"),
-            (date(2026, 6, 28), "Get Pro!"),
-            (date(2025, 10, 7), "Get Pro!"),
+            (date(2026, 10, 7), "Pro launches in 33 days"),
+            (date(2026, 10, 10), "Pro launches in 30 days"),
+            (date(2026, 10, 11), "Pro launches in 29 days"),
+            (date(2026, 11, 8), "Pro launches in 1 day"),
+            (date(2026, 11, 9), "Get Pro!"),
+            (date(2026, 11, 10), "Get Pro!"),
+            (date(2026, 8, 1), "Pro launches in 100 days"),
+            (date(2026, 7, 31), "Get Pro!"),
+            (date(2025, 11, 9), "Get Pro!"),
         ] {
             assert_eq!(pro_launch_label(today).as_ref(), expected, "{today}");
         }

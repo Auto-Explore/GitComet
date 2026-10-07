@@ -319,6 +319,10 @@ pub struct CommitFileChange {
     /// The mode on each side; `None` where the side is absent or unknown.
     pub old_mode: Option<FileMode>,
     pub new_mode: Option<FileMode>,
+    /// The edit as text, for ordering files changed the same way together;
+    /// `None` under the same conditions as `additions`, or when nothing in
+    /// the file's text changed.
+    pub edit: Option<crate::edit_signature::EditSignature>,
 }
 
 impl CommitFileChange {
@@ -335,6 +339,7 @@ impl CommitFileChange {
             old_mode: None,
             new_mode: None,
             large_file: None,
+            edit: None,
         }
     }
 
@@ -346,6 +351,17 @@ impl CommitFileChange {
     pub fn with_line_counts(mut self, additions: Option<u32>, deletions: Option<u32>) -> Self {
         self.additions = additions;
         self.deletions = deletions;
+        self
+    }
+
+    /// The counts and the edit together, as a line diff reports them.
+    pub fn with_line_stats(self, stats: LineStats) -> Self {
+        self.with_line_counts(stats.additions, stats.deletions)
+            .with_edit(stats.edit)
+    }
+
+    pub fn with_edit(mut self, edit: Option<crate::edit_signature::EditSignature>) -> Self {
+        self.edit = edit;
         self
     }
 
@@ -583,12 +599,16 @@ pub struct FileStatus {
 pub struct LineStats {
     pub additions: Option<u32>,
     pub deletions: Option<u32>,
+    /// The edit as text; `None` when the counts are unknown or nothing in
+    /// the text changed.
+    pub edit: Option<crate::edit_signature::EditSignature>,
 }
 
 impl LineStats {
     pub const UNKNOWN: Self = Self {
         additions: None,
         deletions: None,
+        edit: None,
     };
 }
 
@@ -597,6 +617,7 @@ impl From<(Option<u32>, Option<u32>)> for LineStats {
         Self {
             additions,
             deletions,
+            edit: None,
         }
     }
 }

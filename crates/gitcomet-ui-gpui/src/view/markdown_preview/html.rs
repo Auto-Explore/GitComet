@@ -264,7 +264,7 @@ fn html_inline_style(name: &str) -> Option<MarkdownInlineStyle> {
 }
 
 /// A block element's `align` attribute.
-fn html_align(tag: &str) -> MarkdownTextAlign {
+pub(crate) fn html_align(tag: &str) -> MarkdownTextAlign {
     let value = extract_html_attribute(tag, "align").unwrap_or_default();
     match value.trim().to_ascii_lowercase().as_str() {
         "center" => MarkdownTextAlign::Center,
@@ -566,40 +566,50 @@ pub(crate) fn extract_html_pixel_attribute(html: &str, name: &str) -> Option<u32
 }
 
 pub(crate) fn extract_html_attribute(html: &str, name: &str) -> Option<String> {
-    let lower = html.to_ascii_lowercase();
-    let needle = format!("{name}=");
-    let mut search_start = 0;
-
-    while let Some(rel_ix) = lower[search_start..].find(&needle) {
-        let attr_ix = search_start + rel_ix;
-        if attr_ix > 0 {
-            let prev = lower.as_bytes()[attr_ix - 1];
-            if !prev.is_ascii_whitespace() && prev != b'<' {
-                search_start = attr_ix + needle.len();
-                continue;
-            }
-        }
-
-        let value_start = attr_ix + needle.len();
-        if value_start >= html.len() {
+    let whitespace = |ch: char| ch.is_ascii_whitespace();
+    let mut rest = html.trim_start_matches(whitespace).strip_prefix('<')?;
+    let tag_end = rest.find(|ch: char| whitespace(ch) || matches!(ch, '>' | '/'))?;
+    rest = &rest[tag_end..];
+    loop {
+        rest = rest.trim_start_matches(whitespace);
+        if rest.is_empty() || rest.starts_with('>') || rest.starts_with('/') {
             return None;
         }
-
-        let value = &html[value_start..];
-        let mut chars = value.chars();
-        let first = chars.next()?;
-        if first == '"' || first == '\'' {
-            let end_rel = value[1..].find(first)?;
-            return Some(value[1..1 + end_rel].to_owned());
+        let attr_end = rest
+            .find(|ch: char| whitespace(ch) || matches!(ch, '=' | '>' | '/'))
+            .unwrap_or(rest.len());
+        if attr_end == 0 {
+            return None;
         }
-
-        let end = value
-            .find(|c: char| c.is_ascii_whitespace() || matches!(c, '>' | '/'))
-            .unwrap_or(value.len());
-        return Some(value[..end].to_owned());
+        let attribute = &rest[..attr_end];
+        rest = rest[attr_end..].trim_start_matches(whitespace);
+        let Some(after_equals) = rest.strip_prefix('=') else {
+            if attribute.eq_ignore_ascii_case(name) {
+                return Some(String::new());
+            }
+            continue;
+        };
+        rest = after_equals.trim_start_matches(whitespace);
+        // Consume whole values, including quoted text that resembles another
+        // attribute, before looking for the next attribute name.
+        let value = if let Some(quote) = rest.chars().next().filter(|ch| matches!(ch, '"' | '\'')) {
+            rest = &rest[1..];
+            let end = rest.find(quote)?;
+            let value = &rest[..end];
+            rest = &rest[end + 1..];
+            value
+        } else {
+            let end = rest
+                .find(|ch: char| whitespace(ch) || ch == '>')
+                .unwrap_or(rest.len());
+            let value = &rest[..end];
+            rest = &rest[end..];
+            value
+        };
+        if attribute.eq_ignore_ascii_case(name) {
+            return Some(value.to_owned());
+        }
     }
-
-    None
 }
 
 /// Destination of the innermost link currently open, if it is a web URL.

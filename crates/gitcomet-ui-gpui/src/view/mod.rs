@@ -207,6 +207,36 @@ fn repo_activation_msg(
     Some(Msg::RepoActivated { repo_id })
 }
 
+/// Opening a repository already schedules a full refresh. Count that load
+/// toward the focus throttle too: the compositor's initial activation can
+/// arrive after RepoOpened and otherwise queues the same work a second time.
+fn note_opened_repos_for_activation(
+    previous: &AppState,
+    next: &AppState,
+    last_activation_dispatch: &mut FxHashMap<RepoId, Instant>,
+    now: Instant,
+) {
+    if previous.repos.len() == next.repos.len()
+        && previous.repos.iter().zip(&next.repos).all(|(old, new)| {
+            old.id == new.id
+                && matches!(old.open, Loadable::Ready(_)) == matches!(new.open, Loadable::Ready(_))
+        })
+    {
+        return;
+    }
+    last_activation_dispatch.retain(|id, _| next.repos.iter().any(|repo| repo.id == *id));
+    for repo in &next.repos {
+        if matches!(repo.open, Loadable::Ready(_))
+            && !previous
+                .repos
+                .iter()
+                .any(|old| old.id == repo.id && matches!(old.open, Loadable::Ready(_)))
+        {
+            last_activation_dispatch.insert(repo.id, now);
+        }
+    }
+}
+
 mod app_model;
 mod bottom_panel_providers;
 mod branch_sidebar;
@@ -299,10 +329,11 @@ mod word_diff;
 use app_model::AppUiModel;
 use branch_sidebar::{BranchMenuTarget, BranchSection, BranchSidebarRow};
 use caches::{
-    HistoryBaseCache, HistoryBaseCacheRequest, HistoryBaseRowVm, HistoryBranchChipKind,
-    HistoryBranchChipVm, HistoryCache, HistoryCacheBuildRequest, HistoryDecorationCache,
-    HistoryDecorationCacheRequest, HistoryDecorationRowVm, HistoryDisplayKey, HistoryRefListItem,
-    HistoryRefListItemKind, HistoryStashIdsCache, HistoryTextVm, HistoryWorktreeSummaryCache,
+    HistoryAuthorVm, HistoryBaseCache, HistoryBaseCacheRequest, HistoryBaseRowVm,
+    HistoryBranchChipKind, HistoryBranchChipVm, HistoryCache, HistoryCacheBuildRequest,
+    HistoryDecorationCache, HistoryDecorationCacheRequest, HistoryDecorationRowVm,
+    HistoryDisplayKey, HistoryRefListItem, HistoryRefListItemKind, HistoryStashIdsCache,
+    HistoryTextVm, HistoryWorktreeSummaryCache,
 };
 use chrome::TitleBarView;
 use conflict_resolver::{ConflictPickSide, ConflictResolverViewMode};
@@ -314,6 +345,7 @@ use date_time::{DateTimeFormat, Timezone, format_datetime_into};
 use diff_preview::build_new_file_preview_from_diff;
 use patch_split::build_patch_split_rows;
 use poller::Poller;
+pub(in crate::view) use preferences::FileListDefaults;
 use preferences::{HistoryBranchNamesMode, RemoteMarkdownImagePolicy, UiPreferences};
 pub(in crate::view) use terminal_preferences::{
     ActionBarTerminalTarget, ExternalTerminalLaunchContext, ExternalTerminalMode,

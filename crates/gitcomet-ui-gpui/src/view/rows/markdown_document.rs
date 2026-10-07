@@ -26,8 +26,8 @@ use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction::ControlInteractionExt as _;
 use crate::view::markdown_preview::{
     MarkdownBlock, MarkdownInlineImage, MarkdownInlineStyle, MarkdownPreviewDiff,
-    MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind, MarkdownTaskMarker,
-    MarkdownTextAlign, markdown_document_blocks,
+    MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind, MarkdownTableCell,
+    MarkdownTableCellPart, MarkdownTaskMarker, MarkdownTextAlign, markdown_document_blocks,
 };
 use crate::view::perf::{self, ViewPerfRenderLane};
 use rustc_hash::FxHashMap;
@@ -1803,8 +1803,7 @@ fn render_row_text(
     } else {
         div().flex_1().min_w(px(0.0))
     };
-    // `gpui` aligns each wrapped line as it paints; the flow text reads the
-    // same style back to place selections and resolve clicks.
+    // The backend uses this style to align both glyphs and selection geometry.
     if let Some(align) = aligned {
         text = text.text_align(align);
     }
@@ -1851,8 +1850,7 @@ fn render_row_text(
             Arc::clone(&styled.highlights),
         )
         // Inline code is set in the editor font; the prose around it is not.
-        .font_family_ranges(code_ranges, context.editor_font_family.clone())
-        .text_align(aligned.unwrap_or_default()),
+        .font_family_ranges(code_ranges, context.editor_font_family.clone()),
     )
     .into_any_element()
 }
@@ -2175,7 +2173,7 @@ fn render_table(
     let column_count = rows
         .iter()
         .filter_map(|(_, row)| row.table.as_ref())
-        .map(|cells| cells.cells.len().max(cells.table.alignments.len()))
+        .map(|cells| cells.cells.len())
         .max()
         .unwrap_or(0);
     if column_count == 0 {
@@ -2245,17 +2243,9 @@ fn render_table(
                 row_ix,
             ),
         );
-        for (column, range) in cells.cells.iter().enumerate() {
-            let align = if is_header {
-                MarkdownTextAlign::Center
-            } else {
-                cells
-                    .table
-                    .alignments
-                    .get(column)
-                    .copied()
-                    .unwrap_or_default()
-            };
+        for (column, cell_data) in cells.cells.iter().enumerate() {
+            let header_cell = is_header || cell_data.is_header;
+            let align = cell_data.align;
             // The search reveal needs one box per row; the first cell stands in.
             let shell = if column == 0 {
                 reveal_listener(row_ix, context)
@@ -2264,17 +2254,24 @@ fn render_table(
             };
             let cell = cell_shell(shell, column)
                 .debug_selector(move || format!("markdown_preview_cell_box_{row_ix}_{column}"))
-                .when(is_header, |cell| cell.font_weight(FontWeight::SEMIBOLD))
+                .when(header_cell, |cell| cell.font_weight(FontWeight::SEMIBOLD))
+                .when(
+                    cell_data.is_header
+                        && !is_header
+                        && row.change_hint
+                            == crate::view::markdown_preview::MarkdownChangeHint::None,
+                    |cell| cell.bg(header_band),
+                )
                 // The text box moves, not the glyphs inside it: `gpui` hit-tests
                 // and places selections as if every line started at the left.
                 .flex()
                 .map(|cell| markdown_preview_justify(cell, align))
-                .child(render_cell_text(
+                .child(render_table_cell(
                     tab_width,
                     row_ix,
                     row,
                     column,
-                    range.clone(),
+                    cell_data,
                     styled.as_ref(),
                     context,
                 ));
@@ -2297,6 +2294,155 @@ fn render_table(
         context,
         |block| block.child(div().flex().w_full().min_w(px(0.0)).child(grid)),
     )
+}
+
+/// Images and selectable text retain their order within the cell.
+fn render_table_cell(
+    tab_width: usize,
+    row_ix: usize,
+    row: &MarkdownPreviewRow,
+    column: usize,
+    cell: &MarkdownTableCell,
+    styled: &CachedDiffStyledText,
+    context: &MarkdownDocumentContext,
+) -> AnyElement {
+    if cell.content.is_empty() {
+        return render_cell_text(
+            tab_width,
+            row_ix,
+            row,
+            column,
+            cell.range.clone(),
+            styled,
+            context,
+        );
+    }
+    let mut content = div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .min_w(px(0.0))
+        .max_w_full();
+    for part in cell.content.iter() {
+        content = content.child(match part {
+            MarkdownTableCellPart::Text(range) => render_cell_text(
+                tab_width,
+                row_ix,
+                row,
+                column,
+                range.clone(),
+                styled,
+                context,
+            ),
+            MarkdownTableCellPart::Image { index, range } => {
+                render_table_image(row_ix, column, row, *index, range.clone(), context)
+            }
+        });
+    }
+    content.into_any_element()
+}
+
+fn table_image_matches_query(
+    text: &str,
+    range: std::ops::Range<usize>,
+    query: &crate::view::rows::MarkdownPreviewQuery,
+) -> bool {
+    if range.is_empty() {
+        return false;
+    }
+    let mut start = 0;
+    while let Some(found) = query.matcher.find_range_at_or_after(text, start) {
+        if found.start >= range.end {
+            break;
+        }
+        if found.end > range.start {
+            return true;
+        }
+        start = found.end;
+    }
+    false
+}
+
+fn render_table_image(
+    row_ix: usize,
+    column: usize,
+    row: &MarkdownPreviewRow,
+    index: usize,
+    range: std::ops::Range<usize>,
+    context: &MarkdownDocumentContext,
+) -> AnyElement {
+    let mut shell = div()
+        .debug_selector(move || format!("markdown_table_image_box_{row_ix}_{column}_{index}"))
+        .id(SharedString::from(format!(
+            "markdown_table_cell_image_{row_ix}_{column}_{index}"
+        )))
+        .relative()
+        .min_w(px(0.0))
+        .max_w_full()
+        .child(render_inline_image(
+            row_ix,
+            &row.inline_images[index],
+            true,
+            context,
+        ));
+    if let Some(view) = context.view.clone() {
+        let region = context.text_region;
+        let row_len = row.text.len();
+        let searched = context
+            .query
+            .as_ref()
+            .is_some_and(|query| table_image_matches_query(&row.text, range.clone(), query));
+        let search_color = context.theme.colors.editor.search_match_background;
+        shell = shell.child(
+            gpui::canvas(
+                |_, _, _| (),
+                move |bounds, _, window, cx| {
+                    if !super::markdown_flow_text::markdown_flow_row_is_near_viewport(
+                        bounds, window,
+                    ) {
+                        return;
+                    }
+                    view.update(cx, |pane, _| {
+                        pane.add_diff_text_cell_hitbox(
+                            row_ix,
+                            region,
+                            row_len,
+                            DiffTextHitbox {
+                                atomic: true,
+                                bounds,
+                                layout_key: 0,
+                                source_visible_ix: row_ix,
+                                text_start_offset: range.start,
+                                text_len: range.len(),
+                                offset_map: None,
+                                painted_text: SharedString::default(),
+                                streamed_ascii_monospace_cell_width: None,
+                                wrapped: None,
+                                cells: Vec::new(),
+                            },
+                        );
+                        let selected = pane
+                            .diff_text_local_selection_range_in(region, (row_ix, range.clone()))
+                            .is_some_and(|selected| !selected.is_empty());
+                        if selected {
+                            super::markdown_flow_text::record_selection_paint_for_tests(
+                                row_ix,
+                                &[bounds],
+                            );
+                            window.paint_quad(fill(bounds, pane.diff_text_selection_color()));
+                        } else if searched {
+                            window.paint_quad(fill(bounds, with_alpha(search_color, 0.35)));
+                        }
+                    });
+                },
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full(),
+        );
+    }
+    shell.into_any_element()
 }
 
 /// One table cell's text: its slice of the row's styled text, selectable in
@@ -2484,6 +2630,61 @@ fn scaled(value: f32, context: &MarkdownDocumentContext) -> Pixels {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn image_search_query(
+        text: &str,
+        options: crate::view::panes::main::diff_search::DiffSearchOptions,
+    ) -> crate::view::rows::MarkdownPreviewQuery {
+        crate::view::rows::MarkdownPreviewQuery {
+            matcher: Arc::new(
+                crate::view::panes::main::diff_search::DiffSearchMatcher::new(text, options),
+            ),
+            current_row: None,
+        }
+    }
+
+    #[test]
+    fn table_image_search_respects_full_row_regex_anchors() {
+        let query = image_search_query(
+            "^cat$",
+            crate::view::panes::main::diff_search::DiffSearchOptions {
+                regex: true,
+                ..Default::default()
+            },
+        );
+        assert!(!table_image_matches_query("label\tcat", 6..9, &query));
+        assert!(table_image_matches_query("cat", 0..3, &query));
+    }
+
+    #[test]
+    fn table_image_search_highlights_phrases_crossing_image_boundaries() {
+        for phrase in ["before cat", "cat after", "before cat after"] {
+            let query = image_search_query(phrase, Default::default());
+            assert!(table_image_matches_query("before cat after", 7..10, &query));
+        }
+        let query = image_search_query("before", Default::default());
+        assert!(!table_image_matches_query(
+            "before cat after",
+            7..10,
+            &query
+        ));
+        let query = image_search_query("cat", Default::default());
+        assert!(table_image_matches_query("cat cat", 4..7, &query));
+        assert!(!table_image_matches_query("cat", 1..1, &query));
+    }
+
+    #[test]
+    fn table_image_search_respects_full_row_word_boundaries() {
+        let query = image_search_query(
+            "cat",
+            crate::view::panes::main::diff_search::DiffSearchOptions {
+                whole_word: true,
+                ..Default::default()
+            },
+        );
+        assert!(!table_image_matches_query("scatter", 1..4, &query));
+        assert!(table_image_matches_query("label\tcat", 6..9, &query));
+    }
 
     #[test]
     fn amber_fenced_code_blocks_follow_gitcomet_darks_neutral_surface_rule() {

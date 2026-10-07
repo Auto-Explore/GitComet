@@ -232,13 +232,11 @@ class LiveUiMeasurementTests(unittest.TestCase):
             self.assertAlmostEqual(inputs["apply_ms"]["p50"], 0.3)
             self.assertAlmostEqual(summary["phases"]["select"]["process_cpu_cores"], 0.25)
 
-    def test_runs_missing_witnesses_losing_records_or_stalling_are_rejected(self):
+    def test_runs_missing_witnesses_losing_records_or_mixing_identities_are_rejected(self):
         cases = {
             "expected a witness": lambda r: [x for x in r if x.get("stage") != "witness"],
             "dropped records": lambda r: [dict(x, records_dropped=3) if x["event"] == "interval" else x for x in r],
             "another run": lambda r: [dict(x, run_id="other") if x["event"] == "start" else x for x in r],
-            "waited over 1 s": lambda r: r + [{"event": "draw", "window": "w", "start_ms": 2500.0,
-                                               "at_ms": 2501.0, "duration_ms": 1.0, "dirty_ms": 1200.0}],
             "did not finish": lambda r: [x for x in r if x["event"] != "scenario_end"],
         }
         for problem, mutate in cases.items():
@@ -252,6 +250,18 @@ class LiveUiMeasurementTests(unittest.TestCase):
             root = Path(directory)
             self.write_run(root, capture={"outcome": "failed", "exit_code": 101})
             self.assertIn("application exited 101", live_ui.summarize(root)["problems"])
+
+    def test_a_stall_is_retained_as_performance_evidence(self):
+        # A complete visible capture of a slow frame is exactly the evidence
+        # this tool must preserve; delay alone does not prove occlusion.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_run(root, self.records() + [
+                {"event": "draw", "window": "w", "start_ms": 2500.0,
+                 "at_ms": 2501.0, "duration_ms": 1.0, "dirty_ms": 1200.0}])
+            summary = live_ui.summarize(root)
+            self.assertTrue(summary["valid"], summary["problems"])
+            self.assertEqual(summary["long_frames"][0]["dirty_to_draw_ms"], 1301.0)
 
     def test_corrupted_records_are_an_error_not_a_shorter_run(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -395,7 +405,9 @@ class LiveUiMeasurementTests(unittest.TestCase):
 
 class CacheTests(unittest.TestCase):
     def test_local_worktree_manifests_do_not_change_cache_keys(self):
+        # Keep the Rust probe mock separate from subprocess calls in platform.
         with tempfile.TemporaryDirectory() as directory, patch.object(cache, "ROOT", Path(directory)), \
+                patch.object(cache.platform, "platform", return_value="test-platform"), \
                 patch.object(cache.subprocess, "check_output", return_value=b"rustc test"):
             root = Path(directory)
             (root / "Cargo.toml").write_text('[package]\nname = "fixture"\nversion = "0.1.0"\n')
@@ -761,6 +773,20 @@ class RunnerTests(unittest.TestCase):
                 with patch.object(runner, "run", side_effect=execute), patch.object(os, "unlink", locked_unlink):
                     self.assertEqual(runner.run_suite("ui", "suite", suite), outcome)
 
+    def test_nextest_reports_use_the_configured_store_and_inherited_profile(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "ROOT", Path(directory)):
+            config = Path(directory) / ".config/nextest.toml"
+            config.parent.mkdir()
+            config.write_text('[profile.ci.junit]\npath = "results.xml"\n'
+                              '[profile.child]\ninherits = "ci"\n')
+            self.assertEqual(runner.nextest_junit_path("child"),
+                             Path(directory) / "target/nextest/child/results.xml")
+            config.write_text('[store]\ndir = "reports"\n' + config.read_text())
+            self.assertEqual(runner.nextest_junit_path("child"),
+                             Path(directory) / "reports/child/results.xml")
+            with self.assertRaisesRegex(ValueError, "No JUnit path"):
+                runner.nextest_junit_path("unknown")
+
     def test_coverage_runner_labels_follow_the_executed_batching_mode(self):
         suite = {"package-id": "core", "package-name": "gitcomet-core", "kind": "lib", "binary-name": "gitcomet_core",
                  "testcases": {"conflict_session::pure": {"ignored": False}, "process::isolated": {"ignored": False}}}
@@ -796,7 +822,8 @@ class RunnerTests(unittest.TestCase):
                     routed["conflict_session::pure"] = "libtest-pure"
                     return 0
 
-                with patch.object(runner, "run", side_effect=run_nextest), \
+                with patch.object(runner, "nextest_junit_path", return_value=target / "nextest/ci/junit.xml"), \
+                        patch.object(runner, "run", side_effect=run_nextest), \
                         patch.object(runner, "run_suite", side_effect=run_pure):
                     runner.execute("workspace", batch_pure_tests=mode)
                 coverage = json.loads((target / "workspace/coverage.json").read_text())
@@ -835,8 +862,10 @@ class RunnerTests(unittest.TestCase):
                 parallel = schedule == "balanced" and cpus > 1 and group == "both"
                 target = Path(directory)
                 (target / "workspace").mkdir()
-                (target / "workspace/binaries.json").write_text(json.dumps({"rust-build-meta": {"target-directory": directory}}))
+                (target / "workspace/binaries.json").write_text(json.dumps({"rust-build-meta": {"target-directory": str(target / "cargo-artifacts")}}))
                 (target / "nextest" / profile).mkdir(parents=True)
+                junit = target / "nextest" / profile / "junit.xml"
+                junit.write_text("stale results must be removed before execution")
                 barrier, completed = threading.Barrier(2), []
 
                 def run_nextest(name, command, **kwargs):
@@ -850,7 +879,9 @@ class RunnerTests(unittest.TestCase):
                         self.assertEqual(command[-2:], ["--test-threads", str(threads)])
                     else:
                         self.assertNotIn("--test-threads", command)
-                    self.write_junit(target / "nextest" / profile / "junit.xml", nextest_suites)
+                    self.assertNotIn("--target-dir", command, "build flags conflict with reused metadata")
+                    self.assertFalse(junit.exists(), "a previous report must not satisfy this run")
+                    self.write_junit(junit, nextest_suites)
                     completed.append("nextest")
                     return 0
 
@@ -865,7 +896,8 @@ class RunnerTests(unittest.TestCase):
                     completed.append("ui")
                     return 0
 
-                with patch.object(runner, "package_names", return_value=packages), \
+                with patch.object(runner, "nextest_junit_path", return_value=junit), \
+                        patch.object(runner, "package_names", return_value=packages), \
                         patch.object(runner, "inventory", return_value={"rust-suites": selected}), \
                         patch.object(runner, "run", side_effect=run_nextest), patch.object(runner, "run_suite", side_effect=run_ui):
                     runner.execute("workspace", schedule, threads, profile, ui_threads)
@@ -939,7 +971,8 @@ class RunnerTests(unittest.TestCase):
                     completed.append("ui")
                     return 1 if failed == "ui" else 0
 
-                with patch.object(runner, "package_names", return_value=packages), \
+                with patch.object(runner, "nextest_junit_path", return_value=target / "nextest/ci/junit.xml"), \
+                        patch.object(runner, "package_names", return_value=packages), \
                         patch.object(runner, "inventory", return_value={"rust-suites": suites}), \
                         patch.object(runner, "run", side_effect=run_nextest), patch.object(runner, "run_suite", side_effect=run_ui):
                     with self.assertRaisesRegex(RuntimeError, "test execution failed"):
@@ -1355,6 +1388,7 @@ class ApplicationProbeTests(unittest.TestCase):
                     patch.dict(os.environ, {}, clear=True), \
                     patch.object(sys, "argv", ["application-probe.py", "--profiles", "ci-test"]), \
                     patch.object(application_probe.runner, "REPORTS", Path(directory)), \
+                    patch.object(application_probe.platform, "platform", return_value="fixture-os"), \
                     patch.object(application_probe.subprocess, "check_output", return_value="fixture",
                                  side_effect=RuntimeError("metadata failed") if failure == "metadata" else None), \
                     patch.object(application_probe.runner, "run", side_effect=RuntimeError("build failed")):

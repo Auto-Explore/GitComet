@@ -4,6 +4,7 @@ use super::shaping::*;
 use super::state::*;
 use super::wrap::*;
 use super::*;
+use crate::text_layout::TextLayoutExt as _;
 
 pub(super) struct TextElement {
     pub(super) input: Entity<TextInput>,
@@ -443,16 +444,14 @@ impl Element for TextElement {
                         let local_start = seg_start.min(line_end) - start;
                         let local_end = seg_end.min(line_end) - start;
 
-                        let x0 = line.x_for_index(local_start) - scroll_x;
-                        let x1 = line.x_for_index(local_end) - scroll_x;
-                        let top = bounds.top() + line_height * ix as f32;
-                        selections.push(fill(
-                            Bounds::from_corners(
-                                point(bounds.left() + x0, top),
-                                point(bounds.left() + x1, top + line_height),
-                            ),
-                            style_colors.selection,
-                        ));
+                        let origin = point(
+                            bounds.left() - scroll_x,
+                            bounds.top() + line_height * ix as f32,
+                        );
+                        for mut rect in line.selection_bounds(local_start..local_end, line_height) {
+                            rect.origin += origin;
+                            selections.push(fill(rect, style_colors.selection));
+                        }
                     }
                     None
                 };
@@ -528,7 +527,7 @@ impl Element for TextElement {
             pending_lines.push(cursor_line_ix);
             let mut y_offsets = vec![Pixels::ZERO; line_count];
             let mut lines = (0..line_count)
-                .map(|_| WrappedLine::default())
+                .map(|_| EditorLine::default())
                 .collect::<Vec<_>>();
             let mut shaped_mask = vec![false; line_count];
             let wrapped_line_source = LineTextSource::Whole {
@@ -609,10 +608,7 @@ impl Element for TextElement {
                         input.tab_size,
                         window,
                     );
-                    rows_changed |= input.set_measured_wrap_rows(
-                        line_ix,
-                        wrapped.wrap_boundaries().len().saturating_add(1),
-                    );
+                    rows_changed |= input.set_measured_wrap_rows(line_ix, wrapped.line_count());
                     lines[line_ix] = wrapped;
                     shaped_mask[line_ix] = true;
                 }
@@ -660,34 +656,11 @@ impl Element for TextElement {
                     let local_start = seg_start.min(line_end) - start;
                     let local_end = seg_end.min(line_end) - start;
 
-                    let start_pos = lines[ix]
-                        .position_for_index(local_start, line_height)
-                        .unwrap_or(point(Pixels::ZERO, Pixels::ZERO));
-                    let end_pos = lines[ix]
-                        .position_for_index(local_end, line_height)
-                        .unwrap_or(point(Pixels::ZERO, Pixels::ZERO));
-
-                    let start_row = (start_pos.y / line_height).floor().max(0.0) as usize;
-                    let end_row = (end_pos.y / line_height).floor().max(0.0) as usize;
-
-                    for row in start_row..=end_row {
-                        let top = bounds.top() + y_offsets[ix] + line_height * row as f32;
-                        let (x0, x1) = if start_row == end_row {
-                            (start_pos.x, end_pos.x)
-                        } else if row == start_row {
-                            (start_pos.x, bounds.size.width)
-                        } else if row == end_row {
-                            (Pixels::ZERO, end_pos.x)
-                        } else {
-                            (Pixels::ZERO, bounds.size.width)
-                        };
-                        selections.push(fill(
-                            Bounds::from_corners(
-                                point(bounds.left() + x0, top),
-                                point(bounds.left() + x1, top + line_height),
-                            ),
-                            style_colors.selection,
-                        ));
+                    let origin = point(bounds.left(), bounds.top() + y_offsets[ix]);
+                    for mut rect in lines[ix].selection_bounds(local_start..local_end, line_height)
+                    {
+                        rect.origin += origin;
+                        selections.push(fill(rect, style_colors.selection));
                     }
                 }
                 None

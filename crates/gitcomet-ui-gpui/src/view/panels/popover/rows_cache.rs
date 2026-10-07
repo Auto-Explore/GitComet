@@ -217,6 +217,15 @@ impl<T> Default for RowsCache<T> {
 }
 
 impl<T> RowsCache<T> {
+    /// Observe completed filtering without doing the work being measured.
+    pub(super) fn filtered_len_for_query(&self, query: &str) -> Option<usize> {
+        self.slot
+            .borrow()
+            .as_ref()
+            .filter(|(key, _)| key.query == query)
+            .map(|(_, rows)| rows.filtered_len())
+    }
+
     /// Drops the cached rows. Called when a picker opens so a stale list cannot
     /// flash before the first rebuild.
     pub(super) fn clear(&self) {
@@ -257,6 +266,7 @@ where
             rows.marked_index,
         )
     } else {
+        gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PickerModelBuild);
         let (items, payloads, marked_index) = build(SystemTime::now());
         (Rc::from(items), Rc::from(payloads), marked_index)
     };
@@ -322,6 +332,14 @@ mod tests {
         build_once(&cache, worktree_badge_key(&repo, ""), &builds);
 
         assert_eq!(builds.get(), 1, "the second frame must reuse the rows");
+        assert_eq!(cache.filtered_len_for_query(""), Some(1));
+        assert_eq!(
+            cache.filtered_len_for_query("main"),
+            None,
+            "a witness must not filter a new query"
+        );
+        cache.clear();
+        assert_eq!(cache.filtered_len_for_query(""), None);
     }
 
     /// An input missing from a signature shows stale rows with no visible error,

@@ -837,13 +837,8 @@ fn status_and_line_stats_never_start_the_annex_filter() {
         .uncommitted_line_stats_for_status_cancellable(&status, &CancellationToken::new())
         .unwrap();
     assert!(!log.exists(), "line stats started git-annex");
-    assert_eq!(
-        stats.unstaged[Path::new("notes.txt")],
-        gitcomet_core::domain::LineStats {
-            additions: Some(2),
-            deletions: Some(1)
-        }
-    );
+    let notes = stats.unstaged[Path::new("notes.txt")];
+    assert_eq!((notes.additions, notes.deletions), (Some(2), Some(1)));
 }
 
 /// What an interrupted `get` leaves: content in place, Git's index stat data

@@ -593,6 +593,18 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
+    /// Share immutable decoded blocks across consumers. Existing backends keep
+    /// their value-returning implementation; indexed delivery retains this Arc.
+    fn read_history_range_shared(
+        &self,
+        index: &crate::history_index::HistoryIndexHandle,
+        range: std::ops::Range<usize>,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<crate::history_index::HistoryRange>> {
+        self.read_history_range(index, range, cancellation)
+            .map(Arc::new)
+    }
+
     /// Read or refresh a history snapshot. Backends without snapshot support
     /// conservatively rebuild and never claim an unchanged result.
     fn read_history(

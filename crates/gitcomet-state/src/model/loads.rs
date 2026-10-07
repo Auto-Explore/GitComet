@@ -1,12 +1,45 @@
 //! Per-repository load coalescing and log-walk sequencing.
 
 use gitcomet_core::domain::{LogCursor, LogScope};
+use std::path::{Path, PathBuf};
+
+/// A full linked-checkout refresh or an update to specific checkouts.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum WorktreeDirtyScope {
+    #[default]
+    All,
+    Paths(Vec<PathBuf>),
+}
+
+impl WorktreeDirtyScope {
+    pub(crate) fn includes(&self, path: &Path) -> bool {
+        match self {
+            Self::All => true,
+            Self::Paths(paths) => paths.iter().any(|candidate| candidate == path),
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        match (self, other) {
+            (scope, Self::All) => *scope = Self::All,
+            (Self::Paths(paths), Self::Paths(incoming)) => {
+                for path in incoming {
+                    if !paths.contains(&path) {
+                        paths.push(path);
+                    }
+                }
+            }
+            (Self::All, Self::Paths(_)) => {}
+        }
+    }
+}
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RepoLoadsInFlight {
     in_flight: u32,
     pending: u32,
     pending_log: Option<PendingLogLoad>,
+    pending_worktree_dirty: Option<WorktreeDirtyScope>,
     /// The log walk that is actually running, so replies from one a newer
     /// request superseded can be told apart from the current one.
     pub(super) active_log: Option<(LogLoadSeq, PendingLogLoad)>,
@@ -93,6 +126,7 @@ impl RepoLoadsInFlight {
         self.in_flight = 0;
         self.pending = 0;
         self.pending_log = None;
+        self.pending_worktree_dirty = None;
         self.active_log = None;
         self.line_stats_generation = self.line_stats_generation.wrapping_add(1);
         self.active_line_stats = None;
@@ -163,6 +197,27 @@ impl RepoLoadsInFlight {
         } else {
             self.in_flight |= flag;
             true
+        }
+    }
+
+    pub(crate) fn request_worktree_dirty(&mut self, scope: WorktreeDirtyScope) -> bool {
+        if self.request(Self::WORKTREE_DIRTY) {
+            true
+        } else {
+            match &mut self.pending_worktree_dirty {
+                Some(pending) => pending.merge(scope),
+                None => self.pending_worktree_dirty = Some(scope),
+            }
+            false
+        }
+    }
+
+    pub(crate) fn finish_worktree_dirty(&mut self) -> Option<WorktreeDirtyScope> {
+        if self.finish(Self::WORKTREE_DIRTY) {
+            Some(self.pending_worktree_dirty.take().unwrap_or_default())
+        } else {
+            self.pending_worktree_dirty = None;
+            None
         }
     }
 

@@ -19,14 +19,19 @@
 //! analyses the records.
 
 use super::*;
+use gitcomet_core::history_perf::{self, Work};
 use gitcomet_core::op_trace::{self, Stage};
 use gpui::{
-    AnyWindowHandle, AsyncApp, Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent,
-    PlatformInput, ScrollDelta, ScrollWheelEvent, TouchPhase,
+    AnyWindowHandle, AsyncApp, Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, PlatformInput, ScrollDelta, ScrollWheelEvent, TouchPhase,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::path::PathBuf;
+
+mod operations;
+mod windows;
+use operations::Operation;
 
 const SCENARIO_ENV: &str = "GITCOMET_UI_SCENARIO";
 const DEFAULT_WITNESS_TIMEOUT: Duration = Duration::from_secs(15);
@@ -52,13 +57,21 @@ enum Step {
     WaitReady {
         #[serde(default = "default_ready_timeout_ms")]
         timeout_ms: u64,
+        #[serde(default)]
+        indexed: bool,
     },
     /// Sleeps; used to let startup work finish before measuring.
-    Settle { ms: u64 },
+    Settle {
+        ms: u64,
+    },
     /// Ends the previous phase and starts a named one.
-    Phase { name: String },
+    Phase {
+        name: String,
+    },
     /// Moves keyboard focus inside the window.
-    Focus { target: FocusTarget },
+    Focus {
+        target: FocusTarget,
+    },
     /// Presses a key (`Keystroke::parse` syntax) on a fixed schedule.
     Keys {
         key: String,
@@ -73,6 +86,19 @@ enum Step {
         interval_ms: u64,
         #[serde(default)]
         witness: Option<WitnessKind>,
+    },
+    /// Paste via the production clipboard and text input shortcut.
+    Paste {
+        text: String,
+        #[serde(default)]
+        witness: Option<WitnessKind>,
+    },
+    /// Assert the final filter result, including keyboard selection. This reads
+    /// the existing cache; it must never complete filtering on the app's behalf.
+    ExpectRepoPicker {
+        query: String,
+        matches: usize,
+        selected: Option<usize>,
     },
     /// Wheel events over a target on a fixed schedule; `delta_px` is
     /// negative to scroll down. Direction flips every `flip_every` events.
@@ -114,9 +140,67 @@ enum Step {
     },
     /// Opens a repository as the Open Repository flow does once a folder is
     /// picked, as a traced input whose witness is that repository loaded.
-    OpenRepo { path: PathBuf },
+    OpenRepo {
+        path: PathBuf,
+        #[serde(default = "default_true")]
+        wait: bool,
+    },
+    /// Open a real application window and make it the input target.
+    NewWindow {
+        name: String,
+    },
+    /// Activate a named window. The initial window is named `primary`.
+    SwitchWindow {
+        name: String,
+    },
+    /// Close another named window through the normal close guards.
+    CloseWindow {
+        name: String,
+    },
+    /// Assert and record the live main windows and their repository state.
+    ExpectWindows {
+        count: usize,
+    },
     /// Minimizes the window (idle measurements).
     Minimize,
+    /// Coordinates are fractions of the rendered history viewport. Sweeps
+    /// exercise real hit testing; a dwell can require a visible message card.
+    MovePointer {
+        positions: Vec<[f32; 2]>,
+        repeat: usize,
+        interval_ms: u64,
+        #[serde(default)]
+        witness: Option<WitnessKind>,
+    },
+    DragHistory {
+        to_fraction: f32,
+        steps: usize,
+        interval_ms: u64,
+        #[serde(default)]
+        wait_for_rows: bool,
+    },
+    /// Starts through the production store, then returns so subsequent input
+    /// runs concurrently with the operation. WaitOperation proves completion.
+    StartOperation {
+        operation: String,
+        #[serde(default)]
+        path: PathBuf,
+        #[serde(default)]
+        remote: String,
+        #[serde(default)]
+        url: String,
+        #[serde(default)]
+        dest: PathBuf,
+    },
+    WaitOperation {
+        timeout_ms: u64,
+        #[serde(default)]
+        cancelled: bool,
+    },
+    CancelOperation,
+    /// Use the activity dialog's production minimize handler, then prove it
+    /// no longer occludes the history targeted by subsequent input.
+    MinimizeActivity,
 }
 
 fn default_ready_timeout_ms() -> u64 {
@@ -151,12 +235,19 @@ enum WitnessKind {
     DiffLoaded,
     /// The history list moved.
     HistoryScrolled,
+    HistoryJumpLoaded,
     /// The diff search settled on the typed query.
     SearchSettled,
+    RepoPickerFiltered,
     /// The repository at `path` is active with status and history loaded.
-    RepoOpen { path: PathBuf },
+    RepoOpen {
+        path: PathBuf,
+    },
     /// No open repository has `path` as its work tree.
-    RepoClosed { path: PathBuf },
+    RepoClosed {
+        path: PathBuf,
+    },
+    MessageHover,
 }
 
 impl WitnessKind {
@@ -165,9 +256,12 @@ impl WitnessKind {
             Self::CommitDetails => "commit_details",
             Self::DiffLoaded => "diff_loaded",
             Self::HistoryScrolled => "history_scrolled",
+            Self::HistoryJumpLoaded => "history_jump_loaded",
             Self::SearchSettled => "search_settled",
+            Self::RepoPickerFiltered => "repo_picker_filtered",
             Self::RepoOpen { .. } => "repo_open",
             Self::RepoClosed { .. } => "repo_closed",
+            Self::MessageHover => "message_hover",
         }
     }
 }
@@ -191,11 +285,17 @@ struct Pending {
 
 struct Driver {
     window: AnyWindowHandle,
+    windows: FxHashMap<String, AnyWindowHandle>,
     view: Entity<GitCometView>,
     changed: smol::channel::Receiver<()>,
     _observers: Vec<gpui::Subscription>,
     errors: Vec<String>,
     phase: Option<String>,
+    operation: Option<Operation>,
+    pointer_expected: Option<Point<Pixels>>,
+    work_start: [u64; Work::ALL.len()],
+    #[cfg(feature = "perf-alloc")]
+    allocation_start: crate::perf_alloc::PerfAllocMetrics,
 }
 
 pub(crate) fn start_if_requested(cx: &mut App) {
@@ -221,6 +321,10 @@ pub(crate) fn start_if_requested(cx: &mut App) {
 }
 
 async fn run(scenario: Scenario, cx: &mut AsyncApp) {
+    record(
+        "scenario_diagnostics",
+        json!({"allocation_tracking": cfg!(feature = "perf-alloc")}),
+    );
     let mut driver = match Driver::attach(cx).await {
         Ok(driver) => driver,
         Err(error) => {
@@ -240,7 +344,20 @@ async fn run(scenario: Scenario, cx: &mut AsyncApp) {
             break;
         }
     }
+    if driver.operation.is_some() {
+        let _ = driver.cancel_operation(cx);
+        driver
+            .errors
+            .push("scenario ended with an unwitnessed operation".into());
+    }
     driver.end_phase();
+    let work = history_perf::snapshot();
+    let counts: serde_json::Map<String, Value> = Work::ALL
+        .iter()
+        .enumerate()
+        .map(|(index, kind)| (kind.name().into(), json!(work[index])))
+        .collect();
+    record("scenario_work_total", json!({"counts": counts}));
     let outcome = if driver.errors.is_empty() {
         "passed"
     } else {
@@ -305,6 +422,27 @@ impl Driver {
                 .timer(Duration::from_millis(50))
                 .await;
         };
+        let (changed, observers) = Self::observe_view(&view, cx);
+        Ok(Self {
+            window,
+            windows: [("primary".into(), window)].into_iter().collect(),
+            view,
+            changed,
+            _observers: observers,
+            errors: Vec::new(),
+            phase: None,
+            operation: None,
+            pointer_expected: None,
+            work_start: history_perf::snapshot(),
+            #[cfg(feature = "perf-alloc")]
+            allocation_start: crate::perf_alloc::current_alloc_metrics(),
+        })
+    }
+
+    fn observe_view(
+        view: &Entity<GitCometView>,
+        cx: &mut AsyncApp,
+    ) -> (smol::channel::Receiver<()>, Vec<gpui::Subscription>) {
         let (tx, changed) = smol::channel::bounded(1);
         let observers = cx.update(|cx| {
             let (ui_model, main_pane, details_pane) = {
@@ -326,7 +464,7 @@ impl Driver {
                     let tx = tx.clone();
                     move |_, _| notify(&tx)
                 }),
-                cx.observe(&view, {
+                cx.observe(view, {
                     let tx = tx.clone();
                     move |_, _| notify(&tx)
                 }),
@@ -341,18 +479,42 @@ impl Driver {
                 cx.observe(&history, move |_, _| notify(&tx)),
             ]
         });
-        Ok(Self {
-            window,
-            view,
-            changed,
-            _observers: observers,
-            errors: Vec::new(),
-            phase: None,
-        })
+        (changed, observers)
     }
 
     fn end_phase(&mut self) {
         if let Some(name) = self.phase.take() {
+            let end = history_perf::snapshot();
+            let counts: serde_json::Map<String, Value> = Work::ALL
+                .iter()
+                .enumerate()
+                .map(|(index, work)| {
+                    (
+                        work.name().into(),
+                        json!(end[index].saturating_sub(self.work_start[index])),
+                    )
+                })
+                .collect();
+            record("scenario_work", json!({"phase": name, "counts": counts}));
+            if let Some((retained_bytes, pinned_bytes, retained_rows)) =
+                history_perf::shared_memory()
+            {
+                record(
+                    "scenario_history_memory",
+                    json!({"phase": name,
+                    "retained_bytes": retained_bytes, "caller_pinned_bytes": pinned_bytes,
+                    "retained_rows": retained_rows}),
+                );
+            }
+            #[cfg(feature = "perf-alloc")]
+            {
+                let metrics =
+                    crate::perf_alloc::current_alloc_metrics().delta_since(self.allocation_start);
+                let mut payload = serde_json::Map::new();
+                payload.insert("phase".into(), json!(name));
+                metrics.append_to_payload(&mut payload);
+                record("scenario_allocations", Value::Object(payload));
+            }
             record("scenario_phase", json!({"name": name, "state": "end"}));
         }
     }
@@ -365,15 +527,24 @@ impl Driver {
 
     async fn step(&mut self, step: &Step, cx: &mut AsyncApp) -> Result<(), String> {
         match step {
-            Step::WaitReady { timeout_ms } => self.wait_ready(*timeout_ms, cx).await,
+            Step::WaitReady {
+                timeout_ms,
+                indexed,
+            } => self.wait_ready(*timeout_ms, *indexed, cx).await,
             Step::Settle { ms } => {
                 self.sleep(Duration::from_millis(*ms), cx).await;
                 Ok(())
             }
             Step::Phase { name } => {
                 self.end_phase();
+                self.record_windows(cx)?;
                 record("scenario_phase", json!({"name": name, "state": "begin"}));
                 self.phase = Some(name.clone());
+                self.work_start = history_perf::snapshot();
+                #[cfg(feature = "perf-alloc")]
+                {
+                    self.allocation_start = crate::perf_alloc::current_alloc_metrics();
+                }
                 Ok(())
             }
             Step::Focus { target } => self.focus(*target, cx),
@@ -413,6 +584,59 @@ impl Driver {
                     },
                 )
                 .await
+            }
+            Step::Paste { text, witness } => {
+                cx.update(|cx| {
+                    self.view.update(cx, |_, cx| {
+                        crate::clipboard::write_text(
+                            cx,
+                            text.clone(),
+                            crate::clipboard::CopySource::TextInputShortcut,
+                        )
+                    })
+                });
+                // Native clipboard ownership is asynchronous (Wayland needs
+                // a compositor offer). Finish setup before timing the shortcut.
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while !cx.update(|cx| {
+                    self.view.update(cx, |_, cx| {
+                        crate::clipboard::read_text(cx).as_ref() == Some(text)
+                    })
+                }) {
+                    if Instant::now() >= deadline {
+                        return Err("clipboard did not accept scenario text; check native input focus/ownership".into());
+                    }
+                    self.sleep(Duration::from_millis(10), cx).await;
+                }
+                let paste = Keystroke::parse("secondary-v").map_err(|e| e.to_string())?;
+                self.scheduled(1, 0, witness.clone(), cx, |_, window, cx| {
+                    window.dispatch_keystroke(paste.clone(), cx);
+                })
+                .await
+            }
+            Step::ExpectRepoPicker {
+                query,
+                matches,
+                selected,
+            } => {
+                let actual = cx.update(|cx| {
+                    self.view
+                        .read(cx)
+                        .popover_host
+                        .read(cx)
+                        .scenario_repo_picker_state(cx)
+                });
+                let expected = Some((query.clone(), Some(*matches), *selected));
+                if actual != expected {
+                    return Err(format!(
+                        "repository picker: expected {expected:?}, got {actual:?}"
+                    ));
+                }
+                record(
+                    "scenario_assertion",
+                    json!({"kind": "repo_picker", "query": query, "matches": matches, "selected": selected}),
+                );
+                Ok(())
             }
             Step::Scroll {
                 target,
@@ -505,12 +729,22 @@ impl Driver {
                 })
                 .await
             }
-            Step::OpenRepo { path } => {
+            Step::NewWindow { name } => self.new_window(name, cx).await,
+            Step::SwitchWindow { name } => self.switch_window(name, cx).await,
+            Step::CloseWindow { name } => self.close_window(name, cx).await,
+            Step::ExpectWindows { count } => {
+                let actual = self.record_windows(cx)?;
+                if actual != *count {
+                    return Err(format!("expected {count} main windows, found {actual}"));
+                }
+                Ok(())
+            }
+            Step::OpenRepo { path, wait } => {
                 let path =
                     std::fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))?;
                 let store = cx.update(|cx| Arc::clone(&self.view.read(cx).store));
                 let witness = WitnessKind::RepoOpen { path: path.clone() };
-                self.scheduled(1, 0, Some(witness), cx, move |_, _, _| {
+                self.scheduled(1, 0, wait.then_some(witness), cx, move |_, _, _| {
                     store.dispatch(Msg::OpenRepo(path.clone()));
                 })
                 .await
@@ -519,10 +753,163 @@ impl Driver {
                 .window
                 .update(cx, |_, window, _| window.minimize_window())
                 .map_err(|e| e.to_string()),
+            Step::MovePointer {
+                positions,
+                repeat,
+                interval_ms,
+                witness,
+            } => {
+                if positions.is_empty()
+                    || *repeat == 0
+                    || positions
+                        .iter()
+                        .flatten()
+                        .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+                {
+                    return Err(
+                        "pointer positions must be viewport fractions; repeat must be positive"
+                            .into(),
+                    );
+                }
+                let bounds = cx
+                    .update(|cx| {
+                        self.view
+                            .read(cx)
+                            .main_pane
+                            .read(cx)
+                            .history_view
+                            .read(cx)
+                            .history_viewport_bounds()
+                    })
+                    .ok_or("history has no viewport")?;
+                let points: Vec<_> = positions
+                    .iter()
+                    .map(|p| {
+                        point(
+                            bounds.left() + bounds.size.width * p[0],
+                            bounds.top() + bounds.size.height * p[1],
+                        )
+                    })
+                    .collect();
+                self.pointer_expected = Some(points[(*repeat - 1) % points.len()]);
+                self.scheduled(
+                    *repeat,
+                    *interval_ms,
+                    witness.clone(),
+                    cx,
+                    |ix, window, cx| {
+                        window.dispatch_event(
+                            PlatformInput::MouseMove(MouseMoveEvent {
+                                position: points[ix % points.len()],
+                                pressed_button: None,
+                                modifiers: Modifiers::default(),
+                            }),
+                            cx,
+                        );
+                    },
+                )
+                .await
+            }
+            Step::DragHistory {
+                to_fraction,
+                steps,
+                interval_ms,
+                wait_for_rows,
+            } => {
+                if !(0.01..=0.99).contains(to_fraction) || *steps == 0 {
+                    return Err("drag needs positive steps and destination in 0.01..=0.99".into());
+                }
+                let (start, end) = cx
+                    .update(|cx| {
+                        self.view
+                            .read(cx)
+                            .main_pane
+                            .read(cx)
+                            .history_view
+                            .read(cx)
+                            .scenario_drag_points(*to_fraction)
+                    })
+                    .ok_or("history has no viewport")?;
+                self.window
+                    .update(cx, |_, window, cx| {
+                        window.dispatch_event(
+                            PlatformInput::MouseDown(MouseDownEvent {
+                                button: MouseButton::Left,
+                                position: start,
+                                modifiers: Modifiers::default(),
+                                click_count: 1,
+                                first_mouse: false,
+                            }),
+                            cx,
+                        )
+                    })
+                    .map_err(|e| e.to_string())?;
+                let result = self
+                    .scheduled(
+                        *steps,
+                        *interval_ms,
+                        Some(if *wait_for_rows {
+                            WitnessKind::HistoryJumpLoaded
+                        } else {
+                            WitnessKind::HistoryScrolled
+                        }),
+                        cx,
+                        |ix, window, cx| {
+                            let progress = (ix + 1) as f32 / *steps as f32;
+                            window.dispatch_event(
+                                PlatformInput::MouseMove(MouseMoveEvent {
+                                    position: point(
+                                        start.x,
+                                        start.y + (end.y - start.y) * progress,
+                                    ),
+                                    pressed_button: Some(MouseButton::Left),
+                                    modifiers: Modifiers::default(),
+                                }),
+                                cx,
+                            );
+                        },
+                    )
+                    .await;
+                self.window
+                    .update(cx, |_, window, cx| {
+                        window.dispatch_event(
+                            PlatformInput::MouseUp(MouseUpEvent {
+                                button: MouseButton::Left,
+                                position: end,
+                                modifiers: Modifiers::default(),
+                                click_count: 1,
+                            }),
+                            cx,
+                        )
+                    })
+                    .map_err(|e| e.to_string())?;
+                result
+            }
+            Step::StartOperation {
+                operation,
+                path,
+                remote,
+                url,
+                dest,
+            } => {
+                self.start_operation(operation, path, remote, url, dest, cx)
+                    .await
+            }
+            Step::WaitOperation {
+                timeout_ms,
+                cancelled,
+            } => self.wait_operation(*timeout_ms, *cancelled, cx).await,
+            Step::CancelOperation => self.cancel_operation(cx),
+            Step::MinimizeActivity => self.minimize_activity(cx).await,
         }
     }
 
-    async fn wait_ready(&mut self, timeout_ms: u64, cx: &mut AsyncApp) -> Result<(), String> {
+    async fn wait_ready(
+        &mut self,
+        timeout_ms: u64,
+        indexed: bool,
+        cx: &mut AsyncApp,
+    ) -> Result<(), String> {
         let deadline = Instant::now() + Duration::from_millis(timeout_ms);
         loop {
             let ready = cx.update(|cx| {
@@ -535,13 +922,33 @@ impl Driver {
                     && matches!(repo.status, Loadable::Ready(_))
                     && matches!(repo.history_state.log, Loadable::Ready(_))
                     && history.history_viewport_bounds().is_some()
+                    && (!indexed
+                        || history
+                            .scenario_indexed_window()
+                            .is_some_and(|(_, _, _, loaded)| loaded))
             });
             if ready {
-                record("scenario_ready", json!({}));
+                let geometry = cx.update(|cx| {
+                    let view = self.view.read(cx);
+                    let history = view.main_pane.read(cx).history_view.read(cx);
+                    let bounds = history.history_viewport_bounds().expect("ready viewport");
+                    let commits =
+                        view.active_repo()
+                            .and_then(|repo| match &repo.history_state.log {
+                                Loadable::Ready(page) => Some(page.commits.len()),
+                                _ => None,
+                            });
+                    json!({"loaded_commits": commits, "indexed_window": history.scenario_indexed_window(), "viewport": [
+                        f32::from(bounds.left()), f32::from(bounds.top()),
+                        f32::from(bounds.size.width), f32::from(bounds.size.height)]})
+                });
+                record("scenario_ready", geometry);
                 return Ok(());
             }
             if Instant::now() > deadline {
-                return Err(format!("repository not ready within {timeout_ms} ms"));
+                return Err(format!(
+                    "repository not ready within {timeout_ms} ms (require indexed rows: {indexed})"
+                ));
             }
             self.sleep(Duration::from_millis(50), cx).await;
         }
@@ -605,19 +1012,28 @@ impl Driver {
                     view.active_repo()
                         .and_then(|repo| repo.history_state.selected_commit.clone()),
                 ),
-                WitnessKind::HistoryScrolled => Baseline::ScrollPosition(
-                    view.main_pane
-                        .read(cx)
-                        .history_view
-                        .read(cx)
-                        .history_scroll_position(),
-                ),
+                WitnessKind::HistoryScrolled | WitnessKind::HistoryJumpLoaded => {
+                    Baseline::ScrollPosition(
+                        view.main_pane
+                            .read(cx)
+                            .history_view
+                            .read(cx)
+                            .history_scroll_position(),
+                    )
+                }
                 WitnessKind::SearchSettled => {
                     Baseline::Query(view.main_pane.read(cx).diff_search_query.clone())
                 }
+                WitnessKind::RepoPickerFiltered => view
+                    .popover_host
+                    .read(cx)
+                    .scenario_repo_picker_state(cx)
+                    .map(|(query, _, _)| Baseline::Query(query.into()))
+                    .unwrap_or(Baseline::None),
                 WitnessKind::DiffLoaded
                 | WitnessKind::RepoOpen { .. }
-                | WitnessKind::RepoClosed { .. } => Baseline::None,
+                | WitnessKind::RepoClosed { .. }
+                | WitnessKind::MessageHover => Baseline::None,
             }
         })
     }
@@ -644,6 +1060,22 @@ impl Driver {
                 return false;
             };
             match kind {
+                WitnessKind::RepoPickerFiltered => view
+                    .popover_host
+                    .read(cx)
+                    .scenario_repo_picker_state(cx)
+                    .is_some_and(|(query, count, _)| {
+                        count.is_some()
+                            && match baseline {
+                                Baseline::Query(before) => query.as_str() != before.as_ref(),
+                                _ => true,
+                            }
+                    }),
+                WitnessKind::MessageHover => self.pointer_expected.is_some_and(|position| {
+                    view.commit_message_hover_host
+                        .read(cx)
+                        .scenario_contains_source(position)
+                }),
                 WitnessKind::CommitDetails => {
                     let selected = repo.history_state.selected_commit.clone();
                     if target.is_none() {
@@ -674,7 +1106,18 @@ impl Driver {
                         && !matches!(diff.diff_file, Loadable::Loading)
                         && !diff.diff_reload_in_flight
                 }
-                WitnessKind::HistoryScrolled => {
+                WitnessKind::HistoryScrolled | WitnessKind::HistoryJumpLoaded => {
+                    if matches!(kind, WitnessKind::HistoryJumpLoaded)
+                        && !view
+                            .main_pane
+                            .read(cx)
+                            .history_view
+                            .read(cx)
+                            .scenario_indexed_window()
+                            .is_some_and(|(_, _, _, loaded)| loaded)
+                    {
+                        return false;
+                    }
                     let position = view
                         .main_pane
                         .read(cx)
@@ -715,6 +1158,7 @@ impl Driver {
             let scheduled = started + interval * u32::try_from(ix).unwrap_or(u32::MAX);
             // Resolve witnesses until the next input is due.
             loop {
+                let _ = self.operation_status(cx);
                 self.resolve(&mut pending, cx);
                 let now = Instant::now();
                 if now >= scheduled {
@@ -734,6 +1178,11 @@ impl Driver {
                 .map_or(Baseline::None, |kind| self.baseline_for(kind, cx));
             let expects = u64::from(witness.is_some());
             let dispatched = self.window.update(cx, |_, window, cx| {
+                record(
+                    "scenario_input",
+                    json!({"op": op, "window": format!("{:?}", window.window_handle().window_id()),
+                    "intentional_dwell": matches!(witness, Some(WitnessKind::MessageHover))}),
+                );
                 // `b` says whether a witness will follow.
                 op_trace::record(
                     Stage::Input,
@@ -767,6 +1216,7 @@ impl Driver {
         }
         let deadline = Instant::now() + DEFAULT_WITNESS_TIMEOUT;
         while !pending.is_empty() {
+            let _ = self.operation_status(cx);
             self.resolve(&mut pending, cx);
             if pending.is_empty() {
                 break;
@@ -829,6 +1279,11 @@ impl Driver {
                 return "no active repository".to_owned();
             };
             match kind {
+                WitnessKind::RepoPickerFiltered => format!(
+                    "picker={:?}",
+                    view.popover_host.read(cx).scenario_repo_picker_state(cx)
+                ),
+                WitnessKind::MessageHover => format!("pointer={:?}", self.pointer_expected),
                 WitnessKind::CommitDetails => format!(
                     "selected={:?} details_ready={}",
                     repo.history_state.selected_commit,
@@ -845,7 +1300,7 @@ impl Driver {
                     "target={:?} reload_in_flight={}",
                     repo.diff_state.diff_target, repo.diff_state.diff_reload_in_flight
                 ),
-                WitnessKind::HistoryScrolled => format!(
+                WitnessKind::HistoryScrolled | WitnessKind::HistoryJumpLoaded => format!(
                     "position={}",
                     view.main_pane
                         .read(cx)
@@ -893,16 +1348,25 @@ impl Driver {
             .update(|cx| self.view.read(cx).active_repo_workdir())
             .ok_or("no active repository")?;
         // `None` marks a path that did not exist: restoring deletes it.
-        let mut originals = Vec::with_capacity(paths.len());
-        for path in paths {
-            let full = workdir.join(path);
-            let original = match std::fs::read(&full) {
-                Ok(bytes) => Some(bytes),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                Err(error) => return Err(format!("{}: {error}", full.display())),
-            };
-            originals.push((full, original));
-        }
+        let files: Vec<_> = paths.iter().map(|path| workdir.join(path)).collect();
+        let originals = Arc::new(
+            cx.background_executor()
+                .spawn(async move {
+                    files
+                        .into_iter()
+                        .map(|full| {
+                            let original = match std::fs::read(&full) {
+                                Ok(bytes) => Some(bytes),
+                                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                                Err(error) => return Err(format!("{}: {error}", full.display())),
+                            };
+                            Ok((full, original))
+                        })
+                        .collect::<Result<Vec<_>, String>>()
+                })
+                .await?,
+        );
+        let contents: Arc<str> = contents.into();
         let started = Instant::now();
         let interval = Duration::from_millis(interval_ms);
         let mut result = Ok(());
@@ -922,19 +1386,16 @@ impl Driver {
                 u64::from(expect_status),
             );
             let handling = Instant::now();
-            for (full, original) in &originals {
-                let written = match (dirty, original) {
-                    (true, _) => full
-                        .parent()
-                        .map_or(Ok(()), std::fs::create_dir_all)
-                        .and_then(|()| std::fs::write(full, contents)),
-                    (false, Some(original)) => std::fs::write(full, original),
-                    (false, None) => std::fs::remove_file(full),
-                };
-                if let Err(error) = written {
-                    result = Err(format!("{}: {error}", full.display()));
-                }
-            }
+            // These represent an external editor/build. Harness filesystem
+            // work must not manufacture a stall on the application's UI thread.
+            let files = Arc::clone(&originals);
+            let contents = Arc::clone(&contents);
+            result = cx
+                .background_executor()
+                .spawn(
+                    async move { write_fixture_files(&files, dirty.then_some(contents.as_ref())) },
+                )
+                .await;
             op_trace::record(
                 Stage::InputHandled,
                 op,
@@ -983,14 +1444,36 @@ impl Driver {
             }
         }
         // Leave the tree as it was, whatever happened.
-        for (full, original) in &originals {
-            let _ = match original {
-                Some(original) => std::fs::write(full, original),
-                None => std::fs::remove_file(full),
-            };
-        }
-        result
+        let restored = cx
+            .background_executor()
+            .spawn(async move { write_fixture_files(&originals, None) })
+            .await;
+        result.and(restored)
     }
+}
+
+fn write_fixture_files(
+    originals: &[(PathBuf, Option<Vec<u8>>)],
+    contents: Option<&str>,
+) -> Result<(), String> {
+    let mut result = Ok(());
+    for (full, original) in originals {
+        let written = match (contents, original) {
+            (Some(contents), _) => full
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::write(full, contents)),
+            (None, Some(original)) => std::fs::write(full, original),
+            (None, None) => match std::fs::remove_file(full) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                result => result,
+            },
+        };
+        if let Err(error) = written {
+            result = Err(format!("{}: {error}", full.display()));
+        }
+    }
+    result
 }
 
 #[cfg(test)]
@@ -1003,7 +1486,7 @@ mod tests {
     fn harness_step_shapes_parse() {
         let scenario: Scenario = serde_json::from_value(json!({
             "steps": [
-                {"do": "wait_ready", "timeout_ms": 180000},
+                {"do": "wait_ready", "timeout_ms": 180000, "indexed": true},
                 {"do": "settle", "ms": 3000},
                 {"do": "phase", "name": "select"},
                 {"do": "focus", "target": "history"},
@@ -1024,11 +1507,13 @@ mod tests {
                 {"do": "command", "id": "close-repo-tab",
                  "witness": {"kind": "repo_closed", "path": "/tmp"}},
                 {"do": "open_repo", "path": "/tmp"},
-                {"do": "minimize"}
+                {"do": "minimize"},
+                {"do": "paste", "text": "component-017", "witness": {"kind": "repo_picker_filtered"}},
+                {"do": "expect_repo_picker", "query": "component-017", "matches": 1, "selected": 0}
             ]
         }))
         .expect("parse scenario");
-        assert_eq!(scenario.steps.len(), 15);
+        assert_eq!(scenario.steps.len(), 17);
         assert!(matches!(
             scenario.steps[4],
             Step::Keys {
@@ -1058,5 +1543,42 @@ mod tests {
             "steps": [{"do": "wait_redy"}]
         }));
         assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn performance_operation_and_pointer_steps_parse() {
+        let scenario: Scenario = serde_json::from_value(json!({"steps": [
+            {"do": "move_pointer", "positions": [[0.55, 0.08]], "repeat": 1,
+             "interval_ms": 0, "witness": {"kind": "message_hover"}},
+            {"do": "drag_history", "to_fraction": 0.8, "steps": 90, "interval_ms": 16},
+            {"do": "start_operation", "operation": "clone", "url": "http://127.0.0.1/remote.git",
+             "dest": "/tmp/disposable-clone"},
+            {"do": "cancel_operation"},
+            {"do": "minimize_activity"},
+            {"do": "wait_operation", "timeout_ms": 15000, "cancelled": true}
+        ]}))
+        .expect("parse performance steps");
+        assert_eq!(scenario.steps.len(), 6);
+    }
+
+    #[test]
+    fn multi_window_steps_keep_repository_waits_explicit() {
+        let scenario: Scenario = serde_json::from_value(json!({"steps": [
+            {"do": "new_window", "name": "other"},
+            {"do": "open_repo", "path": "/tmp/repo", "wait": false},
+            {"do": "switch_window", "name": "primary"},
+            {"do": "expect_windows", "count": 2},
+            {"do": "close_window", "name": "other"},
+            {"do": "open_repo", "path": "/tmp/repo"}
+        ]}))
+        .unwrap();
+        assert!(matches!(
+            scenario.steps[1],
+            Step::OpenRepo { wait: false, .. }
+        ));
+        assert!(matches!(
+            scenario.steps[5],
+            Step::OpenRepo { wait: true, .. }
+        ));
     }
 }

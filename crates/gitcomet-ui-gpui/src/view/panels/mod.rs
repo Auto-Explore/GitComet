@@ -104,6 +104,19 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         path: std::path::PathBuf,
     },
+    OpenWorktreeDiff {
+        repo_id: RepoId,
+        worktree_path: std::path::PathBuf,
+        target: DiffTarget,
+    },
+    OpenWorktreeFile {
+        worktree_path: std::path::PathBuf,
+        path: std::path::PathBuf,
+    },
+    OpenWorktreeFileLocation {
+        worktree_path: std::path::PathBuf,
+        path: std::path::PathBuf,
+    },
     OpenFileLocation {
         repo_id: RepoId,
         path: std::path::PathBuf,
@@ -353,6 +366,11 @@ pub(in crate::view) enum ContextMenuAction {
     SetCommitFileSort {
         list: crate::view::rows::FileListId,
         sort: crate::view::rows::CommitFileSort,
+    },
+    SetFileListLayout {
+        repo_id: RepoId,
+        list: crate::view::rows::FileListId,
+        layout: crate::view::FileListLayout,
     },
     SetDiffContentMode {
         mode: DiffContentMode,

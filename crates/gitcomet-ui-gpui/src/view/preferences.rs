@@ -2,6 +2,23 @@ use super::*;
 use gitcomet_core::domain::HistoryMode;
 use gitcomet_state::model::GitLogTagFetchMode;
 
+/// The changed-file lists' default layout and sort, for lists built where
+/// the preferences are not passed in: a list an extension opens starts from
+/// them. Set from the preferences and on every change to them.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) struct FileListDefaults {
+    pub(in crate::view) layout: FileListLayout,
+    pub(in crate::view) sort: crate::view::rows::CommitFileSort,
+}
+
+impl gpui::Global for FileListDefaults {}
+
+impl FileListDefaults {
+    pub(in crate::view) fn current(cx: &App) -> Self {
+        cx.try_global::<Self>().copied().unwrap_or_default()
+    }
+}
+
 /// Window geometry and pane state restored at startup.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(super) struct WindowPreferences {
@@ -51,6 +68,7 @@ pub(super) struct ChangeTrackingPreferences {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct FileListPreferences {
     pub(super) layout: FileListLayout,
+    pub(super) sort: crate::view::rows::CommitFileSort,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -332,6 +350,11 @@ impl UiPreferences {
                     .file_list_layout
                     .as_deref()
                     .and_then(FileListLayout::from_key)
+                    .unwrap_or_default(),
+                sort: session
+                    .file_list_sort
+                    .as_deref()
+                    .and_then(crate::view::rows::CommitFileSort::from_key)
                     .unwrap_or_default(),
             },
             diff: DiffPreferences {

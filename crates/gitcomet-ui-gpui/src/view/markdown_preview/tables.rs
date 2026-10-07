@@ -1,80 +1,77 @@
 use super::*;
 
-/// Lay out every table's cells: trim the tab the last cell left, record each
-/// cell's range, give short rows empty cells, and measure the columns.
+/// Finish each table independently, including headerless HTML tables.
 pub(crate) fn finish_table_blocks(rows: &mut [MarkdownPreviewRow]) {
-    let mut start = 0usize;
+    let mut start = 0;
     while start < rows.len() {
-        if !matches!(rows[start].kind, MarkdownPreviewRowKind::TableRow { .. }) {
+        if rows[start].table.is_none() {
             start += 1;
             continue;
         }
-
-        // A header row opens a table, so it also closes the one before it —
-        // two tables that touch must keep their own columns.
         let mut end = start + 1;
         while end < rows.len()
-            && matches!(
-                rows[end].kind,
-                MarkdownPreviewRowKind::TableRow { is_header: false }
-            )
+            && rows[end]
+                .table
+                .as_ref()
+                .is_some_and(|table| !table.starts_table)
         {
             end += 1;
         }
-
         finish_table_block(&mut rows[start..end]);
         start = end;
     }
 }
 
 fn finish_table_block(rows: &mut [MarkdownPreviewRow]) {
-    let mut row_cells = Vec::with_capacity(rows.len());
-    for row in rows.iter_mut() {
-        if let Some(text) = row.text.strip_suffix('\t') {
-            row.text = SharedString::from(text.to_owned());
-        }
-        let text = row.text.as_ref();
-        let mut cells = Vec::new();
-        let mut cell_start = 0usize;
-        for (byte_ix, _) in text.match_indices('\t') {
-            cells.push(cell_start..byte_ix);
-            cell_start = byte_ix + 1;
-        }
-        cells.push(cell_start..text.len());
-        row_cells.push(cells);
-    }
-
-    let alignments = rows
-        .first()
-        .and_then(|row| row.table.as_ref())
-        .map(|table| table.table.alignments.clone())
-        .unwrap_or_default();
-    let column_count = row_cells
+    let columns = rows
         .iter()
-        .map(Vec::len)
+        .filter_map(|row| row.table.as_ref())
+        .map(|table| table.cells.len())
         .max()
-        .unwrap_or(0)
-        .max(alignments.len());
-    let mut column_widths = vec![0usize; column_count];
-    for (row, cells) in rows.iter().zip(&row_cells) {
-        for (width, cell) in column_widths.iter_mut().zip(cells) {
-            *width = (*width).max(row.text[cell.clone()].chars().count());
+        .unwrap_or(0);
+    for row in rows {
+        let table = row.table.as_mut().unwrap();
+        let mut cells = table.cells.to_vec();
+        let mut images = row.inline_images.iter().enumerate().peekable();
+        for cell in &mut cells {
+            let mut parts = Vec::new();
+            let mut at = cell.range.start;
+            while let Some(&(index, image)) = images.peek() {
+                if image.byte_offset > cell.range.end {
+                    break;
+                }
+                images.next();
+                let start = image.byte_offset;
+                let end = (start + image.alt.len()).min(cell.range.end);
+                if at < start {
+                    parts.push(MarkdownTableCellPart::Text(at..start));
+                }
+                parts.push(MarkdownTableCellPart::Image {
+                    index,
+                    range: start..end,
+                });
+                at = end;
+            }
+            if parts.is_empty() {
+                continue;
+            }
+            if at < cell.range.end {
+                parts.push(MarkdownTableCellPart::Text(at..cell.range.end));
+            }
+            cell.content = parts;
         }
-    }
-    let mut alignments = alignments;
-    alignments.resize(column_count, MarkdownTextAlign::None);
-    let table = Arc::new(MarkdownTableInfo {
-        alignments,
-        column_widths,
-    });
-
-    for (row, mut cells) in rows.iter_mut().zip(row_cells) {
-        let end = row.text.len();
-        cells.resize(column_count, end..end);
-        row.table = Some(MarkdownTableRow {
-            cells: Arc::from(cells),
-            table: Arc::clone(&table),
+        cells.resize_with(columns, || MarkdownTableCell {
+            align: if matches!(
+                row.kind,
+                MarkdownPreviewRowKind::TableRow { is_header: true }
+            ) {
+                MarkdownTextAlign::Center
+            } else {
+                MarkdownTextAlign::None
+            },
+            ..MarkdownTableCell::new(row.text.len()..row.text.len())
         });
+        table.cells = Arc::from(cells);
     }
 }
 

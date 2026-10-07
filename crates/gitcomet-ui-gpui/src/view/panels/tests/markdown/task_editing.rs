@@ -6,6 +6,7 @@ use super::*;
 fn worktree_markdown_preview_draws_task_items_as_editable_checkboxes(
     cx: &mut gpui::TestAppContext,
 ) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -49,6 +50,7 @@ fn worktree_markdown_preview_draws_task_items_as_editable_checkboxes(
 
 #[gpui::test]
 fn toggling_a_task_invalidates_the_file_preview(cx: &mut gpui::TestAppContext) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -81,7 +83,18 @@ fn toggling_a_task_invalidates_the_file_preview(cx: &mut gpui::TestAppContext) {
 
     let saved_path = fixture.workdir.join("docs/preview.md");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while std::fs::read_to_string(&saved_path).unwrap() != "- [x] ship it\n" {
+    loop {
+        let saved = {
+            // Saves briefly park the original before installing the new file.
+            // Share the worker's lock so the read cannot land in that gap.
+            let _filesystem = gitcomet_core::filesystem::global()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            std::fs::read_to_string(&saved_path).expect("read saved preview")
+        };
+        if saved == "- [x] ship it\n" {
+            break;
+        }
         assert!(
             std::time::Instant::now() < deadline,
             "checkbox save did not reach disk"
@@ -108,6 +121,7 @@ fn toggling_a_task_invalidates_the_file_preview(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn a_deleted_file_offers_no_editable_checkboxes(cx: &mut gpui::TestAppContext) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {

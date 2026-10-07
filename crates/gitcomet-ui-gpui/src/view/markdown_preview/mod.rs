@@ -233,18 +233,38 @@ pub(super) fn task_line_hash(line: &[u8], column: usize) -> u64 {
 /// by `\t` so a copied selection reads as tab-separated values.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct MarkdownTableRow {
-    /// One range per column; a row shorter than the table gets empty cells.
-    pub(super) cells: Arc<[Range<usize>]>,
-    pub(super) table: Arc<MarkdownTableInfo>,
+    /// One entry per column; a row shorter than the table gets empty cells.
+    pub(super) cells: Arc<[MarkdownTableCell]>,
+    /// Table boundaries are independent of whether a row contains headers.
+    pub(super) starts_table: bool,
 }
 
-/// What the rows of one table share.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(super) struct MarkdownTableInfo {
-    /// One per column, from the `:---:` delimiter row.
-    pub(super) alignments: Vec<MarkdownTextAlign>,
-    /// Widest cell per column in chars, for the monospace row-list rendering.
-    pub(super) column_widths: Vec<usize>,
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct MarkdownTableCell {
+    pub(super) range: Range<usize>,
+    pub(super) is_header: bool,
+    /// Resolved alignment, including default centering for headers.
+    pub(super) align: MarkdownTextAlign,
+    /// Empty for text-only cells; mixed content retains document order.
+    pub(super) content: Vec<MarkdownTableCellPart>,
+}
+
+impl MarkdownTableCell {
+    fn new(range: Range<usize>) -> Self {
+        Self {
+            range,
+            is_header: false,
+            align: MarkdownTextAlign::None,
+            content: Vec::new(),
+        }
+    }
+}
+
+/// Ranges address the row's logical text, including each image's alt text.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum MarkdownTableCellPart {
+    Text(Range<usize>),
+    Image { index: usize, range: Range<usize> },
 }
 
 /// A table column's alignment, or an HTML block's `align`.
@@ -356,3 +376,6 @@ pub(super) use wrap::*;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod table_tests;

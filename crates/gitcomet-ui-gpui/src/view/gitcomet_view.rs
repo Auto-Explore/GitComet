@@ -1260,6 +1260,11 @@ impl GitCometView {
         let show_timezone = ui_preferences.appearance.show_timezone;
         let change_tracking_view = ui_preferences.change_tracking.view;
         let file_list_layout = ui_preferences.file_lists.layout;
+        let file_list_sort = ui_preferences.file_lists.sort;
+        cx.set_global(crate::view::FileListDefaults {
+            layout: file_list_layout,
+            sort: file_list_sort,
+        });
         let terminal_preferences = ui_preferences.terminal.clone();
         let diff_scroll_sync = ui_preferences.diff.scroll_sync;
         let diff_content_mode = ui_preferences.diff.content_mode;
@@ -1926,7 +1931,12 @@ impl GitCometView {
             workspace_persist_seq: 0,
             #[cfg(test)]
             ui_settings_persist_requests_for_test: 0,
-            last_repo_activation_dispatch_at: FxHashMap::default(),
+            last_repo_activation_dispatch_at: initial_state
+                .repos
+                .iter()
+                .filter(|repo| matches!(repo.open, Loadable::Ready(_)))
+                .map(|repo| (repo.id, Instant::now()))
+                .collect(),
             window_grab_activation_suppressed_at: None,
             signing_tools_probe_seq: 0,
             signing_tools_probe_in_flight: false,
@@ -1937,6 +1947,7 @@ impl GitCometView {
             show_timezone,
             change_tracking_view,
             file_list_layout,
+            file_list_sort,
             terminal_preferences,
             terminal_sessions: FxHashMap::default(),
             terminal_panel_height: px(TERMINAL_PANEL_DEFAULT_HEIGHT_PX),

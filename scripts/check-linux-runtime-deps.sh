@@ -15,11 +15,13 @@ packages declare:
 Linked libraries reach the .deb and .rpm through dpkg-shlibdeps and rpm
 AutoReq. Runtime-loaded ones are invisible to both, so they are declared by
 hand in packaging/linux/debian-control.in and packaging/linux/gitcomet.spec.
-Update those together with the lists below.
+AUR dependencies are declared explicitly in packaging/linux/PKGBUILD.in.
+Update all three templates together with the lists below.
 EOF
 }
 
 linked_allowed=(
+  libfontconfig.so.1
   libxcb.so.1
   libxkbcommon.so.0
   libxkbcommon-x11.so.0
@@ -71,7 +73,7 @@ mapfile -t needed < <(readelf -d "$binary" | sed -n 's/.*(NEEDED).*\[\(.*\)\]$/\
 echo "Linked: ${needed[*]}"
 for lib in "${needed[@]}"; do
   if ! in_list "$lib" "${linked_allowed[@]}"; then
-    echo "error: new linked library ${lib}. dpkg-shlibdeps and rpm AutoReq declare it, but add it to linked_allowed here and to the README runtime-library note." >&2
+    echo "error: new linked library ${lib}. dpkg-shlibdeps and rpm AutoReq declare it, but add it to packaging/linux/PKGBUILD.in, linked_allowed here and the README runtime-library note." >&2
     failed=1
   fi
 done
@@ -88,7 +90,7 @@ mapfile -t loaded < <(
 echo "Runtime-loaded: ${loaded[*]}"
 for lib in "${loaded[@]}"; do
   if ! in_list "$lib" "${dlopen_expected[@]}"; then
-    echo "error: new runtime-loaded library ${lib}. Declare it in packaging/linux/debian-control.in and packaging/linux/gitcomet.spec, then add it to dlopen_expected." >&2
+    echo "error: new runtime-loaded library ${lib}. Declare it in packaging/linux/debian-control.in, packaging/linux/gitcomet.spec and packaging/linux/PKGBUILD.in, then add it to dlopen_expected." >&2
     failed=1
   fi
 done

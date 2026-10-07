@@ -286,6 +286,19 @@ fn run_browser(
         .as_mut()
         .and_then(browser_instance::PrimaryBrowserInstance::take_requests);
 
+    // Windows open repositories only once `git --version` has answered. Ask
+    // now, while GPUI and the first window start, rather than after that
+    // window's view is built; windows adopt the result (`runtime_probe`).
+    if let Some(probe) = gitcomet_core::process::begin_git_runtime_probe(false) {
+        // A thread that fails to spawn drops the probe unrun, which releases
+        // the claim, so the windows then probe for themselves.
+        let _ = std::thread::Builder::new()
+            .name("git-probe".into())
+            .spawn(move || {
+                let _ = probe.run();
+            });
+    }
+
     let startup_crash_report = crashlog::take_startup_report();
     if let Some(report) = startup_crash_report.as_ref() {
         // Keep the recovery path visible even if WSLg cannot create

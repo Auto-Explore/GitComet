@@ -59,13 +59,20 @@ pub(in crate::view) struct GroupedRows {
 }
 
 impl GroupedRows {
+    /// The row of each header, ascending.
+    pub(in crate::view) fn headers(&self) -> Arc<[usize]> {
+        self.headers.iter().copied().collect()
+    }
+
     /// The header of the group holding `row`.
+    #[cfg(test)]
     pub(in crate::view) fn header_for(&self, row: usize) -> Option<usize> {
         let after = self.headers.partition_point(|&header| header <= row);
         after.checked_sub(1).map(|ix| self.headers[ix])
     }
 
     /// The first header below `row`.
+    #[cfg(test)]
     pub(in crate::view) fn next_header(&self, row: usize) -> Option<usize> {
         let after = self.headers.partition_point(|&header| header <= row);
         self.headers.get(after).copied()
@@ -302,6 +309,16 @@ impl FileListController {
         grouped
     }
 
+    /// Which groups are collapsed, by group index.
+    pub(in crate::view) fn collapsed_groups(&self) -> &[bool] {
+        &self.collapsed_groups
+    }
+
+    /// The change-kind groups' labels, for a built-in list grouped by kind.
+    pub(in crate::view) fn kind_labels(&self) -> Arc<[SharedString]> {
+        Arc::clone(&self.kind_labels)
+    }
+
     pub(in crate::view) fn toggle_group(&mut self, group: usize) {
         if let Some(collapsed) = self.collapsed_groups.get_mut(group) {
             *collapsed = !*collapsed;
@@ -378,11 +395,15 @@ impl FileListController {
         let key = self.projection_key();
         let files = Arc::clone(&self.files);
         let sort = self.sort;
+        let kinds = Arc::clone(&self.kind_labels);
         self.plan_cache.plan_for(
             key,
-            self.plan_layout(),
-            &self.collapsed,
-            shown.len(),
+            crate::view::rows::PlanShape {
+                layout: self.plan_layout(),
+                collapsed: &self.collapsed,
+                collapsed_groups: &self.collapsed_groups,
+                file_count: shown.len(),
+            },
             || {
                 FileTree::build(
                     shown.iter().map(|&ix| FileTreeItem {
@@ -391,6 +412,12 @@ impl FileListController {
                         deletions: files[ix].deletions,
                     }),
                     sort,
+                )
+            },
+            || {
+                (
+                    shown.iter().map(|&ix| group_of(files[ix].kind)).collect(),
+                    kinds,
                 )
             },
         )

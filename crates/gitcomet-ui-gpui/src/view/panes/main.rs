@@ -105,7 +105,7 @@ pub(in crate::view) enum MainPaneContent {
 impl MainPaneView {
     pub(in crate::view) fn active_content(&self) -> MainPaneContent {
         let repo = self.active_repo();
-        if repo.is_some_and(|repo| self.bound_diff_state(repo).diff_target.is_some()) {
+        if self.rendered_diff_target().is_some() {
             MainPaneContent::Diff
         } else if self.store.binding.is_some() {
             MainPaneContent::UnboundDiff
