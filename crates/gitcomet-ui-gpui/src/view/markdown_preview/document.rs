@@ -223,14 +223,18 @@ pub(crate) fn markdown_diff_row_groups(
         // around it did: that line has no row of its own to mark. Spacers can
         // move between versions without anything changing, so only real rows
         // are paired.
-        let real = |rows: &[MarkdownPreviewRow]| {
-            rows.iter()
-                .filter(|row| !matches!(row.kind, MarkdownPreviewRowKind::Spacer))
-                .map(|row| row.align)
-                .collect::<Vec<_>>()
-        };
-        let (old_aligns, new_aligns) = (real(&group.old), real(&group.new));
-        let realigned = old_aligns.len() == new_aligns.len() && old_aligns != new_aligns;
+        let old_rows = group
+            .old
+            .iter()
+            .filter(|row| !matches!(row.kind, MarkdownPreviewRowKind::Spacer));
+        let new_rows = group
+            .new
+            .iter()
+            .filter(|row| !matches!(row.kind, MarkdownPreviewRowKind::Spacer));
+        let realigned = old_rows.clone().count() == new_rows.clone().count()
+            && old_rows
+                .zip(new_rows)
+                .any(|(old, new)| old.align != new.align || !same_table_presentation(old, new));
         let changed = realigned
             || group
                 .old
@@ -386,7 +390,25 @@ pub(crate) fn markdown_inline_diff_rows_can_merge(
         && old_row.starts_alert == new_row.starts_alert
         && old_row.continues_item == new_row.continues_item
         && old_row.align == new_row.align
+        && same_table_presentation(old_row, new_row)
         && old_row.task.map(|task| task.checked) == new_row.task.map(|task| task.checked)
+}
+
+/// Compare table boundaries and cell presentation, excluding source positions.
+fn same_table_presentation(old: &MarkdownPreviewRow, new: &MarkdownPreviewRow) -> bool {
+    match (&old.table, &new.table) {
+        (None, None) => true,
+        (Some(a), Some(b)) => {
+            old.kind == new.kind
+                && a.starts_table == b.starts_table
+                && a.cells.len() == b.cells.len()
+                && a.cells
+                    .iter()
+                    .zip(b.cells.iter())
+                    .all(|(a, b)| a.is_header == b.is_header && a.align == b.align)
+        }
+        _ => false,
+    }
 }
 
 // ── Internal helpers ────────────────────────────────────────────────────

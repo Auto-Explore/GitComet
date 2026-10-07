@@ -266,7 +266,7 @@ pub(in crate::view) fn markdown_flow_row_offset(
 const MARKDOWN_FLOW_HITBOX_MARGIN: f32 = 2.0;
 
 /// Whether a row is close enough to the window to be worth hit testing.
-fn markdown_flow_row_is_near_viewport(bounds: Bounds<Pixels>, window: &Window) -> bool {
+pub(super) fn markdown_flow_row_is_near_viewport(bounds: Bounds<Pixels>, window: &Window) -> bool {
     let height = window.viewport_size().height;
     let margin = height * MARKDOWN_FLOW_HITBOX_MARGIN;
     bounds.bottom() >= -margin && bounds.top() <= height + margin
@@ -286,7 +286,7 @@ thread_local! {
 }
 
 #[cfg(test)]
-fn record_selection_paint_for_tests(row_ix: usize, rects: &[Bounds<Pixels>]) {
+pub(super) fn record_selection_paint_for_tests(row_ix: usize, rects: &[Bounds<Pixels>]) {
     SELECTION_PAINT_LOG.with(|log| {
         let mut log = log.borrow_mut();
         log.extend(rects.iter().map(|rect| (row_ix, *rect)));
@@ -294,7 +294,7 @@ fn record_selection_paint_for_tests(row_ix: usize, rects: &[Bounds<Pixels>]) {
 }
 
 #[cfg(not(test))]
-fn record_selection_paint_for_tests(_row_ix: usize, _rects: &[Bounds<Pixels>]) {}
+pub(super) fn record_selection_paint_for_tests(_row_ix: usize, _rects: &[Bounds<Pixels>]) {}
 
 /// Font family per byte range of one row's text.
 #[cfg(test)]
@@ -541,6 +541,7 @@ impl gpui::Element for MarkdownFlowText {
                     region,
                     row_len,
                     DiffTextHitbox {
+                        atomic: false,
                         bounds,
                         layout_key: 0,
                         source_visible_ix: row_ix,
@@ -570,6 +571,7 @@ impl gpui::Element for MarkdownFlowText {
                 row_ix,
                 region,
                 DiffTextHitbox {
+                    atomic: false,
                     bounds,
                     layout_key: 0,
                     source_visible_ix: row_ix,
