@@ -11,9 +11,8 @@ fn terminal_toolbar_fill_tracks_panel_lifetime_and_target(cx: &mut gpui::TestApp
         view.update(app, |view, cx| {
             let state = Arc::clone(&view.state);
             crate::view::test_support::push_test_state(view, state, cx);
-            view.terminal_preferences.action_bar_terminal_target =
-                ActionBarTerminalTarget::Embedded;
-            view.sync_action_bar_terminal_target(cx);
+            view.terminal_preferences.terminal_button_target = TerminalButtonTarget::Embedded;
+            view.sync_terminal_button_target(cx);
         })
     });
     cx.run_until_parked();
@@ -36,9 +35,8 @@ fn terminal_toolbar_fill_tracks_panel_lifetime_and_target(cx: &mut gpui::TestApp
     );
     cx.update(|_, app| {
         view.update(app, |view, cx| {
-            view.terminal_preferences.action_bar_terminal_target =
-                ActionBarTerminalTarget::External;
-            view.sync_action_bar_terminal_target(cx);
+            view.terminal_preferences.terminal_button_target = TerminalButtonTarget::External;
+            view.sync_terminal_button_target(cx);
         })
     });
     cx.run_until_parked();
@@ -50,9 +48,8 @@ fn terminal_toolbar_fill_tracks_panel_lifetime_and_target(cx: &mut gpui::TestApp
     );
     cx.update(|window, app| {
         view.update(app, |view, cx| {
-            view.terminal_preferences.action_bar_terminal_target =
-                ActionBarTerminalTarget::Embedded;
-            view.sync_action_bar_terminal_target(cx);
+            view.terminal_preferences.terminal_button_target = TerminalButtonTarget::Embedded;
+            view.sync_terminal_button_target(cx);
             view.close_terminal_tab(repo_id, 0, window, cx);
         })
     });
@@ -62,6 +59,42 @@ fn terminal_toolbar_fill_tracks_panel_lifetime_and_target(cx: &mut gpui::TestApp
         paint(cx, "terminal"),
         closed,
         "closing the last tab must clear the toggle"
+    );
+}
+
+/// The terminal toggle is an icon in the status bar, beside the other panel
+/// toggles; the action bar no longer carries it.
+#[gpui::test]
+fn the_terminal_toggle_sits_in_the_status_bar(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (view, _repo_id, cx) = test_root_view_with_active_repo(cx);
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            let state = Arc::clone(&view.state);
+            crate::view::test_support::push_test_state(view, state, cx);
+        })
+    });
+    cx.run_until_parked();
+    crate::test_support::refresh_and_draw(cx);
+
+    let terminal = cx.debug_bounds("terminal").expect("the terminal toggle");
+    let details = cx
+        .debug_bounds("details_toggle")
+        .expect("the details toggle");
+    let actions = cx
+        .debug_bounds("right_action_group")
+        .expect("the action bar's right group");
+    assert!(
+        (terminal.center().y - details.center().y).abs() < gpui::px(1.0),
+        "on the status bar's row: {terminal:?} vs {details:?}"
+    );
+    assert!(
+        terminal.right() <= details.left(),
+        "before the details toggle"
+    );
+    assert!(
+        !actions.contains(&terminal.center()),
+        "not in the action bar: {terminal:?} inside {actions:?}"
     );
 }
 
