@@ -1599,11 +1599,11 @@ fn journal_storage_skips_cross_volume_candidates() {
         return;
     }
     let root = canonical_path(fixture.path()).unwrap();
+    // Own the repository fallback so ancestor .git directories cannot affect it.
     let gitdir = root.join(".git");
     fs::create_dir(&gitdir).unwrap();
     let mut service = Filesystem::with_storage_candidates(vec![other_volume.path().to_path_buf()]);
-    replace_for_shutdown(&mut service, fixture.path());
-    // Use our own repository fallback, regardless of Git dirs above the fixture.
+    replace_for_shutdown(&mut service, &root);
     let areas = journal_areas(&service);
     assert!(!areas.is_empty());
     assert!(

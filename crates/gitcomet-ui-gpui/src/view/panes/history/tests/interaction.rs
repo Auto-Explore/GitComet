@@ -1079,11 +1079,14 @@ fn history_refs_hover_lists_refs_and_opens_item_menus_in_mode(
         gpui::MouseButton::Right,
         gpui::Modifiers::default(),
     );
-    cx.simulate_mouse_up(
-        combined_chip_point,
-        gpui::MouseButton::Right,
+    let moved = combined_chip_point + point(px(1.0), px(1.0));
+    cx.simulate_mouse_move(
+        moved,
+        Some(gpui::MouseButton::Right),
         gpui::Modifiers::default(),
     );
+    redraw(cx);
+    cx.simulate_mouse_up(moved, gpui::MouseButton::Right, gpui::Modifiers::default());
     cx.run_until_parked();
     redraw(cx);
     cx.update(|_window, app| {
