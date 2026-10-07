@@ -331,41 +331,38 @@ pub fn revision_lookups(hash: &str, refs: &str) {
         assert!(resolve(repo, &"f".repeat(12)).is_err());
     }
 
-    // Enough blobs that two share a four-digit prefix; ambiguity must be named.
-    let blobs = tempfile::tempdir().unwrap();
-    let paths: String = (0..1500)
-        .map(|i| {
-            let path = blobs.path().join(i.to_string());
-            fs::write(&path, format!("blob {i}\n")).unwrap();
-            format!("{}\n", path.display())
+    // Find a four-digit prefix collision in memory and store only its two blobs.
+    // Writing every candidate exhausts temporary filesystem inodes unnecessarily.
+    let object_hash = gix::ObjectId::from_hex(second.as_bytes()).unwrap().kind();
+    let mut prefixes = std::collections::HashMap::new();
+    // There are 65,536 four-digit prefixes, so one more candidate guarantees a collision.
+    let (first_blob, second_blob, ambiguous) = (0..=65_536)
+        .find_map(|i| {
+            let contents = format!("blob {i}\n");
+            let id =
+                gix::objs::compute_hash(object_hash, gix::objs::Kind::Blob, contents.as_bytes())
+                    .unwrap();
+            let prefix = [id.as_bytes()[0], id.as_bytes()[1]];
+            prefixes
+                .insert(prefix, i)
+                .map(|first| (first, i, id.to_string()[..4].to_owned()))
         })
-        .collect();
-    let mut cmd = Command::new("git");
-    test_git_env::apply(&mut cmd);
-    let mut child = cmd
-        .arg("-C")
-        .arg(dir.path())
-        .args(["hash-object", "-w", "--stdin-paths"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    use std::io::Write as _;
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(paths.as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(output.status.success());
-    let mut prefixes = std::collections::HashSet::new();
-    let ambiguous = String::from_utf8(output.stdout)
-        .unwrap()
-        .lines()
-        .map(|id| id[..4].to_owned())
-        .find(|prefix| !prefixes.insert(prefix.clone()))
-        .expect("1500 ids share a four-digit prefix");
+        .expect("find a four-digit blob/blob collision");
+    let blob_file = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
+    let ids = [first_blob, second_blob].map(|i| {
+        fs::write(blob_file.path(), format!("blob {i}\n")).unwrap();
+        git(
+            dir.path(),
+            &[
+                "hash-object",
+                "-w",
+                "--no-filters",
+                blob_file.path().to_str().unwrap(),
+            ],
+        )
+    });
+    assert_ne!(ids[0], ids[1]);
+    assert!(ids.iter().all(|id| id.starts_with(&ambiguous)));
     let repo = GixBackend.open(dir.path()).unwrap();
     let error = resolve(repo.as_ref(), &ambiguous).unwrap_err().to_string();
     assert!(
