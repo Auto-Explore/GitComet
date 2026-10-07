@@ -13,6 +13,9 @@
 /// dependency so versions cannot drift.
 pub use gpui;
 
+/// The exact GPUI revision used by this kit and its host.
+pub const GPUI_REVISION: &str = "d0e01e8854d87ff749168b84ab16566b1e1919b6";
+
 pub mod appearance;
 pub mod assets;
 pub mod bundled_fonts;
@@ -104,6 +107,7 @@ mod version_contract {
         };
 
         let gpui_revision = revision("gpui");
+        assert_eq!(gpui_revision, super::GPUI_REVISION);
         for dependency in ["gpui_platform", "gpui_wgpu", "gpui_parley"] {
             assert_eq!(
                 revision(dependency),

@@ -1,4 +1,4 @@
-use crate::model::{AppState, ConflictFileLoadMode};
+use crate::model::{AppState, ConflictFileLoadMode, WorktreeDirtyScope};
 use crate::msg::Msg;
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession, ConflictStageParts};
 use gitcomet_core::domain::{
@@ -11,7 +11,7 @@ use gitcomet_core::mergetool_trace::{
 };
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{CancellationToken, ConflictFileStages, GitBackend, GitRepository};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Instant;
@@ -1192,7 +1192,7 @@ pub(super) fn schedule_load_worktrees(
     );
 }
 
-/// Scans every *other* linked worktree for uncommitted changes.
+/// Scans all other linked worktrees, or just the requested checkouts.
 ///
 /// The worktree list is re-read inside the task rather than passed in from
 /// state: this way the scan can never disagree with the paths it walks, and it
@@ -1209,9 +1209,11 @@ pub(super) fn schedule_load_worktree_dirty(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     own_workdir: PathBuf,
+    scope: WorktreeDirtyScope,
     files_for: Option<PathBuf>,
     cancellation: CancellationToken,
 ) {
+    let missing_scope = scope.clone();
     spawn_detached_with_repo_or_else(
         executor,
         "load-worktree-dirty",
@@ -1253,6 +1255,9 @@ pub(super) fn schedule_load_worktree_dirty(
                             continue;
                         }
                         scanned.push(worktree.path.clone());
+                        if !scope.includes(&worktree.path) {
+                            continue;
+                        }
                         let Some(handle) = worktree_scan_handle(
                             worktree_scan_handles(),
                             &*backend,
@@ -1278,7 +1283,6 @@ pub(super) fn schedule_load_worktree_dirty(
                                 // removed or replaced underneath it.
                                 forget_worktree_scan_handle(
                                     worktree_scan_handles(),
-                                    repo_id,
                                     &worktree.path,
                                 );
                                 continue;
@@ -1322,7 +1326,11 @@ pub(super) fn schedule_load_worktree_dirty(
                 });
             send_or_log(
                 &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded { repo_id, result }),
+                Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+                    repo_id,
+                    scope,
+                    result,
+                }),
             );
         },
         move |msg_tx| {
@@ -1330,6 +1338,7 @@ pub(super) fn schedule_load_worktree_dirty(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
                     repo_id,
+                    scope: missing_scope,
                     result: Err(missing_repo_error(repo_id)),
                 }),
             );
@@ -1345,26 +1354,26 @@ pub(super) fn schedule_load_worktree_dirty(
 /// the index and the worktree, so a reused handle reports fresh results; a handle
 /// that fails is dropped ([`forget_worktree_scan_handle`]) and reopened next time.
 ///
-/// Keyed by repo as well as path: entries are pruned against the worktree list of
-/// the scan that owns them ([`retain_worktree_scan_handles`]), dropped outright
-/// when the repo's tab closes ([`release_worktree_scan_handles`]), and one repo's
-/// scan must not evict another's.
+/// Keyed by canonical checkout path so linked tabs share warm status caches.
+/// Owners are tracked separately: pruning or closing one tab releases only its
+/// ownership, and a handle is dropped when no tabs still need it.
 static WORKTREE_SCAN_HANDLES: OnceLock<Mutex<WorktreeScanHandles>> = OnceLock::new();
 
 /// Handles held open across scans. Each one keeps file descriptors and mapped
 /// index data alive, so the total is capped rather than left to grow with every
 /// worktree the session has ever looked at.
-const WORKTREE_SCAN_HANDLE_LIMIT: usize = 16;
+const WORKTREE_SCAN_HANDLE_LIMIT: usize = 64;
 
 #[derive(Default)]
 struct WorktreeScanHandles {
-    entries: FxHashMap<(RepoId, PathBuf), WorktreeScanHandle>,
+    entries: FxHashMap<PathBuf, WorktreeScanHandle>,
     /// Ticks once per lookup; the entry holding the highest tick is the hottest.
     clock: u64,
 }
 
 struct WorktreeScanHandle {
     handle: Arc<dyn GitRepository>,
+    owners: FxHashSet<RepoId>,
     last_used: u64,
 }
 
@@ -1376,15 +1385,10 @@ impl WorktreeScanHandles {
 
     /// Frees a slot for a new entry belonging to `repo_id`.
     ///
-    /// The slot comes out of whichever repo holds the most, with the requester
-    /// winning ties. That first step is what keeps repos from starving each
-    /// other: the map is process-wide, and a rule that always spent the
-    /// requester's own budget froze whatever split the tabs happened to open in.
-    /// Two repos of ten worktrees each, the first to scan taking ten slots and
-    /// the second the remaining six, left the second pinned at six forever --
-    /// every scan re-paying discovery and config parsing for the tail of its
-    /// list, which is the cost this cache exists to avoid. Taking from the
-    /// largest holder walks that split down to an even one and then holds there.
+    /// Take from the largest owner, with the requester winning ties, so a new
+    /// repository can earn a fair share rather than staying pinned to whatever
+    /// slots were free when it opened. Shared checkouts occupy one slot but
+    /// count toward each owner's share.
     ///
     /// Within the requester's own entries the *most* recently used goes, not the
     /// coldest. A scan walks `list_worktrees` in order and every scan walks the
@@ -1401,8 +1405,10 @@ impl WorktreeScanHandles {
     /// keep.
     fn evict_one_for(&mut self, repo_id: RepoId) -> bool {
         let mut held: FxHashMap<RepoId, usize> = FxHashMap::default();
-        for (entry_repo, _) in self.entries.keys() {
-            *held.entry(*entry_repo).or_default() += 1;
+        for entry in self.entries.values() {
+            for owner in &entry.owners {
+                *held.entry(*owner).or_default() += 1;
+            }
         }
         let Some(largest) = held
             .into_iter()
@@ -1419,7 +1425,7 @@ impl WorktreeScanHandles {
         let of_largest = self
             .entries
             .iter()
-            .filter(|((entry_repo, _), _)| *entry_repo == largest);
+            .filter(|(_, entry)| entry.owners.contains(&largest));
         let victim = if largest == repo_id {
             of_largest.max_by_key(|(_, entry)| entry.last_used)
         } else {
@@ -1458,12 +1464,13 @@ fn worktree_scan_handle(
     repo_id: RepoId,
     path: &Path,
 ) -> Option<Arc<dyn GitRepository>> {
-    let key = (repo_id, path.to_path_buf());
+    let key = canonicalize_or_original(path.to_path_buf());
     {
         let mut handles = lock_worktree_scan_handles(handles);
         let now = handles.tick();
         if let Some(entry) = handles.entries.get_mut(&key) {
             entry.last_used = now;
+            entry.owners.insert(repo_id);
             return Some(Arc::clone(&entry.handle));
         }
     }
@@ -1473,12 +1480,20 @@ fn worktree_scan_handle(
     // stall every other repo's scan behind it.
     let handle = backend.open(path).ok()?;
     let mut handles = lock_worktree_scan_handles(handles);
+    // A diff load and the scanner can open the same checkout concurrently.
+    let now = handles.tick();
+    if let Some(entry) = handles.entries.get_mut(&key) {
+        entry.last_used = now;
+        entry.owners.insert(repo_id);
+        return Some(Arc::clone(&entry.handle));
+    }
     while handles.entries.len() >= WORKTREE_SCAN_HANDLE_LIMIT && handles.evict_one_for(repo_id) {}
     let last_used = handles.tick();
     handles.entries.insert(
         key,
         WorktreeScanHandle {
             handle: Arc::clone(&handle),
+            owners: FxHashSet::from_iter([repo_id]),
             last_used,
         },
     );
@@ -1528,23 +1543,26 @@ fn retain_worktree_scan_handles(
     repo_id: RepoId,
     seen: &[PathBuf],
 ) {
+    let seen: FxHashSet<_> = seen
+        .iter()
+        .map(|path| canonicalize_or_original(path.clone()))
+        .collect();
     lock_worktree_scan_handles(handles)
         .entries
-        .retain(|(entry_repo, path), _| *entry_repo != repo_id || seen.contains(path));
+        .retain(|path, entry| {
+            if !seen.contains(path) {
+                entry.owners.remove(&repo_id);
+            }
+            !entry.owners.is_empty()
+        });
 }
 
-fn forget_worktree_scan_handle(handles: &Mutex<WorktreeScanHandles>, repo_id: RepoId, path: &Path) {
+fn forget_worktree_scan_handle(handles: &Mutex<WorktreeScanHandles>, path: &Path) {
     lock_worktree_scan_handles(handles)
         .entries
-        .remove(&(repo_id, path.to_path_buf()));
+        .remove(&canonicalize_or_original(path.to_path_buf()));
 }
 
-/// Drops every handle a repo holds, for when the repo itself goes away.
-///
-/// Nothing else can: the per-scan prune only runs from that repo's own scan, so a
-/// closed tab's handles -- file descriptors and mapped index data, one set per
-/// linked worktree -- would otherwise sit there for the life of the process,
-/// released only if unrelated repos happened to push the map to its limit.
 /// Drops every scan handle, e.g. after a fetch, so none keeps old packs mapped.
 pub(in crate::store) fn release_all_worktree_scan_handles() {
     lock_worktree_scan_handles(worktree_scan_handles())
@@ -1553,9 +1571,7 @@ pub(in crate::store) fn release_all_worktree_scan_handles() {
 }
 
 pub(in crate::store) fn release_worktree_scan_handles(repo_id: RepoId) {
-    lock_worktree_scan_handles(worktree_scan_handles())
-        .entries
-        .retain(|(entry_repo, _), _| *entry_repo != repo_id);
+    retain_worktree_scan_handles(worktree_scan_handles(), repo_id, &[]);
 }
 
 /// Whether `worktree_path` is the worktree this tab already has open — those
@@ -2957,6 +2973,68 @@ mod worktree_scan_handle_tests {
         Mutex::new(WorktreeScanHandles::default())
     }
 
+    #[test]
+    fn twenty_worktrees_stay_warm_across_linked_tabs() {
+        let handles = handles();
+        let backend = CountingBackend::new();
+        let paths: Vec<_> = (0..20)
+            .map(|ix| PathBuf::from(format!("/wt/shared-warm-{ix}")))
+            .collect();
+        let mut first_handles = Vec::new();
+        for path in &paths {
+            first_handles
+                .push(worktree_scan_handle(&handles, &backend, RepoId(4100), path).unwrap());
+        }
+        for repo_id in [RepoId(4101), RepoId(4100), RepoId(4101)] {
+            for (path, first) in paths.iter().zip(&first_handles) {
+                let reused = worktree_scan_handle(&handles, &backend, repo_id, path).unwrap();
+                assert!(
+                    Arc::ptr_eq(first, &reused),
+                    "the checkout keeps its warmed status state"
+                );
+            }
+        }
+        assert_eq!(
+            backend.opens(),
+            paths.len(),
+            "each physical checkout is opened just once"
+        );
+        assert_eq!(
+            lock_worktree_scan_handles(&handles).entries.len(),
+            paths.len()
+        );
+        retain_worktree_scan_handles(&handles, RepoId(4100), &[]);
+        assert_eq!(
+            lock_worktree_scan_handles(&handles).entries.len(),
+            paths.len(),
+            "closing one tab retains shared handles"
+        );
+        retain_worktree_scan_handles(&handles, RepoId(4101), &[]);
+        assert!(
+            lock_worktree_scan_handles(&handles).entries.is_empty(),
+            "closing the last owner releases the cache"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn alternate_checkout_paths_share_a_cache_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let checkout = dir.path().join("checkout");
+        let alias = dir.path().join("alias");
+        std::fs::create_dir(&checkout).unwrap();
+        std::os::unix::fs::symlink(&checkout, &alias).unwrap();
+        let handles = handles();
+        let backend = CountingBackend::new();
+        let first = worktree_scan_handle(&handles, &backend, RepoId(4102), &checkout).unwrap();
+        let second = worktree_scan_handle(&handles, &backend, RepoId(4103), &alias).unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(backend.opens(), 1);
+        retain_worktree_scan_handles(&handles, RepoId(4102), &[]);
+        retain_worktree_scan_handles(&handles, RepoId(4103), &[alias]);
+        assert_eq!(lock_worktree_scan_handles(&handles).entries.len(), 1);
+    }
+
     /// Opening a repository is discovery plus config parsing, and the scan runs on
     /// every git-state flush. A repo with more worktrees than the cache holds must
     /// still keep its hottest ones: clearing the map wholesale at the limit made
@@ -3010,6 +3088,9 @@ mod worktree_scan_handle_tests {
                 worktree_scan_handle(&handles, &backend, repo_id, path)
                     .expect("stub backend opens");
             }
+            assert!(
+                lock_worktree_scan_handles(&handles).entries.len() <= WORKTREE_SCAN_HANDLE_LIMIT
+            );
             backend.opens() - before
         };
 
@@ -3076,14 +3157,14 @@ mod worktree_scan_handle_tests {
 
         worktree_scan_handle(&handles, &backend, mine, &path).expect("stub backend opens");
         worktree_scan_handle(&handles, &backend, theirs, &path).expect("stub backend opens");
-        assert_eq!(backend.opens(), 2);
+        assert_eq!(backend.opens(), 1, "tabs share a single checkout handle");
 
         retain_worktree_scan_handles(&handles, mine, &[]);
 
         worktree_scan_handle(&handles, &backend, theirs, &path).expect("stub backend opens");
         assert_eq!(
             backend.opens(),
-            2,
+            1,
             "the other repo's handle must survive this repo's prune"
         );
     }
@@ -3115,8 +3196,8 @@ mod worktree_scan_handle_tests {
         let held = |repo_id: RepoId| {
             lock_worktree_scan_handles(&handles)
                 .entries
-                .keys()
-                .filter(|(entry_repo, _)| *entry_repo == repo_id)
+                .values()
+                .filter(|entry| entry.owners.contains(&repo_id))
                 .count()
         };
 
@@ -3167,8 +3248,8 @@ mod worktree_scan_handle_tests {
         let held = |repo_id: RepoId| {
             lock_worktree_scan_handles(shared)
                 .entries
-                .keys()
-                .filter(|(entry_repo, _)| *entry_repo == repo_id)
+                .values()
+                .filter(|entry| entry.owners.contains(&repo_id))
                 .count()
         };
         assert_eq!(held(closed), 0, "the closed repo must hold nothing");
@@ -3206,6 +3287,96 @@ mod worktree_dirty_files_tests {
             branch: Some("side".into()),
             detached: false,
         }
+    }
+
+    #[test]
+    fn targeted_worker_opens_only_the_requested_checkout_and_full_worker_scans_all() {
+        use crate::msg::InternalMsg;
+        use crate::store::tests::repo_with_linked_worktree;
+        use std::time::Duration;
+        struct CountingBackend {
+            opened: Mutex<Vec<PathBuf>>,
+        }
+        impl GitBackend for CountingBackend {
+            fn open(&self, path: &Path) -> gitcomet_core::services::Result<Arc<dyn GitRepository>> {
+                self.opened
+                    .lock()
+                    .unwrap()
+                    .push(canonicalize_or_original(path.to_path_buf()));
+                gitcomet_git_gix::GixBackend.open(path)
+            }
+        }
+        let (dir, own, selected) = repo_with_linked_worktree();
+        let other = dir.path().join("other");
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&own)
+            .args(["worktree", "add", "-q", "-b", "other"])
+            .arg(&other)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let other = canonicalize_or_original(other);
+        std::fs::write(selected.join("a.txt"), "selected checkout edit\n").unwrap();
+        std::fs::write(other.join("a.txt"), "other checkout edit\n").unwrap();
+        let repo_id = RepoId(4104);
+        let repos =
+            FxHashMap::from_iter([(repo_id, gitcomet_git_gix::GixBackend.open(&own).unwrap())]);
+        let backend = Arc::new(CountingBackend {
+            opened: Mutex::new(Vec::new()),
+        });
+        let executor = TaskExecutor::new(1);
+        let scan = |scope: WorktreeDirtyScope, files_for| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            schedule_load_worktree_dirty(
+                &executor,
+                backend.clone(),
+                &repos,
+                StoreWorkerSender::for_test_msg_sender(tx),
+                repo_id,
+                own.clone(),
+                scope.clone(),
+                files_for,
+                CancellationToken::new(),
+            );
+            loop {
+                let msg = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                if let Msg::Internal(InternalMsg::WorktreeDirtyLoaded {
+                    scope: returned,
+                    result,
+                    ..
+                }) = msg
+                {
+                    assert_eq!(returned, scope);
+                    break result.unwrap();
+                }
+            }
+        };
+        let summaries = scan(
+            WorktreeDirtyScope::Paths(vec![selected.clone()]),
+            Some(selected.clone()),
+        );
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].path, selected);
+        assert_eq!(summaries[0].unstaged[0].path, PathBuf::from("a.txt"));
+        assert_eq!(
+            *backend.opened.lock().unwrap(),
+            vec![selected.clone()],
+            "unrelated checkouts must not be opened or scanned"
+        );
+        let summaries = scan(WorktreeDirtyScope::All, None);
+        assert_eq!(summaries.len(), 2);
+        assert!(summaries.iter().all(|summary| summary.unstaged.is_empty()));
+        assert!(summaries.iter().any(|summary| summary.path == other));
+        // A removed target returns a scoped empty result; it cannot erase other rows.
+        let missing = dir.path().join("missing");
+        assert!(scan(WorktreeDirtyScope::Paths(vec![missing]), None).is_empty());
+        executor.join();
+        release_worktree_scan_handles(repo_id);
     }
 
     /// The file lists are the expensive part of a summary -- an un-ignored build

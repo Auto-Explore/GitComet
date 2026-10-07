@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::interaction_paint::InteractionPaint;
 use gpui::{
     App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement, Pixels,
     Style, StyleRefinement, Styled, Window,
@@ -23,6 +24,7 @@ pub(super) fn keyed_canvas<T>(
         prepaint: Some(Box::new(prepaint)),
         paint: Some(Box::new(paint)),
         style: StyleRefinement::default(),
+        interaction: None,
     }
 }
 
@@ -31,6 +33,14 @@ pub(super) struct KeyedCanvas<T> {
     prepaint: Option<PrepaintCallback<T>>,
     paint: Option<PaintCallback<T>>,
     style: StyleRefinement,
+    interaction: Option<InteractionPaint>,
+}
+
+impl<T> KeyedCanvas<T> {
+    pub(super) fn track_interaction(mut self, interaction: InteractionPaint) -> Self {
+        self.interaction = Some(interaction);
+        self
+    }
 }
 
 impl<T: 'static> IntoElement for KeyedCanvas<T> {
@@ -77,6 +87,9 @@ impl<T: 'static> Element for KeyedCanvas<T> {
     ) -> Option<T> {
         let prepaint =
             take_once_or_debug(&mut self.prepaint, "KeyedCanvas::prepaint callback missing")?;
+        if let Some(interaction) = &self.interaction {
+            interaction.prepaint_canvas(_id.expect("keyed canvas has an id"), bounds, window);
+        }
         Some(prepaint(bounds, window, cx))
     }
 
@@ -101,6 +114,9 @@ impl<T: 'static> Element for KeyedCanvas<T> {
             return;
         };
 
+        if let Some(interaction) = &self.interaction {
+            interaction.paint_canvas(window);
+        }
         style.paint(bounds, window, cx, move |window, cx| {
             paint(bounds, prepaint_state, window, cx)
         });

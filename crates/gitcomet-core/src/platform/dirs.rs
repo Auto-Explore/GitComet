@@ -4,6 +4,8 @@
 //! products never share state. Environment values are read as `OsString` and
 //! joined without conversion: a non-UTF-8 home directory still works. An empty
 //! variable counts as unset.
+//! `GITCOMET_PROFILE_ROOT` isolates state/data/crashes for diagnostic launches
+//! on every platform, without changing the process's home directory.
 //!
 //! | | state | data | crashes |
 //! |---|---|---|---|
@@ -97,6 +99,9 @@ impl<'a> ProductDirs<'a> {
     }
 
     pub fn state_dir(&self) -> Option<PathBuf> {
+        if let Some(root) = self.var("GITCOMET_PROFILE_ROOT") {
+            return Some(root.join("state").join(self.directory_name));
+        }
         let name = self.directory_name;
         match self.platform {
             Platform::Linux => self
@@ -115,6 +120,9 @@ impl<'a> ProductDirs<'a> {
     }
 
     pub fn data_dir(&self) -> Option<PathBuf> {
+        if let Some(root) = self.var("GITCOMET_PROFILE_ROOT") {
+            return Some(root.join("data").join(self.directory_name));
+        }
         match self.platform {
             Platform::Linux => self
                 .var("XDG_DATA_HOME")
@@ -128,6 +136,9 @@ impl<'a> ProductDirs<'a> {
     }
 
     pub fn crash_dir(&self) -> Option<PathBuf> {
+        if self.var("GITCOMET_PROFILE_ROOT").is_some() {
+            return Some(self.state_dir()?.join("crashes"));
+        }
         let base = match self.platform {
             Platform::Linux | Platform::Windows => return Some(self.state_dir()?.join("crashes")),
             Platform::MacOs => self.home()?.join("Library").join("Logs"),
@@ -167,6 +178,29 @@ mod tests {
 
     fn paths(values: [&str; 3]) -> [Option<PathBuf>; 3] {
         values.map(|value| Some(PathBuf::from(value)))
+    }
+
+    #[test]
+    fn diagnostic_profiles_isolate_all_platforms_without_replacing_home() {
+        for platform in [
+            Platform::Linux,
+            Platform::MacOs,
+            Platform::Windows,
+            Platform::Other,
+        ] {
+            assert_eq!(
+                resolve(
+                    &ProductIdentity::gitcomet(),
+                    platform,
+                    &[("HOME", "/user"), ("GITCOMET_PROFILE_ROOT", "/capture")]
+                ),
+                paths([
+                    "/capture/state/gitcomet",
+                    "/capture/data/gitcomet",
+                    "/capture/state/gitcomet/crashes"
+                ])
+            );
+        }
     }
 
     #[test]

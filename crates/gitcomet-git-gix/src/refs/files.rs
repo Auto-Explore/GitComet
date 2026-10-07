@@ -7,12 +7,6 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-pub(crate) fn status(
-    repo: &gix::Repository,
-) -> Result<gix::status::Platform<'_, gix::progress::Discard>> {
-    repo.status(gix::progress::Discard).map_err(super::failure)
-}
-
 pub(crate) fn reflog_lines_rev(
     platform: &mut gix::refs::file::log::iter::Platform<'_, '_>,
     context: &str,

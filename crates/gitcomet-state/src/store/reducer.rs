@@ -2165,9 +2165,11 @@ fn reduce_inner(
         Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded { repo_id, result }) => {
             effects::worktrees_loaded(state, repo_id, result)
         }
-        Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded { repo_id, result }) => {
-            effects::worktree_dirty_loaded(state, repo_id, result)
-        }
+        Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+            repo_id,
+            scope,
+            result,
+        }) => effects::worktree_dirty_loaded(state, repo_id, scope, result),
         Msg::Internal(crate::msg::InternalMsg::RefMetadataLoaded { repo_id, result }) => {
             effects::ref_metadata_loaded(state, repo_id, result)
         }

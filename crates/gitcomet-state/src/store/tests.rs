@@ -197,3 +197,6 @@ mod repo_management;
 mod repo_monitor;
 mod send_failures;
 mod worktree_redirect;
+mod worktree_scanning;
+
+pub(in crate::store) use worktree_redirect::repo_with_linked_worktree;

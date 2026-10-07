@@ -326,3 +326,217 @@ decoration reuse, shared 100k selections, bounded emitted paths, and the existin
 32-block/two-request/stale-result contracts. Generated and targeted graph cases
 compare transitions, checkpoint restoration, attribution, spans and selection
 highlighting with the retained original algorithm.
+
+## Shared reads and compact text (2026-10-04)
+
+Repository ownership now has three levels. A weak common-directory registry
+finds common-repository owners of compatible object stores and immutable history
+topology; a weak working-tree
+registry reuses backend handles for matching `RepositoryOptions`. Each window
+still owns its selections, graph presentation, publication sequences, progress
+subscriptions and cancellation. Watchers remain independently owned, and full
+activation refreshes remain enabled.
+
+Both registries compare canonical paths and open filesystem identities. A
+repository replaced at the same path cannot inherit the old registration. Store
+compatibility includes object format, replacement mappings and their reference
+namespace, recursively resolved alternate stores, trust and effective store
+configuration. Attaching an object store preserves the working tree's own refs,
+configuration and parsed index. LFS/annex detection, attributes, storage paths,
+status and working-file caches stay with that working tree.
+
+Each history request resolves its own HEAD, references and configuration. Its
+exact query includes the common identity, object interpretation generation,
+mode, normalized author filter, reference exclusions, resolved tips and shallow
+boundaries. Matching all-branches requests across linked worktrees share an
+index. Different HEAD-based histories and filters stay separate. Registrations
+coalesce before the build queue; each requester receives progress and can leave
+independently. The last requester cancels the underlying build. Completed index
+registrations are weak.
+
+`GitRepository::read_history_range_shared` defaults to wrapping the existing
+range method for other backends. The gix backend decodes a matching block once;
+indexed delivery retains that `Arc<HistoryRange>` through the state reducer.
+Optional decoded retention is limited to 32 MiB process-wide and 8,192 rows per
+common repository across all its worktrees and queries. Byte accounting charges
+array capacity, strings and Arc headers conservatively. Caller-pinned blocks
+remain reusable through weak registrations after optional retention is evicted.
+The opt-in `scenario_history_memory` diagnostic reports optional retained bytes,
+caller-pinned bytes and retained rows separately; the two byte counts overlap
+when both callers and the cache own a block and must not be added together.
+
+Rotating range readers remain separate from persistent stores. Common-repository
+maintenance cancels old builds, invalidates registrations and refreshes the
+working-tree owners together. Active readers retain their old mappings until
+they finish. History with changed replacement/alternate interpretation rejects
+old indexes so a refresh can obtain the new generation.
+
+The review follow-up separates physical mapping generations from history
+interpretation generations. Pack-access recovery rotates mappings while keeping
+compatible index registrations, so both the automatic retry and a later range
+Retry can use the original index. Explicit maintenance still invalidates history.
+Unreadable store identities use an owner-scoped fallback that stays stable
+within one backend handle and prevents sharing with other worktrees. Recovery of
+the filesystem identity changes the generation normally. Equal page/index
+queries also intern their snapshot strings through weak registrations, retaining
+pointer equality even when the index is shared or has weak observers.
+The workspace CI runner with the `test` profile passed 9,271 tests (47 ignored)
+after these fixes. This includes the vendored GPUI's portable tests; its upstream
+renderer-source audit is excluded because the sibling renderer sources are not
+vendored. All-target Clippy for the changed backend/UI crates also passed. The
+CI run additionally corrected a missing benchmark requirement on
+`interaction-probe`, the exported GPUI revision, scenario clipboard routing and
+the new worker's product-specific labels.
+
+The local GPUI patch reduces `ShapedLine` from 2,984 to 128 bytes on x86-64 using
+empty, single-run and shared multiple-run decorations. Wrapped text uses the same
+storage without reserving 32 slots. Text cache limits are unchanged. Author row
+data caches Unicode initials and their hash. History's existing canvas now owns
+its pointer tracker and hitbox, removing the extra tracker layout wrappers while
+retaining the control's click handlers and ordinary interaction styling. See
+`vendor/README.md` for the upstream revision and patch boundary.
+
+Deterministic tests cover concurrent four-window index/block identity, linked
+worktree query compatibility and isolation, independent cancellation, 100
+close/reopen cycles, repository replacement, alternate/replacement changes,
+worktree move/removal, repacking and active-reader release. Worktree tests edit
+and stage independently and exercise conditional includes, `config.worktree`,
+attributes and separate LFS settings. Existing history/status/large-file suites
+also cover shallow histories, bare repositories, supported object/reference
+formats and LFS/annex operations. Rendering tests cover more than 32 decoration
+runs, Unicode, fractional geometry, wrapping/splitting, tooltips, cancelled
+clicks and overlays, including the production view-cache path.
+
+`scripts/profiling/shared-reads.py` runs five alternating release pairs for one,
+two and four windows on one working tree, linked worktrees and unrelated
+repositories. It records binary hashes, isolated profiles, compositor metadata,
+window/input witnesses, memory, work counts and per-phase p95 input/draw latency.
+Missing required pairs or metrics cannot pass its `max(5%, 1 ms)` regression
+gate. Hover supplies draw timing; selection, scrolling and focus also supply
+witnessed input-to-draw timing.
+`--thp` compares the same candidate binary with the default allocator and
+`MIMALLOC_ALLOW_THP=0`; `--transfers fetch lfs-fetch annex-get` instead creates
+disposable transfer fixtures, verifies transferred content and requires inputs
+to overlap each operation. Allocation diagnostics remain separate from latency
+captures. Linux allocator defaults and GPU experiment defaults are unchanged;
+the frozen macOS revisions remain comparison controls.
+
+Verification for this change: 771 core tests, 1,240 state tests, 376 backend
+library tests, 69 history integration tests, 50 large-file integration tests,
+8 reftable tests, 183 status tests, 39 GPUI text-system tests, 383 history/UI tests
+plus 5 control-interaction, 13 diff-rendering and 70 profiling-tool tests passed.
+Ignored benchmark cases are excluded from those counts. The application release
+build, CI UI Clippy command with warnings
+denied, all-target Clippy for the affected application crates (with the backend
+benchmark feature), formatting and whitespace checks passed.
+
+### Native window measurements
+
+The frozen baseline is `74f52422`; both executables use the shipping release
+profile. The fixture contains 204,001 commits without a commit-graph. The linked
+worktrees have matching resolved histories, and the unrelated repositories have
+independent object databases. Five alternating pairs per case produced 90 valid
+captures with isolated profiles, native window/selection witnesses and no
+allocation instrumentation. Each capture selects 60 commits, moves the pointer
+120 times, scrolls 60 times and then exercises each additional window.
+
+Median settled PSS, in MiB:
+
+| Repository relationship | Windows | Baseline | Candidate |
+| --- | ---: | ---: | ---: |
+| Same working tree | 1 | 409.3 | 404.7 |
+| Same working tree | 2 | 498.9 | 474.3 |
+| Same working tree | 4 | 622.1 | 531.4 |
+| Linked worktrees | 1 | 400.3 | 407.4 |
+| Linked worktrees | 2 | 509.8 | 468.2 |
+| Linked worktrees | 4 | 626.0 | 541.5 |
+| Unrelated repositories | 1 | 404.6 | 405.2 |
+| Unrelated repositories | 2 | 592.5 | 600.9 |
+| Unrelated repositories | 4 | 890.9 | 892.9 |
+
+All nine cases pass the latency gate, using the median of each run's p95 for
+each interaction phase. The largest draw-p95 increase is 0.364 ms; the largest
+witnessed input-p95 increase is 0.327 ms. Four matching windows reduce topology
+builds from four to one and range object reads from 1,024 to 256. Four unrelated
+repositories still build four topologies. One-window memory is roughly unchanged
+in this short workload; the representation-only capacity of the history and diff
+gutter caches falls from 69.94 to 3 MiB of `ShapedLine` values at their unchanged
+limits, excluding keys and referenced glyph/layout allocations.
+
+The runner is an Arch Linux workstation with a Ryzen 9 5950X, 128 GiB RAM,
+GTX 1080, hardware Vulkan and an isolated Mutter/Wayland compositor. Windows are
+1400×900 on one 1600×1100 display. Some samples encountered unrelated host load;
+all remain in the five-pair medians. These measurements cover CPU/platform draw
+submission, not GPU/display completion or multiple fully visible monitors.
+Windows/macOS native measurements were not repeated; their frozen controls and
+disabled GPU experiment defaults are preserved.
+
+Artifacts, binary hashes, input witnesses and raw phase records are under
+`target/performance/shared-reads/`. `matrix/comparison.json` is the final analysis;
+hover input latency is unavailable in the native driver and is deliberately not
+invented. The initial incremental report mistakenly required it; recomputing the
+report corrected that requirement without removing or replacing any capture.
+
+### Transfers, large histories and allocator comparison
+
+The complete experiment has 200 valid release captures across 20 comparisons,
+each with five alternating pairs. All comparisons pass the input/draw latency
+gate. Alongside the 90 window captures above, this includes 30 allocator/window
+captures, 60 transfer captures and 20 background-history captures. The aggregate
+results are in `target/performance/shared-reads/analysis.json`; the respective
+`comparison.json` files and raw captures remain in `thp-matrix/`, `transfers/`,
+`thp-transfers/`, `background/` and `thp-background/`.
+
+Transfer runs keep four populated windows on the same repository while scrolling
+and hovering. Git fetch transfers a 64 MiB payload through smart HTTP; LFS and
+annex each transfer sixty 1 MiB files. Every run verifies content and witnesses
+inputs overlapping the operation: at least 180 for fetch/LFS and 49 for annex.
+Median operation duration and median per-run interaction p95, in milliseconds:
+
+| Operation | Duration baseline → candidate | Draw p95 baseline → candidate | Input p95 baseline → candidate |
+| --- | ---: | ---: | ---: |
+| Git fetch | 11,090.2 → 11,076.7 | 1.824 → 1.807 | 17.461 → 17.402 |
+| LFS fetch | 7,550.5 → 7,550.6 | 1.653 → 1.569 | 17.250 → 17.199 |
+| Annex get | 602.7 → 612.9 | 2.170 → 2.097 | 17.044 → 17.036 |
+
+The background fixture contains 2,040,001 commits at
+`665aaa2a586666554165420c562803c25c75b335`. Loading it in a second window while
+selecting commits in the foreground takes a median 6,033.3 ms in the baseline
+and 6,103.4 ms in the candidate, a 1.2% increase. At least 239 foreground inputs
+overlap loading in each run. Their draw p95 improves from 4.013 to 3.625 ms and
+input p95 from 19.444 to 19.307 ms. Use `--background-repository` with the paired
+runner to reproduce this workload.
+
+The allocator experiments compare the same candidate binary with its default
+environment and with `MIMALLOC_ALLOW_THP=0`. The host kernel has THP set to
+`always`. Four-window median settled PSS, in MiB:
+
+| Repository relationship | Default allocator | THP disabled |
+| --- | ---: | ---: |
+| Same working tree | 528.7 | 373.4 |
+| Linked worktrees | 548.2 | 371.5 |
+| Unrelated repositories | 891.1 | 726.6 |
+
+Both transfer and background-loading input/draw comparisons also pass with THP
+disabled. Fetch/LFS/annex median durations change from 11,156.0 / 7,550.4 / 643.2
+ms to 11,151.4 / 7,554.1 / 627.9 ms. Large-history loading changes from 6,237.8 to
+6,470.6 ms, a 3.7% increase, while settled PSS falls from 1,899.8 to 1,753.9 MiB.
+This host shows a substantial memory benefit and a loading-time tradeoff.
+Linux allocator defaults remain unchanged pending broader native evidence.
+
+### Close/reopen resource retention
+
+Separate diagnostic runs repeat 100 linked-worktree window close/reopen cycles.
+The candidate builds one topology/index across the cycles; the baseline builds
+104 topologies, including the initial window and three warm-up cycles. Candidate
+file descriptors remain at 89 and threads at 79 (78 in the THP-disabled run).
+Deterministic ownership tests separately verify that weak repository/index
+registrations and obsolete object stores release their last owners.
+
+Total process residency is not flat. PSS grows from 450.2 to 622.6 MiB in the
+candidate, compared with 523.9 to 755.6 MiB in the baseline. With THP disabled,
+candidate PSS grows from 325.4 to 412.3 MiB. These observations show reduced
+growth, but do not establish that every process-wide cache or allocator page is
+returned after closing a window. The lifecycle diagnostics ran alongside
+compilation and are excluded from latency acceptance. Their raw captures are
+preserved separately from the 200 paired performance captures.

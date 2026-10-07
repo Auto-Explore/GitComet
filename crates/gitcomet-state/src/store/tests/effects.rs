@@ -22,6 +22,9 @@ fn schedule_effect_with_state_for_test(
         super::effects::EffectExecutors {
             executor,
             repo_load_executor: &repo_load_executor,
+            worktree_scan_executor: &std::sync::LazyLock::new(|| {
+                super::super::executor::TaskExecutor::new(1)
+            }),
             session_persist_executor,
             metadata_executor: &metadata_executor,
             signature_executor: &metadata_executor,
