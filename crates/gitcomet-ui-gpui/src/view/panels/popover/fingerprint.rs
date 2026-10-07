@@ -6,6 +6,12 @@ use std::hash::{Hash, Hasher};
 
 pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64 {
     let mut hasher = FxHasher::default();
+    state
+        .active_repo
+        .and_then(|id| state.repos.iter().find(|repo| repo.id == id))
+        .and_then(|repo| repo.shared_preferences.as_ref())
+        .map(|snapshot| snapshot.revision)
+        .hash(&mut hasher);
     hash_popover_kind(popover, &mut hasher);
     if matches!(
         popover,

@@ -195,6 +195,7 @@ mod maintenance;
 mod reducer_diagnostics;
 mod repo_management;
 mod repo_monitor;
+mod repository_preferences;
 mod send_failures;
 mod worktree_redirect;
 mod worktree_scanning;

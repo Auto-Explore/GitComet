@@ -146,6 +146,7 @@ fn effect_requires_available_git(effect: &Effect) -> bool {
     !matches!(
         effect,
         Effect::Filesystem(_)
+            | Effect::UpdateRepositoryPreferences { .. }
             | Effect::PersistSession { .. }
             | Effect::PersistRecentRepo { .. }
             | Effect::PersistRepoHistoryMode { .. }
@@ -224,6 +225,24 @@ pub(super) fn schedule_effect(
                 util::send_or_log(&msg_tx, Msg::FilesystemFinished(result));
             });
         }
+        Effect::UpdateRepositoryPreferences {
+            repo_id,
+            key,
+            update,
+        } => {
+            session_persist_executor.spawn(move || {
+                if let Err(error) = msg_tx.preferences.update(key, &update) {
+                    util::send_or_log(
+                        &msg_tx,
+                        Msg::Internal(crate::msg::InternalMsg::SessionPersistFailed {
+                            repo_id: Some(repo_id),
+                            action: "updating repository preferences",
+                            error: error.to_string(),
+                        }),
+                    );
+                }
+            });
+        }
         Effect::PersistSession { repo_id, action } => {
             let Some(session_file_path) = session::default_session_file_path_for_effect() else {
                 return;
@@ -276,6 +295,21 @@ pub(super) fn schedule_effect(
             mode,
             action,
         } => {
+            // Opening defaults cannot precede shared-identity migration. Real
+            // opened repositories use the shared preference writer instead.
+            if repo_id.is_some_and(|id| {
+                let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
+                state
+                    .repos
+                    .iter()
+                    .find(|repo| repo.id == id)
+                    .is_some_and(|repo| {
+                        repo.shared_preferences.is_some()
+                            || !matches!(repo.open, crate::model::Loadable::Ready(()))
+                    })
+            }) {
+                return;
+            }
             let Some(session_file_path) = session::default_session_file_path_for_effect() else {
                 return;
             };
@@ -325,6 +359,22 @@ pub(super) fn schedule_effect(
             updates,
             action,
         } => {
+            let updates = {
+                let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
+                updates
+                    .into_iter()
+                    .filter(|(path, _)| {
+                        !state.repos.iter().any(|repo| {
+                            repo.spec.workdir == *path
+                                && (repo.shared_preferences.is_some()
+                                    || !matches!(repo.open, crate::model::Loadable::Ready(())))
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            };
+            if updates.is_empty() {
+                return;
+            }
             let Some(session_file_path) = session::default_session_file_path_for_effect() else {
                 return;
             };
