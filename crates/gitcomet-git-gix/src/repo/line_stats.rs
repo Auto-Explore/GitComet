@@ -675,6 +675,7 @@ mod tests {
                 LineStats {
                     additions: Some(2),
                     deletions: Some(2),
+                    ..LineStats::default()
                 }
             );
         }
@@ -707,6 +708,7 @@ mod tests {
         let known = |additions, deletions| LineStats {
             additions: Some(additions),
             deletions: Some(deletions),
+            ..LineStats::default()
         };
         let unstaged = |path: &str| {
             open_repo(dir)
