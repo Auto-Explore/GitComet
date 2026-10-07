@@ -57,8 +57,8 @@ impl GixRepo {
         if self.head_commit_id_impl()?.as_ref() != Some(&range.expected_head) {
             return Err(failed("The prepared branch head changed"));
         }
-        if self.rebase_in_progress_impl()? {
-            return Err(failed("Finish the current rebase first"));
+        if self.operation_state_on_disk()? {
+            return Err(failed("Finish the current Git operation first"));
         }
         let mut status = self.git_workdir_cmd();
         status.args(["status", "--porcelain", "--untracked-files=all"]);
@@ -124,52 +124,132 @@ impl GixRepo {
     pub(super) fn apply_branch_updates_impl(
         &self,
         updates: &[BranchUpdate],
+        recover: bool,
     ) -> Result<CommandOutput> {
-        let refs: Vec<_> = updates.iter().map(|u| u.update.clone()).collect();
-        let input = valid_updates(&refs)?;
+        let mut refs: Vec<_> = updates.iter().map(|u| u.update.clone()).collect();
+        valid_updates(&refs)?;
+        let common = self
+            .common_dir_impl()
+            .canonicalize()
+            .map_err(|e| failed(e.to_string()))?;
+        let worktrees = self.list_worktrees_impl()?;
         let mut paths = BTreeSet::new();
-        for u in updates {
+        let mut syncs = Vec::new();
+        for (index, u) in updates.iter().enumerate() {
             if !u.update.reference.starts_with("refs/heads/") {
                 return Err(failed("Only branches can synchronize worktrees"));
             }
+            let declared: BTreeSet<_> = u
+                .worktrees
+                .iter()
+                .map(|p| p.canonicalize().map_err(|e| failed(e.to_string())))
+                .collect::<Result<_>>()?;
+            let actual: BTreeSet<_> = worktrees
+                .iter()
+                .filter(|w| w.branch.as_deref() == u.update.reference.strip_prefix("refs/heads/"))
+                .map(|w| w.path.canonicalize().map_err(|e| failed(e.to_string())))
+                .collect::<Result<_>>()?;
+            if declared != actual {
+                return Err(failed(
+                    "Checked-out worktrees changed since preparation. Refresh the transaction before applying.",
+                ));
+            }
+            if recover {
+                let mut current = self.git_workdir_cmd();
+                current.args(["rev-parse", "--verify", &u.update.reference]);
+                if let Ok(head) = run_git_capture(current, "git captured branch tip")
+                    && head.trim() == u.update.new.as_ref()
+                {
+                    refs[index].expected = Some(u.update.new.clone());
+                }
+            }
             for path in &u.worktrees {
-                if !paths.insert(path) {
+                if !paths.insert(path.canonicalize().map_err(|e| failed(e.to_string()))?) {
                     return Err(failed("A worktree occurs more than once"));
                 }
                 let repo = crate::GixBackend.open(path)?;
-                let mut common = git_workdir_cmd_for(path);
-                common.args(["rev-parse", "--path-format=absolute", "--git-common-dir"]);
-                let dir = run_git_capture(common, "git common directory")?;
-                if Path::new(dir.trim()).canonicalize().ok()
-                    != self.common_dir_impl().canonicalize().ok()
+                let mut common_cmd = git_workdir_cmd_for(path);
+                common_cmd.args(["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+                let dir = run_git_capture(common_cmd, "git common directory")?;
+                if Path::new(dir.trim())
+                    .canonicalize()
+                    .map_err(|e| failed(e.to_string()))?
+                    != common
                 {
                     return Err(failed("The worktree belongs to another repository"));
                 }
                 let mut branch = git_workdir_cmd_for(path);
                 branch.args(["symbolic-ref", "HEAD"]);
                 if run_git_capture(branch, "git symbolic-ref HEAD")?.trim() != u.update.reference
-                    || repo.head_commit_id()? != u.update.expected
+                    || repo.head_commit_id()? != refs[index].expected
                 {
                     return Err(failed("A checked-out branch changed"));
                 }
-                let mut status = git_workdir_cmd_for(path);
-                status.args(["status", "--porcelain", "--untracked-files=all"]);
-                if !run_git_capture(status, "git status")?.is_empty()
-                    || repo.rebase_in_progress()?
+                let mut marker_cmd = git_workdir_cmd_for(path);
+                marker_cmd.args([
+                    "rev-parse",
+                    "--path-format=absolute",
+                    "--git-path",
+                    "MERGE_HEAD",
+                ]);
+                let marker = run_git_capture(marker_cmd, "git merge marker")?;
+                if repo.sequencer_state()? != gitcomet_core::services::SequencerState::None
+                    || Path::new(marker.trim()).exists()
                 {
-                    return Err(failed(format!(
-                        "Finish or save changes in {} before applying",
-                        path.display()
-                    )));
+                    return Err(failed("Finish the current Git operation before applying"));
                 }
                 let old = u
                     .update
                     .expected
                     .as_ref()
                     .ok_or_else(|| failed("A checked-out branch has no old tip"))?;
-                sync_tree(path, old, &u.update.new, true)?;
+                let from = if recover {
+                    let mut index_cmd = git_workdir_cmd_for(path);
+                    index_cmd.arg("write-tree");
+                    let index_tree = run_git_capture(index_cmd, "git recovery index tree")?;
+                    let tree = |revision: &CommitId| -> Result<String> {
+                        let mut cmd = git_workdir_cmd_for(path);
+                        cmd.args(["rev-parse", &format!("{}^{{tree}}", revision)]);
+                        run_git_capture(cmd, "git recovery commit tree")
+                    };
+                    let from = if index_tree == tree(&u.update.new)? {
+                        u.update.new.clone()
+                    } else if index_tree == tree(old)? {
+                        old.clone()
+                    } else {
+                        return Err(failed(
+                            "Recovery found unexpected staged edits; files were preserved",
+                        ));
+                    };
+                    let mut tracked = git_workdir_cmd_for(path);
+                    tracked.args(["diff-files", "--quiet"]);
+                    let mut untracked = git_workdir_cmd_for(path);
+                    untracked.args(["ls-files", "--others", "--exclude-standard"]);
+                    if !tracked
+                        .status()
+                        .map_err(|e| failed(e.to_string()))?
+                        .success()
+                        || !run_git_capture(untracked, "git recovery untracked files")?.is_empty()
+                    {
+                        return Err(failed("Recovery found unsaved files; files were preserved"));
+                    }
+                    from
+                } else {
+                    let mut status = git_workdir_cmd_for(path);
+                    status.args(["status", "--porcelain", "--untracked-files=all"]);
+                    if !run_git_capture(status, "git status")?.is_empty() {
+                        return Err(failed(format!(
+                            "Finish or save changes in {} before applying",
+                            path.display()
+                        )));
+                    }
+                    old.clone()
+                };
+                sync_tree(path, &from, &u.update.new, true)?;
+                syncs.push((path.as_path(), from, u.update.new.clone()));
             }
         }
+        let input = valid_updates(&refs)?;
         let mut cmd = self.git_workdir_cmd();
         cmd.args(["update-ref", "--no-deref", "--stdin"])
             .stdin(Stdio::piped())
@@ -205,30 +285,23 @@ impl GixRepo {
             }
         }
         let mut synced: Vec<(&Path, &CommitId, &CommitId)> = Vec::new();
-        for u in updates {
-            for path in &u.worktrees {
-                let old = u
-                    .update
-                    .expected
-                    .as_ref()
-                    .expect("validated checked-out tip");
-                if let Err(error) = sync_tree(path, old, &u.update.new, false) {
-                    let mut recovery = Vec::new();
-                    for (path, old, new) in synced.iter().rev() {
-                        if let Err(e) = sync_tree(path, new, old, false) {
-                            recovery.push(e.to_string());
-                        }
+        for (path, old, new) in &syncs {
+            if let Err(error) = sync_tree(path, old, new, false) {
+                let mut recovery = Vec::new();
+                for (path, old, new) in synced.iter().rev() {
+                    if let Err(e) = sync_tree(path, new, old, false) {
+                        recovery.push(e.to_string());
                     }
-                    let _ = stdin.write_all(b"abort\n");
-                    drop(stdin);
-                    let _ = child.wait();
-                    return Err(failed(format!(
-                        "{error}; worktree recovery: {}",
-                        recovery.join("; ")
-                    )));
                 }
-                synced.push((path.as_path(), old, &u.update.new));
+                let _ = stdin.write_all(b"abort\n");
+                drop(stdin);
+                let _ = child.wait();
+                return Err(failed(format!(
+                    "{error}; worktree recovery: {}",
+                    recovery.join("; ")
+                )));
             }
+            synced.push((path, old, new));
         }
         stdin
             .write_all(b"commit\n")
@@ -466,5 +539,157 @@ mod tests {
         );
         assert_eq!(git(remote.path(), &["rev-parse", "one"]), old.as_ref());
         assert_eq!(git(remote.path(), &["rev-parse", "two"]), old.as_ref());
+    }
+    #[test]
+    fn recovery_accepts_only_recorded_trees_and_preserves_later_edits() {
+        for refs_committed in [false, true] {
+            let d = fixture();
+            let old = id(git(d.path(), &["rev-parse", "HEAD"]));
+            git(d.path(), &["checkout", "-b", "prepared"]);
+            std::fs::write(d.path().join("file"), "prepared\n").unwrap();
+            git(d.path(), &["commit", "-am", "prepared"]);
+            let new = id(git(d.path(), &["rev-parse", "HEAD"]));
+            git(d.path(), &["checkout", "main"]);
+            let update = BranchUpdate {
+                update: RefUpdate {
+                    reference: "refs/heads/main".into(),
+                    expected: Some(old.clone()),
+                    new: new.clone(),
+                },
+                worktrees: vec![d.path().into()],
+            };
+            if refs_committed {
+                git(
+                    d.path(),
+                    &["update-ref", "refs/heads/main", new.as_ref(), old.as_ref()],
+                );
+            } else {
+                git(
+                    d.path(),
+                    &["read-tree", "-u", "-m", old.as_ref(), new.as_ref()],
+                );
+            }
+            let repo = crate::GixBackend.open(d.path()).unwrap();
+            std::fs::write(d.path().join("file"), "later unsaved edit\n").unwrap();
+            assert!(
+                repo.recover_branch_updates_with_output(std::slice::from_ref(&update))
+                    .is_err()
+            );
+            assert_eq!(
+                std::fs::read_to_string(d.path().join("file")).unwrap(),
+                "later unsaved edit\n"
+            );
+            std::fs::write(
+                d.path().join("file"),
+                if refs_committed {
+                    "base\n"
+                } else {
+                    "prepared\n"
+                },
+            )
+            .unwrap();
+            repo.recover_branch_updates_with_output(std::slice::from_ref(&update))
+                .unwrap();
+            assert_eq!(git(d.path(), &["rev-parse", "HEAD"]), new.as_ref());
+            assert!(git(d.path(), &["status", "--porcelain"]).is_empty());
+            repo.recover_branch_updates_with_output(&[update]).unwrap();
+        }
+    }
+    #[test]
+    fn omitted_checked_out_worktree_rejects_the_whole_transaction() {
+        let d = fixture();
+        let repo = crate::GixBackend.open(d.path()).unwrap();
+        let head = id(git(d.path(), &["rev-parse", "HEAD"]));
+        let updates = [
+            BranchUpdate {
+                update: RefUpdate {
+                    reference: "refs/heads/main".into(),
+                    expected: Some(head.clone()),
+                    new: head.clone(),
+                },
+                worktrees: Vec::new(),
+            },
+            BranchUpdate {
+                update: RefUpdate {
+                    reference: "refs/heads/created".into(),
+                    expected: None,
+                    new: head,
+                },
+                worktrees: Vec::new(),
+            },
+        ];
+        assert!(repo.apply_branch_updates_with_output(&updates).is_err());
+        assert!(
+            !std::process::Command::new("git")
+                .current_dir(d.path())
+                .args(["show-ref", "--verify", "refs/heads/created"])
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+    }
+    #[test]
+    fn clean_pending_merge_blocks_rebase_and_branch_application() {
+        let d = fixture();
+        let head = id(git(d.path(), &["rev-parse", "HEAD"]));
+        std::fs::write(d.path().join(".git/MERGE_HEAD"), format!("{head}\n")).unwrap();
+        let repo = crate::GixBackend.open(d.path()).unwrap();
+        assert!(
+            repo.rebase_range_with_output(&RebaseRange {
+                onto: head.clone(),
+                upstream: head.clone(),
+                expected_head: head.clone(),
+                preserve_merges: false
+            })
+            .is_err()
+        );
+        assert!(
+            repo.apply_branch_updates_with_output(&[BranchUpdate {
+                update: RefUpdate {
+                    reference: "refs/heads/main".into(),
+                    expected: Some(head.clone()),
+                    new: head
+                },
+                worktrees: vec![d.path().into()]
+            }])
+            .is_err()
+        );
+        assert!(d.path().join(".git/MERGE_HEAD").exists());
+    }
+    #[test]
+    fn unsupported_atomic_push_reports_no_updates_and_allows_explicit_fallback() {
+        let d = fixture();
+        let remote = tempfile::tempdir().unwrap();
+        git(remote.path(), &["init", "--bare"]);
+        git(
+            remote.path(),
+            &["config", "receive.advertiseAtomic", "false"],
+        );
+        git(
+            d.path(),
+            &["remote", "add", "origin", remote.path().to_str().unwrap()],
+        );
+        git(d.path(), &["push", "origin", "main:one"]);
+        let old = id(git(d.path(), &["rev-parse", "HEAD"]));
+        std::fs::write(d.path().join("file"), "new\n").unwrap();
+        git(d.path(), &["commit", "-am", "new"]);
+        let new = id(git(d.path(), &["rev-parse", "HEAD"]));
+        let repo = crate::GixBackend.open(d.path()).unwrap();
+        let updates = [RemoteRefUpdate {
+            branch: "one".into(),
+            expected: old.clone(),
+            new: new.clone(),
+        }];
+        assert!(
+            repo.push_refs_with_lease_with_output("origin", &updates, true)
+                .unwrap_err()
+                .to_string()
+                .contains("does not support --atomic")
+        );
+        assert_eq!(git(remote.path(), &["rev-parse", "one"]), old.as_ref());
+        repo.push_refs_with_lease_with_output("origin", &updates, false)
+            .unwrap();
+        assert_eq!(git(remote.path(), &["rev-parse", "one"]), new.as_ref());
     }
 }
