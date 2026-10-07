@@ -23,7 +23,9 @@ for version in 0.0.0 0.0.1-rc.1; do
     printf '%s\n' "$arch" >> "$fixtures/binary-$arch"
     run_logged scripts/package-linux.sh stage --binary "$fixtures/binary-$arch" \
       --source "$repo_dir" --out "$fixtures/payload-$arch"
-    scripts/package-linux.sh tarball --payload "$fixtures/payload-$arch" \
+    # GitHub's RUNNER_TEMP is owned by root in the job container; builder needs
+    # its own writable scratch directory when invoking the packaging helper.
+    RUNNER_TEMP="$work" scripts/package-linux.sh tarball --payload "$fixtures/payload-$arch" \
       --version "$version" --arch "$arch" --out "$fixtures"
   done
   git archive --format=tar --prefix="GitComet-$version/" HEAD \

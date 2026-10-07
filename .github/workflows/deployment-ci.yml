@@ -489,6 +489,10 @@ jobs:
           pacman -Syu --noconfirm --needed git shadow desktop-file-utils
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # builder cannot read checkout's root-owned credential file in RUNNER_TEMP.
+          # This smoke job only needs local Git operations.
+          persist-credentials: false
 
       - name: Create non-root packaging user
         shell: bash
