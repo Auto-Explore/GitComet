@@ -1596,36 +1596,31 @@ impl SidebarPaneView {
             .extension_tabs
             .as_ref()
             .and_then(SidebarExtensionTabs::showing);
-        let make_tab = |id: &'static str,
-                        label: &'static str,
-                        tab_mode: SidebarMode,
-                        cx: &mut gpui::Context<Self>| {
-            let selected = mode == tab_mode && contributed.is_none();
-            let selected_bg = if tab_mode == SidebarMode::Files && browsing_files {
-                crate::theme::historical_header_bg(
-                    theme,
-                    theme.colors.interaction.selected_background,
-                )
-            } else {
-                theme.colors.interaction.selected_background
-            };
-            let store = Arc::clone(&self.store);
-            let tab = components::navigation_tab(id, label, selected, Some(selected_bg), theme)
-                .on_click(theme, cx, move |this, _, window, cx| {
-                    store.dispatch(Msg::SetSidebarMode { mode: tab_mode });
-                    if contributed.is_some() {
-                        this.select_routed_tab(None, window, cx);
-                    }
-                });
-            components::navigation_tab_metrics(tab, theme, ui_scale)
-        };
-        let branches_tab = make_tab(
-            "sidebar_tab_branches",
-            "Branches",
-            SidebarMode::Branches,
-            cx,
-        );
-        let files_tab = make_tab("sidebar_tab_files", "Files", SidebarMode::Files, cx);
+        let store = Arc::clone(&self.store);
+        let tabs = components::SegmentedControl::new("sidebar_view_toggle")
+            .segment(
+                components::Segment::new("sidebar_tab_branches", "Branches")
+                    .icon("icons/git_branch.svg")
+                    .selected(mode == SidebarMode::Branches && contributed.is_none())
+                    .tooltip("Branches", Vec::new()),
+            )
+            .segment(
+                components::Segment::new("sidebar_tab_files", "Files")
+                    .icon("icons/folder.svg")
+                    .selected(mode == SidebarMode::Files && contributed.is_none())
+                    .tooltip("Files", Vec::new()),
+            )
+            .render(theme, ui_scale, cx, move |this, index, window, cx| {
+                let mode = if index == 0 {
+                    SidebarMode::Branches
+                } else {
+                    SidebarMode::Files
+                };
+                store.dispatch(Msg::SetSidebarMode { mode });
+                if contributed.is_some() {
+                    this.select_routed_tab(None, window, cx);
+                }
+            });
 
         // Each tab keeps its locate action in the same trailing slot for the
         // whole time its tree is visible. Unavailable actions grey out instead
@@ -1677,9 +1672,7 @@ impl SidebarPaneView {
             .as_ref()
             .is_none_or(|tabs| tabs.host_tabs);
         components::navigation_tab_strip(bg, ui_scale)
-            .when(host_tabs, |strip| {
-                strip.child(branches_tab).child(files_tab)
-            })
+            .when(host_tabs, |strip| strip.child(tabs))
             .children(extension_tabs)
             .child(div().ml_auto().when(contributed.is_none(), |slot| {
                 slot.child(self.render_search_toggle(

@@ -91,6 +91,7 @@ impl SegmentedControl {
             .debug_selector(move || track_id.to_string())
             .flex()
             .items_center()
+            .min_w(px(0.0))
             .h(super::control_height(scale))
             .p(scale.px(2.0))
             .gap(scale.px(2.0))
@@ -120,6 +121,7 @@ impl SegmentedControl {
                 .h_full()
                 .flex()
                 .items_center()
+                .min_w(px(0.0))
                 .gap(scale.px(5.0))
                 .px(scale.px(8.0))
                 .rounded(px((theme.radii.row - 2.0).max(2.0)))
@@ -143,7 +145,7 @@ impl SegmentedControl {
                     }),
                 )
                 .children(icon.map(|icon| svg_icon(icon, text, scale.px(14.0))))
-                .child(label);
+                .child(div().min_w(px(0.0)).truncate().child(label));
             if let Some((label, shortcuts)) = tooltip {
                 button = button.gitcomet_tooltip_keyed(theme, label, shortcuts);
             }
