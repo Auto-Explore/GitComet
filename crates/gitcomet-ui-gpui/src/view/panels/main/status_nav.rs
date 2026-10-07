@@ -151,16 +151,16 @@ pub(super) fn status_navigation_context_for_repo<'a>(
     })
 }
 
-/// Whether the open working-tree target has a file before and after it in the
-/// section's display order: what the toolbar arrows show. The pane renders on
-/// every diff scroll step, so this walks the section once without copying it,
-/// where the navigation context collects the whole section.
-pub(super) fn status_navigation_neighbors(
+/// The open working-tree target's section, its place in the section's display
+/// order and the section's length: the bar's "3 of 43 files" and its arrows.
+/// The pane renders on every diff scroll step, so this walks the section once
+/// without copying it, where the navigation context collects the whole section.
+pub(super) fn status_navigation_position(
     repo: &RepoState,
     diff_target: &DiffTarget,
     change_tracking_view: ChangeTrackingView,
     section_order: Option<&[usize]>,
-) -> Option<(bool, bool)> {
+) -> Option<(StatusSection, usize, usize)> {
     let DiffTarget::WorkingTree { path, area, .. } = diff_target else {
         return None;
     };
@@ -190,7 +190,121 @@ pub(super) fn status_navigation_neighbors(
             .for_each(&mut visit),
     }
     let current = current?;
-    Some((current > 0, current + 1 < len))
+    Some((section, current, len))
+}
+
+/// Where the open file sits in the list it came from, for the bottom bar's
+/// "3 of 43 files": its zero-based place, the list's length, and what the
+/// list is, for the count's tooltip.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct DiffFilePlace {
+    pub(in crate::view) index: usize,
+    pub(in crate::view) count: usize,
+    pub(in crate::view) context: SharedString,
+}
+
+fn status_section_label(section: StatusSection) -> &'static str {
+    match section {
+        StatusSection::Staged => "Staged changes",
+        StatusSection::Unstaged => "Unstaged changes",
+        StatusSection::Untracked => "Untracked files",
+        StatusSection::CombinedUnstaged => "Changes",
+    }
+}
+
+/// `path`'s place among `files` as drawn, and how many are drawn.
+/// `drawn_source_indices` is the list's display order; `None` means source
+/// order.
+fn file_position_in_list(
+    files: &[gitcomet_core::domain::CommitFileChange],
+    drawn_source_indices: Option<&[usize]>,
+    path: &std::path::Path,
+) -> Option<(usize, usize)> {
+    match drawn_source_indices {
+        Some(drawn) => drawn
+            .iter()
+            .position(|source_ix| files.get(*source_ix).is_some_and(|file| file.path == path))
+            .map(|ix| (ix, drawn.len())),
+        None => files
+            .iter()
+            .position(|file| file.path == path)
+            .map(|ix| (ix, files.len())),
+    }
+}
+
+/// The selected inline diff entry's place in the order drawn, and how many
+/// are drawn; like [`adjacent_inline_diff_ix`].
+fn inline_diff_file_position(
+    selected_ix: usize,
+    entries_len: usize,
+    drawn_order: Option<&[usize]>,
+) -> Option<(usize, usize)> {
+    match drawn_order {
+        Some(order) => order
+            .iter()
+            .position(|entry| *entry == selected_ix)
+            .map(|ix| (ix, order.len())),
+        None => (selected_ix < entries_len).then_some((selected_ix, entries_len)),
+    }
+}
+
+/// Where `diff_target` sits in the list it came from, from the same data the
+/// file arrows step through: the status section, the commit's files, or the
+/// comparison's files. `None` when it came from no list.
+pub(super) fn diff_file_position_for_repo(
+    repo: &RepoState,
+    diff_target: &DiffTarget,
+    change_tracking_view: ChangeTrackingView,
+    file_list_source_indices: Option<&[usize]>,
+    status_section_order: Option<&[usize]>,
+) -> Option<DiffFilePlace> {
+    let (index, count, context): (usize, usize, SharedString) = match diff_target {
+        DiffTarget::WorkingTree { .. } => {
+            let (section, index, count) = status_navigation_position(
+                repo,
+                diff_target,
+                change_tracking_view,
+                status_section_order,
+            )?;
+            (index, count, status_section_label(section).into())
+        }
+        DiffTarget::Commit {
+            commit_id, path, ..
+        } => {
+            let Loadable::Ready(details) = &repo.history_state.commit_details else {
+                return None;
+            };
+            if &details.id != commit_id {
+                return None;
+            }
+            let (index, count) =
+                file_position_in_list(&details.files, file_list_source_indices, path)?;
+            let short: String = commit_id.0.chars().take(7).collect();
+            (index, count, format!("Files in commit {short}").into())
+        }
+        DiffTarget::CommitRange {
+            from_commit_id,
+            to_commit_id,
+            path: Some(path),
+            ..
+        } => {
+            let range = repo.history_state.range_selection.as_ref()?;
+            if range.diff_from() != from_commit_id || &range.to != to_commit_id {
+                return None;
+            }
+            let Loadable::Ready(files) = &repo.history_state.range_files else {
+                return None;
+            };
+            let (index, count) = file_position_in_list(files, file_list_source_indices, path)?;
+            (index, count, "Files in comparison".into())
+        }
+        DiffTarget::CommitRange { path: None, .. } => return None,
+    };
+    Some(DiffFilePlace {
+        index,
+        count,
+        context,
+    })
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -223,22 +337,17 @@ fn adjacent_file_in_list<'a>(
     path: &std::path::Path,
     direction: i8,
 ) -> Option<(usize, &'a gitcomet_core::domain::CommitFileChange)> {
-    let source_indices;
-    let drawn = if let Some(indices) = drawn_source_indices {
-        indices
-    } else {
-        source_indices = (0..files.len()).collect::<Vec<_>>();
-        source_indices.as_slice()
-    };
-    let current_ix = drawn
-        .iter()
-        .position(|source_ix| files.get(*source_ix).is_some_and(|file| file.path == path))?;
+    let (current_ix, len) = file_position_in_list(files, drawn_source_indices, path)?;
     let target_ix = if direction < 0 {
         current_ix.checked_sub(1)?
     } else {
-        (current_ix + 1 < drawn.len()).then_some(current_ix + 1)?
+        (current_ix + 1 < len).then_some(current_ix + 1)?
     };
-    Some((target_ix, files.get(*drawn.get(target_ix)?)?))
+    let source_ix = match drawn_source_indices {
+        Some(drawn) => *drawn.get(target_ix)?,
+        None => target_ix,
+    };
+    Some((target_ix, files.get(source_ix)?))
 }
 
 /// The entry an inline foreign diff should open when stepping `direction` from
@@ -400,6 +509,63 @@ impl MainPaneView {
             })
             .ok()
             .flatten()
+    }
+
+    /// Where the open file sits in the list it came from, for the bottom bar.
+    /// Hosted panes have none of the window's lists; their owner says.
+    pub(in crate::view) fn diff_file_place(
+        &self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<DiffFilePlace> {
+        if self.store.binding.is_some() {
+            return None;
+        }
+        if let Some(inline) = self.active_inline_submodule_diff() {
+            let worktree = matches!(
+                inline.origin,
+                gitcomet_state::model::ForeignDiffOrigin::Worktree { .. }
+            );
+            let (selected_ix, entries_len) = (inline.selected_ix, inline.entries.len());
+            let path = inline.submodule_repo_path.clone();
+            let drawn_order = worktree
+                .then(|| {
+                    self.root_view
+                        .update(cx, |root, cx| {
+                            root.details_pane
+                                .read(cx)
+                                .active_worktree_file_source_indices(repo_id, &path)
+                        })
+                        .ok()
+                        .flatten()
+                })
+                .flatten();
+            let (index, count) =
+                inline_diff_file_position(selected_ix, entries_len, drawn_order.as_deref())?;
+            let context = if worktree {
+                "Files in worktree"
+            } else {
+                "Files in submodule"
+            };
+            return Some(DiffFilePlace {
+                index,
+                count,
+                context: context.into(),
+            });
+        }
+        let file_list_source_indices = self.active_file_list_source_indices(repo_id, cx);
+        let change_tracking_view = self.active_change_tracking_view(cx);
+        let status_section_order =
+            self.active_status_section_order(repo_id, change_tracking_view, cx);
+        let repo = self.active_repo()?;
+        let diff_target = self.bound_diff_state(repo).diff_target.as_ref()?;
+        diff_file_position_for_repo(
+            repo,
+            diff_target,
+            change_tracking_view,
+            file_list_source_indices.as_deref(),
+            status_section_order.as_deref(),
+        )
     }
 
     /// Both the toolbar and its actions use these neighbors in display order.
@@ -584,10 +750,11 @@ mod tests {
         }
     }
 
-    /// The toolbar's one-pass answer must match what the prev/next actions
-    /// then do, for every entry, section order and change-tracking view.
+    /// The bar's one-pass place must agree with what the prev/next actions
+    /// then do, for every entry, section order and change-tracking view: an
+    /// arrow is enabled exactly when it has a file to step to.
     #[test]
-    fn status_navigation_neighbors_match_adjacent_targets() {
+    fn status_navigation_position_matches_adjacent_targets() {
         use gitcomet_core::domain::FileStatusKind::{Added, Modified, Untracked};
         let mut repo = repo_state(RepoId(1), "/tmp/repo");
         let unstaged = vec![
@@ -634,7 +801,8 @@ mod tests {
                             .is_some(),
                         );
                         assert_eq!(
-                            status_navigation_neighbors(&repo, &target, view, order)
+                            diff_file_position_for_repo(&repo, &target, view, None, order)
+                                .map(|place| (place.index > 0, place.index + 1 < place.count))
                                 .unwrap_or((false, false)),
                             expected,
                             "{view:?} {target:?} {order:?}"
@@ -643,6 +811,92 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The bar's "N of M" counts the section the file is in, in the order the
+    /// section is drawn, and names it.
+    #[test]
+    fn a_working_tree_file_is_placed_in_its_section() {
+        use gitcomet_core::domain::FileStatusKind::{Added, Modified, Untracked};
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.status = Loadable::Ready(
+            gitcomet_core::domain::RepoStatus {
+                staged: std::sync::Arc::new(vec![
+                    file_status("s1.txt", Added),
+                    file_status("s2.txt", Modified),
+                ]),
+                unstaged: std::sync::Arc::new(vec![
+                    file_status("a.txt", Modified),
+                    file_status("b.txt", Untracked),
+                    file_status("c.txt", Modified),
+                    file_status("d.txt", Untracked),
+                    file_status("e.txt", Modified),
+                ]),
+            }
+            .into(),
+        );
+        let place = |path: &str, area, view, order: Option<&[usize]>| {
+            diff_file_position_for_repo(
+                &repo,
+                &DiffTarget::working_tree(pb(path), area),
+                view,
+                None,
+                order,
+            )
+            .map(|place| (place.index, place.count, place.context.to_string()))
+        };
+        use ChangeTrackingView::{Combined, SplitUntracked};
+        assert_eq!(
+            place("s2.txt", DiffArea::Staged, Combined, None),
+            Some((1, 2, "Staged changes".into()))
+        );
+        assert_eq!(
+            place("c.txt", DiffArea::Unstaged, Combined, None),
+            Some((2, 5, "Changes".into()))
+        );
+        assert_eq!(
+            place("c.txt", DiffArea::Unstaged, SplitUntracked, None),
+            Some((1, 3, "Unstaged changes".into()))
+        );
+        assert_eq!(
+            place("d.txt", DiffArea::Unstaged, SplitUntracked, None),
+            Some((1, 2, "Untracked files".into()))
+        );
+        // A sorted section: drawn e, c, a.
+        assert_eq!(
+            place("c.txt", DiffArea::Unstaged, Combined, Some(&[4, 2, 0])),
+            Some((1, 3, "Changes".into()))
+        );
+        assert_eq!(place("zz.txt", DiffArea::Unstaged, Combined, None), None);
+    }
+
+    #[test]
+    fn a_file_is_placed_in_a_list_as_drawn() {
+        let files: Vec<gitcomet_core::domain::CommitFileChange> = ["a.rs", "b.rs", "c.rs"]
+            .into_iter()
+            .map(|path| {
+                gitcomet_core::domain::CommitFileChange::new(
+                    pb(path),
+                    gitcomet_core::domain::FileStatusKind::Modified,
+                )
+            })
+            .collect();
+        assert_eq!(
+            file_position_in_list(&files, None, &pb("b.rs")),
+            Some((1, 3))
+        );
+        assert_eq!(
+            file_position_in_list(&files, Some(&[2, 1, 0]), &pb("c.rs")),
+            Some((0, 3))
+        );
+        // A filter that hides the file: no place.
+        assert_eq!(
+            file_position_in_list(&files, Some(&[0, 2]), &pb("b.rs")),
+            None
+        );
+        assert_eq!(inline_diff_file_position(1, 3, None), Some((1, 3)));
+        assert_eq!(inline_diff_file_position(1, 3, Some(&[2, 1])), Some((1, 2)));
+        assert_eq!(inline_diff_file_position(5, 3, None), None);
     }
 
     #[test]

@@ -584,7 +584,7 @@ fn the_example_changes_view_shows_picks_in_two_panes(cx: &mut gpui::TestAppConte
     // A note on the selected line goes under it; clicking it removes it.
     click_debug_selector(cx, selector(format!("hosted_diff_{current_id}_row_0")));
     publish(cx, &view, store.snapshot());
-    click_debug_selector(cx, selector(format!("hosted_diff_{current_id}_action_0")));
+    click_debug_selector(cx, "diff_bar_note");
     publish(cx, &view, store.snapshot());
     assert_eq!(cx.update(|_window, app| changes.read(app).notes().len()), 1);
     click_debug_selector(cx, selector(format!("hosted_diff_{current_id}_row_1")));
@@ -691,6 +691,16 @@ fn a_pane_shows_the_first_change_of_each_file_it_is_given(cx: &mut gpui::TestApp
             DiffTarget::working_tree("a.rs".into(), DiffArea::Unstaged),
             app,
         );
+        let pane_view = pane
+            .view()
+            .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+            .unwrap();
+        let renderer = pane_view.read(app).renderer().unwrap().read(app);
+        assert_eq!(
+            renderer.active_content(),
+            crate::view::panes::main::MainPaneContent::Diff,
+            "the loading frame keeps the diff and its bar mounted"
+        );
     });
     settle(cx, &view, &store, "a.rs again, at its change", |cx| {
         row_drawn(cx, first, 300)
@@ -707,6 +717,273 @@ fn a_pane_shows_the_first_change_of_each_file_it_is_given(cx: &mut gpui::TestApp
         !row_drawn(cx, first, 300),
         "the first change did not take over"
     );
+}
+
+/// F1/F4 and Alt+Left/Right step the hosted pane the user is in, as its
+/// own arrows do, and never move History's diff behind the view.
+#[gpui::test]
+fn the_file_keys_in_an_extension_view_step_its_pane_not_history(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (_dir, store, view, cx) = open_repository(cx);
+    cx.update(|_window, app| {
+        crate::app::bind_app_keys_for_test(app);
+        crate::app::install_global_diff_navigation_actions_for_test(app);
+    });
+    let (list_id, changes) = open_changes_view(cx, &view, &store);
+    let current = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            changes
+                .read(app)
+                .current()
+                .and_then(|pane| pane.target(app))
+                .and_then(|target| target.file_path().map(Path::to_path_buf))
+        })
+    };
+    // No pane yet: the keys have nothing to act on.
+    for key in ["f4", "alt-right", "alt-down"] {
+        cx.simulate_keystrokes(key);
+        publish(cx, &view, store.snapshot());
+    }
+    assert!(store.snapshot().repos[0].diff_state.diff_target.is_none());
+
+    click_debug_selector(
+        cx,
+        selector(format!("hosted_file_list_{list_id}_file_a.rs")),
+    );
+    settle(cx, &view, &store, "a.rs in the pane", |cx| {
+        store.snapshot().repos[0].diff_sessions.len() == 1
+            && row_drawn(cx, first_session(&store), 0)
+    });
+    assert_eq!(current(cx), Some(PathBuf::from("a.rs")));
+    let id = first_session(&store);
+    // File arrows work from the selected view's root, outside the diff.
+    cx.update(|window, app| {
+        let focus = view.read(app).repository_view_focus.clone();
+        window.focus(&focus, app);
+    });
+    for (key, path) in [("alt-right", "b.rs"), ("alt-left", "a.rs")] {
+        cx.simulate_keystrokes(key);
+        settle(cx, &view, &store, key, |cx| {
+            current(cx) == Some(PathBuf::from(path))
+        });
+    }
+    cx.update(|window, app| {
+        let focus = app.focus_handle();
+        window.focus(&focus, app);
+    });
+    for (key, path) in [("alt-right", "b.rs"), ("alt-left", "a.rs")] {
+        cx.simulate_keystrokes(key);
+        settle(cx, &view, &store, key, |cx| {
+            current(cx) == Some(PathBuf::from(path))
+        });
+    }
+    // The example also mounts a previous pane after a file step. Keep
+    // clicking the original current pane, and wait for its loaded rows.
+    settle(cx, &view, &store, "a.rs rows after file steps", |cx| {
+        row_drawn(cx, id, 0)
+    });
+    // Into the diff, then F4 and F1.
+    click_debug_selector(cx, selector(format!("hosted_diff_{id}_row_0")));
+    publish(cx, &view, store.snapshot());
+    cx.simulate_keystrokes("f4");
+    settle(cx, &view, &store, "F4 to b.rs", |cx| {
+        current(cx) == Some(PathBuf::from("b.rs"))
+    });
+    cx.simulate_keystrokes("f1");
+    settle(cx, &view, &store, "F1 back to a.rs", |cx| {
+        current(cx) == Some(PathBuf::from("a.rs"))
+    });
+    // The owner says where a.rs is, so the bar counts it and the first
+    // file's previous arrow is disabled.
+    let pane = cx.update(|_window, app| changes.read(app).current().cloned().unwrap());
+    let nav = hosted_bar_nav(cx, &pane);
+    assert!(
+        matches!(nav, Some((Some((0, count)), false, true)) if count >= 2),
+        "{nav:?}"
+    );
+    assert!(
+        store.snapshot().repos[0].diff_state.diff_target.is_none(),
+        "History's diff did not move"
+    );
+    // The pane's file arrows are at its foot, in its bottom bar, not in its
+    // header; History's Stage is not there.
+    let pane = cx
+        .debug_bounds(selector(format!("hosted_diff_{id}")))
+        .expect("the current pane");
+    let next = cx
+        .debug_bounds("diff_next_file")
+        .expect("the pane's next-file arrow");
+    assert!(pane.contains(&next.center()));
+    assert!(next.center().y > pane.center().y, "{next:?} in {pane:?}");
+    assert!(cx.debug_bounds("diff_bar_stage").is_none());
+}
+
+#[gpui::test]
+fn alt_change_keys_reach_the_visible_pane_without_diff_focus(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (dir, store, view, cx) = open_repository(cx);
+    std::fs::write(
+        dir.path().join("a.rs"),
+        numbered("a", 30, Some(3)).replace("a 20\n", "a edited 20\n"),
+    )
+    .unwrap();
+    cx.update(|_, app| {
+        crate::app::bind_app_keys_for_test(app);
+        crate::app::install_global_diff_navigation_actions_for_test(app);
+    });
+    let (list_id, changes) = open_changes_view(cx, &view, &store);
+    click_debug_selector(
+        cx,
+        selector(format!("hosted_file_list_{list_id}_file_a.rs")),
+    );
+    settle(cx, &view, &store, "the pane's rows", |cx| {
+        store.snapshot().repos[0].diff_sessions.len() == 1
+            && row_drawn(cx, first_session(&store), 0)
+    });
+    let pane = cx.update(|_, app| changes.read(app).current().cloned().unwrap());
+    let renderer = hosted_renderer(cx, &pane);
+    let stops = cx.update(|_, app| renderer.read(app).diff_nav_entries());
+    assert_eq!(stops.len(), 2);
+    for detached in [false, true] {
+        let focus = cx.update(|window, app| {
+            renderer.update(app, |pane, _| pane.diff_selection_anchor = Some(stops[0]));
+            let focus = if detached {
+                app.focus_handle()
+            } else {
+                view.read(app).repository_view_focus.clone()
+            };
+            window.focus(&focus, app);
+            focus
+        });
+        publish(cx, &view, store.snapshot());
+        for (key, stop) in [("alt-down", stops[1]), ("alt-up", stops[0])] {
+            cx.simulate_keystrokes(key);
+            publish(cx, &view, store.snapshot());
+            assert_eq!(
+                cx.update(|_, app| renderer.read(app).diff_selection_anchor),
+                Some(stop),
+                "{key}, detached focus: {detached}"
+            );
+            assert!(cx.update(|window, _| focus.is_focused(window)));
+        }
+    }
+    assert!(store.snapshot().repos[0].diff_state.diff_target.is_none());
+}
+
+#[gpui::test]
+fn comparison_blame_toggles_retries_and_follows_the_file(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::domain::BlameSource;
+    let _guard = crate::test_support::lock_visual_test();
+    let (dir, store, view, cx) = open_repository(cx);
+    let from = head(dir.path());
+    let (list_id, changes) = open_changes_view(cx, &view, &store);
+    click_debug_selector(
+        cx,
+        selector(format!("hosted_file_list_{list_id}_file_a.rs")),
+    );
+    settle(cx, &view, &store, "the comparison", |cx| {
+        store.snapshot().repos[0].diff_sessions.len() == 1
+            && row_drawn(cx, first_session(&store), 0)
+    });
+    let id = gitcomet_state::diff_session::DiffViewId(first_session(&store));
+    let pane = cx.update(|_, app| changes.read(app).current().cloned().unwrap());
+    let renderer = hosted_renderer(cx, &pane);
+    assert!(!cx.update(|_, app| renderer.read(app).annotate_enabled));
+    click_debug_selector(cx, "diff_annotate");
+    let ready = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| {
+            let pane = renderer.read(app);
+            pane.annotation_active()
+                && pane.blame_matches_rendered_target()
+                && matches!(&pane.active_repo().unwrap().diff_state.blame, Loadable::Ready(lines) if !lines.is_empty())
+        })
+    };
+    settle(cx, &view, &store, "working-tree comparison blame", ready);
+    assert_eq!(
+        store.snapshot().repos[0].diff_sessions[&id].blame_source,
+        Some(BlameSource::WorkingTree(DiffArea::Unstaged))
+    );
+
+    // A matching failed load must retry on an explicit off/on toggle.
+    let mut failed = (*store.snapshot()).clone();
+    let session = Arc::make_mut(&mut failed.repos[0].diff_sessions)
+        .get_mut(&id)
+        .unwrap();
+    session.blame = Loadable::Error("temporary blame failure".into());
+    session.rev += 1;
+    let failed = Arc::new(failed);
+    store.replace_snapshot_for_test(failed.clone());
+    publish(cx, &view, failed);
+    click_debug_selector(cx, "diff_annotate");
+    click_debug_selector(cx, "diff_annotate");
+    settle(cx, &view, &store, "blame retry", ready);
+
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-q", "-m", "edits"]);
+    let to = head(dir.path());
+    cx.update(|_, app| {
+        pane.set_target(
+            DiffTarget::commit_range(
+                CommitId(from.into()),
+                Some(CommitId(to.clone().into())),
+                Some("b.rs".into()),
+            ),
+            app,
+        );
+    });
+    settle(cx, &view, &store, "committed comparison blame", |cx| {
+        ready(cx)
+            && store.snapshot().repos[0].diff_sessions[&id]
+                .blame_path
+                .as_deref()
+                == Some(Path::new("b.rs"))
+    });
+    assert_eq!(
+        store.snapshot().repos[0].diff_sessions[&id].blame_source,
+        Some(BlameSource::Revision(Some(to)))
+    );
+    assert!(matches!(
+        store.snapshot().repos[0].diff_state.blame,
+        Loadable::NotLoaded
+    ));
+}
+
+fn hosted_renderer(
+    cx: &mut gpui::VisualTestContext,
+    pane: &DiffPane,
+) -> gpui::Entity<MainPaneView> {
+    let view = pane
+        .view()
+        .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+        .unwrap();
+    cx.update(|_, app| view.read(app).renderer().cloned().unwrap())
+}
+
+/// A bar's owner position, and whether each file arrow is enabled.
+type BarNav = (Option<(usize, usize)>, bool, bool);
+
+/// What a hosted pane's bar shows.
+fn hosted_bar_nav(cx: &mut gpui::VisualTestContext, pane: &DiffPane) -> Option<BarNav> {
+    let pane_view = pane
+        .view()
+        .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+        .ok()?;
+    cx.update(|_window, app| {
+        let renderer = pane_view.read(app).renderer()?.clone();
+        renderer.update(app, |pane, cx| {
+            let repo_id = pane.active_repo_id();
+            pane.diff_bar_nav(repo_id, cx)
+                .map(|nav| (nav.position, nav.can_prev, nav.can_next))
+        })
+    })
+}
+
+fn first_session(store: &AppStore) -> u64 {
+    store.snapshot().repos[0]
+        .diff_sessions
+        .keys()
+        .next()
+        .map_or(0, |id| id.0)
 }
 
 #[gpui::test]
@@ -2040,4 +2317,180 @@ fn sorted_linked_worktree_file_clicks_open_untracked_and_deleted_content(
             );
         }
     }
+}
+
+/// An owner's bar: its buttons show in the pane's bottom bar, one that needs
+/// a selection waits for it and is run with it, and `set_bar` replaces them.
+/// A snapshot pane has no list to step through, so no arrows.
+#[gpui::test]
+fn a_pane_draws_its_owners_bar(cx: &mut gpui::TestAppContext) {
+    use gitcomet_extension_api::{DiffBar, DiffBarItem, DiffFileNavigation, DiffLineRange};
+    let _visual_guard = crate::test_support::lock_visual_test();
+    install_example(cx);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, app_cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    publish(app_cx, &view, Arc::new(AppState::test_default()));
+    let host =
+        app_cx.update(|_window, app| view.read(app).extension_window.as_ref().unwrap().host());
+
+    let runs = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let item = |id: &'static str| {
+        let runs = std::rc::Rc::clone(&runs);
+        DiffBarItem::new(id, id, move |range, _| runs.borrow_mut().push((id, range)))
+    };
+    let pane = app_cx.update(|_window, app| {
+        host.create_snapshot_pane(
+            DiffSnapshot::new("notes.txt", "one\ntwo\n", "one\nTWO\n"),
+            DiffPaneOptions {
+                file_navigation: DiffFileNavigation {
+                    previous: Some(gitcomet_extension_api::HostedAction::new("Back", |_| {})),
+                    next: Some(gitcomet_extension_api::HostedAction::new("On", |_| {})),
+                },
+                bar: DiffBar::new()
+                    .with_position(0, 5)
+                    .with_item(
+                        item("note")
+                            .enabled_when(Option::is_some)
+                            .with_shortcut("c"),
+                    )
+                    .with_item(item("done").primary())
+                    .with_item(item("disabled").enabled(false)),
+                layout: gitcomet_extension_api::DiffLayout::Inline,
+                ..DiffPaneOptions::default()
+            },
+            app,
+        )
+        .unwrap()
+    });
+    app_cx.run_until_parked();
+    let id = app_cx.update(|_window, app| {
+        pane.view()
+            .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+            .unwrap_or_else(|_| panic!("a hosted diff pane"))
+            .read(app)
+            .view_id()
+    });
+    let view_any = pane.view();
+    let (_holder, cx) = cx.add_window_view(move |_, _| PaneHolder(view_any));
+    let draw = |cx: &mut gpui::VisualTestContext| {
+        for _ in 0..3 {
+            cx.update(|window, app| {
+                let _ = window.draw(app);
+            });
+            cx.run_until_parked();
+        }
+    };
+    draw(cx);
+
+    for part in ["diff_bottom_bar", "diff_bar_note", "diff_bar_done"] {
+        assert!(cx.debug_bounds(part).is_some(), "{part} is drawn");
+    }
+    assert!(
+        cx.debug_bounds("diff_prev_file").is_none(),
+        "a snapshot pane steps through no list"
+    );
+
+    // No selection yet: the note waits; the other runs without one.
+    click_with(cx, "diff_bar_note", gpui::Modifiers::default());
+    click_with(cx, "diff_bar_done", gpui::Modifiers::default());
+    click_with(cx, "diff_bar_disabled", gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(*runs.borrow(), vec![("done", None)]);
+
+    click_with(
+        cx,
+        selector(format!("hosted_diff_{id}_row_0")),
+        gpui::Modifiers::default(),
+    );
+    cx.run_until_parked();
+    draw(cx);
+    click_with(cx, "diff_bar_note", gpui::Modifiers::default());
+    cx.run_until_parked();
+    let selected = DiffLineRange {
+        side: DiffLineSide::New,
+        start: 1,
+        end: 1,
+    };
+    assert_eq!(runs.borrow().last(), Some(&("note", Some(selected))));
+
+    struct CustomControls;
+    impl gpui::Render for CustomControls {
+        fn render(
+            &mut self,
+            _: &mut Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            div()
+                .debug_selector(|| "custom_diff_bar_controls".to_string())
+                .w(px(40.0))
+                .h(px(20.0))
+        }
+    }
+    cx.update(|_window, app| {
+        let content = app.new(|_| CustomControls).into();
+        pane.set_bar(DiffBar::new().with_content(content), app);
+    });
+    draw(cx);
+    assert!(cx.debug_bounds("custom_diff_bar_controls").is_some());
+    assert!(cx.debug_bounds("diff_bar_note").is_none());
+    cx.update(|_window, app| pane.set_bar(DiffBar::new().with_item(item("other")), app));
+    draw(cx);
+    assert!(cx.debug_bounds("custom_diff_bar_controls").is_none());
+    assert!(cx.debug_bounds("diff_bar_note").is_none());
+    assert!(cx.debug_bounds("diff_bar_other").is_some());
+}
+
+#[gpui::test]
+fn list_observers_follow_sort_layout_and_filter(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (_dir, store, view, cx) = open_repository(cx);
+    let (host, repository) = cx.update(|_, app| {
+        let host = view.read(app).extension_window.as_ref().unwrap().host();
+        let repository = host.active_repository(app).unwrap().unwrap();
+        (host, repository)
+    });
+    let list = cx.update(|_, app| {
+        host.create_file_list(
+            &repository,
+            ChangeSource::comparison(CommitId("HEAD".into()), None, Default::default()),
+            |_, _, _| {},
+            app,
+        )
+        .unwrap()
+    });
+    settle(cx, &view, &store, "observed list loaded", |cx| {
+        cx.update(|_, app| !list.is_loading(app) && list.ordered_paths(app).len() == 2)
+    });
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let subscription = cx.update(|_, app| {
+        let paths = list.clone();
+        let seen = seen.clone();
+        list.observe(
+            move |app| seen.borrow_mut().push(paths.ordered_paths(app)),
+            app,
+        )
+        .unwrap()
+    });
+    for mode in [
+        gitcomet_extension_api::FileListMode::Flat,
+        gitcomet_extension_api::FileListMode::Tree,
+    ] {
+        seen.borrow_mut().clear();
+        cx.update(|_, app| list.set_mode(mode, app));
+        cx.run_until_parked();
+        assert!(!seen.borrow().is_empty(), "layout changes notify the owner");
+    }
+    seen.borrow_mut().clear();
+    cx.update(|_, app| list.set_sort(gitcomet_extension_api::FileListSort::PathDescending, app));
+    cx.run_until_parked();
+    assert_eq!(
+        seen.borrow().last(),
+        Some(&vec![PathBuf::from("b.rs"), PathBuf::from("a.rs")])
+    );
+    seen.borrow_mut().clear();
+    cx.update(|_, app| list.set_filter("a.rs", app));
+    cx.run_until_parked();
+    assert_eq!(seen.borrow().last(), Some(&vec![PathBuf::from("a.rs")]));
+    drop(subscription);
 }

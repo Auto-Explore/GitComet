@@ -618,8 +618,11 @@ mod worktree_uncommitted {
         let (view, cx) =
             draw_sorted_worktree_inline_diff(cx, repo_id, 2, crate::view::FileListLayout::Flat);
 
-        assert!(cx.debug_bounds("diff_prev_file").is_none());
-        assert!(cx.debug_bounds("diff_next_file").is_some());
+        assert_eq!(drawn_file_arrows(cx, &view), Some((false, true)));
+        assert_eq!(
+            diff_bar_position(cx, &view).as_deref(),
+            Some("1 of 3 files")
+        );
         assert!(
             navigate_worktree_inline_diff(cx, &view, repo_id, 1),
             "next-file from the first drawn row should move"
@@ -639,8 +642,11 @@ mod worktree_uncommitted {
         let (view, cx) =
             draw_sorted_worktree_inline_diff(cx, repo_id, 0, crate::view::FileListLayout::Flat);
 
-        assert!(cx.debug_bounds("diff_prev_file").is_some());
-        assert!(cx.debug_bounds("diff_next_file").is_none());
+        assert_eq!(drawn_file_arrows(cx, &view), Some((true, false)));
+        assert_eq!(
+            diff_bar_position(cx, &view).as_deref(),
+            Some("3 of 3 files")
+        );
         assert!(
             !navigate_worktree_inline_diff(cx, &view, repo_id, 1),
             "next-file from the last drawn row must not jump back up the list"
@@ -656,8 +662,7 @@ mod worktree_uncommitted {
         let (view, cx) =
             draw_sorted_worktree_inline_diff(cx, repo_id, 2, crate::view::FileListLayout::Tree);
 
-        assert!(cx.debug_bounds("diff_prev_file").is_none());
-        assert!(cx.debug_bounds("diff_next_file").is_some());
+        assert_eq!(drawn_file_arrows(cx, &view), Some((false, true)));
         assert!(
             navigate_worktree_inline_diff(cx, &view, repo_id, 1),
             "next-file from the first drawn row should move in tree layout too"
@@ -674,8 +679,7 @@ mod worktree_uncommitted {
         let (view, cx) =
             draw_sorted_worktree_inline_diff(cx, RepoId(101), 2, crate::view::FileListLayout::Flat);
         draw_and_drain_test_window(cx);
-        assert!(cx.debug_bounds("diff_prev_file").is_none());
-        assert!(cx.debug_bounds("diff_next_file").is_some());
+        assert_eq!(drawn_file_arrows(cx, &view), Some((false, true)));
         cx.update(|_window, app| {
             view.read(app).details_pane.clone().update(app, |pane, cx| {
                 pane.set_file_list_sort(
@@ -686,8 +690,7 @@ mod worktree_uncommitted {
             });
         });
         draw_and_drain_test_window(cx);
-        assert!(cx.debug_bounds("diff_prev_file").is_some());
-        assert!(cx.debug_bounds("diff_next_file").is_none());
+        assert_eq!(drawn_file_arrows(cx, &view), Some((true, false)));
         for (filter, has_previous) in [
             (crate::view::rows::CommitFileFilter::Added, false),
             (crate::view::rows::CommitFileFilter::All, true),
@@ -702,7 +705,10 @@ mod worktree_uncommitted {
                 });
             });
             draw_and_drain_test_window(cx);
-            assert_eq!(cx.debug_bounds("diff_prev_file").is_some(), has_previous);
+            assert_eq!(
+                drawn_file_arrows(cx, &view).is_some_and(|(previous, _)| previous),
+                has_previous
+            );
         }
     }
 

@@ -1062,6 +1062,18 @@ pub(in crate::view) struct FileRowBadgeDisc {
     pressed: Option<(SharedString, gpui::Rgba)>,
 }
 
+impl FileRowBadgeDisc {
+    /// A disc on a surface that does not react to the pointer, such as the
+    /// diff's header.
+    pub(in crate::view) fn still(background: gpui::Rgba) -> Self {
+        Self {
+            resting: background,
+            hover: None,
+            pressed: None,
+        }
+    }
+}
+
 /// One state/color calculation for file rows and the opaque discs laid over
 /// their icons. Change-kind tints remain visible in every interaction state.
 pub(in crate::view) struct FileRowInteraction {

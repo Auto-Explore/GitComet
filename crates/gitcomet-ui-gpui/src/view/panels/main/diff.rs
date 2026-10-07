@@ -817,24 +817,6 @@ impl MainPaneView {
                                             )
                                         },
                                     );
-                                    let collapsed_file_stat = self
-                                        .is_collapsed_diff_projection_active()
-                                        .then(|| self.collapsed_diff_total_file_stat())
-                                        .flatten();
-                                    let (left_label, right_label) = self.split_diff_pane_labels();
-                                    let left_header = Self::split_column_header_label(
-                                        left_label,
-                                        collapsed_file_stat.map(|(_, removed)| removed),
-                                        '-',
-                                        theme.colors.diff.removed.foreground,
-                                    );
-                                    let right_header = Self::split_column_header_label(
-                                        right_label,
-                                        collapsed_file_stat.map(|(added, _)| added),
-                                        '+',
-                                        theme.colors.diff.added.foreground,
-                                    );
-
                                     // Built before `resize_handle` captures `cx`.
                                     let split_annotate_handle =
                                         self.annotation_active().then(|| {
@@ -960,46 +942,6 @@ impl MainPaneView {
                                             )
                                     };
 
-                                    let columns_header = div()
-                                        .id("diff_split_columns_header")
-                                        .debug_selector(|| "diff_split_columns_header".to_string())
-                                        .w_full()
-                                        // Same right inset as the body below, so both rows divide
-                                        // the identical content box and the column divider lines
-                                        // up. Padding keeps the band and its bottom border
-                                        // full-bleed.
-                                        .pr(shared_scrollbar_gutter)
-                                        .h(components::control_height(
-                                            ui_scale::UiScale::from_percent(ui_scale_percent)
-                                                .with_appearance(theme.metrics),
-                                        ))
-                                        .flex()
-                                        .items_center()
-                                        .text_size(theme.ui_text(12.0))
-                                        .text_color(theme.colors.foreground.secondary)
-                                        .bg(crate::theme::content_header_bg(theme))
-                                        .border_b_1()
-                                        .border_color(theme.colors.stroke.default)
-                                        .child(
-                                            div()
-                                                .w(left_w)
-                                                .min_w(px(0.0))
-                                                .px_2()
-                                                .overflow_hidden()
-                                                .whitespace_nowrap()
-                                                .child(left_header),
-                                        )
-                                        .child(resize_handle("diff_split_resize_handle_header"))
-                                        .child(
-                                            div()
-                                                .w(right_w)
-                                                .min_w(px(0.0))
-                                                .px_2()
-                                                .overflow_hidden()
-                                                .whitespace_nowrap()
-                                                .child(right_header),
-                                        );
-
                                     div()
                                         .id("diff_split_scroll_container")
                                         .relative()
@@ -1009,7 +951,6 @@ impl MainPaneView {
                                         .flex_col()
                                         .bg(theme.colors.surface.canvas)
                                         .font_family(editor_font_family.clone())
-                                        .child(columns_header)
                                         .child(
                                             div()
                                                 .relative()
