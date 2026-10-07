@@ -1062,12 +1062,6 @@ impl SidebarPaneView {
         });
     }
 
-    fn schedule_ui_settings_persist(&mut self, cx: &mut gpui::Context<Self>) {
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.schedule_ui_settings_persist(cx);
-        });
-    }
-
     pub(in super::super) fn toggle_active_repo_collapse_key(
         &mut self,
         collapse_key: SharedString,

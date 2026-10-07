@@ -258,6 +258,14 @@ fn preferences_sync_across_tabs_and_windows_without_lost_fields_or_clone_leakage
     let backend: Arc<dyn GitBackend> = Arc::new(gitcomet_git_gix::GixBackend);
     let (first, _first_events) = AppStore::new_test(backend.clone());
     let main_id = open_repo_and_wait(&first, &main);
+    // Switching tabs cancels unfinished loads, so wait for this reply while
+    // the main worktree is still active.
+    wait_until("main worktree HEAD before switching tabs", || {
+        matches!(
+            &first.snapshot().repos.iter().find(|repo| repo.id == main_id).unwrap().head_branch,
+            Loadable::Ready(name) if name == "main"
+        )
+    });
     let linked_id = open_repo_and_wait(&first, &linked);
     let (second, _second_events) = AppStore::new_test_sharing_preferences(backend, &first);
     let second_id = open_repo_and_wait(&second, &linked);
@@ -450,6 +458,88 @@ fn preferences_sync_across_tabs_and_windows_without_lost_fields_or_clone_leakage
     drop(first);
     drop(second);
     drop(reopened);
+}
+
+#[test]
+fn same_history_selection_overrides_a_queued_worktree_choice_without_reloading() {
+    let hub = crate::store::repository_preferences::PreferenceHub::new(None);
+    let key = RepositoryKey::CommonDir(PathBuf::from("/repo/.git"));
+    let backend_repo = gitcomet_core::test_support::UnconfiguredRepository::new("/repo");
+    let (initial, persistence) = hub.initialize(key.clone(), Path::new("/repo"), &backend_repo);
+    persistence.unwrap();
+    let mut state = AppState::test_default();
+    for (id, path) in [(RepoId(1), "/repo"), (RepoId(2), "/linked")] {
+        let mut repo = RepoState::new_opening(
+            id,
+            RepoSpec {
+                workdir: path.into(),
+            },
+        );
+        repo.open = Loadable::Ready(());
+        repo.shared_preferences = Some(initial.clone());
+        repo.set_log(Loadable::Ready(Arc::new(LogPage {
+            commits: Vec::new(),
+            next_cursor: None,
+        })));
+        state.repos.push(repo);
+    }
+    state.active_repo = Some(RepoId(1));
+    let mut repos = FxHashMap::default();
+    let id_alloc = std::sync::atomic::AtomicU64::new(3);
+    let first = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetHistoryScope {
+            repo_id: RepoId(1),
+            scope: HistoryMode::FirstParent,
+        },
+    );
+    let linked_log_rev = state.repos[1].log_rev;
+    // Neither queued change has been published yet. The linked tab still
+    // displays FullReachable, and explicitly choosing it must win last.
+    let second = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetHistoryScope {
+            repo_id: RepoId(2),
+            scope: HistoryMode::FullReachable,
+        },
+    );
+    assert!(matches!(
+        second.as_slice(),
+        [Effect::UpdateRepositoryPreferences {
+            repo_id: RepoId(2),
+            update: RepositoryPreferenceUpdate::HistoryMode(HistoryMode::FullReachable),
+            ..
+        }]
+    ));
+    assert_eq!(state.repos[1].log_rev, linked_log_rev);
+    assert!(matches!(state.repos[1].log, Loadable::Ready(_)));
+    for effect in first.iter().chain(&second) {
+        if let Effect::UpdateRepositoryPreferences { key, update, .. } = effect {
+            hub.update(key.clone(), update).unwrap();
+        }
+    }
+    let latest = hub.latest(&key).unwrap();
+    assert_eq!(latest.preferences.history_mode, HistoryMode::FullReachable);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ApplyRepositoryPreferences(latest),
+    );
+    assert!(state.repos.iter().all(|repo| {
+        repo.history_state.history_scope == HistoryMode::FullReachable
+            && repo
+                .shared_preferences
+                .as_ref()
+                .unwrap()
+                .preferences
+                .history_mode
+                == HistoryMode::FullReachable
+    }));
 }
 
 #[test]

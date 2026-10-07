@@ -26,6 +26,211 @@ fn wait_for_preferences(store: &AppStore, ready: impl Fn(&SharedRepositoryPrefer
 }
 
 #[gpui::test]
+fn repository_lists_use_configured_defaults_until_an_explicit_sort_is_saved(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_state::model::RepositoryPreferenceUpdate;
+
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let state = long_list_tests::branch_fixture(1);
+    let repo_id = state.repos[0].id;
+    store.replace_snapshot_for_test(state);
+    store.dispatch(Msg::UpdateRepositoryPreference {
+        repo_id,
+        update: RepositoryPreferenceUpdate::Pin {
+            key: "local:initialized".into(),
+            pinned: true,
+        },
+    });
+    wait_for_preferences(&store, |prefs| {
+        prefs.pinned_items.contains("local:initialized")
+    });
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
+    let lists = [
+        FileListId::CommitFiles,
+        FileListId::RangeFiles,
+        FileListId::WorktreeFiles,
+        FileListId::Status(StatusSection::CombinedUnstaged),
+        FileListId::Status(StatusSection::Untracked),
+        FileListId::Status(StatusSection::Unstaged),
+        FileListId::Status(StatusSection::Staged),
+    ];
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            test_support::sync_store_snapshot(view, cx);
+            view.set_file_list_sort(CommitFileSort::FileTypeDescending, cx);
+        });
+    });
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        let pane = view.read(app).details_pane.read(app);
+        for list in lists {
+            assert_eq!(
+                pane.file_list_sort_for(list),
+                CommitFileSort::FileTypeDescending,
+                "{list:?}"
+            );
+        }
+    });
+    assert!(
+        store.snapshot().repos[0]
+            .shared_preferences
+            .as_ref()
+            .unwrap()
+            .preferences
+            .file_sorts
+            .is_empty()
+    );
+
+    // Saving the first override must use the shared writer even though this
+    // repository had no sort entry before the choice.
+    cx.update(|_, app| {
+        let pane = view.read(app).details_pane.clone();
+        pane.update(app, |pane, cx| {
+            pane.set_commit_file_sort(CommitFileSort::PathAscending, cx)
+        });
+    });
+    wait_for_preferences(&store, |prefs| {
+        prefs.file_sorts.get(&RepositoryListKind::CommitFiles)
+            == Some(&RepositoryFileSort::PathAscending)
+    });
+    for default in [CommitFileSort::PathDescending, CommitFileSort::Edits] {
+        cx.update(|_, app| {
+            view.update(app, |view, cx| {
+                test_support::sync_store_snapshot(view, cx);
+                view.set_file_list_sort(default, cx);
+            });
+        });
+        test_support::redraw(cx);
+        cx.update(|_, app| {
+            let pane = view.read(app).details_pane.read(app);
+            for list in lists {
+                let expected = if list == FileListId::CommitFiles
+                    || (list == FileListId::Status(StatusSection::Untracked)
+                        && default.needs_line_stats())
+                {
+                    CommitFileSort::PathAscending
+                } else {
+                    default
+                };
+                assert_eq!(
+                    pane.file_list_sort_for(list),
+                    expected,
+                    "{list:?} with {default:?}"
+                );
+            }
+        });
+    }
+}
+
+#[gpui::test]
+fn remote_locator_broadcasts_expansions_and_keeps_them_after_later_updates(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_state::model::RepositoryPreferenceUpdate;
+
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let mut state = long_list_tests::branch_fixture(2);
+    let repo = &mut Arc::make_mut(&mut state).repos[0];
+    let repo_id = repo.id;
+    let second_id = RepoId(repo_id.0 + 1);
+    repo.common_dir = Some(PathBuf::from("/tmp/shared-repo/.git").into());
+    repo.head_branch = Loadable::Ready("shared/topic-000001".into());
+    if let Loadable::Ready(branches) = &mut repo.branches {
+        Arc::make_mut(branches)[1].upstream = Some(gitcomet_core::domain::Upstream {
+            remote: "origin".into(),
+            branch: "shared/topic-000001".into(),
+        });
+    }
+    let mut second = repo.clone();
+    second.id = second_id;
+    second.spec.workdir = "/tmp/shared-repo-linked".into();
+    Arc::make_mut(&mut state).repos.push(second);
+    store.replace_snapshot_for_test(state);
+    let header = branch_sidebar::remote_header_storage_key("origin");
+    let group = branch_sidebar::remote_group_storage_key("origin", "shared");
+    let nested = branch_sidebar::remote_group_storage_key("origin", "shared/topic-000001");
+    let unrelated = branch_sidebar::remote_group_storage_key("origin", "other");
+    store.dispatch(Msg::UpdateRepositoryPreference {
+        repo_id,
+        update: RepositoryPreferenceUpdate::CollapseItems {
+            added: BTreeSet::from([
+                header.clone(),
+                group.clone(),
+                nested.clone(),
+                unrelated.clone(),
+            ]),
+            removed: BTreeSet::new(),
+        },
+    });
+    wait_for_preferences(&store, |prefs| prefs.collapsed_items.len() == 4);
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            test_support::sync_store_snapshot(view, cx);
+            view.set_sidebar_collapsed(true, cx);
+            view.open_sidebar_collapsed_popover(CollapsedSidebarSection::Remote, cx);
+        });
+    });
+    test_support::redraw(cx);
+    let locator = cx.debug_bounds("collapsed_popover_locator").unwrap();
+    cx.simulate_click(locator.center(), gpui::Modifiers::default());
+    let expected = BTreeSet::from([unrelated.clone()]);
+    wait_for_preferences(&store, |prefs| prefs.collapsed_items == expected);
+    let snapshot = store.snapshot();
+    for repo in &snapshot.repos {
+        assert_eq!(
+            repo.shared_preferences
+                .as_ref()
+                .unwrap()
+                .preferences
+                .collapsed_items,
+            expected
+        );
+    }
+
+    store.dispatch(Msg::UpdateRepositoryPreference {
+        repo_id: second_id,
+        update: RepositoryPreferenceUpdate::Pin {
+            key: "local:after-locate".into(),
+            pinned: true,
+        },
+    });
+    wait_for_preferences(&store, |prefs| {
+        prefs.pinned_items.contains("local:after-locate")
+    });
+    cx.update(|_, app| {
+        view.update(app, |view, cx| test_support::sync_store_snapshot(view, cx));
+    });
+    test_support::redraw(cx);
+    cx.update(|_, app| {
+        let root = view.read(app);
+        let pane = root.sidebar_pane.read(app);
+        assert_eq!(
+            pane.collapsed_popover_section,
+            Some(CollapsedSidebarSection::Remote)
+        );
+        for repo in &pane.state.repos {
+            let collapsed = &pane.sidebar_collapsed_items_by_repo[&repo.spec.workdir];
+            assert!(collapsed.contains(&unrelated));
+            for key in [&header, &group, &nested] {
+                assert!(!collapsed.contains(key));
+                assert!(
+                    !root
+                        .popover_host
+                        .read(app)
+                        .sidebar_collapse_key_is_collapsed(repo.id, key)
+                );
+            }
+        }
+    });
+}
+
+#[gpui::test]
 fn final_sort_selection_survives_an_unchanged_pane_snapshot(cx: &mut gpui::TestAppContext) {
     use gitcomet_state::model::RepositoryPreferenceUpdate;
 

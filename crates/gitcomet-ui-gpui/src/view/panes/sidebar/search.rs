@@ -502,8 +502,15 @@ impl SidebarPaneView {
         self.clear_branch_filter(cx);
         if let sticky::NavigationTarget::Branch(BranchMenuTarget::Remote { remote, branch }) =
             &target
-            && let Some(path) = self.active_repo().map(|repo| repo.spec.workdir.clone())
+            && let Some((repo_id, path)) = self
+                .active_repo()
+                .map(|repo| (repo.id, repo.spec.workdir.clone()))
         {
+            let before = self
+                .sidebar_collapsed_items_by_repo
+                .get(&path)
+                .cloned()
+                .unwrap_or_default();
             let collapsed = self
                 .sidebar_collapsed_items_by_repo
                 .entry(path)
@@ -525,7 +532,7 @@ impl SidebarPaneView {
                 );
             }
             self.sidebar_presentation_cache = SidebarPresentationCache::default();
-            self.schedule_ui_settings_persist(cx);
+            self.publish_sidebar_collapse_changes(repo_id, &before);
             self.sync_popover_collapsed_items(cx);
         }
         self.pending_sidebar_navigation = Some(target);

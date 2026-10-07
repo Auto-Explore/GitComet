@@ -108,10 +108,10 @@ pub(crate) fn initialize_repository_preferences(
     (result, persistence)
 }
 
-pub(crate) fn persist_repository_preference_update(
+pub(crate) fn persist_repository_preference_updates(
     path: &Path,
     key: &RepositoryKey,
-    update: &RepositoryPreferenceUpdate,
+    updates: &[RepositoryPreferenceUpdate],
     preferences: &SharedRepositoryPreferences,
 ) -> io::Result<()> {
     update_session_file(path, |file| {
@@ -124,7 +124,9 @@ pub(crate) fn persist_repository_preference_update(
             return SessionUpdate::Write;
         };
         let old = prefs.clone();
-        prefs.apply(update);
+        for update in updates {
+            prefs.apply(update);
+        }
         if *prefs == old {
             SessionUpdate::Unchanged
         } else {
@@ -270,13 +272,13 @@ mod tests {
             show_hidden_files: false,
             show_ignored_files: true,
         };
-        persist_repository_preference_update(
+        persist_repository_preference_updates(
             &path,
             &key,
-            &RepositoryPreferenceUpdate::Pin {
+            &[RepositoryPreferenceUpdate::Pin {
                 key: "local:dev".into(),
                 pinned: true,
-            },
+            }],
             &preferences,
         )
         .unwrap();
@@ -299,11 +301,10 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn migration_matches_legacy_symlink_and_non_utf8_paths() {
-        use std::ffi::OsString;
-        use std::os::unix::{ffi::OsStringExt, fs::symlink};
+    fn migration_matches_legacy_symlink_paths() {
+        use std::os::unix::fs::symlink;
         let dir = tempfile::tempdir().unwrap();
-        let workdir = dir.path().join(OsString::from_vec(b"repo-\xff".to_vec()));
+        let workdir = dir.path().join("repo");
         fs::create_dir(&workdir).unwrap();
         let alias = dir.path().join("alias");
         symlink(&workdir, &alias).unwrap();
@@ -335,9 +336,61 @@ mod tests {
             load_file(&path).unwrap().repository_preferences[&key.storage_key()],
             prefs
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn migration_preserves_non_utf8_path_keys_without_a_worktree_on_disk() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        // Some Unix filesystems reject these bytes in directory names. A
+        // saved worktree can be unavailable, so migrate its encoded key
+        // without creating that directory or depending on filesystem support.
+        let workdir = dir.path().join(OsString::from_vec(b"repo-\xff".to_vec()));
+        let replacement = dir.path().join("repo-�");
+        let key = RepositoryKey::Worktree(workdir.clone());
+        let path = dir.path().join("session.json");
+        let file = UiSessionFile {
+            version: CURRENT_SESSION_FILE_VERSION,
+            repo_history_modes: Some(BTreeMap::from([
+                (path_storage_key(&workdir), HistoryMode::NoMerges.into()),
+                (
+                    path_storage_key(&replacement),
+                    HistoryMode::FirstParent.into(),
+                ),
+            ])),
+            repo_sidebar_pinned_branches: Some(BTreeMap::from([
+                (
+                    path_storage_key(&workdir),
+                    BTreeSet::from(["local:dev".into()]),
+                ),
+                (
+                    path_storage_key(&replacement),
+                    BTreeSet::from(["local:other".into()]),
+                ),
+            ])),
+            ..Default::default()
+        };
+        persist_to_path(&path, &file).unwrap();
+        let (prefs, persistence) = initialize_repository_preferences(
+            Some(&path),
+            &key,
+            &workdir,
+            &UnconfiguredRepository::new(&workdir),
+        );
+        persistence.unwrap();
+        assert_eq!(prefs.history_mode, HistoryMode::NoMerges);
+        assert_eq!(prefs.pinned_items, BTreeSet::from(["local:dev".into()]));
+        assert_eq!(path_from_storage_key(&path_storage_key(&workdir)), workdir);
+        assert_eq!(
+            load_file(&path).unwrap().repository_preferences[&key.storage_key()],
+            prefs
+        );
         assert_ne!(
             key.storage_key(),
-            RepositoryKey::Worktree(dir.path().join("repo-�")).storage_key()
+            RepositoryKey::Worktree(replacement).storage_key()
         );
     }
 }

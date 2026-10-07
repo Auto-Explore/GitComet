@@ -699,7 +699,7 @@ impl DetailsPaneView {
         self.untracked_height_design = self.ui_scale().design_units_from_optional_pixels(height);
     }
 
-    /// Like the layout, a new default sort wins over every list sorted by hand.
+    /// Update the fallback for lists without an explicit repository sort.
     pub(in super::super) fn set_default_file_list_sort(
         &mut self,
         sort: crate::view::rows::CommitFileSort,
@@ -1417,13 +1417,21 @@ impl DetailsPaneView {
             .find(|repo| repo.id == repo_id)
             .and_then(|repo| repo.shared_preferences.as_ref())
             .map(|snapshot| {
-                snapshot
+                let sort = snapshot
                     .preferences
                     .file_sorts
                     .get(&list.preference_key())
                     .copied()
-                    .unwrap_or_default()
-                    .into()
+                    .map(crate::view::rows::CommitFileSort::from)
+                    .unwrap_or(self.default_file_list_sort);
+                if let crate::view::rows::FileListId::Status(section) = list
+                    && sort.needs_line_stats()
+                    && !crate::view::status_section_has_line_stats(section)
+                {
+                    crate::view::rows::CommitFileSort::default()
+                } else {
+                    sort
+                }
             })
     }
 

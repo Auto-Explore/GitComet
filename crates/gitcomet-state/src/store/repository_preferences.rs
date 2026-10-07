@@ -15,6 +15,7 @@ type Subscriber = Box<dyn Fn(RepositoryPreferencesSnapshot) -> bool + Send + Syn
 struct State {
     records: HashMap<RepositoryKey, RepositoryPreferencesSnapshot>,
     subscribers: HashMap<u64, Subscriber>,
+    unpersisted_updates: HashMap<RepositoryKey, Vec<RepositoryPreferenceUpdate>>,
 }
 
 pub(super) struct PreferenceHub {
@@ -101,7 +102,7 @@ impl PreferenceHub {
         key: RepositoryKey,
         update: &RepositoryPreferenceUpdate,
     ) -> std::io::Result<()> {
-        let preferences =
+        let (preferences, updates) =
             {
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 let current = state.records.entry(key.clone()).or_insert_with(|| {
@@ -125,10 +126,29 @@ impl PreferenceHub {
                         .subscribers
                         .retain(|_, subscriber| subscriber(snapshot.clone()));
                 }
-                preferences
+                let updates = if self.session_path.is_some() {
+                    let pending = state.unpersisted_updates.entry(key.clone()).or_default();
+                    pending.push(update.clone());
+                    pending.clone()
+                } else {
+                    Vec::new()
+                };
+                (preferences, updates)
             };
         if let Some(path) = &self.session_path {
-            crate::session::persist_repository_preference_update(path, &key, update, &preferences)?;
+            // Retain failed deltas until a write succeeds. Replaying them in
+            // order also preserves unrelated preferences already on disk.
+            crate::session::persist_repository_preference_updates(
+                path,
+                &key,
+                &updates,
+                &preferences,
+            )?;
+            self.state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .unpersisted_updates
+                .remove(&key);
         }
         Ok(())
     }
@@ -137,7 +157,115 @@ impl PreferenceHub {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{RepositoryFileSort, RepositoryListKind};
     use gitcomet_core::test_support::UnconfiguredRepository;
+    use std::collections::BTreeSet;
+    use std::fs;
+
+    #[test]
+    fn failed_writes_retry_ordered_deltas_and_preserve_unrelated_disk_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.json");
+        let saved = dir.path().join("saved.json");
+        let workdir = dir.path().join("repo");
+        let key = RepositoryKey::Worktree(workdir.clone());
+        let repo = UnconfiguredRepository::new(&workdir);
+        let hub = PreferenceHub::new(Some(path.clone()));
+        hub.initialize(key.clone(), &workdir, &repo).1.unwrap();
+        let pin = |name: &str, pinned| RepositoryPreferenceUpdate::Pin {
+            key: format!("local:{name}"),
+            pinned,
+        };
+        hub.update(key.clone(), &pin("remove", true)).unwrap();
+
+        // A directory at the destination makes replacement fail even when
+        // running as root. Restore the existing disk record after the outage.
+        fs::rename(&path, &saved).unwrap();
+        fs::create_dir(&path).unwrap();
+        for update in [
+            pin("a", true),
+            pin("remove", false),
+            RepositoryPreferenceUpdate::FileSort {
+                list: RepositoryListKind::CommitFiles,
+                sort: RepositoryFileSort::PathDescending,
+            },
+            RepositoryPreferenceUpdate::FileSort {
+                list: RepositoryListKind::CommitFiles,
+                sort: RepositoryFileSort::FileTypeAscending,
+            },
+        ] {
+            assert!(hub.update(key.clone(), &update).is_err());
+        }
+        let expected = (*hub.latest(&key).unwrap().preferences).clone();
+        assert_eq!(expected.pinned_items, BTreeSet::from(["local:a".into()]));
+        fs::remove_dir(&path).unwrap();
+        fs::rename(&saved, &path).unwrap();
+        let mut disk: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        disk["window_width"] = 1400.into();
+        disk["repository_preferences"][key.storage_key()]["file_sorts"]["range_files"] =
+            "edits".into();
+        fs::write(&path, serde_json::to_vec(&disk).unwrap()).unwrap();
+
+        hub.update(key.clone(), &pin("b", true)).unwrap();
+        let reopened = PreferenceHub::new(Some(path.clone()));
+        let (snapshot, persistence) = reopened.initialize(key.clone(), &workdir, &repo);
+        persistence.unwrap();
+        let mut expected = expected;
+        expected.pinned_items.insert("local:b".into());
+        expected
+            .file_sorts
+            .insert(RepositoryListKind::RangeFiles, RepositoryFileSort::Edits);
+        assert_eq!(*snapshot.preferences, expected);
+        let mut disk: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(disk["window_width"], 1400);
+
+        // Successfully saved deltas must be retired: a later write should
+        // preserve an independent removal instead of replaying the old pin.
+        disk["repository_preferences"][key.storage_key()]["pinned_items"] =
+            serde_json::json!(["local:b"]);
+        fs::write(&path, serde_json::to_vec(&disk).unwrap()).unwrap();
+        hub.update(key.clone(), &pin("c", true)).unwrap();
+        let reopened = PreferenceHub::new(Some(path));
+        let (snapshot, persistence) = reopened.initialize(key, &workdir, &repo);
+        persistence.unwrap();
+        assert_eq!(
+            snapshot.preferences.pinned_items,
+            BTreeSet::from(["local:b".into(), "local:c".into()])
+        );
+    }
+
+    #[test]
+    fn duplicate_updates_retry_failed_persistence_without_another_broadcast() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.json");
+        let saved = dir.path().join("saved.json");
+        let workdir = dir.path().join("repo");
+        let key = RepositoryKey::Worktree(workdir.clone());
+        let repo = UnconfiguredRepository::new(&workdir);
+        let hub = PreferenceHub::new(Some(path.clone()));
+        hub.initialize(key.clone(), &workdir, &repo).1.unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        hub.subscribe(1, Box::new(move |snapshot| tx.send(snapshot).is_ok()));
+        fs::rename(&path, &saved).unwrap();
+        fs::create_dir(&path).unwrap();
+        let pin = RepositoryPreferenceUpdate::Pin {
+            key: "local:a".into(),
+            pinned: true,
+        };
+        assert!(hub.update(key.clone(), &pin).is_err());
+        let changed = rx.try_recv().unwrap();
+        fs::remove_dir(&path).unwrap();
+        fs::rename(&saved, &path).unwrap();
+        hub.update(key.clone(), &pin).unwrap();
+        assert!(rx.try_recv().is_err());
+        assert_eq!(hub.latest(&key).unwrap().revision, changed.revision);
+        let reopened = PreferenceHub::new(Some(path));
+        let (snapshot, persistence) = reopened.initialize(key, &workdir, &repo);
+        persistence.unwrap();
+        assert_eq!(*snapshot.preferences, *changed.preferences);
+    }
 
     #[test]
     fn opening_again_uses_latest_revision_and_duplicate_updates_do_not_echo() {
