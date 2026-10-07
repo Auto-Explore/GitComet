@@ -108,7 +108,10 @@ impl InteractionPaint {
             }
         });
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, _| {
-            if phase == DispatchPhase::Capture && !event.dragging() && pressed.replace(false) {
+            if phase == DispatchPhase::Capture
+                && event.pressed_button.is_none()
+                && pressed.replace(false)
+            {
                 window.refresh();
             }
         });
