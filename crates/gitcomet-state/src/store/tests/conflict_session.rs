@@ -24,6 +24,7 @@ fn setup_repo_with_conflict(
         id_alloc,
         state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            preferences: None,
             repo_id,
             spec: RepoSpec {
                 workdir: PathBuf::from("/tmp/repo"),

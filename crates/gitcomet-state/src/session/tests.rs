@@ -3322,7 +3322,7 @@ fn v4_window_groups_key_loads_as_workspaces_and_rewrites_as_v5() {
     persist_workspaces_to_path(&[workspace], &path).expect("persist workspaces");
     let written: serde_json::Value =
         serde_json::from_slice(&fs::read(&path).expect("read v5")).expect("parse v5");
-    assert_eq!(written["version"], 5);
+    assert_eq!(written["version"], CURRENT_SESSION_FILE_VERSION);
     assert!(written.get("window_groups").is_none());
     assert_eq!(written["workspaces"][0]["custom_name"], "Client work");
 

@@ -397,16 +397,36 @@ pub(super) fn set_history_scope(
     let Some(repo_ix) = state.repos.iter().position(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    let shared_key = state.repos[repo_ix]
+        .shared_preferences
+        .as_ref()
+        .map(|snapshot| snapshot.key.clone());
     if state.repos[repo_ix].history_state.history_scope == scope {
-        return Vec::new();
+        // Another tab's choice may still be queued. Every explicit shared
+        // selection must reach the queue, even when this tab needs no reload.
+        return shared_key
+            .map(|key| Effect::UpdateRepositoryPreferences {
+                repo_id,
+                key,
+                update: crate::model::RepositoryPreferenceUpdate::HistoryMode(scope),
+            })
+            .into_iter()
+            .collect();
     }
     state.repos[repo_ix].set_log_scope(scope);
 
-    restart_history_load(state, repo_ix, |workdir| Effect::PersistRepoHistoryMode {
-        repo_id: Some(repo_id),
-        workdir,
-        mode: scope,
-        action: "updating history mode",
+    restart_history_load(state, repo_ix, |workdir| match shared_key {
+        Some(key) => Effect::UpdateRepositoryPreferences {
+            repo_id,
+            key,
+            update: crate::model::RepositoryPreferenceUpdate::HistoryMode(scope),
+        },
+        None => Effect::PersistRepoHistoryMode {
+            repo_id: Some(repo_id),
+            workdir,
+            mode: scope,
+            action: "updating history mode",
+        },
     })
 }
 

@@ -1270,6 +1270,7 @@ pub(super) fn repo_opened_ok(
     repo_id: RepoId,
     spec: RepoSpec,
     repo: Arc<dyn GitRepository>,
+    preferences: Option<crate::model::RepositoryPreferencesSnapshot>,
 ) -> Vec<Effect> {
     if !state.repos.iter().any(|repo| repo.id == repo_id) {
         return Vec::new();
@@ -1288,6 +1289,13 @@ pub(super) fn repo_opened_ok(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.set_spec(spec);
         repo_state.common_dir = common_dir;
+        if let Some(snapshot) = preferences {
+            repo_state.history_state.history_scope = snapshot.preferences.history_mode;
+            repo_state.file_browser.show_hidden = snapshot.preferences.show_hidden_files;
+            repo_state.file_browser.show_ignored = snapshot.preferences.show_ignored_files;
+            repo_state.shared_preferences = Some(snapshot);
+            repo_state.branch_sidebar_rev += 1;
+        }
         if repo_state.commit_external_drop_open() {
             committed_external_drop = Some((
                 repo_state.spec.workdir.clone(),
