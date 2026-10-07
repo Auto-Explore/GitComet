@@ -1,6 +1,7 @@
 //! Completed pointer clicks shared by elements, canvases and text subtargets.
 //! GPUI pairs element clicks; this layer also gives the innermost control sole
 //! ownership and rejects mismatched buttons. Canvas targets use the same gate.
+//! Movement with a button held retains the original target until release.
 //! Focusing presses participate in the same press/release pairing.
 use gpui::{prelude::*, *};
 
@@ -200,7 +201,7 @@ pub fn on_click<E: Element + InteractiveElement>(
             }
         })
         .on_mouse_move(|event, _, cx| {
-            if !event.dragging() {
+            if event.pressed_button.is_none() {
                 reset(cx);
             }
         })
@@ -322,7 +323,7 @@ pub fn on_canvas_click(
     });
     let hitbox = hitbox.clone();
     window.on_mouse_event(|event: &MouseMoveEvent, phase, _, cx| {
-        if phase == DispatchPhase::Capture && !event.dragging() {
+        if phase == DispatchPhase::Capture && event.pressed_button.is_none() {
             reset(cx);
         }
     });
@@ -342,21 +343,5 @@ pub fn on_canvas_click(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::canvas_target;
-    use gpui::ElementId;
-
-    #[test]
-    fn canvas_targets_are_integers_that_tell_their_keys_apart() {
-        let row = canvas_target("diff-click", (7u64, 3usize, "row"));
-        assert!(
-            matches!(row, ElementId::NamedInteger(..)),
-            "no string is built for a target"
-        );
-        assert_eq!(row, canvas_target("diff-click", (7u64, 3usize, "row")));
-        assert_ne!(row, canvas_target("diff-click", (7u64, 3usize, "context")));
-        assert_ne!(row, canvas_target("diff-click", (7u64, 4usize, "row")));
-        assert_ne!(row, canvas_target("diff-click", (8u64, 3usize, "row")));
-        assert_ne!(row, canvas_target("history-menu", (7u64, 3usize, "row")));
-    }
-}
+#[path = "click_tests.rs"]
+mod tests;

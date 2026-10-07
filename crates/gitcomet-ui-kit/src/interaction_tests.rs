@@ -830,6 +830,48 @@ fn canvas_decorations_follow_the_whole_row_through_hover_press_and_rerender(
     }
 }
 
+#[gpui::test]
+fn canvas_press_feedback_survives_secondary_button_movement(cx: &mut TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    for button in [MouseButton::Right, MouseButton::Middle] {
+        let (_view, cx) = cx
+            .add_window_view(|_, cx| Fixture::new(themes()[0], FixtureKind::PaintedRow, false, cx));
+        redraw(cx);
+        let at = cx.debug_bounds("subject").unwrap().center();
+        cx.simulate_mouse_move(at, None, Modifiers::default());
+        redraw(cx);
+        let hovered = paint(cx, "painted_mask");
+        cx.simulate_mouse_down(at, button, Modifiers::default());
+        redraw(cx);
+        let pressed = paint(cx, "painted_mask");
+        assert_ne!(
+            pressed, hovered,
+            "a held button must paint pressed feedback"
+        );
+
+        let moved = at + point(px(1.0), px(1.0));
+        cx.simulate_mouse_move(moved, Some(button), Modifiers::default());
+        redraw(cx);
+        assert_eq!(paint(cx, "painted_mask"), pressed, "{button:?}: movement");
+        cx.simulate_mouse_up(moved, button, Modifiers::default());
+        redraw(cx);
+        assert_eq!(
+            paint(cx, "painted_mask"),
+            hovered,
+            "release clears feedback"
+        );
+
+        cx.simulate_mouse_down(at, button, Modifiers::default());
+        cx.simulate_mouse_move(moved, None, Modifiers::default());
+        redraw(cx);
+        assert_eq!(
+            paint(cx, "painted_mask"),
+            hovered,
+            "a move with no button held clears stranded feedback"
+        );
+    }
+}
+
 #[test]
 fn discrete_control_styles_and_activation_are_owned_by_the_interaction_kit() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -995,6 +1037,8 @@ fn keyboard_activation_cancels_after_focus_changes_and_keeps_modified_shortcuts(
 
 #[gpui::test]
 fn repeated_local_ids_do_not_transfer_nested_click_ownership(cx: &mut TestAppContext) {
+    use crate::click::PointerClickExt as _;
+
     struct NestedFixture {
         parent_clicks: usize,
         child_clicks: usize,
@@ -1011,6 +1055,10 @@ fn repeated_local_ids_do_not_transfer_nested_click_ownership(cx: &mut TestAppCon
                     ControlActivation::Composite,
                     cx.listener(|this, _, _, _| this.parent_clicks += 1),
                 )
+                .on_pointer_click(
+                    MouseButton::Right,
+                    cx.listener(|this, _, _, _| this.parent_clicks += 1),
+                )
                 .child(
                     div()
                         .id("same_id")
@@ -1019,6 +1067,10 @@ fn repeated_local_ids_do_not_transfer_nested_click_ownership(cx: &mut TestAppCon
                         .on_activate(
                             false,
                             ControlActivation::Action,
+                            cx.listener(|this, _, _, _| this.child_clicks += 1),
+                        )
+                        .on_pointer_click(
+                            MouseButton::Right,
                             cx.listener(|this, _, _, _| this.child_clicks += 1),
                         ),
                 )
@@ -1032,24 +1084,28 @@ fn repeated_local_ids_do_not_transfer_nested_click_ownership(cx: &mut TestAppCon
     redraw(cx);
     let child = cx.debug_bounds("child").unwrap().center();
     let parent = cx.debug_bounds("parent").unwrap().center();
-    for (from, to) in [(child, parent), (parent, child)] {
-        cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::default());
-        cx.update(|_, app| view.update(app, |_, cx| cx.notify()));
-        redraw(cx);
-        cx.simulate_mouse_move(to, Some(MouseButton::Left), Modifiers::default());
-        cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::default());
-        cx.update(|_, app| {
-            assert_eq!(view.read(app).parent_clicks, 0);
-            assert_eq!(view.read(app).child_clicks, 0);
-        });
+    for button in [MouseButton::Left, MouseButton::Right] {
+        for (from, to) in [(child, parent), (parent, child)] {
+            cx.simulate_mouse_down(from, button, Modifiers::default());
+            cx.update(|_, app| view.update(app, |_, cx| cx.notify()));
+            redraw(cx);
+            cx.simulate_mouse_move(to, Some(button), Modifiers::default());
+            cx.simulate_mouse_up(to, button, Modifiers::default());
+            cx.update(|_, app| {
+                assert_eq!(view.read(app).parent_clicks, 0);
+                assert_eq!(view.read(app).child_clicks, 0);
+            });
+        }
     }
-    for at in [child, parent] {
-        cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::default());
-        cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::default());
+    for button in [MouseButton::Left, MouseButton::Right] {
+        for at in [child, parent] {
+            cx.simulate_mouse_down(at, button, Modifiers::default());
+            cx.simulate_mouse_up(at, button, Modifiers::default());
+        }
     }
     cx.update(|_, app| {
-        assert_eq!(view.read(app).parent_clicks, 1);
-        assert_eq!(view.read(app).child_clicks, 1);
+        assert_eq!(view.read(app).parent_clicks, 2);
+        assert_eq!(view.read(app).child_clicks, 2);
     });
 }
 

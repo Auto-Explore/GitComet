@@ -2491,7 +2491,15 @@ mod checkout_picker {
             click_count: 1,
             first_mouse: false,
         });
-        cx.simulate_mouse_up(at, gpui::MouseButton::Right, gpui::Modifiers::default());
+        let moved = at + gpui::point(gpui::px(1.0), gpui::px(1.0));
+        cx.simulate_mouse_move(
+            moved,
+            Some(gpui::MouseButton::Right),
+            gpui::Modifiers::default(),
+        );
+        redraw(cx);
+        assert!(cx.debug_bounds("picker_row_menu").is_none());
+        cx.simulate_mouse_up(moved, gpui::MouseButton::Right, gpui::Modifiers::default());
         cx.run_until_parked();
         redraw(cx);
 

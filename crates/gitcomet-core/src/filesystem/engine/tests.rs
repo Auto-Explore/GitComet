@@ -1598,13 +1598,16 @@ fn journal_storage_skips_cross_volume_candidates() {
     {
         return;
     }
-    let mut service = Filesystem::with_storage_candidates(vec![other_volume.path().to_path_buf()]);
-    replace_for_shutdown(&mut service, fixture.path());
     let root = canonical_path(fixture.path()).unwrap();
-    // No same-volume candidate and no repository: the last resort is the folder.
+    // Own the repository fallback so ancestor .git directories cannot affect it.
+    let gitdir = root.join(".git");
+    fs::create_dir(&gitdir).unwrap();
+    let mut service = Filesystem::with_storage_candidates(vec![other_volume.path().to_path_buf()]);
+    replace_for_shutdown(&mut service, &root);
     let areas = journal_areas(&service);
+    assert!(!areas.is_empty());
     assert!(
-        areas.iter().all(|area| area.starts_with(&root)),
+        areas.iter().all(|area| area.starts_with(&gitdir)),
         "{areas:?}"
     );
     assert_eq!(fs::read_dir(other_volume.path()).unwrap().count(), 0);
