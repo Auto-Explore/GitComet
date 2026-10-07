@@ -50,7 +50,7 @@ On Linux, the cask installs the AppImage build. If your system cannot launch App
 <details>
 <summary>AUR (Arch Linux)</summary>
 
-The community-maintained [`gitcomet-bin`](https://aur.archlinux.org/packages/gitcomet-bin) package repackages the release tarball:
+The [`gitcomet-bin`](https://aur.archlinux.org/packages/gitcomet-bin) package repackages the release tarballs for x86_64 and aarch64 and is updated by the release workflow:
 
 ```bash
 git clone https://aur.archlinux.org/gitcomet-bin.git
