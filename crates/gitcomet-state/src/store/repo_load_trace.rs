@@ -180,6 +180,7 @@ mod tests {
     fn the_worktree_dirty_scan_is_traced_against_its_repo() {
         let effect = Effect::LoadWorktreeDirty {
             repo_id: RepoId(7),
+            scope: crate::model::WorktreeDirtyScope::All,
             workdir: PathBuf::from("/tmp/repo"),
             files_for: None,
         };
@@ -195,6 +196,7 @@ mod tests {
         assert_eq!(
             internal_msg_name(&InternalMsg::WorktreeDirtyLoaded {
                 repo_id: RepoId(7),
+                scope: crate::model::WorktreeDirtyScope::All,
                 result: Ok(Vec::new()),
             }),
             "WorktreeDirtyLoaded"

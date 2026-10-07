@@ -1274,6 +1274,33 @@ impl HistoryView {
         (cache_repo == active && bounds.size.height > px(0.0)).then_some(bounds)
     }
 
+    /// Geometry for native pointer dispatch in the opt-in performance driver.
+    pub(in crate::view) fn scenario_drag_points(
+        &self,
+        fraction: f32,
+    ) -> Option<(Point<Pixels>, Point<Pixels>)> {
+        let bounds = self.history_viewport_bounds()?;
+        let scroll = self.scroll_interaction.borrow();
+        let start = if let Some(logical) = &scroll.logical {
+            let position = if logical.max() > 0.0 {
+                logical.position() / logical.max()
+            } else {
+                0.0
+            };
+            point(
+                // The measured content canvas excludes the scrollbar gutter.
+                bounds.right() + px(8.0),
+                bounds.top() + px(16.0) + (bounds.size.height - px(32.0)) * position as f32,
+            )
+        } else {
+            point(bounds.right() + px(8.0), bounds.top() + px(28.0))
+        };
+        Some((
+            start,
+            point(start.x, bounds.top() + bounds.size.height * fraction),
+        ))
+    }
+
     pub(in crate::view) fn history_scroll_position(&self) -> f64 {
         self.scroll_interaction
             .borrow()
@@ -2944,7 +2971,7 @@ fn build_history_base_cache(
             .into()
     };
     let has_stash_tips = !stash_tips.is_empty();
-    let mut author_cache: FxHashMap<&str, HistoryTextVm> =
+    let mut author_cache: FxHashMap<&str, HistoryAuthorVm> =
         FxHashMap::with_capacity_and_hasher(64, Default::default());
     let mut row_vms = Vec::with_capacity(visible_indices.len());
     if has_stash_tips {
@@ -2956,7 +2983,7 @@ fn build_history_base_cache(
             let commit_id = commit.id.as_ref();
             let author = author_cache
                 .entry(commit.author.as_ref())
-                .or_insert_with(|| HistoryTextVm::new(commit.author.clone().into()))
+                .or_insert_with(|| HistoryAuthorVm::new(commit.author.clone().into()))
                 .clone();
             let (is_stash, summary) =
                 match next_history_stash_tip_for_commit_ix(&stash_tips, &mut next_stash_tip_ix, ix)
@@ -2987,7 +3014,7 @@ fn build_history_base_cache(
             };
             let author = author_cache
                 .entry(commit.author.as_ref())
-                .or_insert_with(|| HistoryTextVm::new(commit.author.clone().into()))
+                .or_insert_with(|| HistoryAuthorVm::new(commit.author.clone().into()))
                 .clone();
             row_vms.push(HistoryBaseRowVm {
                 author,

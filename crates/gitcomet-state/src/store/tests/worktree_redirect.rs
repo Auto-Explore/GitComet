@@ -14,7 +14,7 @@ fn git_output(repo: &Path, args: &[&str]) -> String {
 }
 
 /// Main worktree on `main` (two commits), linked worktree on `feature` (first commit).
-pub(super) fn repo_with_linked_worktree() -> (tempfile::TempDir, PathBuf, PathBuf) {
+pub(in crate::store) fn repo_with_linked_worktree() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = dir.path().join("repo");
     fs::create_dir_all(&repo).expect("repo dir");
@@ -365,4 +365,86 @@ fn a_linked_worktrees_changes_and_diff_load_from_its_own_checkout() {
         ),
         history
     );
+}
+
+#[test]
+fn rapid_linked_worktree_switches_and_reopening_finish_with_the_correct_checkout() {
+    let (_dir, main, linked) = repo_with_linked_worktree();
+    fs::write(main.join("b.txt"), "main staged edit\n").unwrap();
+    run_git(&main, &["add", "b.txt"]);
+    fs::write(linked.join("a.txt"), "linked unstaged edit\n").unwrap();
+    fs::write(linked.join("linked-only.txt"), "linked untracked\n").unwrap();
+    let (store, _events) = AppStore::new_test(Arc::new(gitcomet_git_gix::GixBackend));
+    store.disable_repo_monitors_for_test();
+    let main_id = open_repo_and_wait(&store, &main);
+    let linked_id = open_repo_and_wait(&store, &linked);
+    let settled = |id| {
+        let snapshot = store.snapshot();
+        snapshot.active_repo == Some(id)
+            && snapshot
+                .repos
+                .iter()
+                .find(|repo| repo.id == id)
+                .is_some_and(|repo| {
+                    !repo
+                        .loads_in_flight
+                        .is_in_flight(!crate::model::RepoLoadsInFlight::WORKTREE_DIRTY)
+                        && matches!(repo.status, Loadable::Ready(_))
+                        && matches!(repo.head_branch, Loadable::Ready(_))
+                })
+    };
+    wait_until("initial linked foreground loads", || settled(linked_id));
+    for id in [main_id, linked_id, main_id, linked_id] {
+        store.dispatch(Msg::SetActiveRepo { repo_id: id });
+        wait_until("settled linked checkout switch", || settled(id));
+        let snapshot = store.snapshot();
+        let repo = snapshot.repos.iter().find(|repo| repo.id == id).unwrap();
+        let status = repo.status.ready().unwrap();
+        if id == main_id {
+            assert_eq!(repo.head_branch.ready().unwrap(), "main");
+            assert_eq!(status.staged.len(), 1);
+            assert!(status.unstaged.is_empty());
+        } else {
+            assert_eq!(repo.head_branch.ready().unwrap(), "feature");
+            assert!(status.staged.is_empty());
+            assert_eq!(status.unstaged.len(), 2);
+        }
+    }
+    for _ in 0..20 {
+        store.dispatch(Msg::SetActiveRepo { repo_id: main_id });
+        store.dispatch(Msg::SetActiveRepo { repo_id: linked_id });
+    }
+    store.dispatch(Msg::CloseRepo { repo_id: main_id });
+    wait_until("old checkout to close", || {
+        store.snapshot().repos.iter().all(|repo| repo.id != main_id)
+    });
+    let reopened = open_repo_and_wait(&store, &main);
+    assert_ne!(reopened, main_id);
+    wait_until("reopened foreground and background loads", || {
+        settled(reopened)
+            && store
+                .snapshot()
+                .repos
+                .iter()
+                .find(|repo| repo.id == reopened)
+                .is_some_and(|repo| !repo.loads_in_flight.any_in_flight())
+    });
+    let snapshot = store.snapshot();
+    assert!(snapshot.repos.iter().all(|repo| repo.id != main_id));
+    let repo = snapshot
+        .repos
+        .iter()
+        .find(|repo| repo.id == reopened)
+        .unwrap();
+    assert_eq!(repo.head_branch.ready().unwrap(), "main");
+    assert_eq!(repo.status.ready().unwrap().staged.len(), 1);
+    assert!(repo.status.ready().unwrap().unstaged.is_empty());
+    assert!(
+        repo.worktree_dirty
+            .ready()
+            .unwrap()
+            .iter()
+            .any(|summary| summary.path == linked && summary.modified == 1 && summary.added == 1)
+    );
+    assert_no_error_diagnostics(&store, reopened);
 }

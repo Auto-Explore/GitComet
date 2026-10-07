@@ -104,6 +104,19 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         path: std::path::PathBuf,
     },
+    OpenWorktreeDiff {
+        repo_id: RepoId,
+        worktree_path: std::path::PathBuf,
+        target: DiffTarget,
+    },
+    OpenWorktreeFile {
+        worktree_path: std::path::PathBuf,
+        path: std::path::PathBuf,
+    },
+    OpenWorktreeFileLocation {
+        worktree_path: std::path::PathBuf,
+        path: std::path::PathBuf,
+    },
     OpenFileLocation {
         repo_id: RepoId,
         path: std::path::PathBuf,

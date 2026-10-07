@@ -27,7 +27,7 @@ concurrency:
 
 jobs:
   indexed-history-correctness:
-    name: Indexed history deterministic regressions
+    name: Deterministic performance regressions
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
@@ -51,6 +51,8 @@ jobs:
         cargo test -p gitcomet-ui-gpui --lib indexed_history
         cargo test -p gitcomet-ui-gpui --lib transitions_and_restored_checkpoints_match_original_frontier
         cargo test -p gitcomet-ui-gpui --lib checkpoint_windows_match_continuous_graph_and_attribution
+        cargo test -p gitcomet-ui-kit --lib highlighted_path_typing_does_not_measure_every_hidden_suffix
+        cargo test -p gitcomet-ui-gpui --lib repo_picker_typing_long_recent_paths_has_bounded_text_measurements
 
   performance-budgets:
     name: Performance budgets (manual PR subset)

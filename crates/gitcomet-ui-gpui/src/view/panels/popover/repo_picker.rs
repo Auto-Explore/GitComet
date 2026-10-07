@@ -3,6 +3,32 @@ use super::*;
 use crate::kit::interaction as controls;
 use std::collections::BTreeSet;
 
+impl PopoverHost {
+    /// The real input and cached filter result. This witness must not build rows
+    /// or run filtering itself: doing so would hide missing production updates.
+    pub(in crate::view) fn scenario_repo_picker_state(
+        &self,
+        cx: &App,
+    ) -> Option<(String, Option<usize>, Option<usize>)> {
+        if !matches!(self.popover, Some(PopoverKind::RepoPicker { .. })) {
+            return None;
+        }
+        let query = self
+            .repo_picker_search_input
+            .as_ref()?
+            .read(cx)
+            .text()
+            .to_string();
+        let count = (self.repo_picker_search_query == query.trim())
+            .then(|| {
+                self.repo_picker_rows_cache
+                    .filtered_len_for_query(query.trim())
+            })
+            .flatten();
+        Some((query, count, self.repo_picker_selected_index))
+    }
+}
+
 /// Height this picker caps its row list at. Taller than the badge pickers'
 /// [`components::PICKER_LIST_MAX_HEIGHT_PX`] because three sections share the
 /// list. Shared between the panel that renders the list and the keyboard

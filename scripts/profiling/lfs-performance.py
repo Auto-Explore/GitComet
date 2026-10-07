@@ -35,11 +35,11 @@ def remove_owned(root, path):
 
 def isolated_environment(root):
     env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "GITCOMET_"))}
-    for name in ("home", "xdg", "appdata", "gnupg"):
+    for name in ("xdg", "appdata", "gnupg"):
         (root / name).mkdir()
     (root / "gitconfig").write_text("", encoding="utf-8")
     env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=str(root / "gitconfig"),
-               HOME=str(root / "home"), USERPROFILE=str(root / "home"), XDG_CONFIG_HOME=str(root / "xdg"),
+               XDG_CONFIG_HOME=str(root / "xdg"),
                LOCALAPPDATA=str(root / "appdata"), GNUPGHOME=str(root / "gnupg"), GIT_TERMINAL_PROMPT="0",
                GIT_LFS_FORCE_PROGRESS="1", GITCOMET_DISABLE_SESSION_PERSIST="1")
     env.update(GIT_AUTHOR_DATE="2020-01-01T00:00:00Z", GIT_COMMITTER_DATE="2020-01-01T00:00:00Z")
@@ -63,7 +63,21 @@ class LfsServer(ThreadingHTTPServer):
         self.lock = threading.Lock()
         self.records = []
         self.active = self.max_active = 0
+        self.bandwidth = 0
+        self.next_byte_time = 0.0
+        self.fault = "none"
+        self.stop = threading.Event()
         self.url = f"http://127.0.0.1:{self.server_port}"
+
+    def pace(self, count):
+        if not self.bandwidth:
+            return
+        with self.lock:
+            now = time.monotonic()
+            self.next_byte_time = max(now, self.next_byte_time) + count / self.bandwidth
+            wait = self.next_byte_time - now
+        if self.stop.wait(wait):
+            raise ConnectionAbortedError("fixture stopped")
 
 
 class LfsHandler(BaseHTTPRequestHandler):
@@ -137,6 +151,12 @@ class LfsHandler(BaseHTTPRequestHandler):
             self.server.max_active = max(self.server.active, self.server.max_active)
         try:
             time.sleep(self.server.delay)
+            if self.server.fault == "stall":
+                self.server.stop.wait(300)
+                return
+            if self.server.fault == "disconnect":
+                self.close_connection = True
+                return
             path = self.server.root / oid
             if upload:
                 remaining, digest = size, hashlib.sha256()
@@ -148,6 +168,7 @@ class LfsHandler(BaseHTTPRequestHandler):
                             raise ValueError("incomplete upload")
                         digest.update(data)
                         output.write(data)
+                        self.server.pace(len(data))
                         remaining -= len(data)
                 if digest.hexdigest() != oid:
                     temporary.unlink()
@@ -164,7 +185,9 @@ class LfsHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", str(size))
                 self.end_headers()
                 with path.open("rb") as source:
-                    shutil.copyfileobj(source, self.wfile, 1024 * 1024)
+                    while data := source.read(65536):
+                        self.server.pace(len(data))
+                        self.wfile.write(data)
             success = True
         finally:
             with self.server.lock:
@@ -189,6 +212,7 @@ def server_at(root, expected, latency_ms):
     try:
         yield server
     finally:
+        server.stop.set()
         server.shutdown()
         server.server_close()
         thread.join()

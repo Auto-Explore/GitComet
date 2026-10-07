@@ -2393,6 +2393,16 @@ fn raw_file_committed_under_an_lfs_rule_matches_git_and_stages_as_a_pointer() {
     fs::remove_file(repo.join("raw.bin")).unwrap();
     git(&repo, &["checkout", "--", "raw.bin"]);
 
+    // Checkout refreshes the index's file stats. Invalidate them without changing
+    // content so both Git and the backend run the LFS clean filter, independent
+    // of whether the checkout timestamps happen to be racily clean.
+    fs::File::options()
+        .write(true)
+        .open(repo.join("raw.bin"))
+        .unwrap()
+        .set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1 << 30))
+        .unwrap();
+
     let (rows, opened) = status(&repo);
     assert_eq!(git(&repo, &["status", "--porcelain"]), " M raw.bin\n");
     assert_eq!(
