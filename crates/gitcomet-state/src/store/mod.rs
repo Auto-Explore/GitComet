@@ -17,6 +17,7 @@ mod reducer;
 mod reducer_diagnostics;
 mod repo_load_trace;
 mod repo_monitor;
+mod repository_preferences;
 mod send_diagnostics;
 mod worker_channel;
 
@@ -508,24 +509,48 @@ impl AppStore {
     }
 
     pub fn new(backend: Arc<dyn GitBackend>) -> (Self, smol::channel::Receiver<StoreEvent>) {
-        Self::with_initial_state(backend, AppState::default())
+        Self::with_initial_state(
+            backend,
+            AppState::default(),
+            repository_preferences::PreferenceHub::shared(),
+        )
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn new_test(backend: Arc<dyn GitBackend>) -> (Self, smol::channel::Receiver<StoreEvent>) {
-        Self::with_initial_state(backend, AppState::test_default())
+        Self::with_initial_state(
+            backend,
+            AppState::test_default(),
+            repository_preferences::PreferenceHub::new(
+                crate::session::default_session_file_path_for_effect(),
+            ),
+        )
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn new_test_sharing_preferences(
+        backend: Arc<dyn GitBackend>,
+        other: &Self,
+    ) -> (Self, smol::channel::Receiver<StoreEvent>) {
+        Self::with_initial_state(
+            backend,
+            AppState::test_default(),
+            Arc::clone(&other.msg_tx.preferences),
+        )
     }
 
     fn with_initial_state(
         backend: Arc<dyn GitBackend>,
         initial: AppState,
+        preferences: Arc<repository_preferences::PreferenceHub>,
     ) -> (Self, smol::channel::Receiver<StoreEvent>) {
         let discovery_backend = Arc::clone(&backend);
         let state = Arc::new(RwLock::new(Arc::new(initial)));
         let (command_tx, command_rx) = mpsc::channel::<StoreWorkerCommand>();
         let store_id = StoreInstanceId::next();
         let store_alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let msg_tx = StoreWorkerSender::new(command_tx, Arc::clone(&store_alive), store_id);
+        let msg_tx =
+            StoreWorkerSender::new(command_tx, Arc::clone(&store_alive), store_id, preferences);
         // Coalesced "state changed" notifications: at most one pending.
         let (event_tx, event_rx) = smol::channel::bounded::<StoreEvent>(1);
 
@@ -567,7 +592,7 @@ impl AppStore {
             let mut deferred_commands = VecDeque::new();
 
             while let Ok(command) = recv_next_worker_command(&command_rx, &mut deferred_commands) {
-                let (msg, stamp) = match command {
+                let (mut msg, stamp) = match command {
                     StoreWorkerCommand::Msg(msg) => (*msg, None),
                     StoreWorkerCommand::Traced(msg, stamp) => (*msg, Some(stamp)),
                     StoreWorkerCommand::Shutdown => break,
@@ -601,6 +626,8 @@ impl AppStore {
                 if !thread_msg_tx.is_alive() {
                     continue;
                 }
+
+                thread_msg_tx.refresh_open_preferences(&mut msg);
 
                 // Effects scheduled while handling this message inherit its
                 // operation, and so do the messages their tasks send back.

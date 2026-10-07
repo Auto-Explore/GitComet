@@ -116,6 +116,7 @@ fn open_repo_tab(
         id_alloc,
         state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            preferences: None,
             repo_id,
             spec: spec.clone(),
             repo: Arc::new(CommonDirRepo {

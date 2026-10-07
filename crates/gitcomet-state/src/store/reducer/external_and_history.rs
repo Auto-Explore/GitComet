@@ -400,13 +400,24 @@ pub(super) fn set_history_scope(
     if state.repos[repo_ix].history_state.history_scope == scope {
         return Vec::new();
     }
+    let shared_key = state.repos[repo_ix]
+        .shared_preferences
+        .as_ref()
+        .map(|snapshot| snapshot.key.clone());
     state.repos[repo_ix].set_log_scope(scope);
 
-    restart_history_load(state, repo_ix, |workdir| Effect::PersistRepoHistoryMode {
-        repo_id: Some(repo_id),
-        workdir,
-        mode: scope,
-        action: "updating history mode",
+    restart_history_load(state, repo_ix, |workdir| match shared_key {
+        Some(key) => Effect::UpdateRepositoryPreferences {
+            repo_id,
+            key,
+            update: crate::model::RepositoryPreferenceUpdate::HistoryMode(scope),
+        },
+        None => Effect::PersistRepoHistoryMode {
+            repo_id: Some(repo_id),
+            workdir,
+            mode: scope,
+            action: "updating history mode",
+        },
     })
 }
 

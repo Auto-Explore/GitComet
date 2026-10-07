@@ -172,10 +172,6 @@ impl GitCometView {
                             group_layout,
                             this.window_placement.clone(),
                         );
-                        let repo_sidebar_collapsed_items =
-                            this.sidebar_pane.read(cx).saved_sidebar_collapsed_items();
-                        let repo_sidebar_pinned_branches =
-                            this.sidebar_pane.read(cx).saved_sidebar_pinned_branches();
                         let font_preferences = crate::font_preferences::current(cx);
 
                         let settings = session::UiSettings {
@@ -184,8 +180,8 @@ impl GitCometView {
                             sidebar_width,
                             details_width,
                             sidebar_collapsed: Some(this.sidebar_collapsed),
-                            repo_sidebar_collapsed_items: Some(repo_sidebar_collapsed_items),
-                            repo_sidebar_pinned_branches: Some(repo_sidebar_pinned_branches),
+                            repo_sidebar_collapsed_items: None,
+                            repo_sidebar_pinned_branches: None,
                             theme_mode: Some(this.theme_mode.key().to_string()),
                             // The default is the settings window's; a window's own zoom is not saved.
                             ui_scale_percent: None,

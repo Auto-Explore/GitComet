@@ -209,6 +209,33 @@ pub(in crate::view) enum CommitFileSort {
     EditSizeDescending,
 }
 
+impl From<CommitFileSort> for gitcomet_state::model::RepositoryFileSort {
+    fn from(sort: CommitFileSort) -> Self {
+        match sort {
+            CommitFileSort::PathAscending => Self::PathAscending,
+            CommitFileSort::PathDescending => Self::PathDescending,
+            CommitFileSort::FileTypeAscending => Self::FileTypeAscending,
+            CommitFileSort::FileTypeDescending => Self::FileTypeDescending,
+            CommitFileSort::EditSizeAscending => Self::EditSizeAscending,
+            CommitFileSort::EditSizeDescending => Self::EditSizeDescending,
+        }
+    }
+}
+
+impl From<gitcomet_state::model::RepositoryFileSort> for CommitFileSort {
+    fn from(sort: gitcomet_state::model::RepositoryFileSort) -> Self {
+        use gitcomet_state::model::RepositoryFileSort;
+        match sort {
+            RepositoryFileSort::PathAscending => Self::PathAscending,
+            RepositoryFileSort::PathDescending => Self::PathDescending,
+            RepositoryFileSort::FileTypeAscending => Self::FileTypeAscending,
+            RepositoryFileSort::FileTypeDescending => Self::FileTypeDescending,
+            RepositoryFileSort::EditSizeAscending => Self::EditSizeAscending,
+            RepositoryFileSort::EditSizeDescending => Self::EditSizeDescending,
+        }
+    }
+}
+
 impl CommitFileSort {
     pub(in crate::view) const ALL: [Self; 6] = [
         Self::PathAscending,

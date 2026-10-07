@@ -110,6 +110,19 @@ pub(in crate::view) enum FileListPlan {
 }
 
 impl FileListId {
+    pub(in crate::view) fn preference_key(self) -> gitcomet_state::model::RepositoryListKind {
+        use gitcomet_state::model::RepositoryListKind as Kind;
+        match self {
+            Self::CommitFiles => Kind::CommitFiles,
+            Self::RangeFiles => Kind::RangeFiles,
+            Self::WorktreeFiles => Kind::WorktreeFiles,
+            Self::Status(crate::view::StatusSection::CombinedUnstaged) => Kind::CombinedUnstaged,
+            Self::Status(crate::view::StatusSection::Untracked) => Kind::Untracked,
+            Self::Status(crate::view::StatusSection::Unstaged) => Kind::Unstaged,
+            Self::Status(crate::view::StatusSection::Staged) => Kind::Staged,
+        }
+    }
+
     /// How the filter tooltips name what the counts belong to.
     pub(in crate::view) const fn filter_scope(self) -> &'static str {
         match self {

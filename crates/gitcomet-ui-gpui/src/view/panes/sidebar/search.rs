@@ -294,6 +294,7 @@ impl SidebarPaneView {
                 this.branch_search_options = options;
                 this.sticky_context = None;
                 this.pending_sidebar_navigation = None;
+                this.sidebar_scroll_animation = None;
                 this.branches_scroll
                     .scroll_to_item(0, gpui::ScrollStrategy::Top);
                 this.sync_popover_branch_filter(cx);
