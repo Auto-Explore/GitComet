@@ -585,7 +585,7 @@ fn cell_texts(row: &MarkdownPreviewRow) -> Vec<&str> {
     table
         .cells
         .iter()
-        .map(|range| &row.text[range.clone()])
+        .map(|range| &row.text[range.range.clone()])
         .collect()
 }
 
@@ -606,22 +606,34 @@ fn table_rows_are_flattened() {
 }
 
 #[test]
-fn table_rows_share_column_alignments() {
+fn table_cells_resolve_column_alignments() {
     let doc = parse("| L | C | R | N |\n|:--|:-:|--:|---|\n| 1 | 2 | 3 | 4 |\n");
     let rows = table_rows(&doc);
-    let table = &rows[0].table.as_ref().expect("cells").table;
+    assert!(
+        rows[0]
+            .table
+            .as_ref()
+            .expect("cells")
+            .cells
+            .iter()
+            .all(|cell| cell.align == MarkdownTextAlign::Center),
+        "headers retain their default centering"
+    );
     assert_eq!(
-        table.alignments,
+        rows[1]
+            .table
+            .as_ref()
+            .expect("cells")
+            .cells
+            .iter()
+            .map(|cell| cell.align)
+            .collect::<Vec<_>>(),
         vec![
             MarkdownTextAlign::Left,
             MarkdownTextAlign::Center,
             MarkdownTextAlign::Right,
             MarkdownTextAlign::None,
         ]
-    );
-    assert!(
-        Arc::ptr_eq(table, &rows[1].table.as_ref().expect("cells").table),
-        "every row of a table shares one description"
     );
 }
 
@@ -1370,13 +1382,10 @@ fn normalize_whitespace_collapses_runs() {
 
 #[test]
 fn unsupported_html_degrades_cleanly() {
-    let doc = parse("<table><tr><td>cell</td></tr></table>\n");
+    let doc = parse("<section>cell</section>\n");
     assert_eq!(doc.rows.len(), 1);
     assert_eq!(doc.rows[0].kind, MarkdownPreviewRowKind::PlainFallback);
-    assert_eq!(
-        doc.rows[0].text.as_ref(),
-        "<table><tr><td>cell</td></tr></table>"
-    );
+    assert_eq!(doc.rows[0].text.as_ref(), "<section>cell</section>");
 
     // A `<div>` is a container the preview reads through.
     let doc = parse("<div>block html</div>\n");
@@ -1781,7 +1790,7 @@ fn two_tables_that_touch_stay_separate() {
     // Folding them together padded both to the widest table's columns and
     // drew them as one grid.
     let doc = parse(
-        "| a | b |\n| --- | --- |\n| c | d |\n\n| wiiiiiiiiiide | x |\n| --- | --- |\n| e | f |\n",
+        "| a | b |\n| --- | --- |\n| c | d |\n\n| wiiiiiiiiiide | x | y |\n| --- | --- | --- |\n| e | f | g |\n",
     );
 
     let tables: Vec<Range<usize>> = markdown_document_blocks(&doc)
@@ -1793,20 +1802,15 @@ fn two_tables_that_touch_stay_separate() {
         .collect();
     assert_eq!(tables.len(), 2, "rows: {:?}", row_texts(&doc));
 
-    let widths_of = |rows: &Range<usize>| {
-        doc.rows[rows.start]
-            .table
-            .as_ref()
-            .expect("cells")
-            .table
-            .column_widths
-            .clone()
-    };
-    assert_eq!(widths_of(&tables[0]), vec![1, 1]);
+    assert_eq!(cell_texts(&doc.rows[tables[0].start]), vec!["a", "b"]);
+    assert_eq!(cell_texts(&doc.rows[tables[0].end - 1]), vec!["c", "d"]);
     assert_eq!(
-        widths_of(&tables[1]),
-        vec![13, 1],
-        "each table measures its own columns, not the other's"
+        cell_texts(&doc.rows[tables[1].start]),
+        vec!["wiiiiiiiiiide", "x", "y"]
+    );
+    assert_eq!(
+        cell_texts(&doc.rows[tables[1].end - 1]),
+        vec!["e", "f", "g"]
     );
 }
 
@@ -1939,10 +1943,8 @@ fn a_picture_before_a_nested_list_stays_with_its_parent_item() {
 }
 
 #[test]
-fn a_picture_in_a_table_cell_stays_in_its_column_as_text() {
-    // A table row paints as one string whose columns are aligned by
-    // padding, so a picture recorded against the row would draw at its
-    // leading or trailing edge — out of its column.
+fn a_picture_in_a_table_cell_keeps_its_image_and_copy_text() {
+    // Alt text remains logical copy/search text; the cell paints the image.
     let doc = parse("| ![icon](i.png) | Enabled |\n| --- | --- |\n| b | c |\n");
 
     let header = doc
@@ -1960,10 +1962,12 @@ fn a_picture_in_a_table_cell_stays_in_its_column_as_text() {
         "the picture's description holds its cell: {:?}",
         header.text
     );
-    assert!(
-        doc.rows.iter().all(|row| row.inline_images.is_empty()),
-        "no picture escapes the table to render beside it"
-    );
+    assert_eq!(header.inline_images.len(), 1);
+    assert_eq!(header.inline_images[0].image.source.as_ref(), "i.png");
+    assert!(matches!(
+        header.table.as_ref().unwrap().cells[0].content[0],
+        MarkdownTableCellPart::Image { index: 0, .. }
+    ));
     assert!(
         image_rows(&doc).is_empty(),
         "and none becomes a block either"
@@ -1972,8 +1976,7 @@ fn a_picture_in_a_table_cell_stays_in_its_column_as_text() {
 
 #[test]
 fn an_html_picture_in_a_table_cell_also_stays_in_its_column() {
-    // The `<img>` producer records pictures separately from the markdown
-    // one, so it needs the same guard.
+    // HTML images in Markdown tables use the same cell image model.
     let doc = parse("| <img alt=\"icon\" src=\"i.png\" /> | Enabled |\n| --- | --- |\n| b | c |\n");
 
     let header = doc
@@ -1991,10 +1994,12 @@ fn an_html_picture_in_a_table_cell_also_stays_in_its_column() {
         "the tag's description holds its cell: {:?}",
         header.text
     );
-    assert!(
-        doc.rows.iter().all(|row| row.inline_images.is_empty()),
-        "no picture escapes the table to render beside it"
-    );
+    assert_eq!(header.inline_images.len(), 1);
+    assert_eq!(header.inline_images[0].image.source.as_ref(), "i.png");
+    assert!(matches!(
+        header.table.as_ref().unwrap().cells[0].content[0],
+        MarkdownTableCellPart::Image { index: 0, .. }
+    ));
 }
 
 #[test]
@@ -3908,10 +3913,9 @@ fn container_tags_inside_a_table_cell_or_heading_do_not_split_it() {
 
 #[test]
 fn a_container_closed_on_a_verbatim_line_still_closes() {
-    // `<table>` sends the block to the line-by-line path; its last line closes
-    // the div among other markup.
-    let doc =
-        parse("<div align=\"center\">\n<table><tr><td>x</td></tr>\n</table></div>\n\nIntro text\n");
+    // An unsupported element takes the line-by-line path; its last line
+    // closes the div among other markup.
+    let doc = parse("<div align=\"center\">\n<unknown>x\n</unknown></div>\n\nIntro text\n");
     assert_eq!(
         row_with_text(&doc, "Intro text").align,
         MarkdownTextAlign::None

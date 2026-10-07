@@ -5,6 +5,7 @@
 //! decoration, so scrolling never replans.
 
 use super::*;
+use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::view::rows::{CommitFileFilter, CommitFileSort, FileListRow, RowIx};
 use gitcomet_core::domain::{CommitFileChange, CommitId};
@@ -34,7 +35,9 @@ pub(crate) struct FileListView {
     marks_glyphs: bool,
     chips: Vec<gitcomet_extension_api::FileListFilterChip>,
     base: Option<CommitId>,
-    list_rev: Option<u64>,
+    /// The change list's revision and, for a worktree source, its lane's
+    /// line-stats revision: the counts arrive after the files.
+    list_rev: Option<(u64, Option<u64>)>,
     loading: bool,
     error: Option<SharedString>,
     on_select: FileSelected,
@@ -44,8 +47,26 @@ pub(crate) struct FileListView {
 }
 
 impl FileListView {
+    /// Measured and tested in the tree layout and path order, whatever the
+    /// user's defaults are.
     #[cfg(any(test, feature = "benchmarks"))]
     pub(in crate::view) fn benchmark_snapshot(
+        host: WindowHost,
+        repository: RepositoryHandle,
+        files: Arc<Vec<CommitFileChange>>,
+        cx: &mut gpui::Context<Self>,
+    ) -> Self {
+        let view = Self::snapshot(host, repository, files, cx);
+        view.controller.borrow_mut().set_mode(FileListMode::Tree);
+        view.controller
+            .borrow_mut()
+            .set_sort(CommitFileSort::default());
+        view
+    }
+
+    /// A list over `files` as given, from the user's defaults.
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub(in crate::view) fn snapshot(
         host: WindowHost,
         repository: RepositoryHandle,
         files: Arc<Vec<CommitFileChange>>,
@@ -125,9 +146,11 @@ impl FileListView {
                 let _ = weak.update(cx, |list, cx| list.sync(cx));
             })
             .ok();
-        let controller = Rc::new(std::cell::RefCell::new(FileListController::new(
-            FileListMode::Tree,
-        )));
+        // The user's defaults; an extension's `set_mode` or `set_sort` wins.
+        let defaults = crate::view::FileListDefaults::current(cx);
+        let mut controller = FileListController::new(mode_for(defaults.layout));
+        controller.set_sort(defaults.sort);
+        let controller = Rc::new(std::cell::RefCell::new(controller));
         let scroll = UniformListScrollHandle::default();
         let parent = cx.weak_entity();
         let body = cx.new(|_| {
@@ -168,30 +191,34 @@ impl FileListView {
         let Ok(state) = self.host.state(cx) else {
             return;
         };
-        let Some(list) = state
-            .repos
-            .iter()
-            .find(|repo| {
-                repo.id == self.repository.repo_id()
-                    && repo.lifetime() == self.repository.lifetime()
-            })
-            .and_then(|repo| repo.change_lists.get(&self.view_id))
+        let Some(repo) = state.repos.iter().find(|repo| {
+            repo.id == self.repository.repo_id() && repo.lifetime() == self.repository.lifetime()
+        }) else {
+            return;
+        };
+        let Some(list) = repo
+            .change_lists
+            .get(&self.view_id)
             .filter(|list| list.source == self.source)
         else {
             return;
         };
-        if self.list_rev == Some(list.rev) {
+        let line_stats = worktree_line_stats(repo, &self.source);
+        let key = (list.rev, line_stats.map(|(rev, _)| rev));
+        if self.list_rev == Some(key) {
             return;
         }
-        self.list_rev = Some(list.rev);
+        self.list_rev = Some(key);
         self.loading = list.is_loading() || matches!(list.files, Loadable::NotLoaded);
         self.error = None;
         match &list.files {
             Loadable::Ready(files) => {
                 self.base = list.base.clone();
-                self.controller
-                    .borrow_mut()
-                    .set_files(Arc::clone(files), list.rev);
+                let files = match line_stats {
+                    Some((_, stats)) => with_line_stats(files, stats),
+                    None => Arc::clone(files),
+                };
+                self.controller.borrow_mut().set_files(files, list.rev);
             }
             Loadable::Error(error) => {
                 self.base = None;
@@ -246,6 +273,93 @@ impl FileListView {
     #[cfg(test)]
     pub(crate) fn load_error(&self) -> Option<&str> {
         self.error.as_deref()
+    }
+
+    /// A click steps to the next layout, as in every changed-file list.
+    fn set_layout(&mut self, layout: crate::view::FileListLayout, cx: &mut gpui::Context<Self>) {
+        self.controller.borrow_mut().set_mode(mode_for(layout));
+        cx.notify();
+    }
+
+    fn set_sort(&mut self, sort: CommitFileSort, cx: &mut gpui::Context<Self>) {
+        self.controller.borrow_mut().set_sort(sort);
+        cx.notify();
+    }
+
+    /// The layout icon and the sort button, the controls every changed-file
+    /// list carries. Their menus go through the host, like an extension's.
+    fn controls(&self, list_id: u64, cx: &mut gpui::Context<Self>) -> AnyElement {
+        let theme = self.host.theme(cx);
+        let ui_scale = ui_scale::UiScale::current(cx);
+        let (layout, sort) = {
+            let controller = self.controller.borrow();
+            (layout_for(controller.mode), controller.sort)
+        };
+        let layout_button = components::list_layout_button(
+            format!("hosted_file_list_{list_id}_layout_button"),
+            layout,
+            theme,
+            ui_scale,
+        )
+        .on_click(theme, cx, move |list, event, _window, cx| {
+            if event.standard_click() {
+                list.set_layout(layout.next(), cx);
+            }
+        })
+        .on_pointer_click(
+            gpui::MouseButton::Right,
+            cx.listener(move |list, event: &gpui::MouseDownEvent, _window, cx| {
+                cx.stop_propagation();
+                let weak = cx.weak_entity();
+                let items = menu(
+                    "Layout",
+                    crate::view::FileListLayout::ALL.map(|option| {
+                        let weak = weak.clone();
+                        (option.label(), option == layout, move |cx: &mut App| {
+                            let _ = weak.update(cx, |list, cx| list.set_layout(option, cx));
+                        })
+                    }),
+                );
+                let _ = list.host.open_menu(event.position, items, cx);
+            }),
+        )
+        .debug_selector(move || format!("hosted_file_list_{list_id}_layout_button"))
+        .gitcomet_tooltip(theme, layout.tooltip());
+
+        let sort_button = components::Button::new(format!("hosted_file_list_{list_id}_sort"), "")
+            .style(components::ButtonStyle::Transparent)
+            .start_slot(svg_icon(
+                "icons/sort.svg",
+                theme.colors.foreground.secondary,
+                ui_scale.px(14.0),
+            ))
+            .on_click_with_bounds(theme, cx, move |list, event, bounds, _window, cx| {
+                if !event.standard_click() {
+                    return;
+                }
+                let weak = cx.weak_entity();
+                let items = menu(
+                    "Sort files",
+                    CommitFileSort::ALL.map(|option| {
+                        let weak = weak.clone();
+                        (option.label(), option == sort, move |cx: &mut App| {
+                            let _ = weak.update(cx, |list, cx| list.set_sort(option, cx));
+                        })
+                    }),
+                );
+                let _ = list.host.open_menu(bounds.bottom_left(), items, cx);
+            })
+            .debug_selector(move || format!("hosted_file_list_{list_id}_sort"))
+            .gitcomet_tooltip(theme, format!("Sort: {}", sort.label()).into());
+
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap_1()
+            .child(layout_button)
+            .child(sort_button)
+            .into_any_element()
     }
 
     fn pick(&mut self, change: CommitFileChange, cx: &mut gpui::Context<Self>) {
@@ -343,24 +457,9 @@ impl FileListView {
             let list = cx.weak_entity();
             return range
                 .filter_map(|ix| match *grouped.rows.get(ix)? {
-                    GroupedRow::Header {
-                        group,
-                        count,
-                        collapsed,
-                    } => Some(group_header(
-                        GroupHeader {
-                            list: list.clone(),
-                            list_id,
-                            group,
-                            label: grouped.labels.get(group).cloned().unwrap_or_default(),
-                            count,
-                            collapsed,
-                            sticky: false,
-                        },
-                        theme,
-                        ui_scale,
-                        row_height,
-                    )),
+                    GroupedRow::Header { .. } => group_header(
+                        &list, list_id, &grouped, ix, false, theme, ui_scale, row_height,
+                    ),
                     GroupedRow::File { ordinal } => self.file_row(ix, ordinal, 0, false, cx),
                 })
                 .collect();
@@ -413,145 +512,55 @@ impl FileListView {
     }
 }
 
-struct GroupHeader {
-    list: gpui::WeakEntity<FileListView>,
-    list_id: u64,
-    group: usize,
-    label: SharedString,
-    count: usize,
-    collapsed: bool,
-    /// Drawn pinned over the rows rather than as a row.
-    sticky: bool,
-}
-
-/// A group's header row, `row_height` like every file row (the list is
-/// uniform); clicking it collapses or expands the group.
+/// The header at row `row` of a grouped list, drawn in place or pinned
+/// (`sticky`); clicking it collapses or expands the group.
+#[allow(clippy::too_many_arguments)]
 fn group_header(
-    header: GroupHeader,
+    list: &gpui::WeakEntity<FileListView>,
+    list_id: u64,
+    grouped: &GroupedRows,
+    row: usize,
+    sticky: bool,
     theme: AppTheme,
     ui_scale: ui_scale::UiScale,
     row_height: Pixels,
-) -> AnyElement {
-    let GroupHeader {
-        list,
-        list_id,
+) -> Option<AnyElement> {
+    let GroupedRow::Header {
         group,
-        label,
         count,
         collapsed,
-        sticky,
-    } = header;
+    } = *grouped.rows.get(row)?
+    else {
+        return None;
+    };
+    let label = grouped.labels.get(group).cloned().unwrap_or_default();
     let role = if sticky { "sticky" } else { "group" };
-    let selector_label = label.clone();
-    div()
-        .id((
-            if sticky {
-                "hosted_file_list_sticky"
-            } else {
-                "hosted_file_list_group"
-            },
-            group,
-        ))
-        .debug_selector(move || format!("hosted_file_list_{list_id}_{role}_{selector_label}"))
-        .h(row_height)
-        .w_full()
-        .flex()
-        .items_center()
-        .gap(ui_scale.px(4.0))
-        .px(ui_scale.px(8.0))
-        .bg(theme.colors.surface.panel)
-        .control_interaction(
-            controls::InteractionStyle::new(theme),
-            controls::InteractionState::default(),
-        )
-        .text_size(theme.ui_text(12.0))
-        .text_color(theme.colors.foreground.secondary)
-        .child(if collapsed { "▸" } else { "▾" })
-        .child(format!("{label} ({count})"))
-        .on_activate(
-            false,
-            controls::ControlActivation::Action,
-            move |_, _, cx| {
-                cx.stop_propagation();
-                let _ = list.update(cx, |list, cx| {
-                    list.controller.borrow_mut().toggle_group(group);
-                    cx.notify();
-                });
-            },
-        )
-        .into_any_element()
-}
-
-/// Pins the header of the group at the top of the list over its rows; the
-/// next header pushes it up as it arrives. Computed per frame from the
-/// grouped rows it was given, so scrolling never replans.
-#[derive(Clone)]
-struct StickyGroupHeader {
-    list: gpui::WeakEntity<FileListView>,
-    list_id: u64,
-    grouped: Arc<GroupedRows>,
-    theme: AppTheme,
-    ui_scale: ui_scale::UiScale,
-}
-
-impl gpui::UniformListDecoration for StickyGroupHeader {
-    fn compute(
-        &self,
-        _visible_range: std::ops::Range<usize>,
-        _bounds: gpui::Bounds<Pixels>,
-        scroll_offset: gpui::Point<Pixels>,
-        item_height: Pixels,
-        _item_count: usize,
-        _window: &mut Window,
-        _cx: &mut App,
-    ) -> AnyElement {
-        let scrolled = -scroll_offset.y;
-        if scrolled <= px(0.0) || item_height <= px(0.0) {
-            return div().into_any_element();
-        }
-        let first = (scrolled / item_height).floor() as usize;
-        let Some(GroupedRow::Header {
-            group,
+    let list = list.clone();
+    Some(crate::view::rows::group_header_row(
+        crate::view::rows::GroupHeaderProps {
+            id: (
+                if sticky {
+                    "hosted_file_list_sticky"
+                } else {
+                    "hosted_file_list_group"
+                },
+                group,
+            ),
+            selector: format!("hosted_file_list_{list_id}_{role}_{label}"),
+            label,
             count,
             collapsed,
-        }) = self
-            .grouped
-            .header_for(first)
-            .and_then(|header| self.grouped.rows.get(header).copied())
-        else {
-            return div().into_any_element();
-        };
-        // The decoration's origin scrolls with the rows; `scrolled` is the
-        // viewport's top in its coordinates.
-        let mut top = scrolled;
-        if let Some(next) = self.grouped.next_header(first) {
-            let next_top = item_height * next as f32 - scrolled;
-            if next_top < item_height {
-                top -= item_height - next_top;
-            }
-        }
-        div()
-            .absolute()
-            .top(top)
-            .left_0()
-            .right_0()
-            .occlude()
-            .child(group_header(
-                GroupHeader {
-                    list: self.list.clone(),
-                    list_id: self.list_id,
-                    group,
-                    label: self.grouped.labels.get(group).cloned().unwrap_or_default(),
-                    count,
-                    collapsed,
-                    sticky: true,
-                },
-                self.theme,
-                self.ui_scale,
-                item_height,
-            ))
-            .into_any_element()
-    }
+        },
+        theme,
+        ui_scale,
+        row_height,
+        move |cx| {
+            let _ = list.update(cx, |list, cx| {
+                list.controller.borrow_mut().toggle_group(group);
+                cx.notify();
+            });
+        },
+    ))
 }
 
 /// Whether `chip`'s filter is the one applied.
@@ -565,6 +574,85 @@ fn chip_active(
         Chip::Visible { visible, .. } => controller.shows_only(visible),
         _ => false,
     }
+}
+
+fn mode_for(layout: crate::view::FileListLayout) -> FileListMode {
+    match layout {
+        crate::view::FileListLayout::Flat => FileListMode::Flat,
+        crate::view::FileListLayout::Tree => FileListMode::Tree,
+        crate::view::FileListLayout::Groups => FileListMode::Grouped,
+    }
+}
+
+fn layout_for(mode: FileListMode) -> crate::view::FileListLayout {
+    match mode {
+        FileListMode::Flat => crate::view::FileListLayout::Flat,
+        FileListMode::Grouped => crate::view::FileListLayout::Groups,
+        _ => crate::view::FileListLayout::Tree,
+    }
+}
+
+/// A choice menu: a header, then one entry per option, the current checked.
+fn menu<const N: usize>(
+    header: &'static str,
+    options: [(&'static str, bool, impl Fn(&mut App) + 'static); N],
+) -> Vec<gitcomet_extension_api::HostedMenuItem> {
+    use gitcomet_extension_api::{HostedAction, HostedMenuItem};
+    let mut items = vec![
+        HostedMenuItem::Header(header.into()),
+        HostedMenuItem::Separator,
+    ];
+    for (label, current, run) in options {
+        let item = HostedMenuItem::action(HostedAction::new(label, run));
+        items.push(if current {
+            item.with_icon("icons/check.svg")
+        } else {
+            item
+        });
+    }
+    items
+}
+
+/// A worktree source's counts and edits, which its change list does not
+/// carry: they come from the lane its status rows read, with that lane's
+/// revision. `None` for the other sources, or while the lane is unloaded.
+fn worktree_line_stats<'a>(
+    repo: &'a gitcomet_state::model::RepoState,
+    source: &ChangeSource,
+) -> Option<(
+    u64,
+    &'a rustc_hash::FxHashMap<std::path::PathBuf, gitcomet_core::domain::LineStats>,
+)> {
+    match source {
+        ChangeSource::Worktree { area, .. } => {
+            Some((repo.line_stats_rev(*area), repo.line_stats_for_area(*area)?))
+        }
+        ChangeSource::LinkedWorktree { path, area, .. } => {
+            let Loadable::Ready(dirty) = &repo.worktree_dirty else {
+                return None;
+            };
+            let summary = dirty.iter().find(|summary| &summary.path == path)?;
+            Some((repo.worktree_dirty_rev, summary.line_stats.for_area(*area)))
+        }
+        _ => None,
+    }
+}
+
+/// `files` with the counts and edits `stats` has for them. A new vector, so
+/// every cache keyed on the files sees them change.
+fn with_line_stats(
+    files: &[CommitFileChange],
+    stats: &rustc_hash::FxHashMap<std::path::PathBuf, gitcomet_core::domain::LineStats>,
+) -> Arc<Vec<CommitFileChange>> {
+    Arc::new(
+        files
+            .iter()
+            .map(|file| match stats.get(&file.path) {
+                Some(stats) => file.clone().with_line_stats(*stats),
+                None => file.clone(),
+            })
+            .collect(),
+    )
 }
 
 /// Applies `chip`'s filter, or clears it.
@@ -624,12 +712,18 @@ impl Render for FileListView {
         let rows = self.controller.borrow_mut().row_count();
         let list_id = self.view_id.0;
         let grouped = self.controller.borrow().mode == FileListMode::Grouped;
-        let sticky = grouped.then(|| StickyGroupHeader {
-            list: cx.weak_entity(),
-            list_id,
-            grouped: self.controller.borrow_mut().grouped(),
-            theme,
-            ui_scale: ui_scale::UiScale::current(cx),
+        let sticky = grouped.then(|| {
+            let rows = self.controller.borrow_mut().grouped();
+            let list = cx.weak_entity();
+            let ui_scale = ui_scale::UiScale::current(cx);
+            crate::view::rows::StickyGroupHeaders {
+                headers: rows.headers(),
+                header: Rc::new(move |row, row_height, _cx| {
+                    group_header(
+                        &list, list_id, &rows, row, true, theme, ui_scale, row_height,
+                    )
+                }),
+            }
         });
         self.body.update(cx, |body, _| {
             body.refresh(
@@ -647,23 +741,42 @@ impl Render for FileListView {
             .flex()
             .flex_col()
             .bg(theme.colors.surface.canvas)
-            .when(!self.chips.is_empty(), |list| {
-                list.child(div().flex().flex_wrap().gap_1().children(
-                    self.chips.iter().enumerate().map(|(ix, chip)| {
-                        let active = chip_active(&self.controller.borrow(), chip);
-                        let chip = chip.clone();
-                        components::Button::new(
-                            format!("file_filter_{list_id}_{ix}"),
-                            chip.label().clone(),
-                        )
-                        .selected(active)
-                        .on_click(theme, cx, move |list, _, _, cx| {
-                            apply_chip(&mut list.controller.borrow_mut(), &chip, !active);
-                            cx.notify();
-                        })
-                    }),
-                ))
-            })
+            .child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap_1()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_1()
+                            .min_w_0()
+                            .flex_wrap()
+                            .gap_1()
+                            .children(self.chips.iter().enumerate().map(|(ix, chip)| {
+                                let active = chip_active(&self.controller.borrow(), chip);
+                                let chip = chip.clone();
+                                components::Button::new(
+                                    format!("file_filter_{list_id}_{ix}"),
+                                    chip.label().clone(),
+                                )
+                                .selected(active)
+                                .on_click(
+                                    theme,
+                                    cx,
+                                    move |list, _, _, cx| {
+                                        apply_chip(
+                                            &mut list.controller.borrow_mut(),
+                                            &chip,
+                                            !active,
+                                        );
+                                        cx.notify();
+                                    },
+                                )
+                            })),
+                    )
+                    .child(self.controls(list_id, cx)),
+            )
             .when_some(
                 self.error.clone().or_else(|| {
                     (rows == 0).then(|| {
@@ -737,6 +850,7 @@ impl FileListImpl for HostedFileList {
             gitcomet_extension_api::FileListSort::EditSizeDescending => {
                 CommitFileSort::EditSizeDescending
             }
+            gitcomet_extension_api::FileListSort::Edits => CommitFileSort::Edits,
             _ => CommitFileSort::PathAscending,
         };
         self.entity.update(cx, |list, cx| {
@@ -844,6 +958,48 @@ mod tests {
 
     fn change(path: &str, kind: FileStatusKind) -> CommitFileChange {
         CommitFileChange::new(PathBuf::from(path), kind)
+    }
+
+    /// A worktree source's list carries no counts; they join from its lane,
+    /// keyed on that lane's revision, so the edit-size and Edits sorts have
+    /// something to read.
+    #[test]
+    fn worktree_sources_join_their_lanes_counts_and_edits() {
+        use gitcomet_core::domain::{DiffArea, LineStats, UncommittedLineStats};
+        let mut repo = gitcomet_state::model::RepoState::new_opening(
+            gitcomet_state::model::RepoId(1),
+            gitcomet_core::domain::RepoSpec {
+                workdir: PathBuf::from("/tmp/hosted-line-stats"),
+            },
+        );
+        let mut stats = LineStats::from((Some(2), Some(1)));
+        let mut edit = gitcomet_core::edit_signature::EditSignatureBuilder::default();
+        edit.added(b"x");
+        stats.edit = edit.finish();
+        repo.uncommitted_line_stats = Loadable::Ready(Arc::new(UncommittedLineStats {
+            staged: Default::default(),
+            unstaged: [(PathBuf::from("a.rs"), stats)].into_iter().collect(),
+        }));
+        repo.unstaged_line_stats_rev = 7;
+
+        let unstaged = ChangeSource::worktree(DiffArea::Unstaged, false);
+        let (rev, lane) = worktree_line_stats(&repo, &unstaged).expect("the lane is loaded");
+        assert_eq!(rev, 7);
+        let files = with_line_stats(
+            &[
+                change("a.rs", FileStatusKind::Modified),
+                change("b.rs", FileStatusKind::Modified),
+            ],
+            lane,
+        );
+        assert_eq!((files[0].additions, files[0].deletions), (Some(2), Some(1)));
+        assert_eq!(files[0].edit, stats.edit);
+        assert_eq!(files[1].edit, None, "a file the lane lacks is left alone");
+
+        assert!(
+            worktree_line_stats(&repo, &ChangeSource::Commit(CommitId("HEAD".into()))).is_none(),
+            "a commit's list carries its own counts"
+        );
     }
 
     #[test]

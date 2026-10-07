@@ -5,6 +5,7 @@ pub mod conflict_output;
 pub mod conflict_session;
 pub mod diff;
 pub mod domain;
+pub mod edit_signature;
 pub mod environment;
 pub mod error;
 pub mod file_diff;

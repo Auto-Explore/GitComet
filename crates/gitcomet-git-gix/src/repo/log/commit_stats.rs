@@ -1,6 +1,7 @@
 use super::super::large_files::CommittedPointerScan;
 use super::*;
-use gitcomet_core::domain::{FileMode, ObjectHash};
+use gitcomet_core::domain::{FileMode, LineStats, ObjectHash};
+use gitcomet_core::edit_signature::EditSignatureBuilder;
 
 pub(crate) const COMMIT_STATS_MAX_FILES: usize = 400;
 /// Large-file badges cost ~1-2.5 us per file (measured on 20k-file commits),
@@ -58,41 +59,59 @@ pub(crate) fn commit_stats_line_count(bytes: &[u8]) -> u32 {
     u32::try_from(newlines + trailing).unwrap_or(u32::MAX)
 }
 
-/// Added/removed line counts between two blob versions; `(None, None)` when
-/// either side is binary, too large, or unreadable.
+/// Added/removed line counts and the edit between two blob versions; unknown
+/// when either side is binary, too large, or unreadable.
 pub(crate) fn commit_file_line_stats(
     repo: &gix::Repository,
     old_id: Option<gix::ObjectId>,
     new_id: Option<gix::ObjectId>,
     scratch: &mut CommitStatsScratch,
-) -> (Option<u32>, Option<u32>) {
+) -> LineStats {
     if !read_commit_stats_blob(repo, old_id, &mut scratch.old)
         || !read_commit_stats_blob(repo, new_id, &mut scratch.new)
     {
-        return (None, None);
+        return LineStats::UNKNOWN;
     }
     line_stats_from_bytes(scratch.old.as_slice(), scratch.new.as_slice())
 }
 
 /// The counting core, over content both sides already hold. Shared with the
 /// uncommitted lanes, whose new side is a worktree file rather than a blob.
-pub(crate) fn line_stats_from_bytes(old: &[u8], new: &[u8]) -> (Option<u32>, Option<u32>) {
+/// The edit comes from the same diff: hashing its changed lines costs a
+/// fraction of computing it.
+pub(crate) fn line_stats_from_bytes(old: &[u8], new: &[u8]) -> LineStats {
     if commit_stats_looks_binary(old) || commit_stats_looks_binary(new) {
-        return (None, None);
+        return LineStats::UNKNOWN;
     }
 
+    let mut edit = EditSignatureBuilder::default();
     // One side empty means every line of the other side changed; skip the diff.
     if old.is_empty() || new.is_empty() {
-        return (
-            Some(commit_stats_line_count(new)),
-            Some(commit_stats_line_count(old)),
-        );
+        edit.removed_lines(old);
+        edit.added_lines(new);
+        return LineStats {
+            additions: Some(commit_stats_line_count(new)),
+            deletions: Some(commit_stats_line_count(old)),
+            edit: edit.finish(),
+        };
     }
 
     use gix::diff::blob::InternedInput;
     let input = InternedInput::new(old, new);
     let diff = gix::diff::blob::Diff::compute(gix::diff::blob::Algorithm::Histogram, &input);
-    (Some(diff.count_additions()), Some(diff.count_removals()))
+    for hunk in diff.hunks() {
+        for &token in &input.before[hunk.before.start as usize..hunk.before.end as usize] {
+            edit.removed(input.interner[token]);
+        }
+        for &token in &input.after[hunk.after.start as usize..hunk.after.end as usize] {
+            edit.added(input.interner[token]);
+        }
+    }
+    LineStats {
+        additions: Some(diff.count_additions()),
+        deletions: Some(diff.count_removals()),
+        edit: edit.finish(),
+    }
 }
 
 fn file_mode_from_entry(mode: gix::object::tree::EntryMode) -> Option<FileMode> {
@@ -202,10 +221,10 @@ pub(crate) fn commit_file_change_from_diff(
         return Ok(None);
     }
 
-    let (additions, deletions) = if compute_stats && !is_submodule {
+    let stats = if compute_stats && !is_submodule {
         commit_file_line_stats(repo, old_id, new_id, scratch)
     } else {
-        (None, None)
+        LineStats::UNKNOWN
     };
 
     let old_path = source
@@ -222,7 +241,7 @@ pub(crate) fn commit_file_change_from_diff(
             kind,
         )
         .with_submodule(is_submodule)
-        .with_line_counts(additions, deletions)
+        .with_line_stats(stats)
         .with_old_path(old_path)
         .with_ids(old_id.map(hash), new_id.map(hash))
         .with_modes(

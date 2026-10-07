@@ -1308,10 +1308,7 @@ fn status_rows_pick_up_line_stats_that_arrive_without_a_status_change(
             for (ix, path) in paths.iter().enumerate() {
                 unstaged.insert(
                     std::path::PathBuf::from(path),
-                    gitcomet_core::domain::LineStats {
-                        additions: Some(ix as u32 + 1),
-                        deletions: Some(1),
-                    },
+                    gitcomet_core::domain::LineStats::from((Some(ix as u32 + 1), Some(1))),
                 );
             }
             repo.uncommitted_line_stats = gitcomet_state::model::Loadable::Ready(Arc::new(

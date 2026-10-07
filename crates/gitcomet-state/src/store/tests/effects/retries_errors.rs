@@ -261,3 +261,69 @@ fn branch_action_in_other_worktree_fails_when_backend_opens_own_workdir() {
     assert!(fixture.origin_calls.lock().unwrap().is_empty());
     assert!(fixture.worktree_calls.lock().unwrap().is_empty());
 }
+
+#[test]
+fn worktree_effect_fixture_waits_for_worker_completion() {
+    struct BlockingBackend {
+        inner: Arc<dyn GitBackend>,
+        started: std::sync::mpsc::Sender<()>,
+        release: Arc<(Mutex<bool>, Condvar)>,
+    }
+
+    impl GitBackend for BlockingBackend {
+        fn open(&self, path: &Path) -> Result<Arc<dyn GitRepository>> {
+            self.started.send(()).expect("backend started");
+            let (lock, condvar) = &*self.release;
+            let mut released = lock.lock().expect("release mutex");
+            while !*released {
+                released = condvar.wait(released).expect("release wait");
+            }
+            self.inner.open(path)
+        }
+    }
+
+    let repo_id = RepoId(719);
+    let mut fixture = worktree_redirect_fixture(repo_id, "gitcomet-redirect-join", "feature", true);
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let release_guard = BlockingReleaseGuard {
+        release: Arc::clone(&release),
+    };
+    fixture.backend = Arc::new(BlockingBackend {
+        inner: Arc::clone(&fixture.backend),
+        started: started_tx,
+        release,
+    });
+    let (returned_tx, returned_rx) = std::sync::mpsc::channel();
+    let runner = std::thread::spawn(move || {
+        let msg_rx = run_effect_with_fixture(
+            &fixture,
+            Effect::RenameBranch {
+                repo_id,
+                old_name: "old".to_string(),
+                new_name: "feature".to_string(),
+                force: true,
+            },
+        );
+        returned_tx.send(msg_rx).expect("fixture returned");
+    });
+
+    started_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("worktree backend should start");
+    let early_return = returned_rx.recv_timeout(Duration::from_millis(100));
+    drop(release_guard);
+    let returned_early = early_return.is_ok();
+    let msg_rx = early_return.unwrap_or_else(|error| {
+        assert_eq!(error, std::sync::mpsc::RecvTimeoutError::Timeout);
+        returned_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("fixture should return after the worker finishes")
+    });
+    runner.join().expect("fixture runner panicked");
+    recv_until_action_finished(&msg_rx);
+    assert!(
+        !returned_early,
+        "the fixture must join its worker before returning"
+    );
+}

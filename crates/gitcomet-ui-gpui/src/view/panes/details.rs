@@ -136,6 +136,8 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) comparison_order: Option<ComparisonOrderCache>,
     pub(in super::super) comparison_order_pending: Option<u64>,
     pub(in super::super) commit_file_sort: crate::view::rows::CommitFileSort,
+    /// What a list sorts by until it is sorted by hand.
+    pub(in super::super) default_file_list_sort: crate::view::rows::CommitFileSort,
     pub(in super::super) commit_file_filter: crate::view::rows::CommitFileFilter,
     /// Global default; a list may override it until its context changes.
     pub(in super::super) file_list_layout: crate::view::FileListLayout,
@@ -330,6 +332,7 @@ impl DetailsPaneView {
         let preferences = ui_model.read(cx).preferences.clone();
         let change_tracking_view = preferences.change_tracking.view;
         let file_list_layout = preferences.file_lists.layout;
+        let default_file_list_sort = preferences.file_lists.sort;
         let change_tracking_height = preferences.change_tracking.height;
         let untracked_height = preferences.change_tracking.untracked_height;
         let ui_scale_percent = preferences.appearance.ui_scale_percent;
@@ -526,7 +529,8 @@ impl DetailsPaneView {
             range_comparison_commits_cache: std::cell::RefCell::new(None),
             comparison_order: None,
             comparison_order_pending: None,
-            commit_file_sort: crate::view::rows::CommitFileSort::default(),
+            commit_file_sort: default_file_list_sort,
+            default_file_list_sort,
             file_list_layout,
             file_list_layout_override: FxHashMap::default(),
             file_controllers: Default::default(),
@@ -693,6 +697,22 @@ impl DetailsPaneView {
     pub(in super::super) fn set_untracked_height_from_pixels(&mut self, height: Option<Pixels>) {
         self.untracked_height = height;
         self.untracked_height_design = self.ui_scale().design_units_from_optional_pixels(height);
+    }
+
+    /// Like the layout, a new default sort wins over every list sorted by hand.
+    pub(in super::super) fn set_default_file_list_sort(
+        &mut self,
+        sort: crate::view::rows::CommitFileSort,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.default_file_list_sort = sort;
+        self.commit_file_sort = sort;
+        self.status_file_sort.clear();
+        self.list_sort.clear();
+        self.commit_files_scroll
+            .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+        self.notify_commit_file_projection_dependents(cx);
+        cx.notify();
     }
 
     /// A deliberate change to the global default wins over every list that was
@@ -1070,14 +1090,32 @@ impl DetailsPaneView {
             .unwrap_or(self.file_list_layout)
     }
 
+    /// A click on the list's layout icon: the next layout, for this list
+    /// until its selection changes.
     pub(in super::super) fn toggle_file_list_layout(
         &mut self,
         repo_id: RepoId,
         list: crate::view::rows::FileListId,
         cx: &mut gpui::Context<Self>,
     ) {
-        let next = self.file_list_layout_for(repo_id, list).toggled();
-        self.file_list_layout_override.insert((repo_id, list), next);
+        let next = self.file_list_layout_for(repo_id, list).next();
+        self.set_list_file_layout(repo_id, list, next, cx);
+    }
+
+    /// `layout` for this list until its selection changes, as the icon's
+    /// menu chooses it.
+    pub(in super::super) fn set_list_file_layout(
+        &mut self,
+        repo_id: RepoId,
+        list: crate::view::rows::FileListId,
+        layout: crate::view::FileListLayout,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.file_list_layout_for(repo_id, list) == layout {
+            return;
+        }
+        self.file_list_layout_override
+            .insert((repo_id, list), layout);
         self.notify_commit_file_projection_dependents(cx);
         cx.notify();
     }
@@ -1195,11 +1233,16 @@ impl DetailsPaneView {
         let collapsed = self.file_list_collapsed_for(repo_id, list);
         let controller = self.file_controller(repo_id, list);
         let mut controller = controller.borrow_mut();
+        let collapsed_groups = controller.collapsed_groups().to_vec();
+        let labels = controller.kind_labels();
         controller.plan_cache.plan_for(
             key,
-            layout,
-            &collapsed,
-            projection.source_indices.len(),
+            crate::view::rows::PlanShape {
+                layout,
+                collapsed: &collapsed,
+                collapsed_groups: &collapsed_groups,
+                file_count: projection.source_indices.len(),
+            },
             || {
                 crate::view::rows::FileTree::build(
                     projection.source_indices.iter().filter_map(|source_ix| {
@@ -1212,6 +1255,20 @@ impl DetailsPaneView {
                             })
                     }),
                     sort,
+                )
+            },
+            || {
+                (
+                    projection
+                        .source_indices
+                        .iter()
+                        .map(|source_ix| {
+                            files.get(*source_ix).map_or(usize::MAX, |file| {
+                                crate::view::file_list_controller::group_of(file.kind)
+                            })
+                        })
+                        .collect(),
+                    labels,
                 )
             },
         )
@@ -1265,7 +1322,7 @@ impl DetailsPaneView {
             let rev = repo.history_state.range_files_rev;
             let projection = self.cached_range_file_projection(repo_id, rev, files);
             let plan = self.cached_range_file_plan(repo_id, rev, files);
-            return Some(if plan.is_tree() {
+            return Some(if plan.reorders() {
                 plan.ordered()
                     .iter()
                     .filter_map(|ordinal| projection.source_indices.get(ordinal).copied())
@@ -1335,11 +1392,12 @@ impl DetailsPaneView {
             &summary.path,
             &inputs.files,
         );
-        if !plan.is_tree() {
+        if !plan.reorders() {
             return Some(projection.source_indices.clone());
         }
-        // Tree order, and deliberately every file: a collapsed folder hides
-        // rows, it does not narrow what prev/next file steps through.
+        // Drawn order, and deliberately every file: a collapsed folder or
+        // group hides rows, it does not narrow what prev/next file steps
+        // through.
         Some(
             plan.ordered()
                 .iter()
@@ -1637,7 +1695,7 @@ impl DetailsPaneView {
                 .active_repo_id()
                 .and_then(|repo_id| self.list_sort.get(&(repo_id, other)))
                 .copied()
-                .unwrap_or_default(),
+                .unwrap_or(self.default_file_list_sort),
         }
     }
 
@@ -1716,7 +1774,17 @@ impl DetailsPaneView {
         self.status_file_sort
             .get(&section)
             .copied()
-            .unwrap_or_default()
+            .unwrap_or_else(|| {
+                let sort = self.default_file_list_sort;
+                // Untracked files have no line diff, so a default that reads one
+                // would leave the section in path order under a mode it does not
+                // offer.
+                if sort.needs_line_stats() && !crate::view::status_section_has_line_stats(section) {
+                    crate::view::rows::CommitFileSort::default()
+                } else {
+                    sort
+                }
+            })
     }
 
     pub(in super::super) fn set_status_file_sort(
@@ -1799,19 +1867,11 @@ impl DetailsPaneView {
             let repo = self.active_repo()?;
             self.status_file_plan(repo, section)
         };
-        if !plan.is_tree() {
+        if !plan.reorders() {
             return Some(position);
         }
         let ordinal = crate::view::rows::FileOrdinal(plan.ordered().iter().nth(position)?);
-        let chains = plan.reveal(ordinal);
-        if !chains.is_empty() {
-            let controller = self.file_controller(repo_id, list);
-            let mut controller = controller.borrow_mut();
-            let entry = &mut controller.collapsed;
-            for chain in chains {
-                entry.expand(&chain);
-            }
-            drop(controller);
+        if self.expand_hiding(repo_id, list, &plan, ordinal) {
             cx.notify();
             let repo = self.active_repo()?;
             let plan = self.status_file_plan(repo, section);
@@ -2171,6 +2231,45 @@ impl DetailsPaneView {
         }
     }
 
+    /// Expand the folders or the group hiding `ordinal`'s row; whether any
+    /// was collapsed.
+    fn expand_hiding(
+        &self,
+        repo_id: RepoId,
+        list: crate::view::rows::FileListId,
+        plan: &crate::view::rows::FileListPlan,
+        ordinal: crate::view::rows::FileOrdinal,
+    ) -> bool {
+        let chains = plan.reveal(ordinal);
+        let group = plan.reveal_group(ordinal);
+        if chains.is_empty() && group.is_none() {
+            return false;
+        }
+        let controller = self.file_controller(repo_id, list);
+        let mut controller = controller.borrow_mut();
+        for chain in chains {
+            controller.collapsed.expand(&chain);
+        }
+        if let Some(group) = group {
+            controller.toggle_group(group);
+        }
+        true
+    }
+
+    /// Collapse or expand a group of a built-in list.
+    pub(in crate::view) fn toggle_file_list_group(
+        &mut self,
+        repo_id: RepoId,
+        list: crate::view::rows::FileListId,
+        group: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.file_controller(repo_id, list)
+            .borrow_mut()
+            .toggle_group(group);
+        cx.notify();
+    }
+
     fn reveal_file_list_row(
         &mut self,
         list: crate::view::rows::FileListId,
@@ -2179,20 +2278,12 @@ impl DetailsPaneView {
     ) -> Option<usize> {
         let repo_id = self.active_repo_id()?;
         let plan = self.commit_diff_file_plan(list)?;
-        if !plan.is_tree() {
+        if !plan.reorders() {
             return Some(position);
         }
-        // `position` indexes the tree-ordered list navigation walks.
+        // `position` indexes the drawn-order list navigation walks.
         let ordinal = crate::view::rows::FileOrdinal(plan.ordered().iter().nth(position)?);
-        let chains = plan.reveal(ordinal);
-        if !chains.is_empty() {
-            let controller = self.file_controller(repo_id, list);
-            let mut controller = controller.borrow_mut();
-            let entry = &mut controller.collapsed;
-            for chain in chains {
-                entry.expand(&chain);
-            }
-            drop(controller);
+        if self.expand_hiding(repo_id, list, &plan, ordinal) {
             cx.notify();
             let plan = self.commit_diff_file_plan(list)?;
             return plan.row_ix_for_ordinal(ordinal).map(|row| row.0);
@@ -2212,7 +2303,7 @@ impl DetailsPaneView {
         let repo = self.active_repo().filter(|repo| repo.id == repo_id)?;
         let projection = self.status_section_order(repo, section)?;
         let plan = self.status_file_plan(repo, section);
-        if !plan.is_tree() {
+        if !plan.reorders() {
             return Some(projection);
         }
         Some(
@@ -2255,9 +2346,17 @@ impl DetailsPaneView {
         let line_stats = status_section_line_stats(repo, section);
         let controller = self.file_controller(repo.id, list);
         let mut controller = controller.borrow_mut();
-        controller
-            .plan_cache
-            .plan_for(key, layout, &collapsed, order.len(), || {
+        let collapsed_groups = controller.collapsed_groups().to_vec();
+        let labels = controller.kind_labels();
+        controller.plan_cache.plan_for(
+            key,
+            crate::view::rows::PlanShape {
+                layout,
+                collapsed: &collapsed,
+                collapsed_groups: &collapsed_groups,
+                file_count: order.len(),
+            },
+            || {
                 crate::view::rows::FileTree::build(
                     order.iter().filter_map(|source_ix| {
                         entries
@@ -2276,7 +2375,23 @@ impl DetailsPaneView {
                     }),
                     sort,
                 )
-            })
+            },
+            || {
+                (
+                    order
+                        .iter()
+                        .map(|source_ix| {
+                            entries
+                                .and_then(|entries| entries.get(*source_ix))
+                                .map_or(usize::MAX, |entry| {
+                                    crate::view::file_list_controller::group_of(entry.kind)
+                                })
+                        })
+                        .collect(),
+                    labels,
+                )
+            },
+        )
     }
 
     fn status_section_alignment_key(section: StatusSection) -> u8 {
@@ -2792,7 +2907,7 @@ fn drawn_file_source_indices(
     projection: &crate::view::rows::CommitFileProjection,
     plan: &crate::view::rows::FileListPlan,
 ) -> Arc<[usize]> {
-    if !plan.is_tree() {
+    if !plan.reorders() {
         return projection.source_indices.clone();
     }
     plan.ordered()

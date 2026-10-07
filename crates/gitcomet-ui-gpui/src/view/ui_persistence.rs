@@ -200,6 +200,7 @@ impl GitCometView {
                             show_timezone: Some(this.show_timezone),
                             change_tracking_view: Some(this.change_tracking_view.key().to_string()),
                             file_list_layout: Some(this.file_list_layout.key().to_string()),
+                            file_list_sort: Some(this.file_list_sort.key().to_string()),
                             // Owned by the repository picker, not this snapshot.
                             repo_picker_sort: None,
                             repo_picker_collapsed_sections: None,

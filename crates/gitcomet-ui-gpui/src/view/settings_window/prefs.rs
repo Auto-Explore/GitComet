@@ -39,6 +39,7 @@ impl SettingsWindowView {
             show_timezone: Some(self.show_timezone),
             change_tracking_view: Some(self.change_tracking_view.key().to_string()),
             file_list_layout: Some(self.file_list_layout.key().to_string()),
+            file_list_sort: Some(self.file_list_sort.key().to_string()),
             diff_scroll_sync: Some(self.diff_scroll_sync.key().to_string()),
             diff_content_mode: Some(self.diff_content_mode.key().to_string()),
             diff_whitespace_mode: Some(self.diff_whitespace_mode.key().to_string()),
@@ -725,6 +726,24 @@ impl SettingsWindowView {
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
             view.set_file_list_layout(next, cx);
+        });
+        cx.notify();
+    }
+
+    pub(super) fn set_file_list_sort(
+        &mut self,
+        next: crate::view::rows::CommitFileSort,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.file_list_sort == next {
+            return;
+        }
+
+        self.file_list_sort = next;
+        self.expanded_section = None;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_file_list_sort(next, cx);
         });
         cx.notify();
     }

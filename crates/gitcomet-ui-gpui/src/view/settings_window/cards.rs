@@ -870,7 +870,7 @@ impl SettingsWindowView {
             .summary_row(
                 "settings_window_file_list_layout",
                 "Changed-file lists",
-                self.file_list_layout.settings_label().into(),
+                self.file_list_layout.label().into(),
                 self.expanded_section == Some(SettingsSection::FileListLayout),
                 theme,
             )
@@ -880,6 +880,23 @@ impl SettingsWindowView {
                 controls::ControlActivation::Action,
                 cx.listener(|this, _e: &ClickEvent, _window, cx| {
                     this.toggle_section(SettingsSection::FileListLayout, cx);
+                }),
+            );
+
+        let file_list_sort_row = self
+            .summary_row(
+                "settings_window_file_list_sort",
+                "Changed-file sort",
+                self.file_list_sort.label().into(),
+                self.expanded_section == Some(SettingsSection::FileListSort),
+                theme,
+            )
+            .border_color(no_separator)
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                    this.toggle_section(SettingsSection::FileListSort, cx);
                 }),
             );
 
@@ -950,6 +967,40 @@ impl SettingsWindowView {
                 "settings_window_file_list_layout_scrollbar",
                 self.file_list_layout_scroll.clone(),
                 FILE_LIST_LAYOUT_OPTIONS.len(),
+                SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX,
+                SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX,
+                list,
+                theme,
+            ));
+        }
+
+        change_tracking_card = change_tracking_card.child(file_list_sort_row);
+
+        if self.expanded_section == Some(SettingsSection::FileListSort) {
+            let list = uniform_list(
+                "settings_window_file_list_sort_list",
+                FILE_LIST_SORT_OPTIONS.len(),
+                cx.processor(Self::render_file_list_sort_option_rows),
+            )
+            .w_full()
+            .min_w(px(0.0))
+            .h_full()
+            .min_h(px(0.0))
+            .track_scroll(&self.file_list_sort_scroll)
+            .on_scroll_wheel({
+                let scroll = self.file_list_sort_scroll.clone();
+                move |event, window, cx| {
+                    if uniform_list_should_stop_scroll_propagation(&scroll, event, window) {
+                        cx.stop_propagation();
+                    }
+                }
+            });
+            let list = restrict_scroll_to_vertical_axis(list).into_any_element();
+            change_tracking_card = change_tracking_card.child(self.dropdown_list_container(
+                "settings_window_file_list_sort_list_container",
+                "settings_window_file_list_sort_scrollbar",
+                self.file_list_sort_scroll.clone(),
+                FILE_LIST_SORT_OPTIONS.len(),
                 SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX,
                 SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX,
                 list,

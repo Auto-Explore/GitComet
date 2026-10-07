@@ -984,6 +984,35 @@ impl SettingsWindowView {
             .collect()
     }
 
+    pub(super) fn render_file_list_sort_option_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = this.theme;
+        range
+            .filter_map(|ix| FILE_LIST_SORT_OPTIONS.get(ix).copied())
+            .map(|(id, option, detail)| {
+                this.option_row(
+                    id,
+                    option.label(),
+                    Some(detail.into()),
+                    this.file_list_sort == option,
+                    theme,
+                )
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                        this.set_file_list_sort(option, cx);
+                    }),
+                )
+                .into_any_element()
+            })
+            .collect()
+    }
+
     pub(super) fn render_diff_tab_size_option_rows(
         this: &mut Self,
         range: Range<usize>,
