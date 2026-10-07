@@ -2,6 +2,7 @@
 //! resolved output to a target.
 
 use super::*;
+use gitcomet_ui_kit::text_layout::TextLayoutExt as _;
 
 impl MainPaneView {
     #[cfg(test)]

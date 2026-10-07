@@ -938,6 +938,7 @@ fn a_page_chunk_counts_lookahead_and_rejected_commits_as_visited() {
         &shallow,
         None,
         None,
+        None,
     )
     .expect("build page walk");
     let mut scanned = Vec::new();
@@ -969,6 +970,7 @@ fn a_page_chunk_counts_lookahead_and_rejected_commits_as_visited() {
         [head],
         HistoryMode::FullReachable,
         &shallow,
+        None,
         None,
         None,
     )
@@ -2082,6 +2084,85 @@ fn all_branches_history_recovers_after_repack_replaces_loaded_pack_index() {
 }
 
 #[test]
+fn indexed_ranges_survive_automatic_and_later_pack_access_retries() {
+    use gitcomet_core::services::GitRepository;
+
+    for restore_before_retry in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+        commit_file(workdir, "a.txt", "one\n", "first");
+        git_success(workdir, &["repack", "-a", "-d", "-q"]);
+        let repo = open_repo(workdir);
+        let cancel = CancellationToken::new();
+        let index = repo
+            .build_history_index(HistoryMode::FullReachable, None, &cancel, &mut |_| {})
+            .unwrap()
+            .unwrap();
+        let id = gix::ObjectId::from_bytes_or_panic(index.id_bytes(0).unwrap());
+        assert!(
+            repo.range_reader_repo().unwrap().has_object(id),
+            "load the range reader's pack index without mapping its data"
+        );
+        let pack = fs::read_dir(workdir.join(".git/objects/pack"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "pack")
+            })
+            .unwrap();
+        let backup = pack.with_extension("blocked");
+        fs::rename(&pack, &backup).unwrap();
+        fs::create_dir(&pack).unwrap();
+        fs::write(pack.join("filler"), vec![b'x'; 4096]).unwrap();
+        let restore = || {
+            fs::remove_dir_all(&pack).unwrap();
+            fs::rename(&backup, &pack).unwrap();
+        };
+        let before = repo.shared_store();
+        let mut attempts = 0;
+        let result = repo.with_store_retry(|| {
+            attempts += 1;
+            let result = repo.read_shared_history_range(&index, 0..1, &cancel);
+            if attempts == 1 {
+                assert!(result.is_err(), "the initial pack access must fail");
+                if restore_before_retry {
+                    restore();
+                }
+            }
+            result
+        });
+        assert_eq!(
+            attempts, 2,
+            "a real pack I/O failure must trigger automatic recovery"
+        );
+        let block = if restore_before_retry {
+            result.expect("the automatic retry must retain the index")
+        } else {
+            let error = result.unwrap_err();
+            assert!(
+                !error.to_string().contains("interpretation changed"),
+                "{error}"
+            );
+            restore();
+            repo.read_history_range_shared(&index, 0..1, &cancel)
+                .expect("a later UI retry must retain the index")
+        };
+        let after = repo.shared_store();
+        assert_ne!(before.mapping_id, after.mapping_id);
+        assert_eq!(before.id, after.id);
+        assert_eq!(block.snapshot, index.snapshot);
+        assert_eq!(block.commits[0].id, index.commit_id(0).unwrap());
+        let rebuilt = repo
+            .build_history_index(HistoryMode::FullReachable, None, &cancel, &mut |_| {})
+            .unwrap()
+            .unwrap();
+        assert!(Arc::ptr_eq(&index, &rebuilt));
+    }
+}
+
+#[test]
 fn peel_failure_reports_underlying_io_error() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (repo, _) = repo_with_unmappable_loaded_pack(tmp.path());
@@ -2118,18 +2199,30 @@ fn reopen_object_store_drops_old_store_handles() {
     assert_eq!(repo.log_paged_walk_cache.lock().unwrap().entries.len(), 1);
     repo.range_reader_repo().expect("range reader");
 
+    let active_reader = repo.repo();
+    let old_objects = Arc::downgrade(&repo.thread_safe_repo().0.objects);
+    let old_generation = repo.store_generation();
     repo.reopen_object_store().expect("reopen");
 
     assert!(repo.log_paged_walk_cache.lock().unwrap().entries.is_empty());
     assert!(repo.range_reader.lock().unwrap().is_none());
     let (store, generation) = repo.thread_safe_repo();
-    assert_eq!(generation, 1);
+    assert!(generation > old_generation);
     let config_store = repo
         .repo_with_current_config()
         .expect("config repo")
         .into_sync()
         .objects;
     assert!(Arc::ptr_eq(&config_store, &store.objects));
+    assert!(
+        old_objects.upgrade().is_some(),
+        "active readers retain old mappings"
+    );
+    drop(active_reader);
+    assert!(
+        old_objects.upgrade().is_none(),
+        "the final reader releases old mappings"
+    );
     // The old token no longer resumes anything, but the page is still right.
     let next = repo
         .log_history_mode_page_impl(

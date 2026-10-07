@@ -4,9 +4,7 @@ pub(crate) use probe::probe_output;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-#[cfg(test)]
-use std::sync::Mutex;
-use std::sync::{OnceLock, RwLock};
+use std::sync::{Condvar, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, Eq, PartialEq, Default)]
@@ -198,12 +196,18 @@ pub fn select_git_executable_preference(preference: GitExecutablePreference) -> 
         slot.cancellation.cancel();
         slot.cancellation = CancellationToken::new();
         slot.generation = slot.generation.wrapping_add(1);
-        slot.probing = false;
+        let abandoned_probe = std::mem::replace(&mut slot.probing, false);
         slot.last_probe = None;
         slot.state = GitRuntimeState {
             preference,
             availability: GitExecutableAvailability::Checking,
         };
+        let state = slot.state.clone();
+        drop(slot);
+        if abandoned_probe {
+            notify_probe_settled();
+        }
+        return state;
     }
     slot.state.clone()
 }
@@ -214,6 +218,9 @@ pub struct GitRuntimeProbe {
     preference: GitExecutablePreference,
     generation: u64,
     cancellation: CancellationToken,
+    /// An unrun claim learned nothing, so dropping it must not rate-limit the
+    /// next request.
+    ran: bool,
 }
 
 /// Shared across windows: coalesce in-flight probes and rate-limit recovery.
@@ -238,11 +245,13 @@ pub fn begin_git_runtime_probe(force: bool) -> Option<GitRuntimeProbe> {
         preference: slot.state.preference.clone(),
         generation: slot.generation,
         cancellation: slot.cancellation.clone(),
+        ran: false,
     })
 }
 
 impl GitRuntimeProbe {
-    pub fn run(self) -> Option<GitRuntimeState> {
+    pub fn run(mut self) -> Option<GitRuntimeState> {
+        self.ran = true;
         let next = probe_git_runtime(self.preference.clone(), &self.cancellation);
         let mut slot = git_runtime_slot()
             .write()
@@ -261,9 +270,63 @@ impl Drop for GitRuntimeProbe {
         let mut slot = git_runtime_slot()
             .write()
             .unwrap_or_else(|err| err.into_inner());
-        if slot.generation == self.generation {
+        let settled = slot.generation == self.generation;
+        if settled {
             slot.probing = false;
+            if !self.ran {
+                slot.last_probe = None;
+            }
         }
+        // Never wake waiters while holding the slot: they read it under the
+        // signal's lock.
+        drop(slot);
+        if settled {
+            notify_probe_settled();
+        }
+    }
+}
+
+/// Wakes `wait_for_git_runtime_probe` callers. Notifiers take the lock after
+/// clearing `probing`, so a waiter cannot miss the wake between its check of
+/// the slot and its wait.
+fn probe_settled_signal() -> &'static (Mutex<()>, Condvar) {
+    static SIGNAL: OnceLock<(Mutex<()>, Condvar)> = OnceLock::new();
+    SIGNAL.get_or_init(|| (Mutex::new(()), Condvar::new()))
+}
+
+fn notify_probe_settled() {
+    let (lock, settled) = probe_settled_signal();
+    let _guard = lock.lock().unwrap_or_else(|err| err.into_inner());
+    settled.notify_all();
+}
+
+/// The settled runtime, waiting for a probe someone else started if one is
+/// running. The browser starts one before GPUI and its first window exist, so
+/// that a window can open its repositories without first waiting for
+/// `git --version`; that probe reports to no window, so a window adopts its
+/// result here instead of probing again.
+///
+/// `None` while nothing is known yet: no probe ran, the running one was
+/// abandoned (the executable preference changed), or `timeout` passed first.
+pub fn wait_for_git_runtime_probe(timeout: Duration) -> Option<GitRuntimeState> {
+    let deadline = Instant::now() + timeout;
+    let (lock, settled) = probe_settled_signal();
+    let mut guard = lock.lock().unwrap_or_else(|err| err.into_inner());
+    loop {
+        {
+            let slot = git_runtime_slot()
+                .read()
+                .unwrap_or_else(|err| err.into_inner());
+            if !slot.probing {
+                return (!matches!(slot.state.availability, GitExecutableAvailability::Checking))
+                    .then(|| slot.state.clone());
+            }
+        }
+        let remaining = deadline.checked_duration_since(Instant::now())?;
+        guard = settled
+            .wait_timeout(guard, remaining)
+            .unwrap_or_else(|err| err.into_inner())
+            .0;
     }
 }
 
@@ -568,6 +631,66 @@ mod tests {
             assert!(begin_git_runtime_probe(false).is_none());
         }
         assert_eq!(git_runtime_probe_count(&log), 1);
+    }
+
+    #[test]
+    fn waiters_adopt_a_probe_started_elsewhere_without_probing_again() {
+        let _lock = lock_git_runtime_test();
+        let _restore = GitRuntimePreferenceResetGuard::install(current_git_executable_preference());
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("probes");
+        let (_script_dir, script) = create_git_probe_script("git version early", "", 0, Some(&log));
+        select_git_executable_path(Some(script));
+        assert!(wait_for_git_runtime_probe(Duration::ZERO).is_none());
+
+        let request = begin_git_runtime_probe(false).unwrap();
+        let waiters: Vec<_> = (0..4)
+            .map(|_| std::thread::spawn(|| wait_for_git_runtime_probe(Duration::from_secs(30))))
+            .collect();
+        // The waiters block on the claim until the probe settles.
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(waiters.iter().all(|waiter| !waiter.is_finished()));
+        assert!(request.run().unwrap().is_available());
+        for waiter in waiters {
+            let adopted = waiter.join().unwrap().expect("settled runtime");
+            assert_eq!(adopted.version_output(), Some("git version early"));
+        }
+        // Settled: adopting returns at once, still without a second probe.
+        assert!(wait_for_git_runtime_probe(Duration::ZERO).is_some_and(|r| r.is_available()));
+        assert_eq!(git_runtime_probe_count(&log), 1);
+    }
+
+    #[test]
+    fn dropping_an_unrun_probe_releases_its_claim_without_rate_limiting() {
+        let _lock = lock_git_runtime_test();
+        let _restore = GitRuntimePreferenceResetGuard::install(current_git_executable_preference());
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("probes");
+        let (_script_dir, script) = create_git_probe_script("git version late", "", 0, Some(&log));
+        select_git_executable_path(Some(script));
+        // A worker that never started (a failed thread spawn, a cancelled task).
+        drop(begin_git_runtime_probe(false).unwrap());
+        assert!(!log.exists());
+        let retry = begin_git_runtime_probe(false).expect("nothing was learned, so retry at once");
+        assert!(retry.run().unwrap().is_available());
+        assert_eq!(git_runtime_probe_count(&log), 1);
+        assert!(begin_git_runtime_probe(false).is_none());
+    }
+
+    #[test]
+    fn waiters_give_up_on_a_probe_abandoned_by_a_new_preference() {
+        let _lock = lock_git_runtime_test();
+        let _restore = GitRuntimePreferenceResetGuard::install(current_git_executable_preference());
+        let (_a, a) = create_git_probe_script("git version old", "", 0, None);
+        let (_b, b) = create_git_probe_script("git version new", "", 0, None);
+        select_git_executable_path(Some(a));
+        let old = begin_git_runtime_probe(false).unwrap();
+        let waiter = std::thread::spawn(|| wait_for_git_runtime_probe(Duration::from_secs(30)));
+        std::thread::sleep(Duration::from_millis(20));
+        select_git_executable_path(Some(b));
+        // Nothing is known about the new executable yet.
+        assert!(waiter.join().unwrap().is_none());
+        assert!(old.run().is_none());
     }
 
     #[test]

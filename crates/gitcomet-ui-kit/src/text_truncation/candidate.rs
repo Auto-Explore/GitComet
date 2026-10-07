@@ -148,32 +148,49 @@ where
         return None;
     }
 
-    let mut best: Option<MeasuredCandidate> = None;
-    let mut right_ix = right_len.saturating_sub(1);
+    let mut measure = |left_ix, right_ix| {
+        let candidate = build_candidate(left_ix, right_ix)?;
+        let (width, ellipsis_x) = measure_candidate(window, cx, base_style, font_size, &candidate);
+        Some(MeasuredCandidate {
+            candidate,
+            width,
+            ellipsis_x,
+        })
+    };
 
-    'left: for left_ix in 0..left_len {
+    // Find the first point on the fitting frontier without shaping every
+    // over-wide suffix. For a search hit near the start of a long repository
+    // path, the old character-by-character retreat shaped almost the whole
+    // path hundreds of times on every keystroke (quadratic total text work).
+    // Like the frontier walk below, this relies on options retaining more
+    // text as their index increases; invalid overlapping segments do not fit.
+    let mut right_ix = right_len - 1;
+    let mut best = measure(0, right_ix).filter(|candidate| candidate.width <= max_width);
+    if best.is_none() {
+        let mut lo = 0;
+        let mut hi = right_ix;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if let Some(candidate) =
+                measure(0, mid).filter(|candidate| candidate.width <= max_width)
+            {
+                best = Some(candidate);
+                right_ix = mid;
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+    }
+    let mut best = best?;
+
+    'left: for left_ix in 1..left_len {
         loop {
-            let Some(candidate) = build_candidate(left_ix, right_ix) else {
-                if right_ix == 0 {
-                    break 'left;
-                }
-                right_ix -= 1;
-                continue;
-            };
-
-            let (width, ellipsis_x) =
-                measure_candidate(window, cx, base_style, font_size, &candidate);
-            if width <= max_width {
-                let measured = MeasuredCandidate {
-                    candidate,
-                    width,
-                    ellipsis_x,
-                };
-                if best
-                    .as_ref()
-                    .is_none_or(|current| compare(&measured, current) == Ordering::Greater)
-                {
-                    best = Some(measured);
+            if let Some(candidate) =
+                measure(left_ix, right_ix).filter(|candidate| candidate.width <= max_width)
+            {
+                if compare(&candidate, &best) == Ordering::Greater {
+                    best = candidate;
                 }
                 break;
             }
@@ -185,7 +202,7 @@ where
         }
     }
 
-    best
+    Some(best)
 }
 
 fn widest_fitting_monotonic_candidate<F>(
@@ -720,6 +737,7 @@ pub(super) fn measure_candidate(
     font_size: Pixels,
     candidate: &CandidateLayout,
 ) -> (Pixels, Option<Pixels>) {
+    gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::TextMeasurement);
     record_measure_candidate_call_for_test();
 
     let runs = compute_highlight_runs(
@@ -730,7 +748,7 @@ pub(super) fn measure_candidate(
     let shaped_line =
         window
             .text_system()
-            .shape_line(candidate.display_text.clone(), font_size, &runs, None);
+            .shape_line(candidate.display_text.clone(), font_size, &runs);
     (
         shaped_line.width,
         ellipsis_x_for_projection_and_line(candidate.projection.as_ref(), &shaped_line),

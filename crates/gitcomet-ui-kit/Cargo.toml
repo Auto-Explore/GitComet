@@ -16,13 +16,14 @@ workspace = true
 default = []
 # Test helpers for crates that test against the kit. Enabling it adds
 # functions only; it never changes runtime behavior.
-test-support = ["gpui/test-support", "dep:regex"]
+test-support = ["gpui/test-support", "dep:regex", "dep:gpui_parley"]
 # Exposes internals the host's benchmarks measure.
 benchmarks = []
 
 # No dependency on gitcomet-state, the application, or the UI host:
 # scripts/ci/boundaries.py enforces it.
 [dependencies]
+gpui_parley = { workspace = true, optional = true }
 fontdb = { workspace = true }
 gitcomet-core = { workspace = true }
 # `ui_probe` uses GPUI's opt-in frame event collector in normal app builds.
@@ -48,6 +49,7 @@ x11-clipboard = { workspace = true }
 gitcomet-win32-window-utils = { path = "../win32-window-utils" }
 
 [dev-dependencies]
+gpui_parley = { workspace = true }
 gpui = { workspace = true, features = ["test-support"] }
 gpui_platform = { workspace = true }
 regex = { workspace = true }

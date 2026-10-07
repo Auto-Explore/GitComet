@@ -59,6 +59,8 @@ jobs:
           python-version: "3.14.7"
       - name: Check CI helpers
         run: python3 -m unittest discover -s scripts/ci -p 'test_*.py' -v
+      - name: Test performance capture policy and workload witnesses
+        run: python3 -m unittest discover -s scripts/profiling -p 'test_*.py' -v
       - name: Lint workflows
         run: |
           curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash -o "$RUNNER_TEMP/actionlint-installer.bash"

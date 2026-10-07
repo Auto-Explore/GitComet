@@ -39,6 +39,25 @@ fn install_example(cx: &mut gpui::TestAppContext) {
     });
 }
 
+fn repository_with_edits() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    git(root, &["init", "-q", "-b", "main"]);
+    git(root, &["config", "user.email", "t@example.com"]);
+    git(root, &["config", "user.name", "T"]);
+    git(root, &["config", "commit.gpgsign", "false"]);
+    // Same bytes under any user or system config (Windows CI sets autocrlf).
+    git(root, &["config", "core.autocrlf", "false"]);
+    std::fs::write(root.join("a.rs"), numbered("a", 30, None)).unwrap();
+    std::fs::write(root.join("b.rs"), numbered("b", 30, None)).unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-q", "-m", "init"]);
+    std::fs::write(root.join("a.rs"), numbered("a", 30, Some(3))).unwrap();
+    std::fs::write(root.join("b.rs"), numbered("b", 30, Some(20))).unwrap();
+
+    dir
+}
+
 /// A repository with unstaged edits to `a.rs` and `b.rs`, open in `view`'s
 /// store through the real backend.
 fn open_repository(
@@ -63,20 +82,8 @@ fn open_repository_with(
     gpui::Entity<GitCometView>,
     &mut gpui::VisualTestContext,
 ) {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = repository_with_edits();
     let root = dir.path();
-    git(root, &["init", "-q", "-b", "main"]);
-    git(root, &["config", "user.email", "t@example.com"]);
-    git(root, &["config", "user.name", "T"]);
-    git(root, &["config", "commit.gpgsign", "false"]);
-    // Same bytes under any user or system config (Windows CI sets autocrlf).
-    git(root, &["config", "core.autocrlf", "false"]);
-    std::fs::write(root.join("a.rs"), numbered("a", 30, None)).unwrap();
-    std::fs::write(root.join("b.rs"), numbered("b", 30, None)).unwrap();
-    git(root, &["add", "."]);
-    git(root, &["commit", "-q", "-m", "init"]);
-    std::fs::write(root.join("a.rs"), numbered("a", 30, Some(3))).unwrap();
-    std::fs::write(root.join("b.rs"), numbered("b", 30, Some(20))).unwrap();
 
     install_example(cx);
     let repo = gitcomet_git_gix::GixBackend.open(root).expect("open repo");
@@ -1570,4 +1577,299 @@ fn the_example_lists_a_linked_worktree(cx: &mut gpui::TestAppContext) {
         1,
         "the shown worktree is watched"
     );
+}
+
+fn open_linked_worktree_changes(
+    cx: &mut gpui::TestAppContext,
+) -> (
+    tempfile::TempDir,
+    PathBuf,
+    AppStore,
+    gpui::Entity<GitCometView>,
+    &mut gpui::VisualTestContext,
+) {
+    let dir = repository_with_edits();
+    let linked = dir.path().join("linked");
+    git(
+        dir.path(),
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "linked",
+            linked.to_str().unwrap(),
+            "HEAD",
+        ],
+    );
+    std::fs::write(linked.join("a.rs"), "linked staged\n").unwrap();
+    git(&linked, &["add", "a.rs"]);
+    std::fs::write(linked.join("a.rs"), "linked unstaged\n").unwrap();
+    std::fs::remove_file(linked.join("b.rs")).unwrap();
+    std::fs::write(linked.join("c.rs"), "linked untracked\n").unwrap();
+    let linked = canonicalize_or_original(linked);
+    let (store, events) = AppStore::new_test(Arc::new(gitcomet_git_gix::GixBackend));
+    store.disable_repo_monitors_for_test();
+    store.dispatch(Msg::SetGitRuntimeState(available_git_runtime_state()));
+    store.dispatch(Msg::OpenRepo(dir.path().to_path_buf()));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    settle(cx, &view, &store, "origin checkout to open", |cx| {
+        cx.update(|_, app| {
+            view.read(app).active_repo().is_some_and(|repo| {
+                repo.id == RepoId(1)
+                    && matches!(repo.open, Loadable::Ready(()))
+                    && matches!(repo.status, Loadable::Ready(_))
+            })
+        })
+    });
+    store.dispatch(Msg::SelectWorktreeUncommitted {
+        request_id: None,
+        repo_id: RepoId(1),
+        path: linked.clone(),
+    });
+    settle(cx, &view, &store, "linked worktree files", |cx| {
+        cx.update(|_, app| {
+            view.read(app)
+                .details_pane
+                .read(app)
+                .selected_worktree_summary()
+                .is_some_and(|summary| {
+                    summary.path == linked
+                        && summary.staged.len() == 1
+                        && summary.unstaged.len() == 3
+                })
+        })
+    });
+    assert!(
+        cx.debug_bounds("worktree_uncommitted_body").is_some(),
+        "the worktree details body must be mounted"
+    );
+    (dir, linked, store, view, cx)
+}
+
+fn click_linked_file(cx: &mut gpui::VisualTestContext, row: usize, button: gpui::MouseButton) {
+    let position = cx
+        .debug_bounds(Box::leak(format!("worktree_file_1_{row}").into_boxed_str()))
+        .expect("worktree file row visible")
+        .center();
+    cx.simulate_mouse_move(position, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(position, button, gpui::Modifiers::default());
+    cx.simulate_mouse_up(position, button, gpui::Modifiers::default());
+    crate::view::test_support::redraw(cx);
+}
+
+fn main_diff_contains(pane: &MainPaneView, target: &DiffTarget, needle: &str) -> bool {
+    pane.rendered_patch_diff_loadable()
+        .and_then(Loadable::ready)
+        .is_some_and(|diff| diff.lines.iter().any(|line| line.text.contains(needle)))
+        || (pane.file_diff_cache_target.as_ref() == Some(target)
+            && (0..pane.file_diff_split_row_len())
+                .filter_map(|ix| pane.file_diff_split_row(ix))
+                .any(|row| {
+                    row.old.as_deref().is_some_and(|text| text.contains(needle))
+                        || row.new.as_deref().is_some_and(|text| text.contains(needle))
+                }))
+}
+
+fn assert_linked_diff(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<GitCometView>,
+    store: &AppStore,
+    linked: &Path,
+    target: &DiffTarget,
+    needle: &str,
+) {
+    settle(cx, view, store, "linked diff content", |cx| {
+        cx.update(|_, app| {
+            let pane = view.read(app).main_pane.read(app);
+            pane.rendered_diff_target() == Some(target)
+                && pane
+                    .rendered_patch_diff_loadable()
+                    .is_some_and(|diff| matches!(diff, Loadable::Ready(_)))
+                && pane
+                    .rendered_file_diff_loadable()
+                    .is_some_and(|file| matches!(file, Loadable::Ready(Some(_))))
+                && main_diff_contains(pane, target, needle)
+        })
+    });
+    let state = store.snapshot();
+    assert_eq!(
+        state.active_repo,
+        Some(RepoId(1)),
+        "inline viewing keeps the original tab"
+    );
+    let repo = &state.repos[0];
+    assert!(
+        repo.diff_state.diff_target.is_none(),
+        "the actual click sets only the foreign target"
+    );
+    let inline = repo.diff_state.inline_submodule_diff.as_ref().unwrap();
+    assert_eq!(inline.submodule_repo_path, linked);
+    assert_eq!(&inline.target, target);
+    let diff = inline.diff.ready().unwrap();
+    assert!(
+        cx.update(|_, app| main_diff_contains(view.read(app).main_pane.read(app), target, needle)),
+        "the rendered diff must contain the linked checkout's bytes"
+    );
+    assert!(
+        !diff.lines.iter().any(|line| line.text.contains("a edited")),
+        "must not load the originating checkout's edits"
+    );
+    assert!(
+        cx.debug_bounds("diff_body_container").is_some(),
+        "loaded foreign diff must actually render"
+    );
+    assert!(cx.debug_bounds("inline_foreign_back").is_some());
+}
+
+#[gpui::test]
+fn clicking_linked_worktree_files_renders_staged_and_unstaged_diffs(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (_dir, linked, store, view, cx) = open_linked_worktree_changes(cx);
+    click_linked_file(cx, 0, gpui::MouseButton::Left);
+    assert_linked_diff(
+        cx,
+        &view,
+        &store,
+        &linked,
+        &DiffTarget::working_tree(PathBuf::from("a.rs"), DiffArea::Staged),
+        "linked staged",
+    );
+    let back = cx.debug_bounds("inline_foreign_back").unwrap().center();
+    cx.simulate_click(back, gpui::Modifiers::default());
+    settle(cx, &view, &store, "return to worktree history", |cx| {
+        cx.update(|_, app| {
+            view.read(app).main_pane.read(app).active_content()
+                == crate::view::panes::main::MainPaneContent::History
+        })
+    });
+    assert!(cx.debug_bounds("diff_body_container").is_none());
+    assert_eq!(
+        store.snapshot().repos[0]
+            .history_state
+            .worktree_selection
+            .as_deref(),
+        Some(linked.as_path())
+    );
+    click_linked_file(cx, 1, gpui::MouseButton::Left);
+    assert_linked_diff(
+        cx,
+        &view,
+        &store,
+        &linked,
+        &DiffTarget::working_tree(PathBuf::from("a.rs"), DiffArea::Unstaged),
+        "linked unstaged",
+    );
+}
+
+#[gpui::test]
+fn linked_worktree_file_context_menu_opens_diff_and_uses_checkout_paths(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let _clipboard = crate::test_support::lock_clipboard_test();
+    let (_dir, linked, store, view, cx) = open_linked_worktree_changes(cx);
+    click_linked_file(cx, 0, gpui::MouseButton::Right);
+    assert!(cx.debug_bounds("app_popover").is_some());
+    for entry in [
+        "view_diff",
+        "open_in_worktree_tab",
+        "open_file",
+        "open_file_location",
+        "copy_absolute_path",
+        "copy_relative_path",
+    ] {
+        assert!(
+            cx.debug_bounds(Box::leak(format!("context_menu_{entry}").into_boxed_str()))
+                .is_some(),
+            "missing menu action {entry}"
+        );
+    }
+    for entry in [
+        "stage",
+        "unstage",
+        "discard_changes",
+        "edit_file",
+        "apply_changes",
+    ] {
+        assert!(
+            cx.debug_bounds(Box::leak(format!("context_menu_{entry}").into_boxed_str()))
+                .is_none(),
+            "foreign menus allow viewing and navigation only"
+        );
+    }
+    let copy = cx
+        .debug_bounds("context_menu_copy_absolute_path")
+        .unwrap()
+        .center();
+    cx.simulate_click(copy, gpui::Modifiers::default());
+    let copied = cx.update(|_, app| app.read_from_clipboard().and_then(|item| item.text()));
+    assert_eq!(
+        copied,
+        Some(linked.join("a.rs").to_string_lossy().into_owned())
+    );
+    click_linked_file(cx, 0, gpui::MouseButton::Right);
+    let show = cx.debug_bounds("context_menu_view_diff").unwrap().center();
+    cx.simulate_click(show, gpui::Modifiers::default());
+    assert_linked_diff(
+        cx,
+        &view,
+        &store,
+        &linked,
+        &DiffTarget::working_tree(PathBuf::from("a.rs"), DiffArea::Staged),
+        "linked staged",
+    );
+    click_linked_file(cx, 1, gpui::MouseButton::Right);
+    let open = cx
+        .debug_bounds("context_menu_open_in_worktree_tab")
+        .unwrap()
+        .center();
+    cx.simulate_click(open, gpui::Modifiers::default());
+    settle(cx, &view, &store, "diff in linked tab", |cx| {
+        cx.update(|_, app| {
+            view.read(app).active_repo().is_some_and(|repo| {
+                repo.spec.workdir == linked
+                    && repo.diff_state.diff_target.as_ref()
+                        == Some(&DiffTarget::working_tree(
+                            PathBuf::from("a.rs"),
+                            DiffArea::Unstaged,
+                        ))
+                    && matches!(repo.diff_state.diff, Loadable::Ready(_))
+            })
+        })
+    });
+}
+
+#[gpui::test]
+fn sorted_linked_worktree_file_clicks_open_untracked_and_deleted_content(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (_dir, linked, store, view, cx) = open_linked_worktree_changes(cx);
+    for layout in [FileListLayout::Flat, FileListLayout::Tree] {
+        cx.update(|_, app| {
+            view.read(app).details_pane.clone().update(app, |pane, cx| {
+                pane.set_file_list_sort(
+                    crate::view::rows::FileListId::WorktreeFiles,
+                    crate::view::rows::CommitFileSort::PathDescending,
+                    cx,
+                );
+                pane.set_file_list_layout(layout, cx);
+            })
+        });
+        crate::view::test_support::redraw(cx);
+        for (row, path, content) in [(0, "c.rs", "linked untracked"), (1, "b.rs", "-b 0")] {
+            click_linked_file(cx, row, gpui::MouseButton::Left);
+            assert_linked_diff(
+                cx,
+                &view,
+                &store,
+                &linked,
+                &DiffTarget::working_tree(PathBuf::from(path), DiffArea::Unstaged),
+                content,
+            );
+        }
+    }
 }

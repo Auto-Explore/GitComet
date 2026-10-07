@@ -2,30 +2,6 @@
 //! pipelines can cost much more than comparing the files themselves.
 use gitcomet_core::services::{CancellationToken, Result};
 
-pub(super) fn for_repo(
-    repo: &gix::Repository,
-    cancellation: &CancellationToken,
-) -> Result<Option<usize>> {
-    #[cfg(windows)]
-    {
-        if let Some(limit) = benchmark_override() {
-            return Ok(limit);
-        }
-        if !has_lfs_filter(&repo.config_snapshot()) {
-            return Ok(None);
-        }
-        match repo.index_or_empty() {
-            Ok(index) => for_index(repo, &index, cancellation),
-            Err(_) => Ok(Some(bounded_limit())),
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = (repo, cancellation);
-        Ok(None)
-    }
-}
-
 pub(super) fn for_index(
     repo: &gix::Repository,
     index: &gix::index::State,

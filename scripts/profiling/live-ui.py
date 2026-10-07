@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drive the real GitComet application on Linux and measure it, or compare runs.
+"""Drive the real GitComet application and measure it, or compare runs.
 
 The app runs normally (native window, live store, real workers, normal
 rendering) with the opt-in scenario driver and UI probe enabled. The driver
@@ -34,6 +34,7 @@ import json
 import math
 import os
 from pathlib import Path
+import platform
 import random
 import re
 import shlex
@@ -41,6 +42,7 @@ import signal
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 
@@ -48,6 +50,9 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 import perf_metadata  # noqa: E402
+import perf_platform  # noqa: E402
+import perf_gpu  # noqa: E402
+import perf_gpu_frames  # noqa: E402
 
 SURVEY_SOURCE = ROOT / "crates/gitcomet-ui-gpui/src/view/user_survey.rs"
 SAVE_FILE = "save-target.txt"
@@ -81,11 +86,14 @@ def create_fixture(path, commits, files):
     env = fixture_env()
     git(path, "init", "-q", "-b", "main", env=env)
     for key, value in {"user.name": "Probe", "user.email": "probe@example.invalid",
-                       "core.autocrlf": "false", "commit.gpgsign": "false"}.items():
+                       "core.autocrlf": "false", "commit.gpgsign": "false",
+                       "gc.auto": "0", "maintenance.auto": "false"}.items():
         git(path, "config", key, value, env=env)
     # fast-import: a linear main line touching a rotating set of `files`
     # files, with a side-branch commit merged back every 50 commits.
-    stream = []
+    # Spill the import stream to disk instead of retaining millions of Python
+    # strings while constructing the two-million-commit fixture.
+    stream = tempfile.TemporaryFile(dir=path)
     mark = 0
     main_head = None
 
@@ -95,24 +103,32 @@ def create_fixture(path, commits, files):
         when = 1_600_000_000 + index
         message = f"change {index}"
         body = f"commit {index}\n"
-        stream.append(f"commit refs/heads/{branch}\nmark :{mark}\n"
+        stream.write((f"commit refs/heads/{branch}\nmark :{mark}\n"
                       f"author Probe <probe@example.invalid> {when} +0000\n"
                       f"committer Probe <probe@example.invalid> {when} +0000\n"
-                      f"data {len(message)}\n{message}\n")
+                      f"data {len(message)}\n{message}\n").encode())
         if parents:
-            stream.append(f"from :{parents[0]}\n")
-            stream.extend(f"merge :{parent}\n" for parent in parents[1:])
-        stream.append(f"M 100644 inline {name}\ndata {len(body)}\n{body}\n")
+            stream.write(f"from :{parents[0]}\n".encode())
+            for parent in parents[1:]:
+                stream.write(f"merge :{parent}\n".encode())
+        stream.write(f"M 100644 inline {name}\ndata {len(body)}\n{body}\n".encode())
         return mark
 
     for index in range(commits):
-        name = f"src/module{index % files:05}.txt"
+        # Bound tree fanout so provisioning 2M commits does not repeatedly
+        # encode a single 4,000-entry directory. Working-tree size is unchanged.
+        name = f"src/group{(index % files) // 100:03}/module{index % files:05}.txt"
         if main_head and index % 50 == 49:
-            side = commit("side", [main_head], index, f"side/topic{index % files:05}.txt")
+            side = commit("side", [main_head], index, f"side/group{(index % files) // 100:03}/topic{index % files:05}.txt")
             main_head = commit("main", [main_head, side], index, name)
         else:
             main_head = commit("main", [main_head] if main_head else [], index, name)
-    git(path, "fast-import", "--quiet", env=env, input="".join(stream).encode())
+    stream.seek(0)
+    try:
+        subprocess.run(["git", "-C", str(path), "fast-import", "--quiet"], stdin=stream,
+                       capture_output=True, check=True, env=env)
+    finally:
+        stream.close()
     git(path, "checkout", "-q", "-f", "main", env=env)
     # 100,000 rows; every 1000th holds the needle. The work-tree copy edits
     # 100 of them so the file has a real diff to search.
@@ -136,6 +152,8 @@ def clone_fixture(source, path, revision):
     path = path.resolve()
     subprocess.run(["git", "clone", "-q", "--local", "--no-checkout", str(source), str(path)],
                    check=True, env=fixture_env())
+    git(path, "config", "gc.auto", "0", env=fixture_env())
+    git(path, "config", "maintenance.auto", "false", env=fixture_env())
     git(path, "checkout", "-q", "--detach", revision or "HEAD", env=fixture_env())
     return path
 
@@ -173,9 +191,91 @@ def file_text(repository, path):
         raise ValueError(f"{path} must be an existing UTF-8 file: {error}") from error
 
 
+PICKER_RECENT_COUNT = 40
+# The version-3 session migrates into one workspace containing the active repo.
+PICKER_UNFILTERED_COUNT = PICKER_RECENT_COUNT + 2
+
+
+def picker_recent_paths():
+    # Stable lengths across runs, independent of artifact directory names.
+    # These are display-only paths: scenarios never open or create them.
+    root = "C:/performance" if os.name == "nt" else "/performance"
+    return [f"{root}/company/{'directory/' * (32 if ix % 2 else 96)}component-{ix:03}/GitComet-{ix:03}"
+            for ix in range(PICKER_RECENT_COUNT)]
+
+
+def picker_scenario(ready):
+    witness = {"kind": "repo_picker_filtered"}
+    def key(key, repeat=1, interval_ms=0, witnessed=False):
+        return {"do": "keys", "key": key, "repeat": repeat, "interval_ms": interval_ms,
+                **({"witness": witness} if witnessed else {})}
+    def expect(query, count):
+        return {"do": "expect_repo_picker", "query": query, "matches": count,
+                "selected": 0 if query and count else None}
+    steps = list(ready)
+    for shortcut in ("a", "o"):
+        steps += [
+            {"do": "phase", "name": f"picker_open_{shortcut}"},
+            key(f"secondary-shift-{shortcut}", witnessed=True),
+            expect("", PICKER_UNFILTERED_COUNT),
+            {"do": "settle", "ms": 750},
+            {"do": "phase", "name": f"picker_name_{shortcut}"},
+            {"do": "type", "text": "GitComet", "interval_ms": 80, "witness": witness},
+            expect("GitComet", PICKER_RECENT_COUNT), {"do": "settle", "ms": 750},
+            {"do": "phase", "name": f"picker_path_{shortcut}"},
+            key("secondary-a"), key("backspace", witnessed=True),
+            {"do": "type", "text": "company", "interval_ms": 80, "witness": witness},
+            expect("company", PICKER_RECENT_COUNT), {"do": "settle", "ms": 750},
+            {"do": "phase", "name": f"picker_paste_{shortcut}"},
+            key("secondary-a"),
+            {"do": "paste", "text": "component-017", "witness": witness},
+            expect("component-017", 1), {"do": "settle", "ms": 750},
+            {"do": "phase", "name": f"picker_no_matches_{shortcut}"},
+            key("secondary-a"),
+            {"do": "paste", "text": "zzzz-no-such-repository", "witness": witness},
+            expect("zzzz-no-such-repository", 0), {"do": "settle", "ms": 750},
+            {"do": "phase", "name": f"picker_backspace_{shortcut}"},
+            key("backspace", repeat=len("zzzz-no-such-repository"), interval_ms=16, witnessed=True),
+            expect("", PICKER_UNFILTERED_COUNT), {"do": "settle", "ms": 750},
+            key("escape"),
+        ]
+    return {"version": 1, "steps": steps}
+
+
 def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
     """Scenario files for the in-app driver (view/scenario_driver.rs)."""
-    ready = [{"do": "wait_ready", "timeout_ms": 180_000}, {"do": "settle", "ms": 3000}]
+    ready = [{"do": "wait_ready", "timeout_ms": 180_000}]
+    if name.startswith("history-"):
+        # First-page readiness is separately recorded. Interactions with a
+        # massive timeline must wait for its published index and visible text.
+        ready.append({"do": "wait_ready", "timeout_ms": 180_000, "indexed": True})
+    ready.append({"do": "settle", "ms": 3000})
+    if name == "repo-picker":
+        return picker_scenario(ready)
+    if name == "history-jump":
+        return {"steps": ready + [{"do": "phase", "name": "jump"}]
+                + [step for fraction in (.9, .1, .8, .2, .95, .05) for step in (
+                    {"do": "drag_history", "to_fraction": fraction, "steps": 1, "interval_ms": 0, "wait_for_rows": True},
+                    {"do": "wait_ready", "indexed": True})]
+                + [{"do": "settle", "ms": 1000}]}
+    if name == "history-reopen":
+        return {"steps": ready + [{"do": "phase", "name": "reopen"},
+                {"do": "command", "id": "close-repo-tab", "witness": {"kind": "repo_closed", "path": str(repository)}},
+                {"do": "open_repo", "path": str(repository)},
+                {"do": "wait_ready", "indexed": True}, {"do": "settle", "ms": 1000}]}
+    if name.startswith("history-hover"):
+        points = [[.55, .08]] if name == "history-hover-stationary" else [
+            [.55, .08 + row * .022] for row in range(24)]
+        steps = ready + [{"do": "phase", "name": "hover"},
+                         {"do": "move_pointer", "positions": points, "repeat": 1200, "interval_ms": 8},
+                         {"do": "phase", "name": "hover_dwell"},
+                         {"do": "move_pointer", "positions": [[.55, .08]], "repeat": 1,
+                          "interval_ms": 0, "witness": {"kind": "message_hover"}},
+                         {"do": "phase", "name": "hover_idle"}, {"do": "settle", "ms": 2000}]
+        return {"version": 1, "steps": steps}
+    if name == "history-drag":
+        return {"version": 1, "steps": ready + [{"do": "phase", "name": "drag"},
+                {"do": "drag_history", "to_fraction": .8, "steps": 90, "interval_ms": 16}]}
     if name == "lifecycle":
         if secondary is None:
             raise ValueError("lifecycle needs --secondary-repository")
@@ -280,6 +380,7 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
 
 
 SCENARIOS = ("startup", "idle", "idle-minimized", "idle-hidden-terminal", "two-windows-idle", "history-select",
+             "history-hover", "history-hover-stationary", "history-drag", "history-jump", "history-reopen", "repo-picker",
              "history-select-burst", "history-scroll", "status-save", "status-burst", "status-touch",
              "ignored-churn",
              "diff-search", "terminal-output", "lifecycle")
@@ -293,6 +394,8 @@ def survey_id():
 
 
 def gpu_cache_environment(output, cold):
+    if platform.system() != "Linux":
+        return {}
     cache = (output / "gpu-shader-cache") if cold else GPU_SHADER_CACHE
     cache.mkdir(parents=True, exist_ok=True)
     return {"__GL_SHADER_DISK_CACHE": "1", "__GL_SHADER_DISK_CACHE_PATH": str(cache),
@@ -333,7 +436,7 @@ def smaps_breakdown(pid):
     return dict(kinds)
 
 
-def seed_profile(output, repository):
+def seed_profile(output, repository, window_size=WINDOW_SIZE, session_overrides=None):
     """An isolated profile: sandboxed XDG dirs so the user's session, crash
     reports and desktop entries are never touched, and a seeded session."""
     home = output / "profile"
@@ -343,10 +446,13 @@ def seed_profile(output, repository):
     session_file = output / "session.json"
     session_file.write_text(json.dumps({
         "version": 3, "open_repos": [str(repository)], "active_repo": str(repository),
-        "window_width": WINDOW_SIZE[0], "window_height": WINDOW_SIZE[1], "ui_scale_percent": 100,
+        "window_width": window_size[0], "window_height": window_size[1], "ui_scale_percent": 100,
         "history_verify_commit_signatures": False, "history_verify_commit_signatures_opt_in": False,
         "history_tag_fetch_mode": "disabled", "check_for_updates_on_startup": False,
+        # Only this disposable profile contacts the loopback HTTP fixtures.
+        "allowed_remote_protocols": ["http", "https", "ssh", "git", "file"],
         "survey_prompt": {"survey_id": survey_id(), "opened_at_unix_seconds": 1},
+        **(session_overrides or {}),
     }), encoding="utf-8")
     gitconfig = output / "gitconfig"
     gitconfig.write_text("", encoding="utf-8")
@@ -357,11 +463,14 @@ def seed_profile(output, repository):
                GITCOMET_NO_DESKTOP_INSTALL="1", GITCOMET_SESSION_FILE=str(session_file),
                GITCOMET_DISABLE_SESSION_PERSIST="1", GIT_CONFIG_NOSYSTEM="1",
                GIT_CONFIG_GLOBAL=str(gitconfig), GIT_TERMINAL_PROMPT="0")
+    env.update(perf_platform.profile_directories(output))
     return env
 
 
 def read_proc(pid):
     """One process sample; None once the process is gone."""
+    if platform.system() != "Linux":
+        return perf_platform.sample_process(pid)
     try:
         status = Path(f"/proc/{pid}/status").read_text()
         stat = Path(f"/proc/{pid}/stat").read_text()
@@ -409,14 +518,19 @@ def find_app_pid(parent, binary):
 
 
 def load_average():
-    return Path("/proc/loadavg").read_text().split()[:3]
+    return perf_platform.load_average()
 
 
 def wait_for_quiet(max_load, timeout_s=4 * 3600, poll_s=5.0):
     """Blocks until the 1-minute load average drops below `max_load`: on a
     shared machine other builds would otherwise land inside a run."""
     deadline = time.monotonic() + timeout_s
-    while float(load_average()[0]) >= max_load:
+    while True:
+        load = load_average()
+        if load is None:
+            raise ValueError("--max-load needs a native load-average counter on this platform")
+        if float(load[0]) < max_load:
+            return
         if time.monotonic() > deadline:
             raise TimeoutError(f"load stayed at or above {max_load} for {timeout_s} s")
         time.sleep(poll_s)
@@ -429,9 +543,10 @@ class HeadlessCompositor:
     A headless mutter has no input devices, so no window ever gets keyboard
     focus, and GitComet (rightly) accepts text only in an active window. A
     RemoteDesktop session adds a virtual keyboard and pointer; they must exist
-    before the app binds its seat. Nothing is typed or clicked through them."""
+    before the app binds its seat. Clipboard scenarios also send a Shift
+    press/release during setup so Wayland grants clipboard ownership."""
 
-    def __init__(self, output):
+    def __init__(self, output, refresh_hz=REFRESH_HZ, window_size=WINDOW_SIZE):
         from gi.repository import Gio, GLib
         self.name = f"gitcomet-perf-{uuid.uuid4().hex[:8]}"
         self.log = open(output / "compositor.log", "wb")
@@ -440,7 +555,7 @@ class HeadlessCompositor:
             ["dbus-run-session", "--", "sh", "-c",
              'printf %s "$DBUS_SESSION_BUS_ADDRESS" > "$1"; shift; exec "$@"', "sh", str(address_file),
              "mutter", "--headless", "--no-x11",
-             "--virtual-monitor", f"{WINDOW_SIZE[0] + 200}x{WINDOW_SIZE[1] + 200}@{REFRESH_HZ}",
+             "--virtual-monitor", f"{window_size[0] + 200}x{window_size[1] + 200}@{refresh_hz}",
              "--wayland-display", self.name],
             stdin=subprocess.DEVNULL, stdout=self.log, stderr=subprocess.STDOUT, start_new_session=True)
         socket = Path(os.environ["XDG_RUNTIME_DIR"]) / self.name
@@ -469,15 +584,24 @@ class HeadlessCompositor:
 
         wait(lambda: call("/org/freedesktop/DBus", "org.freedesktop.DBus", "NameHasOwner",
                           GLib.Variant("(s)", (service,)), "(b)")[0], "RemoteDesktop service")
+        self.pid = call("/org/freedesktop/DBus", "org.freedesktop.DBus", "GetConnectionUnixProcessID",
+                        GLib.Variant("(s)", (service,)), "(u)")[0]
         session = call(root, service, "CreateSession", reply="(o)")[0]
         session_interface = service + ".Session"
         call(session, session_interface, "Start")
+        self.keyboard = lambda pressed: call(session, session_interface, "NotifyKeyboardKeysym", GLib.Variant("(ub)", (0xFFE1, pressed)))
         # Shift press/release creates the keyboard; the pointer is parked in
         # the monitor's corner, away from the window.
         call(session, session_interface, "NotifyKeyboardKeysym", GLib.Variant("(ub)", (0xFFE1, True)))
         call(session, session_interface, "NotifyKeyboardKeysym", GLib.Variant("(ub)", (0xFFE1, False)))
         call(session, session_interface, "NotifyPointerMotionRelative", GLib.Variant("(dd)", (5000.0, 5000.0)))
         time.sleep(0.3)
+
+    def prime_clipboard(self):
+        # In-process scenario input has no Wayland serial. A real native press
+        # after the app has focus supplies one, before measured phases begin.
+        self.keyboard(True)
+        self.keyboard(False)
 
     def environment(self, env):
         env = dict(env, WAYLAND_DISPLAY=self.name, XDG_SESSION_TYPE="wayland")
@@ -500,20 +624,39 @@ class HeadlessCompositor:
 
 def run_once(binary, repository, name, output, timeout, metadata=True, display="headless",
              ping_ms=None, save_file=SAVE_FILE, wrap=None, cold_gpu_cache=False, secondary=None,
-             cycles=100, extra_env=None):
+             cycles=100, extra_env=None, scenario_steps=None, ui_scale=100, refresh_hz=None, gpu=False,
+             window_size=WINDOW_SIZE, session_overrides=None, gpu_timings=False):
     # Absolute: the app runs with its working directory in `output`.
     binary, repository, output = binary.resolve(), repository.resolve(), output.resolve()
+    if display == "headless" and platform.system() != "Linux":
+        raise ValueError("Headless captures require Linux; use --display desktop on this platform")
+    if wrap and platform.system() != "Linux":
+        raise ValueError("Launch native profilers around a desktop run; --wrap currently requires Linux PID discovery")
     output.mkdir(parents=True, exist_ok=False)
     run_id = str(uuid.uuid4())
-    env = seed_profile(output, repository)
+    env = seed_profile(output, repository, window_size, session_overrides)
     scenario_file = output / "scenario.json"
     secondary = secondary.resolve() if secondary else None
-    scenario_file.write_text(json.dumps(scenario(name, repository, save_file, secondary, cycles), indent=2),
+    session_path = output / "session.json"
+    session = json.loads(session_path.read_text(encoding="utf-8"))
+    session["ui_scale_percent"] = ui_scale
+    if name == "repo-picker":
+        session["recent_repos"] = picker_recent_paths()
+    session_path.write_text(json.dumps(session), encoding="utf-8")
+    scripted = scenario_steps or scenario(name, repository, save_file, secondary, cycles)
+    scenario_file.write_text(json.dumps(scripted, indent=2),
                              encoding="utf-8")
+    needs_clipboard = any(step["do"] == "paste" for step in scripted["steps"])
     frames = output / "frames.jsonl"
     env.update(GITCOMET_UI_PROBE="1", GITCOMET_UI_PROBE_JSONL=str(frames),
                GITCOMET_UI_PROBE_LOG=str(output / "ui.log"), GITCOMET_UI_SCENARIO=str(scenario_file),
                GITCOMET_PERF_RUN_ID=run_id)
+    env.pop("GPUI_GPU_TIMINGS", None)
+    if gpu_timings:
+        env["GPUI_GPU_TIMINGS"] = "1"
+    # Every short picker phase must contain complete probe intervals and
+    # process samples; otherwise identical runs can have different metrics.
+    env["GITCOMET_UI_PROBE_INTERVAL_MS"] = "250" if name == "repo-picker" else "1000"
     for key in ("MIMALLOC_PURGE_DELAY", "MIMALLOC_PURGE_DECOMMITS"):
         if key in os.environ:
             env[key] = os.environ[key]
@@ -525,24 +668,32 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
     env.update(gpu_cache_environment(output, cold_gpu_cache))
     # Runtime knobs under test, e.g. allocator options; recorded in the capture.
     env.update(extra_env or {})
-    capture = {"version": 1, "run_id": run_id, "scenario": name, "binary": str(binary),
+    capture = {"version": 2, "run_id": run_id, "scenario": name, "binary": str(binary),
                "binary_sha256": perf_metadata.sha256_file(binary), "repository": str(repository),
                "repository_head": git(repository, "rev-parse", "HEAD").stdout.decode().strip(),
-               "window_size": WINDOW_SIZE, "display": display,
-               "refresh_hz": REFRESH_HZ if display == "headless" else None,
+               "window_size": window_size, "display": display, "session_overrides": session_overrides or {},
+               "refresh_hz": (refresh_hz or REFRESH_HZ) if display == "headless" else refresh_hz,
+               "ui_scale_percent": ui_scale, "capabilities": perf_platform.capabilities(),
+               "probe_interval_ms": int(env["GITCOMET_UI_PROBE_INTERVAL_MS"]),
+               "measurement_kind": "diagnostic" if wrap or gpu_timings else "live_application",
                "ping_ms": ping_ms, "wrap": wrap, "gpu_cache": "cold" if cold_gpu_cache else "warm",
                "load_before": load_average(), "outcome": "failed",
                "cycles": cycles if name == "lifecycle" else None, "extra_env": extra_env or {}}
+    capture["gpu_timings_requested"] = gpu_timings
+    capture["renderer_experiments"] = env.get("GPUI_GPU_EXPERIMENTS", "")
+    capture["graph_quad_experiment"] = env.get("GITCOMET_GPU_GRAPH_QUADS", "0")
+    capture["gpu_capture"] = {"requested": gpu}
     if metadata:
         (output / "environment.json").write_text(json.dumps(perf_metadata.collect(
             binaries=[("gitcomet", binary)], fixtures=[("repository", repository)],
             command=" ".join(sys.argv)), indent=2) + "\n", encoding="utf-8")
     samples = []
-    compositor = HeadlessCompositor(output) if display == "headless" else None
+    compositor = HeadlessCompositor(output, refresh_hz or REFRESH_HZ, window_size) if display == "headless" else None
     if compositor:
         env = compositor.environment(env)
     started = time.time()
     capture["spawn_unix_ms"] = started * 1000
+    timeout_problem = None
     with open(output / "stderr.log", "wb") as stderr:
         # A wrapper (perf, heaptrack) makes the run a diagnostic capture: its
         # timings are not latency evidence. The sampled pid is then the
@@ -550,13 +701,23 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
         prefix = [part.replace("{output}", str(output)) for part in shlex.split(wrap)] if wrap else []
         process = subprocess.Popen([*prefix, str(binary)], env=env, cwd=output, stdin=subprocess.DEVNULL,
                                    stdout=subprocess.DEVNULL, stderr=stderr, start_new_session=True)
+        gpu_sampler = None
         try:
             app_pid = process.pid
+            if gpu:
+                gpu_sampler = perf_gpu.Sampler(output, {"app": None if prefix else app_pid,
+                                                       "compositor": compositor.pid if compositor else None})
             while process.poll() is None:
                 if time.time() - started > timeout:
                     raise TimeoutError(f"scenario {name} did not finish within {timeout} s")
                 if prefix and app_pid == process.pid:
                     app_pid = find_app_pid(process.pid, binary) or app_pid
+                    if gpu_sampler:
+                        gpu_sampler.set_app_pid(app_pid)
+                if needs_clipboard and compositor and frames.exists() and b'"scenario_ready"' in frames.read_bytes():
+                    compositor.prime_clipboard()
+                    capture["clipboard_input_primed"] = True
+                    needs_clipboard = False
                 sample = read_proc(app_pid)
                 if sample:
                     # A mapping breakdown every ~5 s; smaps is costlier than status.
@@ -564,11 +725,15 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
                         sample["pss_breakdown_kib"] = smaps_breakdown(app_pid)
                     samples.append(sample)
                 time.sleep(0.25)
+        except TimeoutError as error:
+            timeout_problem = str(error)
+            perf_platform.stop_tree(process)
         except BaseException:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
+            perf_platform.stop_tree(process)
             raise
         finally:
+            if gpu_sampler:
+                capture["gpu_capture"] = gpu_sampler.close()
             if compositor:
                 compositor.close()
             capture["exit_code"] = process.returncode
@@ -579,6 +744,7 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
     crash_dir = output / "profile/state/gitcomet/crashes"
     capture["crash_reports"] = sorted(p.name for p in crash_dir.glob("*")) if crash_dir.exists() else []
     capture["outcome"] = "passed" if process.returncode == 0 else "failed"
+    capture["timeout"] = timeout_problem
     (output / "capture.json").write_text(json.dumps(capture, indent=2) + "\n", encoding="utf-8")
     return summarize(output)
 
@@ -623,9 +789,12 @@ def summarize(directory):
     problems = []
     if capture["outcome"] != "passed":
         problems.append(f"application exited {capture.get('exit_code')}")
+    if capture.get("timeout"):
+        problems.append(capture["timeout"])
     if capture.get("crash_reports"):
         problems.append(f"crash reports: {capture['crash_reports']}")
     records = load_records(directory)
+    gpu_records = perf_gpu.load(directory)
     starts = [r for r in records if r["event"] == "start"]
     if len(starts) != 1:
         problems.append(f"expected one probe start record, saw {len(starts)}")
@@ -639,13 +808,15 @@ def summarize(directory):
         problems.append(f"scenario failed: {ends[-1]['detail']['errors']}")
     if any(r.get("records_dropped") or r.get("stage_records_dropped") for r in records if r["event"] == "interval"):
         problems.append("probe dropped records")
-    # A frame left dirty for over a second means the compositor stopped
-    # pacing the window (hidden or occluded): latencies are then meaningless.
+    # A long frame is evidence, not proof of occlusion. Reject only explicit
+    # visibility failures; otherwise retain stalls for investigation.
     ready_at = next((r["at_ms"] for r in records if r["event"] == "scenario_ready"), None)
     stalled = [r for r in records if r["event"] == "draw" and r.get("dirty_ms") is not None
                and ready_at is not None and r["dirty_ms"] >= ready_at and r["at_ms"] - r["dirty_ms"] > 1000]
-    if stalled:
-        problems.append(f"{len(stalled)} frame(s) waited over 1 s to draw; is the window visible?")
+    visibility = [r for r in records if r["event"] == "scenario_visibility"]
+    if capture["scenario"] not in ("idle-minimized",) and any(
+            r.get("detail", {}).get("visible") is False for r in visibility):
+        problems.append("measured window was not visible")
 
     draws = sorted((r["start_ms"], r) for r in records if r["event"] == "draw")
     submits = sorted((r["start_ms"], r) for r in records if r["event"] == "submit")
@@ -664,8 +835,15 @@ def summarize(directory):
         if record["detail"]["state"] == "begin":
             begins[name] = record
         elif name in begins:
-            phases[name] = analyse_phase(begins.pop(name), record, draws, submits, by_op, applied,
+            begin = begins.pop(name)
+            phases[name] = analyse_phase(begin, record, draws, submits, by_op, applied,
                                          records, threads, process, start)
+            if capture.get("gpu_timings_requested"):
+                phases[name]["gpu_frames"] = perf_gpu_frames.summarize(records, begin["at_ms"], record["at_ms"], distribution)
+            if capture.get("gpu_capture", {}).get("requested"):
+                phases[name]["gpu"] = perf_gpu.summarize_phase(
+                    gpu_records, start["unix_ms"] + begin["at_ms"],
+                    start["unix_ms"] + record["at_ms"], distribution)
     if not phases and capture["scenario"] != "startup":
         problems.append("no complete phase")
     for name, phase in phases.items():
@@ -678,9 +856,13 @@ def summarize(directory):
         anchor = start["unix_ms"]
         first_draw = next((r for r in records if r["event"] == "draw"), None)
         ready = next((r for r in records if r["event"] == "scenario_ready"), None)
+        indexed = next((r for r in records if r["event"] == "scenario_ready"
+                        and r.get("detail", {}).get("indexed_window")
+                        and r["detail"]["indexed_window"][3]), None)
         startup = {"spawn_to_probe_ms": anchor - capture["spawn_unix_ms"],
                    "spawn_to_first_draw_ms": anchor + first_draw["at_ms"] - capture["spawn_unix_ms"] if first_draw else None,
-                   "spawn_to_ready_ms": ready["unix_ms"] - capture["spawn_unix_ms"] if ready else None}
+                   "spawn_to_ready_ms": ready["unix_ms"] - capture["spawn_unix_ms"] if ready else None,
+                   "spawn_to_indexed_ready_ms": indexed["unix_ms"] - capture["spawn_unix_ms"] if indexed else None}
     retention = None
     if capture["scenario"] == "lifecycle" and all(name in phases for name in
                                                   ("warmup_cycles", "cycles", "after_cycles")):
@@ -693,10 +875,42 @@ def summarize(directory):
                            "settled": after.get(key),
                            "growth_per_cycle": (after.get(key) - warm.get(key)) / count
                            if after.get(key) is not None and warm.get(key) is not None else None}
-                     for key in ("pss_kib", "rss_kib", "threads", "fds")}
+                     for key in ("pss_kib", "rss_kib", "private_kib", "threads", "fds", "handles")}
+    operations = [r for r in records if r["event"] == "scenario_operation"]
+    operation_results, unfinished = [], []
+    for accepted in (r for r in operations if r["detail"]["state"] == "accepted"):
+        finished = next((r for r in operations if r["detail"]["op"] == accepted["detail"]["op"]
+                         and r["detail"]["state"] == "finished"), None)
+        if finished is None:
+            problems.append(f"operation {accepted['detail']['name']} has no terminal witness")
+            cancelled = next((r for r in operations if r["detail"]["op"] == accepted["detail"]["op"]
+                              and r["detail"]["state"] == "cancel_requested"), None)
+            observed = max((r.get("at_ms", 0) for r in records), default=0)
+            unfinished.append({"name": accepted["detail"]["name"], "op": accepted["detail"]["op"],
+                               "observed_until_ms": observed,
+                               "cancel_pending_ms": observed - cancelled["at_ms"] if cancelled else None})
+            continue
+        overlap = [r for r in stages if r["stage"] == "input"
+                   and accepted["at_ms"] <= r["at_ms"] < finished["at_ms"]]
+        operation_results.append({**finished["detail"], "overlapping_inputs": len(overlap),
+                                  "accepted_at_ms": accepted["at_ms"], "finished_at_ms": finished["at_ms"]})
     summary = {"run_id": capture["run_id"], "scenario": capture["scenario"], "startup": startup,
+               "debug_assertions": start.get("debug_assertions"),
+               "probe_interval_ms": capture.get("probe_interval_ms"),
+               "graphics": next((sorted(r["environment"].get("graphics", {}).values(), key=lambda v: json.dumps(v, sort_keys=True))
+                                 for r in reversed(records) if r["event"] == "environment"), None),
+               "allocation_tracking": any(r.get("detail", {}).get("allocation_tracking") for r in records if r["event"] == "scenario_diagnostics"),
+               "allocation_phases": [r["detail"] for r in records if r["event"] == "scenario_allocations"],
+               "work_units": next((r["detail"]["counts"] for r in records if r["event"] == "scenario_work_total"),
+                                  next((r["work_units"] for r in reversed(records) if r["event"] == "interval" and "work_units" in r), {})),
+               "work_units_complete": any(r["event"] == "scenario_work_total" for r in records),
                "retention": retention,
+               "long_frames": [{"window": r.get("window"), "at_ms": r["at_ms"],
+                                "dirty_to_draw_ms": r["at_ms"] - r["dirty_ms"]} for r in stalled],
+               "operations": operations, "operation_results": operation_results, "unfinished_operations": unfinished,
                "binary_sha256": capture["binary_sha256"], "repository_head": capture["repository_head"],
+               "gpu_timings_requested": capture.get("gpu_timings_requested", False),
+               "gpu_capture": capture.get("gpu_capture", {"requested": False}),
                "valid": not problems, "problems": problems, "load_before": capture.get("load_before"),
                "load_after": capture.get("load_after"), "phases": phases,
                "note": "Submission is CPU/platform work, not display completion; see README."}
@@ -711,6 +925,11 @@ def analyse_phase(begin, end, draws, submits, by_op, applied, records, threads, 
     phase_draws = [r for t, r in draws if in_phase(t)]
     phase_submits = [r for t, r in submits if in_phase(t)]
     inputs = []
+    scoped_applied = [r for r in records if r["event"] == "state_applied"]
+    draw_windows = {r.get("window") for _, r in draws}
+    known_windows = draw_windows | {w["window"] for r in records if r["event"] == "scenario_windows"
+                                    for w in r["detail"]["windows"]}
+    input_details = {r["detail"]["op"]: r["detail"] for r in records if r["event"] == "scenario_input"}
     for op, items in by_op.items():
         stage = {}
         for item in items:
@@ -721,7 +940,7 @@ def analyse_phase(begin, end, draws, submits, by_op, applied, records, threads, 
         scheduled = entry["a"] / 1e6
         witness = stage.get("witness", [None])[0]
         row = {"op": op, "dispatch_delay_ms": entry["at_ms"] - scheduled,
-               "handler_ms": stage["input_handled"][0]["a"] / 1e6 if "input_handled" in stage else None,
+               "handler_ms": stage["input_handled"][0]["a"] / 1e6 if "input_handled" in stage and entry.get("label") != "file_write" else None,
                "expects_witness": entry["b"] == 1,
                "complete": bool(witness and witness["a"] == 1), "superseded": bool(witness and witness["a"] == 0),
                "queue_ms": [r["a"] / 1e6 for r in stage.get("received", [])],
@@ -731,15 +950,31 @@ def analyse_phase(begin, end, draws, submits, by_op, applied, records, threads, 
         if row["complete"]:
             at = witness["at_ms"]
             row["witness_ms"] = at - scheduled
-            drawn = first_at_or_after(draws, at)
+            detail = input_details.get(op, {})
+            # A witness concerns one window. A draw of another window is not
+            # evidence that this result was rendered. Legacy multiwindow runs
+            # without this association cannot establish input-to-draw latency.
+            expected_window = detail.get("window")
+            own_draws = [(t, r) for t, r in draws if r.get("window") == expected_window] if expected_window else (draws if len(known_windows) == 1 else [])
+            drawn = first_at_or_after(own_draws, at)
+            if detail.get("intentional_dwell") or detail.get("no_op"):
+                drawn = None
             if drawn:
                 row["drawn_ms"] = drawn[1]["at_ms"] - scheduled
-                submitted = first_at_or_after(submits, drawn[1]["at_ms"])
+                submitted = first_at_or_after([(t, r) for t, r in submits if r.get("window") == drawn[1].get("window")], drawn[1]["at_ms"])
                 if submitted:
                     row["submitted_ms"] = submitted[1]["at_ms"] - scheduled
             publications = [r["b"] for r in stage.get("reduced", [])]
             if publications:
-                shown = first_at_or_after([(r["a"], r) for _, r in applied], max(publications))
+                # Every window has its own store/publication sequence. Legacy
+                # unscoped records cannot establish this latency across windows.
+                candidates = [(r["detail"]["publication"],
+                               {"at_ms": r["at_ms"], "b": r["detail"]["duration_ns"]})
+                              for r in scoped_applied if r["detail"]["window"] == expected_window]
+                if not scoped_applied and len(known_windows) == 1:
+                    candidates = [(r["a"], r) for _, r in applied]
+                candidates.sort(key=lambda item: item[0])
+                shown = first_at_or_after(candidates, max(publications))
                 if shown:
                     row["published_to_applied_ms"] = shown[1]["at_ms"] - max(
                         r["at_ms"] for r in stage["reduced"])
@@ -753,11 +988,13 @@ def analyse_phase(begin, end, draws, submits, by_op, applied, records, threads, 
     main_cpu = [r["main_cpu_percent"] for r in intervals if r.get("main_cpu_percent") is not None]
     phase_process = [s for s in process
                      if start["unix_ms"] + lo <= s["unix_ms"] <= start["unix_ms"] + hi]
+    sample_seconds = (phase_process[-1]["unix_ms"] - phase_process[0]["unix_ms"]) / 1000 if len(phase_process) >= 2 else None
 
     def delta(key):
         if len(phase_process) < 2:
             return None
-        return phase_process[-1][key] - phase_process[0][key]
+        before, after = phase_process[0].get(key), phase_process[-1].get(key)
+        return after - before if before is not None and after is not None else None
 
     # /proc truncates names to 15 bytes; traced threads report full names.
     full_names = {r["tid"]: r["name"] for r in records if r["event"] == "thread" and r.get("tid")}
@@ -776,8 +1013,22 @@ def analyse_phase(begin, end, draws, submits, by_op, applied, records, threads, 
             thread_cpu[key] = thread_cpu.get(key, 0) + (row[2] - before[2]) / 1e6
             thread_wait[key] = thread_wait.get(key, 0) + (row[3] - before[3]) / 1e6
             thread_wakeups[key] = thread_wakeups.get(key, 0) + row[4] - before[4]
+    window_snapshot = next((r["detail"]["windows"] for r in reversed(records)
+                            if r["event"] == "scenario_windows" and r["at_ms"] <= lo), [])
+    live_windows = {r["window"] for r in window_snapshot} or {r.get("window") for r in phase_draws}
+    windows = {}
+    for window_id in sorted(w for w in live_windows if w is not None):
+        window_draws = [r for r in phase_draws if r.get("window") == window_id]
+        info = next((r for r in window_snapshot if r["window"] == window_id), {})
+        windows[window_id] = {
+            "name": info.get("name"), "active_at_start": info.get("active"),
+            "repository": info.get("repository"), "frames": len(window_draws),
+            "draw_ms": distribution(r["duration_ms"] for r in window_draws),
+            "invalidations": sum(r.get("invalidations", 0) for r in window_draws),
+        }
     return {
         "seconds": seconds,
+        "windows": windows,
         "frames": len(phase_draws), "frames_per_second": len(phase_draws) / seconds if seconds else None,
         "invalidations": sum(r.get("invalidations", 0) for r in phase_draws),
         "draw_ms": distribution(r["duration_ms"] for r in phase_draws),
@@ -786,19 +1037,28 @@ def analyse_phase(begin, end, draws, submits, by_op, applied, records, threads, 
         "slow_frames_16ms": sum(r["duration_ms"] > 1000 / 60 for r in phase_draws),
         "wake_ms": distribution(v for r in intervals for v in r["wake_ms"]),
         "main_cpu_percent": statistics.fmean(main_cpu) if main_cpu else None,
-        "process_cpu_cores": delta("cpu_s") / seconds if delta("cpu_s") is not None and seconds else None,
+        "process_sample_seconds": sample_seconds,
+        "process_cpu_cores": delta("cpu_s") / sample_seconds if delta("cpu_s") is not None and sample_seconds else None,
         "children_cpu_s": delta("children_cpu_s"),
-        "wakeups_per_second": delta("voluntary_switches") / seconds if delta("voluntary_switches") is not None and seconds else None,
+        "wakeups_per_second": delta("voluntary_switches") / sample_seconds if delta("voluntary_switches") is not None and sample_seconds else None,
         "rss_kib": distribution(s["rss_kib"] for s in phase_process),
         "pss_kib": distribution(s["pss_kib"] for s in phase_process),
+        "private_kib": distribution(s.get("private_kib") for s in phase_process),
         "pss_breakdown_kib": next((s["pss_breakdown_kib"] for s in reversed(phase_process)
                                    if s.get("pss_breakdown_kib")), None),
         # Where the phase ended, for retention across repeated cycles.
-        "end_sample": {key: phase_process[-1].get(key) for key in ("rss_kib", "pss_kib", "threads", "fds")}
+        "end_sample": {key: phase_process[-1].get(key) for key in ("rss_kib", "pss_kib", "private_kib", "threads", "fds", "handles")}
         if phase_process else None,
-        "threads": max((s["threads"] for s in phase_process), default=None),
-        "fds": max((s["fds"] for s in phase_process), default=None),
+        "threads": max((s["threads"] for s in phase_process if s.get("threads") is not None), default=None),
+        "fds": max((s["fds"] for s in phase_process if s.get("fds") is not None), default=None),
+        "handles": max((s["handles"] for s in phase_process if s.get("handles") is not None), default=None),
         "background_work": dict(background.most_common()),
+        "work_units": next((r["detail"]["counts"] for r in records
+                            if r["event"] == "scenario_work"
+                            and r["detail"]["phase"] == begin.get("detail", {}).get("name")), {}),
+        "work_counts": dict(collections.Counter(f"{r['stage']}:{r['label']}" for r in records
+                            if r["event"] == "stage" and in_phase(r["at_ms"])
+                            and r["stage"] in ("received", "task_started", "command_stage")).most_common()),
         "thread_cpu_ms": dict(sorted(thread_cpu.items(), key=lambda item: -item[1])),
         "thread_runqueue_wait_ms": dict(sorted(thread_wait.items(), key=lambda item: -item[1])),
         "thread_timeslices_per_second": {key: value / seconds for key, value in
@@ -938,6 +1198,8 @@ def measure(args):
     session = {"measurement_id": str(uuid.uuid4()), "session": args.session, "pairs": args.pairs,
                "candidate_runtime": candidate,
                "display": args.display,
+               "gpu_sampling": args.gpu,
+               "gpu_timings": args.gpu_timings,
                "scenarios": args.scenarios, "repository": str(repository), "repository_head": head,
                "binaries": {k: str(v) for k, v in binaries.items()}, "hashes": hashes,
                "environment": perf_metadata.collect(binaries=list(binaries.items()),
@@ -956,7 +1218,7 @@ def measure(args):
                     summary = run_once(binaries[variant], repository, name, output, args.timeout,
                                        metadata=False, display=args.display, save_file=args.save_file,
                                        secondary=args.secondary_repository, wrap=runtime["wrap"],
-                                       extra_env=runtime["env"])
+                                       extra_env=runtime["env"], gpu=args.gpu, gpu_timings=args.gpu_timings)
                     if summary["binary_sha256"] != hashes[variant]:
                         raise ValueError(f"{variant} binary changed during the session")
                     if not summary["valid"]:
@@ -978,6 +1240,10 @@ def report(directories):
         raise ValueError("a copied session is not an independent measurement")
     reference = sessions[0]
     for other in sessions[1:]:
+        if other.get("gpu_sampling", False) != reference.get("gpu_sampling", False):
+            raise ValueError("sessions disagree on GPU sampling")
+        if other.get("gpu_timings", False) != reference.get("gpu_timings", False):
+            raise ValueError("sessions disagree on GPU timestamps")
         for key in ("hashes", "scenarios", "repository_head", "display", "candidate_runtime"):
             if other.get(key) != reference.get(key):
                 raise ValueError(f"sessions disagree on {key}")
@@ -1022,6 +1288,10 @@ def main():
     single.add_argument("--timeout", type=int, default=600)
     single.add_argument("--display", choices=("headless", "desktop"), default="headless")
     single.add_argument("--ping-ms", type=int)
+    single.add_argument("--gpu-timings", action="store_true", help="asynchronous native GPU frame and pass timestamps")
+    single.add_argument("--gpu", action="store_true", help="sample NVIDIA process/device GPU usage on Linux")
+    single.add_argument("--window-size", type=positive_int, nargs=2, default=WINDOW_SIZE,
+                        metavar=("WIDTH", "HEIGHT"), help="window dimensions in logical pixels")
     single.add_argument("--save-file", default=SAVE_FILE, help="tracked file status-save and status-touch rewrite")
     single.add_argument("--wrap", help="diagnostic wrapper command, e.g. 'perf record -o {output}/cpu.data --'")
     single.add_argument("--secondary-repository", type=Path, help="repository lifecycle opens and closes")
@@ -1040,6 +1310,8 @@ def main():
     paired.add_argument("--reverse", action="store_true")
     paired.add_argument("--timeout", type=int, default=600)
     paired.add_argument("--display", choices=("headless", "desktop"), default="headless")
+    paired.add_argument("--gpu-timings", action="store_true", help="collect native GPU timestamps on both sides")
+    paired.add_argument("--gpu", action="store_true", help="sample GPU usage on both sides of each pair")
     paired.add_argument("--save-file", default=SAVE_FILE, help="tracked file status-save and status-touch rewrite")
     paired.add_argument("--secondary-repository", type=Path, help="repository lifecycle opens and closes")
     paired.add_argument("--max-load", type=float,
@@ -1061,7 +1333,8 @@ def main():
                           display=args.display, ping_ms=args.ping_ms, save_file=args.save_file,
                           wrap=args.wrap, cold_gpu_cache=args.cold_gpu_cache,
                           secondary=args.secondary_repository, cycles=args.cycles,
-                          extra_env=dict(item.split("=", 1) for item in args.env))
+                          extra_env=dict(item.split("=", 1) for item in args.env), gpu=args.gpu,
+                          window_size=args.window_size, gpu_timings=args.gpu_timings)
         print(json.dumps({"valid": result["valid"], "problems": result["problems"]}, indent=2))
         if not result["valid"]:
             sys.exit(1)

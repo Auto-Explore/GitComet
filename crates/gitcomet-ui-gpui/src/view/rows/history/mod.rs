@@ -512,7 +512,7 @@ fn history_table_row(
     // Branch this commit belongs to, shown as a faded badge while the row is
     // hovered. Inherited down the lane, so unlabelled commits have one too.
     lane_branch_name: Option<SharedString>,
-    author: HistoryTextVm,
+    author: HistoryAuthorVm,
     summary: HistoryTextVm,
     when: HistoryTextVm,
     short_sha: HistoryTextVm,
@@ -591,7 +591,7 @@ fn history_table_row(
         .relative()
         .h(row_height)
         .w_full()
-        .map(|row| row_paint.apply(row))
+        .map(|row| row_paint.apply_with_canvas(row))
         // A find miss fades on top of whatever the annotations asked for.
         .opacity(if find_dimmed {
             annotation.opacity * HISTORY_FIND_DIMMED_OPACITY
@@ -994,25 +994,7 @@ fn working_tree_summary_history_row(
         |_, _, _| (),
         move |bounds, _, window, cx| {
             let node_background = paint.background(theme.colors.surface.canvas, window);
-            use gpui::{PathBuilder, point};
             let scaled_px = ui_scale::scaler(ui_scale::UiScale::from_window(window));
-            let margin_x = scaled_px(HISTORY_GRAPH_MARGIN_X_PX);
-            let col_gap = scaled_px(HISTORY_GRAPH_COL_GAP_PX);
-            let node_x = margin_x + col_gap * 0.0;
-            let center = point(
-                bounds.left() + node_x,
-                bounds.top() + bounds.size.height / 2.0,
-            );
-
-            // Connect the working tree node into the history graph below.
-            let stroke_width = scaled_px(1.6);
-            let mut path = PathBuilder::stroke(stroke_width);
-            path.move_to(point(center.x, center.y));
-            path.line_to(point(center.x, bounds.bottom()));
-            if let Ok(p) = path.build() {
-                window.paint_path(p, node_color);
-            }
-
             if show_graph_color_marker {
                 super::history_graph_paint::paint_graph_fade(
                     node_color,
@@ -1021,6 +1003,20 @@ fn working_tree_summary_history_row(
                     window,
                 );
             }
+
+            // Column 0 on the same grid as the commit rows below.
+            let grid = super::history_graph_paint::GraphGrid::new(window);
+            let (_, center_y, bottom) = grid.row_ys(bounds);
+            let center = gpui::point(grid.snap(bounds.left()) + grid.margin_x, center_y);
+
+            // Connect the working tree node into the history graph below.
+            super::history_graph_paint::paint_straight_connector(
+                center,
+                gpui::point(center.x, bottom),
+                grid.stroke_width,
+                node_color,
+                window,
+            );
 
             super::history_graph_paint::paint_ring_icon_node(
                 center.x,

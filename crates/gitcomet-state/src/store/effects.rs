@@ -1,4 +1,5 @@
 mod clone;
+mod commit_details;
 mod diff_session;
 mod history_authors;
 mod history_find;
@@ -41,6 +42,8 @@ use load_tokens::repo_load_context;
 pub(super) struct EffectExecutors<'a> {
     pub(super) executor: &'a TaskExecutor,
     pub(super) repo_load_executor: &'a TaskExecutor,
+    /// Status scans of other checkouts must not occupy foreground load workers.
+    pub(super) worktree_scan_executor: &'a std::sync::LazyLock<TaskExecutor>,
     pub(super) session_persist_executor: &'a TaskExecutor,
     pub(super) metadata_executor: &'a TaskExecutor,
     pub(super) signature_executor: &'a TaskExecutor,
@@ -166,6 +169,7 @@ pub(super) fn schedule_effect(
     let EffectExecutors {
         executor,
         repo_load_executor,
+        worktree_scan_executor,
         session_persist_executor,
         metadata_executor,
         signature_executor,
@@ -722,18 +726,20 @@ pub(super) fn schedule_effect(
         Effect::LoadWorktreeDirty {
             repo_id,
             workdir,
+            scope,
             files_for,
         } => {
             if let Some((msg_tx, cancellation)) =
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
                 repo_load::schedule_load_worktree_dirty(
-                    repo_load_executor,
+                    worktree_scan_executor,
                     backend.clone(),
                     repos,
                     msg_tx,
                     repo_id,
                     workdir,
+                    scope,
                     files_for,
                     cancellation,
                 );
@@ -859,11 +865,20 @@ pub(super) fn schedule_effect(
             );
         }
         Effect::LoadCommitDetails { repo_id, commit_id } => {
-            if let Some((msg_tx, _)) =
-                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
-            {
-                repo_load::schedule_load_commit_details(
-                    executor, repos, msg_tx, repo_id, commit_id,
+            if let Some((msg_tx, slot)) = load_tokens::commit_details_load_context(
+                thread_state,
+                repo_task_tokens,
+                msg_tx,
+                repo_id,
+            ) {
+                commit_details::schedule(
+                    executor,
+                    &slot,
+                    repos,
+                    Arc::clone(thread_state),
+                    msg_tx,
+                    repo_id,
+                    commit_id,
                 );
             }
         }

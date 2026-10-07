@@ -36,7 +36,15 @@ type LineStatsKey = (DiffArea, Option<gix::ObjectId>, Option<gix::ObjectId>);
 #[derive(Default)]
 pub(super) struct LineStatsMemo {
     counts: FxHashMap<LineStatsKey, LineStats>,
-    annex_index_blobs: FxHashMap<gix::ObjectId, bool>,
+    pointer_index_blobs: FxHashMap<gix::ObjectId, IndexPointer>,
+}
+
+/// What an index blob stands in for, decided from its first bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IndexPointer {
+    None,
+    Annex,
+    Lfs,
 }
 
 /// One scan's view of the memo: hits carry over into `next`, which replaces
@@ -69,20 +77,20 @@ impl MemoScan {
         entry
     }
 
-    fn index_is_annex_pointer(
+    fn index_pointer(
         &mut self,
         id: gix::ObjectId,
-        read: impl FnOnce() -> Option<bool>,
-    ) -> Option<bool> {
-        let is_pointer = self
+        read: impl FnOnce() -> Option<IndexPointer>,
+    ) -> Option<IndexPointer> {
+        let pointer = self
             .previous
-            .annex_index_blobs
+            .pointer_index_blobs
             .get(&id)
-            .or_else(|| self.next.annex_index_blobs.get(&id))
+            .or_else(|| self.next.pointer_index_blobs.get(&id))
             .copied()
             .or_else(read)?;
-        self.next.annex_index_blobs.insert(id, is_pointer);
-        Some(is_pointer)
+        self.next.pointer_index_blobs.insert(id, pointer);
+        Some(pointer)
     }
 }
 
@@ -154,7 +162,9 @@ impl super::GixRepo {
             next
         } else {
             previous.counts.extend(next.counts);
-            previous.annex_index_blobs.extend(next.annex_index_blobs);
+            previous
+                .pointer_index_blobs
+                .extend(next.pointer_index_blobs);
             previous
         };
         result
@@ -354,6 +364,7 @@ fn unstaged_line_stats(
     let mut worktree = Vec::new();
     // Retain attribute caches and reusable filter processes across all files.
     let mut pipeline = repo.filter_pipeline(None).ok();
+    let mut lfs_clean = LfsCleanFilter::Unprobed;
 
     for entry in entries.iter() {
         // Untracked is in neither index lane; conflicted has no single before.
@@ -374,6 +385,7 @@ fn unstaged_line_stats(
             &mut worktree,
             pipeline.as_mut(),
             memo,
+            &mut lfs_clean,
         );
         out.insert(entry.path.clone(), stats);
     }
@@ -381,9 +393,9 @@ fn unstaged_line_stats(
     Ok(out)
 }
 
-fn unstaged_entry_line_stats(
+fn unstaged_entry_line_stats<'repo>(
     gix_repo: &super::GixRepo,
-    repo: &gix::Repository,
+    repo: &'repo gix::Repository,
     index: &gix::index::File,
     entry: &FileStatus,
     index_blob: &mut Vec<u8>,
@@ -393,30 +405,50 @@ fn unstaged_entry_line_stats(
         gix::worktree::IndexPersistedOrInMemory,
     )>,
     memo: &mut MemoScan,
+    lfs_clean: &mut LfsCleanFilter<'repo>,
 ) -> LineStats {
     let rel = gix::path::into_bstr(entry.path.as_path());
     let index_id = index.entry_by_path(rel.as_ref()).map(|found| found.id);
 
     let mut index_blob_loaded = false;
     if let Some(id) = index_id {
-        match memo.index_is_annex_pointer(id, || {
+        let pointer = memo.index_pointer(id, || {
             let header = repo.find_header(id).ok()?;
             if header.kind() != gix::object::Kind::Blob {
                 return None;
             }
             if header.size() > gitcomet_core::annex::POINTER_MAX_BYTES as u64 {
-                return Some(false);
+                return Some(IndexPointer::None);
             }
             // A larger blob cannot be a pointer; leave its decompression to
             // a diff miss, after the worktree's size and binary checks.
             index_blob.clear();
             index_blob_loaded = repo.objects.find_blob(&id, index_blob).is_ok();
-            index_blob_loaded.then(|| gitcomet_core::annex::key_from_pointer(index_blob).is_some())
-        }) {
+            index_blob_loaded.then(|| {
+                if gitcomet_core::annex::key_from_pointer(index_blob).is_some() {
+                    IndexPointer::Annex
+                } else if gitcomet_core::lfs::parse_pointer(index_blob).is_some() {
+                    IndexPointer::Lfs
+                } else {
+                    IndexPointer::None
+                }
+            })
+        });
+        match pointer {
             // Unlocked content cannot be compared without annex's clean
             // filter. Its size and hash cannot make these counts known.
-            Some(true) | None => return LineStats::UNKNOWN,
-            Some(false) => {}
+            Some(IndexPointer::Annex) | None => return LineStats::UNKNOWN,
+            // Reading a modified payload would start `git lfs filter-process`
+            // and hash (and store) it on every refresh, only to count the two
+            // pointer lines that changed. A deletion, or a pointer the filter
+            // does not clean, reads no filter and keeps its counts.
+            Some(IndexPointer::Lfs)
+                if entry.kind != FileStatusKind::Deleted
+                    && lfs_clean.runs_for(repo, index, rel.as_ref()) =>
+            {
+                return LineStats::UNKNOWN;
+            }
+            Some(_) => {}
         }
     }
 
@@ -447,6 +479,62 @@ fn unstaged_entry_line_stats(
 
 /// Reads a worktree file as git would store it. `false` means over the size
 /// cap or unreadable; binary is left to `line_stats_from_bytes`.
+/// Whether reading a path runs the LFS clean filter: `filter=lfs` selects it
+/// and a driver is configured. Probed at the first LFS pointer of a scan.
+enum LfsCleanFilter<'repo> {
+    Unprobed,
+    Off,
+    On(Box<LfsAttributes<'repo>>),
+}
+
+struct LfsAttributes<'repo> {
+    stack: gix::AttributeStack<'repo>,
+    outcome: gix::attrs::search::Outcome,
+}
+
+impl<'repo> LfsCleanFilter<'repo> {
+    fn runs_for(
+        &mut self,
+        repo: &'repo gix::Repository,
+        index: &gix::index::File,
+        path: &gix::bstr::BStr,
+    ) -> bool {
+        if let Self::Unprobed = self {
+            let config = repo.config_snapshot();
+            let configured = ["filter.lfs.process", "filter.lfs.clean"]
+                .into_iter()
+                .any(|key| config.string(key).is_some());
+            *self = configured
+                .then(|| {
+                    repo.attributes_only(
+                        index,
+                        gix::worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
+                    )
+                    .ok()
+                })
+                .flatten()
+                .map_or(Self::Off, |stack| {
+                    Self::On(Box::new(LfsAttributes {
+                        outcome: stack.selected_attribute_matches(["filter"]),
+                        stack,
+                    }))
+                });
+        }
+        let Self::On(attributes) = self else {
+            return false;
+        };
+        let LfsAttributes { stack, outcome } = attributes.as_mut();
+        let Ok(platform) = stack.at_entry(path, None) else {
+            // Unknown attributes: assume the filter runs, as before.
+            return true;
+        };
+        platform.matching_attributes(outcome);
+        outcome.iter_selected().any(|matched| {
+            matches!(matched.assignment.state, gix::attrs::StateRef::Value(value) if value.as_bstr() == "lfs")
+        })
+    }
+}
+
 fn read_worktree_git_bytes(
     gix_repo: &super::GixRepo,
     pipeline: Option<&mut (
@@ -539,6 +627,148 @@ mod tests {
             LINE_STATS_WORKTREE_READS.with(|reads| reads.get()),
             0,
             "unknown annex counts must not read/hash the unlocked payload"
+        );
+    }
+
+    #[test]
+    fn unstaged_lfs_payloads_never_start_the_clean_filter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        let pointer = |oid: char, size: usize| {
+            format!(
+                "version https://git-lfs.github.com/spec/v1\noid sha256:{}\nsize {size}\n",
+                oid.to_string().repeat(64)
+            )
+        };
+        for path in ["staged.bin", "unstaged.bin"] {
+            write_file(dir, path, &pointer('a', 5));
+        }
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "pointers"]);
+        // A staged change is pointer against pointer, both already stored.
+        write_file(dir, "staged.bin", &pointer('b', 7));
+        git_success(dir, &["add", "staged.bin"]);
+        let ran = dir.join("clean-filter-ran");
+        write_file(dir, ".gitattributes", "*.bin filter=lfs\n");
+        git_success(
+            dir,
+            &[
+                "config",
+                "filter.lfs.clean",
+                &format!("touch '{}'; cat", ran.display()),
+            ],
+        );
+        std::fs::write(dir.join("unstaged.bin"), b"smudged payload\n").unwrap();
+        let repo = open_repo(dir);
+        LINE_STATS_WORKTREE_READS.with(|reads| reads.set(0));
+        for _ in 0..2 {
+            let stats = repo
+                .uncommitted_line_stats_impl(&CancellationToken::new())
+                .unwrap();
+            assert_eq!(
+                stats.unstaged[std::path::Path::new("unstaged.bin")],
+                LineStats::UNKNOWN
+            );
+            assert_eq!(
+                stats.staged[std::path::Path::new("staged.bin")],
+                LineStats {
+                    additions: Some(2),
+                    deletions: Some(2),
+                }
+            );
+        }
+        assert_eq!(LINE_STATS_WORKTREE_READS.with(|reads| reads.get()), 0);
+        assert!(!ran.exists(), "the LFS clean filter must not run");
+    }
+
+    #[test]
+    fn lfs_pointer_counts_stay_known_where_no_clean_filter_runs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        let pointer = format!(
+            "version https://git-lfs.github.com/spec/v1\noid sha256:{}\nsize 5\n",
+            "a".repeat(64)
+        );
+        for path in ["deleted.bin", "plain.txt", "tracked.dat"] {
+            write_file(dir, path, &pointer);
+        }
+        write_file(
+            dir,
+            ".gitattributes",
+            "*.bin filter=lfs\n*.dat filter=lfs\n",
+        );
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "pointers"]);
+        std::fs::remove_file(dir.join("deleted.bin")).unwrap();
+        write_file(dir, "plain.txt", "edited\n");
+        write_file(dir, "tracked.dat", "smudged payload\n");
+        let known = |additions, deletions| LineStats {
+            additions: Some(additions),
+            deletions: Some(deletions),
+        };
+        let unstaged = |path: &str| {
+            open_repo(dir)
+                .uncommitted_line_stats_impl(&CancellationToken::new())
+                .unwrap()
+                .unstaged[std::path::Path::new(path)]
+        };
+        // No LFS driver is configured (git-lfs not installed).
+        assert_eq!(unstaged("deleted.bin"), known(0, 3));
+        assert_eq!(unstaged("plain.txt"), known(1, 3));
+
+        let ran = dir.join("clean-filter-ran");
+        git_success(
+            dir,
+            &[
+                "config",
+                "filter.lfs.clean",
+                &format!("touch '{}'; cat", ran.display()),
+            ],
+        );
+        // A deletion and a path outside `filter=lfs` still read no filter.
+        assert_eq!(unstaged("deleted.bin"), known(0, 3));
+        assert_eq!(unstaged("plain.txt"), known(1, 3));
+        assert_eq!(unstaged("tracked.dat"), LineStats::UNKNOWN);
+        assert!(!ran.exists(), "the LFS clean filter must not run");
+    }
+
+    /// Refresh cost with real `git-lfs`: 20 modified 1 MiB payloads.
+    #[test]
+    #[ignore = "timing probe; needs git-lfs"]
+    fn perf_lfs_unstaged_line_stats_refresh() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        git_success(dir, &["lfs", "install", "--local"]);
+        git_success(dir, &["lfs", "track", "*.bin"]);
+        let payload = |seed: u8| -> Vec<u8> {
+            (0..1024 * 1024u32)
+                .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8 ^ seed)
+                .collect()
+        };
+        for ix in 0..20u8 {
+            std::fs::write(dir.join(format!("asset{ix:02}.bin")), payload(ix)).unwrap();
+        }
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-q", "-m", "payloads"]);
+        for ix in 0..20u8 {
+            std::fs::write(dir.join(format!("asset{ix:02}.bin")), payload(ix ^ 0x5a)).unwrap();
+        }
+        let repo = open_repo(dir);
+        let token = CancellationToken::new();
+        let mut samples = Vec::new();
+        for _ in 0..6 {
+            let started = std::time::Instant::now();
+            let stats = repo.uncommitted_line_stats_impl(&token).unwrap();
+            samples.push(started.elapsed().as_secs_f64() * 1000.0);
+            assert_eq!(stats.unstaged.len(), 20);
+        }
+        samples.sort_by(f64::total_cmp);
+        eprintln!(
+            "lfs unstaged line stats refresh: min {:.1} ms, median {:.1} ms, max {:.1} ms",
+            samples[0], samples[3], samples[5]
         );
     }
 

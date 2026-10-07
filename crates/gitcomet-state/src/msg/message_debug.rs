@@ -306,8 +306,13 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
-            InternalMsg::WorktreeDirtyLoaded { repo_id, result } => f
+            InternalMsg::WorktreeDirtyLoaded {
+                repo_id,
+                scope,
+                result,
+            } => f
                 .debug_struct("WorktreeDirtyLoaded")
+                .field("scope", scope)
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),

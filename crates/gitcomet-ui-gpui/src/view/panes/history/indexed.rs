@@ -208,6 +208,21 @@ fn window_commit_range(
 }
 
 impl HistoryView {
+    /// Observe the published index and the visible text window without starting
+    /// loads. A scrollbar moving over placeholder rows is not a completed jump.
+    pub(in crate::view) fn scenario_indexed_window(&self) -> Option<(usize, usize, usize, bool)> {
+        let shown = self.indexed.presentation.as_ref()?;
+        let scroll = self.scroll_interaction.borrow();
+        let logical = scroll.logical.as_ref()?;
+        let (first, last) = window_commit_range(shown, &self.indexed.plan, logical);
+        let loaded = self.indexed.window.as_ref().is_some_and(|window| {
+            Arc::ptr_eq(&window._presentation, shown)
+                && window.start <= first
+                && (first..last).all(|row| window.loaded.get(row - window.start) == Some(&true))
+        });
+        Some((shown.graph.projection.len(), first, last, loaded))
+    }
+
     pub(super) fn indexed_is_building(&self) -> bool {
         self.indexed.building.is_some() || self.indexed.pending.is_some()
     }
@@ -416,9 +431,10 @@ impl HistoryView {
         {
             return;
         }
-        let height = f64::from(f32::from(crate::view::rows::history_row_height(
-            self.ui_scale(),
-        )));
+        let height = self
+            .scroll_interaction
+            .borrow()
+            .row_height(crate::view::rows::history_row_height(self.ui_scale()));
         let (old_top, within, viewport) =
             if let Some(logical) = &self.scroll_interaction.borrow().logical {
                 (logical.top, logical.within, logical.viewport)
@@ -1021,7 +1037,7 @@ impl HistoryView {
                                 &commit.summary
                             };
                             HistoryBaseRowVm {
-                                author: HistoryTextVm::new(commit.author.clone().into()),
+                                author: HistoryAuthorVm::new(commit.author.clone().into()),
                                 summary: HistoryTextVm::new(
                                     if summary == commit.summary.as_ref() {
                                         commit.summary.clone().into()
@@ -1150,9 +1166,11 @@ impl HistoryView {
             move |bounds, window, _cx| {
                 let mut state = interaction.borrow_mut();
                 state.viewport_bounds = shown_repo.map(|repo_id| (repo_id, bounds));
+                // Rows step by the height layout gives them, or they drift 1px apart.
+                let row = f64::from(f32::from(window.pixel_snap(row_height)));
+                state.snapped_row_height = Some((row_height, row));
                 if let Some(logical) = &mut state.logical {
                     let height = f64::from(f32::from(bounds.size.height));
-                    let row = f64::from(f32::from(row_height));
                     if logical.viewport != height || logical.height != row {
                         let position = logical.top as f64 * row + logical.within.min(row);
                         logical.viewport = height;

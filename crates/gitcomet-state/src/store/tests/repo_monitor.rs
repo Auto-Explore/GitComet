@@ -503,6 +503,7 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
         thread_msg_tx: &thread_msg_tx,
         executor: &executor,
         repo_load_executor: &repo_load_executor,
+        worktree_scan_executor: &std::sync::LazyLock::new(|| TaskExecutor::new(1)),
         metadata_executor: &metadata_executor,
         signature_executor: &metadata_executor,
         history_find_executor: &std::sync::LazyLock::new(|| {
@@ -695,6 +696,7 @@ fn a_watch_lease_keeps_a_background_repositorys_monitor_running() {
             thread_msg_tx: &thread_msg_tx,
             executor: &executor,
             repo_load_executor: &repo_load_executor,
+            worktree_scan_executor: &std::sync::LazyLock::new(|| TaskExecutor::new(1)),
             metadata_executor: &metadata_executor,
             signature_executor: &metadata_executor,
             history_find_executor: &std::sync::LazyLock::new(|| {

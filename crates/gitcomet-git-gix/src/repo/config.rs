@@ -140,10 +140,16 @@ impl GixRepo {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         if !cached.is_current() {
-            // Resolve includes with a fresh open, then install that config on
-            // a handle sharing our original index and object store. Retaining
-            // the fresh repository would keep a second parsed index alive.
-            let fresh = self.reopen_repo()?;
+            // Opening may select a different compatible object store. Do not
+            // hold the config lock while installing it (maintenance also updates
+            // this snapshot). Keep this worktree's existing parsed index.
+            drop(cached);
+            let (fresh, _) = self.fresh_history_store()?;
+            let fresh = fresh.to_thread_local();
+            cached = self
+                .config_repo
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
             let mut repo = self.repo();
             let mut config = repo.config_snapshot_mut();
             *config = fresh.config_snapshot().plumbing().clone();

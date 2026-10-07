@@ -642,6 +642,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
                 ..
             }
             | PopoverKind::CommitFileMenu { .. }
+            | PopoverKind::WorktreeFileMenu { .. }
             | PopoverKind::CommitRangeFileMenu { .. }
             | PopoverKind::FileBrowserFileMenu { .. }
             | PopoverKind::FileBrowserFolderMenu { .. }
@@ -1201,6 +1202,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
             ..
         }
         | PopoverKind::CommitFileMenu { .. }
+        | PopoverKind::WorktreeFileMenu { .. }
         | PopoverKind::CommitRangeFileMenu { .. }
         | PopoverKind::FileBrowserFileMenu { .. }
         | PopoverKind::FileBrowserFolderMenu { .. }

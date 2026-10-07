@@ -72,6 +72,8 @@ pub(crate) mod object_store;
 mod patch;
 mod porcelain;
 mod remotes;
+mod shared;
+mod shared_ranges;
 mod signatures;
 mod status;
 mod submodules;
@@ -196,6 +198,7 @@ impl ShallowSnapshot {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct LogPageCacheKey {
+    generation: u64,
     mode: HistoryMode,
     seed: LogPageSeed,
     /// Invalidates cached pages when a shallow repository is deepened or its
@@ -235,11 +238,12 @@ type LogPagedWalkFilter = Box<dyn FnMut(&gix::oid) -> bool + Send>;
 enum LogPagedWalk {
     CommitTime(gix::traverse::commit::Simple<gix::OdbHandleArc, LogPagedWalkFilter>),
     DateOrder(gix::traverse::commit::Topo<log::CancellableLogWalkFind, LogPagedWalkFilter>),
+    CachedDateOrder(log::TopologyWalk),
 }
 
 impl LogPagedWalk {
     fn is_date_order(&self) -> bool {
-        matches!(self, Self::DateOrder(_))
+        matches!(self, Self::DateOrder(_) | Self::CachedDateOrder(_))
     }
 }
 
@@ -253,6 +257,7 @@ impl Iterator for LogPagedWalk {
         match self {
             Self::CommitTime(walk) => walk.next().map(|info| info.map_err(Into::into)),
             Self::DateOrder(walk) => walk.next().map(|info| info.map_err(Into::into)),
+            Self::CachedDateOrder(walk) => walk.next().map(Ok),
         }
     }
 }
@@ -472,9 +477,14 @@ struct RepoStore {
     repo: gix::ThreadSafeRepository,
     /// Bumped on every reopen, so walks parked from an older store are dropped.
     generation: u64,
+    shared: Arc<shared::SharedStore>,
 }
 
 pub(crate) struct GixRepo {
+    pub(crate) identity: shared::WorktreeIdentity,
+    /// Stable fallback identity when a store cannot be safely shared.
+    private_store_scope: u64,
+    pub(crate) options: gitcomet_core::services::RepositoryOptions,
     spec: RepoSpec,
     store: std::sync::RwLock<RepoStore>,
     config_repo: std::sync::Mutex<config::ConfigRepo>,
@@ -521,12 +531,21 @@ impl GixRepo {
         repo: gix::ThreadSafeRepository,
         options: gitcomet_core::services::RepositoryOptions,
     ) -> Self {
+        let identity = shared::WorktreeIdentity::new(&workdir, &repo.to_thread_local());
+        let private_store_scope = shared::next_id();
+        let common = shared::CommonRepository::get(&repo.to_thread_local(), private_store_scope);
+        let mut repo = repo;
+        let shared = common.attach(&mut repo, private_store_scope);
         let config_repo = config::ConfigRepo::new(repo.to_thread_local());
         Self {
+            identity,
+            private_store_scope,
+            options: options.clone(),
             spec: RepoSpec { workdir },
             store: std::sync::RwLock::new(RepoStore {
                 repo,
-                generation: 0,
+                generation: shared.mapping_id,
+                shared,
             }),
             config_repo: std::sync::Mutex::new(config_repo),
             gitlink_status_capability: std::sync::Mutex::new(None),
@@ -577,6 +596,7 @@ impl GixRepo {
     /// The shared store and its generation, for walks that outlive a handle.
     /// Cloned out rather than borrowed: holding the read guard across a walk
     /// deadlocks once a reopen queues for the write lock.
+    #[cfg(test)]
     pub(super) fn thread_safe_repo(&self) -> (gix::ThreadSafeRepository, u64) {
         let store = self.store.read().expect("repo store");
         (store.repo.clone(), store.generation)
@@ -590,23 +610,81 @@ impl GixRepo {
     /// repository keeps on the old one, so its pack mappings go once in-flight
     /// readers finish. Also picks up packs a repack wrote since.
     pub(crate) fn reopen_object_store(&self) -> Result<()> {
+        let shared = self.shared_store();
+        let _maintenance = shared
+            .common
+            .maintenance
+            .lock()
+            .expect("common maintenance");
+        shared.common.invalidate();
+        crate::backend::refresh_common_stores(self, shared.common.id)
+    }
+
+    /// An I/O retry rotates physical mappings, preserving valid immutable
+    /// indexes. Fresh store keys still detect actual interpretation changes.
+    fn recover_object_store(&self) -> Result<()> {
+        let shared = self.shared_store();
+        let _maintenance = shared
+            .common
+            .maintenance
+            .lock()
+            .expect("common maintenance");
+        shared.common.rotate_mappings();
+        crate::backend::refresh_common_stores(self, shared.common.id)
+    }
+
+    pub(crate) fn common_identity(&self) -> u64 {
+        self.shared_store().common.id
+    }
+
+    pub(crate) fn refresh_object_store(&self) -> Result<()> {
         let fresh = self.reopen_repo()?.into_sync();
-        self.config_repo
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .share_objects(&fresh);
-        *self.range_reader.lock().expect("range reader") = None;
-        {
-            let mut store = self.store.write().expect("repo store");
-            store.repo = fresh;
-            store.generation += 1;
-        }
-        self.log_paged_walk_cache
-            .lock()
-            .expect("log paged walk cache")
-            .entries
-            .clear();
+        self.install_history_store(fresh);
         Ok(())
+    }
+
+    fn shared_store(&self) -> Arc<shared::SharedStore> {
+        self.store.read().expect("repo store").shared.clone()
+    }
+
+    /// Fresh refs/config belong to this worktree. Only the compatible object
+    /// store is attached; never substitute another worktree's repository handle.
+    fn fresh_history_store(&self) -> Result<(gix::ThreadSafeRepository, Arc<shared::SharedStore>)> {
+        Ok(self.install_history_store(self.reopen_repo()?.into_sync()))
+    }
+
+    fn install_history_store(
+        &self,
+        mut fresh: gix::ThreadSafeRepository,
+    ) -> (gix::ThreadSafeRepository, Arc<shared::SharedStore>) {
+        let common =
+            shared::CommonRepository::get(&fresh.to_thread_local(), self.private_store_scope);
+        let shared = common.attach(&mut fresh, self.private_store_scope);
+        let changed = {
+            let mut store = self.store.write().expect("repo store");
+            let changed = store.generation != shared.mapping_id;
+            // Keep this worktree's parsed index and refs/config handles.
+            store.repo.objects = fresh.objects.clone();
+            store.generation = shared.mapping_id;
+            store.shared = shared.clone();
+            changed
+        };
+        if changed {
+            self.config_repo
+                .lock()
+                .expect("config repository")
+                .share_objects(&fresh);
+            *self.range_reader.lock().expect("range reader") = None;
+            self.log_paged_walk_cache
+                .lock()
+                .expect("log paged walk cache")
+                .entries
+                .clear();
+            self.log_page_cache.lock().expect("log page cache").clear();
+            *self.all_branches_tips.lock().expect("all branches tips") = None;
+            *self.history_authors_cache.lock().expect("history authors") = None;
+        }
+        (fresh, shared)
     }
 
     /// Runs a history read, reopening the object store and retrying once when
@@ -622,7 +700,7 @@ impl GixRepo {
             }
             result => return result,
         };
-        if self.reopen_object_store().is_err() {
+        if self.recover_object_store().is_err() {
             return Err(error);
         }
         read()
@@ -733,6 +811,15 @@ impl GitRepository for GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<gitcomet_core::history_index::HistoryRange> {
         self.with_store_retry(|| self.read_history_range_impl(index, range.clone(), cancellation))
+    }
+
+    fn read_history_range_shared(
+        &self,
+        index: &gitcomet_core::history_index::HistoryIndexHandle,
+        range: std::ops::Range<usize>,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<gitcomet_core::history_index::HistoryRange>> {
+        self.with_store_retry(|| self.read_shared_history_range(index, range.clone(), cancellation))
     }
 
     fn read_history(
@@ -1915,6 +2002,10 @@ impl GitRepository for GixRepo {
     fn discard_worktree_changes(&self, paths: &[&Path]) -> Result<()> {
         self.discard_worktree_changes_impl(paths)
     }
+}
+
+pub(crate) fn shared_history_memory() -> (usize, usize, usize) {
+    shared_ranges::memory()
 }
 
 #[cfg(test)]

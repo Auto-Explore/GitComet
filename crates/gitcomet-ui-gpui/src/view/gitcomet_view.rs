@@ -1930,7 +1930,12 @@ impl GitCometView {
             workspace_persist_seq: 0,
             #[cfg(test)]
             ui_settings_persist_requests_for_test: 0,
-            last_repo_activation_dispatch_at: FxHashMap::default(),
+            last_repo_activation_dispatch_at: initial_state
+                .repos
+                .iter()
+                .filter(|repo| matches!(repo.open, Loadable::Ready(_)))
+                .map(|repo| (repo.id, Instant::now()))
+                .collect(),
             window_grab_activation_suppressed_at: None,
             signing_tools_probe_seq: 0,
             signing_tools_probe_in_flight: false,

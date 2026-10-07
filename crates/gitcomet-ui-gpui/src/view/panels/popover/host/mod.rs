@@ -1143,7 +1143,7 @@ impl PopoverHost {
         cx.notify();
     }
 
-    pub(super) fn minimize_hook_activity(&mut self, cx: &mut gpui::Context<Self>) {
+    pub(in crate::view) fn minimize_hook_activity(&mut self, cx: &mut gpui::Context<Self>) {
         let Some(PopoverKind::HookActivity { repo_id, .. }) = self.popover.as_ref() else {
             return;
         };

@@ -691,6 +691,47 @@ fn explicit_initial_repository_mode_seeds_empty_session() {
     ));
 }
 
+#[gpui::test]
+fn restored_active_repository_is_not_reopened_before_view_snapshot_arrives(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let store_for_state = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.run_until_parked();
+
+    let path = PathBuf::from("/repos/restored-before-view-sync");
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: path.clone(),
+        },
+    );
+    repo.open = Loadable::Ready(());
+    let restored = Arc::new(AppState {
+        repos: vec![repo],
+        active_repo: Some(RepoId(1)),
+        git_runtime: available_git_runtime_state(),
+        ..AppState::test_default()
+    });
+
+    cx.update(|_window, app| {
+        store_for_state.replace_snapshot_for_test(Arc::clone(&restored));
+        view.update(app, |this, cx| {
+            assert!(this.state.repos.is_empty(), "view is still stale");
+            this.activate_or_open_repo_path(path, cx);
+            assert!(
+                this.pending_repo_open_reservations.is_empty(),
+                "selecting the restored active tab must not reserve another open"
+            );
+            assert!(this.deferred_repo_bootstrap.is_none());
+        });
+    });
+    assert!(Arc::ptr_eq(&store_for_state.snapshot(), &restored));
+}
+
 #[test]
 fn splash_backdrop_embedded_png_decodes() {
     for is_dark in [true, false] {
@@ -2044,4 +2085,93 @@ fn opening_a_workspace_from_home_adopts_it_into_this_window(cx: &mut gpui::TestA
         cx.debug_bounds(row).is_none(),
         "Home no longer lists its own workspace"
     );
+}
+
+#[gpui::test]
+fn linked_worktree_scans_do_not_keep_the_active_tab_spinner_busy(cx: &mut gpui::TestAppContext) {
+    use gitcomet_state::model::RepoLoadsInFlight;
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repos = [1, 2].map(|id| {
+        let mut repo = RepoState::new_opening(
+            RepoId(id),
+            RepoSpec {
+                workdir: PathBuf::from(format!("/tmp/linked-spinner-{id}")),
+            },
+        );
+        repo.open = Loadable::Ready(());
+        repo.loads_in_flight
+            .request(RepoLoadsInFlight::WORKTREE_DIRTY);
+        repo
+    });
+    let mut state = AppState {
+        active_repo: Some(RepoId(1)),
+        repos: repos.into(),
+        ..AppState::test_default()
+    };
+    cx.update(|_, app| {
+        view.read(app)
+            .repo_tabs_bar
+            .clone()
+            .update(app, |tabs, _| tabs.use_spinner_delay_for_tests());
+    });
+    let publish = |state: &AppState, cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| {
+            view.update(app, |this, cx| {
+                test_support::push_test_state(this, Arc::new(state.clone()), cx)
+            })
+        });
+        cx.executor().advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        test_support::redraw(cx);
+    };
+    for id in [1, 2, 1] {
+        state.active_repo = Some(RepoId(id));
+        publish(&state, cx);
+        assert!(
+            cx.debug_bounds(if id == 1 {
+                "repo_tab_busy_spinner_1"
+            } else {
+                "repo_tab_busy_spinner_2"
+            })
+            .is_none(),
+            "scanning another checkout is not loading this tab"
+        );
+        let repo = state
+            .repos
+            .iter_mut()
+            .find(|repo| repo.id == RepoId(id))
+            .unwrap();
+        repo.loads_in_flight
+            .request(RepoLoadsInFlight::WORKTREE_STATUS);
+        publish(&state, cx);
+        assert!(
+            cx.debug_bounds(if id == 1 {
+                "repo_tab_busy_spinner_1"
+            } else {
+                "repo_tab_busy_spinner_2"
+            })
+            .is_some(),
+            "foreground status still shows busy"
+        );
+        state
+            .repos
+            .iter_mut()
+            .find(|repo| repo.id == RepoId(id))
+            .unwrap()
+            .loads_in_flight
+            .finish(RepoLoadsInFlight::WORKTREE_STATUS);
+        publish(&state, cx);
+        assert!(
+            cx.debug_bounds(if id == 1 {
+                "repo_tab_busy_spinner_1"
+            } else {
+                "repo_tab_busy_spinner_2"
+            })
+            .is_none(),
+            "foreground completion hides busy while the linked scan continues"
+        );
+    }
 }
