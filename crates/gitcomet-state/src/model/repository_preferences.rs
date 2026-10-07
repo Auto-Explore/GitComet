@@ -44,6 +44,7 @@ pub enum RepositoryFileSort {
     FileTypeDescending,
     EditSizeAscending,
     EditSizeDescending,
+    Edits,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

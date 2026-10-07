@@ -317,10 +317,7 @@ fn preferences_sync_across_tabs_and_windows_without_lost_fields_or_clone_leakage
         },
     );
     let sorts = BTreeMap::from([
-        (
-            RepositoryListKind::CommitFiles,
-            RepositoryFileSort::EditSizeDescending,
-        ),
+        (RepositoryListKind::CommitFiles, RepositoryFileSort::Edits),
         (
             RepositoryListKind::RangeFiles,
             RepositoryFileSort::PathDescending,

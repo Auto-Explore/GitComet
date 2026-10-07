@@ -222,6 +222,7 @@ impl From<CommitFileSort> for gitcomet_state::model::RepositoryFileSort {
             CommitFileSort::FileTypeDescending => Self::FileTypeDescending,
             CommitFileSort::EditSizeAscending => Self::EditSizeAscending,
             CommitFileSort::EditSizeDescending => Self::EditSizeDescending,
+            CommitFileSort::Edits => Self::Edits,
         }
     }
 }
@@ -236,6 +237,7 @@ impl From<gitcomet_state::model::RepositoryFileSort> for CommitFileSort {
             RepositoryFileSort::FileTypeDescending => Self::FileTypeDescending,
             RepositoryFileSort::EditSizeAscending => Self::EditSizeAscending,
             RepositoryFileSort::EditSizeDescending => Self::EditSizeDescending,
+            RepositoryFileSort::Edits => Self::Edits,
         }
     }
 }

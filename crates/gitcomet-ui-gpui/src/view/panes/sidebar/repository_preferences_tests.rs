@@ -221,7 +221,7 @@ fn shared_snapshots_update_sidebar_menus_and_every_file_list(cx: &mut gpui::Test
                     .read(app)
                     .file_list_layout_for(active, FileListId::CommitFiles),
                 if active == first_id {
-                    default_layout.toggled()
+                    default_layout.next()
                 } else {
                     default_layout
                 }
@@ -233,10 +233,8 @@ fn shared_snapshots_update_sidebar_menus_and_every_file_list(cx: &mut gpui::Test
     // sort for one list must leave all other list choices intact.
     let mut next = (*prefs).clone();
     next.pinned_items.clear();
-    next.file_sorts.insert(
-        RepositoryListKind::CommitFiles,
-        RepositoryFileSort::EditSizeDescending,
-    );
+    next.file_sorts
+        .insert(RepositoryListKind::CommitFiles, RepositoryFileSort::Edits);
     for repo in &mut Arc::make_mut(&mut state).repos {
         repo.shared_preferences = Some(RepositoryPreferencesSnapshot {
             key: key.clone(),
@@ -264,7 +262,7 @@ fn shared_snapshots_update_sidebar_menus_and_every_file_list(cx: &mut gpui::Test
             root.details_pane
                 .read(app)
                 .file_list_sort_for(FileListId::CommitFiles),
-            CommitFileSort::EditSizeDescending
+            CommitFileSort::Edits
         );
         assert_eq!(
             root.details_pane
