@@ -39,6 +39,7 @@ pub(crate) fn show_window_system_menu(window: &Window, position: Point<Pixels>) 
     window.show_window_menu(position);
 }
 
+#[cfg(not(target_os = "windows"))]
 pub(crate) fn application() -> gpui::Application {
     gpui_platform::application()
 }

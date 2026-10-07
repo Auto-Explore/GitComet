@@ -13,6 +13,48 @@ use std::time::{Duration, Instant};
 
 struct TestBackend;
 
+#[cfg(target_os = "windows")]
+#[gpui::test]
+fn dismissing_a_restart_terminal_guard_retains_the_saved_renderer(cx: &mut gpui::TestAppContext) {
+    use crate::windows_renderer::{RendererPreference, RendererSession, RendererState};
+    let _visual_guard = lock_visual_test();
+    let renderer = RendererSession(std::rc::Rc::new(std::cell::RefCell::new(
+        RendererState::new(RendererPreference::Auto, true),
+    )));
+    renderer.0.borrow_mut().saved = RendererPreference::Dx11;
+    cx.update(|app| {
+        app.set_global(renderer.clone());
+        app.set_global(windows::PendingRestart(true));
+        crate::workspaces::initialize_for_test(app, Vec::new());
+        bind_app_keys(app);
+        bind_text_input_keys(app);
+    });
+    let handle = cx.update(|app| {
+        open_gitcomet_window(
+            app,
+            Arc::new(TestBackend),
+            &normal_empty_launch_config(None),
+        )
+    });
+    cx.update(|app| {
+        handle
+            .update(app, |view, _, cx| {
+                assert!(view.request_quit_or_warn(1, 1, vec![], vec![], cx));
+            })
+            .unwrap();
+    });
+    let mut window_cx = gpui::VisualTestContext::from_window(handle.into(), cx);
+    window_cx.run_until_parked();
+    window_cx.simulate_keystrokes("escape");
+    window_cx.run_until_parked();
+    window_cx.update(|_, app| {
+        assert!(!app.global::<windows::PendingRestart>().0);
+        assert_eq!(renderer.0.borrow().saved, RendererPreference::Dx11);
+        assert!(renderer.0.borrow().restart_required());
+        assert_eq!(app.windows().len(), 1);
+    });
+}
+
 impl GitBackend for TestBackend {
     fn open(&self, _workdir: &Path) -> Result<Arc<dyn GitRepository>> {
         Err(Error::new(ErrorKind::Unsupported(

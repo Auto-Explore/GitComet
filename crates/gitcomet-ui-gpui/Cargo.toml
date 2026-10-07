@@ -155,6 +155,8 @@ x11-clipboard = { workspace = true }
 metal = "0.33"
 
 [target.'cfg(target_os = "windows")'.dependencies]
+gpui_platform = { workspace = true, features = ["windows-wgpu"] }
+gpui_wgpu = { workspace = true }
 gitcomet-win32-window-utils = { path = "../win32-window-utils" }
 
 [dev-dependencies]

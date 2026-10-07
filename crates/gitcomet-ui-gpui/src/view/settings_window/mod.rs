@@ -1,5 +1,6 @@
 use super::*;
 use crate::appearance::{Appearance, FontRole, UiDensity};
+use crate::preference_writer::PreferenceWriter;
 use crate::ui_scale;
 use gitcomet_core::domain::HistoryMode;
 use gitcomet_core::process::{
@@ -13,8 +14,7 @@ use gitcomet_state::model::{DefaultTagType, GitLogTagFetchMode};
 use gitcomet_state::session::ExternalCodeEditorSetting;
 use gpui::{Stateful, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 
 const SETTINGS_WINDOW_MIN_WIDTH_PX: f32 = 620.0;
 const SETTINGS_WINDOW_MIN_HEIGHT_PX: f32 = 460.0;
@@ -65,58 +65,9 @@ fn url_label(url: &str) -> SharedString {
         .into()
 }
 
-#[derive(Clone, Default)]
-struct ExternalEditorPreferencePersistQueue {
-    latest_sequence: Arc<AtomicU64>,
-    write_lock: Arc<Mutex<()>>,
-}
+static EXTERNAL_EDITOR_PREFERENCE_PERSIST_QUEUE: OnceLock<PreferenceWriter> = OnceLock::new();
 
-impl ExternalEditorPreferencePersistQueue {
-    fn next_sequence(&self) -> u64 {
-        self.latest_sequence
-            .fetch_add(1, Ordering::AcqRel)
-            .wrapping_add(1)
-    }
-
-    fn persist_if_latest(
-        &self,
-        sequence: u64,
-        setting: Option<ExternalCodeEditorSetting>,
-    ) -> std::io::Result<bool> {
-        let _guard = self
-            .write_lock
-            .lock()
-            .unwrap_or_else(|err| err.into_inner());
-        if self.latest_sequence.load(Ordering::Acquire) != sequence {
-            return Ok(false);
-        }
-        session::persist_ui_settings(external_editor_preference_settings(setting))?;
-        Ok(true)
-    }
-
-    #[cfg(test)]
-    fn persist_to_path_if_latest(
-        &self,
-        sequence: u64,
-        setting: Option<ExternalCodeEditorSetting>,
-        path: &std::path::Path,
-    ) -> std::io::Result<bool> {
-        let _guard = self
-            .write_lock
-            .lock()
-            .unwrap_or_else(|err| err.into_inner());
-        if self.latest_sequence.load(Ordering::Acquire) != sequence {
-            return Ok(false);
-        }
-        session::persist_ui_settings_to_path(external_editor_preference_settings(setting), path)?;
-        Ok(true)
-    }
-}
-
-static EXTERNAL_EDITOR_PREFERENCE_PERSIST_QUEUE: OnceLock<ExternalEditorPreferencePersistQueue> =
-    OnceLock::new();
-
-fn external_editor_preference_persist_queue() -> &'static ExternalEditorPreferencePersistQueue {
+fn external_editor_preference_persist_queue() -> &'static PreferenceWriter {
     EXTERNAL_EDITOR_PREFERENCE_PERSIST_QUEUE.get_or_init(Default::default)
 }
 
@@ -354,6 +305,8 @@ fn remote_url_policy_settings_label(policy: RemoteUrlPolicy) -> String {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingsSection {
+    #[cfg(target_os = "windows")]
+    GraphicsRenderer,
     UiScale,
     WindowControls,
     BrowserOpenTarget,
@@ -386,6 +339,8 @@ impl SettingsSection {
     /// mapping keeps the visible page and the expanded row in sync.
     fn category(self) -> SettingsCategory {
         match self {
+            #[cfg(target_os = "windows")]
+            Self::GraphicsRenderer => SettingsCategory::Appearance,
             Self::UiScale | Self::WindowControls | Self::UiFont | Self::EditorFont => {
                 SettingsCategory::Appearance
             }
@@ -580,6 +535,12 @@ impl SettingsCategory {
     fn matches_query(self, query: &str) -> bool {
         let query = query.trim().to_lowercase();
         if query.is_empty() {
+            return true;
+        }
+        #[cfg(target_os = "windows")]
+        if self == Self::Appearance
+            && "graphics renderer directx 11 directx 12 dx11 dx12 compatibility".contains(&query)
+        {
             return true;
         }
         self.search_haystack().contains(query.as_str())
@@ -1637,6 +1598,8 @@ mod cards;
 pub(crate) mod close_guards;
 mod extension_host;
 mod extension_pages;
+#[cfg(target_os = "windows")]
+mod graphics_renderer;
 mod prefs;
 mod render;
 mod rows;

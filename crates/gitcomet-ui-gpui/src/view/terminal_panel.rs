@@ -882,8 +882,7 @@ impl GitCometView {
                         });
                     }
                 }
-                crate::app::mark_clean_shutdown_from_view(cx);
-                cx.quit();
+                cx.defer(crate::app::finish_quit_or_restart);
             }
         }
     }

@@ -11,6 +11,51 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const SESSION_FILE_ENV: &str = "GITCOMET_SESSION_FILE";
 const DIFF_DEFAULTS_SESSION_SUBTEST_ENV: &str = "GITCOMET_DIFF_DEFAULTS_SESSION_SUBTEST";
 
+#[gpui::test]
+fn restart_cancellation_only_applies_to_application_close_prompts(cx: &mut gpui::TestAppContext) {
+    use gitcomet_extension_api::CloseScope;
+    let _visual_guard = lock_visual_test();
+    cx.update(|app| {
+        crate::view::extension_host::install(
+            gitcomet_extension_api::Registry::build(vec![Box::new(
+                gitcomet_extension_example::review::ReviewExtension,
+            )])
+            .unwrap(),
+            app,
+        );
+    });
+    let (settings, cx) = cx.add_window_view(SettingsWindowView::new);
+    for (scope, click_cancel) in [
+        (CloseScope::Window, false),
+        (CloseScope::Window, true),
+        (CloseScope::Application, false),
+        (CloseScope::Application, true),
+    ] {
+        cx.update(|_, app| app.set_global(crate::app::PendingRestart(true)));
+        settings.update(cx, |view, cx| {
+            view.confirm_close(scope, vec!["Running operation".into()], cx)
+        });
+        cx.run_until_parked();
+        crate::view::test_support::redraw(cx);
+        assert!(cx.debug_bounds("settings_hosted_dialog").is_some());
+        if click_cancel {
+            let cancel = cx.debug_bounds("settings_close_cancel").unwrap().center();
+            cx.simulate_click(cancel, Modifiers::default());
+        } else {
+            cx.simulate_keystrokes("escape");
+        }
+        cx.run_until_parked();
+        cx.update(|_, app| {
+            assert_eq!(
+                app.global::<crate::app::PendingRestart>().0,
+                scope == CloseScope::Window
+            );
+            assert!(settings.read(app).extension_dialog.is_none());
+            assert_eq!(app.windows().len(), 1);
+        });
+    }
+}
+
 #[test]
 fn git_reprobe_preserves_system_and_graphics_environment() {
     use gitcomet_core::environment::{GraphicsDetails, Rendering};
@@ -1422,7 +1467,7 @@ fn external_editor_setting_seeds_from_pending_override_and_can_clear(
 #[test]
 fn external_editor_preference_persist_queue_skips_stale_custom_draft_writes() {
     let session_file = unique_session_file("external-editor-draft-sequence");
-    let queue = ExternalEditorPreferencePersistQueue::default();
+    let queue = PreferenceWriter::default();
     let stale_setting = Some(ExternalCodeEditorSetting::Custom {
         executable: PathBuf::from("/tmp/editor"),
         arguments: Some("--reuse".to_string()),
@@ -1432,17 +1477,23 @@ fn external_editor_preference_persist_queue_skips_stale_custom_draft_writes() {
         arguments: Some("--reuse-window {path}".to_string()),
     });
 
-    let stale_sequence = queue.next_sequence();
-    let latest_sequence = queue.next_sequence();
+    let stale_sequence = queue.next();
+    let latest_sequence = queue.next();
 
     assert!(
         queue
-            .persist_to_path_if_latest(latest_sequence, latest_setting.clone(), &session_file)
+            .persist(latest_sequence, || session::persist_ui_settings_to_path(
+                external_editor_preference_settings(latest_setting.clone()),
+                &session_file
+            ))
             .expect("persist latest custom editor draft")
     );
     assert!(
         !queue
-            .persist_to_path_if_latest(stale_sequence, stale_setting, &session_file)
+            .persist(stale_sequence, || session::persist_ui_settings_to_path(
+                external_editor_preference_settings(stale_setting),
+                &session_file
+            ))
             .expect("skip stale custom editor draft")
     );
 
@@ -4059,6 +4110,10 @@ fn the_executables_page_links_to_the_signature_guide(cx: &mut gpui::TestAppConte
 
 #[test]
 fn appearance_page_owns_themes_fonts_scale_and_density_in_search() {
+    #[cfg(target_os = "windows")]
+    for query in ["graphics renderer", "directx 12", "dx11", "compatibility"] {
+        assert!(SettingsCategory::Appearance.matches_query(query));
+    }
     for query in [
         "theme",
         "solarized",

@@ -14,6 +14,8 @@ impl SettingsWindowView {
         let card = self.card("settings_window_appearance", "Appearance", theme);
         let card = self.appearance_theme_rows(card, theme, cx);
         let card = self.appearance_interface_rows(card, theme, cx);
+        #[cfg(target_os = "windows")]
+        let card = self.graphics_renderer_rows(card, theme, cx);
         self.appearance_typography_rows(card, theme, cx)
     }
 

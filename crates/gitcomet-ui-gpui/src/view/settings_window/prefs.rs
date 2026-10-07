@@ -24,6 +24,8 @@ impl SettingsWindowView {
             theme_mode: Some(self.theme_mode.key().to_string()),
             ui_scale_percent: Some(self.default_ui_scale_percent),
             window_controls_mode: Some(self.window_controls_mode.key().to_string()),
+            // Renderer changes are persisted separately; ordinary preferences must not overwrite a fallback.
+            windows_renderer: None,
             browser_open_target: Some(self.browser_open_target.key().to_string()),
             ui_density: Some(self.appearance_metrics.density.key().to_string()),
             ui_font_size_px: Some(self.appearance_metrics.ui_font_size_px),
@@ -410,10 +412,14 @@ impl SettingsWindowView {
         let setting = self.external_editor_setting.clone();
         crate::external_editor::set_configured_setting_override(setting.clone());
         let persist_queue = external_editor_preference_persist_queue().clone();
-        let sequence = persist_queue.next_sequence();
+        let sequence = persist_queue.next();
         let setting_for_persist = setting.clone();
         cx.background_spawn(async move {
-            let _ = persist_queue.persist_if_latest(sequence, setting_for_persist);
+            let _ = persist_queue.persist(sequence, || {
+                session::persist_ui_settings(external_editor_preference_settings(
+                    setting_for_persist,
+                ))
+            });
         })
         .detach();
         cx.defer(move |cx| {
