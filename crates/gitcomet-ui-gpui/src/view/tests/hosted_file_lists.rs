@@ -28,6 +28,27 @@ fn mount_list(
     gpui::Entity<FileListView>,
     &mut gpui::VisualTestContext,
 ) {
+    let changes = paths
+        .into_iter()
+        .map(|path| CommitFileChange::new(PathBuf::from(path), FileStatusKind::Modified))
+        .collect();
+    let (list, entity, _shell, cx) = mount_changes(cx, changes, None);
+    (list, entity, cx)
+}
+
+/// A hosted list of `changes` in a window of its own, beside the shell that
+/// shows its menus. With `defaults` it starts from them, as the user's;
+/// without, in the tree layout and path order.
+fn mount_changes(
+    cx: &mut gpui::TestAppContext,
+    changes: Vec<CommitFileChange>,
+    defaults: Option<crate::view::FileListDefaults>,
+) -> (
+    HostedFileList,
+    gpui::Entity<FileListView>,
+    gpui::WindowHandle<GitCometView>,
+    &mut gpui::VisualTestContext,
+) {
     cx.update(|app| {
         let registry = Registry::build(vec![Box::new(
             gitcomet_extension_example::review::ReviewExtension,
@@ -48,14 +69,19 @@ fn mount_list(
     )
     .lifetime();
     let repository = RepositoryHandle::new(host.id(), RepoId(1), lifetime, workdir);
-    let files = Arc::new(
-        paths
-            .into_iter()
-            .map(|path| CommitFileChange::new(PathBuf::from(path), FileStatusKind::Modified))
-            .collect::<Vec<_>>(),
-    );
+    let files = Arc::new(changes);
+    let shell_window = shell_cx
+        .window_handle()
+        .downcast::<GitCometView>()
+        .expect("the shell window");
     let entity = shell_cx.update(|_, app| {
-        app.new(|cx| FileListView::benchmark_snapshot(host, repository, files, cx))
+        app.new(|cx| match defaults {
+            Some(defaults) => {
+                cx.set_global(defaults);
+                FileListView::snapshot(host, repository, files, cx)
+            }
+            None => FileListView::benchmark_snapshot(host, repository, files, cx),
+        })
     });
     let view: gpui::AnyView = entity.clone().into();
     let (_holder, cx) = cx.add_window_view(move |_, _| ListHolder(view));
@@ -63,7 +89,136 @@ fn mount_list(
         entity: entity.clone(),
     };
     draw(cx);
-    (list, entity, cx)
+    (list, entity, shell_window, cx)
+}
+
+fn edited(path: &str, text: &str) -> CommitFileChange {
+    let mut edit = gitcomet_core::edit_signature::EditSignatureBuilder::default();
+    edit.added(text.as_bytes());
+    CommitFileChange::new(PathBuf::from(path), FileStatusKind::Modified)
+        .with_line_counts(Some(1), Some(0))
+        .with_edit(edit.finish())
+}
+
+/// The shell window, drawn, for the menus a hosted list opens there.
+fn shell_window(
+    cx: &mut gpui::VisualTestContext,
+    shell: gpui::WindowHandle<GitCometView>,
+) -> gpui::VisualTestContext {
+    let mut shell_cx = gpui::VisualTestContext::from_window(shell.into(), cx);
+    draw(&mut shell_cx);
+    shell_cx
+}
+
+fn shell_popover(
+    cx: &mut gpui::VisualTestContext,
+    shell: gpui::WindowHandle<GitCometView>,
+) -> Option<PopoverKind> {
+    cx.update(|_, app| {
+        shell
+            .read(app)
+            .expect("the shell window")
+            .popover_host
+            .read(app)
+            .popover_kind_for_tests()
+    })
+}
+
+/// The user's defaults decide the layout and sort a hosted list opens with;
+/// its layout icon then steps through the layouts in its own shape.
+#[gpui::test]
+fn a_hosted_list_starts_from_the_defaults_and_steps_its_layout(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let defaults = crate::view::FileListDefaults {
+        layout: crate::view::FileListLayout::Groups,
+        sort: crate::view::rows::CommitFileSort::Edits,
+    };
+    let changes = vec![
+        edited("a.rs", "x"),
+        edited("b.rs", "y"),
+        edited("c.rs", "x"),
+    ];
+    let (list, entity, _shell, cx) = mount_changes(cx, changes, Some(defaults));
+    let id = list_id(cx, &entity);
+    let icon = |key: &str| selector(format!("hosted_file_list_{id}_layout_button_{key}"));
+
+    assert_eq!(shown(cx, &list), vec!["a.rs", "c.rs", "b.rs"], "Edits");
+    assert!(cx.debug_bounds(icon("groups")).is_some());
+    assert!(
+        cx.debug_bounds(selector(format!("hosted_file_list_{id}_group_Modified")))
+            .is_some(),
+        "grouped by kind"
+    );
+
+    click_debug_selector(cx, icon("groups"));
+    draw(cx);
+    assert!(
+        cx.debug_bounds(icon("flat")).is_some(),
+        "Groups → Flat list"
+    );
+    assert!(
+        cx.debug_bounds(selector(format!("hosted_file_list_{id}_group_Modified")))
+            .is_none()
+    );
+    click_debug_selector(cx, icon("flat"));
+    draw(cx);
+    assert!(cx.debug_bounds(icon("tree")).is_some(), "Flat list → Tree");
+    assert_eq!(
+        shown(cx, &list),
+        vec!["a.rs", "c.rs", "b.rs"],
+        "the layout leaves the sort alone"
+    );
+}
+
+/// The sort button and a right click on the layout icon open their menus
+/// through the host, and an entry applies to this list.
+#[gpui::test]
+fn a_hosted_lists_menus_choose_its_sort_and_layout(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let changes = vec![
+        edited("a.rs", "x"),
+        edited("b.rs", "y"),
+        edited("c.rs", "x"),
+    ];
+    let (list, entity, shell, cx) = mount_changes(cx, changes, None);
+    let id = list_id(cx, &entity);
+    assert_eq!(shown(cx, &list), vec!["a.rs", "b.rs", "c.rs"]);
+
+    click_debug_selector(cx, selector(format!("hosted_file_list_{id}_sort")));
+    cx.run_until_parked();
+    assert!(matches!(
+        shell_popover(cx, shell),
+        Some(PopoverKind::Hosted { menu: true, .. })
+    ));
+    let mut shell_cx = shell_window(cx, shell);
+    assert!(
+        shell_cx
+            .debug_bounds("context_menu_entry_icon_Path: Ascending")
+            .is_some(),
+        "the current sort is checked"
+    );
+    click_debug_selector(&mut shell_cx, "context_menu_edits_repeated_first");
+    draw(cx);
+    assert_eq!(shown(cx, &list), vec!["a.rs", "c.rs", "b.rs"]);
+
+    let layout = selector(format!("hosted_file_list_{id}_layout_button_tree"));
+    let center = cx.debug_bounds(layout).expect("the layout icon").center();
+    cx.simulate_mouse_down(center, gpui::MouseButton::Right, gpui::Modifiers::default());
+    cx.simulate_mouse_up(center, gpui::MouseButton::Right, gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds(layout).is_some(),
+        "a right click opens the menu without stepping"
+    );
+    let mut shell_cx = shell_window(cx, shell);
+    click_debug_selector(&mut shell_cx, "context_menu_groups");
+    draw(cx);
+    assert!(
+        cx.debug_bounds(selector(format!(
+            "hosted_file_list_{id}_layout_button_groups"
+        )))
+        .is_some()
+    );
 }
 
 fn draw(cx: &mut gpui::VisualTestContext) {

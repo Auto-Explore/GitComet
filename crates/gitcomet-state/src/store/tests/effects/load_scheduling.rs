@@ -1268,6 +1268,9 @@ fn open_repo_effects_are_bounded_by_repo_load_executor() {
     let executors = super::super::effects::EffectExecutors {
         executor: &executor,
         repo_load_executor: &repo_load_executor,
+        worktree_scan_executor: &std::sync::LazyLock::new(|| {
+            super::super::executor::TaskExecutor::new(1)
+        }),
         session_persist_executor: &executor,
         metadata_executor: &metadata_executor,
         signature_executor: &metadata_executor,
@@ -1642,6 +1645,9 @@ fn slow_large_file_and_remote_tag_loads_do_not_block_other_repo_metadata() {
         let executors = super::effects::EffectExecutors {
             executor: &executor,
             repo_load_executor: &repo_load_executor,
+            worktree_scan_executor: &std::sync::LazyLock::new(|| {
+                super::super::executor::TaskExecutor::new(1)
+            }),
             session_persist_executor: &executor,
             metadata_executor: &metadata_executor,
             signature_executor: &metadata_executor,
@@ -2356,6 +2362,9 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
     let executors = super::super::effects::EffectExecutors {
         executor: &executor,
         repo_load_executor: &repo_load_executor,
+        worktree_scan_executor: &std::sync::LazyLock::new(|| {
+            super::super::executor::TaskExecutor::new(1)
+        }),
         session_persist_executor: &executor,
         metadata_executor: &metadata_executor,
         signature_executor: &metadata_executor,
@@ -2406,4 +2415,120 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
     executor.join();
     repo_load_executor.join();
     metadata_executor.join();
+}
+
+/// A queued scan must wait on its own pool while foreground reads complete.
+/// Drive the real effect router and backend, not just two executor instances.
+#[test]
+fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
+    use crate::store::{effects::EffectExecutors, executor::TaskExecutor};
+    let (_dir, workdir, _linked) =
+        crate::store::tests::worktree_redirect::repo_with_linked_worktree();
+    let backend: Arc<dyn GitBackend> = Arc::new(gitcomet_git_gix::GixBackend);
+    let repo_id = RepoId(1);
+    let repo = backend.open(&workdir).unwrap();
+    let mut state = AppState::test_default();
+    let mut repo_state = crate::model::RepoState::new_opening(repo_id, repo.spec().clone());
+    repo_state.open = Loadable::Ready(());
+    state.repos.push(repo_state);
+    state.active_repo = Some(repo_id);
+    let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
+    let repos = FxHashMap::from_iter([(repo_id, repo)]);
+    let foreground = TaskExecutor::new(1);
+    let scans: std::sync::LazyLock<TaskExecutor> =
+        std::sync::LazyLock::new(|| TaskExecutor::new(1));
+    let other = TaskExecutor::new(1);
+    let find: std::sync::LazyLock<TaskExecutor> = std::sync::LazyLock::new(|| TaskExecutor::new(1));
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    scans.spawn(move || {
+        started_tx.send(()).unwrap();
+        let _ = release_rx.recv_timeout(Duration::from_secs(5));
+    });
+    started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let tx = crate::store::worker_channel::StoreWorkerSender::for_test_msg_sender(tx);
+    let mut tokens = FxHashMap::default();
+    let executors = EffectExecutors {
+        executor: &other,
+        repo_load_executor: &foreground,
+        worktree_scan_executor: &scans,
+        session_persist_executor: &other,
+        metadata_executor: &other,
+        signature_executor: &other,
+        history_find_executor: &find,
+    };
+    for effect in [
+        Effect::LoadWorktreeDirty {
+            repo_id,
+            scope: crate::model::WorktreeDirtyScope::All,
+            workdir,
+            files_for: None,
+        },
+        Effect::LoadHeadBranch { repo_id },
+    ] {
+        crate::store::effects::schedule_effect(
+            executors,
+            &thread_state,
+            &backend,
+            &repos,
+            &mut tokens,
+            tx.clone(),
+            effect,
+        );
+    }
+    let first = recv_effect_message(&rx, Duration::from_secs(3));
+    let premature = rx.try_recv();
+    release_tx.send(()).unwrap();
+    assert!(
+        matches!(
+            first,
+            Ok(Msg::Internal(crate::msg::InternalMsg::HeadBranchLoaded {
+                result: Ok(_),
+                ..
+            }))
+        ),
+        "foreground must finish while scans are blocked: {first:?}"
+    );
+    assert!(
+        matches!(premature, Err(std::sync::mpsc::TryRecvError::Empty)),
+        "scan must stay on its own pool: {premature:?}"
+    );
+    assert!(matches!(
+        recv_effect_message(&rx, Duration::from_secs(5)),
+        Ok(Msg::Internal(
+            crate::msg::InternalMsg::WorktreeDirtyLoaded { result: Ok(_), .. }
+        ))
+    ));
+    // Cancellation must also suppress a scan still queued on the new pool.
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    scans.spawn(move || {
+        let _ = release_rx.recv_timeout(Duration::from_secs(5));
+    });
+    crate::store::effects::schedule_effect(
+        executors,
+        &thread_state,
+        &backend,
+        &repos,
+        &mut tokens,
+        tx.clone(),
+        Effect::LoadWorktreeDirty {
+            repo_id,
+            scope: crate::model::WorktreeDirtyScope::All,
+            workdir: repos[&repo_id].spec().workdir.clone(),
+            files_for: None,
+        },
+    );
+    tokens[&repo_id].cancel();
+    release_tx.send(()).unwrap();
+    let (drained_tx, drained_rx) = std::sync::mpsc::channel();
+    scans.spawn(move || {
+        drained_tx.send(()).unwrap();
+    });
+    drained_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let cancelled_reply = rx.try_recv();
+    assert!(
+        matches!(cancelled_reply, Err(std::sync::mpsc::TryRecvError::Empty)),
+        "a cancelled queued scan cannot publish stale results: {cancelled_reply:?}"
+    );
 }

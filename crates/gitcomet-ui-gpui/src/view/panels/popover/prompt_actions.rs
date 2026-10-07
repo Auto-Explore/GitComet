@@ -337,6 +337,7 @@ impl PopoverHost {
             PopoverKind::CommitFileSortMenu { list } => {
                 self.context_menu_view(PopoverKind::CommitFileSortMenu { list }, cx)
             }
+            kind @ PopoverKind::FileListLayoutMenu { .. } => self.context_menu_view(kind, cx),
             PopoverKind::ChangeTrackingSettings => {
                 self.context_menu_view(PopoverKind::ChangeTrackingSettings, cx)
             }
@@ -513,6 +514,7 @@ impl PopoverHost {
                 },
                 cx,
             ),
+            kind @ PopoverKind::WorktreeFileMenu { .. } => self.context_menu_view(kind, cx),
             kind @ PopoverKind::CommitRangeFileMenu { .. } => self.context_menu_view(kind, cx),
             PopoverKind::FileBrowserFileMenu { repo_id, path } => {
                 self.context_menu_view(PopoverKind::FileBrowserFileMenu { repo_id, path }, cx)

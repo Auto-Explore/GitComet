@@ -443,11 +443,13 @@ pub(super) fn global_nav(
         };
         if repo_state.history_state.worktree_selection != snapshot.worktree_selection {
             repo_state.set_worktree_selection(snapshot.worktree_selection.clone());
-            if snapshot.worktree_selection.is_some() {
+            if let Some(path) = snapshot.worktree_selection.clone() {
                 repo_state.set_commit_details(Loadable::NotLoaded);
                 // Only the selected worktree's changed files are carried in
                 // state, so the restored row needs a scan to fetch its own.
-                effects.extend(super::effects::request_worktree_dirty_effect(repo_state));
+                effects.extend(super::effects::request_worktree_dirty_path_effect(
+                    repo_state, path,
+                ));
             }
         }
     }

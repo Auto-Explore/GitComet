@@ -5,7 +5,7 @@ use super::util::{
 use crate::model::{
     AppNotificationKind, AppState, CommitMultiSelection, ConflictFileLoadMode, DiagnosticKind,
     FileBrowserSettings, ForeignDiffOrigin, Loadable, PendingFileBrowserReopen, RangeSelection,
-    RepoId, RepoLoadsInFlight, RepoState, SidebarDataRequest, SidebarMode,
+    RepoId, RepoLoadsInFlight, RepoState, SidebarDataRequest, SidebarMode, WorktreeDirtyScope,
 };
 use crate::msg::{CommitSelectMode, ConflictAutosolveMode, Effect};
 use gitcomet_core::conflict_session::{
@@ -590,13 +590,46 @@ pub(super) fn worktrees_loaded(
 pub(super) fn worktree_dirty_loaded(
     state: &mut AppState,
     repo_id: RepoId,
+    scope: WorktreeDirtyScope,
     result: std::result::Result<Vec<WorktreeDirtySummary>, Error>,
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     let mut inline_refresh = None;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         match result {
-            Ok(v) => repo_state.set_worktree_dirty(Loadable::Ready(v)),
+            Ok(mut refreshed) => {
+                let mut dirty = if matches!(scope, WorktreeDirtyScope::All) {
+                    refreshed
+                } else {
+                    let mut merged = Vec::new();
+                    if let Loadable::Ready(previous) = &repo_state.worktree_dirty {
+                        for summary in previous.iter() {
+                            if scope.includes(&summary.path) {
+                                if let Some(ix) =
+                                    refreshed.iter().position(|new| new.path == summary.path)
+                                {
+                                    merged.push(refreshed.remove(ix));
+                                }
+                            } else {
+                                merged.push(summary.clone());
+                            }
+                        }
+                    }
+                    merged.extend(refreshed);
+                    merged
+                };
+                // A reply may belong to a selection that has since moved. Keep
+                // details only for the currently selected checkout, including
+                // when a targeted update leaves other summaries untouched.
+                for summary in &mut dirty {
+                    if repo_state.history_state.worktree_selection.as_ref() != Some(&summary.path) {
+                        summary.staged.clear();
+                        summary.unstaged.clear();
+                        summary.line_stats = Default::default();
+                    }
+                }
+                repo_state.set_worktree_dirty(Loadable::Ready(dirty));
+            }
             // A worktree that cannot be opened (removed, on an unmounted
             // volume) is a routine condition, not something worth a diagnostic
             // banner -- the scan simply reports nothing for it, per worktree,
@@ -643,15 +676,25 @@ pub(super) fn worktree_dirty_loaded(
         if selected_worktree_is_gone {
             repo_state.set_worktree_selection(None);
         }
-        inline_refresh = refresh_worktree_inline_diff_entries(repo_state);
         if repo_state
-            .loads_in_flight
-            .finish(RepoLoadsInFlight::WORKTREE_DIRTY)
+            .diff_state
+            .inline_submodule_diff
+            .as_ref()
+            .is_some_and(|inline| scope.includes(&inline.submodule_repo_path))
         {
+            inline_refresh = refresh_worktree_inline_diff_entries(repo_state);
+        }
+        if let Some(scope) = repo_state.loads_in_flight.finish_worktree_dirty() {
             // Rebuilt rather than repeated: the selection may have moved while
             // the finished scan was running, and the repeat should carry the
             // file lists of whatever is selected now.
-            effects.push(worktree_dirty_effect(repo_state));
+            let scope = if matches!(repo_state.worktree_dirty, Loadable::Ready(_)) {
+                scope
+            } else {
+                // A failed initial scan left no complete snapshot to merge into.
+                WorktreeDirtyScope::All
+            };
+            effects.push(worktree_dirty_effect(repo_state, scope));
         }
     }
     // Outside the borrow above.
@@ -1291,13 +1334,13 @@ pub(super) fn select_worktree_uncommitted(
     }
     // Whatever this displaces -- another worktree's open diff, say -- is retired
     // by `retire_orphaned_worktree_diffs` once the reducer settles.
-    repo_state.set_worktree_selection(Some(path));
+    repo_state.set_worktree_selection(Some(path.clone()));
     repo_state.set_commit_details(Loadable::NotLoaded);
 
     // Only the selected worktree's changed files are carried in state, so the row
     // that was just selected needs a scan to fetch its own. The counts are already
     // on screen and stay there while it runs.
-    request_worktree_dirty_effect(repo_state)
+    request_worktree_dirty_path_effect(repo_state, path)
         .into_iter()
         .collect()
 }
@@ -1686,20 +1729,12 @@ pub(super) fn load_worktree_dirty(state: &mut AppState, repo_id: RepoId) -> Vec<
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
-    if !matches!(repo_state.open, Loadable::Ready(())) {
-        return Vec::new();
-    }
     // Unlike the other loaders this one does not flip to `Loading`: the counts
     // stay on screen while a rescan runs, so a window-focus refresh does not
     // blank the rows it is about to redraw identically.
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::WORKTREE_DIRTY)
-    {
-        vec![worktree_dirty_effect(repo_state)]
-    } else {
-        Vec::new()
-    }
+    request_worktree_dirty_effect(repo_state)
+        .into_iter()
+        .collect()
 }
 
 /// Queues a rescan of the other worktrees' uncommitted changes, if one is not
@@ -1728,8 +1763,32 @@ pub(super) fn request_worktree_dirty_effect(repo_state: &mut RepoState) -> Optio
     }
     repo_state
         .loads_in_flight
-        .request(RepoLoadsInFlight::WORKTREE_DIRTY)
-        .then(|| worktree_dirty_effect(repo_state))
+        .request_worktree_dirty(WorktreeDirtyScope::All)
+        .then(|| worktree_dirty_effect(repo_state, WorktreeDirtyScope::All))
+}
+
+/// Selection and checkout-specific watches need only that checkout's status.
+/// Establish a full snapshot first if no completed or running scan exists.
+pub(super) fn request_worktree_dirty_path_effect(
+    repo_state: &mut RepoState,
+    path: PathBuf,
+) -> Option<Effect> {
+    if !matches!(repo_state.open, Loadable::Ready(())) {
+        return None;
+    }
+    let scope = if !matches!(repo_state.worktree_dirty, Loadable::Ready(_))
+        && !repo_state
+            .loads_in_flight
+            .is_in_flight(RepoLoadsInFlight::WORKTREE_DIRTY)
+    {
+        WorktreeDirtyScope::All
+    } else {
+        WorktreeDirtyScope::Paths(vec![gitcomet_core::domain::normalize_worktree_path(&path)])
+    };
+    repo_state
+        .loads_in_flight
+        .request_worktree_dirty(scope.clone())
+        .then(|| worktree_dirty_effect(repo_state, scope))
 }
 
 /// The scan effect, aimed at whichever worktree row is selected.
@@ -1737,10 +1796,11 @@ pub(super) fn request_worktree_dirty_effect(repo_state: &mut RepoState) -> Optio
 /// Built in one place so every trigger -- watcher flush, window focus, selecting
 /// a row -- asks for the file lists of the worktree that is actually on screen,
 /// and for counts alone everywhere else.
-pub(super) fn worktree_dirty_effect(repo_state: &RepoState) -> Effect {
+pub(super) fn worktree_dirty_effect(repo_state: &RepoState, scope: WorktreeDirtyScope) -> Effect {
     Effect::LoadWorktreeDirty {
         repo_id: repo_state.id,
         workdir: repo_state.spec.workdir.clone(),
+        scope,
         files_for: repo_state.history_state.worktree_selection.clone(),
     }
 }

@@ -157,15 +157,20 @@ This release flow will:
 - build and upload release artifacts
 - publish the GitHub release
 - call `.github/workflows/deploy-homebrew-tap.yml` to update `Casks/gitcomet.rb` in the tap repo
+- call `.github/workflows/deploy-aur.yml` to update `gitcomet-bin` in the AUR
 
 You can also run `.github/workflows/deploy-homebrew-tap.yml` manually for backfills or dry-runs.
 
 ### Linux packages
 
-`scripts/package-linux.sh` builds every Linux package from one staged payload. The `.deb`, `.rpm` and AppImage include the binary, desktop entry, all five icon sizes, licence files and README. The tarball preserves its historical layout for third-party packagers: only the binary, README, `LICENSE-AGPL-3.0` and `NOTICE`. Package metadata lives in `packaging/linux/`: `debian-control.in` for the `.deb` and `gitcomet.spec` for the `.rpm`.
+`scripts/package-linux.sh` builds the release artifacts from one staged payload. The `.deb`, `.rpm` and AppImage include the binary, desktop entry, all five icon sizes, licence files and README. The tarball preserves its historical layout for third-party packagers: only the binary, README, `LICENSE-AGPL-3.0` and `NOTICE`. Package metadata lives in `packaging/linux/`: `debian-control.in` for the `.deb`, `gitcomet.spec` for the `.rpm`, and `PKGBUILD.in` for the AUR's `gitcomet-bin`.
 
-Linked libraries are declared automatically by `dpkg-shlibdeps` and rpm AutoReq. Libraries the app loads at runtime (Vulkan, EGL, Wayland) are declared by hand. `scripts/check-linux-runtime-deps.sh` runs in CI and on every release build, and fails when the binary's libraries or its glibc baseline drift from those declarations.
+Linked libraries are declared automatically by `dpkg-shlibdeps` and rpm AutoReq, and explicitly in `PKGBUILD.in`. Libraries the app loads at runtime (Vulkan, EGL, Wayland) are declared by hand. `scripts/check-linux-runtime-deps.sh` runs in CI and on every release build, and fails when the binary's libraries or its glibc baseline drift from those declarations. Update all three package templates when the runtime dependencies change. Arch requires `libglvnd` for EGL and offers `vulkan-icd-loader` as an optional dependency; `wayland` is optional because X11 is the fallback.
 
 The `deb_revision` and `rpm_release` inputs of `.github/workflows/release-manual-main.yml` set the package revision (the `1` in `1.2.3-1`). Raise them when rebuilding packages for an existing version through a manual dispatch of `.github/workflows/build-release-artifacts.yml`.
 
-The RPM supports Fedora 42 and newer. This repository no longer publishes to the AUR; Arch users are served by the community-maintained `gitcomet-bin` package.
+The RPM supports Fedora 42 and newer.
+
+The release workflow publishes `gitcomet-bin` after the GitHub release is public. `.github/workflows/deploy-aur.yml` can also be dispatched for backfills or with `dry_run: true` to verify sources and preview the generated PKGBUILD and `.SRCINFO` without pushing. It uses the existing `AUR_PRIVATE_SSH_KEY` and `AUR_PRIVATE_SSH_KEY_PASSPHRASE` secrets. `AUR_GIT_REPOSITORY` defaults to `ssh://aur@aur.archlinux.org/gitcomet-bin.git`; an existing `gitcomet.git` URL is redirected to `gitcomet-bin.git`. `AUR_GIT_BRANCH` defaults to `master`.
+
+`scripts/update-aur.sh` renders the template with checksums of both release tarballs and the tagged source archive, which supplies the desktop entry and icons. Arch's `aarch64` uses the `linux-arm64` release artifact. New versions start at `pkgrel=1`; metadata changes for the same version increment `pkgrel`, while identical reruns leave it unchanged. Release candidates use `1.2.3rc.1` as the Arch version and retain `1.2.3-rc.1` in download URLs. Run `scripts/test-aur-packaging.sh` as a non-root user on Arch to verify metadata, source checksums, and the full payload for both architectures.

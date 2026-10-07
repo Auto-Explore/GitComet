@@ -3,6 +3,7 @@ use super::*;
 #[derive(Clone, Copy)]
 enum Removal {
     Wheel,
+    CachedWheel,
     Programmatic,
     Replace,
     Empty,
@@ -62,6 +63,14 @@ fn tooltip_is_retracted_after_row_removal(
         cx.debug_bounds("history_row_0").is_some()
     });
     let row = cx.debug_bounds("history_row_0").unwrap();
+    let _cache_guard = matches!(removal, Removal::CachedWheel)
+        .then(crate::view::enable_stable_cached_views_for_test);
+    cx.update(|_, app| view.update(app, |_, cx| cx.notify()));
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    }
     let history = cx.update(|_, app| view.read(app).main_pane.read(app).history_view.clone());
     // Exercise the canvas listener, including its actual cell bounds.
     let mut hover = None;
@@ -105,7 +114,7 @@ fn tooltip_is_retracted_after_row_removal(
                 ui_model.update(app, |model, cx| model.set_state(Arc::new(next), cx));
             });
         }
-        Removal::Wheel => cx.simulate_event(gpui::ScrollWheelEvent {
+        Removal::Wheel | Removal::CachedWheel => cx.simulate_event(gpui::ScrollWheelEvent {
             position: hover,
             delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-600.0))),
             ..Default::default()
@@ -144,7 +153,10 @@ fn tooltip_is_retracted_after_row_removal(
         let _ = window.draw(app);
     });
     cx.run_until_parked();
-    if matches!(removal, Removal::Wheel | Removal::Programmatic) {
+    if matches!(
+        removal,
+        Removal::Wheel | Removal::CachedWheel | Removal::Programmatic
+    ) {
         assert!(
             cx.debug_bounds("history_row_0").is_none(),
             "the owning row must leave the viewport"
@@ -164,6 +176,11 @@ fn tooltip_is_retracted_after_row_removal(
         None,
         "the removed row must not rearm the shared tooltip elsewhere"
     );
+}
+
+#[gpui::test]
+fn cached_history_canvas_tooltip_clears_after_scroll(cx: &mut gpui::TestAppContext) {
+    tooltip_is_retracted_after_row_removal(cx, HistoryRowHoverArea::Date, Removal::CachedWheel);
 }
 
 #[gpui::test]

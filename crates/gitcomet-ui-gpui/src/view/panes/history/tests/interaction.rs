@@ -1505,6 +1505,15 @@ fn history_refs_hover_lists_refs_and_opens_item_menus_in_mode(
 
 #[gpui::test]
 fn history_row_selection_requires_a_completed_click(cx: &mut gpui::TestAppContext) {
+    history_row_click_and_drag(cx, false);
+}
+
+#[gpui::test]
+fn cached_history_row_selection_requires_a_completed_click(cx: &mut gpui::TestAppContext) {
+    history_row_click_and_drag(cx, true);
+}
+
+fn history_row_click_and_drag(cx: &mut gpui::TestAppContext, cached: bool) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let store_for_assert = store.clone();
@@ -1592,6 +1601,16 @@ fn history_row_selection_requires_a_completed_click(cx: &mut gpui::TestAppContex
     // Positive control: an ordinary click selects, and the dispatch really
     // does reach the store, so the assertions below are not vacuous.
     let row_3 = row(cx, "history_row_3");
+    // Cache replays omit test-only debug bounds, so retain the initial geometry.
+    let row_1 = row(cx, "history_row_1");
+    let row_5 = row(cx, "history_row_5");
+    let _cache_guard = cached.then(crate::view::enable_stable_cached_views_for_test);
+    cx.update(|_, app| view.update(app, |_, cx| cx.notify()));
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    }
     cx.simulate_mouse_move(row_3, None, gpui::Modifiers::default());
     cx.simulate_click(row_3, gpui::Modifiers::default());
     wait_until(cx, "row 3 selected by a click", |_cx| {
@@ -1599,8 +1618,6 @@ fn history_row_selection_requires_a_completed_click(cx: &mut gpui::TestAppContex
     });
 
     // Press on one row, release on another: neither row receives a click.
-    let row_1 = row(cx, "history_row_1");
-    let row_5 = row(cx, "history_row_5");
     cx.simulate_mouse_move(row_1, None, gpui::Modifiers::default());
     cx.simulate_mouse_down(row_1, gpui::MouseButton::Left, gpui::Modifiers::default());
     cx.simulate_mouse_move(row_5, gpui::MouseButton::Left, gpui::Modifiers::default());
@@ -1628,6 +1645,15 @@ fn history_row_selection_requires_a_completed_click(cx: &mut gpui::TestAppContex
 fn history_rows_ignore_clicks_that_landed_on_the_collapsed_sidebar_popover(
     cx: &mut gpui::TestAppContext,
 ) {
+    history_rows_ignore_overlay_clicks(cx, false);
+}
+
+#[gpui::test]
+fn cached_history_rows_ignore_overlay_clicks(cx: &mut gpui::TestAppContext) {
+    history_rows_ignore_overlay_clicks(cx, true);
+}
+
+fn history_rows_ignore_overlay_clicks(cx: &mut gpui::TestAppContext, cached: bool) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
@@ -1685,6 +1711,9 @@ fn history_rows_ignore_clicks_that_landed_on_the_collapsed_sidebar_popover(
     wait_until(cx, "history rows", |cx| {
         cx.debug_bounds("history_row_3").is_some()
     });
+    let row = cx.debug_bounds("history_row_3").expect("history row");
+    let _cache_guard = cached.then(crate::view::enable_stable_cached_views_for_test);
+    cx.update(|_, app| view.update(app, |_, cx| cx.notify()));
 
     // Draw only: every step here is synchronous, and pumping the executor
     // (or advancing the clock) would let store background work race the
@@ -1716,9 +1745,6 @@ fn history_rows_ignore_clicks_that_landed_on_the_collapsed_sidebar_popover(
     let panel = cx
         .debug_bounds("collapsed_sidebar_popover")
         .expect("expected the collapsed sidebar popover");
-    let row = cx
-        .debug_bounds("history_row_3")
-        .expect("history row should be rendered");
 
     // Right of the popover, over the dismiss scrim, on a commit row: the
     // click dismisses the popover and stops there. That it dismisses at all

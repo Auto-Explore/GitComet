@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/workflows/deployment-ci.yml"
       - ".github/workflows/build-release-artifacts.yml"
+      - ".github/workflows/deploy-aur.yml"
       - ".github/workflows/deploy-homebrew-tap.yml"
       - ".github/workflows/deploy-apt-repo.yml"
       - ".github/workflows/deploy-windows-installer.yml"
@@ -18,6 +19,8 @@ on:
       - "scripts/generate-homebrew-cask.sh"
       - "scripts/build-apt-repo.sh"
       - "scripts/package-linux.sh"
+      - "scripts/update-aur.sh"
+      - "scripts/test-aur-packaging.sh"
       - "scripts/check-linux-runtime-deps.sh"
       - "scripts/test-linux-runtime-deps.sh"
       - "packaging/linux/**"
@@ -43,6 +46,7 @@ on:
     paths:
       - ".github/workflows/deployment-ci.yml"
       - ".github/workflows/build-release-artifacts.yml"
+      - ".github/workflows/deploy-aur.yml"
       - ".github/workflows/deploy-homebrew-tap.yml"
       - ".github/workflows/deploy-apt-repo.yml"
       - ".github/workflows/deploy-windows-installer.yml"
@@ -55,6 +59,8 @@ on:
       - "scripts/generate-homebrew-cask.sh"
       - "scripts/build-apt-repo.sh"
       - "scripts/package-linux.sh"
+      - "scripts/update-aur.sh"
+      - "scripts/test-aur-packaging.sh"
       - "scripts/check-linux-runtime-deps.sh"
       - "scripts/test-linux-runtime-deps.sh"
       - "packaging/linux/**"
@@ -116,6 +122,9 @@ jobs:
           bash -n scripts/generate-homebrew-cask.sh
           bash -n scripts/build-apt-repo.sh
           bash -n scripts/package-linux.sh
+          bash -n scripts/update-aur.sh
+          bash -n scripts/test-aur-packaging.sh
+          bash -n packaging/linux/PKGBUILD.in
           bash -n scripts/check-linux-runtime-deps.sh
           bash -n scripts/test-linux-runtime-deps.sh
           bash -n scripts/emit-breakpad-symbols.sh
@@ -149,6 +158,7 @@ jobs:
         run: |
           ruby -e 'require "yaml"; %w[
             .github/workflows/build-release-artifacts.yml
+            .github/workflows/deploy-aur.yml
             .github/workflows/deploy-homebrew-tap.yml
             .github/workflows/deploy-apt-repo.yml
             .github/workflows/deploy-windows-installer.yml
@@ -160,6 +170,13 @@ jobs:
       - name: Validate deployment workflow config keys
         run: |
           set -euo pipefail
+          grep -Fq 'vars.AUR_GIT_REPOSITORY' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.AUR_GIT_BRANCH' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.AUR_GIT_REPOSITORY' .github/workflows/deploy-aur.yml
+          grep -Fq 'vars.AUR_GIT_BRANCH' .github/workflows/deploy-aur.yml
+          grep -Fq 'AUR_PRIVATE_SSH_KEY' .github/workflows/deploy-aur.yml
+          grep -Fq 'AUR_PRIVATE_SSH_KEY_PASSPHRASE' .github/workflows/deploy-aur.yml
+          grep -Fq 'ssh://aur@aur.archlinux.org/gitcomet-bin.git' .github/workflows/deploy-aur.yml
           grep -Fq 'vars.APT_STORAGE_ACCOUNT' .github/workflows/release-manual-main.yml
           grep -Fq 'vars.APT_STORAGE_CONTAINER' .github/workflows/release-manual-main.yml
           grep -Fq 'vars.APT_REPO_DISTRIBUTION' .github/workflows/release-manual-main.yml
@@ -457,6 +474,36 @@ jobs:
 
       - name: Verify dump_syms is runnable
         run: dump_syms --version
+
+  aur-metadata-smoke:
+    name: Validate AUR metadata and package payloads
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Install Arch packaging tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          pacman -Syu --noconfirm --needed git shadow desktop-file-utils
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # builder cannot read checkout's root-owned credential file in RUNNER_TEMP.
+          # This smoke job only needs local Git operations.
+          persist-credentials: false
+
+      - name: Create non-root packaging user
+        shell: bash
+        run: |
+          set -euo pipefail
+          id -u builder >/dev/null 2>&1 || useradd -m builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      - name: Test AUR generation and both architecture payloads
+        shell: bash
+        run: su builder -c "cd '$GITHUB_WORKSPACE' && scripts/test-aur-packaging.sh"
 
   linux-packaging-smoke:
     name: Validate Linux packaging script

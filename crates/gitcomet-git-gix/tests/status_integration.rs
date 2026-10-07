@@ -600,6 +600,8 @@ struct ConflictStageFixture {
     has_theirs: bool,
 }
 
+#[path = "status_integration/bare_repository.rs"]
+mod bare_repository;
 #[path = "status_integration/conflicts_and_mergetool.rs"]
 mod conflicts_and_mergetool;
 #[path = "status_integration/repository_operations.rs"]

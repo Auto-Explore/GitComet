@@ -1336,3 +1336,271 @@ fn a_centred_picture_wider_than_the_column_stays_inside_it(cx: &mut gpui::TestAp
 
     fixture.cleanup();
 }
+
+#[gpui::test]
+fn table_images_render_inside_their_cells_and_fit_a_narrow_pane(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(950.0), px(900.0)));
+    for (name, source) in [
+        (
+            "markdown_table_pictures",
+            "Body.\n\n| Icon | Screenshot |\n|---|---|\n| ![icon](icon.png) | ![screen](wide.png) |\n\nAfter.\n",
+        ),
+        (
+            "html_table_pictures",
+            "Body.\n\n<table><tr><th>Icon</th><th>Screenshot</th></tr><tr><td><img src='icon.png' alt='icon'></td><td><img src='wide.png' alt='screen'></td></tr></table>\n\nAfter.\n",
+        ),
+    ] {
+        let (fixture, column) = open_with_pictures(
+            cx,
+            &view,
+            164,
+            name,
+            source,
+            &[("icon.png", 32, 32), ("wide.png", 1600, 800)],
+        );
+        let rows = table_row_ixs(&fixture);
+        let pictures = inline_pictures(cx, &fixture);
+        assert_eq!(pictures.len(), 2);
+        for (column_ix, picture) in pictures.iter().enumerate() {
+            let cell = cx
+                .debug_bounds(leaked_selector(format!(
+                    "markdown_preview_cell_box_{}_{column_ix}",
+                    rows[1]
+                )))
+                .unwrap();
+            assert_inside(cell, *picture);
+            assert_inside(column, *picture);
+            assert!(picture.size.width > px(0.0) && picture.size.height > px(0.0));
+            assert!(picture.bottom() <= cell.bottom() + px(0.5));
+        }
+        assert!(
+            pictures[0].size.width <= px(32.5),
+            "small pictures are not upscaled: {pictures:?}"
+        );
+        assert!(
+            (pictures[1].size.width / pictures[1].size.height - 2.0).abs() < 0.05,
+            "screenshot keeps its aspect ratio: {pictures:?}"
+        );
+        assert!(
+            pictures[1].size.height > px(26.0),
+            "table pictures are not capped to inline icon height"
+        );
+        fixture.cleanup();
+    }
+}
+
+#[gpui::test]
+fn table_picture_selection_copies_descriptions_once(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let (fixture, _) = open_with_pictures(
+        cx,
+        &view,
+        165,
+        "table_picture_copy",
+        "Body.\n\n<table><tr><th>A</th><th>B</th></tr><tr><td>before <img src='icon.png' alt='café'> after</td><td><img src='icon.png' alt='last'></td></tr></table>\n\nTail.\n",
+        &[("icon.png", 32, 32)],
+    );
+    let start = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_cell_text_box_{}_0",
+            table_row_ixs(&fixture)[0]
+        )))
+        .unwrap();
+    let end = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_text_box_{}",
+            fixture.row_ix("Tail.")
+        )))
+        .unwrap();
+    drag_preview_selection(
+        cx,
+        point(start.left() + px(0.1), start.center().y),
+        point(end.right() + px(3.0), end.center().y),
+    );
+    assert_eq!(
+        copied_preview_selection(cx, &view).as_deref(),
+        Some("A\tB\nbefore café after\tlast\nTail.")
+    );
+    crate::view::rows::clear_markdown_selection_paint_log_for_tests();
+    draw_frames(cx, 1);
+    let selected =
+        crate::view::rows::markdown_selection_paint_log_for_tests(table_row_ixs(&fixture)[1]);
+    for picture in inline_pictures(cx, &fixture) {
+        assert!(
+            selected
+                .iter()
+                .any(|rect| rect.contains(&picture.center())
+                    && rect.size.height >= picture.size.height),
+            "image selection covers its slot: image={picture:?}, selection={selected:?}"
+        );
+    }
+
+    focus_diff_panel(cx, &view);
+    cx.simulate_keystrokes("secondary-f");
+    draw_frames(cx, 1);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.clone();
+        pane.update(app, |pane, cx| {
+            pane.diff_search_query = "café".into();
+            pane.diff_search_input
+                .update(cx, |input, cx| input.set_text("café", cx));
+            pane.diff_search_recompute_matches_and_scroll_to_first();
+            assert_eq!(
+                pane.diff_search_matches.len(),
+                1,
+                "image descriptions remain searchable"
+            );
+            cx.notify();
+        });
+    });
+    draw_frames(cx, 2);
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn remote_table_images_keep_approval_controls_in_their_cells(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.clone();
+        pane.update(app, |pane, cx| {
+            pane.set_remote_markdown_image_policy(
+                crate::view::RemoteMarkdownImagePolicy::AskBeforeLoading,
+                cx,
+            )
+        });
+    });
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(166),
+        "remote_table_picture",
+        "<table><tr><td><img src='https://example.invalid/a.png' alt='remote' width='120' height='60'></td><td>Text <a href='https://example.com/docs'><img src='https://example.invalid/b.png' alt='linked' width='32' height='32'></a></td></tr></table>",
+    );
+    let offset = fixture.picture_offsets()[0];
+    let control = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_inline_image_load_{offset}"
+        )))
+        .expect("the cell offers the existing per-image approval control");
+    let cell = cx.debug_bounds("markdown_preview_cell_box_0_0").unwrap();
+    assert_inside(cell, control);
+    assert!(control.size.width > px(0.0) && control.size.height > px(0.0));
+    assert!(
+        cx.debug_bounds("markdown_preview_load_all_remote_images")
+            .is_some()
+    );
+    assert!(
+        cx.debug_bounds(leaked_selector(format!(
+            "markdown_preview_inline_image_{offset}"
+        )))
+        .is_none(),
+        "an image element is not created before approval"
+    );
+    let linked_offset = fixture.picture_offsets()[1];
+    let linked = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_inline_image_load_{linked_offset}"
+        )))
+        .unwrap();
+    simulate_counted_click(cx, linked.center(), 1);
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        let popover = view.read(app).popover_host.read(app).popover_kind_for_tests();
+        assert!(matches!(popover, Some(PopoverKind::WebLinkMenu {
+            ref url, load_remote_image_url: Some(ref image_url),
+        }) if url.as_ref() == "https://example.com/docs" && image_url.as_ref() == "https://example.invalid/b.png"));
+    });
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn html_table_pictures_render_in_inline_and_split_diffs(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.clone();
+        pane.update(app, |pane, cx| {
+            pane.set_remote_markdown_image_policy(
+                crate::view::RemoteMarkdownImagePolicy::AskBeforeLoading,
+                cx,
+            )
+        });
+    });
+    cx.simulate_resize(gpui::size(px(1400.0), px(850.0)));
+    let old = "<table>\n<tr><td><img src='https://example.invalid/old.png' alt='old' width='64' height='32'></td><td>before</td></tr>\n</table>";
+    let new = "<table>\n<tr><td><img src='https://example.invalid/new.png' alt='new' width='64' height='32'></td><td>after</td></tr>\n</table>";
+    for (ix, (name, mode)) in [
+        ("html_table_inline_images", DiffViewMode::Inline),
+        ("html_table_split_images", DiffViewMode::Split),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let workdir = open_rendered_markdown_diff_in(
+            cx,
+            &view,
+            gitcomet_state::model::RepoId(167 + ix as u64),
+            name,
+            old,
+            new,
+            mode,
+        );
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview
+            else {
+                panic!("preview ready")
+            };
+            assert_eq!(
+                preview
+                    .old
+                    .rows
+                    .iter()
+                    .filter(|row| row.table.is_some())
+                    .count(),
+                1
+            );
+            assert_eq!(
+                preview
+                    .new
+                    .rows
+                    .iter()
+                    .filter(|row| row.table.is_some())
+                    .count(),
+                1
+            );
+            for region in if mode == DiffViewMode::Inline {
+                vec![DiffTextRegion::Inline]
+            } else {
+                vec![DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight]
+            } {
+                assert!(
+                    pane.diff_text_hitboxes
+                        .iter()
+                        .any(|((_, painted_region), row)| *painted_region == region
+                            && row.cells.iter().any(|cell| cell.atomic)),
+                    "each rendered side registers the picture inside its table cell"
+                );
+            }
+        });
+        std::fs::remove_dir_all(workdir).unwrap();
+    }
+}

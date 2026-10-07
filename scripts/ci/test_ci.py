@@ -232,13 +232,11 @@ class LiveUiMeasurementTests(unittest.TestCase):
             self.assertAlmostEqual(inputs["apply_ms"]["p50"], 0.3)
             self.assertAlmostEqual(summary["phases"]["select"]["process_cpu_cores"], 0.25)
 
-    def test_runs_missing_witnesses_losing_records_or_stalling_are_rejected(self):
+    def test_runs_missing_witnesses_losing_records_or_mixing_identities_are_rejected(self):
         cases = {
             "expected a witness": lambda r: [x for x in r if x.get("stage") != "witness"],
             "dropped records": lambda r: [dict(x, records_dropped=3) if x["event"] == "interval" else x for x in r],
             "another run": lambda r: [dict(x, run_id="other") if x["event"] == "start" else x for x in r],
-            "waited over 1 s": lambda r: r + [{"event": "draw", "window": "w", "start_ms": 2500.0,
-                                               "at_ms": 2501.0, "duration_ms": 1.0, "dirty_ms": 1200.0}],
             "did not finish": lambda r: [x for x in r if x["event"] != "scenario_end"],
         }
         for problem, mutate in cases.items():
@@ -252,6 +250,18 @@ class LiveUiMeasurementTests(unittest.TestCase):
             root = Path(directory)
             self.write_run(root, capture={"outcome": "failed", "exit_code": 101})
             self.assertIn("application exited 101", live_ui.summarize(root)["problems"])
+
+    def test_a_stall_is_retained_as_performance_evidence(self):
+        # A complete visible capture of a slow frame is exactly the evidence
+        # this tool must preserve; delay alone does not prove occlusion.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_run(root, self.records() + [
+                {"event": "draw", "window": "w", "start_ms": 2500.0,
+                 "at_ms": 2501.0, "duration_ms": 1.0, "dirty_ms": 1200.0}])
+            summary = live_ui.summarize(root)
+            self.assertTrue(summary["valid"], summary["problems"])
+            self.assertEqual(summary["long_frames"][0]["dirty_to_draw_ms"], 1301.0)
 
     def test_corrupted_records_are_an_error_not_a_shorter_run(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -179,8 +179,6 @@ pub(super) fn paint_history_graph(
     window: &mut Window,
     cx: &mut App,
 ) {
-    use gpui::PathBuilder;
-
     if row.lanes_now.is_empty() {
         return;
     }
@@ -296,13 +294,13 @@ pub(super) fn paint_history_graph(
             );
         } else {
             // A fork whisker has nothing above it, so it stays a bare stub.
-            let mut path = PathBuilder::stroke(stroke_width);
-            path.move_to(point(left + x_for_col(from), y_center));
-            path.line_to(point(left + x_for_col(usize::from(edge.to_col)), y_center));
-            if let Ok(p) = path.build() {
-                gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintPath);
-                window.paint_path(p, color);
-            }
+            paint_straight_connector(
+                point(left + x_for_col(from), y_center),
+                point(left + x_for_col(usize::from(edge.to_col)), y_center),
+                stroke_width,
+                color,
+                window,
+            );
         }
     }
 
@@ -1016,6 +1014,51 @@ pub(super) fn paint_vertical_segment(
     ));
 }
 
+/// Preserve the stroke's butt caps and painter order when a connector is axis aligned.
+/// Nearly collinear connectors still need a path: rounding them to an axis would
+/// move an endpoint at fractional display scales.
+pub(super) fn paint_straight_connector(
+    from: gpui::Point<Pixels>,
+    to: gpui::Point<Pixels>,
+    width: Pixels,
+    color: gpui::Rgba,
+    window: &mut Window,
+) {
+    if from == to || width <= px(0.0) {
+        return;
+    }
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let enabled = cfg!(test)
+        || *ENABLED.get_or_init(|| gitcomet_ui_kit::ui_probe::env_flag("GITCOMET_GPU_GRAPH_QUADS"));
+    let bounds = if !enabled {
+        None
+    } else if from.x == to.x {
+        Some(Bounds::new(
+            point(from.x - width * 0.5, from.y.min(to.y)),
+            size(width, (to.y - from.y).abs()),
+        ))
+    } else if from.y == to.y {
+        Some(Bounds::new(
+            point(from.x.min(to.x), from.y - width * 0.5),
+            size((to.x - from.x).abs(), width),
+        ))
+    } else {
+        None
+    };
+    if let Some(bounds) = bounds {
+        gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintSegmentQuad);
+        window.paint_layer(bounds, |window| window.paint_quad(fill(bounds, color)));
+    } else {
+        let mut path = gpui::PathBuilder::stroke(width);
+        path.move_to(from);
+        path.line_to(to);
+        if let Ok(path) = path.build() {
+            gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintPath);
+            window.paint_path(path, color);
+        }
+    }
+}
+
 /// Whether two x-offsets draw as one line. A connector between them is no elbow.
 fn same_x(a: Pixels, b: Pixels) -> bool {
     (a - b).abs() < px(0.5)
@@ -1062,9 +1105,14 @@ fn paint_node_to_lane(
 ) {
     use gpui::PathBuilder;
 
-    // A straight drop is a quad like every other straight run.
     if same_x(x_from, x_to) {
-        paint_vertical_segment(left + x_to, y_center, y_bottom, stroke_width, color, window);
+        paint_straight_connector(
+            point(left + x_from, y_center),
+            point(left + x_to, y_bottom),
+            stroke_width,
+            color,
+            window,
+        );
         return;
     }
 
@@ -2016,6 +2064,105 @@ mod tests {
 #[cfg(test)]
 mod coalescing_regressions {
     use super::*;
+
+    #[gpui::test]
+    fn straight_connectors_and_node_exits_do_not_tessellate(cx: &mut gpui::TestAppContext) {
+        use gitcomet_core::history_perf::{self, Work};
+        let _guard = crate::test_support::lock_visual_test();
+        let cx = cx.add_empty_window();
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let _capture = history_perf::capture();
+            cx.draw(
+                point(px(0.0), px(0.0)),
+                size(
+                    gpui::AvailableSpace::Definite(px(120.0)),
+                    gpui::AvailableSpace::Definite(px(80.0)),
+                ),
+                |_, _| {
+                    gpui::canvas(
+                        |_, _, _| (),
+                        move |_, (), window, _| {
+                            let p = |x, y| point(px(x * scale), px(y * scale));
+                            let colour = gpui::rgb(0xabcdef);
+                            // Both fork directions, both vertical directions and the node exit.
+                            for (from, to) in [
+                                (p(10.0, 20.0), p(30.0, 20.0)),
+                                (p(30.0, 25.0), p(10.0, 25.0)),
+                                (p(10.0, 10.0), p(10.0, 30.0)),
+                                (p(20.0, 30.0), p(20.0, 10.0)),
+                            ] {
+                                paint_straight_connector(from, to, px(1.6 * scale), colour, window);
+                            }
+                            paint_node_to_lane(
+                                px(0.0),
+                                px(40.0 * scale),
+                                px(40.0 * scale),
+                                px(10.0 * scale),
+                                px(30.0 * scale),
+                                px(4.0 * scale),
+                                px(1.6 * scale),
+                                colour,
+                                window,
+                            );
+                            // Degenerate strokes contribute no geometry.
+                            paint_straight_connector(
+                                p(5.0, 5.0),
+                                p(5.0, 5.0),
+                                px(1.6),
+                                colour,
+                                window,
+                            );
+                        },
+                    )
+                    .w(px(120.0))
+                    .h(px(80.0))
+                },
+            );
+            assert_eq!(history_perf::count(Work::PaintPath), 0, "scale={scale}");
+            assert_eq!(
+                history_perf::count(Work::PaintSegmentQuad),
+                5,
+                "scale={scale}"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn nearly_collinear_connectors_keep_their_endpoints(cx: &mut gpui::TestAppContext) {
+        use gitcomet_core::history_perf::{self, Work};
+        let _guard = crate::test_support::lock_visual_test();
+        let cx = cx.add_empty_window();
+        let _capture = history_perf::capture();
+        cx.draw(
+            point(px(0.0), px(0.0)),
+            size(
+                gpui::AvailableSpace::Definite(px(60.0)),
+                gpui::AvailableSpace::Definite(px(40.0)),
+            ),
+            |_, _| {
+                gpui::canvas(
+                    |_, _, _| (),
+                    |_, (), window, _| {
+                        paint_node_to_lane(
+                            px(0.0),
+                            px(20.0),
+                            px(20.25),
+                            px(10.0),
+                            px(30.0),
+                            px(4.0),
+                            px(1.6),
+                            gpui::rgb(0xabcdef),
+                            window,
+                        );
+                    },
+                )
+                .w(px(60.0))
+                .h(px(40.0))
+            },
+        );
+        assert_eq!(history_perf::count(Work::PaintPath), 1);
+        assert_eq!(history_perf::count(Work::PaintSegmentQuad), 0);
+    }
 
     #[gpui::test]
     fn indexed_history_actual_paint_paths_are_bounded_by_displayed_columns(

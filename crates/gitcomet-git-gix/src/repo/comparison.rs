@@ -250,11 +250,11 @@ pub(super) fn commit_to_worktree_files(
     if include_untracked {
         for path in untracked_paths(workdir, cancellation)? {
             // Counted from disk, under the tracked lanes' size cap.
-            let additions = super::line_stats::read_worktree_file_capped(&workdir.join(&path))
-                .and_then(|bytes| super::log::line_stats_from_bytes(&[], &bytes).0);
+            let stats = super::line_stats::read_worktree_file_capped(&workdir.join(&path))
+                .map(|bytes| super::log::line_stats_from_bytes(&[], &bytes))
+                .unwrap_or_default();
             files.push(
-                CommitFileChange::new(path, FileStatusKind::Untracked)
-                    .with_line_counts(additions, additions.map(|_| 0)),
+                CommitFileChange::new(path, FileStatusKind::Untracked).with_line_stats(stats),
             );
         }
     }
@@ -293,12 +293,16 @@ impl GixRepo {
         cancellation.check_cancelled()?;
         let files = match to {
             Some(to) => diff_range_files(self, &self.repo(), &base, to)?,
-            None => commit_to_worktree_files(
-                &self.spec.workdir,
-                &base,
-                options.include_untracked,
-                cancellation,
-            )?,
+            None => {
+                let mut files = commit_to_worktree_files(
+                    &self.spec.workdir,
+                    &base,
+                    options.include_untracked,
+                    cancellation,
+                )?;
+                self.add_worktree_edits(&mut files, cancellation)?;
+                files
+            }
         };
         cancellation.check_cancelled()?;
         Ok(Comparison::new(base, files))

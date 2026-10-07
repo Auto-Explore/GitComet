@@ -385,15 +385,15 @@ pub(crate) fn markdown_blocks_in(
                 });
             }
             MarkdownPreviewRowKind::TableRow { .. } => {
-                // A header row opens a table, so it ends the one before it for
-                // the same reason an alert's first row ends the quote above.
+                // HTML tables may have no headers, or several header rows.
                 blocks.push(MarkdownBlock::Table(take_run(
                     document,
                     &mut ix,
                     end,
                     |offset, row| match row.kind {
-                        MarkdownPreviewRowKind::TableRow { is_header } => {
-                            (offset == 0 || !is_header) && row.blockquote_level == quote_depth
+                        MarkdownPreviewRowKind::TableRow { .. } => {
+                            (offset == 0 || !row.table.as_ref().is_some_and(|t| t.starts_table))
+                                && row.blockquote_level == quote_depth
                         }
                         _ => false,
                     },

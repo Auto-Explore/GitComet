@@ -16,6 +16,7 @@ ui = ["ui-gpui"]
 ui-gpui-runtime = ["gitcomet-app/ui-gpui-runtime", "dep:gitcomet-ui-gpui"]
 ui-gpui = ["ui-gpui-runtime"]
 gix = ["gitcomet-app/gix", "dep:gitcomet-git-gix"]
+perf-alloc = ["ui-gpui", "gitcomet-ui-gpui/perf-alloc"]
 
 [dependencies]
 gitcomet-app = { workspace = true }

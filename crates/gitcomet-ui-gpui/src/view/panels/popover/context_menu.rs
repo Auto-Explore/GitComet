@@ -25,6 +25,7 @@ mod file_browser_file;
 mod file_browser_folder;
 pub(super) mod file_history_commit;
 mod file_list_folder;
+mod file_list_layout;
 mod history_branch_filter;
 mod history_refs;
 mod large_file;
@@ -49,7 +50,27 @@ mod text_format_menu;
 mod ui_scale_picker;
 mod web_link;
 mod worktree;
+mod worktree_file;
 mod worktree_section;
+
+fn resolve_checkout_file_path(
+    workdir: &std::path::Path,
+    path: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    if path.is_absolute()
+        || path.components().any(|c| {
+            matches!(
+                c,
+                std::path::Component::ParentDir
+                    | std::path::Component::Prefix(_)
+                    | std::path::Component::RootDir
+            )
+        })
+    {
+        return Err("Refusing to open path outside repository".to_string());
+    }
+    Ok(normalize_platform_path(workdir.join(path)))
+}
 
 fn normalize_platform_path(path: std::path::PathBuf) -> std::path::PathBuf {
     #[cfg(target_os = "windows")]
@@ -372,23 +393,10 @@ impl PopoverHost {
         repo_id: RepoId,
         path: &std::path::Path,
     ) -> Result<std::path::PathBuf, String> {
-        if path.is_absolute()
-            || path.components().any(|c| {
-                matches!(
-                    c,
-                    std::path::Component::ParentDir
-                        | std::path::Component::Prefix(_)
-                        | std::path::Component::RootDir
-                )
-            })
-        {
-            return Err("Refusing to open path outside repository".to_string());
-        }
-
         let workdir = self
             .workdir_for_repo(repo_id)
             .ok_or_else(|| "Repository is not available".to_string())?;
-        Ok(normalize_platform_path(workdir.join(path)))
+        resolve_checkout_file_path(&workdir, path)
     }
 
     fn open_path_default(&mut self, path: std::path::PathBuf, cx: &mut gpui::Context<Self>) {
@@ -666,6 +674,11 @@ impl PopoverHost {
                 path,
                 cx,
             )),
+            PopoverKind::WorktreeFileMenu {
+                repo_id,
+                worktree_path,
+                target,
+            } => Some(worktree_file::model(self, *repo_id, worktree_path, target)),
             PopoverKind::CommitRangeFileMenu {
                 repo_id,
                 from_commit_id,
@@ -683,6 +696,9 @@ impl PopoverHost {
             )),
             PopoverKind::CommitFileSortMenu { list } => {
                 Some(commit_file_sort::model(self, *list, cx))
+            }
+            PopoverKind::FileListLayoutMenu { repo_id, list } => {
+                Some(file_list_layout::model(self, *repo_id, *list, cx))
             }
             PopoverKind::FileBrowserFileMenu { repo_id, path } => {
                 Some(file_browser_file::model(self, *repo_id, path, cx))
@@ -1155,6 +1171,34 @@ impl PopoverHost {
                     self.open_path_default(full_path, cx);
                 }
             }
+            ContextMenuAction::OpenWorktreeDiff {
+                repo_id,
+                worktree_path,
+                target,
+            } => {
+                self.details_pane.update(cx, |pane, cx| {
+                    pane.open_worktree_file_diff(repo_id, &worktree_path, &target, window, cx);
+                });
+            }
+            ContextMenuAction::OpenWorktreeFile {
+                worktree_path,
+                path,
+            } => match resolve_checkout_file_path(&worktree_path, &path) {
+                Ok(path) if path.exists() => self.open_path_default(path, cx),
+                Ok(path) => self.push_toast(
+                    components::ToastKind::Error,
+                    format!("Path not found: {}", path.display()),
+                    cx,
+                ),
+                Err(error) => self.push_toast(components::ToastKind::Error, error, cx),
+            },
+            ContextMenuAction::OpenWorktreeFileLocation {
+                worktree_path,
+                path,
+            } => match resolve_checkout_file_path(&worktree_path, &path) {
+                Ok(path) => self.reveal_path_in_file_manager(path, Some(worktree_path), cx),
+                Err(error) => self.push_toast(components::ToastKind::Error, error, cx),
+            },
             ContextMenuAction::OpenFileLocation { repo_id, path } => {
                 let full_path = match self.resolve_workdir_path(repo_id, &path) {
                     Ok(path) => path,
@@ -1469,6 +1513,15 @@ impl PopoverHost {
             ContextMenuAction::SetCommitFileSort { list, sort } => {
                 self.details_pane.update(cx, |pane, cx| {
                     pane.set_file_list_sort(list, sort, cx);
+                });
+            }
+            ContextMenuAction::SetFileListLayout {
+                repo_id,
+                list,
+                layout,
+            } => {
+                self.details_pane.update(cx, |pane, cx| {
+                    pane.set_list_file_layout(repo_id, list, layout, cx);
                 });
             }
             ContextMenuAction::SetTextEncoding { encoding } => {
