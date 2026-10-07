@@ -88,6 +88,9 @@ impl PopoverHost {
                 name,
                 is_current_branch,
             } => rename_branch_prompt::panel(self, repo_id, name, is_current_branch, cx),
+            PopoverKind::WorkspacePrompt { prompt, .. } => {
+                workspace_prompt::panel(self, prompt.clone(), cx)
+            }
             PopoverKind::CheckoutRemoteBranchPrompt {
                 repo_id,
                 remote,

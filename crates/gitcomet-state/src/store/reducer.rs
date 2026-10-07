@@ -28,6 +28,7 @@ mod repository_preferences;
 mod settings;
 mod submodule_trust;
 mod util;
+mod workspace;
 
 use crate::model::{AppState, Loadable, RepoId};
 use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoPath, RepoPathList};
@@ -2353,5 +2354,55 @@ fn reduce_inner(
             command,
             result,
         }) => auth::repo_command_finished(repos, state, repo_id, command, result),
+
+        // ── Workspace ───────────────────────────────────────────
+        Msg::LoadWorkspace { repo_id } => workspace::load_workspace(state, repo_id),
+        Msg::ApplyWorkspaceEdit { repo_id, edit } => {
+            workspace::apply_workspace_edit(state, repo_id, edit)
+        }
+        Msg::SetWorkspaceBranchApplied {
+            repo_id,
+            name,
+            applied,
+        } => workspace::set_branch_applied(state, repo_id, name, applied),
+        Msg::CommitWorkspaceBranch {
+            repo_id,
+            name,
+            message,
+        } => workspace::commit_branch(state, repo_id, name, message),
+        Msg::CommitWorkspaceFile { repo_id, path } => {
+            workspace::commit_single_file(state, repo_id, path)
+        }
+        Msg::DismissWorkspaceConflict { repo_id } => workspace::dismiss_conflict(state, repo_id),
+        Msg::PushWorkspaceBranch { repo_id, name } => workspace::push_branch(state, repo_id, name),
+        Msg::Internal(crate::msg::InternalMsg::WorkspaceLoaded {
+            repo_id,
+            result,
+            assignments,
+            workspace_commit,
+        }) => workspace::workspace_loaded(state, repo_id, result, assignments, workspace_commit),
+        Msg::Internal(crate::msg::InternalMsg::WorkspaceEditFinished {
+            repo_id,
+            edit,
+            result,
+        }) => workspace::workspace_edit_finished(state, repo_id, edit, result),
+        Msg::Internal(crate::msg::InternalMsg::WorkspaceActiveFinished {
+            repo_id,
+            active,
+            checkout_base,
+            result,
+        }) => workspace::workspace_active_finished(state, repo_id, active, checkout_base, result),
+        Msg::Internal(crate::msg::InternalMsg::WorkspaceAssignFinished {
+            repo_id,
+            path,
+            hunk,
+            branch,
+            result,
+        }) => workspace::workspace_assign_finished(state, repo_id, path, hunk, branch, result),
+        Msg::Internal(crate::msg::InternalMsg::WorkspacePushFinished {
+            repo_id,
+            name,
+            result,
+        }) => workspace::workspace_push_finished(state, repo_id, name, result),
     }
 }

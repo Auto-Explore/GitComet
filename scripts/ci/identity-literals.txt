@@ -17,6 +17,7 @@ crates/gitcomet-core/src/identity.rs package-metadata 1 GitComet's own identity 
 crates/gitcomet-core/src/identity.rs vendor 7 GitComet's own identity (definition site)
 crates/gitcomet-core/src/path_utils.rs identifier 2 filesystem service staging and save temporary file prefixes
 crates/gitcomet-core/src/signing_tools.rs identifier 1 temporary directory prefix
+crates/gitcomet-core/src/workspace.rs identifier 2 workspace branch and ref namespace: the on-disk ref format written into existing repositories
 crates/gitcomet-extension-example-app/src/main.rs display-name 1 the example product describes itself as built on GitComet crates
 crates/gitcomet-extension-example/src/lib.rs package-metadata 1 the example product's own identity (definition site)
 crates/gitcomet-fs-watch/src/macos.rs identifier 1 FSEvents dispatch queue label
@@ -27,6 +28,7 @@ crates/gitcomet-git-gix/src/repo/maintenance.rs identifier 1 progress thread nam
 crates/gitcomet-git-gix/src/repo/mergetool.rs identifier 3 temporary prefixes and the shared per-repo trust config key
 crates/gitcomet-git-gix/src/repo/submodules.rs identifier 1 shared per-repo submodule trust config key
 crates/gitcomet-git-gix/src/repo/text_decode.rs identifier 1 temporary file prefix
+crates/gitcomet-git-gix/src/repo/workspace.rs identifier 1 per-repository bookkeeping directory under .git, a stable on-disk format
 crates/gitcomet-git-gix/src/util/trace2.rs identifier 2 Git trace2 and LFS progress temporary file prefixes
 crates/gitcomet-state/src/history_find.rs identifier 1 worker thread name (profiler attribution)
 crates/gitcomet-state/src/session/mod.rs identifier 2 session path encoding markers (file format)

@@ -67,6 +67,7 @@ mod tag_push;
 mod terminal_shutdown_confirm;
 mod unsaved_file_edits_confirm;
 mod upstream_picker;
+pub(in crate::view) mod workspace_prompt;
 mod worktree_add_prompt;
 mod worktree_badge_picker;
 mod worktree_picker;
@@ -380,6 +381,12 @@ pub(in super::super) struct PopoverHost {
     remote_url_input: Entity<components::TextInput>,
     remote_url_edit_input: Entity<components::TextInput>,
     create_branch_input: Entity<components::TextInput>,
+    /// Which step the open workspace prompt is showing.
+    ///
+    /// Held here rather than in the popover's kind because narrowing a branch's
+    /// action list down to one edit is not a different dialog: changing the
+    /// kind would make the fingerprint see a new popover replacing this one.
+    workspace_prompt_kind: Option<WorkspacePromptKind>,
     create_branch_checkout_enabled: bool,
     create_branch_source_target: String,
     worktree_ref_source_target: String,
@@ -968,6 +975,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::PushPicker
         | PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::RenameBranchPrompt { .. }
+        | PopoverKind::WorkspacePrompt { .. }
         | PopoverKind::StashPrompt
         | PopoverKind::StashDropConfirm { .. }
         | PopoverKind::CloneRepo
@@ -1061,7 +1069,8 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         }
         PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::RenameBranchPrompt { .. }
-        | PopoverKind::CheckoutRemoteBranchPrompt { .. } => Some(DIALOG_540_WIDTH),
+        | PopoverKind::CheckoutRemoteBranchPrompt { .. }
+        | PopoverKind::WorkspacePrompt { .. } => Some(DIALOG_540_WIDTH),
         PopoverKind::StashDropConfirm { .. }
         | PopoverKind::Repo {
             kind:

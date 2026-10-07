@@ -9,6 +9,7 @@ mod operations;
 mod repository;
 mod repository_preferences;
 mod signature_map;
+mod workspace;
 
 pub use app::*;
 pub use diff::*;
@@ -19,11 +20,15 @@ pub use operations::*;
 pub use repository::*;
 pub use repository_preferences::*;
 pub use signature_map::CommitSignatureMap;
+pub use workspace::*;
 
 pub type Shared<T> = Arc<T>;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum Loadable<T> {
+    /// Nothing has been requested yet. This is also the `Default`, so a fresh
+    /// state starts out not-loaded rather than loading or failed.
+    #[default]
     NotLoaded,
     Loading,
     Ready(T),

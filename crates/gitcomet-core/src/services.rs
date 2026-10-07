@@ -2121,6 +2121,161 @@ pub trait GitRepository: Send + Sync {
     }
 
     fn discard_worktree_changes(&self, paths: &[&Path]) -> Result<()>;
+
+    // ── Workspace (virtual branches) ──────────────────────────────
+    //
+    // The methods below implement the workspace described in
+    // [`crate::workspace`]. They are separate from the branch methods above
+    // because they maintain `gitcomet/workspace`, which is GitComet's own
+    // bookkeeping rather than a branch a user works on.
+
+    /// Read the workspace: the target branch and every virtual branch.
+    ///
+    /// The returned state describes intent — which branches exist and how they
+    /// stack — not Git state. A branch that has been created in another tool
+    /// may still be missing from the state until the next write.
+    fn read_workspace(&self) -> Result<crate::workspace::WorkspaceState> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "workspace is not implemented for this backend",
+        )))
+    }
+
+    /// Persist the workspace after an edit.
+    ///
+    /// The state is validated before it is written, so a rejected edit leaves
+    /// the stored workspace exactly as it was rather than half-applied.
+    fn write_workspace(&self, _state: &crate::workspace::WorkspaceState) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "workspace is not implemented for this backend",
+        )))
+    }
+
+    /// Read which virtual branch each changed file belongs to.
+    fn read_workspace_assignments(&self) -> Result<crate::workspace::AssignmentIndex> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "workspace is not implemented for this backend",
+        )))
+    }
+
+    fn write_workspace_assignments(
+        &self,
+        _index: &crate::workspace::AssignmentIndex,
+    ) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "workspace is not implemented for this backend",
+        )))
+    }
+
+    /// Create a branch for `name` at its base and apply it.
+    ///
+    /// The base is the branch's parent if it is stacked, otherwise the
+    /// workspace target.
+    fn create_virtual_branch(&self, name: &str, base: &str) -> Result<()> {
+        let _ = (name, base);
+        Err(Error::new(ErrorKind::Unsupported(
+            "workspace is not implemented for this backend",
+        )))
+    }
+
+    /// Point an existing branch at a new base, rebasing it there.
+    ///
+    /// Used both when the workspace target moves and when a branch is stacked
+    /// on a different branch.
+    fn rebase_virtual_branch(&self, _name: &str, _onto: &str) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "workspace is not implemented for this backend",
+        )))
+    }
+
+    /// Put the working directory on the workspace branch, building it if
+    /// needed, and return its tip.
+    ///
+    /// This is what makes an applied branch visible in the user's files rather
+    /// than only in a ref. Implementations must refuse, never discard, when
+    /// local changes would be overwritten — the same rule `git checkout` has.
+    fn enter_workspace(&self) -> Result<CommitId> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "workspace is not implemented for this backend",
+        )))
+    }
+
+    /// Take the working directory back off the workspace branch onto `onto`.
+    ///
+    /// `onto` is the branch the user was on before entering, so leaving is the
+    /// inverse of [`Self::enter_workspace`] and carries the same refusal rule.
+    fn leave_workspace(&self, _onto: &str) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "workspace is not implemented for this backend",
+        )))
+    }
+
+    /// Rebuild `gitcomet/workspace` so it holds the combined tree of
+    /// `applied`, in the order given.
+    ///
+    /// `applied` must already be ordered so a stacked branch follows its
+    /// parent; see [`crate::workspace::WorkspaceState::application_order`].
+    /// Each entry is merged with a merge commit, which is what keeps the
+    /// workspace branch's history readable and reversible.
+    ///
+    /// A conflict between two applied branches is returned as an error naming
+    /// both branches, rather than being left half-merged in the worktree.
+    fn update_workspace_branch(&self, _applied: &[&str]) -> Result<CommitId> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "workspace is not implemented for this backend",
+        )))
+    }
+
+    /// Move every independent branch onto `target` and rebuild the workspace.
+    ///
+    /// Branches stacked on another virtual branch move with their base and are
+    /// not rebased here.
+    fn update_workspace_target(&self, _target: &str) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "workspace is not implemented for this backend",
+        )))
+    }
+
+    /// Commit the changes in `paths` to `name` rather than to the workspace.
+    ///
+    /// This is how assigned files become commits on a virtual branch: the
+    /// paths are committed against that branch's own base, so the commit
+    /// contains only the work assigned to it.
+    fn commit_paths_to_virtual_branch(
+        &self,
+        _name: &str,
+        _message: &str,
+        _paths: &[&Path],
+    ) -> Result<CommitOperationOutcome> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "workspace is not implemented for this backend",
+        )))
+    }
+
+    /// Whether `name` is safe to push and targets `target` upstream.
+    ///
+    /// The workspace pushes virtual branches as ordinary branches; this exists
+    /// so the UI can say what a push would do before it does it, and so a
+    /// stacked branch's PR base is known without opening a browser.
+    fn virtual_branch_push_target(
+        &self,
+        name: &str,
+        workspace: &crate::workspace::WorkspaceState,
+    ) -> Option<String> {
+        let _ = (name, workspace);
+        None
+    }
+
+    /// Publish the virtual branch `name`, setting its upstream on first push.
+    ///
+    /// A workspace branch is an ordinary Git branch that the user may not be
+    /// checked out on, so this pushes the named ref rather than `HEAD`. There is
+    /// deliberately no "push everything" form: publishing a workspace branch is
+    /// always one deliberate action on one branch.
+    fn push_virtual_branch(&self, _name: &str) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "pushing a workspace branch is not implemented for this backend",
+        )))
+    }
 }
 
 fn validate_safe_push_after_commit_target<R: GitRepository + ?Sized>(

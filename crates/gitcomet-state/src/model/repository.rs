@@ -5,6 +5,7 @@ use super::{
     CommandLogEntry, ConflictState, DiffState, FileBrowserState, GitHookOperation, HistoryState,
     InteractiveCherryPickSetup, InteractiveRebaseSetup, Loadable, RepoLoadsInFlight,
     RepoNavigationState, RepoPendingState, Shared, SubmoduleAddProgressState, TagPushPreviewState,
+    WorkspaceRepoState,
 };
 use crate::session;
 use gitcomet_core::domain::*;
@@ -75,6 +76,10 @@ pub struct RepoState {
     pub upstream_divergence: Loadable<Option<UpstreamDivergence>>,
     pub upstream_divergence_rev: u64,
     pub branches: Loadable<Arc<Vec<Branch>>>,
+    /// The GitButler-style workspace: virtual branches, their stacks, and the
+    /// `gitcomet/workspace` branch. Loaded lazily — a repository that never
+    /// opens the Workspace view never touches it.
+    pub workspace: WorkspaceRepoState,
     pub branches_rev: u64,
     pub tags: Loadable<Arc<Vec<Tag>>>,
     pub tags_rev: u64,
@@ -347,6 +352,7 @@ impl RepoState {
             feedback: RepoFeedbackState::default(),
             pending: RepoPendingState::default(),
             load_epoch: 0,
+            workspace: WorkspaceRepoState::default(),
         }
     }
 

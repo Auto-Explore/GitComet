@@ -2182,6 +2182,39 @@ impl PopoverHost {
                     });
                 }
             }
+            ContextMenuAction::AssignHunkToWorkspace {
+                repo_id,
+                path,
+                hunk,
+            } => {
+                // Owned, because opening the prompt takes `&mut self` while a borrow of
+                // `self.state` would still be live.
+                let branch = self
+                    .state
+                    .repos
+                    .iter()
+                    .find(|repo| repo.id == repo_id)
+                    .and_then(|repo| repo.workspace.assignments.file(&path))
+                    .and_then(|file| file.hunk_branch(hunk))
+                    .map(str::to_string);
+                let anchor = self.popover_anchor_point();
+                self.open_popover_at(
+                    PopoverKind::WorkspacePrompt {
+                        repo_id,
+                        prompt: workspace_prompt::assign_hunk_prompt(
+                            &path,
+                            hunk,
+                            branch.as_deref(),
+                        ),
+                    },
+                    anchor,
+                    window,
+                    cx,
+                );
+                // The dialog that replaces this menu replaces it, so letting the
+                // common tail close the popover would close the dialog too.
+                close_after_action = false;
+            }
             ContextMenuAction::StageHunk { repo_id, src_ix } => {
                 if let Some(patch) = self.build_unified_patch_for_hunk_src_ix(repo_id, src_ix, cx) {
                     self.store.dispatch(Msg::StageHunk { repo_id, patch });

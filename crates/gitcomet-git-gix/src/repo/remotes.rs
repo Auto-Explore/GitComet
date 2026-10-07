@@ -526,7 +526,7 @@ impl GixRepo {
         !fetch_urls.is_empty() && fetch_urls == push_urls
     }
 
-    fn preferred_remote_name(&self) -> Result<Option<String>> {
+    pub(super) fn preferred_remote_name(&self) -> Result<Option<String>> {
         let remotes = self.list_remotes_impl()?;
         if remotes.is_empty() {
             return Ok(None);
@@ -1279,6 +1279,11 @@ impl GixRepo {
         prune: bool,
         capture_output: bool,
     ) -> Result<CommandOutput> {
+        // A pull merges into HEAD, so on the workspace branch it would leave a
+        // merge commit there that the next rebuild discards. Moving the base
+        // forward is `SetTarget`, which already exists and is the operation
+        // that means it here.
+        self.refuse_workspace_head_action("a pull")?;
         let branch = self.current_branch_name()?;
         // Read the configuration rather than the tracking ref: a branch whose
         // upstream was deleted on the remote still has one configured, and
@@ -1942,6 +1947,13 @@ impl GixRepo {
     }
 
     fn push_with_optional_output_impl(&self, capture_output: bool) -> Result<CommandOutput> {
+        // This pushes whatever HEAD is, and entering the workspace is what puts
+        // HEAD on `gitcomet/workspace`. Without the guard the ordinary Push
+        // button would publish GitComet's bookkeeping branch to the user's
+        // remote — with `--set-upstream`, so it would also follow the user to
+        // every later branch switch. `push_virtual_branch` is the safe path: it
+        // names the ref instead of publishing HEAD.
+        self.refuse_workspace_head_action("a push")?;
         if let Some(branch) = self.current_branch_name()? {
             if let Some(upstream) = self.configured_branch_upstream(&branch)? {
                 let output = self.push_head_to_branch_with_optional_output_impl(
@@ -1977,6 +1989,11 @@ impl GixRepo {
     }
 
     fn push_force_with_optional_output_impl(&self, capture_output: bool) -> Result<CommandOutput> {
+        // A force push publishes HEAD just as an ordinary push does, and with
+        // `--force-with-lease` it would overwrite the remote's copy of the
+        // workspace branch rather than merely adding to it. See
+        // [`GixRepo::refuse_workspace_head_action`], which carries the reasoning.
+        self.refuse_workspace_head_action("a force push")?;
         if let Some(branch) = self.current_branch_name()?
             && let Some(upstream) = self.branch_upstream(&branch)?
         {
@@ -2007,6 +2024,7 @@ impl GixRepo {
         &self,
         lease: &ForcePushLease,
     ) -> Result<CommandOutput> {
+        self.refuse_workspace_head_action("a force push with a lease")?;
         self.push_head_to_branch_with_oid_lease_with_output_impl(lease)
     }
 
@@ -2095,6 +2113,7 @@ impl GixRepo {
     }
 
     pub(super) fn merge_ref_with_output_impl(&self, reference: &str) -> Result<CommandOutput> {
+        self.refuse_workspace_head_action("a merge")?;
         validate_ref_like_arg(reference, "reference")?;
 
         let command_str = format!("git merge --ff --no-edit {reference}");

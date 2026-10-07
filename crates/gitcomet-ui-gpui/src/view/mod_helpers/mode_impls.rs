@@ -313,6 +313,17 @@ pub(crate) enum PopoverKind {
         section: StatusSection,
         folder: std::sync::Arc<std::path::Path>,
     },
+    /// An edit to the workspace: create, restack, re-parent or remove a
+    /// virtual branch, or point the workspace at a different target.
+    ///
+    /// One kind covers all of them because they differ only in the label on the
+    /// field and in which `WorkspaceEdit` confirming builds; a variant each would
+    /// mean the same prompt body, input handling and dismissal logic repeated
+    /// seven times.
+    WorkspacePrompt {
+        repo_id: RepoId,
+        prompt: WorkspacePrompt,
+    },
     PreviousCommitMessagesMenu {
         repo_id: RepoId,
     },
@@ -1124,6 +1135,112 @@ pub(in crate::view) enum TerminalShutdownAction {
         workspace_id: gitcomet_state::session::WorkspaceId,
     },
     QuitApp,
+}
+
+/// Which workspace edit an open [`WorkspacePrompt`] is collecting input for.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(in crate::view) enum WorkspacePromptKind {
+    /// Offer the branch's own actions, then narrow to one of them.
+    BranchActions,
+    /// A new branch built directly on the workspace target.
+    Create,
+    /// A new branch that takes [`WorkspacePrompt::branch`]'s place in the stack.
+    CreateAbove,
+    /// A new branch stacked under [`WorkspacePrompt::branch`].
+    CreateBelow,
+    /// Rebase the workspace onto a different target branch.
+    SetTarget,
+    /// Restack [`WorkspacePrompt::branch`] onto a different base.
+    SetParent,
+    /// Move [`WorkspacePrompt::branch`] into another branch's stack.
+    MoveToStack,
+    /// Delete [`WorkspacePrompt::branch`].
+    Remove,
+    /// Say which branch [`WorkspacePrompt::path`] belongs to.
+    AssignFile,
+    /// Say which branch one hunk of a file belongs to.
+    AssignHunk,
+    /// Write the message for the commit of [`WorkspacePrompt::path`].
+    CommitMessage,
+    /// Write the message for a commit of every file assigned to
+    /// [`WorkspacePrompt::branch`].
+    CommitBranch,
+}
+
+impl WorkspacePromptKind {
+    /// Whether this step asks for a typed value.
+    ///
+    /// False for the action list, which submits nothing by picking a row, and
+    /// for [`WorkspacePromptKind::Remove`], which is confirmed with no field.
+    pub(in crate::view) fn asks_for_text(self) -> bool {
+        !matches!(self, Self::BranchActions | Self::Remove)
+    }
+
+    pub(in crate::view) fn title(self) -> &'static str {
+        match self {
+            Self::BranchActions => "Branch",
+            Self::Create => "New branch",
+            Self::CreateAbove => "New branch above",
+            Self::CreateBelow => "New branch below",
+            Self::SetTarget => "Set workspace target",
+            Self::SetParent => "Change base branch",
+            Self::MoveToStack => "Move into stack",
+            Self::Remove => "Remove branch",
+            Self::AssignFile => "Assign file",
+            Self::AssignHunk => "Assign hunk",
+            Self::CommitMessage => "Commit changes",
+            Self::CommitBranch => "Commit branch",
+        }
+    }
+
+    pub(in crate::view) fn field_label(self) -> &'static str {
+        match self {
+            Self::Create | Self::CreateAbove | Self::CreateBelow => "Branch name",
+            Self::SetTarget => "Target branch",
+            Self::SetParent => "New base branch",
+            Self::MoveToStack => "Stack to join",
+            // An empty field is the way to unassign, so the label says what
+            // clearing it does rather than just naming the value.
+            Self::AssignFile => "Branch (empty leaves it unassigned)",
+            Self::AssignHunk => "Branch (empty leaves it unassigned)",
+            Self::CommitMessage | Self::CommitBranch => "Commit message",
+            Self::BranchActions | Self::Remove => "",
+        }
+    }
+
+    /// The label on the button that submits the prompt.
+    pub(in crate::view) fn confirm_label(self) -> &'static str {
+        match self {
+            Self::BranchActions => "Close",
+            Self::Create | Self::CreateAbove | Self::CreateBelow => "Create",
+            Self::SetTarget => "Set target",
+            Self::SetParent => "Restack",
+            Self::MoveToStack => "Move",
+            Self::Remove => "Remove",
+            Self::AssignFile | Self::AssignHunk => "Assign",
+            Self::CommitMessage | Self::CommitBranch => "Commit",
+        }
+    }
+}
+
+/// The workspace edit an open prompt is performing.
+///
+/// The subject branch is captured here rather than read from the store on
+/// submit: the list can change under an open prompt (a background load, a
+/// restack elsewhere) and the edit should apply to what the user was looking
+/// at when they opened it.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(in crate::view) struct WorkspacePrompt {
+    pub(in crate::view) kind: WorkspacePromptKind,
+    /// The branch the edit acts on, empty for the workspace-wide kinds and for
+    /// the file ones, where the branch is what gets typed.
+    pub(in crate::view) branch: String,
+    /// The file the edit acts on, set only for the file kinds.
+    pub(in crate::view) path: Option<std::path::PathBuf>,
+    /// Which hunk of that file, set only for the hunk kinds.
+    pub(in crate::view) hunk: Option<gitcomet_core::workspace::HunkFingerprint>,
+    /// The text the field opens with.
+    pub(in crate::view) value: String,
 }
 
 /// A close the Git-operation or extension guards asked about. Confirming it

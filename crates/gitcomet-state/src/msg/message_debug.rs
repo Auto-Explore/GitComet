@@ -654,6 +654,127 @@ impl std::fmt::Debug for InternalMsg {
                 .field("command", command)
                 .field("result", result)
                 .finish(),
+            InternalMsg::WorkspaceLoaded {
+                repo_id,
+                result,
+                assignments,
+                workspace_commit,
+            } => f
+                .debug_struct("WorkspaceLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .field("assignments", assignments)
+                .field("workspace_commit", workspace_commit)
+                .finish(),
+            InternalMsg::WorkspaceEditFinished {
+                repo_id,
+                edit,
+                result,
+            } => f
+                .debug_struct("WorkspaceEditFinished")
+                .field("repo_id", repo_id)
+                .field("edit", edit)
+                .field("result", result)
+                .finish(),
+            InternalMsg::WorkspaceActiveFinished {
+                repo_id,
+                active,
+                checkout_base,
+                result,
+            } => f
+                .debug_struct("WorkspaceActiveFinished")
+                .field("repo_id", repo_id)
+                .field("active", active)
+                .field("checkout_base", checkout_base)
+                .field("result", result)
+                .finish(),
+            InternalMsg::WorkspaceAssignFinished {
+                repo_id,
+                path,
+                hunk,
+                branch,
+                result,
+            } => f
+                .debug_struct("WorkspaceAssignFinished")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .field("hunk", hunk)
+                .field("branch", branch)
+                .field("result", result)
+                .finish(),
+            InternalMsg::WorkspacePushFinished {
+                repo_id,
+                name,
+                result,
+            } => f
+                .debug_struct("WorkspacePushFinished")
+                .field("repo_id", repo_id)
+                .field("name", name)
+                .field("result", result)
+                .finish(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::RepoId;
+    use gitcomet_core::error::{Error, ErrorKind};
+
+    fn rendered(msg: &InternalMsg) -> String {
+        format!("{msg:?}")
+    }
+
+    /// Every workspace message has to render, and render usefully.
+    ///
+    /// The match behind this is exhaustive with no catch-all, so a new variant
+    /// is a compile error rather than a silent gap — but a *field* left out is
+    /// silent, and these are the strings the debug overlay shows when a
+    /// workspace operation misbehaves.
+    #[test]
+    fn a_failed_switch_says_which_way_and_where_it_was_going_back_to() {
+        let rendered = rendered(&InternalMsg::WorkspaceActiveFinished {
+            repo_id: RepoId(3),
+            active: true,
+            checkout_base: Some("release/2.3".into()),
+            result: Err(Error::new(ErrorKind::Backend("local changes".into()))),
+        });
+        assert!(rendered.contains("WorkspaceActiveFinished"), "{rendered}");
+        assert!(rendered.contains("active"), "{rendered}");
+        assert!(rendered.contains("true"), "{rendered}");
+        assert!(rendered.contains("release/2.3"), "{rendered}");
+    }
+
+    #[test]
+    fn a_failed_leave_shows_the_fallback_target_or_admits_there_was_none() {
+        let without = rendered(&InternalMsg::WorkspaceActiveFinished {
+            repo_id: RepoId(3),
+            active: false,
+            checkout_base: None,
+            result: Err(Error::new(ErrorKind::Backend("local changes".into()))),
+        });
+        assert!(without.contains("false"), "{without}");
+        assert!(
+            without.contains("checkout_base: None"),
+            "an absent branch has to be visible as absent: {without}"
+        );
+    }
+
+    #[test]
+    fn a_failed_assignment_still_names_its_hunk() {
+        // Without the fingerprint the overlay cannot tell two assignments of
+        // the same file apart, which is exactly when it is needed.
+        let fingerprint = gitcomet_core::workspace::HunkFingerprint::of(&["NEW\n"], 1);
+        let rendered = rendered(&InternalMsg::WorkspaceAssignFinished {
+            repo_id: RepoId(3),
+            path: std::path::PathBuf::from("src/lib.rs"),
+            hunk: Some(fingerprint),
+            branch: Some("api".into()),
+            result: Err(Error::new(ErrorKind::Backend("nope".into()))),
+        });
+        assert!(rendered.contains("WorkspaceAssignFinished"), "{rendered}");
+        assert!(rendered.contains("src/lib.rs"), "{rendered}");
+        assert!(rendered.contains("api"), "{rendered}");
     }
 }

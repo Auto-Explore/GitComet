@@ -1064,7 +1064,13 @@ impl GixRepo {
         }
     }
 
+    /// Refuse a commit while the working directory is on `gitcomet/workspace`.
+    ///
+    /// The workspace branch is GitComet's own bookkeeping and is rebuilt from the
+    /// applied set, so a commit on it is discarded at the next apply. See
+    /// [`GixRepo::refuse_workspace_head_action`], which carries the reasoning.
     pub(super) fn commit_impl(&self, message: &str) -> Result<()> {
+        self.refuse_workspace_head_action("a commit")?;
         let merge_in_progress = self.merge_in_progress_for_commit()?;
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("commit");
@@ -1099,6 +1105,9 @@ impl GixRepo {
 
     pub(super) fn commit_amend_impl(&self, message: &str) -> Result<()> {
         self.refuse_amending_annex_adjustment()?;
+        // An amend here rewrites a commit the next rebuild is going to throw
+        // away, for the same reason a commit would.
+        self.refuse_workspace_head_action("an amend")?;
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("commit").arg("--amend").arg("-m").arg(message);
         run_git_simple(cmd, "git commit --amend")

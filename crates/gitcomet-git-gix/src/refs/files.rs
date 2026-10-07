@@ -132,6 +132,11 @@ fn collect_loose_local_branches_fast(
 
         let relative = path.strip_prefix(root).unwrap_or(path.as_path());
         let name = path_to_git_ref_name(relative);
+        // See `collect_local_branches`: GitComet's own branches are Workspace
+        // bookkeeping and never appear as user branches.
+        if crate::repo::is_workspace_branch_name(&name) {
+            continue;
+        }
         let target = cached_commit_id(target_ids, last_target, target_id);
         branches.push(Branch {
             name,

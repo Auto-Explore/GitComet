@@ -1589,9 +1589,12 @@ fn sidebar_tabs_grow_with_density_at_each_ui_scale(cx: &mut gpui::TestAppContext
                     // Real scale changes resize the panel too. Measure the
                     // natural tab widths with room for both header actions;
                     // the minimum-width search test covers constrained tabs.
+                    // Room enough for three tabs since the Workspace tab
+                    // joined the strip: at 320 the strip ran out of space and
+                    // the tabs were squeezed instead of growing with density.
                     test_support::set_sidebar_width_for_test(
                         view,
-                        px(320.0 * scale as f32 / 100.0),
+                        px(400.0 * scale as f32 / 100.0),
                         cx,
                     );
                 });
