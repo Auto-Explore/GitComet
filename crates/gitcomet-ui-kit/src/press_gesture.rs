@@ -119,7 +119,7 @@ pub fn install_reset(window: &mut Window) {
     window.on_mouse_event(|event: &MouseMoveEvent, phase, window, cx| {
         if phase == DispatchPhase::Capture {
             set_pointer_down(event.dragging(), window, cx);
-            if !event.dragging() {
+            if event.pressed_button.is_none() {
                 crate::click::reset(cx);
                 set_claimed(false, cx);
             }
