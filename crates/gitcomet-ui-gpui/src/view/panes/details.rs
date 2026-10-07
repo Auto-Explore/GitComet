@@ -291,6 +291,10 @@ impl DetailsPaneView {
             // Large-file chips also arrive after the list.
             repo.large_files_rev.hash(&mut hasher);
             repo.lfs_locks_rev.hash(&mut hasher);
+            repo.shared_preferences
+                .as_ref()
+                .map(|snapshot| snapshot.revision)
+                .hash(&mut hasher);
             repo.ops_rev.hash(&mut hasher);
             repo.history_state.selected_commit_rev.hash(&mut hasher);
             repo.log_rev.hash(&mut hasher);
@@ -695,7 +699,7 @@ impl DetailsPaneView {
         self.untracked_height_design = self.ui_scale().design_units_from_optional_pixels(height);
     }
 
-    /// Like the layout, a new default sort wins over every list sorted by hand.
+    /// Update the fallback for lists without an explicit repository sort.
     pub(in super::super) fn set_default_file_list_sort(
         &mut self,
         sort: crate::view::rows::CommitFileSort,
@@ -1045,7 +1049,9 @@ impl DetailsPaneView {
         files: &[gitcomet_core::domain::CommitFileChange],
     ) -> Arc<crate::view::rows::CommitFileProjection> {
         let list = crate::view::rows::FileListId::CommitFiles;
-        let sort = self.commit_file_sort;
+        let sort = self
+            .shared_file_sort_for(repo_id, list)
+            .unwrap_or(self.commit_file_sort);
         let filter = self.commit_file_filter;
         let source = self.file_source_key(repo_id, commit_details_rev, None);
         let key = crate::view::rows::file_list_projection_key(repo_id.0, source, sort, filter);
@@ -1400,11 +1406,66 @@ impl DetailsPaneView {
         )
     }
 
+    fn shared_file_sort_for(
+        &self,
+        repo_id: RepoId,
+        list: crate::view::rows::FileListId,
+    ) -> Option<crate::view::rows::CommitFileSort> {
+        self.state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .and_then(|repo| repo.shared_preferences.as_ref())
+            .map(|snapshot| {
+                let sort = snapshot
+                    .preferences
+                    .file_sorts
+                    .get(&list.preference_key())
+                    .copied()
+                    .map(crate::view::rows::CommitFileSort::from)
+                    .unwrap_or(self.default_file_list_sort);
+                if let crate::view::rows::FileListId::Status(section) = list
+                    && sort.needs_line_stats()
+                    && !crate::view::status_section_has_line_stats(section)
+                {
+                    crate::view::rows::CommitFileSort::default()
+                } else {
+                    sort
+                }
+            })
+    }
+
+    fn publish_file_sort(
+        &self,
+        list: crate::view::rows::FileListId,
+        sort: crate::view::rows::CommitFileSort,
+    ) -> bool {
+        let Some(repo_id) = self.active_repo_id() else {
+            return false;
+        };
+        if self.shared_file_sort_for(repo_id, list).is_none() {
+            return false;
+        }
+        // A previous choice may still be queued behind persistence work.
+        // Publish every explicit choice; the hub deduplicates in queue order.
+        self.store.dispatch(Msg::UpdateRepositoryPreference {
+            repo_id,
+            update: gitcomet_state::model::RepositoryPreferenceUpdate::FileSort {
+                list: list.preference_key(),
+                sort: sort.into(),
+            },
+        });
+        true
+    }
+
     pub(in super::super) fn set_commit_file_sort(
         &mut self,
         sort: crate::view::rows::CommitFileSort,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.publish_file_sort(crate::view::rows::FileListId::CommitFiles, sort) {
+            return;
+        }
         if self.commit_file_sort == sort {
             return;
         }
@@ -1615,7 +1676,8 @@ impl DetailsPaneView {
         path_alignment_visible_signature(&(
             repo_id,
             commit_details_rev,
-            self.commit_file_sort,
+            self.shared_file_sort_for(repo_id, crate::view::rows::FileListId::CommitFiles)
+                .unwrap_or(self.commit_file_sort),
             self.commit_file_filter,
             total_rows,
             range.start,
@@ -1628,6 +1690,12 @@ impl DetailsPaneView {
         &self,
         list: crate::view::rows::FileListId,
     ) -> crate::view::rows::CommitFileSort {
+        if let Some(sort) = self
+            .active_repo_id()
+            .and_then(|id| self.shared_file_sort_for(id, list))
+        {
+            return sort;
+        }
         match list {
             crate::view::rows::FileListId::Status(section) => self.status_file_sort_for(section),
             crate::view::rows::FileListId::CommitFiles => self.commit_file_sort,
@@ -1645,6 +1713,9 @@ impl DetailsPaneView {
         sort: crate::view::rows::CommitFileSort,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.publish_file_sort(list, sort) {
+            return;
+        }
         match list {
             crate::view::rows::FileListId::Status(section) => {
                 self.set_status_file_sort(section, sort, cx)
@@ -1703,6 +1774,11 @@ impl DetailsPaneView {
         &self,
         section: StatusSection,
     ) -> crate::view::rows::CommitFileSort {
+        if let Some(sort) = self.active_repo_id().and_then(|id| {
+            self.shared_file_sort_for(id, crate::view::rows::FileListId::Status(section))
+        }) {
+            return sort;
+        }
         self.status_file_sort
             .get(&section)
             .copied()
@@ -1725,6 +1801,9 @@ impl DetailsPaneView {
         sort: crate::view::rows::CommitFileSort,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.publish_file_sort(crate::view::rows::FileListId::Status(section), sort) {
+            return;
+        }
         if self.status_file_sort_for(section) == sort {
             return;
         }

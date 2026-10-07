@@ -389,8 +389,8 @@ pub(in crate::view) enum ContextMenuAction {
     },
     SetExplorerVisibility {
         repo_id: RepoId,
-        hidden: bool,
-        ignored: bool,
+        hidden: Option<bool>,
+        ignored: Option<bool>,
     },
     SetChangeTrackingView {
         view: ChangeTrackingView,

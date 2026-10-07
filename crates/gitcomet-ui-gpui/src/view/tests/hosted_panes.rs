@@ -1859,7 +1859,15 @@ fn sorted_linked_worktree_file_clicks_open_untracked_and_deleted_content(
                 pane.set_file_list_layout(layout, cx);
             })
         });
-        crate::view::test_support::redraw(cx);
+        settle(cx, &view, &store, "shared worktree sorting", |cx| {
+            cx.update(|_, app| {
+                view.read(app)
+                    .details_pane
+                    .read(app)
+                    .file_list_sort_for(crate::view::rows::FileListId::WorktreeFiles)
+                    == crate::view::rows::CommitFileSort::PathDescending
+            })
+        });
         for (row, path, content) in [(0, "c.rs", "linked untracked"), (1, "b.rs", "-b 0")] {
             click_linked_file(cx, row, gpui::MouseButton::Left);
             assert_linked_diff(

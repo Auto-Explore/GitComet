@@ -442,6 +442,7 @@ fn dispatch_increments_failure_counter_when_channel_is_disconnected() {
         command_tx,
         Arc::new(std::sync::atomic::AtomicBool::new(true)),
         super::worker_channel::StoreInstanceId::next(),
+        crate::store::repository_preferences::PreferenceHub::new(None),
     );
 
     let store = AppStore {
@@ -468,6 +469,7 @@ fn concurrent_last_app_store_drops_shutdown_worker_once() {
         command_tx,
         Arc::clone(&alive),
         super::worker_channel::StoreInstanceId::next(),
+        crate::store::repository_preferences::PreferenceHub::new(None),
     );
     let store = AppStore {
         backend: Arc::new(FailingBackend),

@@ -166,6 +166,7 @@ fn successful_dropped_repo_commits_and_emits_deferred_persistence() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            preferences: None,
             repo_id: RepoId(1),
             spec,
             repo: Arc::new(DummyRepo::new(path.to_string_lossy().as_ref())),
@@ -778,6 +779,7 @@ fn last_drop_failing_selects_the_previous_valid_drop() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            preferences: None,
             repo_id: valid,
             spec,
             repo: Arc::new(DummyRepo::new("/tmp/drop-valid")),

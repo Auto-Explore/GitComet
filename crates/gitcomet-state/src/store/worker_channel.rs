@@ -64,6 +64,7 @@ enum StoreWorkerSenderInner {
 #[derive(Clone)]
 pub(super) struct StoreWorkerSender {
     inner: StoreWorkerSenderInner,
+    pub(super) preferences: Arc<super::repository_preferences::PreferenceHub>,
     alive: Arc<AtomicBool>,
     store_id: StoreInstanceId,
     repo_load_guard: Option<RepoLoadGuard>,
@@ -105,8 +106,25 @@ impl StoreWorkerSender {
         tx: mpsc::Sender<StoreWorkerCommand>,
         alive: Arc<AtomicBool>,
         store_id: StoreInstanceId,
+        preferences: Arc<super::repository_preferences::PreferenceHub>,
     ) -> Self {
+        let subscriber_tx = tx.clone();
+        let subscriber_alive = Arc::downgrade(&alive);
+        preferences.subscribe(
+            store_id.get(),
+            Box::new(move |snapshot| {
+                subscriber_alive
+                    .upgrade()
+                    .is_some_and(|alive| alive.load(Ordering::Acquire))
+                    && subscriber_tx
+                        .send(StoreWorkerCommand::Msg(Box::new(
+                            Msg::ApplyRepositoryPreferences(snapshot),
+                        )))
+                        .is_ok()
+            }),
+        );
         Self {
+            preferences,
             inner: StoreWorkerSenderInner::Command(tx),
             alive,
             store_id,
@@ -119,10 +137,34 @@ impl StoreWorkerSender {
     pub(super) fn for_test_msg_sender(tx: mpsc::Sender<Msg>) -> Self {
         Self {
             inner: StoreWorkerSenderInner::MsgForTest(tx),
+            preferences: super::repository_preferences::PreferenceHub::new(None),
             alive: Arc::new(AtomicBool::new(true)),
             store_id: StoreInstanceId(0),
             repo_load_guard: None,
             cancellation: None,
+        }
+    }
+
+    pub(super) fn refresh_open_preferences(&self, msg: &mut Msg) {
+        fn refresh(
+            message: &mut crate::msg::InternalMsg,
+            hub: &super::repository_preferences::PreferenceHub,
+        ) {
+            match message {
+                crate::msg::InternalMsg::RepoLoadFinished { message, .. } => refresh(message, hub),
+                crate::msg::InternalMsg::RepoOpenedOk {
+                    preferences: Some(snapshot),
+                    ..
+                } => {
+                    if let Some(latest) = hub.latest(&snapshot.key) {
+                        *snapshot = latest;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Msg::Internal(message) = msg {
+            refresh(message, &self.preferences);
         }
     }
 
@@ -250,6 +292,7 @@ impl StoreWorkerSender {
         if !self.alive.swap(false, Ordering::AcqRel) {
             return;
         }
+        self.preferences.unsubscribe(self.store_id.get());
 
         match &self.inner {
             StoreWorkerSenderInner::Command(tx) => {

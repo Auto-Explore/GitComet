@@ -121,6 +121,52 @@ impl StickyContext {
     }
 }
 
+const HEADER_SCROLL_DURATION: std::time::Duration = std::time::Duration::from_millis(150);
+
+pub(super) struct ScrollAnimation {
+    repo_id: RepoId,
+    key: SharedString,
+    row_keys: Rc<[SharedString]>,
+    start: f32,
+    target: f32,
+    last_offset: f32,
+    started: std::time::Instant,
+    bounds: Bounds<Pixels>,
+    row_height: f32,
+}
+
+fn animated_scroll_offset(start: f32, target: f32, elapsed: std::time::Duration) -> f32 {
+    let t = (elapsed.as_secs_f32() / HEADER_SCROLL_DURATION.as_secs_f32()).clamp(0.0, 1.0);
+    start + (target - start) * (1.0 - (1.0 - t).powi(3))
+}
+
+fn navigation_destination(
+    context: &StickyContext,
+    ix: usize,
+    center: bool,
+    height: f32,
+    row_height: f32,
+) -> f32 {
+    let mut offset = (ix as f32 * row_height).max(0.0);
+    for _ in 0..3 {
+        let layout = context.layout(height, row_height, offset);
+        let headers = layout
+            .slots
+            .iter()
+            .map(sidebar_sticky::StickySlot::row)
+            .collect::<Vec<_>>();
+        offset = sidebar_sticky::navigation_offset(
+            ix,
+            &headers,
+            height,
+            row_height,
+            context.rows.len(),
+            center,
+        );
+    }
+    offset
+}
+
 #[derive(Clone)]
 pub(super) enum NavigationTarget {
     #[cfg(test)]
@@ -427,7 +473,8 @@ impl SidebarPaneView {
         &mut self,
         bounds: Bounds<Pixels>,
         row_height: Pixels,
-        _cx: &mut gpui::Context<Self>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
     ) {
         if self.sticky_context.as_ref().is_some_and(|context| {
             context
@@ -466,27 +513,33 @@ impl SidebarPaneView {
         });
         let offset = if let Some((ix, center)) = target {
             context.anchor = None;
-            let mut offset = (ix as f32 * row_height).max(0.0);
-            // Re-fit at the destination: a reveal can change which edge owns
-            // the pin overflow control and which ancestors cover the body.
-            for _ in 0..3 {
-                let layout = context.layout(height, row_height, offset);
-                let headers = layout
-                    .slots
-                    .iter()
-                    .map(sidebar_sticky::StickySlot::row)
-                    .collect::<Vec<_>>();
-                offset = sidebar_sticky::navigation_offset(
-                    ix,
-                    &headers,
-                    height,
+            let offset = navigation_destination(context, ix, center, height, row_height);
+            let current = -f32::from(self.branches_scroll.0.borrow().base_handle.offset().y);
+            self.sidebar_scroll_animation = None;
+            if !center
+                && crate::ui_runtime::current().uses_pane_animations()
+                && !cx.reduce_motion()
+                && self.collapsed_popover_section.is_none()
+                && (current - offset).abs() > 0.5
+                && let Some(repo_id) = self.state.active_repo
+            {
+                self.sidebar_scroll_animation = Some(ScrollAnimation {
+                    repo_id,
+                    key: presentation.row_keys[ix].clone(),
+                    row_keys: Rc::clone(&presentation.row_keys),
+                    start: current,
+                    target: offset,
+                    last_offset: current,
+                    started: std::time::Instant::now(),
+                    bounds,
                     row_height,
-                    presentation.rows.len(),
-                    center,
-                );
+                });
             }
-            Some(offset)
+            self.sidebar_scroll_animation.is_none().then_some(offset)
         } else {
+            if self.sidebar_scroll_animation.is_some() {
+                context.anchor = None;
+            }
             context.anchor.take().and_then(|(anchor, y)| {
                 presentation
                     .row_keys
@@ -500,6 +553,45 @@ impl SidebarPaneView {
                     })
             })
         };
+        let mut offset = offset;
+        if let Some(mut animation) = self.sidebar_scroll_animation.take() {
+            let current = -f32::from(self.branches_scroll.0.borrow().base_handle.offset().y);
+            let valid = self.state.active_repo == Some(animation.repo_id)
+                && self.state.sidebar_mode == SidebarMode::Branches
+                && bounds == animation.bounds
+                && row_height == animation.row_height
+                && (current - animation.last_offset).abs() <= 0.5;
+            if valid {
+                let mut target_exists = true;
+                if !Rc::ptr_eq(&animation.row_keys, &presentation.row_keys) {
+                    if let Some(ix) = presentation
+                        .row_keys
+                        .iter()
+                        .position(|key| *key == animation.key)
+                    {
+                        animation.target =
+                            navigation_destination(context, ix, false, height, row_height);
+                        animation.row_keys = Rc::clone(&presentation.row_keys);
+                    } else {
+                        target_exists = false;
+                    }
+                }
+                if target_exists {
+                    let elapsed = animation.started.elapsed();
+                    let next = animated_scroll_offset(animation.start, animation.target, elapsed)
+                        .clamp(
+                            0.0,
+                            (presentation.rows.len() as f32 * row_height - height).max(0.0),
+                        );
+                    offset = Some(next);
+                    animation.last_offset = next;
+                    if elapsed < HEADER_SCROLL_DURATION {
+                        self.sidebar_scroll_animation = Some(animation);
+                        cx.on_next_frame(window, |_, _, cx| cx.notify());
+                    }
+                }
+            }
+        }
         if let Some(offset) = offset {
             let mut handle = self.branches_scroll.0.borrow_mut();
             handle.deferred_scroll_to_item = None;
@@ -884,5 +976,127 @@ fn review_fractional_sidebar_rows_share_the_decoration_geometry(cx: &mut gpui::T
                 "row rendering and decoration disagree at {scale}% / {display_scale}x"
             );
         });
+    }
+}
+
+#[cfg(test)]
+mod animation_tests {
+    use super::*;
+
+    #[gpui::test]
+    fn header_animation_retargets_and_manual_scrolling_cancels(cx: &mut gpui::TestAppContext) {
+        use crate::view::test_support::{self, TestBackend};
+        let _guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        let mut state = super::super::long_list_tests::branch_fixture(10_000);
+        Arc::make_mut(&mut state).repos[0].stashes =
+            super::super::long_list_tests::fixture(100, CollapsedSidebarSection::Stashes).repos[0]
+                .stashes
+                .clone();
+        cx.update(|_, app| {
+            view.update(app, |view, cx| {
+                view.store.replace_snapshot_for_test(state.clone());
+                test_support::push_test_state(view, state, cx);
+                view.set_sidebar_collapsed(false, cx);
+            })
+        });
+        test_support::redraw(cx);
+        let pane = cx.update(|_, app| view.read(app).sidebar_pane.clone());
+        let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(300.0), px(500.0)));
+        cx.update(|window, app| {
+            pane.update(app, |pane, cx| {
+                crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+                    pane.navigate_sidebar_header(
+                        branch_sidebar::stash_section_storage_key().into(),
+                        cx,
+                    );
+                    pane.prepare_sidebar_scroll(bounds, px(24.0), window, cx);
+                    let animation = pane
+                        .sidebar_scroll_animation
+                        .as_mut()
+                        .expect("live header navigation animates");
+                    assert!(animation.target > animation.start + 10_000.0);
+                    animation.started =
+                        std::time::Instant::now() - std::time::Duration::from_millis(50);
+                    pane.prepare_sidebar_scroll(bounds, px(24.0), window, cx);
+                    let offset = -f32::from(pane.branches_scroll.0.borrow().base_handle.offset().y);
+                    let animation = pane.sidebar_scroll_animation.as_ref().unwrap();
+                    assert!(offset > animation.start && offset < animation.target);
+
+                    pane.navigate_sidebar_header(
+                        branch_sidebar::local_section_storage_key().into(),
+                        cx,
+                    );
+                    pane.prepare_sidebar_scroll(bounds, px(24.0), window, cx);
+                    let animation = pane
+                        .sidebar_scroll_animation
+                        .as_ref()
+                        .expect("second click retargets");
+                    assert!((animation.start - offset).abs() < 0.5);
+                    assert!(animation.target < animation.start);
+
+                    // A scrollbar changes the actual offset between frames.
+                    pane.branches_scroll
+                        .0
+                        .borrow()
+                        .base_handle
+                        .set_offset(point(px(0.0), px(-125.0)));
+                    pane.prepare_sidebar_scroll(bounds, px(24.0), window, cx);
+                    assert!(pane.sidebar_scroll_animation.is_none());
+                    assert_eq!(
+                        pane.branches_scroll.0.borrow().base_handle.offset().y,
+                        px(-125.0)
+                    );
+
+                    pane.navigate_sidebar_header(
+                        branch_sidebar::stash_section_storage_key().into(),
+                        cx,
+                    );
+                    pane.prepare_sidebar_scroll(bounds, px(24.0), window, cx);
+                    let target = pane.sidebar_scroll_animation.as_ref().unwrap().target;
+                    pane.sidebar_scroll_animation.as_mut().unwrap().started =
+                        std::time::Instant::now() - std::time::Duration::from_millis(150);
+                    pane.prepare_sidebar_scroll(bounds, px(24.0), window, cx);
+                    assert!(pane.sidebar_scroll_animation.is_none());
+                    assert_eq!(
+                        -f32::from(pane.branches_scroll.0.borrow().base_handle.offset().y),
+                        target
+                    );
+                });
+                // Deterministic runtime preserves existing exact-offset tests.
+                pane.navigate_sidebar_header(
+                    branch_sidebar::local_section_storage_key().into(),
+                    cx,
+                );
+                pane.prepare_sidebar_scroll(bounds, px(24.0), window, cx);
+                assert!(pane.sidebar_scroll_animation.is_none());
+                assert_eq!(
+                    pane.branches_scroll.0.borrow().base_handle.offset().y,
+                    px(0.0)
+                );
+            })
+        });
+    }
+    #[test]
+    fn header_scroll_is_fast_monotonic_and_finishes_at_the_exact_destination() {
+        for (start, target) in [(0.0, 24000.0), (24000.0, 0.0)] {
+            assert_eq!(
+                animated_scroll_offset(start, target, std::time::Duration::ZERO),
+                start
+            );
+            let halfway =
+                animated_scroll_offset(start, target, std::time::Duration::from_millis(75));
+            assert!(halfway > start.min(target) && halfway < start.max(target));
+            assert_eq!(
+                animated_scroll_offset(start, target, HEADER_SCROLL_DURATION),
+                target
+            );
+            assert_eq!(
+                animated_scroll_offset(start, target, std::time::Duration::from_secs(1)),
+                target
+            );
+        }
     }
 }

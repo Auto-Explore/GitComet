@@ -24,6 +24,7 @@ pub(super) mod maintenance;
 mod nav_history_tests;
 mod repo_management;
 mod repo_watch;
+mod repository_preferences;
 mod settings;
 mod submodule_trust;
 mod util;
@@ -774,30 +775,7 @@ fn reduce_inner(
             repo_id,
             hidden,
             ignored,
-        } => {
-            if let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo.file_browser.show_hidden = hidden;
-                repo.file_browser.show_ignored = ignored;
-                if !ignored {
-                    repo.file_browser.pending_recursive_expansions.clear();
-                }
-                // Keyboard actions must not reach rows that just disappeared.
-                if !hidden {
-                    let revealed = &repo.file_browser.revealed_paths;
-                    repo.file_browser.selection.retain(|path| {
-                        !crate::explorer::is_hidden_path(path)
-                            || revealed.iter().any(|shown| shown.starts_with(path))
-                    });
-                }
-                repo.file_browser.stale = true;
-                repo.file_browser.bump_rev();
-                return vec![Effect::LoadFileBrowser {
-                    repo_id,
-                    source: repo.file_browser.source.clone(),
-                }];
-            }
-            vec![]
-        }
+        } => repository_preferences::set_explorer_visibility(state, repo_id, hidden, ignored),
         Msg::OpenRepo(path) => repo_management::open_repo(repos, id_alloc, state, path),
         Msg::OpenRepoFromExternalDrop(path) => {
             repo_management::open_repo_from_external_drop(repos, id_alloc, state, path)
@@ -946,6 +924,10 @@ fn reduce_inner(
             external_and_history::repo_externally_changed(repos, state, repo_id, change)
         }
         Msg::RepoWatchDegraded { repo_id: _, reason } => repo_watch::watch_degraded(state, reason),
+        Msg::UpdateRepositoryPreference { repo_id, update } => {
+            repository_preferences::update(state, repo_id, update)
+        }
+        Msg::ApplyRepositoryPreferences(snapshot) => repository_preferences::apply(state, snapshot),
         Msg::SetHistoryScope { repo_id, scope } => {
             external_and_history::set_history_scope(state, repo_id, scope)
         }
@@ -2020,7 +2002,8 @@ fn reduce_inner(
             repo_id,
             spec,
             repo,
-        }) => repo_management::repo_opened_ok(repos, state, repo_id, spec, repo),
+            preferences,
+        }) => repo_management::repo_opened_ok(repos, state, repo_id, spec, repo, preferences),
         Msg::Internal(crate::msg::InternalMsg::RepoLoadFinished {
             repo_id,
             load_epoch,
