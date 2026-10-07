@@ -3,7 +3,7 @@
 use crate::contributions::{
     BottomPanelDescriptor, ChromeDescriptor, CloseGuard, CommandDescriptor, DetailsTabDescriptor,
     MenuLocation, RepositoryEntryGate, RepositoryViewDescriptor, SettingsPageDescriptor,
-    SidebarSectionDescriptor, StatusItemDescriptor, WindowGateDescriptor,
+    SidebarSectionDescriptor, SidebarTabDescriptor, StatusItemDescriptor, WindowGateDescriptor,
 };
 use crate::id::{ContributionId, ExtensionId};
 use crate::{Extension, HistoryAnnotator};
@@ -64,6 +64,7 @@ pub struct Registrar {
     repository_views: Vec<(ContributionId, RepositoryViewDescriptor)>,
     bottom_panels: Vec<(ContributionId, BottomPanelDescriptor)>,
     details_tabs: Vec<(ContributionId, DetailsTabDescriptor)>,
+    sidebar_tabs: Vec<(ContributionId, SidebarTabDescriptor)>,
     sidebar_sections: Vec<(ContributionId, SidebarSectionDescriptor)>,
     history_annotators: Vec<(ContributionId, HistoryAnnotator)>,
     sidebar_providers: Vec<(ContributionId, crate::SidebarProvider)>,
@@ -88,6 +89,7 @@ impl Registrar {
             repository_views: Vec::new(),
             bottom_panels: Vec::new(),
             details_tabs: Vec::new(),
+            sidebar_tabs: Vec::new(),
             sidebar_sections: Vec::new(),
             history_annotators: Vec::new(),
             sidebar_providers: Vec::new(),
@@ -153,15 +155,37 @@ impl Registrar {
         self
     }
 
+    /// Registers a tab in a repository panel. Both areas use the same
+    /// descriptor, view scoping, lifetime and validation.
+    pub fn panel_tab(
+        &mut self,
+        area: crate::PanelArea,
+        local: impl Into<Cow<'static, str>>,
+        descriptor: crate::PanelTabDescriptor,
+    ) -> &mut Self {
+        if let Some(id) = self.id(local) {
+            match area {
+                crate::PanelArea::Details => self.details_tabs.push((id, descriptor)),
+                crate::PanelArea::Sidebar => self.sidebar_tabs.push((id, descriptor)),
+            }
+        }
+        self
+    }
+
     pub fn details_tab(
         &mut self,
         local: impl Into<Cow<'static, str>>,
         descriptor: DetailsTabDescriptor,
     ) -> &mut Self {
-        if let Some(id) = self.id(local) {
-            self.details_tabs.push((id, descriptor));
-        }
-        self
+        self.panel_tab(crate::PanelArea::Details, local, descriptor)
+    }
+
+    pub fn sidebar_tab(
+        &mut self,
+        local: impl Into<Cow<'static, str>>,
+        descriptor: SidebarTabDescriptor,
+    ) -> &mut Self {
+        self.panel_tab(crate::PanelArea::Sidebar, local, descriptor)
     }
 
     pub fn sidebar_provider(
@@ -331,6 +355,7 @@ pub struct Registry {
     repository_views: Vec<(ContributionId, RepositoryViewDescriptor)>,
     bottom_panels: Vec<(ContributionId, BottomPanelDescriptor)>,
     details_tabs: Vec<(ContributionId, DetailsTabDescriptor)>,
+    sidebar_tabs: Vec<(ContributionId, SidebarTabDescriptor)>,
     sidebar_sections: Vec<(ContributionId, SidebarSectionDescriptor)>,
     history_annotators: Vec<(ContributionId, HistoryAnnotator)>,
     sidebar_providers: Vec<(ContributionId, crate::SidebarProvider)>,
@@ -378,6 +403,7 @@ impl Registry {
             registry.repository_views.extend(registrar.repository_views);
             registry.bottom_panels.extend(registrar.bottom_panels);
             registry.details_tabs.extend(registrar.details_tabs);
+            registry.sidebar_tabs.extend(registrar.sidebar_tabs);
             registry.sidebar_sections.extend(registrar.sidebar_sections);
             registry
                 .history_annotators
@@ -420,6 +446,10 @@ impl Registry {
             (
                 "details tab",
                 duplicates(registry.details_tabs.iter().map(|(id, _)| id)),
+            ),
+            (
+                "sidebar tab",
+                duplicates(registry.sidebar_tabs.iter().map(|(id, _)| id)),
             ),
             (
                 "sidebar section",
@@ -549,6 +579,10 @@ impl Registry {
 
     pub fn details_tabs(&self) -> &[(ContributionId, DetailsTabDescriptor)] {
         &self.details_tabs
+    }
+
+    pub fn sidebar_tabs(&self) -> &[(ContributionId, SidebarTabDescriptor)] {
+        &self.sidebar_tabs
     }
 
     pub fn sidebar_providers(&self) -> &[(ContributionId, crate::SidebarProvider)] {

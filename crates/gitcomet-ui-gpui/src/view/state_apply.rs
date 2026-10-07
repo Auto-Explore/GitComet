@@ -619,6 +619,9 @@ impl GitCometView {
         if self.repository_views.is_some() {
             self.sync_extension_navigation(cx);
         }
+        if self.sidebar_tabs.is_some() {
+            self.sync_sidebar_tabs(cx);
+        }
         if !self.document_routing.pending.is_empty() {
             self.finish_document_routing(cx);
         }

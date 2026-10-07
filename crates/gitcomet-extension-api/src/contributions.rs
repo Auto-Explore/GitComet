@@ -9,13 +9,17 @@
 //! break an extension.
 
 use crate::host::{RepositoryHandle, WindowHost};
-use gitcomet_ui_kit::gpui::{AnyView, App, SharedString, Window};
+use gitcomet_ui_kit::gpui::{AnyView, App, FocusHandle, Focusable, SharedString, Window};
 use gitcomet_ui_kit::theme::AppTheme;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 
 /// Builds a contribution's view for one window or repository.
 pub type ViewBuilder<C> = Rc<dyn Fn(C, &mut Window, &mut App) -> AnyView>;
+
+/// The keyboard scope of a built repository view.
+pub type ViewFocus = Rc<dyn Fn(&AnyView, &App) -> Option<FocusHandle>>;
 
 /// Runs a command.
 pub type CommandHandler = Rc<dyn Fn(CommandContext, &mut Window, &mut App)>;
@@ -27,8 +31,8 @@ pub struct RepositoryViewContext {
     pub repository: RepositoryHandle,
 }
 
-/// A view of a repository, selectable next to History in the repository's
-/// navigation. The view is built when first selected in a window and kept
+/// A view of a repository, selectable next to History from the tabs in the
+/// action bar. The view is built when first selected in a window and kept
 /// while the repository stays open there.
 #[derive(Clone)]
 #[non_exhaustive]
@@ -36,12 +40,19 @@ pub struct RepositoryViewDescriptor {
     pub title: SharedString,
     pub icon: SharedString,
     pub build: ViewBuilder<RepositoryViewContext>,
+    /// Focused by the host when the user switches to this view.
+    pub focus: Option<ViewFocus>,
     /// Navigation belongs to the selected view, including mouse side buttons.
     pub navigation: Option<ViewNavigation>,
     /// The action bar's context while the view is selected: shown after
     /// Back/Forward in place of History's branch, tracking and merge
     /// controls, which a selected view always hides. Built with the view.
     pub action_bar: Option<ViewBuilder<RepositoryViewContext>>,
+    /// Listed in the action bar's More menu instead of having a tab of its
+    /// own, for a view used less often. While it is selected, More names it.
+    pub under_more: bool,
+    /// The content offered in each surrounding panel while this view is active.
+    pub panels: BTreeMap<PanelArea, PanelContentPolicy>,
 }
 
 impl RepositoryViewDescriptor {
@@ -54,13 +65,28 @@ impl RepositoryViewDescriptor {
             title: title.into(),
             icon: icon.into(),
             build: Rc::new(build),
+            focus: None,
             navigation: None,
             action_bar: None,
+            under_more: false,
+            panels: BTreeMap::new(),
         }
     }
 
     pub fn with_navigation(mut self, navigation: ViewNavigation) -> Self {
         self.navigation = Some(navigation);
+        self
+    }
+
+    /// Give the keyboard to the built view of type `V` on selection. The
+    /// host does this once per view switch, never on redraw or activation.
+    pub fn with_focus<V: Focusable + 'static>(mut self) -> Self {
+        self.focus = Some(Rc::new(|view, cx| {
+            view.clone()
+                .downcast::<V>()
+                .ok()
+                .map(|view| view.read(cx).focus_handle(cx))
+        }));
         self
     }
 
@@ -70,6 +96,22 @@ impl RepositoryViewDescriptor {
     ) -> Self {
         self.action_bar = Some(Rc::new(build));
         self
+    }
+
+    /// Lists the view in the action bar's More menu rather than as a tab.
+    pub fn under_more(mut self) -> Self {
+        self.under_more = true;
+        self
+    }
+
+    /// Sets which content a surrounding panel offers for this view.
+    pub fn with_panel_content(mut self, area: PanelArea, policy: PanelContentPolicy) -> Self {
+        self.panels.insert(area, policy);
+        self
+    }
+
+    pub fn panel_content(&self, area: PanelArea) -> PanelContentPolicy {
+        self.panels.get(&area).copied().unwrap_or_default()
     }
 }
 
@@ -141,18 +183,45 @@ impl BottomPanelDescriptor {
     }
 }
 
-/// A tab beside the details pane's own content. Built when first selected in
+/// A surrounding panel that accepts tabs. This identifies placement,
+/// independent of the extension or workflow that supplies its content.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[non_exhaustive]
+pub enum PanelArea {
+    Details,
+    Sidebar,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum PanelContentPolicy {
+    /// The host's tabs and the contributions listed for the active view.
+    #[default]
+    HostAndExtensions,
+    /// Only the contributions listed for the active view. The first tab is
+    /// selected if none requests `opens_with_view`. Empty panels retain the
+    /// host's content so a view cannot leave an unusable blank panel.
+    ExtensionsOnly,
+}
+
+/// A tab in a repository panel. Built when first selected in
 /// a window and kept while the repository stays open there.
 #[derive(Clone)]
 #[non_exhaustive]
-pub struct DetailsTabDescriptor {
+pub struct PanelTabDescriptor {
     pub title: SharedString,
     /// Shown before the title in the tab strip.
     pub icon: Option<SharedString>,
     pub build: ViewBuilder<RepositoryViewContext>,
+    /// Lists the tab only while this repository view is selected; `None`
+    /// lists it in every view.
+    pub view: Option<ViewTarget>,
+    /// Selects the tab whenever its view is selected. Leaving the view
+    /// brings back the tab that was selected before.
+    pub opens_with_view: bool,
 }
 
-impl DetailsTabDescriptor {
+impl PanelTabDescriptor {
     pub fn new(
         title: impl Into<SharedString>,
         build: impl Fn(RepositoryViewContext, &mut Window, &mut App) -> AnyView + 'static,
@@ -161,6 +230,8 @@ impl DetailsTabDescriptor {
             title: title.into(),
             icon: None,
             build: Rc::new(build),
+            view: None,
+            opens_with_view: false,
         }
     }
 
@@ -168,7 +239,24 @@ impl DetailsTabDescriptor {
         self.icon = Some(icon.into());
         self
     }
+
+    /// Lists the tab only while `view` is selected.
+    pub fn with_view(mut self, view: ViewTarget) -> Self {
+        self.view = Some(view);
+        self
+    }
+
+    /// Selects the tab when its view is selected; see [`Self::opens_with_view`].
+    pub fn opens_with_view(mut self) -> Self {
+        self.opens_with_view = true;
+        self
+    }
 }
+
+/// A panel tab placed in the details area.
+pub type DetailsTabDescriptor = PanelTabDescriptor;
+/// A panel tab placed in the sidebar.
+pub type SidebarTabDescriptor = PanelTabDescriptor;
 
 /// A section below the sidebar's own, for the active repository. Built once
 /// per repository in a window and kept while it stays open there.

@@ -40,6 +40,10 @@ fn install_example(cx: &mut gpui::TestAppContext) {
 }
 
 fn repository_with_edits() -> tempfile::TempDir {
+    repository_with_edits_of(30, [3, 20])
+}
+
+fn repository_with_edits_of(lines: usize, edits: [usize; 2]) -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
     git(root, &["init", "-q", "-b", "main"]);
@@ -48,12 +52,12 @@ fn repository_with_edits() -> tempfile::TempDir {
     git(root, &["config", "commit.gpgsign", "false"]);
     // Same bytes under any user or system config (Windows CI sets autocrlf).
     git(root, &["config", "core.autocrlf", "false"]);
-    std::fs::write(root.join("a.rs"), numbered("a", 30, None)).unwrap();
-    std::fs::write(root.join("b.rs"), numbered("b", 30, None)).unwrap();
+    std::fs::write(root.join("a.rs"), numbered("a", lines, None)).unwrap();
+    std::fs::write(root.join("b.rs"), numbered("b", lines, None)).unwrap();
     git(root, &["add", "."]);
     git(root, &["commit", "-q", "-m", "init"]);
-    std::fs::write(root.join("a.rs"), numbered("a", 30, Some(3))).unwrap();
-    std::fs::write(root.join("b.rs"), numbered("b", 30, Some(20))).unwrap();
+    std::fs::write(root.join("a.rs"), numbered("a", lines, Some(edits[0]))).unwrap();
+    std::fs::write(root.join("b.rs"), numbered("b", lines, Some(edits[1]))).unwrap();
 
     dir
 }
@@ -82,7 +86,23 @@ fn open_repository_with(
     gpui::Entity<GitCometView>,
     &mut gpui::VisualTestContext,
 ) {
-    let dir = repository_with_edits();
+    open_repository_of(cx, backend, 30, [3, 20])
+}
+
+/// [`open_repository_with`] with `lines` lines in each file, `a.rs` edited
+/// at `edits[0]` and `b.rs` at `edits[1]`.
+fn open_repository_of(
+    cx: &mut gpui::TestAppContext,
+    backend: Arc<dyn gitcomet_core::services::GitBackend>,
+    lines: usize,
+    edits: [usize; 2],
+) -> (
+    tempfile::TempDir,
+    AppStore,
+    gpui::Entity<GitCometView>,
+    &mut gpui::VisualTestContext,
+) {
+    let dir = repository_with_edits_of(lines, edits);
     let root = dir.path();
 
     install_example(cx);
@@ -599,6 +619,96 @@ fn the_example_changes_view_shows_picks_in_two_panes(cx: &mut gpui::TestAppConte
     assert_eq!(store.snapshot().repos[0].diff_sessions.len(), 2);
 }
 
+/// Whether display row `row` of pane `id` is drawn: in its visible window.
+fn row_drawn(cx: &mut gpui::VisualTestContext, id: u64, row: usize) -> bool {
+    cx.debug_bounds(selector(format!("hosted_diff_{id}_row_{row}")))
+        .is_some()
+}
+
+/// A pane opened on a long file, and the same pane given another one, each
+/// show the file's first change rather than its first line, as History's
+/// diff does.
+#[gpui::test]
+fn a_pane_shows_the_first_change_of_each_file_it_is_given(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (_dir, store, view, cx) = open_repository_of(cx, Arc::new(TestBackend), 400, [300, 250]);
+    let (list_id, changes) = open_changes_view(cx, &view, &store);
+    let current = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            changes
+                .read(app)
+                .current()
+                .and_then(|pane| pane.target(app))
+                .and_then(|target| target.file_path().map(Path::to_path_buf))
+        })
+    };
+    click_debug_selector(
+        cx,
+        selector(format!("hosted_file_list_{list_id}_file_a.rs")),
+    );
+    settle(cx, &view, &store, "a.rs at its change", |cx| {
+        store.snapshot().repos[0].diff_sessions.len() == 1
+            && store.snapshot().repos[0]
+                .diff_sessions
+                .keys()
+                .all(|id| row_drawn(cx, id.0, 300))
+    });
+    let first = store.snapshot().repos[0]
+        .diff_sessions
+        .keys()
+        .next()
+        .unwrap()
+        .0;
+    assert!(!row_drawn(cx, first, 0), "not at the top");
+    // Opening at a change is not selecting it: the extension is told of
+    // no selection, so it offers no line actions.
+    let selection = cx.update(|_window, app| {
+        changes
+            .read(app)
+            .current()
+            .and_then(|pane| pane.selection(app))
+    });
+    assert_eq!(selection, None);
+
+    // The same pane, given b.rs.
+    click_debug_selector(
+        cx,
+        selector(format!("hosted_file_list_{list_id}_file_b.rs")),
+    );
+    settle(cx, &view, &store, "b.rs in the first pane", |_| {
+        store.snapshot().repos[0].diff_sessions.len() == 2
+    });
+    assert_eq!(current(cx), Some(PathBuf::from("b.rs")));
+    settle(cx, &view, &store, "b.rs at its change", |cx| {
+        row_drawn(cx, first, 250)
+    });
+    assert!(!row_drawn(cx, first, 300), "not where a.rs was");
+
+    // A line asked for once the file is in wins over its first change.
+    let pane = cx.update(|_window, app| changes.read(app).current().cloned().unwrap());
+    cx.update(|_window, app| {
+        pane.set_target(
+            DiffTarget::working_tree("a.rs".into(), DiffArea::Unstaged),
+            app,
+        );
+    });
+    settle(cx, &view, &store, "a.rs again, at its change", |cx| {
+        row_drawn(cx, first, 300)
+    });
+    cx.update(|_window, app| pane.reveal(DiffLineSide::New, 60, app));
+    settle(cx, &view, &store, "a.rs at the line asked for", |cx| {
+        row_drawn(cx, first, 59)
+    });
+    for _ in 0..5 {
+        publish(cx, &view, store.snapshot());
+    }
+    assert!(row_drawn(cx, first, 59));
+    assert!(
+        !row_drawn(cx, first, 300),
+        "the first change did not take over"
+    );
+}
+
 #[gpui::test]
 fn snapshot_panes_diff_texts_without_a_repository(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
@@ -635,6 +745,60 @@ fn snapshot_panes_diff_texts_without_a_repository(cx: &mut gpui::TestAppContext)
     cx.run_until_parked();
     assert_eq!(rows_with(cx, &pane, "more"), 0);
     assert_eq!(rows_with(cx, &pane, "two"), 1);
+}
+
+/// A pane left at the default layout opens in the user's Inline/Split
+/// setting; an explicit layout wins, and `Preferred` reads the setting again.
+#[gpui::test]
+fn a_pane_at_the_default_layout_follows_the_diff_setting(cx: &mut gpui::TestAppContext) {
+    use crate::view::DiffViewMode;
+    use gitcomet_extension_api::DiffLayout;
+    let _visual_guard = crate::test_support::lock_visual_test();
+    install_example(cx);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, app_cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    publish(app_cx, &view, Arc::new(AppState::test_default()));
+    // The setting's own default is Split; the user chose Inline.
+    app_cx.update(|_window, app| {
+        view.update(app, |view, cx| {
+            view.set_diff_view_mode(DiffViewMode::Inline, cx)
+        })
+    });
+    let host =
+        app_cx.update(|_window, app| view.read(app).extension_window.as_ref().unwrap().host());
+    let pane = app_cx.update(|_window, app| {
+        host.create_snapshot_pane(
+            DiffSnapshot::new("lib.rs", "old\n", "new\n"),
+            DiffPaneOptions::default(),
+            app,
+        )
+        .unwrap()
+    });
+    let view_any = pane.view();
+    let (_holder, cx) = cx.add_window_view(move |_, _| PaneHolder(view_any));
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+    let entity = pane
+        .view()
+        .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+        .unwrap();
+    let mode = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| entity.read(app).view_mode_for_test(app))
+    };
+    assert_eq!(mode(cx), Some(DiffViewMode::Inline), "as the user set it");
+
+    cx.update(|_window, app| pane.set_layout(DiffLayout::Split, app));
+    assert_eq!(
+        mode(cx),
+        Some(DiffViewMode::Split),
+        "an explicit layout wins"
+    );
+    cx.update(|_window, app| pane.set_layout(DiffLayout::Preferred, app));
+    assert_eq!(mode(cx), Some(DiffViewMode::Inline));
 }
 
 /// Commits a rename with an edit, an addition, a deletion, and a binary
@@ -809,6 +973,8 @@ fn pane_contributions_annotate_act_and_inset_without_touching_file_lines(
                 selection_actions: vec![DiffSelectionAction::new("Comment", move |range, _| {
                     on_action.borrow_mut().push(range)
                 })],
+                // Rows are counted inline, whatever the diff setting says.
+                layout: gitcomet_extension_api::DiffLayout::Inline,
                 ..DiffPaneOptions::default()
             },
             app,
@@ -1171,6 +1337,8 @@ fn clickable_pane(
         policy,
         on_gutter_click: record("gutter"),
         on_annotation_click: record("annotation"),
+        // Rows are counted inline, whatever the diff setting says.
+        layout: gitcomet_extension_api::DiffLayout::Inline,
         ..DiffPaneOptions::default()
     };
     let snapshot = DiffSnapshot::new("notes.txt", "one\ntwo\nthree\n", "one\nTWO\nthree\n");

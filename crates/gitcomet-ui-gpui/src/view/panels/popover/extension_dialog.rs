@@ -98,6 +98,17 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.set_hosted_menu(id, items);
+        self.open_popover_at(PopoverKind::Hosted { id, menu: true }, anchor, window, cx);
+    }
+
+    /// Holds `items` as hosted menu `id`, for a `PopoverKind::Hosted` menu
+    /// the caller opens where it belongs.
+    pub(in crate::view) fn set_hosted_menu(
+        &mut self,
+        id: u64,
+        items: Vec<gitcomet_extension_api::HostedMenuItem>,
+    ) {
         use gitcomet_extension_api::HostedMenuItem;
         let items = items
             .into_iter()
@@ -125,7 +136,6 @@ impl PopoverHost {
             content: None,
             menu: Some(ContextMenuModel::new(items)),
         });
-        self.open_popover_at(PopoverKind::Hosted { id, menu: true }, anchor, window, cx);
     }
 
     pub(in crate::view) fn reanchor_hosted(

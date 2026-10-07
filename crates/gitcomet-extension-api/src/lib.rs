@@ -25,6 +25,8 @@ pub use sidebar::*;
 pub mod host;
 pub mod id;
 pub mod lifecycle;
+pub mod markdown;
+pub use markdown::{MarkdownView, MarkdownViewImpl};
 pub mod panes;
 pub mod presentation;
 pub use presentation::{HostedAction, HostedMenuItem, NotificationKind};
@@ -36,10 +38,11 @@ pub use services::{RepositoryReader, StoreView, SyntaxService};
 pub use contributions::{
     BottomPanelDescriptor, ChromeDescriptor, CloseDecision, CloseGuard, CloseRequest, CloseScope,
     CommandContext, CommandDescriptor, CommandHandler, DetailsTabDescriptor, EntryOrigin,
-    GateDecision, MenuLocation, Navigate, NavigationAvailability, RepositoryEntryGate,
-    RepositoryEntryRequest, RepositoryViewContext, RepositoryViewDescriptor, SettingsPageContext,
-    SettingsPageDescriptor, SettingsTarget, SidebarSectionDescriptor, StatusItemDescriptor,
-    ViewBuilder, ViewNavigation, ViewTarget, WindowGateDescriptor, WindowGatePredicate,
+    GateDecision, MenuLocation, Navigate, NavigationAvailability, PanelArea, PanelContentPolicy,
+    PanelTabDescriptor, RepositoryEntryGate, RepositoryEntryRequest, RepositoryViewContext,
+    RepositoryViewDescriptor, SettingsPageContext, SettingsPageDescriptor, SettingsTarget,
+    SidebarSectionDescriptor, SidebarTabDescriptor, StatusItemDescriptor, ViewBuilder, ViewFocus,
+    ViewNavigation, ViewTarget, WindowGateDescriptor, WindowGatePredicate,
 };
 /// Revision-pinned state types hosted panes take.
 pub use gitcomet_state::diff_session::ChangeSource;
@@ -50,11 +53,11 @@ pub use host::{
 pub use id::{ContributionId, ExtensionId, IdError};
 pub use lifecycle::{HostNotifier, ShellEvent, Slot, SlotSignal, WindowExtension};
 pub use panes::{
-    DiffAnnotation, DiffAnnotations, DiffFileNavigation, DiffGutterAction, DiffInset, DiffLayout,
-    DiffLegendItem, DiffLineRange, DiffLineSide, DiffPane, DiffPaneEvent, DiffPaneEventHandler,
-    DiffPaneOptions, DiffPanePolicy, DiffRowDecor, DiffRowDecorProvider, DiffRowStyle,
-    DiffScrollAnchor, DiffSelectionAction, DiffSelectionRun, DiffSnapshot, FileList, FileListMode,
-    FileSelected,
+    DiffAnnotation, DiffAnnotations, DiffBar, DiffBarItem, DiffBarItemStyle, DiffBarRun,
+    DiffFileNavigation, DiffFilePosition, DiffGutterAction, DiffInset, DiffLayout, DiffLegendItem,
+    DiffLineRange, DiffLineSide, DiffPane, DiffPaneEvent, DiffPaneEventHandler, DiffPaneOptions,
+    DiffPanePolicy, DiffRowDecor, DiffRowDecorProvider, DiffRowStyle, DiffScrollAnchor,
+    DiffSelectionAction, DiffSelectionRun, DiffSnapshot, FileList, FileListMode, FileSelected,
 };
 pub use registry::{
     KeyBindingDeclaration, MenuItemDeclaration, Registrar, RegistrationError, Registry,

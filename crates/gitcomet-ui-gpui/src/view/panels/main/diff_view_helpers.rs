@@ -153,7 +153,11 @@ impl MainPaneView {
                             .text_size(theme.ui_text(14.0))
                             .font_weight(FontWeight::BOLD)
                             .child(
+                                // Given its colour: the text measures itself
+                                // outside this div's style, and in a hosted
+                                // pane the colour it found there was black.
                                 components::TruncatedText::path(text, theme.ui_text(14.0))
+                                    .text_color(theme.colors.foreground.primary)
                                     .id(("diff_title_path", 0usize))
                                     .full_text_tooltip(self.tooltip_host.clone())
                                     .render(cx),
@@ -442,6 +446,7 @@ impl MainPaneView {
         let button = |id: &'static str,
                       icon: &'static str,
                       tooltip: &'static str,
+                      keys: Vec<SharedString>,
                       delta: i8,
                       cx: &mut gpui::Context<Self>| {
             let btn = components::Button::new(id, "")
@@ -458,7 +463,7 @@ impl MainPaneView {
                 }
             })
             .debug_selector(move || id.to_string())
-            .gitcomet_tooltip(theme, SharedString::from(tooltip))
+            .gitcomet_tooltip_keyed(theme, tooltip.into(), keys)
             .into_any_element()
         };
 
@@ -467,7 +472,8 @@ impl MainPaneView {
                 button(
                     "diff_prev_file",
                     "icons/arrow_left.svg",
-                    "Previous file (F1)",
+                    "Previous file",
+                    crate::view::shortcut_labels::previous_file_shortcuts(),
                     -1,
                     cx,
                 )
@@ -476,7 +482,8 @@ impl MainPaneView {
                 button(
                     "diff_next_file",
                     "icons/arrow_right.svg",
-                    "Next file (F4)",
+                    "Next file",
+                    crate::view::shortcut_labels::next_file_shortcuts(),
                     1,
                     cx,
                 )

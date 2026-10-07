@@ -593,7 +593,6 @@ mod badges {
                 "upstream_badge",
                 "pull",
                 "push",
-                "terminal",
                 "create_branch",
                 "stash",
             ] {

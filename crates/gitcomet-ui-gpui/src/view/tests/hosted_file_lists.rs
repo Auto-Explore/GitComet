@@ -374,3 +374,66 @@ fn scrolling_a_grouped_100k_list_never_regroups(cx: &mut gpui::TestAppContext) {
     let (buckets, _) = cx.update(|_, app| entity.read(app).test_group_builds());
     assert_eq!(buckets, builds.0 + 1, "a new revision regroups once");
 }
+
+#[gpui::test]
+fn programmatic_selection_reveals_and_scrolls_a_folded_file(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (list, entity, cx) = mount_list(cx, (0..200).map(|n| format!("dir_{n:03}/file.rs")));
+    let id = list_id(cx, &entity);
+    cx.update(|_, app| {
+        entity.update(app, |view, _| {
+            view.test_collapse_directory(PathBuf::from("dir_190"));
+        });
+    });
+    draw(cx);
+    cx.update(|_, app| assert!(list.select_path(Path::new("dir_190/file.rs"), app)));
+    draw(cx);
+    assert!(
+        cx.debug_bounds(selector(format!(
+            "hosted_file_list_{id}_file_dir_190/file.rs"
+        )))
+        .is_some()
+    );
+    cx.update(|_, app| {
+        list.set_mode(FileListMode::Grouped, app);
+        entity.update(app, |view, _| view.test_collapse_group(2));
+        assert!(list.select_path(Path::new("dir_190/file.rs"), app));
+    });
+    draw(cx);
+    assert!(
+        cx.debug_bounds(selector(format!(
+            "hosted_file_list_{id}_file_dir_190/file.rs"
+        )))
+        .is_some()
+    );
+    cx.update(|_, app| {
+        list.set_filter("another-file".into(), app);
+        assert!(!list.select_path(Path::new("dir_190/file.rs"), app));
+    });
+}
+
+#[gpui::test]
+fn file_rows_open_the_native_context_menu(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (list, entity, shell, cx) = mount_changes(
+        cx,
+        vec![CommitFileChange::new(
+            PathBuf::from("a.rs"),
+            FileStatusKind::Modified,
+        )],
+        None,
+    );
+    let id = list_id(cx, &entity);
+    let row = selector(format!("hosted_file_list_{id}_file_a.rs"));
+    let center = cx.debug_bounds(row).unwrap().center();
+    cx.simulate_mouse_down(center, gpui::MouseButton::Right, gpui::Modifiers::default());
+    cx.simulate_mouse_up(center, gpui::MouseButton::Right, gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(
+        matches!(shell_popover(cx, shell), Some(PopoverKind::CommitFileMenu { path, .. }) if path == Path::new("a.rs"))
+    );
+    assert!(
+        cx.update(|_, app| list.selected(app)).is_none(),
+        "opening a menu does not change the diff selection"
+    );
+}

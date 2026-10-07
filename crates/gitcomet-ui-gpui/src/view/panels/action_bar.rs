@@ -1,6 +1,10 @@
 use super::*;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
+use crate::view::repository_views::{MORE_VIEWS_INVOKER, RoutedArea, ViewTabs};
 use rustc_hash::FxHasher;
+use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 use std::sync::Arc;
 
 const ACTION_BAR_HEIGHT_PX: f32 = components::CONTROL_HEIGHT_PX + 12.0;
@@ -85,11 +89,18 @@ fn tight_badge_label_max_chars(ui_density: crate::appearance::UiDensity) -> usiz
     }
 }
 
-fn secondary_action_label(density: ActionBarDensity, label: &'static str) -> &'static str {
-    if density == ActionBarDensity::Compact {
-        ""
-    } else {
-        label
+/// Branch and Stash name themselves unless the bar is compact, or
+/// condensed beside the repository's view tabs, which need the room more;
+/// their tooltips name them then.
+fn secondary_action_label(
+    density: ActionBarDensity,
+    beside_view_tabs: bool,
+    label: &'static str,
+) -> &'static str {
+    match density {
+        ActionBarDensity::Compact => "",
+        ActionBarDensity::Condensed if beside_view_tabs => "",
+        _ => label,
     }
 }
 
@@ -241,6 +252,8 @@ pub(in super::super) struct ActionBarView {
     )>,
     /// That view's action-bar context.
     extension_slot: Option<gpui::AnyView>,
+    /// The repository's views as tabs, while an extension registers any.
+    view_tabs: Option<ViewTabs>,
     store: Arc<AppStore>,
     state: Arc<AppState>,
     theme: AppTheme,
@@ -248,8 +261,6 @@ pub(in super::super) struct ActionBarView {
     root_view: WeakEntity<GitCometView>,
     notify_fingerprint: u64,
     active_context_menu_invoker: Option<SharedString>,
-    open_terminal_repo_ids: FxHashSet<RepoId>,
-    action_bar_terminal_target: ActionBarTerminalTarget,
 }
 
 impl ActionBarView {
@@ -306,6 +317,7 @@ impl ActionBarView {
         Self {
             extension_navigation: None,
             extension_slot: None,
+            view_tabs: None,
             store,
             state,
             theme,
@@ -313,8 +325,6 @@ impl ActionBarView {
             root_view,
             notify_fingerprint,
             active_context_menu_invoker: None,
-            open_terminal_repo_ids: FxHashSet::default(),
-            action_bar_terminal_target: ActionBarTerminalTarget::default(),
         }
     }
 
@@ -338,6 +348,136 @@ impl ActionBarView {
         self.extension_navigation = navigation;
         self.extension_slot = slot;
         cx.notify();
+    }
+
+    pub(in crate::view) fn set_view_tabs(
+        &mut self,
+        tabs: Option<ViewTabs>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.view_tabs == tabs {
+            return;
+        }
+        self.view_tabs = tabs;
+        cx.notify();
+    }
+
+    /// Shows History (`None`) or view `index`. Deferred: the root updates
+    /// this bar as the selection changes.
+    fn select_view(&self, index: Option<usize>, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        let root = self.root_view.clone();
+        window.defer(cx, move |window, cx| {
+            let _ = root.update(cx, |root, cx| {
+                root.select_routed_view(RoutedArea::Main, index, window, cx)
+            });
+        });
+    }
+
+    /// The repository's views as tabs: History and each registered view,
+    /// then one tab for those listed under More, which names the selected
+    /// one. Labels give way to icons where the bar is compact.
+    fn view_tabs(
+        &self,
+        tabs: &ViewTabs,
+        labelled: bool,
+        open: bool,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let theme = self.theme;
+        let ui_scale = crate::ui_scale::UiScale::current(cx);
+        let mut group = div()
+            .id("repository_view_tabs")
+            .debug_selector(|| "repository_view_tabs".to_string())
+            .flex()
+            .flex_none()
+            .items_center()
+            .h_full();
+        let history = (
+            None,
+            SharedString::from("History"),
+            Some(SharedString::from("icons/history.svg")),
+        );
+        let entries = std::iter::once(history).chain(
+            tabs.views
+                .iter()
+                .filter(|view| !view.under_more)
+                .map(|view| (Some(view.index), view.title.clone(), view.icon.clone())),
+        );
+        for (index, title, icon) in entries {
+            let id = index.map_or_else(
+                || "repository_view_history".to_string(),
+                |index| format!("repository_view_{index}"),
+            );
+            let mut tab = components::BarTab::new(id).selected(tabs.selected == index);
+            if let Some(icon) = icon {
+                tab = tab.icon(icon);
+            }
+            if labelled {
+                tab = tab.label(title.clone());
+            }
+            let tab = tab.render(theme, ui_scale).on_activate(
+                false,
+                controls::ControlActivation::ManagedFocus,
+                cx.listener(move |this, _, window, cx| this.select_view(index, window, cx)),
+            );
+            // An icon alone is named in its tooltip.
+            group = group.child(if labelled {
+                tab
+            } else {
+                tab.gitcomet_tooltip(theme, title)
+            });
+        }
+        let mut more = tabs.views.iter().filter(|view| view.under_more).peekable();
+        if more.peek().is_none() {
+            return group;
+        }
+        let shown = more.find(|view| Some(view.index) == tabs.selected);
+        let mut tab = components::BarTab::new(MORE_VIEWS_INVOKER)
+            .selected(shown.is_some())
+            .open(open)
+            .end_icon("icons/chevron_down.svg");
+        match shown {
+            Some(view) => {
+                if let Some(icon) = view.icon.clone() {
+                    tab = tab.icon(icon);
+                }
+                if labelled {
+                    tab = tab.label(view.title.clone());
+                }
+            }
+            None if labelled => tab = tab.label("More"),
+            None => tab = tab.icon("icons/more_vertical.svg"),
+        }
+        // The menu opens below the tab, so keep where it was drawn.
+        let drawn: Rc<RefCell<Option<Bounds<Pixels>>>> = Rc::default();
+        let painted = Rc::clone(&drawn);
+        let tab = tab
+            .render(theme, ui_scale)
+            .on_activate(
+                false,
+                controls::ControlActivation::ManagedFocus,
+                cx.listener(move |this, e: &ClickEvent, window, cx| {
+                    let anchor = (*drawn.borrow())
+                        .unwrap_or_else(|| Bounds::new(e.position(), gpui::size(px(0.0), px(0.0))));
+                    let root = this.root_view.clone();
+                    window.defer(cx, move |window, cx| {
+                        let _ = root
+                            .update(cx, |root, cx| root.open_more_views_menu(anchor, window, cx));
+                    });
+                }),
+            )
+            .gitcomet_tooltip(theme, "More views".into());
+        group.child(
+            div()
+                .flex()
+                .h_full()
+                .on_children_prepainted(move |children, _window, _cx| {
+                    if let Some(bounds) = children.first() {
+                        *painted.borrow_mut() = Some(*bounds);
+                    }
+                })
+                .child(tab),
+        )
     }
 
     fn extension_navigate(&self, forward: bool, cx: &mut gpui::Context<Self>) -> bool {
@@ -372,30 +512,6 @@ impl ActionBarView {
             return;
         }
         self.active_context_menu_invoker = next;
-        cx.notify();
-    }
-
-    pub(in super::super) fn set_open_terminal_repo_ids(
-        &mut self,
-        next: FxHashSet<RepoId>,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.open_terminal_repo_ids == next {
-            return;
-        }
-        self.open_terminal_repo_ids = next;
-        cx.notify();
-    }
-
-    pub(in super::super) fn set_action_bar_terminal_target(
-        &mut self,
-        target: ActionBarTerminalTarget,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.action_bar_terminal_target == target {
-            return;
-        }
-        self.action_bar_terminal_target = target;
         cx.notify();
     }
 
@@ -469,7 +585,9 @@ impl Render for ActionBarView {
             ActionBarDensity::Condensed => CONDENSED_BADGE_LABEL_MAX_CHARS,
             ActionBarDensity::Wide => BADGE_LABEL_MAX_CHARS,
         };
-        let action_label = |label: &'static str| secondary_action_label(density, label);
+        let beside_view_tabs = self.view_tabs.is_some();
+        let action_label =
+            |label: &'static str| secondary_action_label(density, beside_view_tabs, label);
         // Two independent things called density: the responsive breakpoint above
         // picks the base gap from the viewport, then the user's density setting
         // ramps it.
@@ -919,33 +1037,6 @@ impl Render for ActionBarView {
         } else {
             icon_muted
         };
-        let terminal_opens_external =
-            self.action_bar_terminal_target == ActionBarTerminalTarget::External;
-        let terminal_is_open = !terminal_opens_external
-            && self
-                .active_repo_id()
-                .is_some_and(|repo_id| self.open_terminal_repo_ids.contains(&repo_id));
-        let terminal_tooltip: SharedString = if terminal_opens_external {
-            "Open external terminal".into()
-        } else if terminal_is_open {
-            "Hide terminal".into()
-        } else {
-            "Show terminal".into()
-        };
-        let terminal = div().debug_selector(|| "terminal".to_string()).child(
-            components::Button::new("terminal", action_label("Terminal"))
-                .start_slot(icon("icons/terminal.svg", icon_primary))
-                .style(components::ButtonStyle::Subtle)
-                .selected(terminal_is_open)
-                .selected_bg(menu_selected_bg)
-                .disabled(self.active_repo_id().is_none())
-                .on_click(theme, cx, move |this, _e, window, cx| {
-                    let _ = this.root_view.update(cx, |root, cx| {
-                        root.activate_terminal_button_for_active_repo(window, cx);
-                    });
-                })
-                .gitcomet_tooltip(theme, terminal_tooltip),
-        );
         let mut push_main = components::Button::new("push_main", if tight { "" } else { "Push" })
             .busy(push_loading)
             .start_slot(if push_loading {
@@ -1235,6 +1326,26 @@ impl Render for ActionBarView {
                 })
         };
 
+        // The repository's views lead the right group, a divider apart from
+        // the actions that act on the repository.
+        let more_open = active_invoker.as_deref() == Some(MORE_VIEWS_INVOKER);
+        let view_tabs = self.view_tabs.clone().map(|tabs| {
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .h_full()
+                .gap(action_group_gap)
+                .child(self.view_tabs(&tabs, density != ActionBarDensity::Compact, more_open, cx))
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(1.0))
+                        .h(scaled_px(17.0))
+                        .bg(theme.colors.stroke.subtle),
+                )
+        });
+
         div()
             .debug_selector(|| "action_bar".to_string())
             .w_full()
@@ -1253,7 +1364,8 @@ impl Render for ActionBarView {
                     .items_center()
                     .gap(action_group_gap)
                     .flex_none()
-                    .child(terminal)
+                    .h_full()
+                    .children(view_tabs)
                     .child(create_branch)
                     .child(stash),
             )
@@ -1406,16 +1518,30 @@ mod tests {
     #[test]
     fn secondary_action_labels_remain_visible_in_condensed_mode() {
         assert_eq!(
-            secondary_action_label(ActionBarDensity::Compact, "Terminal"),
+            secondary_action_label(ActionBarDensity::Compact, false, "Stash"),
             ""
         );
         assert_eq!(
-            secondary_action_label(ActionBarDensity::Condensed, "Terminal"),
-            "Terminal"
+            secondary_action_label(ActionBarDensity::Condensed, false, "Stash"),
+            "Stash"
         );
         assert_eq!(
-            secondary_action_label(ActionBarDensity::Wide, "Terminal"),
-            "Terminal"
+            secondary_action_label(ActionBarDensity::Wide, false, "Stash"),
+            "Stash"
+        );
+    }
+
+    /// Beside the repository's view tabs the condensed bar gives the badges
+    /// the room the labels took.
+    #[test]
+    fn secondary_action_labels_give_way_to_view_tabs_below_wide() {
+        assert_eq!(
+            secondary_action_label(ActionBarDensity::Condensed, true, "Stash"),
+            ""
+        );
+        assert_eq!(
+            secondary_action_label(ActionBarDensity::Wide, true, "Stash"),
+            "Stash"
         );
     }
 

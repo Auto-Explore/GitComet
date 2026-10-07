@@ -1978,9 +1978,10 @@ impl MainPaneView {
                         this.diff_jump_prev();
                         cx.notify();
                     })
-                    .gitcomet_tooltip(
+                    .gitcomet_tooltip_keyed(
                         theme,
-                        crate::view::shortcut_labels::previous_change_tooltip().into(),
+                        "Previous change".into(),
+                        crate::view::shortcut_labels::previous_change_shortcuts(),
                     );
 
                 let next_hunk_btn = components::Button::new("diff_next_hunk", "")
@@ -1998,9 +1999,10 @@ impl MainPaneView {
                         this.diff_jump_next();
                         cx.notify();
                     })
-                    .gitcomet_tooltip(
+                    .gitcomet_tooltip_keyed(
                         theme,
-                        crate::view::shortcut_labels::next_change_tooltip().into(),
+                        "Next change".into(),
+                        crate::view::shortcut_labels::next_change_shortcuts(),
                     );
 
                 let diff_inline_btn = components::Button::new("diff_inline", "Inline")

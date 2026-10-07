@@ -160,17 +160,17 @@ impl SettingsWindowView {
         self.apply_terminal_preferences_change(next, cx);
     }
 
-    pub(super) fn set_action_bar_terminal_target(
+    pub(super) fn set_terminal_button_target(
         &mut self,
-        target: ActionBarTerminalTarget,
+        target: TerminalButtonTarget,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.terminal_preferences.action_bar_terminal_target == target {
+        if self.terminal_preferences.terminal_button_target == target {
             return;
         }
 
         let mut next = self.terminal_preferences.clone();
-        next.action_bar_terminal_target = target;
+        next.terminal_button_target = target;
         self.terminal_status = None;
         self.apply_terminal_preferences_change(next, cx);
     }

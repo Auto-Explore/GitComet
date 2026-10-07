@@ -1902,8 +1902,10 @@ impl GitCometView {
             window_gates: super::window_gates::WindowGates::new(cx),
             window_gated: false,
             extension_window,
+            repository_view_focus: cx.focus_handle(),
             repository_views: Self::repository_view_router(cx),
             details_tabs: Self::details_tab_router(cx),
+            sidebar_tabs: Self::sidebar_tab_router(cx),
             sidebar_sections: Self::sidebar_section_router(cx),
             tooltip_host,
             toast_host,
@@ -2043,7 +2045,7 @@ impl GitCometView {
         };
 
         view.set_theme(initial_theme, cx);
-        view.sync_action_bar_terminal_target(cx);
+        view.sync_terminal_button_target(cx);
         for reason in entry_denials {
             view.push_toast(components::ToastKind::Warning, reason.to_string(), cx);
         }
@@ -3098,6 +3100,29 @@ impl GitCometView {
         Ok(())
     }
 
+    /// The diff the diff keys (F1–F4, F7, Alt+Up/Down) act on: History's,
+    /// unless an extension's repository view is selected. Then it is the
+    /// hosted diff pane inside that view the user is engaged with, and with
+    /// none there the keys do nothing, rather than move History's hidden
+    /// selection.
+    pub(super) fn diff_shortcut_target(
+        &self,
+        window: &Window,
+        cx: &App,
+    ) -> Option<Entity<MainPaneView>> {
+        let extension_view_selected = self
+            .repository_views
+            .as_ref()
+            .zip(self.active_repo())
+            .is_some_and(|(router, repo)| router.selected(repo).is_some());
+        if !extension_view_selected || self.documents_active {
+            return Some(self.main_pane.clone());
+        }
+        self.extension_window
+            .as_ref()?
+            .diff_pane_for_keys(&self.repository_view_focus, window, cx)
+    }
+
     pub(super) fn defer_text_input_main_pane_action<F>(
         &self,
         cx: &mut gpui::Context<Self>,
@@ -3106,11 +3131,16 @@ impl GitCometView {
         F: FnOnce(&mut MainPaneView, &mut Window, &mut gpui::Context<MainPaneView>) -> bool
             + 'static,
     {
-        let main_pane = self.main_pane.clone();
+        let view = cx.weak_entity();
         let window_handle = self.window_handle;
         cx.defer(move |cx| {
             let _ = window_handle.update(cx, |_, window, cx| {
-                main_pane.update(cx, |pane, cx| {
+                let Ok(Some(pane)) =
+                    view.read_with(cx, |view, cx| view.diff_shortcut_target(window, cx))
+                else {
+                    return;
+                };
+                pane.update(cx, |pane, cx| {
                     if action(pane, window, cx) {
                         cx.notify();
                         window.refresh();
@@ -3133,16 +3163,36 @@ impl GitCometView {
         });
     }
 
-    pub(super) fn defer_adjacent_diff_file_navigation(
+    pub(crate) fn defer_adjacent_diff_file_navigation(
         &self,
         direction: i8,
         cx: &mut gpui::Context<Self>,
     ) {
+        if !self.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
+            return;
+        }
         self.defer_text_input_main_pane_action(cx, move |pane, window, cx| {
             let Some(repo_id) = pane.active_repo_id() else {
                 return false;
             };
             pane.try_select_adjacent_diff_file(repo_id, direction, window, cx)
+        });
+    }
+
+    pub(crate) fn defer_diff_change_navigation(
+        &self,
+        previous: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.shell_action_allowed(super::shell_policy::ShellAction::Repository) {
+            return;
+        }
+        self.defer_text_input_main_pane_action(cx, move |pane, _window, cx| {
+            if previous {
+                pane.navigate_prev_diff_change(cx)
+            } else {
+                pane.navigate_next_diff_change(cx)
+            }
         });
     }
 
