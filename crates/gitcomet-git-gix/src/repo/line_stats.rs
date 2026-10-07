@@ -671,11 +671,8 @@ mod tests {
                 LineStats::UNKNOWN
             );
             assert_eq!(
-                stats.staged[std::path::Path::new("staged.bin")],
-                LineStats {
-                    additions: Some(2),
-                    deletions: Some(2),
-                }
+                counts(stats.staged.get(std::path::Path::new("staged.bin"))),
+                Some((Some(2), Some(2)))
             );
         }
         assert_eq!(LINE_STATS_WORKTREE_READS.with(|reads| reads.get()), 0);
@@ -704,10 +701,6 @@ mod tests {
         std::fs::remove_file(dir.join("deleted.bin")).unwrap();
         write_file(dir, "plain.txt", "edited\n");
         write_file(dir, "tracked.dat", "smudged payload\n");
-        let known = |additions, deletions| LineStats {
-            additions: Some(additions),
-            deletions: Some(deletions),
-        };
         let unstaged = |path: &str| {
             open_repo(dir)
                 .uncommitted_line_stats_impl(&CancellationToken::new())
@@ -715,8 +708,14 @@ mod tests {
                 .unstaged[std::path::Path::new(path)]
         };
         // No LFS driver is configured (git-lfs not installed).
-        assert_eq!(unstaged("deleted.bin"), known(0, 3));
-        assert_eq!(unstaged("plain.txt"), known(1, 3));
+        assert_eq!(
+            counts(Some(&unstaged("deleted.bin"))),
+            Some((Some(0), Some(3)))
+        );
+        assert_eq!(
+            counts(Some(&unstaged("plain.txt"))),
+            Some((Some(1), Some(3)))
+        );
 
         let ran = dir.join("clean-filter-ran");
         git_success(
@@ -728,8 +727,14 @@ mod tests {
             ],
         );
         // A deletion and a path outside `filter=lfs` still read no filter.
-        assert_eq!(unstaged("deleted.bin"), known(0, 3));
-        assert_eq!(unstaged("plain.txt"), known(1, 3));
+        assert_eq!(
+            counts(Some(&unstaged("deleted.bin"))),
+            Some((Some(0), Some(3)))
+        );
+        assert_eq!(
+            counts(Some(&unstaged("plain.txt"))),
+            Some((Some(1), Some(3)))
+        );
         assert_eq!(unstaged("tracked.dat"), LineStats::UNKNOWN);
         assert!(!ran.exists(), "the LFS clean filter must not run");
     }
