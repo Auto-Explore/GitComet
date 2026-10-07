@@ -241,22 +241,22 @@ impl GitCometView {
             .copied()
             .collect::<FxHashSet<RepoId>>();
         let repo_tabs_bar = self.repo_tabs_bar.clone();
-        let status_bar = self.bottom_status_bar.clone();
+        let action_bar = self.action_bar.clone();
         let popover_host = self.popover_host.clone();
         cx.defer(move |cx| {
             repo_tabs_bar.update(cx, |bar, cx| {
                 bar.set_open_terminal_repo_ids(repo_ids.clone(), cx)
             });
-            status_bar.update(cx, |bar, cx| bar.set_open_terminal_repo_ids(repo_ids, cx));
+            action_bar.update(cx, |bar, cx| bar.set_open_terminal_repo_ids(repo_ids, cx));
             popover_host.update(cx, |host, cx| host.dismiss_stale_terminal_menu(cx));
         });
     }
 
     pub(in crate::view) fn sync_terminal_button_target(&self, cx: &mut gpui::Context<Self>) {
         let target = self.terminal_preferences.terminal_button_target;
-        let status_bar = self.bottom_status_bar.clone();
+        let action_bar = self.action_bar.clone();
         cx.defer(move |cx| {
-            status_bar.update(cx, |bar, cx| bar.set_terminal_button_target(target, cx));
+            action_bar.update(cx, |bar, cx| bar.set_terminal_button_target(target, cx));
         });
     }
 

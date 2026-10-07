@@ -1,9 +1,9 @@
 //! Data-driven actions shared by built-in and contributed toolbars.
 
-use super::{BarButton, keystrokes_display};
+use super::{BarButton, ButtonStyle, filled_action_frame, keystrokes_display};
 use crate::{theme::AppTheme, tooltip::GitCometTooltipExt, ui_scale::UiScale};
 use gpui::prelude::*;
-use gpui::{AnyElement, App, SharedString};
+use gpui::{AnyElement, App, SharedString, div, px};
 use std::rc::Rc;
 
 pub type ActionRun<C> = Rc<dyn Fn(C, &mut App)>;
@@ -15,6 +15,8 @@ pub enum ActionButtonStyle {
     #[default]
     Default,
     Primary,
+    /// A neutral frame and an accent icon, like the Commit button.
+    Framed,
 }
 
 /// An action and its presentation. The owner supplies the invocation context
@@ -75,6 +77,11 @@ impl<C> ActionButton<C> {
         self
     }
 
+    pub fn framed(mut self) -> Self {
+        self.style = ActionButtonStyle::Framed;
+        self
+    }
+
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
         self
@@ -108,7 +115,7 @@ impl<C: Clone + 'static> ActionButton<C> {
         let enabled = self.is_enabled(&context);
         let shortcut = self.shortcut.as_deref().map(keystrokes_display);
         let mut button = BarButton::new(id.clone(), self.label.clone())
-            .primary(self.style == ActionButtonStyle::Primary)
+            .primary(self.style != ActionButtonStyle::Default)
             .enabled(enabled);
         if let Some(icon) = &self.icon {
             button = button.icon(icon.clone());
@@ -117,8 +124,14 @@ impl<C: Clone + 'static> ActionButton<C> {
             button = button.shortcut(shortcut.clone());
         }
         let run = Rc::clone(&self.run);
-        button
-            .into_button(theme, scale)
+        let frame_selector = format!("{id}_frame");
+        let button = button.into_button(theme, scale);
+        let button = if self.style == ActionButtonStyle::Framed {
+            button.style(ButtonStyle::Subtle)
+        } else {
+            button
+        };
+        let button = button
             .on_click_handler(theme, scale, move |_, _, cx| {
                 if enabled {
                     let run = Rc::clone(&run);
@@ -132,7 +145,24 @@ impl<C: Clone + 'static> ActionButton<C> {
                 self.tooltip.clone().unwrap_or_else(|| self.label.clone()),
                 shortcut.into_iter().map(SharedString::from).collect(),
             )
-            .into_any_element()
+            .into_any_element();
+        if self.style == ActionButtonStyle::Framed {
+            filled_action_frame(theme, scale)
+                .debug_selector(move || frame_selector)
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .h_full()
+                        .rounded(px(theme.radii.control))
+                        .bg(theme.colors.surface.raised)
+                        .overflow_hidden()
+                        .child(button),
+                )
+                .into_any_element()
+        } else {
+            button
+        }
     }
 }
 

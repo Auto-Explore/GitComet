@@ -335,6 +335,7 @@ fn named_saved_workspace(name: &str, repo: &str) -> gitcomet_state::session::Wor
     workspace
 }
 
+mod bar_placement;
 mod extension_signals;
 mod extension_view_panels;
 mod extension_views;

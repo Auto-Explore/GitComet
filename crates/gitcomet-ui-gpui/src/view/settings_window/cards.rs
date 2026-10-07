@@ -597,7 +597,7 @@ impl SettingsWindowView {
                         .text_size(theme.ui_text(12.0))
                         .text_color(theme.colors.foreground.secondary)
                         .child(
-                            "Choose what the terminal button in the status bar opens. Global shortcuts for each can be configured separately.",
+                            "Choose what the terminal button opens. Global shortcuts for each can be configured separately.",
                         ),
                 )
                 .child(

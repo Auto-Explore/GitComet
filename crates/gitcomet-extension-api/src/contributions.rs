@@ -279,10 +279,13 @@ impl SidebarSectionDescriptor {
     }
 }
 
-/// An item in the window's status bar, built once per window.
+/// An item in the window's chrome, built once per window. Defaults to the
+/// status bar; [`Self::with_location`] can place it in the action bar.
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct StatusItemDescriptor {
+    /// Placement in the window's chrome; defaults to the end of the status bar.
+    pub location: crate::BarItemLocation,
     /// Restricts the item to a repository view; `None` shows it in every view.
     pub view: Option<ViewTarget>,
     pub build: ViewBuilder<WindowHost>,
@@ -292,9 +295,16 @@ impl StatusItemDescriptor {
     /// An item shown in every repository view.
     pub fn new(build: impl Fn(WindowHost, &mut Window, &mut App) -> AnyView + 'static) -> Self {
         Self {
+            location: crate::BarItemLocation::default(),
             view: None,
             build: Rc::new(build),
         }
+    }
+
+    /// Places this item in either bar, retaining its view scope and lifetime.
+    pub fn with_location(mut self, location: crate::BarItemLocation) -> Self {
+        self.location = location;
+        self
     }
 
     pub fn with_view(mut self, view: ViewTarget) -> Self {

@@ -1,6 +1,8 @@
+use super::bar_items::{self, BarItemOwner, BarItems, ExtensionBarItem, RelocatedBarItems};
 use super::*;
 use crate::kit::interaction as controls;
 use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
+use gitcomet_extension_api::{BarItemLocation, BuiltinBarItem};
 
 /// Slimmer than the tab-bar slot the bottom bar used to borrow; it hosts the
 /// pane collapse toggles, the window's zoom control and the branding strip on
@@ -87,6 +89,7 @@ fn status_bar_chip(
 }
 
 pub(in super::super) struct BottomStatusBarView {
+    pub(super) relocated_items: RelocatedBarItems,
     theme: AppTheme,
     state: Arc<AppState>,
     _ui_model_subscription: gpui::Subscription,
@@ -96,12 +99,9 @@ pub(in super::super) struct BottomStatusBarView {
     pro_launch_label: SharedString,
     /// Extension status items in registration order, built once the window
     /// has opened. Empty without extensions.
-    extension_items: Vec<(Option<gitcomet_extension_api::ViewTarget>, gpui::AnyView)>,
+    extension_items: Vec<ExtensionBarItem>,
     active_view: gitcomet_extension_api::ViewTarget,
     edition_strip: Option<gpui::AnyView>,
-    /// Repositories with an open embedded terminal, for the terminal toggle.
-    open_terminal_repo_ids: rustc_hash::FxHashSet<RepoId>,
-    terminal_button_target: TerminalButtonTarget,
     #[cfg(any(test, feature = "benchmarks"))]
     pub(in crate::view) render_count: usize,
 }
@@ -127,6 +127,7 @@ impl BottomStatusBarView {
             }
         });
         Self {
+            relocated_items: Vec::new(),
             theme,
             state,
             _ui_model_subscription: subscription,
@@ -138,35 +139,9 @@ impl BottomStatusBarView {
             extension_items: Vec::new(),
             active_view: gitcomet_extension_api::ViewTarget::History,
             edition_strip: None,
-            open_terminal_repo_ids: Default::default(),
-            terminal_button_target: TerminalButtonTarget::default(),
             #[cfg(any(test, feature = "benchmarks"))]
             render_count: 0,
         }
-    }
-
-    pub(in super::super) fn set_open_terminal_repo_ids(
-        &mut self,
-        next: rustc_hash::FxHashSet<RepoId>,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.open_terminal_repo_ids == next {
-            return;
-        }
-        self.open_terminal_repo_ids = next;
-        cx.notify();
-    }
-
-    pub(in super::super) fn set_terminal_button_target(
-        &mut self,
-        target: TerminalButtonTarget,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.terminal_button_target == target {
-            return;
-        }
-        self.terminal_button_target = target;
-        cx.notify();
     }
 
     #[cfg(test)]
@@ -176,7 +151,7 @@ impl BottomStatusBarView {
 
     pub(in super::super) fn set_extension_items(
         &mut self,
-        items: Vec<(Option<gitcomet_extension_api::ViewTarget>, gpui::AnyView)>,
+        items: Vec<ExtensionBarItem>,
         cx: &mut gpui::Context<Self>,
     ) {
         self.extension_items = items;
@@ -285,12 +260,13 @@ impl BottomStatusBarView {
     }
 }
 
-impl Render for BottomStatusBarView {
-    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        #[cfg(any(test, feature = "benchmarks"))]
-        {
-            self.render_count += 1;
-        }
+impl BarItemOwner for BottomStatusBarView {
+    fn bar_items(
+        &mut self,
+        _action_bar: bool,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> BarItems {
         let theme = self.theme;
         let filesystem_pending = self
             .root_view
@@ -394,41 +370,6 @@ impl Render for BottomStatusBarView {
                     "Show details panel".into()
                 } else {
                     "Hide details panel".into()
-                },
-            );
-
-        // The terminal opens under the main area; its toggle sits with the
-        // other panel toggles. It is selected while the embedded terminal is
-        // open; launching an external one is momentary.
-        let terminal_opens_external = self.terminal_button_target == TerminalButtonTarget::External;
-        let terminal_is_open = !terminal_opens_external
-            && self
-                .state
-                .active_repo
-                .is_some_and(|repo_id| self.open_terminal_repo_ids.contains(&repo_id));
-        let terminal_toggle = components::Button::new("terminal", "")
-            .start_slot(svg_icon(
-                "icons/terminal.svg",
-                theme.colors.foreground.secondary,
-                scaled_px(16.0),
-            ))
-            .style(components::ButtonStyle::Transparent)
-            .selected(terminal_is_open)
-            .disabled(self.state.active_repo.is_none())
-            .on_click(theme, cx, |this, _e, window, cx| {
-                let _ = this.root_view.update(cx, |root, cx| {
-                    root.activate_terminal_button_for_active_repo(window, cx);
-                });
-            })
-            .debug_selector(|| "terminal".to_string())
-            .gitcomet_tooltip(
-                theme,
-                if terminal_opens_external {
-                    "Open external terminal".into()
-                } else if terminal_is_open {
-                    "Hide terminal".into()
-                } else {
-                    "Show terminal".into()
                 },
             );
 
@@ -659,8 +600,111 @@ impl Render for BottomStatusBarView {
             })
             .child(version_label);
 
+        let mut items = BarItems::new(cx);
+        items.push(BuiltinBarItem::SidebarToggle, sidebar_toggle);
+        if filesystem_pending {
+            items.push(
+                BuiltinBarItem::FilesystemProgress,
+                components::Button::new(
+                    "filesystem_progress",
+                    self.state
+                        .filesystem
+                        .progress
+                        .as_ref()
+                        .map(|progress| {
+                            format!(
+                                "Files: {}/{} · Cancel",
+                                progress.completed_items, progress.total_items
+                            )
+                        })
+                        .unwrap_or_else(|| "Files: waiting · Cancel".into()),
+                )
+                .borderless()
+                .style(components::ButtonStyle::Subtle)
+                .on_click(theme, cx, |this, _, _, cx| {
+                    let _ = this
+                        .root_view
+                        .update(cx, |root, cx| root.cancel_filesystem_operations(cx));
+                }),
+            );
+        }
+        items.extensions(&self.extension_items, &self.active_view);
+        items.push(BuiltinBarItem::DetailsToggle, details_toggle);
+        items.push(BuiltinBarItem::HookActivity, hook_activity_button);
+        let documents = {
+            let (documents_shown, picker_open) = self
+                .root_view
+                .upgrade()
+                .map(|root| {
+                    let root = root.read(cx);
+                    (root.documents_active, root.document_picker_open(cx))
+                })
+                .unwrap_or_default();
+            components::Button::new("bottom_documents", "")
+                .start_slot(svg_icon(
+                    "icons/file.svg",
+                    theme.colors.foreground.secondary,
+                    scaled_px(16.),
+                ))
+                .selected(documents_shown)
+                .open(picker_open)
+                .style(components::ButtonStyle::Subtle)
+                .borderless()
+                .on_click_with_bounds(theme, cx, |this, _, bounds, window, cx| {
+                    let _ = this.root_view.update(cx, |root, cx| {
+                        root.toggle_document_picker(bounds, window, cx)
+                    });
+                })
+                .gitcomet_tooltip(theme, "Open a file…".into())
+                .debug_selector(|| "bottom_documents".into())
+        };
+        items.push(BuiltinBarItem::Documents, documents);
+        items.push(BuiltinBarItem::Zoom, zoom_button);
+        let branding = div()
+            .flex()
+            .items_center()
+            .children(self.edition_strip.clone())
+            .when(self.edition_strip.is_none(), |row| {
+                row.child(
+                    // Branding chips want more air between them than the
+                    // toggles, which read as one control group.
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(scaled_px(6.0))
+                        .pl(scaled_px(6.0))
+                        .children(discord_badge)
+                        .children(free_badge)
+                        .children(pro_link)
+                        .child(brand)
+                        .child(version_link)
+                        .when(cfg!(debug_assertions), |row| {
+                            row.child(
+                                div()
+                                    .id("build_dev_badge")
+                                    .text_size(theme.ui_text(10.0))
+                                    .child("DEV"),
+                            )
+                        }),
+                )
+            });
+        items.push(BuiltinBarItem::Branding, branding);
+        items
+    }
+}
+
+impl Render for BottomStatusBarView {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        #[cfg(any(test, feature = "benchmarks"))]
+        {
+            self.render_count += 1;
+        }
+        let mut items = self.bar_items(false, window, cx);
+        let theme = self.theme;
+        let scale = crate::ui_scale::UiScale::current(cx);
         div()
             .id("bottom_status_bar")
+            .debug_selector(|| "bottom_status_bar".into())
             .w_full()
             .h(bottom_status_bar_height(cx))
             .flex_none()
@@ -680,105 +724,25 @@ impl Render for BottomStatusBarView {
                 div()
                     .flex()
                     .items_center()
-                    .gap(scaled_px(2.0))
-                    .child(sidebar_toggle)
-                    .when(filesystem_pending, |d| {
-                        d.child(
-                            components::Button::new(
-                                "filesystem_progress",
-                                self.state
-                                    .filesystem
-                                    .progress
-                                    .as_ref()
-                                    .map(|p| {
-                                        format!(
-                                            "Files: {}/{} · Cancel",
-                                            p.completed_items, p.total_items
-                                        )
-                                    })
-                                    .unwrap_or_else(|| "Files: waiting · Cancel".into()),
-                            )
-                            .borderless()
-                            .style(components::ButtonStyle::Subtle)
-                            .on_click(theme, cx, |this, _, _, cx| {
-                                let _ = this
-                                    .root_view
-                                    .update(cx, |root, cx| root.cancel_filesystem_operations(cx));
-                            }),
-                        )
-                    }),
+                    .gap(scale.px(2.0))
+                    .h_full()
+                    .children(bar_items::placed_views(
+                        &self.relocated_items,
+                        BarItemLocation::StatusBarStart,
+                    ))
+                    .children(items.take(BarItemLocation::StatusBarStart)),
             )
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap(scaled_px(2.0))
-                    // Extension indicators sit with the host's own status
-                    // controls, never between the branding chips.
-                    .children(
-                        self.extension_items
-                            .iter()
-                            .filter(|(view, _)| {
-                                view.as_ref().is_none_or(|view| view == &self.active_view)
-                            })
-                            .map(|(_, view)| view.clone()),
-                    )
-                    .child(terminal_toggle)
-                    .child(details_toggle)
-                    .child(hook_activity_button)
-                    .child({
-                        let (documents_shown, picker_open) = self
-                            .root_view
-                            .upgrade()
-                            .map(|root| {
-                                let root = root.read(cx);
-                                (root.documents_active, root.document_picker_open(cx))
-                            })
-                            .unwrap_or_default();
-                        components::Button::new("bottom_documents", "")
-                            .start_slot(svg_icon(
-                                "icons/file.svg",
-                                theme.colors.foreground.secondary,
-                                scaled_px(16.),
-                            ))
-                            .selected(documents_shown)
-                            .open(picker_open)
-                            .style(components::ButtonStyle::Subtle)
-                            .borderless()
-                            .on_click_with_bounds(theme, cx, |this, _, bounds, window, cx| {
-                                let _ = this.root_view.update(cx, |root, cx| {
-                                    root.toggle_document_picker(bounds, window, cx)
-                                });
-                            })
-                            .gitcomet_tooltip(theme, "Open a file…".into())
-                            .debug_selector(|| "bottom_documents".into())
-                    })
-                    .child(zoom_button)
-                    .children(self.edition_strip.clone())
-                    .when(self.edition_strip.is_none(), |row| {
-                        row.child(
-                            // Branding chips want more air between them than the
-                            // toggles, which read as one control group.
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(scaled_px(6.0))
-                                .pl(scaled_px(6.0))
-                                .children(discord_badge)
-                                .children(free_badge)
-                                .children(pro_link)
-                                .child(brand)
-                                .child(version_link)
-                                .when(cfg!(debug_assertions), |row| {
-                                    row.child(
-                                        div()
-                                            .id("build_dev_badge")
-                                            .text_size(theme.ui_text(10.0))
-                                            .child("DEV"),
-                                    )
-                                }),
-                        )
-                    }),
+                    .gap(scale.px(2.0))
+                    .h_full()
+                    .children(bar_items::placed_views(
+                        &self.relocated_items,
+                        BarItemLocation::StatusBarEnd,
+                    ))
+                    .children(items.take(BarItemLocation::StatusBarEnd)),
             )
     }
 }

@@ -1828,21 +1828,6 @@ impl MainPaneView {
 
         let mut controls = div().flex().items_center().gap_1();
         let mut change_navigation = None;
-        if self.is_inline_submodule_diff_active()
-            && let Some(repo_id) = repo_id
-        {
-            controls = controls.child(
-                components::Button::new("inline_submodule_back", "Back")
-                    .separated_end_slot(Self::diff_nav_hotkey_hint(theme, "Esc"))
-                    .style(components::ButtonStyle::Outlined)
-                    .on_click(theme, cx, move |this, _e, _w, cx| {
-                        this.store
-                            .dispatch(Msg::CloseInlineSubmoduleDiff { repo_id });
-                        cx.notify();
-                    })
-                    .debug_selector(|| "inline_foreign_back".to_string()),
-            );
-        }
         let is_simple_conflict_strategy = matches!(
             self.conflict_resolver.strategy,
             Some(
@@ -2185,7 +2170,9 @@ impl MainPaneView {
                         .gitcomet_tooltip_keyed(
                             theme,
                             "Close diff".into(),
-                            if self.store.policy.escape_clears_target {
+                            if inline_submodule_diff_active
+                                || self.store.policy.escape_clears_target
+                            {
                                 vec!["Esc".into()]
                             } else {
                                 Vec::new()

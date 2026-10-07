@@ -1477,6 +1477,7 @@ impl GitCometView {
         let bottom_status_bar = cx.new(|cx| {
             BottomStatusBarView::new(initial_theme, ui_model.clone(), weak_view.clone(), cx)
         });
+        panels::bar_items::connect(&action_bar, &bottom_status_bar, cx);
 
         let sidebar_pane = cx.new(|cx| {
             let mut pane = SidebarPaneView::new(

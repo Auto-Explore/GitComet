@@ -16,6 +16,8 @@
 //! dispatch existing messages, but reducers stay the host's.
 
 mod annotations;
+pub mod bars;
+pub use bars::{BarItemLocation, BuiltinBarItem};
 pub mod contributions;
 pub use annotations::*;
 pub mod files;

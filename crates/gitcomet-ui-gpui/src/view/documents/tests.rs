@@ -1168,7 +1168,21 @@ fn status_bar_documents_button_opens_a_picker_that_opens_typed_paths(
     cx: &mut gpui::TestAppContext,
 ) {
     let _guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    // Standalone files must not depend on whether the temporary directory's
+    // ancestors happen to contain .git markers.
+    struct StandaloneBackend;
+    impl gitcomet_core::services::GitBackend for StandaloneBackend {
+        fn open(
+            &self,
+            _workdir: &Path,
+        ) -> gitcomet_core::services::Result<Arc<dyn gitcomet_core::services::GitRepository>>
+        {
+            Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::NotARepository,
+            ))
+        }
+    }
+    let (store, events) = AppStore::new_test(Arc::new(StandaloneBackend));
     let (root, cx) = cx.add_window_view(|window, cx| {
         // Text input only accepts typing in the active window.
         window.activate();
@@ -1176,6 +1190,8 @@ fn status_bar_documents_button_opens_a_picker_that_opens_typed_paths(
     });
     cx.update(|_, app| crate::app::bind_text_input_keys_for_test(app));
     let directory = tempfile::tempdir().unwrap();
+    // Exercise repository discovery for this standalone file on every host.
+    std::fs::create_dir(directory.path().join(".git")).unwrap();
     let workdir =
         gitcomet_core::path_utils::canonicalize_or_original(directory.path().to_path_buf());
     let path = workdir.join("notes.md");

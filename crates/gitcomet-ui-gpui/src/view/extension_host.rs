@@ -1259,18 +1259,24 @@ pub(crate) fn window_opened(view: &Entity<GitCometView>, cx: &mut App) {
         });
         if has_status_bar && !registry.status_items().is_empty() {
             let _ = window_handle.update(cx, |_, window, cx| {
-                let items = registry
+                let (action_items, status_items): (Vec<_>, Vec<_>) = registry
                     .status_items()
                     .iter()
                     .map(|(_, item)| {
                         super::perf::extension_dispatch();
-                        (item.view.clone(), (item.build)(host.clone(), window, cx))
+                        (
+                            item.location,
+                            item.view.clone(),
+                            (item.build)(host.clone(), window, cx),
+                        )
                     })
-                    .collect();
+                    .partition(|(location, _, _)| location.is_action_bar());
                 if let Some(view) = view.upgrade() {
                     view.update(cx, |root, cx| {
                         root.bottom_status_bar
-                            .update(cx, |bar, cx| bar.set_extension_items(items, cx));
+                            .update(cx, |bar, cx| bar.set_extension_items(status_items, cx));
+                        root.action_bar
+                            .update(cx, |bar, cx| bar.set_extension_items(action_items, cx));
                     });
                 }
             });
@@ -1322,7 +1328,17 @@ impl GitCometView {
             }
             Slot::ActionBar | Slot::Navigation => self.action_bar.update(cx, |_, cx| cx.notify()),
             Slot::TitleBar => self.title_bar.update(cx, |_, cx| cx.notify()),
-            Slot::Status => self.bottom_status_bar.update(cx, |_, cx| cx.notify()),
+            Slot::Status => {
+                self.bottom_status_bar.update(cx, |_, cx| cx.notify());
+                if registry(cx).is_some_and(|registry| {
+                    registry
+                        .status_items()
+                        .iter()
+                        .any(|(_, item)| item.location.is_action_bar())
+                }) {
+                    self.action_bar.update(cx, |_, cx| cx.notify());
+                }
+            }
             Slot::Details => self.details_pane.update(cx, |_, cx| cx.notify()),
             Slot::Sidebar => self.sidebar_pane.update(cx, |_, cx| cx.notify()),
             Slot::History => self.main_pane.update(cx, |pane, cx| {

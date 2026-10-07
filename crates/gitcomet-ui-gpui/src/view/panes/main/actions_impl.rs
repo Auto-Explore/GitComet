@@ -366,9 +366,7 @@ impl MainPaneView {
     }
 
     fn has_active_diff_target(&self) -> bool {
-        self.active_repo()
-            .and_then(|repo| self.bound_diff_state(repo).diff_target.as_ref())
-            .is_some()
+        self.rendered_diff_target().is_some()
     }
 
     fn navigate_diff_change(&mut self, previous: bool, cx: &mut gpui::Context<Self>) -> bool {

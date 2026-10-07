@@ -1,6 +1,8 @@
+use super::bar_items::{self, BarItemOwner, BarItems, ExtensionBarItem, RelocatedBarItems};
 use super::*;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::view::repository_views::{MORE_VIEWS_INVOKER, RoutedArea, ViewTabs};
+use gitcomet_extension_api::{BarItemLocation, BuiltinBarItem};
 use rustc_hash::FxHasher;
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
@@ -245,6 +247,9 @@ fn push_tooltip_text(push_count: usize, tracking_branch_name: Option<&str>) -> S
 }
 
 pub(in super::super) struct ActionBarView {
+    pub(super) relocated_items: RelocatedBarItems,
+    extension_items: Vec<ExtensionBarItem>,
+    active_view: gitcomet_extension_api::ViewTarget,
     /// Set while an extension's repository view is selected.
     extension_navigation: Option<(
         gitcomet_extension_api::RepositoryViewContext,
@@ -261,6 +266,8 @@ pub(in super::super) struct ActionBarView {
     root_view: WeakEntity<GitCometView>,
     notify_fingerprint: u64,
     active_context_menu_invoker: Option<SharedString>,
+    open_terminal_repo_ids: FxHashSet<RepoId>,
+    terminal_button_target: TerminalButtonTarget,
 }
 
 impl ActionBarView {
@@ -315,6 +322,9 @@ impl ActionBarView {
         });
 
         Self {
+            relocated_items: Vec::new(),
+            extension_items: Vec::new(),
+            active_view: gitcomet_extension_api::ViewTarget::History,
             extension_navigation: None,
             extension_slot: None,
             view_tabs: None,
@@ -325,12 +335,56 @@ impl ActionBarView {
             root_view,
             notify_fingerprint,
             active_context_menu_invoker: None,
+            open_terminal_repo_ids: FxHashSet::default(),
+            terminal_button_target: TerminalButtonTarget::default(),
         }
     }
 
     pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
         cx.notify();
+    }
+
+    pub(in crate::view) fn set_extension_items(
+        &mut self,
+        items: Vec<ExtensionBarItem>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.extension_items = items;
+        cx.notify();
+    }
+
+    pub(in crate::view) fn set_active_view(
+        &mut self,
+        view: gitcomet_extension_api::ViewTarget,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.active_view != view {
+            self.active_view = view;
+            cx.notify();
+        }
+    }
+
+    pub(in crate::view) fn set_open_terminal_repo_ids(
+        &mut self,
+        next: FxHashSet<RepoId>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.open_terminal_repo_ids != next {
+            self.open_terminal_repo_ids = next;
+            cx.notify();
+        }
+    }
+
+    pub(in crate::view) fn set_terminal_button_target(
+        &mut self,
+        target: TerminalButtonTarget,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.terminal_button_target != target {
+            self.terminal_button_target = target;
+            cx.notify();
+        }
     }
 
     pub(in crate::view) fn set_extension_navigation(
@@ -562,10 +616,15 @@ impl ActionBarView {
     }
 }
 
-impl Render for ActionBarView {
-    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+impl BarItemOwner for ActionBarView {
+    fn bar_items(
+        &mut self,
+        action_bar: bool,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> BarItems {
+        let mut items = BarItems::new(cx);
         let theme = self.theme;
-        let action_bar_height = action_bar_height(cx);
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let density = action_bar_density(
@@ -585,9 +644,17 @@ impl Render for ActionBarView {
             ActionBarDensity::Condensed => CONDENSED_BADGE_LABEL_MAX_CHARS,
             ActionBarDensity::Wide => BADGE_LABEL_MAX_CHARS,
         };
-        let beside_view_tabs = self.view_tabs.is_some();
-        let action_label =
-            |label: &'static str| secondary_action_label(density, beside_view_tabs, label);
+        let beside_view_tabs = self.view_tabs.is_some()
+            && items
+                .location(BuiltinBarItem::RepositoryViews)
+                .is_action_bar();
+        let action_label = |label: &'static str| {
+            if action_bar {
+                secondary_action_label(density, beside_view_tabs, label)
+            } else {
+                ""
+            }
+        };
         // Two independent things called density: the responsive breakpoint above
         // picks the base gap from the viewport, then the user's density setting
         // ramps it.
@@ -607,11 +674,6 @@ impl Render for ActionBarView {
         // Text in the three picker badges gives way before actions do. Keep
         // enough room for the icon and an ellipsis even at the narrowest size.
         let badge_min_width = scaled_px(theme.metrics.row_height(22.0, 32.0) + 28.0);
-        let action_bar_padding_x = if dense_spacing {
-            scaled_px(4.0)
-        } else {
-            scaled_px(8.0)
-        };
         let merge_abort_label = if dense_spacing {
             "Abort"
         } else {
@@ -1212,32 +1274,33 @@ impl Render for ActionBarView {
             .child(pull)
             .child(push);
 
-        let left_group = div()
-            .debug_selector(|| "left_action_group".to_string())
-            .flex()
-            .items_center()
-            .gap(action_group_gap)
-            .flex_1()
-            .min_w(px(0.0))
-            .overflow_hidden()
-            .child(global_nav);
-        // A selected extension view brings its own context; History's branch,
-        // tracking and merge controls stay with History.
-        let left_group = if self.extension_navigation.is_some() {
-            left_group.children(self.extension_slot.clone().map(|slot| {
-                div()
-                    .debug_selector(|| "extension_action_bar".to_string())
-                    .flex()
-                    .items_center()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .child(slot)
-            }))
+        items.push(BuiltinBarItem::Navigation, global_nav);
+        // The selected view owns its context and visibility, in either bar.
+        if self.extension_navigation.is_some() {
+            if let Some(slot) = self.extension_slot.clone() {
+                items.push(
+                    BuiltinBarItem::ViewContext,
+                    div()
+                        .debug_selector(|| "extension_action_bar".to_string())
+                        .flex()
+                        .items_center()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .child(slot),
+                );
+            }
         } else {
-            left_group
-                .children(worktree_badge)
-                .child(tracking_actions)
-                .children(historical_badge)
+            if let Some(badge) = worktree_badge {
+                items.push(BuiltinBarItem::Worktree, badge);
+            }
+            items.push(BuiltinBarItem::Tracking, tracking_actions);
+            if let Some(badge) = historical_badge {
+                items.push(BuiltinBarItem::HistoricalBrowse, badge);
+            }
+            let operation_controls = div()
+                .flex()
+                .items_center()
+                .gap(action_group_gap)
                 .when(is_merging, |d| {
                     d.child(
                         div()
@@ -1323,8 +1386,11 @@ impl Render for ActionBarView {
                                     ),
                             ),
                     )
-                })
-        };
+                });
+            if is_merging || sequencer_banner.is_some() {
+                items.push(BuiltinBarItem::OperationControls, operation_controls);
+            }
+        }
 
         // The repository's views lead the right group, a divider apart from
         // the actions that act on the repository.
@@ -1346,28 +1412,97 @@ impl Render for ActionBarView {
                 )
         });
 
+        if let Some(tabs) = view_tabs {
+            items.push(BuiltinBarItem::RepositoryViews, tabs);
+        }
+        let terminal_opens_external = self.terminal_button_target == TerminalButtonTarget::External;
+        let terminal_is_open = !terminal_opens_external
+            && self
+                .active_repo_id()
+                .is_some_and(|repo| self.open_terminal_repo_ids.contains(&repo));
+        let terminal = div().debug_selector(|| "terminal".to_string()).child(
+            components::Button::new("terminal", action_label("Terminal"))
+                .start_slot(icon("icons/terminal.svg", icon_primary))
+                .style(components::ButtonStyle::Subtle)
+                .selected(terminal_is_open)
+                .selected_bg(menu_selected_bg)
+                .disabled(self.active_repo_id().is_none())
+                .on_click(theme, cx, |this, _, window, cx| {
+                    let _ = this.root_view.update(cx, |root, cx| {
+                        root.activate_terminal_button_for_active_repo(window, cx);
+                    });
+                })
+                .gitcomet_tooltip(
+                    theme,
+                    if terminal_opens_external {
+                        "Open external terminal".into()
+                    } else if terminal_is_open {
+                        "Hide terminal".into()
+                    } else {
+                        "Show terminal".into()
+                    },
+                ),
+        );
+        items.push(BuiltinBarItem::Terminal, terminal);
+        items.push(BuiltinBarItem::CreateBranch, create_branch);
+        items.push(BuiltinBarItem::Stash, stash);
+        items.extensions(&self.extension_items, &self.active_view);
+        items
+    }
+}
+
+impl Render for ActionBarView {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let mut items = self.bar_items(true, window, cx);
+        let theme = self.theme;
+        let scale = crate::ui_scale::UiScale::current(cx);
+        let density =
+            action_bar_density(window.viewport_size().width, scale.percent(), theme.metrics);
+        let dense = density != ActionBarDensity::Wide;
+        let tight = tight_action_bar(density, theme.metrics.density);
+        let gap = scale.px(if tight {
+            4.0
+        } else {
+            theme.metrics.ramp(if dense { 4.0 } else { 8.0 }, 6.0)
+        });
         div()
             .debug_selector(|| "action_bar".to_string())
             .w_full()
-            .h(action_bar_height)
+            .h(action_bar_height(cx))
             .flex_none()
             .flex()
             .items_center()
             .justify_between()
-            .px(action_bar_padding_x)
+            .px(scale.px(if dense { 4.0 } else { 8.0 }))
             .bg(theme.colors.surface.chrome)
-            .child(left_group)
+            .child(
+                div()
+                    .debug_selector(|| "left_action_group".to_string())
+                    .flex()
+                    .items_center()
+                    .gap(gap)
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .children(items.take(BarItemLocation::ActionBarStart))
+                    .children(bar_items::placed_views(
+                        &self.relocated_items,
+                        BarItemLocation::ActionBarStart,
+                    )),
+            )
             .child(
                 div()
                     .debug_selector(|| "right_action_group".to_string())
                     .flex()
                     .items_center()
-                    .gap(action_group_gap)
+                    .gap(gap)
                     .flex_none()
                     .h_full()
-                    .children(view_tabs)
-                    .child(create_branch)
-                    .child(stash),
+                    .children(items.take(BarItemLocation::ActionBarEnd))
+                    .children(bar_items::placed_views(
+                        &self.relocated_items,
+                        BarItemLocation::ActionBarEnd,
+                    )),
             )
     }
 }

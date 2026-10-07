@@ -2047,9 +2047,17 @@ fn open_linked_worktree_changes(
             "HEAD",
         ],
     );
-    std::fs::write(linked.join("a.rs"), "linked staged\n").unwrap();
+    let staged = numbered("a", 30, None)
+        .replace("a 3\n", "linked staged 3\n")
+        .replace("a 14\n", "linked staged 14\n")
+        .replace("a 25\n", "linked staged 25\n");
+    std::fs::write(linked.join("a.rs"), &staged).unwrap();
     git(&linked, &["add", "a.rs"]);
-    std::fs::write(linked.join("a.rs"), "linked unstaged\n").unwrap();
+    std::fs::write(
+        linked.join("a.rs"),
+        staged.replace("linked staged", "linked unstaged"),
+    )
+    .unwrap();
     std::fs::remove_file(linked.join("b.rs")).unwrap();
     std::fs::write(linked.join("c.rs"), "linked untracked\n").unwrap();
     let linked = canonicalize_or_original(linked);
@@ -2166,7 +2174,7 @@ fn assert_linked_diff(
         cx.debug_bounds("diff_body_container").is_some(),
         "loaded foreign diff must actually render"
     );
-    assert!(cx.debug_bounds("inline_foreign_back").is_some());
+    assert!(cx.debug_bounds("inline_foreign_back").is_none());
 }
 
 #[gpui::test]
@@ -2182,8 +2190,14 @@ fn clicking_linked_worktree_files_renders_staged_and_unstaged_diffs(cx: &mut gpu
         &DiffTarget::working_tree(PathBuf::from("a.rs"), DiffArea::Staged),
         "linked staged",
     );
-    let back = cx.debug_bounds("inline_foreign_back").unwrap().center();
-    cx.simulate_click(back, gpui::Modifiers::default());
+    let close = cx.debug_bounds("diff_close").unwrap().center();
+    cx.simulate_mouse_move(close, None, gpui::Modifiers::default());
+    crate::view::test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        crate::view::test_support::tooltip_text(cx, &view).as_deref(),
+        Some("Close diff (Esc)"),
+    );
+    cx.simulate_keystrokes("escape");
     settle(cx, &view, &store, "return to worktree history", |cx| {
         cx.update(|_, app| {
             view.read(app).main_pane.read(app).active_content()
@@ -2207,6 +2221,235 @@ fn clicking_linked_worktree_files_renders_staged_and_unstaged_diffs(cx: &mut gpu
         &DiffTarget::working_tree(PathBuf::from("a.rs"), DiffArea::Unstaged),
         "linked unstaged",
     );
+}
+
+#[gpui::test]
+fn linked_worktree_change_keys_use_the_displayed_diff(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (_dir, linked, store, view, cx) = open_linked_worktree_changes(cx);
+    cx.update(|_, app| {
+        crate::app::bind_app_keys_for_test(app);
+        crate::app::install_global_diff_navigation_actions_for_test(app);
+        crate::app::install_global_diff_shortcut_fallback_for_test(app);
+    });
+    click_linked_file(cx, 0, gpui::MouseButton::Left);
+    assert_linked_diff(
+        cx,
+        &view,
+        &store,
+        &linked,
+        &DiffTarget::working_tree(PathBuf::from("a.rs"), DiffArea::Staged),
+        "linked staged",
+    );
+
+    for layout in [DiffViewMode::Inline, DiffViewMode::Split] {
+        for content in [DiffContentMode::Full, DiffContentMode::Collapsed] {
+            cx.update(|_, app| {
+                view.update(app, |view, cx| {
+                    view.set_diff_view_mode(layout, cx);
+                    view.set_diff_content_mode(content, cx);
+                });
+            });
+            publish(cx, &view, store.snapshot());
+            let pane = cx.update(|_, app| view.read(app).main_pane.clone());
+            let stops = cx.update(|_, app| pane.read(app).diff_nav_entries());
+            assert_eq!(stops.len(), 3, "{layout:?}, {content:?}");
+
+            for detached in [false, true] {
+                let focus = cx.update(|window, app| {
+                    pane.update(app, |pane, cx| {
+                        pane.diff_selection_anchor = Some(stops[0]);
+                        pane.diff_selection_range = None;
+                        cx.notify();
+                    });
+                    let focus = if detached {
+                        app.focus_handle()
+                    } else {
+                        pane.read(app).diff_panel_focus_handle.clone()
+                    };
+                    window.focus(&focus, app);
+                    focus
+                });
+                publish(cx, &view, store.snapshot());
+                for (key, stop) in [
+                    ("f3", stops[1]),
+                    ("f2", stops[0]),
+                    ("shift-f3", stops[1]),
+                    ("shift-f2", stops[0]),
+                    ("f7", stops[1]),
+                    ("shift-f7", stops[0]),
+                    ("alt-down", stops[1]),
+                    ("alt-up", stops[0]),
+                ] {
+                    cx.simulate_keystrokes(key);
+                    publish(cx, &view, store.snapshot());
+                    assert_eq!(
+                        cx.update(|_, app| pane.read(app).diff_selection_anchor),
+                        Some(stop),
+                        "{key}, {layout:?}, {content:?}, detached focus: {detached}",
+                    );
+                    assert!(cx.update(|window, _| focus.is_focused(window)));
+                }
+            }
+        }
+    }
+
+    for (key, area, needle) in [
+        ("f4", DiffArea::Unstaged, "linked unstaged"),
+        ("f1", DiffArea::Staged, "linked staged"),
+    ] {
+        cx.simulate_keystrokes(key);
+        assert_linked_diff(
+            cx,
+            &view,
+            &store,
+            &linked,
+            &DiffTarget::working_tree(PathBuf::from("a.rs"), area),
+            needle,
+        );
+    }
+}
+
+#[gpui::test]
+fn linked_worktree_file_selection_repaints_without_mouse_movement(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (_dir, _linked, store, view, cx) = open_linked_worktree_changes(cx);
+    cx.update(|_, app| {
+        crate::app::bind_app_keys_for_test(app);
+        crate::app::install_global_diff_navigation_actions_for_test(app);
+        crate::app::install_global_diff_shortcut_fallback_for_test(app);
+    });
+    // Cached frames do not replay debug selectors, so retain the bounds before
+    // enabling the same cache boundaries used in the application.
+    let staged_bounds = cx.debug_bounds("worktree_file_1_0").unwrap();
+    let unstaged_bounds = cx.debug_bounds("worktree_file_1_1").unwrap();
+    let paint = |cx: &mut gpui::VisualTestContext, bounds: gpui::Bounds<gpui::Pixels>| {
+        cx.update(|window, _| {
+            let scale = window.scale_factor();
+            window
+                .painted_quads()
+                .into_iter()
+                .filter(|quad| {
+                    let rect = quad.bounds;
+                    (rect.origin.x.0 - f32::from(bounds.origin.x) * scale).abs() < 1.0
+                        && (rect.origin.y.0 - f32::from(bounds.origin.y) * scale).abs() < 1.0
+                        && (rect.size.width.0 - f32::from(bounds.size.width) * scale).abs() < 1.0
+                        && (rect.size.height.0 - f32::from(bounds.size.height) * scale).abs() < 1.0
+                })
+                .map(|quad| quad.background)
+                .collect::<Vec<_>>()
+        })
+    };
+    let staged_resting = paint(cx, staged_bounds);
+    cx.simulate_mouse_move(staged_bounds.center(), None, gpui::Modifiers::default());
+    crate::view::test_support::redraw(cx);
+    let staged_idle = paint(cx, staged_bounds);
+    let unstaged_idle = paint(cx, unstaged_bounds);
+    assert!(!staged_idle.is_empty());
+    assert!(!unstaged_idle.is_empty());
+    let _cache_guard = enable_stable_cached_views_for_test();
+    publish(cx, &view, store.snapshot());
+    // The pointer stays over this row throughout selection, change navigation,
+    // file navigation and closing. No mouse event can repair a stale highlight.
+    cx.simulate_click(staged_bounds.center(), gpui::Modifiers::default());
+    let pane = cx.update(|_, app| view.read(app).main_pane.clone());
+    let selected_ix = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| {
+            view.read(app)
+                .details_pane
+                .read(app)
+                .active_repo()
+                .and_then(|repo| repo.diff_state.inline_submodule_diff.as_ref())
+                .map(|inline| inline.selected_ix)
+        })
+    };
+    settle(cx, &view, &store, "selected staged worktree file", |cx| {
+        selected_ix(cx) == Some(0)
+            && cx.update(|_, app| {
+                let pane = pane.read(app);
+                pane.rendered_patch_diff_loadable()
+                    .is_some_and(|diff| matches!(diff, Loadable::Ready(_)))
+                    && pane
+                        .rendered_file_diff_loadable()
+                        .is_some_and(|file| matches!(file, Loadable::Ready(Some(_))))
+                    && main_diff_contains(
+                        pane,
+                        &DiffTarget::working_tree(PathBuf::from("a.rs"), DiffArea::Staged),
+                        "linked staged",
+                    )
+            })
+    });
+    let staged_selected = paint(cx, staged_bounds);
+    assert_ne!(
+        staged_selected, staged_idle,
+        "selection must paint immediately"
+    );
+    assert_eq!(paint(cx, unstaged_bounds), unstaged_idle);
+
+    let stops = cx.update(|_, app| pane.read(app).diff_nav_entries());
+    assert_eq!(stops.len(), 3);
+    assert_eq!(
+        cx.update(|_, app| pane.read(app).diff_selection_anchor),
+        Some(stops[0]),
+        "opening the file focuses its first change"
+    );
+    for (key, stop) in [
+        ("f3", stops[1]),
+        ("f2", stops[0]),
+        ("shift-f3", stops[1]),
+        ("shift-f2", stops[0]),
+        ("f7", stops[1]),
+        ("shift-f7", stops[0]),
+        ("alt-down", stops[1]),
+        ("alt-up", stops[0]),
+    ] {
+        cx.simulate_keystrokes(key);
+        publish(cx, &view, store.snapshot());
+        assert_eq!(
+            cx.update(|_, app| pane.read(app).diff_selection_anchor),
+            Some(stop)
+        );
+        assert_eq!(paint(cx, staged_bounds), staged_selected, "after {key}");
+    }
+
+    cx.simulate_keystrokes("f4");
+    settle(cx, &view, &store, "selected unstaged worktree file", |cx| {
+        selected_ix(cx) == Some(1)
+    });
+    // Keyboard input can clear hover feedback even with a stationary pointer.
+    // Both unselected fills are valid; the persistent selection must disappear.
+    let staged_after_f4 = paint(cx, staged_bounds);
+    assert!(
+        staged_after_f4 == staged_idle || staged_after_f4 == staged_resting,
+        "F4 clears the old highlight: {staged_after_f4:?}"
+    );
+    assert_ne!(
+        paint(cx, unstaged_bounds),
+        unstaged_idle,
+        "F4 paints the new highlight"
+    );
+
+    cx.simulate_keystrokes("f1");
+    settle(cx, &view, &store, "reselected staged worktree file", |cx| {
+        selected_ix(cx) == Some(0)
+    });
+    assert_eq!(
+        paint(cx, staged_bounds),
+        staged_selected,
+        "F1 restores the highlight"
+    );
+    assert_eq!(paint(cx, unstaged_bounds), unstaged_idle);
+
+    cx.simulate_keystrokes("escape");
+    settle(cx, &view, &store, "closed worktree diff", |cx| {
+        selected_ix(cx).is_none()
+    });
+    let staged_after_close = paint(cx, staged_bounds);
+    assert!(
+        staged_after_close == staged_idle || staged_after_close == staged_resting,
+        "closing clears the highlight: {staged_after_close:?}"
+    );
+    assert_eq!(paint(cx, unstaged_bounds), unstaged_idle);
 }
 
 #[gpui::test]

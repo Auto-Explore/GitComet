@@ -48,30 +48,6 @@ Questions about contribution permissions or signing records: info@gitcomet.dev. 
 Product names, identifiers, and links come from `gitcomet_core::identity`, never
 from string literals: `scripts/ci/identity_literals.py` fails on new ones.
 
-### Extending the host
-
-Keep workflow state and provider behaviour in the extension. Host contributions
-describe placement, lifecycle and interaction rather than individual workflows.
-Repository views provide their own action-bar content and navigation; panel tabs
-use `PanelTabDescriptor` and `Registrar::panel_tab` for either `PanelArea`.
-`RepositoryViewDescriptor::with_panel_content` controls whether a panel offers
-host tabs alongside contributed tabs. Both panels use the same router and tab
-components, and `WindowHost::show_panel_tab` reveals a registered tab through it.
-
-Toolbar actions use the kit's `ActionButton<C>` with an owner-supplied context and
-`enabled_when` predicate. `DiffBarItem` is that same component with selected file
-lines as its context; the built-in Stage button and hosted diff actions share its
-renderer, eligibility checks and deferred invocation. For controls beyond buttons,
-mount an owner-built view with `DiffBar::with_content` instead of adding a new
-workflow-specific descriptor field. The view owns its state and invalidation.
-
-Git operations expose captured revisions and compare-and-swap ref updates. Ref
-updates and checked-out branch application share one prepared transaction guard;
-built-in force push and multi-branch publication share the exact-lease command
-builder. Clients own planning and recovery journals. Add backend operations for
-Git semantics that several callers can share, and route existing operations
-through them where the semantics match.
-
 ### Getting started
 
 Linux prerequisites:

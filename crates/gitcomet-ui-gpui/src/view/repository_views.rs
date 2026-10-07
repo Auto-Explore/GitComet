@@ -301,7 +301,7 @@ impl GitCometView {
             })
             .unwrap_or(gitcomet_extension_api::ViewTarget::History);
         self.bottom_status_bar
-            .update(cx, |bar, cx| bar.set_active_view(active_view, cx));
+            .update(cx, |bar, cx| bar.set_active_view(active_view.clone(), cx));
         let enabled = !self.window_gated && navigation.is_none();
         let slot = navigation.as_ref().and_then(|_| {
             let repo = self.active_repo()?;
@@ -309,6 +309,7 @@ impl GitCometView {
         });
         let tabs = self.repository_view_tabs();
         self.action_bar.update(cx, |bar, cx| {
+            bar.set_active_view(active_view, cx);
             bar.set_extension_navigation(navigation, slot, cx);
             bar.set_view_tabs(tabs, cx);
         });

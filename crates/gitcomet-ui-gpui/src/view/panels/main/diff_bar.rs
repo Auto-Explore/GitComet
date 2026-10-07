@@ -141,7 +141,7 @@ impl MainPaneView {
             DiffArea::Unstaged => "icons/plus.svg",
             DiffArea::Staged => "icons/minus.svg",
         };
-        let button = components::ActionButton::new("stage", action.label(), move |(), cx| {
+        components::ActionButton::new("stage", action.label(), move |(), cx| {
             let _ = handle.update(cx, |_, window, cx| {
                 let _ = pane.update(cx, |pane, cx| {
                     pane.toggle_stage_shown_file(window, cx);
@@ -153,12 +153,8 @@ impl MainPaneView {
         .with_icon(icon)
         .with_shortcut("space")
         .with_tooltip(action.tooltip())
-        .primary()
-        .render("diff_bar_stage", (), theme, scale);
-        components::filled_action_frame(theme, scale)
-            .debug_selector(|| "diff_bar_stage_frame".to_string())
-            .child(button)
-            .into_any_element()
+        .framed()
+        .render("diff_bar_stage", (), theme, scale)
     }
 
     /// Uses the same action renderer as the built-in toolbar. Owner-built
