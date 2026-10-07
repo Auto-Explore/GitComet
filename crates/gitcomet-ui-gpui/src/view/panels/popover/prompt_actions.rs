@@ -337,6 +337,7 @@ impl PopoverHost {
             PopoverKind::CommitFileSortMenu { list } => {
                 self.context_menu_view(PopoverKind::CommitFileSortMenu { list }, cx)
             }
+            kind @ PopoverKind::FileListLayoutMenu { .. } => self.context_menu_view(kind, cx),
             PopoverKind::ChangeTrackingSettings => {
                 self.context_menu_view(PopoverKind::ChangeTrackingSettings, cx)
             }

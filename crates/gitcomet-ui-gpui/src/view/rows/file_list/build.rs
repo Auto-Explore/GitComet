@@ -222,7 +222,7 @@ impl FileTree {
     }
 
     /// Directories before files under a path sort, mirrored for the descending
-    /// one. Edit-size and file-type sorts interleave instead: grouping
+    /// one. Edit-size, edit and file-type sorts interleave instead: grouping
     /// directories first would float a folder holding a three-line change above
     /// a root file with nine hundred, and would split a type group in two.
     fn emit_order(&self, node_ix: usize) -> std::borrow::Cow<'_, [TreeEntry]> {
@@ -230,6 +230,7 @@ impl FileTree {
         match self.sort {
             CommitFileSort::EditSizeAscending
             | CommitFileSort::EditSizeDescending
+            | CommitFileSort::Edits
             | CommitFileSort::FileTypeAscending
             | CommitFileSort::FileTypeDescending => std::borrow::Cow::Borrowed(entries),
             CommitFileSort::PathAscending | CommitFileSort::PathDescending => {

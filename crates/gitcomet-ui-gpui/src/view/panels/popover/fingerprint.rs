@@ -59,6 +59,7 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
         PopoverKind::DiffContentModeSettings
         | PopoverKind::TextFormatMenu { .. }
         | PopoverKind::CommitFileSortMenu { .. }
+        | PopoverKind::FileListLayoutMenu { .. }
         | PopoverKind::WebLinkMenu { .. }
         | PopoverKind::LocalFileLinkMenu { .. }
         | PopoverKind::CommitShaLinkMenu { .. }
@@ -218,6 +219,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::DiscardChangesConfirm { repo_id, .. }
         | PopoverKind::DiscardFolderChangesConfirm { repo_id, .. }
         | PopoverKind::FileListFolderMenu { repo_id, .. }
+        | PopoverKind::FileListLayoutMenu { repo_id, .. }
         | PopoverKind::AddToGitignorePrompt { repo_id, .. }
         | PopoverKind::StageConflictMarkersConfirm { repo_id, .. }
         | PopoverKind::PullReconcilePrompt { repo_id }
@@ -544,6 +546,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::TextFormatMenu { .. }
         | PopoverKind::CommitFileSortMenu { .. }
+        | PopoverKind::FileListLayoutMenu { .. }
         | PopoverKind::WebLinkMenu { .. }
         | PopoverKind::LocalFileLinkMenu { .. }
         | PopoverKind::CommitShaLinkMenu { .. }
@@ -669,6 +672,11 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         }
         PopoverKind::CommitFileSortMenu { list } => {
             104u8.hash(hasher);
+            list.hash(hasher);
+        }
+        PopoverKind::FileListLayoutMenu { repo_id, list } => {
+            123u8.hash(hasher);
+            repo_id.hash(hasher);
             list.hash(hasher);
         }
         PopoverKind::WebLinkMenu {

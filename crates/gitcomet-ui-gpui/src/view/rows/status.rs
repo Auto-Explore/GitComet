@@ -567,6 +567,37 @@ fn render_status_rows_for_section(
                     );
                 }
                 crate::view::rows::FileListRow::File { ordinal, depth } => (ordinal, depth),
+                crate::view::rows::FileListRow::Group {
+                    group,
+                    label,
+                    count,
+                    collapsed,
+                } => {
+                    let pane = cx.weak_entity();
+                    let list = crate::view::rows::FileListId::Status(section);
+                    let ui_scale = crate::ui_scale::UiScale::current(cx);
+                    return Some(crate::view::rows::group_header_row(
+                        crate::view::rows::GroupHeaderProps {
+                            id: ("status_group", group),
+                            selector: format!(
+                                "status_group_{}_{}_{label}",
+                                repo_id.0,
+                                section.id_label()
+                            ),
+                            label,
+                            count,
+                            collapsed,
+                        },
+                        theme,
+                        ui_scale,
+                        ui_scale.row_height(STATUS_ROW_HEIGHT_PX, 32.0),
+                        move |cx| {
+                            let _ = pane.update(cx, |pane, cx| {
+                                pane.toggle_file_list_group(repo_id, list, group, cx)
+                            });
+                        },
+                    ));
+                }
             };
             let entry = entries.get(ordinal.0)?;
             let path_display = if is_tree {
@@ -1183,20 +1214,8 @@ mod tests {
         ];
         let all: Vec<usize> = (0..entries.len()).collect();
         let mut stats = rustc_hash::FxHashMap::default();
-        stats.insert(
-            pb("small.rs"),
-            LineStats {
-                additions: Some(1),
-                deletions: Some(1),
-            },
-        );
-        stats.insert(
-            pb("big.rs"),
-            LineStats {
-                additions: Some(90),
-                deletions: Some(10),
-            },
-        );
+        stats.insert(pb("small.rs"), LineStats::from((Some(1), Some(1))));
+        stats.insert(pb("big.rs"), LineStats::from((Some(90), Some(10))));
         // `unknown.rs` is absent on purpose — a binary file, say.
 
         let largest = crate::view::rows::status_section_sorted_indexes(
@@ -1217,6 +1236,41 @@ mod tests {
             smallest.as_ref(),
             &[0, 1, 2],
             "unknowns stay last in both directions"
+        );
+    }
+
+    /// A section's lane carries the edits; files sharing one sit together.
+    #[test]
+    fn edits_sort_groups_a_sections_repeated_edits() {
+        use crate::view::rows::tests::edit;
+        use gitcomet_core::domain::LineStats;
+
+        let entries = vec![
+            file_status("c.rs", FileStatusKind::Modified),
+            file_status("b.rs", FileStatusKind::Modified),
+            file_status("a.rs", FileStatusKind::Modified),
+            file_status("d.rs", FileStatusKind::Modified),
+        ];
+        let all: Vec<usize> = (0..entries.len()).collect();
+        let stats: rustc_hash::FxHashMap<_, _> = [("a.rs", "x"), ("b.rs", "y"), ("d.rs", "y")]
+            .into_iter()
+            .map(|(path, text)| {
+                let mut stats = LineStats::from((Some(1), Some(0)));
+                stats.edit = edit(text);
+                (pb(path), stats)
+            })
+            .collect();
+
+        let ordered = crate::view::rows::status_section_sorted_indexes(
+            &entries,
+            &all,
+            crate::view::rows::CommitFileSort::Edits,
+            Some(&stats),
+        );
+        assert_eq!(
+            ordered.as_ref(),
+            &[1, 3, 2, 0],
+            "b+d, then a, then c (unknown)"
         );
     }
 

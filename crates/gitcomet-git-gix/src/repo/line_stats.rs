@@ -170,6 +170,43 @@ impl super::GixRepo {
         result
     }
 
+    /// Edits for a commit-to-worktree file list, whose counts came from
+    /// `git diff --numstat` without the contents. Reads both sides under the
+    /// caps the counts use, and only for files those could count.
+    pub(super) fn add_worktree_edits(
+        &self,
+        files: &mut [gitcomet_core::domain::CommitFileChange],
+        cancellation: &CancellationToken,
+    ) -> Result<()> {
+        if files.len() > super::log::COMMIT_STATS_MAX_FILES {
+            return Ok(());
+        }
+        let repo = self.status_repo();
+        let mut pipeline = repo.filter_pipeline(None).ok();
+        let (mut old, mut new) = (Vec::new(), Vec::new());
+        for file in files
+            .iter_mut()
+            .filter(|file| file.edit.is_none() && file.additions.is_some() && !file.is_submodule)
+        {
+            cancellation.check_cancelled()?;
+            let old_id = file
+                .old_id
+                .as_ref()
+                .and_then(|id| gix::ObjectId::from_hex(id.0.as_bytes()).ok());
+            if !read_commit_stats_blob(&repo, old_id, &mut old) {
+                continue;
+            }
+            new.clear();
+            if file.kind != FileStatusKind::Deleted
+                && !read_worktree_git_bytes(self, pipeline.as_mut(), &file.path, &mut new)
+            {
+                continue;
+            }
+            file.edit = line_stats_from_bytes(&old, &new).edit;
+        }
+        Ok(())
+    }
+
     fn line_stats_memo(&self) -> std::sync::MutexGuard<'_, LineStatsMemo> {
         self.line_stats_memo
             .lock()
@@ -288,7 +325,7 @@ fn staged_line_stats(
             let path = path_buf_from_git_bytes(location.as_ref(), "gix staged line stats path")
                 .or_erased()?;
             let stats = memo.counts((DiffArea::Staged, old_id, new_id), || {
-                commit_file_line_stats(repo, old_id, new_id, &mut scratch).into()
+                commit_file_line_stats(repo, old_id, new_id, &mut scratch)
             });
             out.push((path, (old_id, new_id), stats));
             Ok(std::ops::ControlFlow::Continue(()))
@@ -431,7 +468,7 @@ fn unstaged_entry_line_stats<'repo>(
         if !index_blob_loaded && !read_commit_stats_blob(repo, index_id, index_blob) {
             return LineStats::UNKNOWN;
         }
-        line_stats_from_bytes(index_blob.as_slice(), worktree.as_slice()).into()
+        line_stats_from_bytes(index_blob.as_slice(), worktree.as_slice())
     };
     // Hashing costs a fraction of the diff an unchanged file then skips.
     match gix::objs::compute_hash(repo.object_hash(), gix::objs::Kind::Blob, worktree) {
@@ -552,6 +589,11 @@ fn read_worktree_git_bytes(
 mod tests {
     use super::*;
     use crate::repo::status::tests::{git_success, init_test_repo, open_repo, write_file};
+
+    /// The counts alone: these tests are about counting, not the edit.
+    fn counts(stats: Option<&LineStats>) -> Option<(Option<u32>, Option<u32>)> {
+        stats.map(|stats| (stats.additions, stats.deletions))
+    }
 
     #[test]
     fn review_unlocked_annex_stats_skip_payload_reads_on_every_refresh() {
@@ -783,11 +825,8 @@ mod tests {
             .line_stats_for_entries_impl(&entries, &CancellationToken::new())
             .unwrap();
         assert_eq!(
-            stats.unstaged[std::path::Path::new("notes.txt")],
-            LineStats {
-                additions: Some(2),
-                deletions: Some(1),
-            }
+            counts(stats.unstaged.get(std::path::Path::new("notes.txt"))),
+            Some((Some(2), Some(1)))
         );
     }
 
@@ -912,11 +951,8 @@ mod tests {
             .uncommitted_line_stats_impl(&CancellationToken::new())
             .unwrap();
         assert_eq!(
-            stats.unstaged.get(std::path::Path::new("link")),
-            Some(&LineStats {
-                additions: Some(1),
-                deletions: Some(1),
-            })
+            counts(stats.unstaged.get(std::path::Path::new("link"))),
+            Some((Some(1), Some(1)))
         );
     }
 
@@ -937,13 +973,7 @@ mod tests {
         let stats = open_repo(dir)
             .uncommitted_line_stats_impl(&CancellationToken::new())
             .unwrap();
-        assert_eq!(
-            stats.unstaged.get(&path),
-            Some(&LineStats {
-                additions: Some(1),
-                deletions: Some(1),
-            })
-        );
+        assert_eq!(counts(stats.unstaged.get(&path)), Some((Some(1), Some(1))));
     }
 
     #[test]
@@ -966,19 +996,13 @@ mod tests {
         let stats = repo.line_stats_for_entries_impl(&entries, &token).unwrap();
         for path in ["a.txt", "nested/b.txt"] {
             assert_eq!(
-                stats.unstaged.get(std::path::Path::new(path)),
-                Some(&LineStats {
-                    additions: Some(1),
-                    deletions: Some(0)
-                })
+                counts(stats.unstaged.get(std::path::Path::new(path))),
+                Some((Some(1), Some(0)))
             );
         }
         assert_eq!(
-            stats.unstaged.get(std::path::Path::new("raw/c.txt")),
-            Some(&LineStats {
-                additions: Some(2),
-                deletions: Some(1)
-            })
+            counts(stats.unstaged.get(std::path::Path::new("raw/c.txt"))),
+            Some((Some(2), Some(1)))
         );
         // The supplied snapshot bounds the scan; it must not rediscover other changes.
         let status = gitcomet_core::domain::RepoStatus {
@@ -1019,18 +1043,12 @@ mod tests {
             .expect("line stats");
 
         assert_eq!(
-            stats.staged.get(std::path::Path::new("staged.txt")),
-            Some(&LineStats {
-                additions: Some(2),
-                deletions: Some(0)
-            })
+            counts(stats.staged.get(std::path::Path::new("staged.txt"))),
+            Some((Some(2), Some(0)))
         );
         assert_eq!(
-            stats.unstaged.get(std::path::Path::new("unstaged.txt")),
-            Some(&LineStats {
-                additions: Some(0),
-                deletions: Some(1)
-            })
+            counts(stats.unstaged.get(std::path::Path::new("unstaged.txt"))),
+            Some((Some(0), Some(1)))
         );
         assert!(
             !stats
@@ -1168,11 +1186,8 @@ mod tests {
         assert_eq!(take_line_stats_diffs_for_tests(), 1);
         assert_eq!(moved, scan(&open_repo(dir)));
         assert_eq!(
-            moved.unstaged.get(std::path::Path::new("big.txt")),
-            Some(&LineStats {
-                additions: Some(100),
-                deletions: Some(100),
-            })
+            counts(moved.unstaged.get(std::path::Path::new("big.txt"))),
+            Some((Some(100), Some(100)))
         );
 
         // Moving a pair to the staged lane computes that lane's own entry.
@@ -1321,11 +1336,8 @@ mod tests {
             .uncommitted_line_stats_impl(&CancellationToken::new())
             .expect("line stats");
         assert_eq!(
-            stats.staged.get(std::path::Path::new("first.txt")),
-            Some(&LineStats {
-                additions: Some(4),
-                deletions: Some(0)
-            })
+            counts(stats.staged.get(std::path::Path::new("first.txt"))),
+            Some((Some(4), Some(0)))
         );
     }
 
@@ -1344,11 +1356,109 @@ mod tests {
             .uncommitted_line_stats_impl(&CancellationToken::new())
             .expect("line stats");
         assert_eq!(
-            stats.unstaged.get(std::path::Path::new("gone.txt")),
-            Some(&LineStats {
-                additions: Some(0),
-                deletions: Some(3)
-            })
+            counts(stats.unstaged.get(std::path::Path::new("gone.txt"))),
+            Some((Some(0), Some(3)))
+        );
+    }
+    /// `a.rs` and `nested/b.rs` take the same edit (at different indents),
+    /// `c.rs` a different one.
+    fn seed_same_edit(workdir: &std::path::Path, from: &str, to: &str) {
+        write_file(workdir, "a.rs", &format!("use {from};\nfn a() {{}}\n"));
+        write_file(
+            workdir,
+            "nested/b.rs",
+            &format!("    use {from};\nfn b() {{}}\n"),
+        );
+        write_file(workdir, "c.rs", &format!("use {from};\nfn c() {{}}\n"));
+        if !to.is_empty() {
+            write_file(workdir, "a.rs", &format!("use {to};\nfn a() {{}}\n"));
+            write_file(
+                workdir,
+                "nested/b.rs",
+                &format!("    use {to};\nfn b() {{}}\n"),
+            );
+            write_file(workdir, "c.rs", &format!("use {to}_other;\nfn c() {{}}\n"));
+        }
+    }
+
+    fn assert_same_edit(
+        edit: impl Fn(&str) -> Option<gitcomet_core::edit_signature::EditSignature>,
+    ) {
+        let a = edit("a.rs");
+        assert!(a.is_some(), "a text edit has a signature");
+        assert_eq!(a, edit("nested/b.rs"), "the same edit shares it");
+        assert_ne!(a, edit("c.rs"), "a different edit does not");
+    }
+
+    fn head_id(workdir: &std::path::Path) -> gitcomet_core::domain::CommitId {
+        let repo = gix::open(workdir).expect("open repo");
+        gitcomet_core::domain::CommitId(repo.head_id().expect("head").to_string().into())
+    }
+
+    #[test]
+    fn the_same_edit_shares_a_signature_in_both_uncommitted_lanes() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+        seed_same_edit(workdir, "old", "");
+        git_success(workdir, &["add", "."]);
+        git_success(workdir, &["commit", "-m", "seed"]);
+        seed_same_edit(workdir, "old", "staged");
+        git_success(workdir, &["add", "."]);
+        seed_same_edit(workdir, "staged", "unstaged");
+
+        let stats = open_repo(workdir)
+            .uncommitted_line_stats_impl(&CancellationToken::new())
+            .expect("line stats");
+        for lane in [&stats.staged, &stats.unstaged] {
+            assert_same_edit(|path| lane[std::path::Path::new(path)].edit);
+        }
+        assert_ne!(
+            stats.staged[std::path::Path::new("a.rs")].edit,
+            stats.unstaged[std::path::Path::new("a.rs")].edit,
+            "each lane signs its own edit"
+        );
+    }
+
+    #[test]
+    fn the_same_edit_shares_a_signature_in_a_commit_and_against_the_worktree() {
+        use gitcomet_core::services::GitRepository as _;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+        seed_same_edit(workdir, "old", "");
+        git_success(workdir, &["add", "."]);
+        git_success(workdir, &["commit", "-m", "seed"]);
+        let seed = head_id(workdir);
+        seed_same_edit(workdir, "old", "new");
+        git_success(workdir, &["commit", "-am", "edit"]);
+        let repo = open_repo(workdir);
+
+        let details = repo.commit_details(&head_id(workdir)).expect("details");
+        let committed = |path: &str| {
+            details
+                .files
+                .iter()
+                .find(|f| f.path == std::path::Path::new(path))?
+                .edit
+        };
+        assert_same_edit(committed);
+
+        // The worktree side has no blob; its counts come from numstat, so the
+        // edit is read separately.
+        seed_same_edit(workdir, "new", "newer");
+        let against_worktree = repo.diff_range_files(&seed, None).expect("range");
+        let edit = |path: &str| {
+            against_worktree
+                .iter()
+                .find(|f| f.path == std::path::Path::new(path))?
+                .edit
+        };
+        assert_same_edit(edit);
+        assert_ne!(
+            edit("a.rs"),
+            committed("a.rs"),
+            "measured from the seed, the edit is old to newer"
         );
     }
 }

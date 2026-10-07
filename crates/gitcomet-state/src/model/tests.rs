@@ -1448,10 +1448,7 @@ fn line_stats_revs_move_per_lane_only_when_that_lane_changes() {
                 .map(|(path, additions)| {
                     (
                         PathBuf::from(path),
-                        LineStats {
-                            additions: Some(*additions),
-                            deletions: Some(0),
-                        },
+                        LineStats::from((Some(*additions), Some(0))),
                     )
                 })
                 .collect()
