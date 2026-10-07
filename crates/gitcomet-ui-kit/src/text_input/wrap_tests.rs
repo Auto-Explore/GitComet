@@ -70,6 +70,116 @@ fn seed_wrapped_input(
     input
 }
 
+fn draw_and_assert_end_caret(
+    input: &Entity<TextInput>,
+    expected_text: &str,
+    cx: &mut gpui::VisualTestContext,
+) -> usize {
+    for _ in 0..3 {
+        draw_frame(cx);
+    }
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            assert_eq!(input.text(), expected_text);
+            let TextInputLayout::Wrapped { lines, .. } = input.layout.last.as_ref().unwrap() else {
+                panic!("wrapped layout")
+            };
+            let rows = lines.iter().map(EditorLine::line_count).sum::<usize>();
+            let bounds = input.layout.bounds.unwrap();
+            let line_height = input.layout.line_height;
+            let expected_top = bounds.top() + line_height * (rows - 1) as f32;
+            let end = input.text().encode_utf16().count();
+            let ime = input
+                .bounds_for_range(end..end, bounds, window, cx)
+                .unwrap();
+            assert_eq!(ime.top(), expected_top, "IME caret for {:?}", input.text());
+            let scale = window.scale_factor();
+            let caret = window
+                .painted_quads()
+                .into_iter()
+                .find(|quad| {
+                    quad.background == input.style.cursor.into()
+                        && (quad.bounds.size.width.0 - scale).abs() < 0.01
+                })
+                .expect("focused input must paint its caret");
+            // The painted caret has a 3 px inset within the visual row.
+            assert!(
+                (caret.bounds.origin.y.0 - f32::from(expected_top + px(3.0)) * scale).abs() <= 1.0,
+                "painted caret for {:?}: {:?}, expected row {}",
+                input.text(),
+                caret.bounds,
+                rows - 1
+            );
+            assert!(
+                (caret.bounds.origin.x.0 - f32::from(ime.left()) * scale).abs() <= 1.0,
+                "painted x {:?} must agree with IME {:?} within pixel snapping",
+                caret.bounds,
+                ime
+            );
+            rows
+        })
+    })
+}
+
+#[gpui::test]
+fn wrapped_caret_follows_typing_deletion_history_and_resize(cx: &mut gpui::TestAppContext) {
+    crate::test_support::use_real_text_backend(cx);
+    let (view, cx) = cx.add_window_view(WrappedInputView::new);
+    let input = seed_wrapped_input(&view, cx, "");
+    cx.update(|_window, app| {
+        input.update(app, |input, cx| {
+            input.text_size = Some(13.0);
+            cx.notify();
+        });
+        let width = input.read(app).layout.bounds.unwrap().size.width;
+        view.update(app, |view, cx| {
+            view.width += px(120.0) - width;
+            cx.notify();
+        });
+    });
+    for _ in 0..4 {
+        draw_frame(cx);
+    }
+    let narrow_width = cx.update(|_, app| view.read(app).width);
+    let message = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
+    let mut rows_seen = [false; 4];
+    for (start, character) in message.char_indices() {
+        let end = start + character.len_utf8();
+        cx.simulate_input(&message[start..end]);
+        if character != ' ' {
+            let rows = draw_and_assert_end_caret(&input, &message[..end], cx);
+            if let Some(seen) = rows_seen.get_mut(rows - 1) {
+                *seen = true;
+            }
+        }
+    }
+    assert!(
+        rows_seen.into_iter().all(|seen| seen),
+        "must type through four rows"
+    );
+    let shortened = "alpha beta gamma de";
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            let end = input.text().encode_utf16().count();
+            input.replace_text_in_range(Some(shortened.len()..end), "", window, cx);
+        });
+    });
+    draw_and_assert_end_caret(&input, shortened, cx);
+    cx.update(|window, app| input.update(app, |input, cx| input.undo(&Undo, window, cx)));
+    draw_and_assert_end_caret(&input, message, cx);
+    cx.update(|window, app| input.update(app, |input, cx| input.redo(&Redo, window, cx)));
+    draw_and_assert_end_caret(&input, shortened, cx);
+    for (width, rows) in [(px(240.0), 1), (narrow_width, 2)] {
+        cx.update(|_window, app| {
+            view.update(app, |view, cx| {
+                view.width = width;
+                cx.notify();
+            })
+        });
+        assert_eq!(draw_and_assert_end_caret(&input, shortened, cx), rows);
+    }
+}
+
 #[gpui::test]
 fn reversed_ime_ranges_keep_multiline_text_and_row_caches_in_step(cx: &mut gpui::TestAppContext) {
     crate::test_support::use_real_text_backend(cx);
