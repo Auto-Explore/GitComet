@@ -14,9 +14,8 @@ static SESSION_ACTIVE: AtomicBool = AtomicBool::new(false);
 static SESSION_LIFECYCLE: Mutex<()> = Mutex::new(());
 static WRITING_RUNTIME_ERROR_LOG: Mutex<()> = Mutex::new(());
 /// `(location, message)` hashes already written this session. A driver or
-/// GPUI diagnostic that repeats every frame would otherwise capture and
-/// symbolize a backtrace per repetition; one record per distinct error is
-/// what the recovered report needs.
+/// GPUI diagnostic that repeats every frame only needs one durable record
+/// per distinct error in the recovered report.
 static RUNTIME_ERRORS_SEEN: Mutex<Vec<u64>> = Mutex::new(Vec::new());
 const MAX_RUNTIME_ERRORS_SEEN: usize = 1_024;
 static CRASH_LOGGER: CrashLogger = CrashLogger;
@@ -274,8 +273,11 @@ fn write_runtime_error_log(record: &log::Record<'_>, message: &str) {
     } else {
         format!("An error was emitted by log target {}.", record.target())
     };
-    let backtrace = Backtrace::force_capture().to_string();
-    let _ = write_runtime_error_log_in_dir(&dir, &location, &message, &info, &backtrace);
+    // Logging a recoverable driver diagnostic can happen on the UI thread.
+    // Symbolizing its stack here stalls startup, especially with Windows PDBs.
+    // The log record already identifies the caller; reserve backtraces for
+    // panics and explicit fatal session failures.
+    let _ = write_runtime_error_log_in_dir(&dir, &location, &message, &info);
 }
 
 fn write_runtime_error_log_in_dir(
@@ -283,7 +285,6 @@ fn write_runtime_error_log_in_dir(
     location: &str,
     message: &str,
     info: &str,
-    backtrace: &str,
 ) -> std::io::Result<()> {
     let path = runtime_error_path(dir);
     let mut file = open_private_append(&path)?;
@@ -309,8 +310,6 @@ fn write_runtime_error_log_in_dir(
     writeln!(file, "message={}", single_line_text(message))?;
     writeln!(file, "info={}", single_line_text(info))?;
     write_cached_environment(&mut file)?;
-    writeln!(file, "backtrace:")?;
-    writeln!(file, "{backtrace}")?;
     // No `sync_data`: the record only has to outlive this process, which the
     // page cache guarantees, and an fsync per `error!` stalled the frame that
     // logged it.
@@ -1422,6 +1421,121 @@ mod tests {
     }
 
     #[test]
+    fn runtime_logger_preserves_deduplicated_metadata_without_a_backtrace() {
+        const CHILD: &str = "GITCOMET_RUNTIME_LOGGER_TEST_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            install();
+            begin_session().expect("begin child session");
+            let snapshot = EnvironmentSnapshot {
+                git_version: Some("runtime logger test git".into()),
+                ..Default::default()
+            };
+            environment::publish(snapshot);
+            let record = log::Record::builder()
+                .level(log::Level::Error)
+                .target("test::recoverable_driver")
+                .file(Some("driver.rs"))
+                .line(Some(42))
+                .args(format_args!("recoverable driver diagnostic"))
+                .build();
+            log::logger().log(&record);
+            log::logger().log(&record);
+            // Leave recovery artifacts for the parent to inspect.
+            std::process::exit(42);
+        }
+
+        let root = tempdir().expect("child profile root");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "crashlog::tests::runtime_logger_preserves_deduplicated_metadata_without_a_backtrace",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("GITCOMET_PROFILE_ROOT", root.path())
+            .output()
+            .expect("run child logger");
+        assert_eq!(output.status.code(), Some(42));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(stderr.matches("recoverable driver diagnostic").count(), 2);
+
+        let dir = root
+            .path()
+            .join("state")
+            .join(identity::current().directory_name())
+            .join("crashes");
+        let report = take_startup_report_from_crash_dir(&dir).expect("recover runtime error");
+        let contents = std::fs::read_to_string(&report.crash_log_path).unwrap();
+        assert_eq!(
+            contents.matches("=== GitComet runtime error ===").count(),
+            1
+        );
+        let parsed = parse_crash_log(&contents);
+        assert_eq!(parsed.failure_kind.as_deref(), Some("runtime-error"));
+        assert_eq!(parsed.location.as_deref(), Some("driver.rs#L42"));
+        assert_eq!(
+            parsed.message.as_deref(),
+            Some("recoverable driver diagnostic")
+        );
+        assert_eq!(
+            parsed.info.as_deref(),
+            Some("An error was emitted by log target test::recoverable_driver.")
+        );
+        assert_eq!(
+            parsed.environment.unwrap().git_version.as_deref(),
+            Some("runtime logger test git")
+        );
+        assert!(parsed.backtrace.is_empty());
+        assert!(!contents.contains("backtrace:"));
+    }
+
+    #[test]
+    fn panic_and_fatal_launch_reports_keep_backtraces() {
+        const CHILD: &str = "GITCOMET_FATAL_BACKTRACE_TEST_CHILD";
+        if let Ok(kind) = std::env::var(CHILD) {
+            install();
+            begin_session().expect("begin child session");
+            if kind == "panic" {
+                panic!("fatal backtrace test panic");
+            }
+            record_session_failure("test launch", "fatal backtrace test returned error")
+                .expect("record fatal launch failure");
+            std::process::exit(42);
+        }
+
+        for kind in ["panic", "returned-error"] {
+            let root = tempdir().expect("child profile root");
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "crashlog::tests::panic_and_fatal_launch_reports_keep_backtraces",
+                    "--nocapture",
+                ])
+                .env(CHILD, kind)
+                .env("GITCOMET_PROFILE_ROOT", root.path())
+                .output()
+                .expect("run fatal failure child");
+            assert_eq!(
+                output.status.code(),
+                Some(if kind == "panic" { 101 } else { 42 })
+            );
+            let dir = root
+                .path()
+                .join("state")
+                .join(identity::current().directory_name())
+                .join("crashes");
+            let report = take_startup_report_from_crash_dir(&dir).expect("recover fatal failure");
+            let parsed = parse_crash_log(&std::fs::read_to_string(report.crash_log_path).unwrap());
+            assert_eq!(parsed.failure_kind.as_deref(), Some(kind));
+            assert!(
+                !parsed.backtrace.trim().is_empty(),
+                "missing {kind} backtrace"
+            );
+            assert!(parsed.location.is_some());
+        }
+    }
+
+    #[test]
     fn percent_encode_encodes_reserved_characters() {
         assert_eq!(percent_encode("a b&c/d"), "a%20b%26c%2Fd");
     }
@@ -1597,7 +1711,7 @@ frame 2
     }
 
     #[test]
-    fn runtime_error_supplies_failure_location_message_and_backtrace() {
+    fn runtime_error_supplies_failure_metadata_without_a_backtrace() {
         let dir = tempdir().expect("temp dir");
         let marker = session_marker_path(dir.path());
         let last_operation = last_operation_path(dir.path());
@@ -1618,7 +1732,6 @@ frame 2
             "crates/gpui_linux/src/linux/wayland/client.rs#L993",
             "Io error: Connection reset by peer (os error 104)",
             "An error was emitted by log target gpui_linux::linux::wayland::client.",
-            "runtime frame 1\nruntime frame 2",
         )
         .expect("write runtime error");
 
@@ -1643,7 +1756,11 @@ frame 2
         );
         assert_eq!(parsed.copy_source.as_deref(), Some("diff-context-menu"));
         assert_eq!(parsed.clipboard_backend.as_deref(), Some("x11"));
-        assert!(parsed.backtrace.contains("runtime frame 1"));
+        assert!(parsed.backtrace.is_empty());
+        assert_eq!(
+            parsed.info.as_deref(),
+            Some("An error was emitted by log target gpui_linux::linux::wayland::client.")
+        );
         assert!(report.summary.contains("Connection reset by peer"));
         assert!(report.issue_url.contains("wayland%2Fclient.rs%23L993"));
         assert!(
@@ -1839,7 +1956,7 @@ new frame
         std::os::unix::fs::symlink(&real, &dir).expect("symlink");
 
         begin_session_in_dir(&dir).expect("begin session in a symlinked dir");
-        write_runtime_error_log_in_dir(&dir, "target", "boom", "", "")
+        write_runtime_error_log_in_dir(&dir, "target", "boom", "")
             .expect("runtime error log in a symlinked dir");
 
         assert!(session_marker_path(&real).exists());

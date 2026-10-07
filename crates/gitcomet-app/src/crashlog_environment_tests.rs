@@ -143,14 +143,7 @@ fn panic_and_abnormal_exit_keep_cached_environment() {
             );
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        write_runtime_error_log_in_dir(
-            &dir,
-            "test",
-            "renderer error",
-            "driver failed",
-            "runtime frame",
-        )
-        .unwrap();
+        write_runtime_error_log_in_dir(&dir, "test", "renderer error", "driver failed").unwrap();
         let runtime = std::fs::read_to_string(runtime_error_path(&dir)).unwrap();
         assert_eq!(parse_crash_log(&runtime).environment, Some(snapshot(true)));
         if kind == "panic" {
