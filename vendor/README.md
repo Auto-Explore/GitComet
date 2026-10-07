@@ -1,4 +1,16 @@
-# Vendored tree-sitter grammars
+# Vendored dependencies
+
+## GPUI text storage
+
+GPUI is pinned to Havunen/gpui-ce revision
+`d0e01e8854d87ff749168b84ab16566b1e1919b6` in the root workspace manifest.
+This revision stores shaped-line decorations in the shared layout instead of
+reserving 32 decoration runs in every shaped line. It supersedes the compact
+text-storage patch previously vendored in `gpui/`, so that crate and the Cargo
+patch are no longer needed. Platform, renderer and test text-backend crates use
+the same upstream revision.
+
+## Tree-sitter grammars
 
 Each `tree-sitter-*` directory here is a grammar GitComet compiles from source
 rather than pulling from crates.io. Every one of them carries its reason in its

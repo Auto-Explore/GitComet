@@ -32,6 +32,7 @@ fn activation_refresh_scans_worktrees_once_and_real_follow_up_changes_are_retain
         let complete = || {
             Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
                 repo_id: RepoId(1),
+                scope: crate::model::WorktreeDirtyScope::All,
                 result: Ok(Vec::new()),
             })
         };
@@ -4028,6 +4029,7 @@ fn an_index_only_change_does_not_rescan_the_other_worktrees() {
             state,
             Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
                 repo_id,
+                scope: crate::model::WorktreeDirtyScope::All,
                 result: Ok(Vec::new()),
             }),
         );

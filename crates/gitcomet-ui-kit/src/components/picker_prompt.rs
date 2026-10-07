@@ -252,6 +252,10 @@ pub fn picker_prompt_layout_ordered(
     collapsed: &BTreeSet<SharedString>,
     order: PickerPromptOrder,
 ) -> PickerPromptLayout {
+    gitcomet_core::history_perf::record_many(
+        gitcomet_core::history_perf::Work::PickerFilterItem,
+        items.len() as u64,
+    );
     let matches = match_items(items, &section_groups(items), query, order);
     let mut layout = PickerPromptLayout {
         item_indices: Vec::with_capacity(matches.len()),

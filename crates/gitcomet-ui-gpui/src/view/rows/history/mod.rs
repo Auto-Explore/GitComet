@@ -512,7 +512,7 @@ fn history_table_row(
     // Branch this commit belongs to, shown as a faded badge while the row is
     // hovered. Inherited down the lane, so unlabelled commits have one too.
     lane_branch_name: Option<SharedString>,
-    author: HistoryTextVm,
+    author: HistoryAuthorVm,
     summary: HistoryTextVm,
     when: HistoryTextVm,
     short_sha: HistoryTextVm,
@@ -591,7 +591,7 @@ fn history_table_row(
         .relative()
         .h(row_height)
         .w_full()
-        .map(|row| row_paint.apply(row))
+        .map(|row| row_paint.apply_with_canvas(row))
         // A find miss fades on top of whatever the annotations asked for.
         .opacity(if find_dimmed {
             annotation.opacity * HISTORY_FIND_DIMMED_OPACITY
@@ -1010,10 +1010,9 @@ fn working_tree_summary_history_row(
             let center = gpui::point(grid.snap(bounds.left()) + grid.margin_x, center_y);
 
             // Connect the working tree node into the history graph below.
-            super::history_graph_paint::paint_vertical_segment(
-                center.x,
-                center.y,
-                bottom,
+            super::history_graph_paint::paint_straight_connector(
+                center,
+                gpui::point(center.x, bottom),
                 grid.stroke_width,
                 node_color,
                 window,

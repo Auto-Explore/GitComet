@@ -513,6 +513,7 @@ impl PopoverHost {
                 },
                 cx,
             ),
+            kind @ PopoverKind::WorktreeFileMenu { .. } => self.context_menu_view(kind, cx),
             kind @ PopoverKind::CommitRangeFileMenu { .. } => self.context_menu_view(kind, cx),
             PopoverKind::FileBrowserFileMenu { repo_id, path } => {
                 self.context_menu_view(PopoverKind::FileBrowserFileMenu { repo_id, path }, cx)

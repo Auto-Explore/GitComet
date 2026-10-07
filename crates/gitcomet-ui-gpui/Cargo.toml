@@ -13,6 +13,7 @@ workspace = true
 
 [features]
 default = []
+perf-alloc = []
 benchmarks = [
     "gitcomet-ui-kit/benchmarks",
     "gitcomet-core/benchmarks",

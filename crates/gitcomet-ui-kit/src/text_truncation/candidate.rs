@@ -737,6 +737,7 @@ pub(super) fn measure_candidate(
     font_size: Pixels,
     candidate: &CandidateLayout,
 ) -> (Pixels, Option<Pixels>) {
+    gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::TextMeasurement);
     record_measure_candidate_call_for_test();
 
     let runs = compute_highlight_runs(

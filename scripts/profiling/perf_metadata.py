@@ -29,6 +29,7 @@ PAIR_INVARIANT_FIELDS = (
     "toolchain.rustc", "toolchain.cargo_lock_sha256", "build",
     "machine.cpu_model", "machine.kernel", "machine.cpu_governor", "machine.cpu_boost",
     "gpu.cards", "gpu.vulkan", "gpu.nvidia", "display.session_type", "allocator", "git.version",
+    "gpu.native", "git.lfs", "git.annex",
 )
 
 
@@ -119,12 +120,17 @@ def machine_info():
     meminfo = {line.split(":")[0]: line.split(":")[1].strip()
                for line in (read("/proc/meminfo") or "").splitlines() if ":" in line}
     loadavg = read("/proc/loadavg")
+    if platform.system() == "Darwin":
+        model = run(["sysctl", "-n", "machdep.cpu.brand_string"])
+        meminfo["MemTotal"] = run(["sysctl", "-n", "hw.memsize"])
+    elif platform.system() == "Windows":
+        model = run(["powershell", "-NoProfile", "-Command", "(Get-CimInstance Win32_Processor).Name"])
     return {
         "hostname": platform.node(),
         "cpu_model": model,
         "logical_cpus": os.cpu_count(),
         "kernel": platform.release(),
-        "os": read("/etc/os-release"),
+        "os": read("/etc/os-release") or platform.platform(),
         "cpu_governor": read("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"),
         "cpu_driver": read("/sys/devices/system/cpu/cpu0/cpufreq/scaling_driver"),
         "cpu_boost": read("/sys/devices/system/cpu/cpufreq/boost"),
@@ -159,6 +165,11 @@ def gpu_info():
         cards.append({"card": card.name, "vendor": read(device / "vendor"), "device": read(device / "device"),
                       "driver": driver.resolve().name if driver.exists() else None})
     info = {"cards": cards}
+    if platform.system() == "Darwin":
+        info["native"] = parse_json(run(["system_profiler", "SPDisplaysDataType", "-json"]))
+    elif platform.system() == "Windows":
+        info["native"] = parse_json(run(["powershell", "-NoProfile", "-Command",
+            "Get-CimInstance Win32_VideoController | Select-Object Name,DriverVersion | ConvertTo-Json"]))
     if shutil.which("nvidia-smi"):
         # Model and driver identify the setup; clocks and temperature are
         # state at capture time and differ between any two captures.
@@ -191,6 +202,7 @@ def git_info():
         "version": run(["git", "--version"]),
         "config": run(["git", "config", "--list", "--show-origin"]),
         "lfs": run(["git", "lfs", "version"]),
+        "annex": run(["git", "annex", "version", "--raw"]),
     }
 
 

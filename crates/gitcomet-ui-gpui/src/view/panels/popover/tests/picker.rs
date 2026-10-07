@@ -528,6 +528,98 @@ fn repo_picker_search_selects_first_result_and_enter_activates_it(cx: &mut gpui:
     );
 }
 
+/// Filtering recent repositories must not shape every suffix of every long
+/// path on each keystroke. Count the real draw's text measurements rather than
+/// asserting a machine-dependent wall-clock threshold.
+#[gpui::test]
+fn repo_picker_typing_long_recent_paths_has_bounded_text_measurements(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::kit::text_truncation::{
+        clear_truncated_layout_cache_for_test, measure_candidate_calls_for_test,
+        reset_measure_candidate_calls_for_test,
+    };
+
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| crate::app::bind_text_input_keys_for_test(app));
+    open_repo_picker(&view, cx);
+    let popover_host = cx.update(|_window, app| view.read(app).popover_host.clone());
+    let recent_count = 12;
+    cx.update(|_window, app| {
+        popover_host.update(app, |host, cx| {
+            host.cached_workspaces.clear();
+            host.cached_pinned_repos.clear();
+            host.cached_recent_repos = (0..recent_count)
+                .map(|ix| {
+                    std::path::PathBuf::from(format!(
+                        "/work/{}/needle/component-{ix:02}/{}/repo-{ix:02}",
+                        "parent/".repeat(8),
+                        "directory/".repeat(64),
+                    ))
+                })
+                .collect();
+            cx.notify();
+        });
+    });
+    clear_truncated_layout_cache_for_test();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let mut query = String::new();
+    for key in ["n", "e", "e", "d", "l", "e", "backspace"] {
+        use gitcomet_core::history_perf::{self, Work};
+        let _work = history_perf::capture();
+        reset_measure_candidate_calls_for_test();
+        cx.simulate_keystrokes(key);
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        if key == "backspace" {
+            query.pop();
+        } else {
+            query.push_str(key);
+        }
+        cx.update(|_window, app| {
+            let host = popover_host.read(app);
+            assert_eq!(host.repo_picker_search_query, query);
+            assert_eq!(host.repo_picker_selected_index, Some(0));
+            assert_eq!(
+                host.scenario_repo_picker_state(app),
+                Some((query.clone(), Some(recent_count), Some(0))),
+            );
+            let rows = repo_picker::cached(host, &query);
+            assert_eq!(rows.filtered_len(), recent_count);
+            assert!(rows.layout.match_ranges.iter().all(Option::is_some));
+        });
+        let measurements = measure_candidate_calls_for_test();
+        assert_eq!(
+            history_perf::count(Work::PickerModelBuild),
+            0,
+            "typing must reuse the row model"
+        );
+        assert_eq!(
+            history_perf::count(Work::PickerFilterItem),
+            recent_count as u64,
+            "filter each row once per query"
+        );
+        assert_eq!(
+            history_perf::count(Work::TextMeasurement),
+            measurements as u64
+        );
+        assert!(
+            measurements <= 256 * recent_count,
+            "typing {query:?} shaped {measurements} text candidates for {recent_count} recent repositories",
+        );
+        assert!(cx.debug_bounds("picker_prompt_item_0").is_some());
+    }
+    clear_truncated_layout_cache_for_test();
+}
+
 /// Seeds a session where one repository is pinned and has already fallen off
 /// the recents list, then checks the picker still lists it — under Pinned, and
 /// nowhere else. Runs in a subprocess so the session-file override is set

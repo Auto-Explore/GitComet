@@ -1453,6 +1453,7 @@ pub enum InternalMsg {
     },
     WorktreeDirtyLoaded {
         repo_id: RepoId,
+        scope: crate::model::WorktreeDirtyScope,
         result: Result<Vec<WorktreeDirtySummary>, Error>,
     },
     RefMetadataLoaded {
