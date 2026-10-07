@@ -316,6 +316,17 @@ opt-level = 2
 [profile.dev.package.taffy]
 opt-level = 2
 
+# Native text shaping also runs on the UI thread. Font-table reads and glyph
+# substitution dominated first-use repository-picker draws in the Linux trace.
+[profile.dev.package.harfrust]
+opt-level = 2
+
+[profile.dev.package.read-fonts]
+opt-level = 2
+
+[profile.dev.package.font-types]
+opt-level = 2
+
 # Text decoding runs on every non-UTF-8 file load; at opt-level 0 it is
 # tens of times slower than the file read itself.
 [profile.dev.package.encoding_rs]
