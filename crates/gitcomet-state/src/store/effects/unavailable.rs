@@ -42,7 +42,8 @@ pub(super) fn send_unavailable_git_effect_result(
     let send = |msg| util::send_or_log(msg_tx, msg);
 
     match effect {
-        Effect::Filesystem(_)
+        Effect::UpdateRepositoryPreferences { .. }
+        | Effect::Filesystem(_)
         | Effect::PersistSession { .. }
         | Effect::PersistRecentRepo { .. }
         | Effect::PersistRepoHistoryMode { .. }

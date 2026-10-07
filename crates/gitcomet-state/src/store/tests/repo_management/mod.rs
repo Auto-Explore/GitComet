@@ -150,6 +150,7 @@ fn assert_open_repo_history_mode_resolution(
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            preferences: None,
             repo_id: RepoId(1),
             spec,
             repo: Arc::new(DummyRepo::new(&workdir)),

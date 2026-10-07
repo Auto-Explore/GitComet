@@ -212,6 +212,11 @@ pub(crate) struct UiSessionFile {
     recommend_repo_maintenance: Option<bool>,
     git_executable_path: Option<String>,
     external_code_editor: Option<ExternalCodeEditorSettingFile>,
+    #[serde(
+        default,
+        deserialize_with = "repository_preferences::lenient_preferences"
+    )]
+    repository_preferences: BTreeMap<String, crate::model::SharedRepositoryPreferences>,
     repo_history_modes: Option<BTreeMap<String, HistoryModeSetting>>,
     repo_history_scopes: Option<BTreeMap<String, HistoryScopeSetting>>,
     repo_history_author_filters: Option<BTreeMap<String, Option<String>>>,
@@ -245,7 +250,8 @@ const SESSION_FILE_VERSION_V2: u32 = 2;
 const SESSION_FILE_VERSION_V3: u32 = 3;
 const SESSION_FILE_VERSION_V4: u32 = 4;
 const SESSION_FILE_VERSION_V5: u32 = 5;
-const CURRENT_SESSION_FILE_VERSION: u32 = SESSION_FILE_VERSION_V5;
+const SESSION_FILE_VERSION_V6: u32 = 6;
+const CURRENT_SESSION_FILE_VERSION: u32 = SESSION_FILE_VERSION_V6;
 const LEGACY_WORKSPACE_ID: WorkspaceId =
     WorkspaceId::from_u128(0x4749_5443_4f4d_4554_0000_0000_0000_0001);
 const MAX_RECENT_REPOS: usize = 15;
@@ -550,9 +556,10 @@ fn load_file(path: &Path) -> Option<UiSessionFile> {
             let file = serde_json::from_value::<UiSessionFile>(value).ok()?;
             Some(migrate_v2_file(file))
         }
-        SESSION_FILE_VERSION_V3 | SESSION_FILE_VERSION_V4 | SESSION_FILE_VERSION_V5 => {
-            serde_json::from_value::<UiSessionFile>(value).ok()
-        }
+        SESSION_FILE_VERSION_V3
+        | SESSION_FILE_VERSION_V4
+        | SESSION_FILE_VERSION_V5
+        | SESSION_FILE_VERSION_V6 => serde_json::from_value::<UiSessionFile>(value).ok(),
         _ => None,
     }?;
     file = migrate_legacy_repo_fetch_prune_setting(file);
@@ -703,3 +710,8 @@ pub(crate) use repos::load_repo_session_preferences_from_path;
 
 #[cfg(test)]
 mod tests;
+
+mod repository_preferences;
+pub(crate) use repository_preferences::{
+    initialize_repository_preferences, persist_repository_preference_updates,
+};

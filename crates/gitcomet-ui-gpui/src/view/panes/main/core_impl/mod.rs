@@ -201,6 +201,10 @@ impl MainPaneView {
                     3u8.hash(&mut hasher);
                 }
             }
+            repo.shared_preferences
+                .as_ref()
+                .map(|snapshot| snapshot.revision)
+                .hash(&mut hasher);
             repo.diff_state.diff_state_rev.hash(&mut hasher);
             // How the file is read: a new choice or new attributes re-read it.
             repo.diff_state.text_override_rev.hash(&mut hasher);

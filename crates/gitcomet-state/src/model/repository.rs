@@ -64,6 +64,7 @@ pub struct RepoState {
     /// The shared git directory (the main `.git` of a linked worktree), set
     /// once the repository opens; tabs of one repository share maintenance.
     pub common_dir: Option<Arc<std::path::Path>>,
+    pub shared_preferences: Option<super::RepositoryPreferencesSnapshot>,
     pub maintenance: RepoMaintenanceState,
 
     pub open: Loadable<()>,
@@ -260,6 +261,7 @@ impl RepoState {
             sequencer_actions_in_flight: 0,
             commit_in_flight: 0,
             common_dir: None,
+            shared_preferences: None,
             maintenance: RepoMaintenanceState::default(),
             open: Loadable::Loading,
             history_state: HistoryState::default(),
@@ -1083,5 +1085,19 @@ fn loadable_into_arc<T>(loadable: Loadable<T>) -> Loadable<Arc<T>> {
         Loadable::Loading => Loadable::Loading,
         Loadable::NotLoaded => Loadable::NotLoaded,
         Loadable::Error(e) => Loadable::Error(e),
+    }
+}
+
+impl RepoState {
+    pub fn repository_key(&self) -> super::RepositoryKey {
+        self.shared_preferences
+            .as_ref()
+            .map(|snapshot| snapshot.key.clone())
+            .unwrap_or_else(|| {
+                self.common_dir
+                    .as_deref()
+                    .map(|path| super::RepositoryKey::CommonDir(path.to_path_buf()))
+                    .unwrap_or_else(|| super::RepositoryKey::Worktree(self.spec.workdir.clone()))
+            })
     }
 }

@@ -18,6 +18,7 @@ fn record_conflict_autosolve_telemetry_logs_mode_and_unresolved_deltas() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            preferences: None,
             repo_id: RepoId(1),
             spec: RepoSpec {
                 workdir: PathBuf::from("/tmp/repo"),

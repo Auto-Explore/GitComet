@@ -111,6 +111,7 @@ fn hiding_dot_files_drops_them_from_the_selection_unless_revealed() {
         .map(PathBuf::from)
         .collect();
     let file_browser = &mut state.repos[0].file_browser;
+    file_browser.show_ignored = true;
     file_browser.selection.paths = paths.iter().cloned().collect();
     file_browser.selection.focused = Some(paths[0].clone());
     file_browser
@@ -122,10 +123,11 @@ fn hiding_dot_files_drops_them_from_the_selection_unless_revealed() {
         &mut state,
         Msg::SetExplorerVisibility {
             repo_id,
-            hidden: false,
-            ignored: false,
+            hidden: Some(false),
+            ignored: None,
         },
     );
+    assert!(state.repos[0].file_browser.show_ignored);
     let selection = &state.repos[0].file_browser.selection;
     assert_eq!(
         selection.paths,
