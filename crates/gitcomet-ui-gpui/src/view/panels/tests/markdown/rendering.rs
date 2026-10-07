@@ -3,6 +3,58 @@
 use super::*;
 
 #[gpui::test]
+fn auth_token_readme_tables_render_multiline_code_inside_cells(cx: &mut gpui::TestAppContext) {
+    gitcomet_ui_kit::test_support::use_real_text_backend_with_system_fonts(cx);
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(1400.0), px(1200.0)));
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(168),
+        "auth_token_readme_tables",
+        include_str!("../../../markdown_preview/fixtures/auth_token_tables.md"),
+    );
+    let rows = table_row_ixs(&fixture);
+    assert_eq!(rows.len(), 6);
+    for width in [1400.0, 950.0] {
+        cx.simulate_resize(gpui::size(px(width), px(1200.0)));
+        draw_frames(cx, 2);
+        let cell = cx
+            .debug_bounds(leaked_selector(format!(
+                "markdown_preview_cell_box_{}_1",
+                rows[0]
+            )))
+            .unwrap();
+        let text = cx
+            .debug_bounds(leaked_selector(format!(
+                "markdown_preview_cell_text_box_{}_1",
+                rows[0]
+            )))
+            .unwrap();
+        assert!(
+            text.size.height > px(50.0),
+            "code retains multiple lines: {text:?}"
+        );
+        assert!(text.size.width > px(0.0));
+        assert!(text.right() <= cell.right() + px(0.5));
+        assert!(text.bottom() <= cell.bottom() + px(0.5));
+        assert!(
+            cx.debug_bounds(leaked_selector(format!(
+                "markdown_preview_cell_box_{}_2",
+                rows[2]
+            )))
+            .is_some(),
+            "the authentication table also renders"
+        );
+    }
+    fixture.cleanup();
+}
+
+#[gpui::test]
 fn markdown_empty_cells_and_code_lines_keep_their_selection_layout(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend_with_system_fonts(cx);
     let _visual_guard = lock_visual_test();

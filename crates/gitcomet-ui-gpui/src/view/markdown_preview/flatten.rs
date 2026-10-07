@@ -1,6 +1,9 @@
 use super::*;
 use pulldown_cmark::{CodeBlockKind, Event, LinkType, Parser, Tag, TagEnd};
 
+mod html_tables;
+use html_tables::PendingHtmlTable;
+
 /// Flatten markdown events into preview rows.
 pub(crate) fn flatten_to_rows(
     source: &str,
@@ -23,6 +26,7 @@ pub(crate) fn flatten_to_rows(
         flattener.event(event, (range.start + body_start)..(range.end + body_start))?;
     }
 
+    flattener.finish_pending_html_table()?;
     let mut rows = flattener.rows;
     finish_table_blocks(&mut rows);
     insert_top_level_heading_spacer_rows(&mut rows);
@@ -84,9 +88,12 @@ struct OpenCodeBlock {
 }
 
 struct OpenTable {
-    info: Arc<MarkdownTableInfo>,
+    /// Markdown column alignments, resolved onto cells as they are read.
+    alignments: Vec<MarkdownTextAlign>,
     /// The row being read: where it starts and whether it is the header.
     row: Option<(usize, bool)>,
+    cells: Vec<MarkdownTableCell>,
+    starts_table: bool,
 }
 
 /// An HTML block's lines, joined so a tag or comment broken over lines is
@@ -96,6 +103,22 @@ struct HtmlBlockBuffer {
     text: String,
     /// Each line's range in `text` and in the source.
     lines: Vec<(Range<usize>, Range<usize>)>,
+    /// Markdown pulldown recognized between the HTML blocks of a table.
+    markdown: Vec<HtmlMarkdownFragment>,
+    /// Source ranges of code blocks and inline code, opaque to HTML parsing.
+    literals: Vec<Range<usize>>,
+}
+
+#[derive(Clone)]
+struct HtmlMarkdownFragment {
+    source: Range<usize>,
+    kind: HtmlMarkdownKind,
+}
+
+#[derive(Clone)]
+enum HtmlMarkdownKind {
+    Paragraph,
+    CodeBlock(String),
 }
 
 impl HtmlBlockBuffer {
@@ -177,6 +200,8 @@ struct Flattener<'a> {
     code: Option<OpenCodeBlock>,
     table: Option<OpenTable>,
     html_block: Option<HtmlBlockBuffer>,
+    pending_html_table: Option<PendingHtmlTable>,
+    captured_html_ends: Vec<TagEnd>,
     html_containers: Vec<OpenHtmlContainer>,
     /// The `<hN>` being read: its level and where it starts.
     html_heading: Option<(u8, usize)>,
@@ -217,6 +242,8 @@ impl<'a> Flattener<'a> {
             code: None,
             table: None,
             html_block: None,
+            pending_html_table: None,
+            captured_html_ends: Vec::new(),
             html_containers: Vec::new(),
             html_heading: None,
             html_trailing_space: None,
@@ -226,6 +253,9 @@ impl<'a> Flattener<'a> {
     }
 
     fn event(&mut self, event: Event<'_>, range: Range<usize>) -> Option<()> {
+        if self.capture_table_event(&event, &range)? {
+            return Some(());
+        }
         match event {
             Event::Start(tag) => self.start(tag, range),
             Event::End(tag) => self.end(tag, range),
@@ -388,25 +418,26 @@ impl<'a> Flattener<'a> {
             Tag::Table(alignments) => {
                 self.begin_block(true)?;
                 self.table = Some(OpenTable {
-                    info: Arc::new(MarkdownTableInfo {
-                        alignments: alignments
-                            .iter()
-                            .map(|alignment| match alignment {
-                                pulldown_cmark::Alignment::None => MarkdownTextAlign::None,
-                                pulldown_cmark::Alignment::Left => MarkdownTextAlign::Left,
-                                pulldown_cmark::Alignment::Center => MarkdownTextAlign::Center,
-                                pulldown_cmark::Alignment::Right => MarkdownTextAlign::Right,
-                            })
-                            .collect(),
-                        column_widths: Vec::new(),
-                    }),
+                    alignments: alignments
+                        .iter()
+                        .map(|alignment| match alignment {
+                            pulldown_cmark::Alignment::None => MarkdownTextAlign::None,
+                            pulldown_cmark::Alignment::Left => MarkdownTextAlign::Left,
+                            pulldown_cmark::Alignment::Center => MarkdownTextAlign::Center,
+                            pulldown_cmark::Alignment::Right => MarkdownTextAlign::Right,
+                        })
+                        .collect(),
                     row: None,
+                    cells: Vec::new(),
+                    starts_table: true,
                 });
             }
+            Tag::TableCell => self.start_table_cell(false, MarkdownTextAlign::None),
             Tag::TableHead | Tag::TableRow => {
                 self.clear_row();
                 if let Some(table) = self.table.as_mut() {
                     table.row = Some((range.start, matches!(tag, Tag::TableHead)));
+                    table.cells.clear();
                 }
             }
             Tag::Emphasis => self.styles.push((MarkdownInlineStyle::Italic, false)),
@@ -500,41 +531,10 @@ impl<'a> Flattener<'a> {
                 self.pop_container();
             }
             TagEnd::Table => self.table = None,
-            TagEnd::TableHead | TagEnd::TableRow => {
-                let Some((start, is_header)) =
-                    self.table.as_mut().and_then(|table| table.row.take())
-                else {
-                    return Some(());
-                };
-                let lines = self.line_range(start..range.end);
-                let (indent, quotes) = (self.indent_level(), self.blockquote_level());
-                let text = std::mem::take(&mut self.text);
-                let spans = std::mem::take(&mut self.spans);
-                self.clear_row();
-                self.push_row(
-                    MarkdownPreviewRowInput::plain(
-                        MarkdownPreviewRowKind::TableRow { is_header },
-                        &text,
-                        &spans,
-                        lines,
-                        indent,
-                        quotes,
-                    ),
-                    None,
-                    false,
-                )?;
-                // Cells are laid out once the whole table is read.
-                if let (Some(row), Some(table)) = (self.rows.last_mut(), self.table.as_ref()) {
-                    row.table = Some(MarkdownTableRow {
-                        cells: Arc::from(Vec::new()),
-                        table: Arc::clone(&table.info),
-                    });
-                }
-            }
-            // Cells end in a tab; `finish_table_blocks` trims the last one.
+            TagEnd::TableHead | TagEnd::TableRow => self.end_table_row(range.end)?,
             TagEnd::TableCell => {
                 self.end_open_html();
-                self.text.push('\t');
+                self.end_table_cell();
             }
             // An HTML formatting tag may be open above the markdown one, so
             // each end removes its own style.
@@ -549,6 +549,64 @@ impl<'a> Flattener<'a> {
             TagEnd::Image => self.close_image(range),
             _ => {}
         }
+        Some(())
+    }
+
+    fn start_table_cell(&mut self, is_header: bool, align: MarkdownTextAlign) {
+        if let Some(table) = self.table.as_mut() {
+            let align = if align != MarkdownTextAlign::None {
+                align
+            } else if is_header || table.row.is_some_and(|(_, header)| header) {
+                MarkdownTextAlign::Center
+            } else {
+                table
+                    .alignments
+                    .get(table.cells.len())
+                    .copied()
+                    .unwrap_or_default()
+            };
+            table.cells.push(MarkdownTableCell {
+                is_header,
+                align,
+                ..MarkdownTableCell::new(self.text.len()..self.text.len())
+            });
+        }
+    }
+
+    fn end_table_cell(&mut self) {
+        if let Some(cell) = self.table.as_mut().and_then(|t| t.cells.last_mut()) {
+            cell.range.end = self.text.len();
+        }
+        self.text.push('\t');
+    }
+
+    fn end_table_row(&mut self, end: usize) -> Option<()> {
+        let table = self.table.as_mut()?;
+        let (start, is_header) = table.row.take()?;
+        let cells = std::mem::take(&mut table.cells);
+        let metadata = MarkdownTableRow {
+            cells: Arc::from(cells),
+            starts_table: std::mem::replace(&mut table.starts_table, false),
+        };
+        if self.text.ends_with('\t') {
+            self.text.pop();
+        }
+        let text = std::mem::take(&mut self.text);
+        let spans = std::mem::take(&mut self.spans);
+        self.clear_row();
+        self.push_row(
+            MarkdownPreviewRowInput::plain(
+                MarkdownPreviewRowKind::TableRow { is_header },
+                &text,
+                &spans,
+                self.line_range(start..end),
+                self.indent_level(),
+                self.blockquote_level(),
+            ),
+            None,
+            false,
+        )?;
+        self.rows.last_mut()?.table = Some(metadata);
         Some(())
     }
 
@@ -634,17 +692,12 @@ impl<'a> Flattener<'a> {
         let Some(image) = self.image.take() else {
             return;
         };
-        if self.in_table_row() {
-            // A table row is painted as one string whose columns are aligned by
-            // padding, so a picture cannot sit in a cell without breaking that
-            // alignment. Its description stays in the cell instead, which keeps
-            // the column readable and in the right place.
-            self.push_text(&image.alt, range, false);
-            return;
-        }
-        self.note_content(range);
+        self.note_content(range.clone());
+        let alt = normalize_whitespace(image.alt.trim());
+        let byte_offset = self.text.len();
+        let alt = self.insert_image_alt(alt, range);
         self.images.push(MarkdownInlineImage {
-            byte_offset: self.text.len(),
+            byte_offset,
             source_byte: image.source_byte,
             // Markdown image syntax cannot declare a size.
             image: Arc::new(MarkdownImage {
@@ -652,12 +705,31 @@ impl<'a> Flattener<'a> {
                 width_px: None,
                 height_px: None,
             }),
-            alt: SharedString::from(normalize_whitespace(image.alt.trim())),
+            alt,
             link_url: current_link_url(&self.links),
         });
     }
 
+    fn insert_image_alt(&mut self, alt: String, range: Range<usize>) -> SharedString {
+        if !self.in_table_row() {
+            return alt.into();
+        }
+        let start = self.text.len();
+        self.push_text(&alt, range, false);
+        // Cell image ranges use the description's byte length. Keep it equal
+        // to the text actually inserted after leading whitespace is trimmed.
+        self.text[start..].to_owned().into()
+    }
+
     fn html(&mut self, html: &str, range: Range<usize>, block: bool) -> Option<()> {
+        if self.table.is_none()
+            && !self.html_containers_inert()
+            && is_html_open_tag(&html.to_ascii_lowercase(), "table")
+        {
+            let mut buffer = HtmlBlockBuffer::default();
+            buffer.push(html, range);
+            return self.read_html_block(&buffer);
+        }
         self.apply_html(classify_supported_html(html), html, range, block)
     }
 
@@ -709,26 +781,24 @@ impl<'a> Flattener<'a> {
                 }
             }
             HtmlHandling::Images(images) => {
-                if self.in_table_row() {
-                    // As with a markdown image: a table cell keeps the
-                    // description rather than a picture that cannot be placed
-                    // in its column.
-                    for image in images {
-                        self.push_text(&image.alt, range.clone(), false);
-                    }
-                    return Some(());
-                }
                 // An `<img>` records itself the way a markdown image does; the
                 // row it closes decides whether it is inline or a block.
                 self.note_content(range.clone());
                 for image in images {
+                    let byte_offset = self.text.len();
+                    let alt = if self.in_table_row() {
+                        normalize_whitespace(&image.alt)
+                    } else {
+                        image.alt
+                    };
+                    let alt = self.insert_image_alt(alt, range.clone());
                     self.images.push(MarkdownInlineImage {
-                        byte_offset: self.text.len(),
+                        byte_offset,
                         // Several tags can share one event, so the id is the
                         // tag's own position, not the event's.
                         source_byte: range.start.saturating_add(image.tag_offset),
                         image: Arc::new(image.image),
-                        alt: SharedString::from(image.alt),
+                        alt,
                         link_url: image.link_url.or_else(|| current_link_url(&self.links)),
                     });
                 }
@@ -845,7 +915,7 @@ impl<'a> Flattener<'a> {
     /// Read a buffered HTML block tag by tag, as a browser would, when the
     /// preview knows every tag in it; otherwise line by line, verbatim where
     /// it cannot interpret a line.
-    fn read_html_block(&mut self, block: &HtmlBlockBuffer) -> Option<()> {
+    fn read_html_flow_block(&mut self, block: &HtmlBlockBuffer) -> Option<()> {
         let tokens: Vec<HtmlToken> = html_tokens(&block.text).collect();
         let mut pieces = Vec::with_capacity(tokens.len());
         let mut ix = 0;

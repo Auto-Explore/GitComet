@@ -179,7 +179,9 @@ pub(crate) fn push_row(
         }
         _ => (row.text.to_owned(), row.inline_spans.to_vec()),
     };
-    let (row_text, row_spans, inline_images) = if row.inline_images.is_empty() {
+    let (row_text, row_spans, inline_images) = if row.inline_images.is_empty()
+        || matches!(row.kind, MarkdownPreviewRowKind::TableRow { .. })
+    {
         (row_text, row_spans, row.inline_images)
     } else {
         // Whitespace normalization can shorten the text past an offset.

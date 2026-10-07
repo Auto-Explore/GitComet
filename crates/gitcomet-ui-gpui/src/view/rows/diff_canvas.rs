@@ -4201,6 +4201,7 @@ fn paint_selectable_diff_text(
     }
 
     let hitbox = DiffTextHitbox {
+        atomic: false,
         bounds,
         layout_key,
         source_visible_ix,
