@@ -703,7 +703,13 @@ impl GitRepository for GixRepo {
         &self,
         updates: &[gitcomet_core::services::BranchUpdate],
     ) -> Result<CommandOutput> {
-        self.apply_branch_updates_impl(updates)
+        self.apply_branch_updates_impl(updates, false)
+    }
+    fn recover_branch_updates_with_output(
+        &self,
+        updates: &[gitcomet_core::services::BranchUpdate],
+    ) -> Result<CommandOutput> {
+        self.apply_branch_updates_impl(updates, true)
     }
     fn push_refs_with_lease_with_output(
         &self,

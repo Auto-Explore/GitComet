@@ -581,6 +581,17 @@ pub trait GitRepository: Send + Sync {
             "branch transactions are not implemented",
         )))
     }
+    /// Resume a journalled branch transaction after interruption. Every ref and
+    /// clean index must still equal either its captured original or prepared
+    /// revision. Unexpected tips or edits are preserved and reject recovery.
+    fn recover_branch_updates_with_output(
+        &self,
+        _updates: &[BranchUpdate],
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "branch transaction recovery is not implemented",
+        )))
+    }
     fn push_refs_with_lease_with_output(
         &self,
         _remote: &str,
