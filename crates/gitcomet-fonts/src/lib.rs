@@ -3,39 +3,30 @@ pub const FIRA_CODE_FONT_FAMILY: &str = "Fira Code";
 pub const IBM_PLEX_SANS_FONT_FAMILY: &str = "IBM Plex Sans";
 pub const LILEX_FONT_FAMILY: &str = "Lilex";
 
-const FIRA_CODE_REGULAR_BYTES: &[u8] =
-    include_bytes!("../../gitcomet-ui-kit/assets/fonts/fira_code/FiraCode-Regular.ttf");
-const FIRA_CODE_SEMIBOLD_BYTES: &[u8] =
-    include_bytes!("../../gitcomet-ui-kit/assets/fonts/fira_code/FiraCode-SemiBold.ttf");
-const FIRA_CODE_BOLD_BYTES: &[u8] =
-    include_bytes!("../../gitcomet-ui-kit/assets/fonts/fira_code/FiraCode-Bold.ttf");
+const FIRA_CODE_REGULAR_BYTES: &[u8] = include_bytes!("../assets/fira_code/FiraCode-Regular.ttf");
+const FIRA_CODE_SEMIBOLD_BYTES: &[u8] = include_bytes!("../assets/fira_code/FiraCode-SemiBold.ttf");
+const FIRA_CODE_BOLD_BYTES: &[u8] = include_bytes!("../assets/fira_code/FiraCode-Bold.ttf");
 
 const IBM_PLEX_SANS_REGULAR_BYTES: &[u8] =
-    include_bytes!("../../gitcomet-ui-kit/assets/fonts/ibm_plex_sans/IBMPlexSans-Regular.ttf");
+    include_bytes!("../assets/ibm_plex_sans/IBMPlexSans-Regular.ttf");
 const IBM_PLEX_SANS_ITALIC_BYTES: &[u8] =
-    include_bytes!("../../gitcomet-ui-kit/assets/fonts/ibm_plex_sans/IBMPlexSans-Italic.ttf");
+    include_bytes!("../assets/ibm_plex_sans/IBMPlexSans-Italic.ttf");
 const IBM_PLEX_SANS_SEMIBOLD_BYTES: &[u8] =
-    include_bytes!("../../gitcomet-ui-kit/assets/fonts/ibm_plex_sans/IBMPlexSans-SemiBold.ttf");
-const IBM_PLEX_SANS_SEMIBOLD_ITALIC_BYTES: &[u8] = include_bytes!(
-    "../../gitcomet-ui-kit/assets/fonts/ibm_plex_sans/IBMPlexSans-SemiBoldItalic.ttf"
-);
+    include_bytes!("../assets/ibm_plex_sans/IBMPlexSans-SemiBold.ttf");
+const IBM_PLEX_SANS_SEMIBOLD_ITALIC_BYTES: &[u8] =
+    include_bytes!("../assets/ibm_plex_sans/IBMPlexSans-SemiBoldItalic.ttf");
 const IBM_PLEX_SANS_BOLD_BYTES: &[u8] =
-    include_bytes!("../../gitcomet-ui-kit/assets/fonts/ibm_plex_sans/IBMPlexSans-Bold.ttf");
+    include_bytes!("../assets/ibm_plex_sans/IBMPlexSans-Bold.ttf");
 const IBM_PLEX_SANS_BOLD_ITALIC_BYTES: &[u8] =
-    include_bytes!("../../gitcomet-ui-kit/assets/fonts/ibm_plex_sans/IBMPlexSans-BoldItalic.ttf");
+    include_bytes!("../assets/ibm_plex_sans/IBMPlexSans-BoldItalic.ttf");
 
-const LILEX_REGULAR_BYTES: &[u8] =
-    include_bytes!("../../gitcomet-ui-kit/assets/fonts/lilex/Lilex-Regular.ttf");
-const LILEX_ITALIC_BYTES: &[u8] =
-    include_bytes!("../../gitcomet-ui-kit/assets/fonts/lilex/Lilex-Italic.ttf");
-const LILEX_SEMIBOLD_BYTES: &[u8] =
-    include_bytes!("../../gitcomet-ui-kit/assets/fonts/lilex/Lilex-SemiBold.ttf");
+const LILEX_REGULAR_BYTES: &[u8] = include_bytes!("../assets/lilex/Lilex-Regular.ttf");
+const LILEX_ITALIC_BYTES: &[u8] = include_bytes!("../assets/lilex/Lilex-Italic.ttf");
+const LILEX_SEMIBOLD_BYTES: &[u8] = include_bytes!("../assets/lilex/Lilex-SemiBold.ttf");
 const LILEX_SEMIBOLD_ITALIC_BYTES: &[u8] =
-    include_bytes!("../../gitcomet-ui-kit/assets/fonts/lilex/Lilex-SemiBoldItalic.ttf");
-const LILEX_BOLD_BYTES: &[u8] =
-    include_bytes!("../../gitcomet-ui-kit/assets/fonts/lilex/Lilex-Bold.ttf");
-const LILEX_BOLD_ITALIC_BYTES: &[u8] =
-    include_bytes!("../../gitcomet-ui-kit/assets/fonts/lilex/Lilex-BoldItalic.ttf");
+    include_bytes!("../assets/lilex/Lilex-SemiBoldItalic.ttf");
+const LILEX_BOLD_BYTES: &[u8] = include_bytes!("../assets/lilex/Lilex-Bold.ttf");
+const LILEX_BOLD_ITALIC_BYTES: &[u8] = include_bytes!("../assets/lilex/Lilex-BoldItalic.ttf");
 
 pub const BUNDLED_FONT_BYTES: &[&[u8]] = &[
     include_bytes!("../assets/noto_emoji/NotoEmoji.ttf"),

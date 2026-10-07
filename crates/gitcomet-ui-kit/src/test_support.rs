@@ -23,9 +23,11 @@ fn use_text_backend(cx: &mut gpui::TestAppContext, system_fonts: gpui_parley::Sy
     system
         .add_fonts(vec![
             std::borrow::Cow::Borrowed(include_bytes!(
-                "../assets/fonts/ibm_plex_sans/IBMPlexSans-Regular.ttf"
+                "../../gitcomet-fonts/assets/ibm_plex_sans/IBMPlexSans-Regular.ttf"
             )),
-            std::borrow::Cow::Borrowed(include_bytes!("../assets/fonts/lilex/Lilex-Regular.ttf")),
+            std::borrow::Cow::Borrowed(include_bytes!(
+                "../../gitcomet-fonts/assets/lilex/Lilex-Regular.ttf"
+            )),
         ])
         .expect("bundled test fonts");
     *cx = gpui::TestAppContext::build_with_text_system(cx.dispatcher.clone(), None, system);
