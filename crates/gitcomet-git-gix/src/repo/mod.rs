@@ -61,6 +61,7 @@ mod discard;
 mod file_browser;
 mod git_ops;
 mod history;
+mod history_transaction;
 mod large_files;
 mod lfs;
 mod line_stats;
@@ -686,6 +687,32 @@ pub(crate) fn allow_test_repo_local_mergetool_command(workdir: &Path, tool_name:
 }
 
 impl GitRepository for GixRepo {
+    fn rebase_range_with_output(
+        &self,
+        range: &gitcomet_core::services::RebaseRange,
+    ) -> Result<CommandOutput> {
+        self.rebase_range_impl(range)
+    }
+    fn update_refs_with_output(
+        &self,
+        updates: &[gitcomet_core::services::RefUpdate],
+    ) -> Result<CommandOutput> {
+        self.update_refs_impl(updates)
+    }
+    fn apply_branch_updates_with_output(
+        &self,
+        updates: &[gitcomet_core::services::BranchUpdate],
+    ) -> Result<CommandOutput> {
+        self.apply_branch_updates_impl(updates)
+    }
+    fn push_refs_with_lease_with_output(
+        &self,
+        remote: &str,
+        updates: &[gitcomet_core::services::RemoteRefUpdate],
+        atomic: bool,
+    ) -> Result<CommandOutput> {
+        self.push_refs_impl(remote, updates, atomic)
+    }
     fn history_authors(
         &self,
         mode: HistoryMode,
