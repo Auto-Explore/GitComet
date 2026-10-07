@@ -29,6 +29,7 @@ dekobon-tree-sitter-groovy = { workspace = true }
 fontdb = { workspace = true }
 futures = { workspace = true }
 gitcomet-core = { workspace = true }
+gitcomet-diagrams = { workspace = true }
 gitcomet-extension-api = { workspace = true }
 gitcomet-git-gix = { workspace = true, optional = true }
 gitcomet-state = { workspace = true }

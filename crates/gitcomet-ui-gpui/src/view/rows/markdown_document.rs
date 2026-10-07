@@ -439,6 +439,7 @@ fn estimated_block_height(
             rows.iter().count() as f32 * line
                 + 2.0 * f32::from(scaled(CODE_BLOCK_PAD_Y_PX, context))
         }
+        MarkdownBlock::Diagram(_) => 360.0,
         MarkdownBlock::Table(_) => {
             rows.iter().count() as f32
                 * (line + 2.0 * f32::from(scaled(TABLE_CELL_PAD_Y_PX, context)))
@@ -1398,6 +1399,36 @@ fn render_block(
         MarkdownBlock::Code(_) => wrapper
             .child(render_code(tab_width, rows, context))
             .into_any_element(),
+        MarkdownBlock::Diagram(range) => {
+            let Some(diagram) = rows.first().and_then(|(_, row)| row.diagram.as_ref()) else {
+                return wrapper.into_any_element();
+            };
+            non_text_block_shell(document, range.clone(), context)
+                .child(crate::view::diagram_preview::DiagramPreview {
+                    id: (
+                        SharedString::from(format!("markdown_diagram_{:?}", context.text_region)),
+                        range.start,
+                    )
+                        .into(),
+                    input: crate::view::diagram_preview::DiagramInput::Text {
+                        kind: diagram.kind,
+                        text: diagram.source.clone(),
+                    },
+                    theme: context.theme,
+                    embedded: true,
+                    source_element: Some(render_code(tab_width, rows, context)),
+                    force_source: context
+                        .reveal
+                        .pending()
+                        .is_some_and(|row| range.contains(&row))
+                        || context
+                            .query
+                            .as_ref()
+                            .and_then(|query| query.current_row)
+                            .is_some_and(|row| range.contains(&row)),
+                })
+                .into_any_element()
+        }
         MarkdownBlock::Table(_) => wrapper
             .child(render_table(tab_width, rows, context))
             .into_any_element(),

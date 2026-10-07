@@ -1,0 +1,7 @@
+%%{init: {"theme":"dark"}}%%
+flowchart LR
+  A([StartUpdated]) --> B{Decision}
+  B -->|yes| C[/Do thing/]
+  B -->|no| D[\\Skip\\]
+  C --> E[[End]]
+  D --> E

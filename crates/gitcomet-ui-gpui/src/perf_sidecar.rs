@@ -54,6 +54,9 @@ impl MeasurementKind {
 
 /// Classifies a result by its benchmark group (the first path segment).
 pub fn measurement_kind_for_bench(bench: &str) -> MeasurementKind {
+    if bench.starts_with("mermaid_preview/preview_frame/") {
+        return MeasurementKind::GpuiTestPlatformDraw;
+    }
     let group = bench.split('/').next().unwrap_or(bench);
     match group {
         "git_ops" | "fs_event" | "real_repo" | "idle" => MeasurementKind::BackendOperation,

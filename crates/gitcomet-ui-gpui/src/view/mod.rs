@@ -254,6 +254,9 @@ pub(crate) mod components;
 mod conflict_markers;
 pub(crate) mod conflict_resolver;
 mod date_time;
+mod diagram_preview;
+#[cfg(feature = "benchmarks")]
+pub use diagram_preview::benchmarks::MermaidPreviewFixture;
 pub(crate) mod diff_navigation;
 mod diff_preview;
 mod diff_text_model;
@@ -296,6 +299,7 @@ mod pop_out;
 mod preference_sync;
 mod preferences;
 mod reflog_panel;
+mod rendered_preview;
 mod repo_open;
 mod repository_views;
 mod reveal_commit;

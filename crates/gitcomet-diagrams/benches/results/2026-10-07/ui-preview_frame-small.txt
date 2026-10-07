@@ -1,0 +1,6 @@
+Gnuplot not found, using plotters backend
+Benchmarking mermaid_preview/preview_frame/small
+Benchmarking mermaid_preview/preview_frame/small: Analyzing
+mermaid_preview/preview_frame/small
+                        time:   [97.787 µs 97.835 µs 98.026 µs]
+

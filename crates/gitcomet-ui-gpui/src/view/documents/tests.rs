@@ -1168,7 +1168,23 @@ fn status_bar_documents_button_opens_a_picker_that_opens_typed_paths(
     cx: &mut gpui::TestAppContext,
 ) {
     let _guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    // This fixture opens a standalone file. Temporary directories can inherit
+    // a repository marker (including the sandbox's synthetic /tmp/.git).
+    // Reject those probes as non-repositories, as a real backend rejects the
+    // synthetic marker, instead of TestBackend's generic Unsupported error.
+    struct StandaloneBackend;
+    impl gitcomet_core::services::GitBackend for StandaloneBackend {
+        fn open(
+            &self,
+            _: &Path,
+        ) -> gitcomet_core::services::Result<Arc<dyn gitcomet_core::services::GitRepository>>
+        {
+            Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::NotARepository,
+            ))
+        }
+    }
+    let (store, events) = AppStore::new_test(Arc::new(StandaloneBackend));
     let (root, cx) = cx.add_window_view(|window, cx| {
         // Text input only accepts typing in the active window.
         window.activate();

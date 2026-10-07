@@ -1,0 +1,27 @@
+[package]
+name = "gitcomet-diagrams"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mermaid-rs-renderer.workspace = true
+roxmltree.workspace = true
+serde_json.workspace = true
+yaml-rust2 = { version = "0.13.0", default-features = false }
+resvg.workspace = true
+gitcomet-fonts.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+image.workspace = true
+
+[[bench]]
+name = "mermaid"
+harness = false

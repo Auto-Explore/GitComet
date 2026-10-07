@@ -1,0 +1,7 @@
+flowchart LR
+%%{init: {broken}}%%
+  A([Start]) --> B{Decision}
+  B -->|yes| C[/Do thing/]
+  B -->|no| D[\\Skip\\]
+  C --> E[[End]]
+  D --> E

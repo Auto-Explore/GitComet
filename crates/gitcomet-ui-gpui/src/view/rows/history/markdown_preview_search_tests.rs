@@ -18,6 +18,7 @@ fn row(text: &str, spans: Vec<MarkdownInlineSpan>) -> MarkdownPreviewRow {
         text: text.to_string().into(),
         inline_spans: Arc::new(spans),
         code_language: None,
+        diagram: None,
         source_line_range: 0..1,
         change_hint: MarkdownChangeHint::None,
         indent_level: 0,

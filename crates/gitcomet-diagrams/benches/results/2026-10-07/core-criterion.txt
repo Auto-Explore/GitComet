@@ -1,0 +1,107 @@
+Gnuplot not found, using plotters backend
+Benchmarking mermaid/parse_layout_svg/small
+Benchmarking mermaid/parse_layout_svg/small: Analyzing
+mermaid/parse_layout_svg/small
+                        time:   [11.413 ms 11.431 ms 11.435 ms]
+Benchmarking mermaid/parse/small
+Benchmarking mermaid/parse/small: Analyzing
+mermaid/parse/small     time:   [14.651 µs 14.661 µs 14.699 µs]
+Benchmarking mermaid/layout/small
+Benchmarking mermaid/layout/small: Analyzing
+mermaid/layout/small    time:   [11.283 ms 11.536 ms 11.599 ms]
+Benchmarking mermaid/svg/small
+Benchmarking mermaid/svg/small: Analyzing
+mermaid/svg/small       time:   [12.744 µs 12.775 µs 12.897 µs]
+Benchmarking mermaid/prepare_scene/small
+Benchmarking mermaid/prepare_scene/small: Analyzing
+mermaid/prepare_scene/small
+                        time:   [192.91 µs 193.37 µs 193.48 µs]
+Benchmarking mermaid/visible_tile_100_percent/small
+Benchmarking mermaid/visible_tile_100_percent/small: Analyzing
+mermaid/visible_tile_100_percent/small
+                        time:   [303.44 µs 304.37 µs 304.60 µs]
+Benchmarking mermaid/visible_tile_400_percent_dpr2/small
+Benchmarking mermaid/visible_tile_400_percent_dpr2/small: Analyzing
+mermaid/visible_tile_400_percent_dpr2/small
+                        time:   [445.12 µs 445.77 µs 448.37 µs]
+Benchmarking mermaid/parse_layout_svg/typical
+Benchmarking mermaid/parse_layout_svg/typical: Analyzing
+mermaid/parse_layout_svg/typical
+                        time:   [89.011 ms 89.085 ms 89.104 ms]
+Benchmarking mermaid/parse/typical
+Benchmarking mermaid/parse/typical: Analyzing
+mermaid/parse/typical   time:   [183.45 µs 183.61 µs 184.24 µs]
+Benchmarking mermaid/layout/typical
+Benchmarking mermaid/layout/typical: Analyzing
+mermaid/layout/typical  time:   [88.314 ms 88.849 ms 88.983 ms]
+Benchmarking mermaid/svg/typical
+Benchmarking mermaid/svg/typical: Analyzing
+mermaid/svg/typical     time:   [129.98 µs 130.07 µs 130.10 µs]
+Benchmarking mermaid/prepare_scene/typical
+Benchmarking mermaid/prepare_scene/typical: Analyzing
+mermaid/prepare_scene/typical
+                        time:   [1.8693 ms 1.8774 ms 1.8795 ms]
+Benchmarking mermaid/visible_tile_100_percent/typical
+Benchmarking mermaid/visible_tile_100_percent/typical: Analyzing
+mermaid/visible_tile_100_percent/typical
+                        time:   [485.71 µs 486.19 µs 488.11 µs]
+Benchmarking mermaid/visible_tile_400_percent_dpr2/typical
+Benchmarking mermaid/visible_tile_400_percent_dpr2/typical: Analyzing
+mermaid/visible_tile_400_percent_dpr2/typical
+                        time:   [696.85 µs 697.22 µs 698.72 µs]
+Benchmarking mermaid/parse_layout_svg/dense
+Benchmarking mermaid/parse_layout_svg/dense: Analyzing
+mermaid/parse_layout_svg/dense
+                        time:   [767.54 ms 770.07 ms 770.71 ms]
+Benchmarking mermaid/parse/dense
+Benchmarking mermaid/parse/dense: Analyzing
+mermaid/parse/dense     time:   [597.48 µs 597.52 µs 597.65 µs]
+Benchmarking mermaid/layout/dense
+Benchmarking mermaid/layout/dense: Analyzing
+mermaid/layout/dense    time:   [764.81 ms 769.28 ms 770.39 ms]
+Benchmarking mermaid/svg/dense
+Benchmarking mermaid/svg/dense: Analyzing
+mermaid/svg/dense       time:   [808.98 µs 810.01 µs 810.26 µs]
+Benchmarking mermaid/prepare_scene/dense
+Benchmarking mermaid/prepare_scene/dense: Analyzing
+mermaid/prepare_scene/dense
+                        time:   [4.7175 ms 4.7199 ms 4.7205 ms]
+Benchmarking mermaid/visible_tile_100_percent/dense
+Benchmarking mermaid/visible_tile_100_percent/dense: Analyzing
+mermaid/visible_tile_100_percent/dense
+                        time:   [4.5022 ms 4.5027 ms 4.5048 ms]
+Benchmarking mermaid/visible_tile_400_percent_dpr2/dense
+Benchmarking mermaid/visible_tile_400_percent_dpr2/dense: Analyzing
+mermaid/visible_tile_400_percent_dpr2/dense
+                        time:   [4.3114 ms 4.3145 ms 4.3153 ms]
+Benchmarking mermaid/parse_layout_svg/large
+Benchmarking mermaid/parse_layout_svg/large: Analyzing
+mermaid/parse_layout_svg/large
+                        time:   [1.1019 s 1.1019 s 1.1019 s]
+Benchmarking mermaid/parse/large
+Benchmarking mermaid/parse/large: Analyzing
+mermaid/parse/large     time:   [1.9668 ms 1.9713 ms 1.9892 ms]
+Benchmarking mermaid/layout/large
+Benchmarking mermaid/layout/large: Analyzing
+mermaid/layout/large    time:   [1.0977 s 1.0977 s 1.0977 s]
+Benchmarking mermaid/svg/large
+Benchmarking mermaid/svg/large: Analyzing
+mermaid/svg/large       time:   [1.3488 ms 1.3493 ms 1.3495 ms]
+Benchmarking mermaid/prepare_scene/large
+Benchmarking mermaid/prepare_scene/large: Analyzing
+mermaid/prepare_scene/large
+                        time:   [17.720 ms 17.943 ms 17.999 ms]
+Benchmarking mermaid/visible_tile_100_percent/large
+Benchmarking mermaid/visible_tile_100_percent/large: Analyzing
+mermaid/visible_tile_100_percent/large
+                        time:   [2.0826 ms 2.0827 ms 2.0828 ms]
+Benchmarking mermaid/visible_tile_400_percent_dpr2/large
+Benchmarking mermaid/visible_tile_400_percent_dpr2/large: Analyzing
+mermaid/visible_tile_400_percent_dpr2/large
+                        time:   [3.1113 ms 3.1142 ms 3.1150 ms]
+
+Benchmarking mermaid/header_recognition
+Benchmarking mermaid/header_recognition: Analyzing
+mermaid/header_recognition
+                        time:   [185.19 ns 185.27 ns 185.58 ns]
+

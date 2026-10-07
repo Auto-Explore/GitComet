@@ -1,0 +1,6 @@
+Gnuplot not found, using plotters backend
+Benchmarking mermaid_preview/pan_zoom_tiles/typical
+Benchmarking mermaid_preview/pan_zoom_tiles/typical: Analyzing
+mermaid_preview/pan_zoom_tiles/typical
+                        time:   [180.75 ns 181.45 ns 181.62 ns]
+

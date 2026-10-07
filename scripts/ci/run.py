@@ -42,6 +42,7 @@ CONTEXTS = {
     "workspace": ["--workspace", *(arg for package in EXAMPLE_PACKAGES for arg in ("--exclude", package)),
                   "--no-default-features", "--features", "gix,gitcomet-ui-gpui/default"],
     "core": ["-p", "gitcomet-core"],
+    "diagrams": ["-p", "gitcomet-diagrams"],
     "state": ["-p", "gitcomet-state"],
     "backend": ["-p", "gitcomet-git-gix"],
     # The executable's integration tests and the launch library's unit tests.

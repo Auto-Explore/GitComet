@@ -1085,6 +1085,12 @@ impl MainPaneView {
     }
 
     fn activate_diff_search(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        if crate::view::diff_target_rendered_preview_kind(self.rendered_diff_target())
+            == Some(RenderedPreviewKind::Diagram)
+        {
+            self.rendered_preview_modes
+                .set(RenderedPreviewKind::Diagram, RenderedPreviewMode::Source);
+        }
         // Search used to drop every rendered preview back to Source here so there
         // was plain text to scan. It scans the rendered markdown rows instead,
         // so opening the search box no longer changes what you are looking at —
@@ -1751,6 +1757,7 @@ impl MainPaneView {
 
         let title = self.diff_panel_title(theme, cx);
         let viewer_nav = self.diff_viewer_nav_cluster(theme, cx);
+        self.ensure_diagram_search_source(cx);
         // What the pane shows, as every other question about it answers it.
         let surface = self.main_pane_surface();
         let inline_submodule_diff_active = surface.inline_submodule_diff;
@@ -1833,6 +1840,14 @@ impl MainPaneView {
                 .rendered_preview_modes
                 .get(RenderedPreviewKind::Markdown)
                 == RenderedPreviewMode::Rendered;
+        let is_diagram_preview_view = rendered_view_toggle_kind
+            == Some(RenderedPreviewKind::Diagram)
+            && self
+                .rendered_preview_modes
+                .get(RenderedPreviewKind::Diagram)
+                == RenderedPreviewMode::Rendered
+            && !is_conflict_resolver
+            && !is_conflict_compare;
         let is_image_diff_loaded = (wants_file_diff || wants_collapsed_diff)
             && self
                 .rendered_file_image_diff_loadable()
@@ -1957,7 +1972,7 @@ impl MainPaneView {
 
             controls = controls.when_some(prev_file_btn, |d, btn| d.child(btn));
 
-            if !is_image_diff_view {
+            if !is_image_diff_view && !is_diagram_preview_view {
                 let nav_entries = self.diff_nav_entries();
                 let can_nav_prev = self.diff_nav_prev_target_ix(&nav_entries).is_some();
                 let can_nav_next = self.diff_nav_next_target_ix(&nav_entries).is_some();
@@ -2144,61 +2159,24 @@ impl MainPaneView {
 
         if !is_conflict_resolver && let Some(preview_kind) = rendered_view_toggle_kind {
             let preview_mode = self.rendered_preview_modes.get(preview_kind);
-            controls = controls.child(
-                div()
-                    .id(preview_kind.toggle_id())
-                    .debug_selector(move || preview_kind.toggle_id().to_string())
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        components::Button::new(
-                            preview_kind.rendered_button_id(),
-                            preview_kind.rendered_label(),
-                        )
-                        .style(if preview_mode == RenderedPreviewMode::Rendered {
-                            components::ButtonStyle::Filled
-                        } else {
-                            components::ButtonStyle::Outlined
-                        })
-                        .on_click(
-                            theme,
-                            cx,
-                            move |this, _e, window, cx| {
-                                this.rendered_preview_modes
-                                    .set(preview_kind, RenderedPreviewMode::Rendered);
-                                // Rendered rows and source lines are different
-                                // row spaces, so an open search has to rescan
-                                // rather than keep indices into the old one.
-                                this.diff_search_recompute_matches();
-                                this.restore_diff_panel_focus_after_toolbar_action(window, cx);
-                                cx.notify();
-                            },
-                        ),
-                    )
-                    .child(
-                        components::Button::new(
-                            preview_kind.source_button_id(),
-                            preview_kind.source_label(),
-                        )
-                        .style(if preview_mode == RenderedPreviewMode::Source {
-                            components::ButtonStyle::Filled
-                        } else {
-                            components::ButtonStyle::Outlined
-                        })
-                        .on_click(
-                            theme,
-                            cx,
-                            move |this, _e, window, cx| {
-                                this.rendered_preview_modes
-                                    .set(preview_kind, RenderedPreviewMode::Source);
-                                this.diff_search_recompute_matches();
-                                this.restore_diff_panel_focus_after_toolbar_action(window, cx);
-                                cx.notify();
-                            },
-                        ),
-                    ),
-            );
+            controls = controls.child(crate::view::rendered_preview::mode_toggle(
+                preview_kind,
+                if is_file_editor {
+                    RenderedPreviewMode::Source
+                } else {
+                    preview_mode
+                },
+                is_file_editor,
+                theme,
+                cx,
+                move |this, mode, window, cx| {
+                    this.rendered_preview_modes.set(preview_kind, mode);
+                    // Rendered rows and source lines occupy different row spaces.
+                    this.diff_search_recompute_matches();
+                    this.restore_diff_panel_focus_after_toolbar_action(window, cx);
+                    cx.notify();
+                },
+            ));
         }
 
         if self.has_blocked_remote_markdown_images() {
@@ -2359,13 +2337,16 @@ impl MainPaneView {
         } else if is_file_editor {
             self.render_file_editor(theme, window, cx)
         } else if is_file_preview {
-            if is_markdown_preview_view {
+            if is_markdown_preview_view || is_diagram_preview_view {
                 match &self.worktree_preview {
                     Loadable::NotLoaded | Loadable::Loading => {
                         components::empty_state(theme, "Preview", "Loading").into_any_element()
                     }
                     Loadable::Error(e) => {
                         components::empty_state(theme, "Preview", e.clone()).into_any_element()
+                    }
+                    Loadable::Ready(_) if is_diagram_preview_view => {
+                        self.render_diagram_file(theme, ui_scale_percent)
                     }
                     Loadable::Ready(_) => {
                         self.ensure_single_markdown_preview_cache(cx);

@@ -1,0 +1,6 @@
+Gnuplot not found, using plotters backend
+Benchmarking mermaid_preview/scene_cache_hit/large
+Benchmarking mermaid_preview/scene_cache_hit/large: Analyzing
+mermaid_preview/scene_cache_hit/large
+                        time:   [2.1971 µs 2.2369 µs 2.2469 µs]
+

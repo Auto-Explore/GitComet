@@ -66,9 +66,6 @@ fn annex_whereis_lines(
     }
 }
 
-/// Inset between an image/SVG preview column and its artwork.
-const IMAGE_PREVIEW_CELL_PADDING_PX: f32 = 16.0;
-
 /// Gap above the first and below the last row of a rendered markdown preview,
 /// so the document does not start and end flush against the pane edges.
 pub(in crate::view) const MARKDOWN_PREVIEW_DOCUMENT_EDGE_GAP_PX: f32 = 12.0;
@@ -291,6 +288,12 @@ impl MainPaneView {
                 .get(RenderedPreviewKind::Markdown)
                 == RenderedPreviewMode::Rendered;
 
+        let wants_diagram_preview = rendered_preview_kind == Some(RenderedPreviewKind::Diagram)
+            && self
+                .rendered_preview_modes
+                .get(RenderedPreviewKind::Diagram)
+                == RenderedPreviewMode::Rendered;
+
         if wants_image {
             enum DiffFileImageState {
                 NotLoaded,
@@ -383,66 +386,48 @@ impl MainPaneView {
                                     .map(|image| CachedDiffImageSource::Render(image, new_frame))
                             });
 
-                        // Breathing room around the artwork. Without it an SVG
-                        // renders edge to edge and reads as cramped against
-                        // the column header, the split divider, and the pane
-                        // edges.
-                        let cell_padding = crate::ui_scale::design_px_from_percent(
-                            IMAGE_PREVIEW_CELL_PADDING_PX,
-                            ui_scale_percent,
-                        );
                         let clamp_preview_size = self
                             .file_image_diff_cache_path
                             .as_deref()
                             .is_some_and(preview_path_uses_scale_down);
-                        let cell = |id: &'static str, image: Option<CachedDiffImageSource>| {
+                        let image = |image: Option<CachedDiffImageSource>| {
                             let muted = theme.colors.foreground.secondary;
-                            div()
-                                .id(id)
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .h_full()
-                                .overflow_hidden()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .p(cell_padding)
-                                .child(match image {
-                                    Some(CachedDiffImageSource::Path(path)) => gpui::img(path)
-                                        .w_full()
-                                        .h_full()
-                                        .object_fit(gpui::ObjectFit::Contain)
-                                        .with_loading(move || {
-                                            div()
-                                                .text_size(theme.ui_text(14.0))
-                                                .text_color(muted)
-                                                .child("Processing image...")
-                                                .into_any_element()
-                                        })
-                                        .with_fallback(move || {
-                                            div()
-                                                .text_size(theme.ui_text(14.0))
-                                                .text_color(muted)
-                                                .child("Preview unavailable.")
-                                                .into_any_element()
-                                        })
-                                        .into_any_element(),
-                                    Some(CachedDiffImageSource::Render(img_data, frame_index)) => {
-                                        preview_render_image_element(
-                                            img_data,
-                                            frame_index,
-                                            clamp_preview_size,
-                                        )
-                                        .w_full()
-                                        .h_full()
-                                        .into_any_element()
-                                    }
-                                    None => div()
-                                        .text_size(theme.ui_text(14.0))
-                                        .text_color(theme.colors.foreground.secondary)
-                                        .child("No image")
-                                        .into_any_element(),
-                                })
+                            match image {
+                                Some(CachedDiffImageSource::Path(path)) => gpui::img(path)
+                                    .w_full()
+                                    .h_full()
+                                    .object_fit(gpui::ObjectFit::Contain)
+                                    .with_loading(move || {
+                                        div()
+                                            .text_size(theme.ui_text(14.0))
+                                            .text_color(muted)
+                                            .child("Processing image...")
+                                            .into_any_element()
+                                    })
+                                    .with_fallback(move || {
+                                        div()
+                                            .text_size(theme.ui_text(14.0))
+                                            .text_color(muted)
+                                            .child("Preview unavailable.")
+                                            .into_any_element()
+                                    })
+                                    .into_any_element(),
+                                Some(CachedDiffImageSource::Render(img_data, frame_index)) => {
+                                    preview_render_image_element(
+                                        img_data,
+                                        frame_index,
+                                        clamp_preview_size,
+                                    )
+                                    .w_full()
+                                    .h_full()
+                                    .into_any_element()
+                                }
+                                None => div()
+                                    .text_size(theme.ui_text(14.0))
+                                    .text_color(muted)
+                                    .child("No image")
+                                    .into_any_element(),
+                            }
                         };
 
                         // A content view is one file, not a comparison: opening
@@ -451,54 +436,20 @@ impl MainPaneView {
                         let is_content_view = self
                             .active_repo()
                             .is_some_and(|repo| self.bound_diff_state(repo).content_preview);
-                        if is_content_view {
-                            return div()
-                                .id("diff_image_container")
-                                .debug_selector(|| "diff_image_single".to_string())
-                                .relative()
-                                .h_full()
-                                .min_h(px(0.0))
-                                .flex()
-                                .flex_col()
-                                .bg(theme.colors.surface.canvas)
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_h(px(0.0))
-                                        .flex()
-                                        .child(cell("diff_image_single_cell", new.or(old))),
-                                )
-                                .into_any_element();
-                        }
-
-                        let columns_header = components::split_columns_header(
+                        let content = if is_content_view {
+                            crate::view::rendered_preview::PreviewContent::File(image(new.or(old)))
+                        } else {
+                            crate::view::rendered_preview::PreviewContent::Diff {
+                                old: image(old),
+                                new: image(new),
+                            }
+                        };
+                        crate::view::rendered_preview::render(
+                            "diff_image",
+                            content,
                             theme,
                             ui_scale_percent,
-                            "A (before)",
-                            "B (after)",
-                        );
-
-                        div()
-                            .id("diff_image_container")
-                            .relative()
-                            .h_full()
-                            .min_h(px(0.0))
-                            .flex()
-                            .flex_col()
-                            .bg(theme.colors.surface.canvas)
-                            .child(columns_header)
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_h(px(0.0))
-                                    .flex()
-                                    .child(cell("diff_image_left", old))
-                                    .child(
-                                        div().w(px(1.0)).h_full().bg(theme.colors.stroke.default),
-                                    )
-                                    .child(cell("diff_image_right", new)),
-                            )
-                            .into_any_element()
+                        )
                     }
                 }
             }
@@ -523,7 +474,7 @@ impl MainPaneView {
                 },
             };
 
-            if !wants_markdown_preview {
+            if !wants_markdown_preview && !wants_diagram_preview {
                 self.ensure_file_diff_cache(cx);
             }
 
@@ -532,7 +483,7 @@ impl MainPaneView {
                     components::empty_state(theme, "Diff", "Select a file.").into_any_element()
                 }
                 DiffFileState::Loading => {
-                    let label = if wants_markdown_preview {
+                    let label = if wants_markdown_preview || wants_diagram_preview {
                         "Preview"
                     } else {
                         "Diff"
@@ -540,7 +491,7 @@ impl MainPaneView {
                     components::empty_state(theme, label, "Loading").into_any_element()
                 }
                 DiffFileState::Error(e) => {
-                    if wants_markdown_preview {
+                    if wants_markdown_preview || wants_diagram_preview {
                         components::empty_state(theme, "Preview", e).into_any_element()
                     } else {
                         self.diff_raw_input.update(cx, |input, cx| {
@@ -559,6 +510,14 @@ impl MainPaneView {
                             .overflow_y_scroll()
                             .track_scroll(&self.diff_raw_scroll)
                             .child(self.diff_raw_input.clone())
+                            .into_any_element()
+                    }
+                }
+                DiffFileState::Ready { has_file } if wants_diagram_preview => {
+                    if has_file {
+                        self.render_diagram_file(theme, ui_scale_percent)
+                    } else {
+                        components::empty_state(theme, "Preview", "No file contents available.")
                             .into_any_element()
                     }
                 }

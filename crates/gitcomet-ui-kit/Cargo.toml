@@ -23,6 +23,7 @@ benchmarks = []
 # No dependency on gitcomet-state, the application, or the UI host:
 # scripts/ci/boundaries.py enforces it.
 [dependencies]
+gitcomet-fonts.workspace = true
 gpui_parley = { workspace = true, optional = true }
 fontdb = { workspace = true }
 gitcomet-core = { workspace = true }

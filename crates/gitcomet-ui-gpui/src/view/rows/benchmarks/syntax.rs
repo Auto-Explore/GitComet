@@ -2411,6 +2411,7 @@ fn build_markdown_preview_row(
     };
 
     MarkdownPreviewRow {
+        diagram: None,
         kind,
         text: text.into(),
         inline_spans,

@@ -1,0 +1,29 @@
+flowchart TD
+  subgraph Ingest
+    A[Source] --> B{Validate}
+    B -->|ok| C[Normalize]
+    B -->|fail| D[Reject]
+  end
+
+  subgraph Process
+    C --> E[Queue]
+    E --> F[Worker 1]
+    E --> G[Worker 2]
+    E --> H[Worker 3]
+    F --> I[Aggregate]
+    G --> I
+    H --> I
+  end
+
+  subgraph Output
+    I --> J{Route}
+    J -->|fast| K[Cache]
+    J -->|slow| L[Archive]
+    K --> M[Notify]
+    L --> M
+  end
+
+  D --> M
+  A -. retry .-> E
+  C --> J
+  G -. audit .-> D

@@ -4,6 +4,8 @@ members = [
   "crates/gitcomet",
   "crates/gitcomet-app",
   "crates/gitcomet-core",
+  "crates/gitcomet-diagrams",
+  "crates/gitcomet-fonts",
   "crates/gitcomet-extension-api",
   "crates/gitcomet-extension-example",
   "crates/gitcomet-extension-example-app",
@@ -15,6 +17,7 @@ members = [
   "crates/gitcomet-ui-kit",
 ]
 exclude = [
+  "vendor/mermaid-rs-renderer",
   "crates/gitcomet-filesystem-native",
   "crates/win32-window-utils",
   "vendor/tree-sitter-asm",
@@ -78,6 +81,8 @@ rust-version = "1.98.1"
 # Internal crates
 gitcomet-app = { path = "crates/gitcomet-app", default-features = false }
 gitcomet-core = { path = "crates/gitcomet-core" }
+gitcomet-diagrams = { path = "crates/gitcomet-diagrams" }
+gitcomet-fonts = { path = "crates/gitcomet-fonts" }
 gitcomet-extension-api = { path = "crates/gitcomet-extension-api" }
 gitcomet-git-gix = { path = "crates/gitcomet-git-gix" }
 gitcomet-state = { path = "crates/gitcomet-state" }
@@ -126,6 +131,8 @@ itertools = "0.15.0"
 jiff = "0.2"
 log = "0.4.34"
 lru = "0.18"
+mermaid-rs-renderer = { path = "vendor/mermaid-rs-renderer", version = "0.3.1", default-features = false }
+roxmltree = "0.20"
 # git-annex object paths are hashed with MD5 (not for security).
 md-5 = "0.11"
 memchr = "2.8.3"

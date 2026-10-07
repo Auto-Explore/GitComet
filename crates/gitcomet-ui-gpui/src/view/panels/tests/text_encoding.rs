@@ -106,6 +106,101 @@ fn koi8() -> TextEncoding {
 }
 
 #[gpui::test]
+fn whole_file_diagram_previews_use_decoded_utf16_and_legacy_text(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::text_format::{TextFormat, encode};
+    let _visual_guard = lock_visual_test();
+    let _clipboard_guard = lock_clipboard_test();
+    let (view, cx) = open_window(cx);
+    let directory = tempfile::tempdir().unwrap();
+    for (case, encoding) in [TextEncoding::UTF_16LE, TextEncoding::WINDOWS_1252]
+        .into_iter()
+        .enumerate()
+    {
+        for (extension, source) in [
+            ("mmd", "flowchart LR\nA[café]-->B[Server]\n"),
+            ("mermaid", "sequenceDiagram\nAlice->>Bob: café\n"),
+        ] {
+            let path = format!("diagram-{case}.{extension}");
+            let bytes = encode(
+                source,
+                TextFormat {
+                    encoding,
+                    bom: encoding == TextEncoding::UTF_16LE,
+                },
+            )
+            .unwrap();
+            std::fs::write(directory.path().join(&path), bytes.as_ref()).unwrap();
+            cx.update(|_, app| {
+                view.read(app).main_pane.clone().update(app, |pane, _| {
+                    pane.rendered_preview_modes
+                        .set(RenderedPreviewKind::Diagram, RenderedPreviewMode::Rendered);
+                });
+            });
+            show(
+                cx,
+                &view,
+                file_state_for_path(
+                    gitcomet_state::model::RepoId(9593),
+                    directory.path(),
+                    &path,
+                    false,
+                    Loadable::NotLoaded,
+                    Some(encoding),
+                ),
+                false,
+            );
+            wait_for_main_pane_condition(
+                cx,
+                &view,
+                "decoded whole-file diagram",
+                |pane| {
+                    matches!(pane.worktree_preview, Loadable::Ready(_))
+                        && pane.main_pane_surface().toggle_kind
+                            == Some(RenderedPreviewKind::Diagram)
+                },
+                |pane| {
+                    (
+                        pane.worktree_preview.clone(),
+                        pane.main_pane_surface().toggle_kind,
+                    )
+                },
+            );
+            cx.update(|_, app| {
+                let pane = view.read(app).main_pane.read(app);
+                assert_eq!(pane.worktree_preview_text.as_ref(), source);
+                assert!(pane.worktree_preview_source_path.is_some());
+            });
+            cx.run_until_parked();
+            cx.update(|window, app| {
+                let _ = window.draw(app);
+            });
+            cx.run_until_parked();
+            assert!(cx.debug_bounds("diagram_preview").is_some(), "{path}");
+            assert!(cx.debug_bounds("diagram_loading").is_none(), "{path}");
+            assert!(cx.debug_bounds("diagram_error").is_none(), "{path}");
+            assert!(cx.debug_bounds("diff_diagram_single").is_some());
+            assert!(cx.debug_bounds("diff_diagram_left").is_none());
+            assert!(cx.debug_bounds("diagram_copy_source").is_none());
+            let code = cx.debug_bounds("diagram_diff_view_code").unwrap();
+            cx.simulate_click(code.center(), Modifiers::default());
+            crate::view::test_support::redraw(cx);
+            assert!(cx.debug_bounds("diagram_preview").is_none());
+            cx.update(|window, app| {
+                view.read(app).main_pane.clone().update(app, |pane, cx| {
+                    pane.select_all_diff_text(window, cx);
+                    pane.copy_selected_diff_text_to_clipboard(cx);
+                });
+            });
+            assert_eq!(
+                cx.update(|_, app| app.read_from_clipboard().and_then(|item| item.text())),
+                Some(source.to_string()),
+                "{path}"
+            );
+        }
+    }
+}
+
+#[gpui::test]
 fn read_only_line_ending_conversion_preserves_buffer_and_format(cx: &mut gpui::TestAppContext) {
     use gitcomet_core::text_format::LineEnding;
     let _visual_guard = lock_visual_test();

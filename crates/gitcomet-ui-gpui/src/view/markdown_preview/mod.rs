@@ -129,11 +129,20 @@ impl MarkdownPreviewDiff {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct MarkdownDiagramSource {
+    pub(super) kind: gitcomet_diagrams::DiagramKind,
+    pub(super) info: Arc<str>,
+    pub(super) source: Arc<str>,
+    pub(super) fence_lines: Range<usize>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct MarkdownPreviewRow {
     pub(super) kind: MarkdownPreviewRowKind,
     pub(super) text: SharedString,
     pub(super) inline_spans: Arc<Vec<MarkdownInlineSpan>>,
     pub(super) code_language: Option<crate::view::rows::DiffSyntaxLanguage>,
+    pub(super) diagram: Option<Arc<MarkdownDiagramSource>>,
     pub(super) source_line_range: Range<usize>,
     pub(super) change_hint: MarkdownChangeHint,
     pub(super) indent_level: u8,
@@ -165,6 +174,7 @@ impl Default for MarkdownPreviewRow {
             text: SharedString::default(),
             inline_spans: Arc::default(),
             code_language: None,
+            diagram: None,
             source_line_range: 0..0,
             change_hint: MarkdownChangeHint::None,
             indent_level: 0,
@@ -354,5 +364,7 @@ pub(super) use inline::*;
 pub(super) use tables::*;
 pub(super) use wrap::*;
 
+#[cfg(test)]
+mod diagram_tests;
 #[cfg(test)]
 mod tests;

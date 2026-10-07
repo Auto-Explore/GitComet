@@ -177,3 +177,6 @@ pub(crate) use worktree_preview_render::bench_worktree_preview_render;
 
 mod extensions;
 pub(crate) use extensions::bench_extensions;
+
+mod mermaid;
+pub(crate) use mermaid::bench_mermaid_preview;

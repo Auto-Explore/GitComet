@@ -1,0 +1,26 @@
+{
+  "bench": "mermaid_preview/scene_cache_hit/typical",
+  "runner": {
+    "hostname": "linuxdesktop",
+    "os": "linux",
+    "arch": "x86_64",
+    "cpu_count": 1
+  },
+  "measurement": {
+    "kind": "prepared_row_work",
+    "cargo_profile": "release",
+    "debug_assertions": false,
+    "allocator": {
+      "mimalloc_env": {}
+    }
+  },
+  "metrics": {
+    "alloc_bytes": 0,
+    "alloc_ops": 0,
+    "dealloc_bytes": 0,
+    "dealloc_ops": 0,
+    "net_alloc_bytes": 0,
+    "realloc_bytes_delta": 0,
+    "realloc_ops": 0
+  }
+}

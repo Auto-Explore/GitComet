@@ -80,6 +80,7 @@ struct OpenImage {
 struct OpenCodeBlock {
     start: usize,
     after_fence: bool,
+    info: Option<String>,
     language: Option<crate::view::rows::DiffSyntaxLanguage>,
 }
 
@@ -336,6 +337,10 @@ impl<'a> Flattener<'a> {
                 self.code = Some(OpenCodeBlock {
                     start: range.start,
                     after_fence: matches!(kind, CodeBlockKind::Fenced(_)),
+                    info: match &kind {
+                        CodeBlockKind::Fenced(info) => Some(info.to_string()),
+                        CodeBlockKind::Indented => None,
+                    },
                     language: match &kind {
                         CodeBlockKind::Fenced(info) => {
                             crate::view::rows::diff_syntax_language_for_code_fence_info(
@@ -478,12 +483,26 @@ impl<'a> Flattener<'a> {
                 let first_line = block.start + usize::from(code.after_fence);
                 let text = std::mem::take(&mut self.text);
                 self.clear_row();
+                let row_start = self.rows.len();
                 self.push_code_rows(
                     &text,
                     first_line,
                     block.end.saturating_sub(1),
                     code.language,
                 )?;
+                if let Some(info) = code.info
+                    && let Some(kind) = gitcomet_diagrams::DiagramKind::for_fence(&info, &text)
+                {
+                    let diagram = Arc::new(super::MarkdownDiagramSource {
+                        kind,
+                        info: info.into(),
+                        source: text.into(),
+                        fence_lines: block,
+                    });
+                    for row in &mut self.rows[row_start..] {
+                        row.diagram = Some(diagram.clone());
+                    }
+                }
             }
             TagEnd::List(_) => self.pop_container(),
             TagEnd::Item => {
