@@ -63,7 +63,7 @@ def macos_processes():
 
 def windows_processes():
     import ctypes as c
-    from ctypes import wintypes as w
+    import ctypes.wintypes as w
 
     class Entry(c.Structure):
         _fields_ = [("size", w.DWORD), ("usage", w.DWORD), ("pid", w.DWORD),
