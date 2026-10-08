@@ -112,10 +112,11 @@ def strip_comments_and_test_modules(text):
 
 def occurrences(text):
     """(line, kind, excerpt) for every product literal in production code."""
-    return production_occurrences(strip_comments_and_test_modules(text))
+    return occurrences_in_code(strip_comments_and_test_modules(text))
 
 
-def production_occurrences(code):
+def occurrences_in_code(code):
+    """As occurrences, for source whose comments and test modules are removed."""
     found = []
     for match in STRING.finditer(code):
         literal = match.group(2) if match.group(2) is not None else match.group(3)
@@ -131,8 +132,12 @@ def scan_text(text):
     return +Counter(kind for _, kind, _ in occurrences(text))
 
 
-def test_module_files(path, code):
-    """Test modules declared in the already stripped production source."""
+def test_module_files(path, text):
+    """Files that `path` declares as `#[cfg(test)] mod name;`."""
+    return test_module_files_in_code(path, strip_comments_and_test_modules(text))
+
+
+def test_module_files_in_code(path, code):
     source = Path(path)
     own_dir = source.parent
     child_dir = own_dir if source.name in ("mod.rs", "lib.rs", "main.rs") else own_dir / source.stem
@@ -150,10 +155,15 @@ def scan():
     files = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "crates/**/*.rs"], cwd=ROOT,
                            stdout=subprocess.PIPE, check=True).stdout.decode().split("\0")
     files = sorted({path for path in files if path and (ROOT / path).is_file()})
-    texts = {path: strip_comments_and_test_modules((ROOT / path).read_text(encoding="utf-8")) for path in files}
-    test_files = set()
-    for path, text in texts.items():
-        test_files |= test_module_files(path, text)
+    texts = {path: (ROOT / path).read_text(encoding="utf-8") for path in files}
+    # Module discovery and literal counting share one lexical pass per file.
+    # A known test file without #[cfg(...)] cannot match TEST_MODULE_FILE.
+    # Others still need discovery: #[path] can name a module outside their tree.
+    codes = {path: strip_comments_and_test_modules(text) for path, text in texts.items()
+             if not is_test_path(path) or "#[cfg(" in text}
+    test_files = {path for path in files if is_test_path(path)}
+    for path, code in codes.items():
+        test_files |= test_module_files_in_code(path, code)
     # A test module's descendants are test code too.
     def parent_module(path):
         # `a/b/c.rs` and `a/b/c/mod.rs` are children of `a/b.rs` or `a/b/mod.rs`.
@@ -168,10 +178,10 @@ def scan():
         parent = parent_module(path)
         return parent is not None and parent not in seen and in_test_module(parent, (*seen, path))
     found = {}
-    for path in files:
-        if is_test_path(path) or in_test_module(path):
+    for path in codes:
+        if in_test_module(path):
             continue
-        counts = Counter(kind for _, kind, _ in production_occurrences(texts[path]))
+        counts = Counter(kind for _, kind, _ in occurrences_in_code(codes[path]))
         for kind, count in counts.items():
             found[(path, kind)] = count
     return found

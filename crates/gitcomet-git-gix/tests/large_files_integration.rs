@@ -54,14 +54,15 @@ fn git_lfs_available() -> bool {
 fn init_repo(repo: &Path) {
     fs::create_dir_all(repo).unwrap();
     git(repo, &["init", "-q"]);
-    for (key, value) in [
-        ("user.name", "Test"),
-        ("user.email", "test@example.com"),
-        ("commit.gpgsign", "false"),
-        ("core.autocrlf", "false"),
-    ] {
-        git(repo, &["config", key, value]);
-    }
+    gitcomet_core::test_support::git_fixture::append_config(
+        repo,
+        &[
+            ("user.name", "Test"),
+            ("user.email", "test@example.com"),
+            ("commit.gpgsign", "false"),
+            ("core.autocrlf", "false"),
+        ],
+    );
 }
 
 /// A repository whose `*.bin` files go through the real LFS filter.
@@ -2315,17 +2316,52 @@ fn prepare_slow_clean_filter(repo: &Path, clean: &str) {
 }
 
 #[cfg(unix)]
-#[test]
-fn lfs_silent_local_commands_outlive_the_silence_deadline() {
+fn assert_silent_lfs_command_outlives_deadline(
+    name: &str,
+    command: gitcomet_core::large_files::LargeFileCommand,
+) {
     with_lfs_shim(
-        "lfs_silent_local_commands_outlive_the_silence_deadline",
+        name,
         "#!/bin/sh\ncase \"$1\" in fsck|prune) sleep 3 ;; track) ;; *) exit 91 ;; esac\n",
         |repo| {
             prepare_slow_clean_filter(repo, "sleep 3; cat");
             let opened = GixBackend.open(repo).unwrap();
-            for command in silent_lfs_commands() {
-                opened.run_large_file_command(&command).unwrap();
-            }
+            opened.run_large_file_command(&command).unwrap();
+        },
+    );
+}
+
+// Each case has an isolated subprocess environment. Let libtest schedule these
+// independent waits together instead of spending their combined duration in
+// one test; the one-second deadline and three-second silence stay unchanged.
+#[cfg(unix)]
+#[test]
+fn lfs_silent_fsck_outlives_the_silence_deadline() {
+    assert_silent_lfs_command_outlives_deadline(
+        "lfs_silent_fsck_outlives_the_silence_deadline",
+        gitcomet_core::large_files::LargeFileCommand::LfsFsck,
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn lfs_silent_prune_outlives_the_silence_deadline() {
+    assert_silent_lfs_command_outlives_deadline(
+        "lfs_silent_prune_outlives_the_silence_deadline",
+        gitcomet_core::large_files::LargeFileCommand::LfsPrune,
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn lfs_silent_track_outlives_the_silence_deadline() {
+    assert_silent_lfs_command_outlives_deadline(
+        "lfs_silent_track_outlives_the_silence_deadline",
+        gitcomet_core::large_files::LargeFileCommand::LfsTrack {
+            patterns: vec!["*.slow".into()],
+            filename: false,
+            lockable: false,
+            renormalize: vec!["file.slow".into()],
         },
     );
 }

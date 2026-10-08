@@ -294,7 +294,7 @@ fn structured_conflict_edit_reuses_stashed_outline_base_while_background_recompu
     let repo_id = gitcomet_state::model::RepoId(168);
     let fixture = SyntheticLargeConflictFixture::new(
         "resolved_outline_pending_incremental",
-        "fixtures/resolved_outline_pending.html",
+        "fixtures/resolved_outline_pending.txt",
         20_000,
         4,
     );
@@ -499,7 +499,7 @@ fn giant_two_way_resync_rebuilds_split_index_after_manual_session_edit(
     let repo_id = gitcomet_state::model::RepoId(172);
     let fixture = SyntheticLargeConflictFixture::new(
         "giant_two_way_resync_manual_edit",
-        "fixtures/resync_manual_edit.html",
+        "fixtures/resync_manual_edit.txt",
         20_001,
         4,
     );

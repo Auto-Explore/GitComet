@@ -763,7 +763,7 @@ fn large_conflict_bootstrap_stays_streamed_for_huge_files(cx: &mut gpui::TestApp
     let repo_id = gitcomet_state::model::RepoId(162);
     let fixture = SyntheticLargeConflictFixture::new(
         "large_conflict_block_local_sparse",
-        "fixtures/huge_conflict.html",
+        "fixtures/huge_conflict.txt",
         55_001,
         1,
     );
@@ -929,7 +929,7 @@ fn large_conflict_bootstrap_uses_streamed_split_index_for_dense_huge_files(
     let repo_id = gitcomet_state::model::RepoId(163);
     let fixture = SyntheticLargeConflictFixture::new(
         "large_conflict_block_local_dense",
-        "fixtures/huge_conflict_dense.html",
+        "fixtures/huge_conflict_dense.txt",
         60_000,
         256,
     );

@@ -75,6 +75,8 @@ fn reset_conflict_scroll_matrix_offsets(pane: &mut MainPaneView) {
     );
 }
 
+// Use a .txt path for geometry and outline tests so the large document does
+// not also schedule HTML parsing. Syntax regressions use .html explicitly.
 struct SyntheticLargeConflictFixture {
     workdir: std::path::PathBuf,
     file_rel: std::path::PathBuf,
