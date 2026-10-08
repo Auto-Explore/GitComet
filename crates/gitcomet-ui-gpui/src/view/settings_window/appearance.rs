@@ -1,5 +1,5 @@
-//! The Appearance page: theme tiles, interface scale and density, and
-//! typography. Split into one function per section to keep the unoptimized
+//! The Appearance page: typography, theme tiles, and interface scale and
+//! density. Split into one function per section to keep the unoptimized
 //! render frame small.
 
 use super::*;
@@ -12,9 +12,9 @@ impl SettingsWindowView {
         cx: &mut gpui::Context<Self>,
     ) -> Stateful<gpui::Div> {
         let card = self.card("settings_window_appearance", "Appearance", theme);
+        let card = self.appearance_typography_rows(card, theme, cx);
         let card = self.appearance_theme_rows(card, theme, cx);
-        let card = self.appearance_interface_rows(card, theme, cx);
-        self.appearance_typography_rows(card, theme, cx)
+        self.appearance_interface_rows(card, theme, cx)
     }
 
     fn appearance_theme_rows(

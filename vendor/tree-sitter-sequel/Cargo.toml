@@ -2,6 +2,13 @@
 # (MIT -- see the note below), to regenerate `src/parser.c` with a larger
 # small-state threshold and to drop three T-SQL rules.
 #
+# src/scanner.c is updated to 97614d051eebfd3bc5d97c0bdb5a1638719ca811 in the
+# 2026-10-08 sweep (upstream PR #361, merged 2026-09-18). Serialization no longer
+# frees the active dollar-quote tag; deserialization frees the previous tag before
+# restoring it, and allocation failure is checked. This fixes scanner state loss
+# and a leak during incremental parsing. The grammar and its three local T-SQL
+# exclusions stay at b7057b7, so parser regeneration is unnecessary.
+#
 # Past the 0.3.11 release for two fixes and a pile of new statements, none of
 # them released: backtick-quoted identifiers (`` `my col` ``, 2 ERRORs -> 0) and
 # HAVING without GROUP BY (2 -> 0), plus CREATE/ALTER POLICY, row level

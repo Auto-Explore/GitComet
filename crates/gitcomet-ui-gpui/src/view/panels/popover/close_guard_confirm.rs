@@ -62,7 +62,7 @@ pub(super) fn panel(
                 let _ = root_view.update(cx, |root, cx| {
                     root.perform_close_action(action, window, cx);
                 });
-                this.close_popover(cx);
+                this.close_resolved_popover(cx);
             }),
         cx,
     )

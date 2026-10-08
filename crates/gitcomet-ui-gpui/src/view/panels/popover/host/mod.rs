@@ -1328,6 +1328,29 @@ impl PopoverHost {
     }
 
     pub(in crate::view) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
+        self.close_popover_with_resolution(false, cx);
+    }
+
+    pub(in crate::view) fn close_resolved_popover(&mut self, cx: &mut gpui::Context<Self>) {
+        self.close_popover_with_resolution(true, cx);
+    }
+
+    fn close_popover_with_resolution(&mut self, resolved: bool, cx: &mut gpui::Context<Self>) {
+        let application_close = match self.popover.as_ref() {
+            Some(PopoverKind::UnsavedFileEditsConfirm(prompt)) => {
+                matches!(prompt.action, UnsavedFileEditsAction::QuitApp)
+            }
+            Some(PopoverKind::TerminalShutdownConfirm(prompt)) => {
+                matches!(prompt.action, TerminalShutdownAction::QuitApp)
+            }
+            Some(PopoverKind::CloseGuardConfirm(prompt)) => {
+                matches!(prompt.action, TerminalShutdownAction::QuitApp)
+            }
+            _ => false,
+        };
+        if !resolved && application_close {
+            crate::app::cancel_pending_restart(cx);
+        }
         let dismissing_unsaved_prompt = self.showing_unsaved_file_edits_prompt();
         let dismissed_filesystem_prompt = self.open_filesystem_prompt_id();
         let dismissing_hook_activity = self.is_hook_activity_workflow_open();

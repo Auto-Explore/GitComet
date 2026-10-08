@@ -49,6 +49,18 @@ fn main() {
 
     let manifest_dir =
         PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR missing"));
+    // The workspace pin is the source of truth for the public revision metadata too.
+    let workspace_manifest = manifest_dir.join("../../Cargo.toml");
+    println!("cargo:rerun-if-changed={}", workspace_manifest.display());
+    let manifest = fs::read_to_string(workspace_manifest).expect("read workspace manifest");
+    let revision = manifest
+        .lines()
+        .find(|line| line.starts_with("gpui = "))
+        .and_then(|line| line.split_once("rev = \""))
+        .and_then(|(_, revision)| revision.split_once('"'))
+        .map(|(revision, _)| revision)
+        .expect("workspace gpui revision missing");
+    println!("cargo:rustc-env=GITCOMET_GPUI_REVISION={revision}");
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR missing"));
     let icons_dir = manifest_dir.join("assets/icons");
     let mut generated = generate_svg_dir_assets(&icons_dir, "icons", "icon_bytes", "ICON_ASSETS");

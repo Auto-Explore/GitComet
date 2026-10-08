@@ -11,6 +11,51 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const SESSION_FILE_ENV: &str = "GITCOMET_SESSION_FILE";
 const DIFF_DEFAULTS_SESSION_SUBTEST_ENV: &str = "GITCOMET_DIFF_DEFAULTS_SESSION_SUBTEST";
 
+#[gpui::test]
+fn restart_cancellation_only_applies_to_application_close_prompts(cx: &mut gpui::TestAppContext) {
+    use gitcomet_extension_api::CloseScope;
+    let _visual_guard = lock_visual_test();
+    cx.update(|app| {
+        crate::view::extension_host::install(
+            gitcomet_extension_api::Registry::build(vec![Box::new(
+                gitcomet_extension_example::review::ReviewExtension,
+            )])
+            .unwrap(),
+            app,
+        );
+    });
+    let (settings, cx) = cx.add_window_view(SettingsWindowView::new);
+    for (scope, click_cancel) in [
+        (CloseScope::Window, false),
+        (CloseScope::Window, true),
+        (CloseScope::Application, false),
+        (CloseScope::Application, true),
+    ] {
+        cx.update(|_, app| app.set_global(crate::app::PendingRestart(true)));
+        settings.update(cx, |view, cx| {
+            view.confirm_close(scope, vec!["Running operation".into()], cx)
+        });
+        cx.run_until_parked();
+        crate::view::test_support::redraw(cx);
+        assert!(cx.debug_bounds("settings_hosted_dialog").is_some());
+        if click_cancel {
+            let cancel = cx.debug_bounds("settings_close_cancel").unwrap().center();
+            cx.simulate_click(cancel, Modifiers::default());
+        } else {
+            cx.simulate_keystrokes("escape");
+        }
+        cx.run_until_parked();
+        cx.update(|_, app| {
+            assert_eq!(
+                app.global::<crate::app::PendingRestart>().0,
+                scope == CloseScope::Window
+            );
+            assert!(settings.read(app).extension_dialog.is_none());
+            assert_eq!(app.windows().len(), 1);
+        });
+    }
+}
+
 #[test]
 fn git_reprobe_preserves_system_and_graphics_environment() {
     use gitcomet_core::environment::{GraphicsDetails, Rendering};
@@ -772,7 +817,7 @@ fn expanded_diff_content_mode_section_renders_before_scroll_sync_row(
     );
 }
 
-/// The Appearance page runs Theme -> Interface -> Typography, and typography
+/// The Appearance page runs Typography -> Theme -> Interface, and typography
 /// orders font pickers -> ligatures -> sizes with no presets popover.
 #[gpui::test]
 fn appearance_card_puts_ligatures_between_the_font_pickers_and_the_sizes(
@@ -826,17 +871,13 @@ fn appearance_card_puts_ligatures_between_the_font_pickers_and_the_sizes(
     let sizes = bounds("settings_window_font_size_controls");
 
     for (upper, lower, what) in [
+        (typography_heading, ui_font, "typography heading -> UI font"),
+        (sizes, theme_heading, "font sizes -> theme heading"),
         (theme_heading, tiles, "theme heading -> tiles"),
         (tiles, interface_heading, "tiles -> interface heading"),
         (interface_heading, ui_scale, "interface heading -> UI scale"),
         (ui_scale, density, "UI scale -> density"),
         (density, window_controls, "density -> window controls"),
-        (
-            window_controls,
-            typography_heading,
-            "window controls -> typography",
-        ),
-        (typography_heading, ui_font, "typography heading -> UI font"),
     ] {
         assert!(
             upper.bottom() <= lower.top(),
@@ -913,6 +954,26 @@ fn appearance_page_renders_theme_utilities_and_opens_theme_guide(cx: &mut gpui::
     let guide_bounds = settings_cx
         .debug_bounds("settings_window_theme_guide")
         .expect("expected theme guide row bounds");
+    let scroll_bounds = settings_cx
+        .debug_bounds("settings_window_scroll")
+        .expect("expected settings scroll bounds");
+    if guide_bounds.center().y >= scroll_bounds.bottom() {
+        let scroll_delta = guide_bounds.center().y - scroll_bounds.bottom() + px(24.0);
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            let current = settings.settings_window_scroll.offset();
+            settings
+                .settings_window_scroll
+                .set_offset(point(current.x, current.y - scroll_delta));
+            cx.notify();
+        });
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    }
+    let guide_bounds = settings_cx
+        .debug_bounds("settings_window_theme_guide")
+        .expect("expected theme guide row bounds after scrolling");
     settings_cx.simulate_click(guide_bounds.center(), Modifiers::default());
     settings_cx.run_until_parked();
 
@@ -1422,7 +1483,7 @@ fn external_editor_setting_seeds_from_pending_override_and_can_clear(
 #[test]
 fn external_editor_preference_persist_queue_skips_stale_custom_draft_writes() {
     let session_file = unique_session_file("external-editor-draft-sequence");
-    let queue = ExternalEditorPreferencePersistQueue::default();
+    let queue = PreferenceWriter::default();
     let stale_setting = Some(ExternalCodeEditorSetting::Custom {
         executable: PathBuf::from("/tmp/editor"),
         arguments: Some("--reuse".to_string()),
@@ -1432,17 +1493,23 @@ fn external_editor_preference_persist_queue_skips_stale_custom_draft_writes() {
         arguments: Some("--reuse-window {path}".to_string()),
     });
 
-    let stale_sequence = queue.next_sequence();
-    let latest_sequence = queue.next_sequence();
+    let stale_sequence = queue.next();
+    let latest_sequence = queue.next();
 
     assert!(
         queue
-            .persist_to_path_if_latest(latest_sequence, latest_setting.clone(), &session_file)
+            .persist(latest_sequence, || session::persist_ui_settings_to_path(
+                external_editor_preference_settings(latest_setting.clone()),
+                &session_file
+            ))
             .expect("persist latest custom editor draft")
     );
     assert!(
         !queue
-            .persist_to_path_if_latest(stale_sequence, stale_setting, &session_file)
+            .persist(stale_sequence, || session::persist_ui_settings_to_path(
+                external_editor_preference_settings(stale_setting),
+                &session_file
+            ))
             .expect("skip stale custom editor draft")
     );
 
@@ -4059,6 +4126,29 @@ fn the_executables_page_links_to_the_signature_guide(cx: &mut gpui::TestAppConte
 
 #[test]
 fn appearance_page_owns_themes_fonts_scale_and_density_in_search() {
+    #[cfg(target_os = "windows")]
+    {
+        for query in [
+            "graphics",
+            "graphics renderer",
+            "directx 12",
+            "dx11",
+            "compatibility",
+        ] {
+            assert!(
+                SettingsCategory::General.matches_query(query),
+                "{query} should find the General page"
+            );
+            assert!(
+                !SettingsCategory::Appearance.matches_query(query),
+                "{query} moved off the Appearance page"
+            );
+        }
+        assert_eq!(
+            SettingsSection::GraphicsRenderer.category(),
+            SettingsCategory::General
+        );
+    }
     for query in [
         "theme",
         "solarized",

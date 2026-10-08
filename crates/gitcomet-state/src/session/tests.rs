@@ -2969,6 +2969,87 @@ fn persist_ui_settings_round_trips_window_controls_mode() {
 }
 
 #[test]
+fn windows_renderer_fallback_survives_other_settings_and_workspace_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.json");
+    persist_ui_settings_to_path(
+        UiSettings {
+            windows_renderer: Some("auto".into()),
+            theme_mode: Some("dark".into()),
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+    persist_ui_settings_to_path(
+        UiSettings {
+            windows_renderer: Some("dx11".into()),
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+    persist_ui_settings_to_path(
+        UiSettings {
+            ui_scale_percent: Some(150),
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+    persist_workspaces_to_path(&[Workspace::new(vec![dir.path().to_path_buf()])], &path).unwrap();
+    let loaded = load_from_path(&path);
+    assert_eq!(loaded.workspaces.len(), 1);
+    assert_eq!(loaded.windows_renderer.as_deref(), Some("dx11"));
+    assert_eq!(loaded.theme_mode.as_deref(), Some("dark"));
+    assert_eq!(loaded.ui_scale_percent, Some(150));
+    persist_ui_settings_to_path(
+        UiSettings {
+            windows_renderer: Some("auto".into()),
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+    assert_eq!(
+        load_from_path(&path).windows_renderer.as_deref(),
+        Some("auto")
+    );
+}
+
+#[test]
+fn windows_renderer_update_preserves_extension_namespaces_and_reports_io_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.json");
+    persist_extension_namespace_to_path(
+        "example",
+        Some(serde_json::json!({"draft":"keep"})),
+        &path,
+    )
+    .unwrap();
+    persist_ui_settings_to_path(
+        UiSettings {
+            windows_renderer: Some("dx11".into()),
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(json["extensions"]["example"]["draft"], "keep");
+    assert!(
+        persist_ui_settings_to_path(
+            UiSettings {
+                windows_renderer: Some("dx11".into()),
+                ..Default::default()
+            },
+            dir.path()
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn saved_workspace_automatic_name_uses_the_first_repository_and_count() {
     let mut workspace = Workspace::new(vec![
         PathBuf::from("/work/alpha"),

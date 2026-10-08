@@ -76,7 +76,7 @@ pub(super) fn panel(
                         let _ = root_view.update(cx, move |root, cx| {
                             root.resolve_unsaved_file_edits(action, false, cx);
                         });
-                        this.close_popover(cx);
+                        this.close_resolved_popover(cx);
                     }),
             )
             .when(!waiting_for_writes, |buttons| {
@@ -89,7 +89,7 @@ pub(super) fn panel(
                             let _ = root_view.update(cx, move |root, cx| {
                                 root.resolve_unsaved_file_edits(action, true, cx);
                             });
-                            this.close_popover(cx);
+                            this.close_resolved_popover(cx);
                         }),
                 )
             }),
