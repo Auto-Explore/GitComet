@@ -79,7 +79,7 @@ fn production_limit(
         if files > 128 {
             return Ok(Some(bounded_limit()));
         }
-        let Ok(path) = gix::path::try_from_bstr(path) else {
+        let Ok(path) = gix::path::from_bstr(path) else {
             return Ok(Some(bounded_limit()));
         };
         let Ok(metadata) = std::fs::symlink_metadata(workdir.join(path)) else {

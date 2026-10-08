@@ -60,10 +60,7 @@ impl GixRepo {
                 .objects
                 .find_commit(info.id.as_ref(), &mut buffer)
                 .map_err(|error| {
-                    crate::repo::object_store::gix_error(
-                        "gix history author",
-                        &gix::Error::from(error),
-                    )
+                    crate::repo::object_store::gix_error("gix history author", &error)
                 })?;
             let name = commit
                 .author()

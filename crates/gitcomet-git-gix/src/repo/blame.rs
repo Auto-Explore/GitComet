@@ -10,7 +10,6 @@ use crate::util::{
 use gitcomet_core::domain::{DiffArea, is_uncommitted_commit_id};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{BlameLine, CommandOutput, ConflictSide, Result};
-use gix::bstr::ByteSlice as _;
 use rustc_hash::FxHashMap;
 use std::collections::hash_map::Entry;
 use std::fs;
@@ -424,7 +423,10 @@ impl GixRepo {
             let source_path = entry
                 .source_file_name
                 .as_ref()
-                .map(|name| gix::path::from_bstr(name.as_bstr()).into_owned())
+                .map(|name| {
+                    crate::util::path_buf_from_git_bytes(name.as_ref(), "gix blame source path")
+                })
+                .transpose()?
                 .filter(|source| source.as_path() != path);
             let metadata = blame_commit_metadata(
                 &repo,

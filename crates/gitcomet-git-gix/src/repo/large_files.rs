@@ -91,7 +91,7 @@ fn lfs_storage_dir(repo: &gix::Repository) -> PathBuf {
     let config = repo.config_snapshot();
     let storage = config
         .string("lfs.storage")
-        .and_then(|value| gix::path::try_from_bstring(value).ok());
+        .and_then(|value| gix::path::from_bstring(value).ok());
     lfs::storage_dir(storage.as_deref(), repo.common_dir())
 }
 
@@ -152,7 +152,7 @@ fn index_classified(
     index: &gix::index::State,
     path: &Path,
 ) -> Option<Classified> {
-    let key = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(path));
+    let key = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(path).ok()?);
     let entry = index.entry_by_path(key.as_ref())?;
     let is_symlink = entry.mode == gix::index::entry::Mode::SYMLINK;
     classify_blob(repo, entry.id, is_symlink)
@@ -314,7 +314,10 @@ impl LockableLookup<'_> {
         let Some(stack) = self.stack.as_mut() else {
             return false;
         };
-        let key = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(path));
+        let Ok(key) = gix::path::into_bstr(path) else {
+            return false;
+        };
+        let key = gix::path::to_unix_separators_on_windows(key);
         let Ok(platform) = stack.at_entry(key.as_ref(), None) else {
             return false;
         };
@@ -344,7 +347,7 @@ fn scan_lfs_attributes(
         let path = entry.path(&index);
         (path == ".gitattributes" || path.ends_with(b"/.gitattributes"))
             .then(|| {
-                gix::path::try_from_bstr(path)
+                gix::path::from_bstr(path)
                     .ok()
                     .map(|path| (path.into_owned(), Some(entry.id)))
             })
@@ -446,7 +449,7 @@ impl super::GixRepo {
             return None;
         }
         let index = repo.index_or_empty().ok()?;
-        let key = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(path));
+        let key = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(path).ok()?);
         let entry = index.entry_by_path(key.as_ref())?;
         // A locked (symlink) entry replaced by a file is ordinary content.
         if entry.mode == gix::index::entry::Mode::SYMLINK
@@ -767,7 +770,7 @@ impl super::GixRepo {
         };
         if metadata.file_type().is_symlink() {
             let target = std::fs::read_link(&full).ok()?;
-            let target = gix::path::into_bstr(target).into_owned();
+            let target = gix::path::into_bstr(target).ok()?.into_owned();
             let classified = classify_bytes(target.as_ref(), true)?;
             let present = std::fs::metadata(&full).is_ok_and(|m| m.is_file());
             let worktree = if present {

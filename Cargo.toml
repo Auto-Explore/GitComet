@@ -75,7 +75,7 @@ edition = "2024"
 license = "AGPL-3.0-only"
 authors = ["AutoExplore Oy <info@autoexplore.ai>"]
 repository = "https://github.com/Auto-Explore/GitComet"
-rust-version = "1.98.1"
+rust-version = "1.99.0"
 
 [workspace.dependencies]
 # Internal crates
@@ -117,13 +117,13 @@ fnv = "1.0.7"
 fontdb = "0.24.0"
 fs2 = "0.4.3"
 futures = "0.3.34"
-gix = { version = "0.88.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "status", "blame", "sha1", "sha256"] }
+gix = { version = "0.89.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "status", "blame", "sha1", "sha256"] }
 # Already in the tree via gix; Git-compatible quoting for attribute patterns.
-gix-quote = "0.9.0"
-gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "0e5c7cbc66d54870f4b02ea85e0a423ab2ca9324" }
-gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "0e5c7cbc66d54870f4b02ea85e0a423ab2ca9324", features = ["font-kit"] }
-gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "0e5c7cbc66d54870f4b02ea85e0a423ab2ca9324" }
-gpui_parley = { package = "gpui_ce_parley", git = "https://github.com/Havunen/gpui-ce.git", rev = "0e5c7cbc66d54870f4b02ea85e0a423ab2ca9324", default-features = false }
+gix-quote = "0.10.0"
+gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "f7474ab18033dee1e58770494c3b56afb3938b24" }
+gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "f7474ab18033dee1e58770494c3b56afb3938b24", features = ["font-kit"] }
+gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "f7474ab18033dee1e58770494c3b56afb3938b24" }
+gpui_parley = { package = "gpui_ce_parley", git = "https://github.com/Havunen/gpui-ce.git", rev = "f7474ab18033dee1e58770494c3b56afb3938b24", default-features = false }
 image = "0.25.10"
 # Already in the dependency graph; merges sorted reference streams lazily.
 itertools = "0.15.0"
@@ -132,7 +132,7 @@ jiff = "0.2"
 log = "0.4.34"
 lru = "0.18"
 mermaid-rs-renderer = { path = "vendor/mermaid-rs-renderer", version = "0.3.1", default-features = false }
-roxmltree = "0.20"
+roxmltree = "0.21"
 # git-annex object paths are hashed with MD5 (not for security).
 md-5 = "0.11"
 memchr = "2.8.3"

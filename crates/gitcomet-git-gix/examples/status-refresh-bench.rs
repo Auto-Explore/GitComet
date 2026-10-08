@@ -95,7 +95,7 @@ fn run(path: &Path, repeats: usize) {
             ) {
                 continue;
             }
-            let relative = gix::path::try_from_bstr(entry.path(&index)).unwrap();
+            let relative = gix::path::from_bstr(entry.path(&index)).unwrap();
             fs::OpenOptions::new()
                 .write(true)
                 .open(path.join(relative))

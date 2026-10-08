@@ -291,10 +291,26 @@ fn shape_truncated_line_uncached(
         base_style,
         &candidate.display_highlights,
     );
-    let shaped_line =
+    let mut shaped_line =
         window
             .text_system()
             .shape_line(candidate.display_text.clone(), font_size, &runs);
+
+    // TODO(gpui-ce): Convert Parley's font-space underline offsets to screen
+    // coordinates in the backend, then remove this workaround. Negative offsets
+    // currently paint above the baseline, cutting through SHA links.
+    if shaped_line.paint_fragments.iter().any(|fragment| {
+        fragment.style.underline.is_some()
+            && fragment
+                .underline_offset
+                .is_some_and(|offset| offset < Pixels::ZERO)
+    }) {
+        for fragment in &mut Arc::make_mut(&mut shaped_line).paint_fragments {
+            if fragment.style.underline.is_some() {
+                fragment.underline_offset = fragment.underline_offset.map(|offset| offset.abs());
+            }
+        }
+    }
 
     TruncatedLineLayout {
         #[cfg(any(test, feature = "test-support"))]

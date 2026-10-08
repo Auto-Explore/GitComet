@@ -1393,7 +1393,6 @@ fn worktree_encoding_to_git(
     full: &Path,
     attributes: &gitcomet_core::text_format::TextAttributes,
 ) -> Result<Vec<u8>> {
-    use gix::error::ErrorExt as _;
     use gix::filter::plumbing::eol;
 
     let raw = std::fs::read(full).map_err(io_err_to_error)?;
@@ -1412,15 +1411,17 @@ fn worktree_encoding_to_git(
         (true, false) => eol::AttributesDigest::TextInput,
         (true, true) => eol::AttributesDigest::TextAutoInput,
     };
-    let index_path = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(path));
+    let index_path = gix::path::into_bstr(path)
+        .map_err(|_| Error::new(ErrorKind::Unsupported("path is not valid UTF-8")))?;
+    let index_path = gix::path::to_unix_separators_on_windows(index_path);
     let index_blob = index
         .entry_by_path(index_path.as_ref())
         .map(|entry| entry.id);
-    let mut index_object = |buf: &mut Vec<u8>| -> gix::ExnResult<Option<()>> {
+    let mut index_object = |buf: &mut Vec<u8>| -> gix::Result<Option<()>> {
         let Some(id) = index_blob else {
             return Ok(None);
         };
-        let object = repo.find_object(id).map_err(|error| error.raise_erased())?;
+        let object = repo.find_object(id)?;
         buf.clear();
         buf.extend_from_slice(&object.data);
         Ok(Some(()))
@@ -1552,7 +1553,11 @@ fn read_worktree_image_file_bytes_cancellable(
         // large-file side resolves to the content. Other links are not images.
         Ok(metadata) if metadata.file_type().is_symlink() => {
             let target = std::fs::read_link(&full).map_err(io_err_to_error)?;
-            let target = gix::path::into_bstr(target).into_owned();
+            let target = gix::path::into_bstr(target)
+                .map_err(|_| {
+                    Error::new(ErrorKind::Unsupported("symlink target is not valid UTF-8"))
+                })?
+                .into_owned();
             return Ok(
                 gitcomet_core::annex::key_from_symlink_target(target.as_ref())
                     .is_some()
@@ -1829,7 +1834,11 @@ fn worktree_entry_optional(workdir: &Path, path: &Path) -> Option<WorktreeEntry>
     let metadata = std::fs::symlink_metadata(&full).ok()?;
     if metadata.file_type().is_symlink() {
         let mut target = Vec::new();
-        target.extend_from_slice(gix::path::into_bstr(std::fs::read_link(&full).ok()?).as_ref());
+        target.extend_from_slice(
+            gix::path::into_bstr(std::fs::read_link(&full).ok()?)
+                .ok()?
+                .as_ref(),
+        );
         return Some(WorktreeEntry::Symlink { target });
     }
     metadata.is_file().then_some(WorktreeEntry::Regular(full))
@@ -2024,7 +2033,7 @@ fn worktree_attributes_fingerprint(repo: &gix::Repository, path: &Path) -> Optio
         assignment.hash(&mut hasher);
     }
     // CRLF conversion can also consult the indexed version of the file itself.
-    let index_path = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(path));
+    let index_path = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(path).ok()?);
     index
         .entry_by_path(index_path.as_ref())
         .map(|entry| entry.id)

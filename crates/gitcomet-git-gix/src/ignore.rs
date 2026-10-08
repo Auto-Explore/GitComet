@@ -56,10 +56,9 @@ pub(crate) fn repository_watch_info(
                     .iter()
                     .filter(|entry| entry.mode == GitIndexMode::COMMIT)
                 {
-                    let relative =
-                        gix::path::try_from_bstr(entry.path(&index)).map_err(|error| {
-                            Error::new(ErrorKind::Backend(format!("watch gitlink path: {error}")))
-                        })?;
+                    let relative = gix::path::from_bstr(entry.path(&index)).map_err(|error| {
+                        Error::new(ErrorKind::Backend(format!("watch gitlink path: {error}")))
+                    })?;
                     let child = workdir.join(relative);
                     info.ignore_inputs.push(child.join(".git"));
                     match crate::open::open_worktree_repo(&child) {
@@ -90,7 +89,7 @@ pub(crate) fn repository_watch_info(
         {
             // LFS treats this as a literal path (no ~/ interpolation). Relative
             // storage belongs to the common Git directory for linked worktrees.
-            let storage = gix::path::try_from_bstr(&storage).map_err(|error| {
+            let storage = gix::path::from_bstr(&storage).map_err(|error| {
                 Error::new(ErrorKind::Backend(format!("watch LFS storage: {error}")))
             })?;
             let storage = if storage.is_absolute() {
@@ -100,7 +99,10 @@ pub(crate) fn repository_watch_info(
             };
             // Git LFS uses filepath.Join/Clean before opening the path. In
             // particular, link/../Storage must not follow link before popping it.
-            let storage = gix::path::normalize_saturating(storage.into(), workdir);
+            let storage =
+                gix::path::normalize_saturating(storage.into(), workdir).map_err(|error| {
+                    Error::new(ErrorKind::Backend(format!("watch LFS storage: {error}")))
+                })?;
             // Storage may share a directory with source files or Git metadata.
             // Only LFS-owned folders are private, not every path under storage.
             info.cache_dirs.extend(
@@ -312,20 +314,24 @@ impl GixWorktreeIgnoreMatcher {
     /// the watcher reported the path as: a file or symlink that replaced a
     /// tracked directory has just deleted every entry under it, so the caller's
     /// kind must not skip the lookup beneath the path.
-    fn path_is_tracked(&self, relative_path: &Path) -> bool {
-        let relative_path =
-            gix::path::to_unix_separators_on_windows(gix::path::into_bstr(relative_path));
-        self.index.entry_by_path(relative_path.as_ref()).is_some()
+    fn path_is_tracked(&self, relative_path: &Path) -> Result<bool> {
+        let relative_path = gix::path::into_bstr(relative_path).map_err(|error| {
+            Error::new(ErrorKind::Backend(format!(
+                "gix ignore matcher path: {error}"
+            )))
+        })?;
+        let relative_path = gix::path::to_unix_separators_on_windows(relative_path);
+        Ok(self.index.entry_by_path(relative_path.as_ref()).is_some()
             || self
                 .index
                 .entry_closest_to_directory_or_directory(relative_path.as_ref())
-                .is_some()
+                .is_some())
     }
 }
 
 impl WorktreeIgnoreMatcher for GixWorktreeIgnoreMatcher {
     fn is_ignored(&mut self, relative_path: &Path, kind: WorktreePathKind) -> Result<bool> {
-        if self.path_is_tracked(relative_path) {
+        if self.path_is_tracked(relative_path)? {
             return Ok(false);
         }
 

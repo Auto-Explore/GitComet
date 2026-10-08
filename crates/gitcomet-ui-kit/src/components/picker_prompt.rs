@@ -160,7 +160,7 @@ const SECONDARY_TEXT_REMS: f32 = 0.75;
 /// tree overrides. `row_height_is_the_height_rows_actually_paint_at` pins this
 /// to what a drawn row really measures, so a future global override cannot
 /// silently desynchronise the windowed list's spacers from its rows.
-const LINE_HEIGHT_RATIO: f32 = 1.618_034;
+const LINE_HEIGHT_RATIO: f32 = std::f32::consts::GOLDEN_RATIO;
 /// The list renders every row until its content is this many viewports tall;
 /// past that it renders only what can be seen. Short lists — every picker in the
 /// app bar one — therefore keep exactly the geometry they had before windowing.

@@ -259,7 +259,8 @@ impl super::GixRepo {
         let mut trees = Vec::new();
         for path in paths {
             let relative = path.strip_prefix(&self.spec.workdir).unwrap_or(path);
-            let key = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(relative));
+            let key = gix::path::into_bstr(relative).map_err(|e| backend(&e))?;
+            let key = gix::path::to_unix_separators_on_windows(key);
             let mut blobs: Vec<_> = index
                 .entry_range(key.as_ref())
                 .into_iter()
