@@ -13,6 +13,7 @@ pub(super) struct WatchPlan {
     pub failures: usize,
 }
 impl WatchPlan {
+    #[cfg(test)]
     pub fn walk(
         &mut self,
         starts: impl IntoIterator<Item = PathBuf>,
@@ -21,11 +22,37 @@ impl WatchPlan {
         rules: &mut IgnoreRules,
         inputs: &mut WatchInputs,
         limit: usize,
-        mut visit: impl FnMut(&Path) -> notify::Result<()>,
+        visit: impl FnMut(&Path) -> notify::Result<()>,
     ) {
+        self.walk_while(
+            starts,
+            worktree,
+            policy,
+            rules,
+            inputs,
+            limit,
+            visit,
+            || true,
+        );
+    }
+
+    pub fn walk_while(
+        &mut self,
+        starts: impl IntoIterator<Item = PathBuf>,
+        worktree: bool,
+        policy: &PolicySnapshot,
+        rules: &mut IgnoreRules,
+        inputs: &mut WatchInputs,
+        limit: usize,
+        mut visit: impl FnMut(&Path) -> notify::Result<()>,
+        keep_going: impl Fn() -> bool,
+    ) -> bool {
         let mut pending: VecDeque<_> = starts.into_iter().collect();
         let mut visited = FxHashSet::default();
         while let Some(dir) = pending.pop_front() {
+            if !keep_going() {
+                return false;
+            }
             if !visited.insert(dir.clone()) || self.dirs.contains(&dir) {
                 continue;
             }
@@ -70,10 +97,16 @@ impl WatchPlan {
             if worktree {
                 self.worktree_dirs.insert(dir.clone());
             }
+            if !keep_going() {
+                return false;
+            }
             match fs::read_dir(&dir) {
                 Ok(entries) => {
                     let mut children = Vec::new();
                     for entry in entries {
+                        if !keep_going() {
+                            return false;
+                        }
                         match entry {
                             Ok(entry) => {
                                 if worktree && entry.file_name() == ".gitignore" {
@@ -94,6 +127,7 @@ impl WatchPlan {
                 Err(_) => self.failures += 1,
             }
         }
+        keep_going()
     }
 
     pub fn outcome(

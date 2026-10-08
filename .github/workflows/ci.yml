@@ -31,7 +31,7 @@ on:
       nextest-profile:
         description: Workspace nextest concurrency policy
         type: choice
-        options: [ci, ci-git-limited, ci-watch-first, ci-throughput]
+        options: [ci, ci-git-limited, ci-watch-limited-4, ci-watch-limited-8, ci-watch-first, ci-throughput]
         default: ci
       pure-threads:
         description: Optional positive concurrency for audited pure batches
