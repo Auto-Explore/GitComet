@@ -602,6 +602,12 @@ def watcher_stress(context="workspace", iterations=10, nextest_threads=None):
     prepare_runtime_binaries(context)
     directory = paths(context) / "watcher-stress"
     directory.mkdir(parents=True, exist_ok=True)
+    # Inventory and prerequisite failures happen before the iteration finally
+    # block. Never leave a previous campaign's successful summary behind.
+    (directory / "summary.json").write_text(json.dumps({
+        "iterations": iterations, "threads": threads, "filter": WATCHER_FILTER,
+        "success": False, "results": [],
+    }, indent=2) + "\n", encoding="utf-8")
     selection = directory / "selected-tests.json"
     run(f"{context}-watcher-inventory", ["cargo", "nextest", "list", *reuse_args(context),
         "--ignore-default-filter", "-E", WATCHER_FILTER, "--message-format", "json"], output=selection)

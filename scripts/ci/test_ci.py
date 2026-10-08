@@ -596,7 +596,7 @@ class CacheTests(unittest.TestCase):
 
 
 class RunnerTests(unittest.TestCase):
-    def watcher_stress_results(self, outcomes):
+    def watcher_stress_results(self, outcomes, *, fail_inventory=False):
         selected = {"state": {"package-id": "state", "testcases": {
             "required": {"ignored": False, "filter-match": {"status": "matches"}},
             "unrelated": {"ignored": False, "filter-match": {"status": "mismatch"}},
@@ -610,11 +610,16 @@ class RunnerTests(unittest.TestCase):
                 redirect_stdout(io.StringIO()):
             junit = Path(directory) / "nextest.xml"
             junit.write_text("stale")
+            root = runner.paths("workspace") / "watcher-stress"
+            root.mkdir()
+            (root / "summary.json").write_text('{"success": true}')
             executions = []
 
             def invoke(name, command, **kwargs):
                 self.assertNotIn("--stress-count", command)
                 if "list" in command:
+                    if fail_inventory:
+                        raise RuntimeError("inventory failed")
                     Path(kwargs["output"]).write_text(json.dumps({"rust-suites": selected}))
                     return 0
                 self.assertFalse(junit.exists(), "stale JUnit survived between iterations")
@@ -669,6 +674,10 @@ class RunnerTests(unittest.TestCase):
                 self.assertEqual(reports, {1: failed, 2: passed})
 
     def test_watcher_stress_rejects_missing_malformed_incomplete_and_skipped_reports(self):
+        error, summary, _ = self.watcher_stress_results([None], fail_inventory=True)
+        self.assertIsInstance(error, RuntimeError)
+        self.assertFalse(summary["success"])
+        self.assertEqual(summary["results"], [])
         reports = (None, "broken XML", '<testsuites/>', self.watcher_junit().replace('<testsuites>', '<testsuites errors="1">'), self.watcher_junit().replace('<testsuites>', '<testsuites errors="invalid">'), '<testsuites><testsuite><testcase/></testsuite></testsuites>', self.watcher_junit('<skipped/>'),
                    self.watcher_junit('<error message="crash"/>'),
                    self.watcher_junit('<system-err>skipping Git-for-Windows shell startup</system-err>'),
