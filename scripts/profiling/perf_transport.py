@@ -147,6 +147,8 @@ class GitHandler(BaseHTTPRequestHandler):
                     try:
                         self.send_error(500, "Git fixture backend failed")
                     except OSError:
+                        # Best effort only: if the client disconnected, sending the
+                        # fallback HTTP error can fail and should not mask the root cause.
                         pass
                 self.close_connection = True
             finally:
