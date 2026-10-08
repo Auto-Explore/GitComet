@@ -140,6 +140,18 @@ fn nonempty(value: String) -> Option<String> {
     (!value.trim().is_empty()).then_some(value)
 }
 
+#[cfg(target_os = "windows")]
+fn graphics_backend(window: &Window) -> Option<String> {
+    Some(
+        if gpui_wgpu::WgpuContextHandle::from_window(window).is_some() {
+            "DirectX 12"
+        } else {
+            "DirectX 11"
+        }
+        .into(),
+    )
+}
+
 /// Do not infer this from WAYLAND_DISPLAY/XDG_SESSION_TYPE: X11 windows can
 /// run within a Wayland session, including explicit backend overrides and WSLg.
 fn window_system(handle: Option<RawWindowHandle>) -> Option<&'static str> {
@@ -163,7 +175,7 @@ fn graphics_backend(window: &Window) -> Option<String> {
     })
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 fn graphics_backend(window: &Window) -> Option<String> {
     match HasWindowHandle::window_handle(window).ok()?.as_raw() {
         RawWindowHandle::Win32(_) => Some("DirectX 11".into()),

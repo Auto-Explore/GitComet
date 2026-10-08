@@ -116,8 +116,47 @@ pub fn write_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     temporary.write_all(bytes)?;
     make_file_private(temporary.as_file());
     temporary.as_file().sync_all()?;
-    temporary.persist(path).map_err(|err| err.error)?;
-    Ok(())
+    #[cfg(windows)]
+    {
+        persist_with_windows_retry(temporary, |temporary| temporary.persist(path))
+    }
+    #[cfg(not(windows))]
+    {
+        temporary.persist(path).map_err(|err| err.error)?;
+        Ok(())
+    }
+}
+
+// MoveFileExW can deny replacement while a reader holds the destination open,
+// even with Rust's default sharing flags. Retry the same synced temporary file
+// so a brief read (or a scanner's handle) cannot discard the user's last save.
+#[cfg(any(windows, test))]
+fn persist_with_windows_retry(
+    mut temporary: tempfile::NamedTempFile,
+    mut persist: impl FnMut(tempfile::NamedTempFile) -> Result<File, tempfile::PersistError>,
+) -> io::Result<()> {
+    use std::time::Duration;
+
+    let mut retries_remaining = 10;
+    let mut delay = Duration::from_millis(10);
+    loop {
+        match persist(temporary) {
+            Ok(_) => return Ok(()),
+            Err(err) => {
+                // ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION.
+                // Permanent failures still return the final error and clean up
+                // the temporary file after at most 750 ms of retry delays.
+                if retries_remaining == 0 || !matches!(err.error.raw_os_error(), Some(5 | 32 | 33))
+                {
+                    return Err(err.error);
+                }
+                temporary = err.file;
+                retries_remaining -= 1;
+                std::thread::sleep(delay);
+                delay = (delay * 2).min(Duration::from_millis(100));
+            }
+        }
+    }
 }
 
 /// Owner-only, via the handle so a swapped path cannot redirect it. Best-effort.
@@ -137,6 +176,97 @@ mod tests {
     use super::ensure_private_dir;
     use super::{open_private_append, write_private_file};
     use std::io::Write as _;
+
+    #[test]
+    fn private_replacement_retries_windows_conflicts_without_losing_contents() {
+        for code in [5, 32, 33] {
+            let root = tempfile::tempdir().expect("tempdir");
+            let path = root.path().join("session.json");
+            write_private_file(&path, b"previous").expect("initial contents");
+            let mut temporary = tempfile::NamedTempFile::new_in(root.path()).unwrap();
+            temporary.write_all(b"replacement").unwrap();
+            temporary.as_file().sync_all().unwrap();
+            let temporary_path = temporary.path().to_path_buf();
+            let mut attempts = 0;
+            super::persist_with_windows_retry(temporary, |temporary| {
+                attempts += 1;
+                assert_eq!(std::fs::read(&path).unwrap(), b"previous");
+                assert_eq!(temporary.path(), temporary_path);
+                assert_eq!(std::fs::read(temporary.path()).unwrap(), b"replacement");
+                if attempts <= 2 {
+                    Err(tempfile::PersistError {
+                        error: std::io::Error::from_raw_os_error(code),
+                        file: temporary,
+                    })
+                } else {
+                    temporary.persist(&path)
+                }
+            })
+            .expect("save after the conflict clears");
+            assert_eq!(attempts, 3);
+            assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
+            assert!(!temporary_path.exists());
+        }
+    }
+
+    #[test]
+    fn private_replacement_bounds_windows_retries_and_cleans_up_failed_saves() {
+        for (code, expected_attempts) in [(5, 11), (32, 11), (33, 11), (112, 1)] {
+            let root = tempfile::tempdir().expect("tempdir");
+            let path = root.path().join("session.json");
+            write_private_file(&path, b"previous").expect("initial contents");
+            let temporary = tempfile::NamedTempFile::new_in(root.path()).unwrap();
+            let temporary_path = temporary.path().to_path_buf();
+            let mut attempts = 0;
+            let error = super::persist_with_windows_retry(temporary, |temporary| {
+                attempts += 1;
+                Err(tempfile::PersistError {
+                    error: std::io::Error::from_raw_os_error(code),
+                    file: temporary,
+                })
+            })
+            .expect_err("persistent errors must be reported");
+            assert_eq!(error.raw_os_error(), Some(code));
+            assert_eq!(attempts, expected_attempts);
+            assert_eq!(std::fs::read(&path).unwrap(), b"previous");
+            assert!(!temporary_path.exists());
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn private_replacement_recovers_after_a_windows_reader_closes() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let path = root.path().join("session.json");
+        write_private_file(&path, b"previous").expect("initial contents");
+        // Permit reads and writes but hold back FILE_SHARE_DELETE so the first
+        // real replacement fails deterministically, independently of timing.
+        let mut reader = Some(
+            std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(1 | 2)
+                .open(&path)
+                .unwrap(),
+        );
+        let mut temporary = tempfile::NamedTempFile::new_in(root.path()).unwrap();
+        temporary.write_all(b"replacement").unwrap();
+        temporary.as_file().sync_all().unwrap();
+        let mut saw_conflict = false;
+        super::persist_with_windows_retry(temporary, |temporary| {
+            let result = temporary.persist(&path);
+            if result.is_err() && reader.is_some() {
+                saw_conflict = true;
+                assert_eq!(std::fs::read(&path).unwrap(), b"previous");
+                drop(reader.take());
+            }
+            result
+        })
+        .expect("save after the reader closes");
+        assert!(saw_conflict, "the open reader must block replacement");
+        assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
+    }
 
     #[cfg(unix)]
     #[test]

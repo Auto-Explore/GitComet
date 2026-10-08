@@ -240,6 +240,26 @@ fn stale_explorer_menus_preserve_independent_toggles_across_windows() {
                 assert_eq!(browser.show_ignored, !ignored);
             }
             wait_until("independent explorer toggles persisted", || {
+                for (store, id) in [(&first, first_id), (&second, second_id)] {
+                    let state = store.snapshot();
+                    let errors: Vec<_> = state
+                        .repos
+                        .iter()
+                        .find(|repo| repo.id == id)
+                        .unwrap()
+                        .feedback
+                        .diagnostics
+                        .iter()
+                        .filter(|entry| {
+                            entry.kind == DiagnosticKind::Error
+                                && entry.message.contains("updating repository preferences")
+                        })
+                        .collect();
+                    assert!(
+                        errors.is_empty(),
+                        "explorer preference save failed: {errors:?}"
+                    );
+                }
                 let file: serde_json::Value =
                     serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
                 let prefs = &file["repository_preferences"]
