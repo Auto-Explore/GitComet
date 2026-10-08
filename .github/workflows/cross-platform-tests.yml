@@ -59,7 +59,7 @@ on:
       nextest-profile:
         description: Optional limit for concurrent Git-heavy tests
         type: choice
-        options: [ci, ci-git-limited]
+        options: [ci, ci-git-limited, ci-watch-limited-4, ci-watch-limited-8]
         default: ci
       ui-threads:
         description: Optional positive UI libtest concurrency (serial schedule only)
@@ -147,8 +147,7 @@ jobs:
             sh -lc 'exit 0'
           fi
           python3 -c 'import os, subprocess; version = subprocess.check_output(["rustc", "-vV"], text=True); assert "host: " + os.environ["EXPECTED_HOST"] in version, version'
-      - name: Verify Windows CI subprocess handling
-        if: runner.os == 'Windows'
+      - name: Verify CI helpers on the native platform
         run: python3 -m unittest discover -s scripts/ci -p 'test_*.py' -v
       - name: Compile and inventory workspace tests
         run: python3 scripts/ci/run.py compile --context workspace
@@ -171,13 +170,8 @@ jobs:
           GITCOMET_TEST_SYNC_TRACE: "1"
         run: |
           args=()
-          if [[ -n "$CI_NEXTEST_THREADS" ]]; then args+=(--test-threads "$CI_NEXTEST_THREADS"); fi
-          python3 scripts/ci/run.py command --name watcher-stress -- \
-            cargo nextest run \
-            --binaries-metadata target/ci-reports/workspace/binaries.json \
-            --cargo-metadata target/ci-reports/workspace/cargo.json \
-            --profile ci-watch-stress --stress-count 10 --no-tests=fail "${args[@]}" \
-            -E 'package(=gitcomet-fs-watch) | (package(=gitcomet-state) & (test(native_sync_) | test(native_barrier_) | test(::selective::synchronization::) | test(::selective::native_lifecycle::) | test(::selective::path_identities::) | test(::worktree_redirect::)))'
+          if [[ -n "$CI_NEXTEST_THREADS" ]]; then args+=(--nextest-threads "$CI_NEXTEST_THREADS"); fi
+          python3 scripts/ci/run.py watcher-stress --context workspace --iterations 10 "${args[@]}"
       - name: Workspace doctests
         if: success() || (failure() && steps.tests.outcome == 'failure')
         shell: bash

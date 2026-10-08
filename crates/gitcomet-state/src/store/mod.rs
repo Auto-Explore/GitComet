@@ -1224,3 +1224,6 @@ mod path_tests {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(feature = "benchmarks")]
+pub(crate) use repo_monitor::watcher_startup_for_bench;

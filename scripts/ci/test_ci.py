@@ -596,6 +596,113 @@ class CacheTests(unittest.TestCase):
 
 
 class RunnerTests(unittest.TestCase):
+    def watcher_stress_results(self, outcomes):
+        selected = {"state": {"package-id": "state", "testcases": {
+            "required": {"ignored": False, "filter-match": {"status": "matches"}},
+            "unrelated": {"ignored": False, "filter-match": {"status": "mismatch"}},
+            "manual": {"ignored": True, "filter-match": {"status": "matches"}},
+        }}}
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(runner, "REPORTS", Path(directory)), \
+                patch.object(runner, "prepare_runtime_binaries"), \
+                patch.object(runner, "reuse_args", return_value=[]), \
+                patch.object(runner, "package_names", return_value={"state": "gitcomet-state"}), \
+                redirect_stdout(io.StringIO()):
+            junit = Path(directory) / "nextest.xml"
+            junit.write_text("stale")
+            executions = []
+
+            def invoke(name, command, **kwargs):
+                self.assertNotIn("--stress-count", command)
+                if "list" in command:
+                    Path(kwargs["output"]).write_text(json.dumps({"rust-suites": selected}))
+                    return 0
+                self.assertFalse(junit.exists(), "stale JUnit survived between iterations")
+                self.assertEqual(command[command.index("--test-threads") + 1], "4")
+                outcome = outcomes[len(executions)]
+                executions.append(name)
+                if isinstance(outcome, BaseException):
+                    raise outcome
+                code, report = outcome
+                if report is not None:
+                    junit.write_text(report)
+                if isinstance(code, BaseException):
+                    raise code
+                return code
+
+            error = None
+            with patch.object(runner, "nextest_junit_path", return_value=junit), \
+                    patch.object(runner, "run", side_effect=invoke):
+                try:
+                    runner.watcher_stress(iterations=len(outcomes), nextest_threads=4)
+                except (RuntimeError, KeyboardInterrupt) as caught:
+                    error = caught
+            root = Path(directory) / "workspace/watcher-stress"
+            summary = json.loads((root / "summary.json").read_text())
+            reports = {index: (root / f"iteration-{index}/junit.xml").read_text()
+                       for index in range(1, len(outcomes) + 1)
+                       if (root / f"iteration-{index}/junit.xml").exists()}
+            return error, summary, reports
+
+    @staticmethod
+    def watcher_junit(body=""):
+        return '<testsuites><testsuite name="state"><testcase name="required">' + body + \
+               '</testcase></testsuite></testsuites>'
+
+    def test_ordinary_validation_rejects_failed_junit_even_with_successful_execution(self):
+        suites = {"state": {"package-id": "state", "testcases": {"required": {"ignored": False}}}}
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
+            junit = Path(directory) / "junit.xml"
+            junit.write_text(self.watcher_junit('<failure message="panic"/>'))
+            with self.assertRaisesRegex(RuntimeError, "reported 1 failed"):
+                runner.check_nextest_results("workspace", suites, {"state": "gitcomet-state"}, junit)
+
+    def test_watcher_stress_cannot_hide_an_earlier_failure_with_a_later_pass(self):
+        failed = self.watcher_junit('<failure message="panic"/>')
+        passed = self.watcher_junit()
+        for code in (0, 100):
+            with self.subTest(returncode=code):
+                error, summary, reports = self.watcher_stress_results([(code, failed), (0, passed)])
+                self.assertIsInstance(error, RuntimeError)
+                self.assertFalse(summary["success"])
+                self.assertEqual([row["success"] for row in summary["results"]], [False, True])
+                self.assertEqual(reports, {1: failed, 2: passed})
+
+    def test_watcher_stress_rejects_missing_malformed_incomplete_and_skipped_reports(self):
+        reports = (None, "broken XML", '<testsuites/>', self.watcher_junit().replace('<testsuites>', '<testsuites errors="1">'), self.watcher_junit().replace('<testsuites>', '<testsuites errors="invalid">'), '<testsuites><testsuite><testcase/></testsuite></testsuites>', self.watcher_junit('<skipped/>'),
+                   self.watcher_junit('<error message="crash"/>'),
+                   self.watcher_junit('<system-err>skipping Git-for-Windows shell startup</system-err>'),
+                   self.watcher_junit('<system-err>skipping: git-lfs is not installed</system-err>'),
+                   self.watcher_junit('<system-out>skipping syntax corpus test: unavailable</system-out>'))
+        for report in reports:
+            with self.subTest(report=report):
+                error, summary, _ = self.watcher_stress_results([(0, report), (0, self.watcher_junit())])
+                self.assertIsInstance(error, RuntimeError)
+                self.assertFalse(summary["success"])
+                self.assertEqual(len(summary["results"]), 2)
+
+    def test_watcher_stress_keeps_nonzero_status_and_interruption(self):
+        error, summary, _ = self.watcher_stress_results([(100, self.watcher_junit())])
+        self.assertIsInstance(error, RuntimeError)
+        self.assertFalse(summary["success"])
+        error, summary, _ = self.watcher_stress_results([(0, self.watcher_junit()), KeyboardInterrupt()])
+        self.assertIsInstance(error, KeyboardInterrupt)
+        self.assertFalse(summary["success"])
+        self.assertFalse(summary["results"][-1]["success"])
+        partial = self.watcher_junit('<error message="interrupted"/>')
+        error, summary, reports = self.watcher_stress_results([(KeyboardInterrupt(), partial)])
+        self.assertIsInstance(error, KeyboardInterrupt)
+        self.assertFalse(summary["success"])
+        self.assertEqual(reports, {1: partial})
+
+    def test_watcher_stress_validates_selected_coverage_and_preserves_worktree_cases(self):
+        error, summary, reports = self.watcher_stress_results([(0, self.watcher_junit())] * 2)
+        self.assertIsNone(error)
+        self.assertTrue(summary["success"])
+        self.assertEqual(len(reports), 2)
+        self.assertIn("::worktree_redirect::", runner.WATCHER_FILTER)
+        self.assertIn("::selective::", runner.WATCHER_FILTER)
+
     def test_pure_batch_partition_is_explicit_and_preserves_ignored_tests(self):
         suite = {"package-name": "gitcomet-core", "package-id": "core", "kind": "lib",
                  "testcases": {"conflict_session::pure": {"ignored": False},

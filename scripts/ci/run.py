@@ -30,7 +30,12 @@ UI = "gitcomet-ui-gpui"
 # process-global platform state, so each of these harnesses runs as one libtest
 # process on every platform instead of nextest's process per test.
 GPUI_PACKAGES = (UI, "gitcomet-ui-kit", "gitcomet-extension-example")
-NEXTEST_PROFILES = ("ci", "ci-git-limited", "ci-watch-first")
+NEXTEST_PROFILES = ("ci", "ci-git-limited", "ci-watch-first", "ci-watch-limited-4", "ci-watch-limited-8")
+WATCHER_FILTER = ('package(=gitcomet-fs-watch) | (package(=gitcomet-state) & '
+                  '(test(native_sync_) | test(native_barrier_) | test(::selective::synchronization::) | '
+                  'test(::selective::native_lifecycle::) | test(::selective::path_identities::) | '
+                  'test(::selective::efficiency::) | test(::selective::setup_recovery::) | '
+                  'test(::worktree_redirect::)))')
 # Audited in-memory tests: no process-global environment, filesystem, or native
 # resources. Keep this an explicit binary/prefix allowlist, not all unit tests.
 PURE_BATCHES = {"gitcomet-core": ("conflict_session::",)}
@@ -55,7 +60,7 @@ DISPLAY_PROFILES = {
     "wayland-kde": ("", "wayland-1", "wayland", "KDE"),
 }
 GIT_PREREQUISITE_SKIP = re.compile(
-    r"\bskipping\b[^\n]*(?:Git-for-Windows|(?:git|posix|sh).*shell|shell.*(?:unavailable|startup))",
+    r"\bskipping\b[^\n]*(?:Git-for-Windows|git-lfs|syntax corpus|(?:git|posix|sh).*shell|shell.*(?:unavailable|startup))",
     re.IGNORECASE,
 )
 RUNTIME_SKIP = re.compile(r"\bskipping\b|\b(?:assertion|test|fixture)\s+skipped\b", re.IGNORECASE)
@@ -552,7 +557,25 @@ def check_nextest_results(context, suites, packages, junit, *, excluded=frozense
     expected = {(binary_id, name) for binary_id, suite in suites.items()
                 if not uses_libtest(packages[suite["package-id"]])
                 for name, test in suite["testcases"].items() if not test["ignored"]} - excluded
-    xml = ET.parse(junit)
+    try:
+        xml = ET.parse(junit)
+        if xml.getroot().tag != "testsuites":
+            raise RuntimeError(f"{context}: invalid nextest JUnit root")
+    except (OSError, ET.ParseError) as error:
+        raise RuntimeError(f"{context}: missing or malformed nextest results: {error}") from error
+    if not expected:
+        raise RuntimeError(f"{context}: nextest selected no active tests")
+    try:
+        reported_failures = sum(int(element.get(field, "0")) for element in
+                                [xml.getroot(), *xml.getroot().findall("testsuite")]
+                                for field in ("failures", "errors"))
+    except ValueError as error:
+        raise RuntimeError(f"{context}: malformed nextest failure counts") from error
+    if reported_failures:
+        raise RuntimeError(f"{context}: nextest JUnit reports failures or errors")
+    if any(not suite.get("name") or any(not case.get("name") for case in suite.findall("testcase"))
+           for suite in xml.getroot().findall("testsuite")):
+        raise RuntimeError(f"{context}: malformed nextest case identity")
     for case in xml.iter("testcase"):
         reject_prerequisite_skips(f"{context}:{case.attrib['name']}",
                                   case.findtext("system-out", "") + "\n" + case.findtext("system-err", ""))
@@ -565,6 +588,67 @@ def check_nextest_results(context, suites, packages, junit, *, excluded=frozense
     for case in xml.iter("testcase"):
         record_runtime_exclusions(f"{context}:{case.attrib['name']}",
                                   case.findtext("system-out", "") + "\n" + case.findtext("system-err", ""))
+    failures = failed_junit_cases(junit)
+    if failures:
+        annotate_failures(context, failures)
+        raise RuntimeError(f"{context}: nextest reported {len(failures)} failed tests")
+
+
+def watcher_stress(context="workspace", iterations=10, nextest_threads=None):
+    """Use independent invocations: a later pass cannot hide an earlier failure."""
+    if iterations < 1 or nextest_threads is not None and nextest_threads < 1:
+        raise ValueError("watcher stress iterations and threads must be positive")
+    threads = nextest_threads if nextest_threads is not None else min(4, os.cpu_count() or 1)
+    prepare_runtime_binaries(context)
+    directory = paths(context) / "watcher-stress"
+    directory.mkdir(parents=True, exist_ok=True)
+    selection = directory / "selected-tests.json"
+    run(f"{context}-watcher-inventory", ["cargo", "nextest", "list", *reuse_args(context),
+        "--ignore-default-filter", "-E", WATCHER_FILTER, "--message-format", "json"], output=selection)
+    suites = json.loads(selection.read_text(encoding="utf-8"))["rust-suites"]
+    suites = {binary: dict(suite, testcases={name: test for name, test in suite["testcases"].items()
+              if test["filter-match"]["status"] == "matches"}) for binary, suite in suites.items()}
+    if not any(not test["ignored"] for suite in suites.values() for test in suite["testcases"].values()):
+        raise RuntimeError(f"{context}: watcher stress selected no active tests")
+    packages = package_names(context)
+    junit = nextest_junit_path("ci-watch-stress")
+    results = []
+    try:
+        for index in range(1, iterations + 1):
+            name = f"{context}-watcher-stress-{index}"
+            report = directory / f"iteration-{index}"
+            report.mkdir(exist_ok=True)
+            destination = report / "junit.xml"
+            destination.unlink(missing_ok=True)
+            junit.unlink(missing_ok=True)
+            result = dict(iteration=index, success=False)
+            results.append(result)
+            started = time.monotonic()
+            try:
+                result["returncode"] = run(name, ["cargo", "nextest", "run", *reuse_args(context),
+                    "--profile", "ci-watch-stress", "--ignore-default-filter", "-E", WATCHER_FILTER,
+                    "--test-threads", str(threads), "--no-fail-fast", "--no-tests=fail"], check=False, dots=True)
+            finally:
+                result["elapsed_seconds"] = time.monotonic() - started
+                log = REPORTS / f"{name}.log"
+                if log.exists():
+                    shutil.copyfile(log, report / "output.log")
+                if junit.exists():
+                    shutil.copyfile(junit, destination)
+            try:
+                check_nextest_results(name, suites, packages, destination)
+                result["success"] = result["returncode"] == 0
+            except RuntimeError as error:
+                result["error"] = str(error)
+                print(f"::error::{error}", flush=True)
+    finally:
+        (directory / "summary.json").write_text(json.dumps({
+            "iterations": iterations, "threads": threads, "filter": WATCHER_FILTER,
+            "success": len(results) == iterations and all(result["success"] for result in results),
+            "results": results,
+        }, indent=2) + "\n", encoding="utf-8")
+    if any(not result["success"] for result in results):
+        raise RuntimeError(f"{context}: watcher stress failed; see {directory / 'summary.json'}")
 
 
 def run_parallel(tasks):
@@ -638,9 +722,8 @@ def execute(context, schedule="serial", nextest_threads=None, nextest_profile="c
         code = run(f"{context}-nextest", command, check=False, live=live, cancel=cancel, dots=True)
         if junit.exists():
             shutil.copyfile(junit, paths(context) / "junit.xml")
-            annotate_failures(f"{context}-nextest", failed_junit_cases(junit))
             check_nextest_results(context, suites, packages, junit, excluded=batched)
-        elif not code:
+        else:
             raise RuntimeError(f"{context}: nextest produced no results")
         return code
 
@@ -703,12 +786,13 @@ def smoke(context, target, selector, *, exact=False, env=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("phase", choices=["compile", "test", "doc", "display", "cmd-smoke", "command"])
+    parser.add_argument("phase", choices=["compile", "test", "watcher-stress", "doc", "display", "cmd-smoke", "command"])
     parser.add_argument("--context", choices=CONTEXTS, default="workspace")
     parser.add_argument("--cargo-profile", default="ci-test")
     parser.add_argument("--test-target", action="append", default=[],
                         help="Compile only this integration target; repeat for multiple smoke targets")
     parser.add_argument("--name", default="command")
+    parser.add_argument("--iterations", type=int, default=10, help="Independent watcher-stress repetitions")
     parser.add_argument("--schedule", choices=["serial", "balanced"], default="serial")
     parser.add_argument("--nextest-threads", type=int, help="Opt-in concurrency experiment (serial schedule only)")
     parser.add_argument("--ui-threads", type=int, help="Opt-in libtest concurrency experiment (serial schedule only)")
@@ -720,14 +804,19 @@ def main():
         parser.error("--test-target requires compile")
     for option in ("nextest", "ui"):
         threads = getattr(args, option + "_threads")
-        if threads is not None and (args.phase != "test" or threads < 1 or args.schedule != "serial"):
-            parser.error(f"--{option}-threads must be positive and requires test --schedule serial")
+        allowed = args.phase == "test" or option == "nextest" and args.phase == "watcher-stress"
+        if threads is not None and (not allowed or threads < 1 or args.schedule != "serial"):
+            parser.error(f"--{option}-threads must be positive and requires test/watcher-stress --schedule serial")
+    if args.phase == "watcher-stress" and args.iterations < 1:
+        parser.error("--iterations must be positive")
     os.chdir(ROOT)
     if args.phase == "compile":
         compile_tests(args.context, args.cargo_profile, args.test_target)
     elif args.phase == "test":
         execute(args.context, args.schedule, args.nextest_threads, args.nextest_profile,
                 args.ui_threads, args.batch_pure_tests)
+    elif args.phase == "watcher-stress":
+        watcher_stress(args.context, args.iterations, args.nextest_threads)
     elif args.phase == "doc":
         # The app contains only binaries, so it has no doctest targets.
         if args.context != "app":

@@ -44,8 +44,27 @@ class MoldInstallerTests(unittest.TestCase):
                 self.assertIn(f"mold-3.0.0-{architecture}-linux.tar.gz", download.call_args.args[0])
                 self.assertEqual((bin_dir / "mold").read_bytes(), b"mold executable")
                 self.assertEqual((bin_dir / "mold").stat().st_mode & 0o777, 0o755)
-                self.assertEqual((bin_dir / "ld.mold").resolve(), bin_dir / "mold")
-                self.assertEqual((root / "github-path").read_text(), f"{bin_dir}\n")
+                self.assertEqual((bin_dir / "ld.mold").resolve(), (bin_dir / "mold").resolve())
+                self.assertEqual((root / "github-path").read_text(), f"{bin_dir.resolve()}\n")
+
+    def test_installation_through_a_symlinked_parent_exports_the_same_executable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            real = root / "real"
+            real.mkdir()
+            alias = root / "alias"
+            alias.symlink_to(real, target_is_directory=True)
+            bin_dir = alias / "bin"
+            data = archive_with(f"mold-{installer.VERSION}-x86_64-linux/bin/mold")
+            with patch.object(installer.platform, "system", return_value="Linux"), \
+                    patch.object(installer.platform, "machine", return_value="x86_64"), \
+                    patch.dict(installer.SHA256, {"x86_64": hashlib.sha256(data).hexdigest()}), \
+                    patch.object(installer.urllib.request, "urlopen", return_value=io.BytesIO(data)), \
+                    patch.object(installer.subprocess, "check_output", return_value="mold 3.0.0 (compatible with GNU ld)\n"), \
+                    patch.dict(os.environ, {"GITHUB_PATH": ""}), redirect_stdout(io.StringIO()):
+                installer.install(bin_dir)
+            self.assertEqual((bin_dir / "ld.mold").resolve(), (real / "bin/mold").resolve())
+            self.assertEqual((bin_dir / "ld.mold").read_bytes(), b"mold executable")
 
     def test_bad_download_preserves_existing_installation(self):
         with tempfile.TemporaryDirectory() as directory:
