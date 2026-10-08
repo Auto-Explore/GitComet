@@ -118,9 +118,21 @@ fn run_git_capture_with_display(repo: &Path, args: &[&str], display: Option<&str
 }
 
 fn run_git_with_stdin(repo: &Path, args: &[&str], stdin_text: &str) -> Output {
+    run_git_with_stdin_and_env(repo, args, stdin_text, &[])
+}
+
+fn run_git_with_stdin_and_env(
+    repo: &Path,
+    args: &[&str],
+    stdin_text: &str,
+    env_vars: &[(&str, &str)],
+) -> Output {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     let mut cmd = no_window_command("git");
     apply_isolated_git_config_env(&mut cmd);
+    for (key, value) in env_vars {
+        cmd.env(key, value);
+    }
     cmd.arg("-C")
         .arg(repo)
         .args(args)
@@ -1147,15 +1159,32 @@ fn git_mergetool_no_trust_exit_code_unchanged_output_stays_unresolved() {
 
     setup_overlapping_conflict(repo);
     configure_mergetool_selection(repo, "fake", None, None);
-    configure_mergetool_command(repo, "fake", "exit 0");
+    configure_mergetool_command(repo, "fake", "echo TOOL=fake >&2; :");
     configure_mergetool_trust_exit_code(repo, "fake", false);
 
-    let output = run_git_capture(repo, &["mergetool", "--no-prompt", "--tool", "fake"]);
+    let original = fs::read(repo.join("file.txt")).unwrap();
+    // --no-prompt suppresses the launch prompt, but Git still asks whether an
+    // unchanged merge succeeded. Supply a real pipe with an explicit refusal
+    // instead of relying on the Windows shell's handling of a null stdin.
+    let output = run_git_with_stdin_and_env(
+        repo,
+        &["mergetool", "--no-prompt", "--tool", "fake"],
+        "n\n",
+        &[("GIT_TRACE", "1"), ("GIT_TRACE2", "1")],
+    );
     let text = output_text(&output);
 
     assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .any(|line| line == "TOOL=fake"),
+        "git mergetool stopped before the fake tool ran (status: {})\n{text}",
+        output.status
+    );
+    assert!(
         !output.status.success(),
-        "expected git mergetool to fail when trustExitCode=false and output is unchanged\n{text}"
+        "expected git mergetool to fail when trustExitCode=false and output is unchanged (status: {})\n{text}",
+        output.status
     );
     assert!(
         text.contains("seems unchanged"),
@@ -1164,6 +1193,11 @@ fn git_mergetool_no_trust_exit_code_unchanged_output_stays_unresolved() {
     assert!(
         text.contains("Was the merge successful"),
         "expected no-trust follow-up prompt in git output\n{text}"
+    );
+    assert_eq!(
+        fs::read(repo.join("file.txt")).unwrap(),
+        original,
+        "expected the unresolved merge contents to be preserved\n{text}"
     );
 
     let merged = fs::read_to_string(repo.join("file.txt")).unwrap();

@@ -116,8 +116,30 @@ pub fn write_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     temporary.write_all(bytes)?;
     make_file_private(temporary.as_file());
     temporary.as_file().sync_all()?;
-    temporary.persist(path).map_err(|err| err.error)?;
+    persist_private_file(temporary, path)?;
     Ok(())
+}
+
+fn persist_private_file(mut temporary: tempfile::NamedTempFile, path: &Path) -> io::Result<()> {
+    // Windows scanners and readers can briefly deny replacement. Keep the
+    // already-written temporary file so a transient failure does not leave a
+    // published preference change waiting for another edit before it is saved.
+    let mut retries_left = if cfg!(windows) { 7 } else { 0 };
+    let mut delay = std::time::Duration::from_millis(10);
+    loop {
+        match temporary.persist(path) {
+            Ok(_) => return Ok(()),
+            Err(err)
+                if retries_left > 0 && matches!(err.error.raw_os_error(), Some(5 | 32 | 33)) =>
+            {
+                temporary = err.file;
+                retries_left -= 1;
+                std::thread::sleep(delay);
+                delay *= 2;
+            }
+            Err(err) => return Err(err.error),
+        }
+    }
 }
 
 /// Owner-only, via the handle so a swapped path cannot redirect it. Best-effort.
@@ -235,5 +257,57 @@ mod tests {
         file.write_all(b" second").expect("write append");
         drop(file);
         assert_eq!(std::fs::read(path).unwrap(), b"first second");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn private_replacement_retries_until_a_reader_releases_the_destination() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let path = root.path().join("session.json");
+        write_private_file(&path, b"old").expect("initial contents");
+        // Allow reads and writes but deny deletion, as a scanner can do.
+        let reader = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1 | 2)
+            .open(&path)
+            .expect("open reader that prevents replacement");
+        let mut temporary = tempfile::NamedTempFile::new_in(root.path()).unwrap();
+        temporary.write_all(b"new").unwrap();
+        let blocked = temporary
+            .persist(&path)
+            .expect_err("reader blocks replacement");
+        assert!(matches!(blocked.error.raw_os_error(), Some(5 | 32 | 33)));
+        assert_eq!(std::fs::read(&path).unwrap(), b"old");
+
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                drop(reader);
+            });
+            super::persist_private_file(blocked.file, &path).expect("retry replacement");
+        });
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn private_replacement_reports_a_persistent_lock_and_cleans_up() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let path = root.path().join("session.json");
+        write_private_file(&path, b"old").expect("initial contents");
+        let _reader = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1 | 2)
+            .open(&path)
+            .expect("open reader that prevents replacement");
+        let error = write_private_file(&path, b"new").expect_err("lock remains held");
+        assert!(matches!(error.raw_os_error(), Some(5 | 32 | 33)));
+        assert_eq!(std::fs::read(&path).unwrap(), b"old");
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
     }
 }
