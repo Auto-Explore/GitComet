@@ -636,3 +636,42 @@ fn status_select_all_on_empty_or_loading_sections_never_selects_diff_text(
         });
     }
 }
+
+#[gpui::test]
+fn status_section_space_rechecks_selection_before_deferred_staging(cx: &mut gpui::TestAppContext) {
+    let _guard = lock_visual_test();
+    let (view, cx) = fixture(cx);
+    let section = StatusSection::CombinedUnstaged;
+    click_row(cx, section, 1, gpui::Modifiers::default());
+    wait_until_store_diff_target_path(cx, &view, Path::new("b.rs"));
+    sync_store_snapshot(cx, &view);
+    let before = preview(cx, &view);
+    let ops_rev = crate::view::test_support::repo_ops_rev(&view, cx, REPO);
+
+    cx.update(|window, app| {
+        view.read(app).details_pane.clone().update(app, |pane, cx| {
+            assert!(pane.handle_status_section_shortcut(
+                section,
+                &gpui::Keystroke::parse("space").unwrap(),
+                window,
+                cx,
+            ));
+            // Model deselection before the deferred action gets to run. Retain
+            // the explicit empty selection, as Ctrl-clicking the last row does.
+            pane.status_multi_selection
+                .get_mut(&REPO)
+                .unwrap()
+                .unstaged
+                .clear();
+            cx.notify();
+        });
+    });
+    draw_and_drain_test_window(cx);
+    crate::view::test_support::drain_store_worker(&view, cx);
+    assert_eq!(
+        crate::view::test_support::repo_ops_rev(&view, cx, REPO),
+        ops_rev
+    );
+    assert_eq!(preview(cx, &view), before);
+    assert!(selected(cx, &view, DiffArea::Unstaged).is_empty());
+}

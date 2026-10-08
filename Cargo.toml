@@ -163,7 +163,7 @@ strsim = "0.11.1"
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 tempfile = "3.27.0"
 thiserror = "2.0"
-tree-sitter = "0.27.0"
+tree-sitter = "0.27.1"
 uuid = { version = "1.27.0", features = ["serde", "v4"] }
 # Fifteen of the grammars below are `path = "vendor/..."` purely to shrink the
 # release binary: they are upstream's source, regenerated with a larger

@@ -898,6 +898,210 @@ fn staging_shortcuts_consume_the_selected_paths(cx: &mut gpui::TestAppContext) {
     }
 }
 
+/// Exercise the real mouse-to-keyboard route and wait for Git's status refresh
+/// between presses. Focusing the diff manually would bypass the section handler.
+#[gpui::test]
+fn status_section_space_after_mouse_selection_advances_and_keeps_list_focus(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::view::FileListLayout;
+    use crate::view::rows::CommitFileSort;
+
+    let _guard = lock_visual_test();
+    for section in [
+        StatusSection::CombinedUnstaged,
+        StatusSection::Unstaged,
+        StatusSection::Untracked,
+        StatusSection::Staged,
+    ] {
+        for (layout, sort, order) in [
+            (
+                FileListLayout::Flat,
+                CommitFileSort::PathAscending,
+                [0, 1, 2],
+            ),
+            (
+                FileListLayout::Flat,
+                CommitFileSort::PathDescending,
+                [2, 1, 0],
+            ),
+            (
+                FileListLayout::Tree,
+                CommitFileSort::PathAscending,
+                [2, 0, 1],
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut scenario = ScenarioApp {
+                app: cx.new_app(),
+                store: None,
+                finished: false,
+            };
+            for (path, bytes) in clean_repository_template() {
+                let path = dir.path().join(path);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, bytes).unwrap();
+            }
+            let paths = if section == StatusSection::Untracked {
+                ["new/a.txt", "new/b.txt", "new/nested/c.txt"]
+            } else {
+                ["a.txt", "b.txt", "nested/c.txt"]
+            };
+            for path in paths {
+                let path = dir.path().join(path);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, "changed\n").unwrap();
+            }
+            if section == StatusSection::Staged {
+                git(dir.path(), &["add", "."]);
+            }
+            // Leave a file in another section when the split section empties.
+            if section == StatusSection::Untracked {
+                std::fs::write(dir.path().join("a.txt"), "unrelated\n").unwrap();
+            } else if section == StatusSection::Unstaged {
+                std::fs::write(dir.path().join("other.txt"), "untracked\n").unwrap();
+            }
+
+            let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
+            let status = backend.status().unwrap();
+            let mut repo = opening_repo_state(REPO, dir.path());
+            repo.open = Loadable::Ready(());
+            repo.worktree_status = Loadable::Ready(status.unstaged.clone());
+            repo.staged_status = Loadable::Ready(status.staged.clone());
+            repo.status = Loadable::Ready(Arc::new(status));
+            let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+            scenario.store = Some(store.clone());
+            store.disable_repo_monitors_for_test();
+            let store_for_view = store.clone();
+            let (view, cx) = scenario.app.add_window_view(|window, cx| {
+                GitCometView::new(store_for_view, events, None, window, cx)
+            });
+            crate::view::test_support::drain_store_worker(&view, cx);
+            store.insert_repo_for_test(REPO, backend);
+            super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo, REPO));
+            cx.simulate_resize(gpui::size(px(1600.0), px(1000.0)));
+            cx.update(|_, app| {
+                view.update(app, |root, cx| {
+                    root.set_change_tracking_view(
+                        if section == StatusSection::CombinedUnstaged {
+                            ChangeTrackingView::Combined
+                        } else {
+                            ChangeTrackingView::SplitUntracked
+                        },
+                        cx,
+                    );
+                    root.details_pane.update(cx, |pane, cx| {
+                        pane.set_file_list_layout(layout, cx);
+                        pane.set_status_file_sort(section, sort, cx);
+                    });
+                });
+            });
+            cx.update(|_, app| {
+                app.clear_key_bindings();
+                crate::app::bind_app_keys_for_test(app);
+                crate::app::install_global_diff_shortcut_fallback_for_test(app);
+            });
+            draw_and_drain_test_window(cx);
+            let row = cx.update(|_, app| {
+                view.read(app).details_pane.clone().update(app, |pane, cx| {
+                    assert_eq!(
+                        pane.status_display_order_paths(REPO, section),
+                        order.map(|ix| PathBuf::from(paths[ix])),
+                        "{section:?} {layout:?} {sort:?}"
+                    );
+                    pane.reveal_status_row(section, 1, cx).unwrap()
+                })
+            });
+            draw_and_drain_test_window(cx);
+            let selector = format!("status_row_{}_{}_{row}", REPO.0, section.id_label());
+            let bounds = cx
+                .debug_bounds(Box::leak(selector.into_boxed_str()))
+                .unwrap();
+            cx.simulate_click(
+                point(bounds.left() + px(40.0), bounds.center().y),
+                Modifiers::default(),
+            );
+            let area = section.diff_area();
+            let sequence = [paths[order[1]], paths[order[2]], paths[order[0]]];
+            wait_for(cx, &view, &store, "mouse-selected file", |repo| {
+                repo.diff_state.diff_target
+                    == Some(DiffTarget::working_tree(sequence[0].into(), area))
+            });
+
+            // Middle -> next -> previous -> empty, without further mouse clicks.
+            for (ix, path) in sequence.into_iter().enumerate() {
+                let snapshot = store.snapshot();
+                let before = snapshot.repos[0].ops_rev;
+                let status_rev = match area {
+                    DiffArea::Unstaged => snapshot.repos[0].worktree_status_rev,
+                    DiffArea::Staged => snapshot.repos[0].staged_status_rev,
+                };
+                let expected = sequence
+                    .get(ix + 1)
+                    .map(|path| DiffTarget::working_tree((*path).into(), area));
+                cx.update(|window, app| {
+                    assert!(
+                        view.read(app)
+                            .details_pane
+                            .read(app)
+                            .status_section_focus_handle(section)
+                            .is_focused(window)
+                    );
+                });
+                cx.simulate_keystrokes("space");
+                wait_for(
+                    cx,
+                    &view,
+                    &store,
+                    "Space action and status refresh",
+                    |repo| {
+                        repo.ops_rev >= before + 2
+                            && repo.local_actions_in_flight == 0
+                            // Ready lists remain visible during a refresh.
+                            && match area {
+                                DiffArea::Unstaged => repo.worktree_status_rev > status_rev,
+                                DiffArea::Staged => repo.staged_status_rev > status_rev,
+                            }
+                            && matches!(repo.worktree_status, Loadable::Ready(_))
+                            && matches!(repo.staged_status, Loadable::Ready(_))
+                    },
+                );
+                let snapshot = store.snapshot();
+                let repo = &snapshot.repos[0];
+                assert!(
+                    repo.feedback.last_error.is_none(),
+                    "{:?}",
+                    repo.feedback.last_error
+                );
+                assert!(
+                    !repo
+                        .status_entries_for_area(area)
+                        .unwrap()
+                        .iter()
+                        .any(|entry| entry.path == Path::new(path))
+                );
+                assert_eq!(
+                    repo.diff_state.diff_target, expected,
+                    "{section:?} {layout:?} {sort:?}, after Space on {path}"
+                );
+                cx.update(|window, app| {
+                    let pane = view.read(app).details_pane.read(app);
+                    assert!(pane.status_section_focus_handle(section).is_focused(window));
+                    assert!(
+                        !pane.status_multi_selection.contains_key(&REPO),
+                        "the consumed selection must allow the next diff's row to be highlighted"
+                    );
+                    assert_eq!(pane.active_repo().unwrap().diff_state.diff_target, expected);
+                });
+            }
+            store.dispatch(Msg::CloseRepo { repo_id: REPO });
+            crate::view::test_support::drain_store_worker(&view, cx);
+            drop(view);
+            scenario.finish().expect("staging scenario teardown");
+        }
+    }
+}
+
 #[gpui::test]
 fn staging_a_row_preserves_an_unrelated_multi_selection(cx: &mut gpui::TestAppContext) {
     let _guard = lock_visual_test();
