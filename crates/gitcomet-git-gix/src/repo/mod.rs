@@ -387,23 +387,43 @@ impl DiskFileStamp {
     fn read_for_verification_memo(path: &Path) -> Option<Self> {
         // Capture the time first: a pause after stat must not make a snapshot
         // taken inside the racy window eligible for memoization.
-        let now = racy_check_now();
+        let now = racy_check_now(path);
         Self::read(path).filter(|stamp| !stamp.is_racy_at(now))
     }
 }
 
-fn racy_check_now() -> std::time::SystemTime {
+fn racy_check_now(_path: &Path) -> std::time::SystemTime {
     let now = std::time::SystemTime::now();
     #[cfg(test)]
-    let now = now + RACY_CLOCK_SKEW.with(std::cell::Cell::get);
+    let now = RACY_CLOCK.with(|clock| {
+        let clock = clock.borrow();
+        let now = clock.now.unwrap_or(now);
+        if clock.path.as_deref().is_none_or(|path| path == _path) {
+            now + clock.skew
+        } else {
+            now
+        }
+    });
     now
 }
 
 // Tests cannot backdate ctime, so they move the racy-check clock forward instead.
 #[cfg(test)]
 thread_local! {
-    static RACY_CLOCK_SKEW: std::cell::Cell<std::time::Duration> =
-        const { std::cell::Cell::new(std::time::Duration::ZERO) };
+    static RACY_CLOCK: std::cell::RefCell<TestRacyClock> =
+        const { std::cell::RefCell::new(TestRacyClock {
+            now: None,
+            skew: std::time::Duration::ZERO,
+            path: None,
+        }) };
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct TestRacyClock {
+    now: Option<std::time::SystemTime>,
+    skew: std::time::Duration,
+    path: Option<PathBuf>,
 }
 
 #[cfg(test)]
@@ -418,21 +438,37 @@ pub(crate) fn disk_file_stats_for_test() -> usize {
 }
 
 #[cfg(test)]
-pub(crate) struct RacyClockSkew(());
+pub(crate) struct RacyClockSkew(TestRacyClock);
 
 #[cfg(test)]
 impl RacyClockSkew {
     /// Makes every stamp taken on this thread look `skew` older until dropped.
     pub(crate) fn set(skew: std::time::Duration) -> Self {
-        RACY_CLOCK_SKEW.with(|cell| cell.set(skew));
-        Self(())
+        Self::install(TestRacyClock {
+            skew,
+            ..Default::default()
+        })
+    }
+
+    /// Freeze the clock and age only the worktree input. Files created by the
+    /// read stay fresh even if the test thread is descheduled afterwards.
+    pub(crate) fn set_for_path(path: PathBuf, skew: std::time::Duration) -> Self {
+        Self::install(TestRacyClock {
+            now: Some(std::time::SystemTime::now()),
+            skew,
+            path: Some(path),
+        })
+    }
+
+    fn install(clock: TestRacyClock) -> Self {
+        Self(RACY_CLOCK.with(|cell| cell.replace(clock)))
     }
 }
 
 #[cfg(test)]
 impl Drop for RacyClockSkew {
     fn drop(&mut self) {
-        RACY_CLOCK_SKEW.with(|cell| cell.set(std::time::Duration::ZERO));
+        RACY_CLOCK.with(|cell| cell.replace(std::mem::take(&mut self.0)));
     }
 }
 

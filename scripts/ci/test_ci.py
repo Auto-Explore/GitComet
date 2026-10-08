@@ -1500,6 +1500,34 @@ class BoundaryTests(unittest.TestCase):
 
 
 class IdentityLiteralTests(unittest.TestCase):
+    def test_scan_shares_lexical_pass_and_excludes_test_descendants(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "crates/example/src"
+            source.mkdir(parents=True)
+            (source / "lib.rs").write_text(
+                '#[cfg(test)] mod checks;\nconst NAME: &str = "GitComet";')
+            (source / "checks.rs").write_text('mod child;\nconst TEST: &str = "GitComet";')
+            (source / "checks").mkdir()
+            (source / "checks/child.rs").write_text('const TEST: &str = "GitComet";')
+            (source / "smoke_tests.rs").write_text(
+                'mod child;\n#[cfg(test)] #[path="relocated.rs"] mod relocated;\n'
+                'const TEST: &str = "GitComet";')
+            (source / "smoke_tests").mkdir()
+            (source / "smoke_tests/child.rs").write_text('const TEST: &str = "GitComet";')
+            (source / "relocated.rs").write_text('const TEST: &str = "GitComet";')
+            (source / "simple_tests.rs").write_text('const TEST: &str = "GitComet";')
+            subprocess.run(["git", "init", "-q", directory], check=True)
+            strip = identity_literals.strip_comments_and_test_modules
+            with patch.object(identity_literals, "ROOT", root), \
+                    patch.object(identity_literals, "strip_comments_and_test_modules", wraps=strip) as lexical_pass:
+                self.assertEqual(identity_literals.scan(),
+                                 {("crates/example/src/lib.rs", "display-name"): 1})
+            # Each source shares its pass between discovery and counting,
+            # except known tests with no cfg declarations. Test files that
+            # declare modules in other directories still need discovery.
+            self.assertEqual(lexical_pass.call_count, 6)
+
     def test_scan_includes_new_files_and_tolerates_deleted_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
