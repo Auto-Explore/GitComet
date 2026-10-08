@@ -64,13 +64,15 @@ class ExecutionTests(unittest.TestCase):
             runner.thread_budgets(8, ["ui", "nextest", "pure"], dict(ui=4, nextest=4, pure=None))
 
     def test_cpu_capacity_respects_affinity_and_parent_container_quota(self):
-        files = {"/proc/self/cgroup": "0::/test/child\n", "/sys/fs/cgroup/test/child/cpu.max": "max 100000\n",
-                 "/sys/fs/cgroup/test/cpu.max": "600000 100000\n", "/sys/fs/cgroup/cpu.max": "max 100000\n"}
+        files = {Path("/proc/self/cgroup"): "0::/test/child\n",
+                 Path("/sys/fs/cgroup/test/child/cpu.max"): "max 100000\n",
+                 Path("/sys/fs/cgroup/test/cpu.max"): "600000 100000\n",
+                 Path("/sys/fs/cgroup/cpu.max"): "max 100000\n"}
         with patch.object(runner.os, "cpu_count", return_value=64), \
                 patch.object(runner.os, "sched_getaffinity", return_value=set(range(32)), create=True), \
                 patch.object(runner.os, "process_cpu_count", return_value=64, create=True), \
                 patch.object(runner.sys, "platform", "linux"), \
-                patch.object(Path, "read_text", lambda path: files[str(path)]):
+                patch.object(Path, "read_text", lambda path: files[path]):
             self.assertEqual(runner.available_cpus(), 6)
 
     def test_three_families_overlap_and_skip_only_audited_ui_tests(self):

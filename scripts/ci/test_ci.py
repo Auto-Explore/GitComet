@@ -973,7 +973,7 @@ class RunnerTests(unittest.TestCase):
             with self.subTest(platform=platform_name, schedule=schedule, cpus=cpus, group=group, profile=profile), \
                     tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
                     patch.object(runner.sys, "platform", platform_name), \
-                    patch.object(runner.os, "cpu_count", return_value=cpus):
+                    patch.object(runner, "available_cpus", return_value=cpus):
                 selected = (nextest_suites | ui_suites) if group == "both" else nextest_suites if group == "nextest" else ui_suites
                 parallel = schedule == "balanced" and cpus > 1 and group == "both"
                 target = Path(directory)
@@ -1021,6 +1021,7 @@ class RunnerTests(unittest.TestCase):
                 self.assertCountEqual(completed, expected)
                 execution = json.loads((target / "workspace/execution.json").read_text())
                 self.assertTrue(execution["success"])
+                self.assertEqual(execution["cpus"], cpus)
                 self.assertEqual(execution["nextest_profile"], profile)
                 self.assertEqual(execution["effective_schedule"], "balanced" if parallel else "serial")
                 self.assertEqual(execution["ui_threads"], ui_threads)
@@ -1078,7 +1079,7 @@ class RunnerTests(unittest.TestCase):
         for platform_name, schedule, failed in product(("linux", "darwin", "win32"), ("serial", "balanced"), ("nextest", "ui")):
             with self.subTest(platform=platform_name, schedule=schedule, failed=failed), \
                     tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
-                    patch.object(runner.sys, "platform", platform_name), patch.object(runner.os, "cpu_count", return_value=4):
+                    patch.object(runner.sys, "platform", platform_name), patch.object(runner, "available_cpus", return_value=4):
                 target = Path(directory)
                 (target / "workspace").mkdir()
                 (target / "workspace/binaries.json").write_text(json.dumps({"rust-build-meta": {"target-directory": directory}}))
@@ -1101,7 +1102,9 @@ class RunnerTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, "test execution failed"):
                         runner.execute("workspace", schedule)
                 self.assertCountEqual(completed, ["nextest", "ui"], "one failed runner must not skip the rest")
-                self.assertFalse(json.loads((target / "workspace/execution.json").read_text())["success"])
+                execution = json.loads((target / "workspace/execution.json").read_text())
+                self.assertFalse(execution["success"])
+                self.assertEqual(execution["effective_schedule"], schedule)
 
     def test_all_git_integration_suites_require_nextest_results_on_every_platform(self):
         suites = self.git_integration_suites()
