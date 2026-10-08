@@ -49,7 +49,7 @@ cargo clippy -p gitcomet-diagrams -p gitcomet-fonts --all-targets --locked --off
 python3 scripts/ci/boundaries.py
 ```
 
-The corpus has 93 source fixtures covering all families, plus parameterized
+The corpus has 94 source fixtures covering all families, plus parameterized
 aliases, bounded generated graphs, source/configuration errors and UI/cache
 regressions. Checks include labels, finite geometry, visible pixels,
 deterministic SVG, natural dimensions, tile seams, cache budgets, concurrent

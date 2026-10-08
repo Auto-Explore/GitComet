@@ -216,17 +216,13 @@ fn removed_formats_and_explicit_code_languages_stay_code() {
 }
 #[test]
 fn supplied_mermaid_fixture_renders_labels_styles_and_reports_unsupported_curve() {
-    let source = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../fixtures/syntax_test/diagrams/mermaid/diagrams.mmd"),
-    )
-    .unwrap();
-    let svg = assert_render(&source, "emoji 😀");
+    let source = include_str!("../tests/fixtures/flowchart/supplied.mmd");
+    let svg = assert_render(source, "emoji 😀");
     let svg = std::str::from_utf8(&svg).unwrap();
     for color in ["#eef2ff", "#dcfce7", "#fef3c7", "#ef4444"] {
         assert!(svg.contains(color), "{color}");
     }
-    let output = render(DiagramKind::Mermaid, &source).unwrap();
+    let output = render(DiagramKind::Mermaid, source).unwrap();
     assert_eq!(
         output.diagnostics,
         ["Mermaid setting 'flowchart.curve' is not supported by the native preview."]
