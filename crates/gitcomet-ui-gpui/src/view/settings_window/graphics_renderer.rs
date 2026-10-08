@@ -116,7 +116,7 @@ impl SettingsWindowView {
                         view.upgrade()?;
                         Some(window.prompt(
                             gpui::PromptLevel::Info,
-                            "Restart GitComet?",
+                            &format!("Restart {}?", crate::view::product_name()),
                             Some("The saved graphics renderer takes effect after restarting."),
                             &[
                                 gpui::PromptButton::new("Restart now"),
