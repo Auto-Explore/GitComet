@@ -817,7 +817,7 @@ fn expanded_diff_content_mode_section_renders_before_scroll_sync_row(
     );
 }
 
-/// The Appearance page runs Theme -> Interface -> Typography, and typography
+/// The Appearance page runs Typography -> Theme -> Interface, and typography
 /// orders font pickers -> ligatures -> sizes with no presets popover.
 #[gpui::test]
 fn appearance_card_puts_ligatures_between_the_font_pickers_and_the_sizes(
@@ -871,17 +871,13 @@ fn appearance_card_puts_ligatures_between_the_font_pickers_and_the_sizes(
     let sizes = bounds("settings_window_font_size_controls");
 
     for (upper, lower, what) in [
+        (typography_heading, ui_font, "typography heading -> UI font"),
+        (sizes, theme_heading, "font sizes -> theme heading"),
         (theme_heading, tiles, "theme heading -> tiles"),
         (tiles, interface_heading, "tiles -> interface heading"),
         (interface_heading, ui_scale, "interface heading -> UI scale"),
         (ui_scale, density, "UI scale -> density"),
         (density, window_controls, "density -> window controls"),
-        (
-            window_controls,
-            typography_heading,
-            "window controls -> typography",
-        ),
-        (typography_heading, ui_font, "typography heading -> UI font"),
     ] {
         assert!(
             upper.bottom() <= lower.top(),
@@ -958,6 +954,26 @@ fn appearance_page_renders_theme_utilities_and_opens_theme_guide(cx: &mut gpui::
     let guide_bounds = settings_cx
         .debug_bounds("settings_window_theme_guide")
         .expect("expected theme guide row bounds");
+    let scroll_bounds = settings_cx
+        .debug_bounds("settings_window_scroll")
+        .expect("expected settings scroll bounds");
+    if guide_bounds.center().y >= scroll_bounds.bottom() {
+        let scroll_delta = guide_bounds.center().y - scroll_bounds.bottom() + px(24.0);
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            let current = settings.settings_window_scroll.offset();
+            settings
+                .settings_window_scroll
+                .set_offset(point(current.x, current.y - scroll_delta));
+            cx.notify();
+        });
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    }
+    let guide_bounds = settings_cx
+        .debug_bounds("settings_window_theme_guide")
+        .expect("expected theme guide row bounds after scrolling");
     settings_cx.simulate_click(guide_bounds.center(), Modifiers::default());
     settings_cx.run_until_parked();
 
@@ -4111,8 +4127,27 @@ fn the_executables_page_links_to_the_signature_guide(cx: &mut gpui::TestAppConte
 #[test]
 fn appearance_page_owns_themes_fonts_scale_and_density_in_search() {
     #[cfg(target_os = "windows")]
-    for query in ["graphics renderer", "directx 12", "dx11", "compatibility"] {
-        assert!(SettingsCategory::Appearance.matches_query(query));
+    {
+        for query in [
+            "graphics",
+            "graphics renderer",
+            "directx 12",
+            "dx11",
+            "compatibility",
+        ] {
+            assert!(
+                SettingsCategory::General.matches_query(query),
+                "{query} should find the General page"
+            );
+            assert!(
+                !SettingsCategory::Appearance.matches_query(query),
+                "{query} moved off the Appearance page"
+            );
+        }
+        assert_eq!(
+            SettingsSection::GraphicsRenderer.category(),
+            SettingsCategory::General
+        );
     }
     for query in [
         "theme",

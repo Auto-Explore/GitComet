@@ -14,6 +14,11 @@ impl SettingsWindowView {
         };
         let state = session.0.borrow();
         let disabled = state.overridden || state.saving;
+        card = card.child(self.subsection_heading(
+            "settings_window_general_graphics",
+            "Graphics",
+            theme,
+        ));
         card = card.child(
             self.summary_row(
                 "settings_graphics_renderer",

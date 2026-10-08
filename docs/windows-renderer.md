@@ -5,9 +5,9 @@ support before creating the DX12 renderer. If the check or initialization fails,
 it saves **DirectX 11 — compatibility** in the session and starts with DX11.
 Future launches read that preference and skip DX12 detection and initialization.
 
-Change **Appearance → Graphics renderer** to **Automatic** to try DX12 again,
-including after updating a graphics driver. GitComet does not retry automatically
-after driver or application updates.
+Change **GitComet Settings → General → Graphics → Graphics renderer** to
+**Automatic** to try DX12 again, including after updating a graphics driver.
+GitComet does not retry automatically after driver or application updates.
 
 Manual preference changes are saved before GitComet offers **Restart now** or
 **Later**. Restart uses the normal unsaved-file, terminal, Git-operation, and

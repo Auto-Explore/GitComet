@@ -340,7 +340,7 @@ impl SettingsSection {
     fn category(self) -> SettingsCategory {
         match self {
             #[cfg(target_os = "windows")]
-            Self::GraphicsRenderer => SettingsCategory::Appearance,
+            Self::GraphicsRenderer => SettingsCategory::General,
             Self::UiScale | Self::WindowControls | Self::UiFont | Self::EditorFont => {
                 SettingsCategory::Appearance
             }
@@ -538,7 +538,7 @@ impl SettingsCategory {
             return true;
         }
         #[cfg(target_os = "windows")]
-        if self == Self::Appearance
+        if self == Self::General
             && "graphics renderer directx 11 directx 12 dx11 dx12 compatibility".contains(&query)
         {
             return true;
