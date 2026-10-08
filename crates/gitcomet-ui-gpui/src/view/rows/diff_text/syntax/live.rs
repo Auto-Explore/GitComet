@@ -46,6 +46,22 @@ fn clamp_to_len(range: Range<usize>, len: usize) -> Range<usize> {
     start..end
 }
 
+fn parse_now() -> Instant {
+    #[cfg(test)]
+    if let Some(now) = injection_tests::parse_clock_now() {
+        return now;
+    }
+    Instant::now()
+}
+
+fn parse_deadline(budget: Option<Duration>) -> Option<Instant> {
+    budget.map(|budget| parse_now() + budget)
+}
+
+fn deadline_expired(deadline: Option<Instant>) -> bool {
+    deadline.is_some_and(|deadline| parse_now() >= deadline)
+}
+
 /// Feeds the parser blanks for the masked spans and real text everywhere else.
 ///
 /// The spans are the unresolved-conflict placeholder rows — `<Merge Conflict>`
@@ -129,16 +145,18 @@ fn parse_masked_tree(
     rope: &Rope,
     mask: &[Range<usize>],
     old_tree: Option<&tree_sitter::Tree>,
-    budget: Option<Duration>,
+    deadline: Option<Instant>,
 ) -> Option<tree_sitter::Tree> {
+    if deadline_expired(deadline) {
+        return None;
+    }
     with_ts_parser_parse_result(&spec.ts_language, |parser| {
         let mut read = masked_read(rope, mask);
-        let Some(budget) = budget else {
+        let Some(deadline) = deadline else {
             return parser.parse_with_options(&mut read, old_tree, None);
         };
-        let started = Instant::now();
         let mut progress = |_state: &tree_sitter::ParseState| {
-            if started.elapsed() >= budget {
+            if parse_now() >= deadline {
                 std::ops::ControlFlow::Break(())
             } else {
                 std::ops::ControlFlow::Continue(())
@@ -394,7 +412,7 @@ impl LiveSyntaxLayer {
 /// the editor agrees with the diff panes: a template's HTML is depth 1, and its
 /// `<script>` bodies are depth 2.
 ///
-/// `budget` is a ceiling for *all* layers together, not per layer. Handing each
+/// `deadline` is shared with the root and every injected layer. Handing each
 /// one its own copy let a document with N injections spend N × budget on the
 /// keystroke path while the root parse it was protecting stayed capped at one —
 /// so a markdown file with many fenced blocks blocked the frame in proportion to
@@ -409,15 +427,15 @@ fn parse_injection_layers(
     spec: &TreesitterHighlightSpec,
     tree: &tree_sitter::Tree,
     mask: &[Range<usize>],
-    budget: Option<Duration>,
+    deadline: Option<Instant>,
     previous: Vec<LiveSyntaxLayer>,
     priority: Option<Range<usize>>,
 ) -> (Vec<LiveSyntaxLayer>, bool) {
     // One deadline for the whole set, so the cost of injections is bounded by
     // the budget rather than by how many there are.
-    let mut parser = InjectionParser::new(rope, mask, budget, previous, priority);
+    let mut parser = InjectionParser::new(rope, mask, deadline, previous, priority);
     let mut layers = Vec::new();
-    let targets = collect_injection_targets(rope, spec, tree, 0..rope.len());
+    let targets = collect_injection_targets(rope, spec, tree, 0..rope.len(), deadline);
     let mut dropped = parser.parse_layers_for_targets(targets, None, 1, &mut layers);
 
     // Each layer's own injections, clipped to the layer's ranges: a raw_text
@@ -433,7 +451,8 @@ fn parse_injection_layers(
                 parser.retain_nested_layers(parent, depth, &mut nested);
                 continue;
             }
-            let targets = collect_injection_targets(rope, parent.spec, &parent.tree, parent.hull());
+            let targets =
+                collect_injection_targets(rope, parent.spec, &parent.tree, parent.hull(), deadline);
             dropped |=
                 parser.parse_layers_for_targets(targets, Some(&parent.ranges), depth, &mut nested);
         }
@@ -453,6 +472,7 @@ fn parse_injection_layers(
 struct InjectionTargets {
     singles: Vec<(DiffSyntaxLanguage, Range<usize>)>,
     groups: Vec<(DiffSyntaxLanguage, usize, Vec<Range<usize>>)>,
+    incomplete: bool,
 }
 
 fn collect_injection_targets(
@@ -460,10 +480,12 @@ fn collect_injection_targets(
     spec: &TreesitterHighlightSpec,
     tree: &tree_sitter::Tree,
     scope: Range<usize>,
+    deadline: Option<Instant>,
 ) -> InjectionTargets {
     let mut targets = InjectionTargets {
         singles: Vec::new(),
         groups: Vec::new(),
+        incomplete: false,
     };
     let Some(query) = spec.injection_query.as_ref() else {
         return targets;
@@ -471,6 +493,10 @@ fn collect_injection_targets(
     let Some(content_ix) = query.capture_index_for_name("injection.content") else {
         return targets;
     };
+    if deadline_expired(deadline) {
+        targets.incomplete = true;
+        return targets;
+    }
     let language_ix = query
         .capture_index_for_name("injection.language")
         .or_else(|| query.capture_index_for_name("language"));
@@ -483,15 +509,34 @@ fn collect_injection_targets(
     let mut combined_ranges: FxHashMap<(DiffSyntaxLanguage, usize), Vec<Range<usize>>> =
         FxHashMap::default();
     let mut truncated = false;
+    let interrupted = std::cell::Cell::new(false);
     catch_treesitter_query_panic(|| {
         TS_CURSOR.with(|cursor| {
             let mut cursor = cursor.borrow_mut();
             cursor.set_match_limit(TS_QUERY_MATCH_LIMIT);
             cursor.set_byte_range(scope);
             cursor.set_containing_byte_range(0..usize::MAX);
-            let mut matches = cursor.matches(query, tree.root_node(), RopeTextProvider(rope));
+            let mut progress = |_state: &tree_sitter::QueryCursorState| {
+                if deadline_expired(deadline) {
+                    interrupted.set(true);
+                    std::ops::ControlFlow::Break(())
+                } else {
+                    std::ops::ControlFlow::Continue(())
+                }
+            };
+            let options = tree_sitter::QueryCursorOptions::new().progress_callback(&mut progress);
+            let mut matches = cursor.matches_with_options(
+                query,
+                tree.root_node(),
+                RopeTextProvider(rope),
+                options,
+            );
             tree_sitter::StreamingIterator::advance(&mut matches);
             while let Some(m) = matches.get() {
+                if deadline_expired(deadline) {
+                    interrupted.set(true);
+                    break;
+                }
                 if let Some(language) = injection_language_for_match(rope, query, m, language_ix) {
                     let pattern_ix = m.pattern_index;
                     let is_combined = spec.is_combined_injection_pattern(pattern_ix);
@@ -511,11 +556,12 @@ fn collect_injection_targets(
                         }
                     }
                 }
+                #[cfg(test)]
+                injection_tests::query_match_completed();
                 tree_sitter::StreamingIterator::advance(&mut matches);
             }
-            if has_combined {
-                truncated = cursor.did_exceed_match_limit();
-            }
+            drop(matches);
+            truncated = interrupted.get() || cursor.did_exceed_match_limit();
         });
     });
 
@@ -543,6 +589,7 @@ fn collect_injection_targets(
     if has_combined && !truncated {
         targets.groups = combined_injection_groups_in_apply_order(combined_ranges);
     }
+    targets.incomplete = truncated;
     targets
 }
 
@@ -567,11 +614,10 @@ impl<'a> InjectionParser<'a> {
     fn new(
         rope: &'a Rope,
         mask: &'a [Range<usize>],
-        budget: Option<Duration>,
+        deadline: Option<Instant>,
         previous: Vec<LiveSyntaxLayer>,
         priority: Option<Range<usize>>,
     ) -> Self {
-        let deadline = budget.map(|budget| Instant::now() + budget);
         let mut by_grammar: FxHashMap<_, Vec<PreviousLayerSpan>> = FxHashMap::default();
         for (index, layer) in previous.iter().enumerate() {
             let hull = layer.hull();
@@ -674,6 +720,32 @@ impl<'a> InjectionParser<'a> {
         depth: u8,
         out: &mut Vec<LiveSyntaxLayer>,
     ) -> bool {
+        if targets.incomplete {
+            // Discovery did not finish, so even a combined group's ranges may
+            // be incomplete. Keep only edited previous ownership until a full
+            // background query can replace it; never parse a partial group.
+            for slot in &mut self.previous {
+                let Some(previous) = slot.as_ref().filter(|layer| layer.depth == depth) else {
+                    continue;
+                };
+                let ranges = clip_to.map_or_else(
+                    || previous.ranges.clone(),
+                    |parent| intersect_sorted_ranges(&previous.ranges, parent),
+                );
+                if ranges.is_empty() {
+                    continue;
+                }
+                let mut layer = if ranges == previous.ranges {
+                    slot.take().unwrap()
+                } else {
+                    previous.clone()
+                };
+                layer.ranges = ranges;
+                layer.pending = true;
+                out.push(layer);
+            }
+            return true;
+        }
         let singles = targets
             .singles
             .into_iter()
@@ -830,7 +902,7 @@ fn parse_included_range(
     if !injection_tests::take_parse_slot(old_tree.is_some()) {
         return None;
     }
-    if ranges.is_empty() || deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+    if ranges.is_empty() || deadline_expired(deadline) {
         return None;
     }
     with_ts_parser_parse_result(&spec.ts_language, |parser| {
@@ -852,7 +924,7 @@ fn parse_included_range(
             None => guard.parser().parse_with_options(&mut read, old_tree, None),
             Some(deadline) => {
                 let mut progress = |_state: &tree_sitter::ParseState| {
-                    if Instant::now() >= deadline {
+                    if parse_now() >= deadline {
                         std::ops::ControlFlow::Break(())
                     } else {
                         std::ops::ControlFlow::Continue(())
@@ -926,10 +998,20 @@ impl LiveSyntaxDocument {
         if rope.len() > PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES {
             return None;
         }
+        let deadline = parse_deadline(budget);
         let spec = tree_sitter_highlight_spec(language)?;
-        let tree = parse_masked_tree(spec, &rope, mask.as_ref(), None, budget)?;
-        let (injections, dropped) =
-            parse_injection_layers(&rope, spec, &tree, mask.as_ref(), budget, Vec::new(), None);
+        let tree = parse_masked_tree(spec, &rope, mask.as_ref(), None, deadline)?;
+        #[cfg(test)]
+        injection_tests::root_parse_completed();
+        let (injections, dropped) = parse_injection_layers(
+            &rope,
+            spec,
+            &tree,
+            mask.as_ref(),
+            deadline,
+            Vec::new(),
+            None,
+        );
         Some(Self {
             language,
             spec,
@@ -979,6 +1061,7 @@ impl LiveSyntaxDocument {
         edit: Option<(Range<usize>, Range<usize>)>,
         budget: Option<Duration>,
     ) -> LiveSyntaxSyncOutcome {
+        let deadline = parse_deadline(budget);
         // The ceiling bounds the *document*, not just the incremental step, so
         // it has to be rechecked on every edit. Parsing past it here would let
         // a single paste buy an unbounded background reparse for the rest of
@@ -1020,15 +1103,23 @@ impl LiveSyntaxDocument {
         self.version = next_live_syntax_version();
 
         let old_tree = seed.then_some(&self.tree);
-        match parse_masked_tree(self.spec, &self.rope, self.mask.as_ref(), old_tree, budget) {
+        match parse_masked_tree(
+            self.spec,
+            &self.rope,
+            self.mask.as_ref(),
+            old_tree,
+            deadline,
+        ) {
             Some(tree) => {
+                #[cfg(test)]
+                injection_tests::root_parse_completed();
                 self.tree = tree;
                 let (injections, dropped) = parse_injection_layers(
                     &self.rope,
                     self.spec,
                     &self.tree,
                     self.mask.as_ref(),
-                    budget,
+                    deadline,
                     std::mem::take(&mut self.injections),
                     priority,
                 );
@@ -1127,6 +1218,12 @@ pub(in crate::view) struct LiveSyntaxReparseRequest {
     old_tree: tree_sitter::Tree,
     injections: Vec<LiveSyntaxLayer>,
     version: u64,
+}
+
+impl LiveSyntaxReparseRequest {
+    pub(in crate::view) fn version(&self) -> u64 {
+        self.version
+    }
 }
 
 /// Run a deferred reparse to completion. Safe to call under `smol::unblock`.
