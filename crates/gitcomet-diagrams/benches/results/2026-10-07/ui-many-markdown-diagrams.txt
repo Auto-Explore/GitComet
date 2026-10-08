@@ -1,6 +1,0 @@
-Gnuplot not found, using plotters backend
-Benchmarking mermaid_preview/many_markdown_diagrams
-Benchmarking mermaid_preview/many_markdown_diagrams: Analyzing
-mermaid_preview/many_markdown_diagrams
-                        time:   [52.575 µs 53.012 µs 53.122 µs]
-

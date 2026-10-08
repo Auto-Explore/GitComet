@@ -1,6 +1,0 @@
-Gnuplot not found, using plotters backend
-Benchmarking mermaid_preview/concurrent_identical/large
-Benchmarking mermaid_preview/concurrent_identical/large: Analyzing
-mermaid_preview/concurrent_identical/large
-                        time:   [1.1089 s 1.1149 s 1.1389 s]
-

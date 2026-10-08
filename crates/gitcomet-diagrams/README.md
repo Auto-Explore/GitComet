@@ -69,8 +69,13 @@ Tests never bless golden images. Fixture attribution is in
 
 ## Performance measurements
 
-The measured release latency/allocation comparison and stage results are in
-[benches/results/2026-10-07/README.md](benches/results/2026-10-07/README.md).
+Saved measurement runs under `benches/results/` are local artifacts ignored by Git.
+The release latency/allocation comparison writes its output under
+`target/mermaid-profile/` by default:
+
+```sh
+python3 scripts/profiling/benchmark-mermaid-renderer.py
+```
 
 The core Criterion benchmark exercises the production renderer and separately
 measures parsing, layout, SVG, scene preparation, visible tiles and header

@@ -1,6 +1,0 @@
-Gnuplot not found, using plotters backend
-Benchmarking mermaid_preview/cold_prepare/large
-Benchmarking mermaid_preview/cold_prepare/large: Analyzing
-mermaid_preview/cold_prepare/large
-                        time:   [1.1369 s 1.1557 s 1.1605 s]
-

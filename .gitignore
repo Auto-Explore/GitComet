@@ -17,6 +17,10 @@ dist/
 __pycache__/
 *.pyc
 criterion
+
+# Local Mermaid benchmark measurements and reports.
+/crates/gitcomet-diagrams/benches/results/
+
 .codex
 .worktrees/
 .reasonix/

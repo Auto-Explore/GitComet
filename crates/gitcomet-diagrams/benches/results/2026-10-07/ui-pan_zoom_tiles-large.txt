@@ -1,6 +1,0 @@
-Gnuplot not found, using plotters backend
-Benchmarking mermaid_preview/pan_zoom_tiles/large
-Benchmarking mermaid_preview/pan_zoom_tiles/large: Analyzing
-mermaid_preview/pan_zoom_tiles/large
-                        time:   [175.61 ns 176.41 ns 179.61 ns]
-

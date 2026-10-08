@@ -1,6 +1,0 @@
-Gnuplot not found, using plotters backend
-Benchmarking mermaid_preview/scene_cache_hit/small
-Benchmarking mermaid_preview/scene_cache_hit/small: Analyzing
-mermaid_preview/scene_cache_hit/small
-                        time:   [47.896 ns 48.322 ns 50.025 ns]
-

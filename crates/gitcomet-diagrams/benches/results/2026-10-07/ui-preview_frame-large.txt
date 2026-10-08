@@ -1,6 +1,0 @@
-Gnuplot not found, using plotters backend
-Benchmarking mermaid_preview/preview_frame/large
-Benchmarking mermaid_preview/preview_frame/large: Analyzing
-mermaid_preview/preview_frame/large
-                        time:   [95.954 µs 96.863 µs 100.50 µs]
-
