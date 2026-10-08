@@ -533,7 +533,13 @@ pub(super) fn run_windowed_app(
     let quit_when_all_windows_closed = should_quit_when_all_windows_closed(&launch);
     // Without this, `gpui` keeps its null client and every request — the
     // update check, and images a markdown preview points at — fails silently.
-    let application = application()
+    #[cfg(target_os = "windows")]
+    let (application, renderer_session) = crate::windows_renderer::application(
+        launch.view_config.view_mode == GitCometViewMode::Normal,
+    );
+    #[cfg(not(target_os = "windows"))]
+    let application = application();
+    let application = application
         .with_assets(GitCometAssets::with_extensions(extensions.assets()))
         .with_http_client(crate::http::client());
 
@@ -562,6 +568,8 @@ pub(super) fn run_windowed_app(
 
     application.run(move |cx: &mut App| {
         cx.set_global(clean_shutdown_tracker);
+        #[cfg(target_os = "windows")]
+        cx.set_global(renderer_session);
         crate::ui_probe::start_if_enabled(cx);
         crate::environment::initialize(cx);
         cx.set_global(GitCometBackendGlobal(Arc::clone(&backend)));

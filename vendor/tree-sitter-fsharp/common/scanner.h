@@ -1683,18 +1683,38 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
         return true;
       }
     }
-  } else if (lexer->lookahead == 'i' && valid_symbols[IN]) {
+  } else if (lexer->lookahead == 'i' &&
+             (valid_symbols[IN] || valid_symbols[DEDENT])) {
     advance(lexer);
     if (lexer->lookahead == 'n') {
       advance(lexer);
       if (!is_word_char(lexer->lookahead)) {
-        // Produce the IN token to close an _expression_block_for_let.
-        // Pop the indent that was pushed by the matching INDENT, since
-        // _in replaces _dedent as the block terminator.
-        pop_indent(scanner);
-        lexer->mark_end(lexer);
-        lexer->result_symbol = IN;
-        return true;
+        if (valid_symbols[IN]) {
+          // Produce the IN token to close an _expression_block_for_let.
+          // Pop the indent that was pushed by the matching INDENT, since
+          // _in replaces _dedent as the block terminator.
+          pop_indent(scanner);
+          lexer->mark_end(lexer);
+          lexer->result_symbol = IN;
+          return true;
+        }
+        // `let x = if c then a else b in x`: the `in` arrives while the
+        // else-branch's own block (or a match arm's, a lambda body's, a
+        // try body's) is still open, so IN is not valid yet but DEDENT
+        // is. Close that block — zero-width, the `in` is not consumed —
+        // and the next scan sees it with IN valid. The base level is
+        // never closed this way: there `in` can only be a `for … in`.
+        // Not inside a `{ … }` block: there `in` is an ordinary identifier
+        // in query clauses (`join c in cs on (…)`) and the parser lexes it.
+        bool in_brace = false;
+        for (uint32_t i = 0; i < scanner->indent_kinds.size; i++) {
+          if (*array_get(&scanner->indent_kinds, i) == INDENT_BRACE) { in_brace = true; break; }
+        }
+        if (scanner->indents.size > 1 && !in_brace) {
+          pop_indent(scanner);
+          lexer->result_symbol = DEDENT;
+          return true;
+        }
       }
     }
   } else if (lexer->lookahead == 'e' &&

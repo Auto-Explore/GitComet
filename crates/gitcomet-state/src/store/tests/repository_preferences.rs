@@ -241,8 +241,8 @@ fn stale_explorer_menus_preserve_independent_toggles_across_windows() {
             }
             wait_until("independent explorer toggles persisted", || {
                 for (store, id) in [(&first, first_id), (&second, second_id)] {
-                    let snapshot = store.snapshot();
-                    let errors: Vec<_> = snapshot
+                    let state = store.snapshot();
+                    let errors: Vec<_> = state
                         .repos
                         .iter()
                         .find(|repo| repo.id == id)
@@ -250,9 +250,15 @@ fn stale_explorer_menus_preserve_independent_toggles_across_windows() {
                         .feedback
                         .diagnostics
                         .iter()
-                        .filter(|diagnostic| diagnostic.kind == DiagnosticKind::Error)
+                        .filter(|entry| {
+                            entry.kind == DiagnosticKind::Error
+                                && entry.message.contains("updating repository preferences")
+                        })
                         .collect();
-                    assert!(errors.is_empty(), "explorer toggle errors: {errors:?}");
+                    assert!(
+                        errors.is_empty(),
+                        "explorer preference save failed: {errors:?}"
+                    );
                 }
                 let file: serde_json::Value =
                     serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();

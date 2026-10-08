@@ -94,7 +94,7 @@ pub(super) fn panel(
             .on_click(theme, cx, move |this, _e, window, cx| {
                 let root_view = this.root_view.clone();
                 let prompt = prompt.clone();
-                this.close_popover(cx);
+                this.close_resolved_popover(cx);
                 // Later close guards read this host. Release its update lease
                 // before checking them or closing the window that owns it.
                 window.defer(cx, move |window, cx| {

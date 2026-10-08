@@ -186,6 +186,7 @@ impl GitCometView {
                             // The default is the settings window's; a window's own zoom is not saved.
                             ui_scale_percent: None,
                             // Owned by the settings window; None preserves it.
+                            windows_renderer: None,
                             window_controls_mode: None,
                             browser_open_target: None,
                             ui_density: Some(crate::appearance::current(cx).density.key().to_string()),

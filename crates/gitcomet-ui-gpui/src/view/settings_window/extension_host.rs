@@ -473,6 +473,7 @@ pub(super) struct SettingsDialog {
     pub anchor: Option<gpui::Point<gpui::Pixels>>,
     pub focus: gpui::FocusHandle,
     previous_focus: Option<gpui::FocusHandle>,
+    application_close_prompt: bool,
 }
 impl SettingsHost {
     fn present(
@@ -489,6 +490,11 @@ impl SettingsHost {
         cx.defer(move |cx| {
             let _ = window.update(cx, |_, window, cx| {
                 let content = content(window, cx);
+                // Read before a button callback can hold the prompt entity's mutable lease.
+                let application_close_prompt = content
+                    .clone()
+                    .downcast::<super::close_guards::SettingsClosePrompt>()
+                    .is_ok_and(|prompt| prompt.read(cx).scope == CloseScope::Application);
                 let _ = view.update(cx, |view, cx| {
                     let focus = cx.focus_handle();
                     let previous_focus = view
@@ -504,6 +510,7 @@ impl SettingsHost {
                         anchor,
                         focus,
                         previous_focus,
+                        application_close_prompt,
                     });
                     cx.notify();
                 });
@@ -529,6 +536,21 @@ impl SettingsHost {
 }
 impl SettingsWindowView {
     pub(super) fn close_hosted_dialog(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self
+            .extension_dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.application_close_prompt)
+        {
+            crate::app::cancel_pending_restart(cx);
+        }
+        self.close_resolved_hosted_dialog(window, cx);
+    }
+
+    pub(super) fn close_resolved_hosted_dialog(
         &mut self,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,

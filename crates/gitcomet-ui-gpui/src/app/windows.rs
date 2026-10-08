@@ -602,14 +602,88 @@ pub(crate) fn close_active_window_or_warn(cx: &mut App) {
     }
 }
 
+#[derive(Default)]
+pub(crate) struct PendingRestart(pub(crate) bool);
+impl gpui::Global for PendingRestart {}
+
+#[cfg(test)]
+mod restart_tests {
+    use super::*;
+    #[gpui::test]
+    async fn approved_restart_uses_the_existing_helper_without_replaying_arguments(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let restart = cx.expect_restart();
+        cx.update(|cx| {
+            cx.set_global(PendingRestart(true));
+            finish_quit_or_restart(cx);
+            assert!(!cx.global::<PendingRestart>().0);
+        });
+        let (path, arguments) = restart.await.unwrap();
+        assert!(path.is_none());
+        assert!(arguments.is_empty());
+    }
+    #[cfg(target_os = "windows")]
+    #[gpui::test]
+    fn cancellation_retains_saved_renderer_for_the_next_launch(cx: &mut gpui::TestAppContext) {
+        use crate::windows_renderer::{RendererPreference, RendererSession, RendererState};
+        cx.update(|cx| {
+            let mut state = RendererState::new(RendererPreference::Auto, true);
+            state.saved = RendererPreference::Dx11;
+            let session = RendererSession(std::rc::Rc::new(std::cell::RefCell::new(state)));
+            cx.set_global(session.clone());
+            cx.set_global(PendingRestart(true));
+            cancel_pending_restart(cx);
+            assert!(!cx.global::<PendingRestart>().0);
+            cancel_pending_restart(cx);
+            assert!(!cx.global::<PendingRestart>().0);
+            assert_eq!(session.0.borrow().saved, RendererPreference::Dx11);
+            assert!(session.0.borrow().restart_required());
+        });
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn request_restart(cx: &mut App) {
+    if cx
+        .try_global::<crate::windows_renderer::RendererSession>()
+        .is_none_or(|session| !session.0.borrow().restart_allowed)
+    {
+        return;
+    }
+    cx.set_global(PendingRestart(true));
+    quit_app_or_warn(cx);
+}
+
+pub(crate) fn cancel_pending_restart(cx: &mut App) {
+    if let Some(pending) = cx.try_global::<PendingRestart>()
+        && pending.0
+    {
+        cx.set_global(PendingRestart(false));
+    }
+}
+
+/// Every approved application quit goes through this point, including close guards.
+pub(crate) fn finish_quit_or_restart(cx: &mut App) {
+    let restart = cx
+        .try_global::<PendingRestart>()
+        .is_some_and(|pending| pending.0);
+    cx.set_global(PendingRestart(false));
+    mark_clean_shutdown(cx);
+    if restart {
+        cx.restart();
+    } else {
+        cx.quit();
+    }
+}
+
 pub(crate) fn quit_app_or_warn(cx: &mut App) {
     let entries = gitcomet_window_entries(cx);
     if entries.is_empty() {
         if crate::view::settings_window::close_guards::request_settings_only_quit(cx) {
             return;
         }
-        mark_clean_shutdown(cx);
-        cx.quit();
+        finish_quit_or_restart(cx);
         return;
     }
 
@@ -665,8 +739,7 @@ pub(crate) fn quit_app_or_warn(cx: &mut App) {
             }
         }
         if late_reasons.is_empty() {
-            mark_clean_shutdown(cx);
-            cx.quit();
+            finish_quit_or_restart(cx);
             return;
         }
     }
@@ -700,8 +773,7 @@ pub(crate) fn quit_app_or_warn(cx: &mut App) {
             activate_gitcomet_window(cx, entry.handle);
         }
     } else {
-        mark_clean_shutdown(cx);
-        cx.quit();
+        finish_quit_or_restart(cx);
     }
 }
 

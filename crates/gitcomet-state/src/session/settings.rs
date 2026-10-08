@@ -12,6 +12,7 @@ pub struct UiSettings {
     pub theme_mode: Option<String>,
     pub ui_scale_percent: Option<u32>,
     pub window_controls_mode: Option<String>,
+    pub windows_renderer: Option<String>,
     pub browser_open_target: Option<String>,
     pub ui_density: Option<String>,
     pub ui_font_size_px: Option<u32>,
@@ -113,6 +114,7 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         apply_setting!(settings, file, theme_mode);
         apply_setting!(settings, file, ui_scale_percent);
         apply_setting!(settings, file, window_controls_mode);
+        apply_setting!(settings, file, windows_renderer);
         apply_setting!(settings, file, browser_open_target);
         apply_setting!(settings, file, ui_density);
         apply_setting!(settings, file, ui_font_size_px);

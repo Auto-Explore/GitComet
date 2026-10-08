@@ -1,37 +1,27 @@
-# Vendored from the `tree-sitter-haskell 0.23.1` crates.io release
-# (https://github.com/tree-sitter/tree-sitter-haskell, MIT -- see the note below), to
-# regenerate `src/parser.c` with a larger small-state threshold.
+# Vendored from https://github.com/tree-sitter/tree-sitter-haskell at
+# 97288e585b0bd44199720280d067fa35bacd81ff (0.24.1, MIT).
 #
-# `tree-sitter generate` decides per parse state whether to emit a dense row in
-# `ts_parse_table` (SYMBOL_COUNT * 2 bytes, O(1) lookup) or a compact entry in
-# `ts_small_parse_table` (scanned), using
-# `threshold = min(64, symbol_count / 2)`. That 64 is only the break-even for a
-# grammar with <= 128 symbols; every large grammar has far more, so thousands of
-# states get a dense row costing several times the compact form. Regenerating
-# with `TS_SMALL_STATE_THRESHOLD=128` saves 1.42 MiB here.
+# Updated in the 2026-10-08 upstream sweep: type_synomym is corrected to
+# type_synonym, `cases` is highlighted, and declaration query patterns name
+# concrete decl/function, decl/bind and decl/signature subtypes. The old patterns
+# are invalid under tree-sitter 0.27 and fail to compile against this parser.
+# GitComet's haskell_highlights.scm mirrors these changes and retains its scoped
+# (type/variable) capture so expression variables do not get the type colour.
+# grammar/ is vendored along with grammar.js so its modular source is complete.
 #
-# It is a representation change only -- the automaton, and so every parse tree, is
-# byte-identical. `vendor/README.md` has the procedure and the proof.
+# Generated with tree-sitter-cli 0.27.0, ABI 15, TS_SMALL_STATE_THRESHOLD=128.
+# STATE_COUNT 12862 / SYMBOL_COUNT 537 and all other automaton counts match
+# upstream. grammar.json and node-types.json are byte-identical. The retune
+# reduces LARGE_STATE_COUNT from 2378 to 117 without changing parsing.
+# Regenerate from src/grammar.json with the patched CLI in vendor/README.md.
+# Shared headers come from vendor/tree-sitter-headers.
 #
-# Generated with tree-sitter-cli 0.26.13 at ABI 14, the ABI upstream ships,
-# and the `tree_sitter/` headers come from vendor/tree-sitter-headers -- see the
-# README there.
-#
-# Upstream's published crate contains no LICENSE file -- it is excluded from the
-# package, though the repository has one and the crate metadata declares MIT.
-# Nothing was invented here to fill the gap: if these grammars are redistributed
-# outside the repository, copy the licence text from
-# https://github.com/tree-sitter/tree-sitter-haskell first.
-#
-# `queries/` *is* vendored here, unlike most of vendor/: GitComet reads this
-# grammar's upstream query consts rather than authoring its own, so dropping the
-# directory would compile them out (`vendor/tree-sitter-build` sets the
-# `with_*_query` cfgs from the files that are present) and the language would go
-# uncoloured.
+# queries/ is vendored for the upstream constants; GitComet's own highlight query
+# adds the scoped type-variable fix described above.
 [package]
 name = "tree-sitter-haskell"
 description = "Haskell grammar for tree-sitter"
-version = "0.23.1"
+version = "0.24.1"
 repository = "https://github.com/tree-sitter/tree-sitter-haskell"
 edition = "2021"
 license = "MIT"

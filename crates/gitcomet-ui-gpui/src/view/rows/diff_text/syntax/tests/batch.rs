@@ -300,29 +300,18 @@ fn prepared_ocaml_documents_highlight_both_halves_of_the_pair() {
     }
 }
 
-/// The reason queries/ocaml_highlights.scm exists rather than a reference to
-/// `tree_sitter_ocaml::HIGHLIGHTS_QUERY`: upstream names `(shebang)`, which the
-/// interface grammar has no rule for, and one unknown node type fails the whole
-/// query rather than the pattern that names it.
+/// Upstream 0.26 removed the implementation-only shebang pattern, so its query
+/// now serves implementations, interfaces and standalone types directly.
 #[test]
-fn ocaml_query_serves_both_grammars_and_upstream_does_not() {
+fn ocaml_upstream_query_serves_all_three_grammars() {
     for language in [
         tree_sitter_ocaml::LANGUAGE_OCAML,
         tree_sitter_ocaml::LANGUAGE_OCAML_INTERFACE,
+        tree_sitter_ocaml::LANGUAGE_OCAML_TYPE,
     ] {
         tree_sitter::Query::new(&language.into(), OCAML_HIGHLIGHTS_QUERY)
-            .expect("the vendored query should compile against both OCaml grammars");
+            .expect("the upstream query should compile against every OCaml grammar");
     }
-
-    assert!(
-        tree_sitter::Query::new(
-            &tree_sitter_ocaml::LANGUAGE_OCAML_INTERFACE.into(),
-            tree_sitter_ocaml::HIGHLIGHTS_QUERY,
-        )
-        .is_err(),
-        "upstream's query now compiles against the interface grammar -- drop the \
-             vendored copy and use `tree_sitter_ocaml::HIGHLIGHTS_QUERY` for both."
-    );
 }
 
 // ---- Groovy ---------------------------------------------------------------

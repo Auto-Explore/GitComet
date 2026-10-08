@@ -2,6 +2,130 @@
 
 use super::*;
 
+/// Read the painted quad and the IME anchor independently of caret row lookup.
+fn draw_and_assert_commit_end_caret(
+    input: &gpui::Entity<gitcomet_ui_kit::TextInput>,
+    cx: &mut gpui::VisualTestContext,
+) -> usize {
+    use gpui::EntityInputHandler as _;
+    for _ in 0..3 {
+        crate::test_support::refresh_and_draw(cx);
+    }
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            let rows = input.wrap_row_counts().iter().sum::<usize>();
+            let first = input.hotspot_bounds(&(0..1)).unwrap();
+            let expected_top = first.top() + first.size.height * (rows - 1) as f32;
+            let end = input.text().encode_utf16().count();
+            let ime = input.bounds_for_range(end..end, first, window, cx).unwrap();
+            let text = input.text();
+            assert_eq!(ime.top(), expected_top, "commit IME anchor for {text:?}");
+            let scale = window.scale_factor();
+            let color = input.theme_for_test().colors.editor.cursor;
+            let caret = window
+                .painted_quads()
+                .into_iter()
+                .find(|quad| {
+                    quad.background == color.into()
+                        && (quad.bounds.size.width.0 - scale).abs() < 0.01
+                })
+                .expect("commit input must paint its caret");
+            let inset = (f32::from(first.size.height) - caret.bounds.size.height.0 / scale) / 2.0;
+            assert!(
+                (caret.bounds.origin.y.0 - (f32::from(expected_top) + inset) * scale).abs() <= 1.0,
+                "commit caret for {text:?}: {:?}, expected row {}",
+                caret.bounds,
+                rows - 1
+            );
+            assert!((caret.bounds.origin.x.0 - f32::from(ime.left()) * scale).abs() <= 1.0);
+            rows
+        })
+    })
+}
+
+#[gpui::test]
+fn cached_commit_form_caret_tracks_wrapped_growth_and_shrink(cx: &mut gpui::TestAppContext) {
+    use gpui::EntityInputHandler as _;
+    let _visual_guard = lock_visual_test();
+    let _cache_guard = crate::view::enable_stable_cached_views_for_test();
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate();
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(49);
+    let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-commit-wrap-caret"));
+    repo.status = gitcomet_state::model::Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: Arc::new(vec![gitcomet_core::domain::FileStatus {
+                path: "staged.txt".into(),
+                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                conflict: None,
+            }]),
+            unstaged: Arc::new(Vec::new()),
+        }
+        .into(),
+    );
+    let (input, scroll) = cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+        let pane = view.read(app).details_pane.read(app);
+        (
+            pane.commit_message_input.clone(),
+            pane.commit_message_scroll.clone(),
+        )
+    });
+    cx.simulate_resize(gpui::size(px(1200.0), px(900.0)));
+    for percent in [100, 150] {
+        cx.update(|window, app| {
+            crate::ui_scale::set_default(app, percent);
+            view.update(app, |view, cx| view.notify_font_preferences_changed(cx));
+            input.update(app, |input, cx| input.set_text(String::new(), cx));
+            window.focus(&input.read(app).focus_handle(), app);
+        });
+        for _ in 0..4 {
+            crate::test_support::refresh_and_draw(cx);
+        }
+        let mut heights = [px(0.0); 3];
+        let mut two_row_end = 0;
+        let message = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
+        for (index, word) in message
+            .split_whitespace()
+            .cycle()
+            .take(8 * message.split_whitespace().count())
+            .enumerate()
+        {
+            if index > 0 {
+                cx.simulate_input(" ");
+            }
+            cx.simulate_input(word);
+            let rows = draw_and_assert_commit_end_caret(&input, cx);
+            assert!(rows <= 3, "fixture must pass through each row");
+            heights[rows - 1] = scroll.bounds().size.height;
+            if rows == 2 {
+                two_row_end = cx.update(|_, app| input.read(app).text().encode_utf16().count());
+            }
+            if rows == 3 {
+                break;
+            }
+        }
+        assert!(
+            heights[1] > heights[0] && heights[2] > heights[1],
+            "commit input must grow: {heights:?}"
+        );
+        cx.update(|window, app| {
+            input.update(app, |input, cx| {
+                let end = input.text().encode_utf16().count();
+                input.replace_text_in_range(Some(two_row_end..end), "", window, cx);
+            })
+        });
+        assert_eq!(draw_and_assert_commit_end_caret(&input, cx), 2);
+        assert_eq!(scroll.bounds().size.height, heights[1]);
+    }
+}
+
 #[gpui::test]
 fn staged_revert_offers_its_message_to_an_empty_commit_box(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));

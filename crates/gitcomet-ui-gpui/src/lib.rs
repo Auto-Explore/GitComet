@@ -22,6 +22,7 @@ pub mod perf_alloc;
 pub mod perf_ram_guard;
 #[doc(hidden)]
 pub mod perf_sidecar;
+mod preference_writer;
 #[cfg(test)]
 mod render_guards;
 mod session_ui;
@@ -31,6 +32,8 @@ mod window_controls;
 #[cfg(test)]
 mod window_focus_tests;
 mod window_root_hook;
+#[cfg(any(target_os = "windows", test))]
+mod windows_renderer;
 mod workspaces;
 
 pub use app::{

@@ -14,7 +14,7 @@
 pub use gpui;
 
 /// The exact GPUI revision used by this kit and its host.
-pub const GPUI_REVISION: &str = "d0e01e8854d87ff749168b84ab16566b1e1919b6";
+pub const GPUI_REVISION: &str = env!("GITCOMET_GPUI_REVISION");
 
 pub mod appearance;
 pub mod assets;

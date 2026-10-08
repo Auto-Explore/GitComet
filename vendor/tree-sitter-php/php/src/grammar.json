@@ -775,6 +775,18 @@
           }
         },
         {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "\\"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
           "type": "SYMBOL",
           "name": "namespace_name"
         },
@@ -5222,8 +5234,21 @@
           "value": "clone"
         },
         {
-          "type": "SYMBOL",
-          "name": "primary_expression"
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "primary_expression"
+            },
+            {
+              "type": "FIELD",
+              "name": "arguments",
+              "content": {
+                "type": "SYMBOL",
+                "name": "arguments"
+              }
+            }
+          ]
         }
       ]
     },
@@ -6715,6 +6740,80 @@
             {
               "type": "SYMBOL",
               "name": "argument_placeholder"
+            },
+            {
+              "type": "PREC",
+              "value": -1,
+              "content": {
+                "type": "ALIAS",
+                "content": {
+                  "type": "CHOICE",
+                  "members": [
+                    {
+                      "type": "PATTERN",
+                      "value": "array",
+                      "flags": "i"
+                    },
+                    {
+                      "type": "PATTERN",
+                      "value": "binary",
+                      "flags": "i"
+                    },
+                    {
+                      "type": "PATTERN",
+                      "value": "bool",
+                      "flags": "i"
+                    },
+                    {
+                      "type": "PATTERN",
+                      "value": "boolean",
+                      "flags": "i"
+                    },
+                    {
+                      "type": "PATTERN",
+                      "value": "double",
+                      "flags": "i"
+                    },
+                    {
+                      "type": "PATTERN",
+                      "value": "float",
+                      "flags": "i"
+                    },
+                    {
+                      "type": "PATTERN",
+                      "value": "int",
+                      "flags": "i"
+                    },
+                    {
+                      "type": "PATTERN",
+                      "value": "integer",
+                      "flags": "i"
+                    },
+                    {
+                      "type": "PATTERN",
+                      "value": "object",
+                      "flags": "i"
+                    },
+                    {
+                      "type": "PATTERN",
+                      "value": "real",
+                      "flags": "i"
+                    },
+                    {
+                      "type": "PATTERN",
+                      "value": "string",
+                      "flags": "i"
+                    },
+                    {
+                      "type": "PATTERN",
+                      "value": "unset",
+                      "flags": "i"
+                    }
+                  ]
+                },
+                "named": true,
+                "value": "name"
+              }
             }
           ]
         }
@@ -6742,6 +6841,61 @@
                 {
                   "type": "PATTERN",
                   "value": "array",
+                  "flags": "i"
+                },
+                {
+                  "type": "PATTERN",
+                  "value": "binary",
+                  "flags": "i"
+                },
+                {
+                  "type": "PATTERN",
+                  "value": "bool",
+                  "flags": "i"
+                },
+                {
+                  "type": "PATTERN",
+                  "value": "boolean",
+                  "flags": "i"
+                },
+                {
+                  "type": "PATTERN",
+                  "value": "double",
+                  "flags": "i"
+                },
+                {
+                  "type": "PATTERN",
+                  "value": "float",
+                  "flags": "i"
+                },
+                {
+                  "type": "PATTERN",
+                  "value": "int",
+                  "flags": "i"
+                },
+                {
+                  "type": "PATTERN",
+                  "value": "integer",
+                  "flags": "i"
+                },
+                {
+                  "type": "PATTERN",
+                  "value": "object",
+                  "flags": "i"
+                },
+                {
+                  "type": "PATTERN",
+                  "value": "real",
+                  "flags": "i"
+                },
+                {
+                  "type": "PATTERN",
+                  "value": "string",
+                  "flags": "i"
+                },
+                {
+                  "type": "PATTERN",
+                  "value": "unset",
                   "flags": "i"
                 },
                 {
@@ -9544,6 +9698,10 @@
     ],
     [
       "heredoc_body"
+    ],
+    [
+      "parenthesized_expression",
+      "argument"
     ]
   ],
   "precedences": [],
