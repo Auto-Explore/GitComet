@@ -56,3 +56,41 @@ mod tests {
             .expect("Error loading Sql parser");
     }
 }
+
+#[cfg(test)]
+mod scanner_tests {
+    #[test]
+    fn scanner_serialization_preserves_the_active_tag() {
+        use std::ffi::c_void;
+        unsafe extern "C" {
+            fn tree_sitter_sql_external_scanner_create() -> *mut c_void;
+            fn tree_sitter_sql_external_scanner_destroy(payload: *mut c_void);
+            fn tree_sitter_sql_external_scanner_serialize(
+                payload: *mut c_void,
+                buffer: *mut u8,
+            ) -> u32;
+            fn tree_sitter_sql_external_scanner_deserialize(
+                payload: *mut c_void,
+                buffer: *const u8,
+                length: u32,
+            );
+        }
+        // Serializing must be read-only: another branch may serialize the same
+        // scanner before restoring it. Upstream used to free the tag on this call.
+        let tag = b"$body$\0";
+        let mut first = [0; 1024];
+        let mut second = first;
+        let (first_len, second_len) = unsafe {
+            let scanner = tree_sitter_sql_external_scanner_create();
+            tree_sitter_sql_external_scanner_deserialize(scanner, tag.as_ptr(), tag.len() as u32);
+            let first_len = tree_sitter_sql_external_scanner_serialize(scanner, first.as_mut_ptr());
+            let second_len =
+                tree_sitter_sql_external_scanner_serialize(scanner, second.as_mut_ptr());
+            tree_sitter_sql_external_scanner_deserialize(scanner, std::ptr::null(), 0);
+            tree_sitter_sql_external_scanner_destroy(scanner);
+            (first_len as usize, second_len as usize)
+        };
+        assert_eq!(&first[..first_len], tag);
+        assert_eq!(&second[..second_len], tag);
+    }
+}

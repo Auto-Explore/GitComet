@@ -6,9 +6,11 @@ every external scanner also includes `tree_sitter/alloc.h` and
 grammar's `src/tree_sitter/`, so every vendored grammar carried its own copy of
 the same ~40 KB. They are kept here once instead.
 
-The copy here is the one tree-sitter-cli 0.26.13 emits, which is what generated
-every `src/parser.c` under `vendor/` except `tree-sitter-vue`'s — that grammar's
-`grammar.js` was never vendored, so it cannot be regenerated.
+The copy here is the one tree-sitter-cli 0.26.13 emits, byte-identical to the
+0.27.0 generated-parser headers checked in the 2026-10-08 upstream sweep.
+Grammars use the generator recorded in their Cargo.toml; C# and TypeScript
+still need 0.26.5 to reproduce their pinned automata. Vue keeps its upstream
+parser because its grammar.js was never vendored.
 
 ## How a grammar finds these
 
@@ -18,8 +20,8 @@ grammar that still has a `src/tree_sitter/` of its own keeps using it, because
 both `#include "tree_sitter/parser.h"` (relative to the including file) and the
 `-I` search order reach `src/` first.
 
-Nothing needs the override today, but `tree-sitter-vue` is where one would first
-be needed and is worth knowing about: it is the only grammar here whose
+`tree-sitter-v` uses this override for its ABI-13 parser's older macro API.
+`tree-sitter-vue` is another case worth knowing about: it is the only grammar here whose
 `grammar.js` was not vendored, so it cannot be regenerated, and the `array.h` it
 used to carry was an older implementation with a different macro contract
 (`array_push` as an expression rather than a `do {} while (0)`, and no

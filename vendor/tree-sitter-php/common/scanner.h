@@ -88,6 +88,7 @@ static void deserialize(Scanner *scanner, const char *buffer, unsigned length) {
     for (uint32_t i = 0; i < scanner->heredocs.size; i++) {
         reset_heredoc(array_get(&scanner->heredocs, i));
     }
+    array_clear(&scanner->heredocs);
 
     if (length == 0) {
         return;
@@ -95,24 +96,17 @@ static void deserialize(Scanner *scanner, const char *buffer, unsigned length) {
 
     uint8_t open_heredoc_count = buffer[size++];
     for (unsigned i = 0; i < open_heredoc_count; i++) {
-        Heredoc *heredoc = NULL;
-        if (i < scanner->heredocs.size) {
-            heredoc = array_get(&scanner->heredocs, i);
-        } else {
-            Heredoc new_heredoc = heredoc_new();
-            array_push(&scanner->heredocs, new_heredoc);
-            heredoc = array_back(&scanner->heredocs);
-        }
-
-        heredoc->end_word_indentation_allowed = buffer[size++];
-        memcpy(&heredoc->word.size, &buffer[size], sizeof(uint32_t));
+        Heredoc heredoc = heredoc_new();
+        heredoc.end_word_indentation_allowed = buffer[size++];
+        memcpy(&heredoc.word.size, &buffer[size], sizeof(uint32_t));
         size += sizeof(uint32_t);
-        unsigned word_size = heredoc->word.size * sizeof(heredoc->word.contents[0]);
+        unsigned word_size = heredoc.word.size * sizeof(heredoc.word.contents[0]);
         if (word_size > 0) {
-            array_reserve(&heredoc->word, heredoc->word.size);
-            memcpy(heredoc->word.contents, &buffer[size], word_size);
+            array_reserve(&heredoc.word, heredoc.word.size);
+            memcpy(heredoc.word.contents, &buffer[size], word_size);
             size += word_size;
         }
+        array_push(&scanner->heredocs, heredoc);
     }
 
     assert(size == length);
@@ -207,24 +201,11 @@ static inline bool scan_nowdoc_string(Scanner *scanner, TSLexer *lexer) {
         advance(lexer);
         has_consumed_content = true;
 
-        end_tag_matched = (i == heredoc_tag.size - 1 && (iswspace(lexer->lookahead) || lexer->lookahead == ';' ||
-                                                         lexer->lookahead == ',' || lexer->lookahead == ')'));
+        end_tag_matched = (i == heredoc_tag.size - 1 && !is_valid_name_char(lexer));
     }
 
     if (end_tag_matched) {
-        // There may be an arbitrary amount of white space after the end tag
-        while (iswspace(lexer->lookahead) && lexer->lookahead != '\r' && lexer->lookahead != '\n') {
-            advance(lexer);
-            has_consumed_content = true;
-        }
-
-        // Return to allow the end tag parsing if we've encountered an end tag
-        // at a valid position
-        if (lexer->lookahead == ';' || lexer->lookahead == ',' || lexer->lookahead == ')' || lexer->lookahead == '\n' ||
-            lexer->lookahead == '\r') {
-            // , and ) is needed to support heredoc in function arguments
-            return false;
-        }
+        return false;
     }
 
     for (bool has_content = has_consumed_content;; has_content = true) {
@@ -269,25 +250,11 @@ static bool scan_encapsed_part_string(Scanner *scanner, TSLexer *lexer, bool is_
             has_consumed_content = true;
             advance(lexer);
 
-            end_tag_matched = (i == heredoc_tag.size - 1 && (iswspace(lexer->lookahead) || lexer->lookahead == ';' ||
-                                                             lexer->lookahead == ',' || lexer->lookahead == ')'));
+            end_tag_matched = (i == heredoc_tag.size - 1 && !is_valid_name_char(lexer));
         }
 
         if (end_tag_matched) {
-            // There may be an arbitrary amount of white space after the end tag
-            // However, we should not consume \r or \n
-            while (iswspace(lexer->lookahead) && lexer->lookahead != '\r' && lexer->lookahead != '\n') {
-                advance(lexer);
-                has_consumed_content = true;
-            }
-
-            // Return to allow the end tag parsing if we've encountered an end
-            // tag at a valid position
-            if (lexer->lookahead == ';' || lexer->lookahead == ',' || lexer->lookahead == ')' ||
-                lexer->lookahead == '\n' || lexer->lookahead == '\r') {
-                // , and ) is needed to support heredoc in function arguments
-                return false;
-            }
+            return false;
         }
     }
 

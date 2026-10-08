@@ -115,6 +115,11 @@ fn vendored_grammars_are_abi_compatible_with_workspace_tree_sitter() {
             tree_sitter_fsharp::LANGUAGE_FSHARP.into(),
         ),
         (
+            "fsharp (signature)",
+            "tree-sitter-fsharp",
+            tree_sitter_fsharp::LANGUAGE_SIGNATURE.into(),
+        ),
+        (
             "gitignore",
             "tree-sitter-gitignore",
             tree_sitter_gitignore::LANGUAGE.into(),
@@ -166,9 +171,19 @@ fn vendored_grammars_are_abi_compatible_with_workspace_tree_sitter() {
             tree_sitter_ocaml::LANGUAGE_OCAML_INTERFACE.into(),
         ),
         (
+            "ocaml (type)",
+            "tree-sitter-ocaml",
+            tree_sitter_ocaml::LANGUAGE_OCAML_TYPE.into(),
+        ),
+        (
             "php",
             "tree-sitter-php",
             tree_sitter_php::LANGUAGE_PHP.into(),
+        ),
+        (
+            "php (only)",
+            "tree-sitter-php",
+            tree_sitter_php::LANGUAGE_PHP_ONLY.into(),
         ),
         (
             "powershell",
@@ -216,6 +231,7 @@ fn vendored_grammars_are_abi_compatible_with_workspace_tree_sitter() {
             "tree-sitter-typescript",
             tree_sitter_typescript::LANGUAGE_TSX.into(),
         ),
+        ("v", "tree-sitter-v", tree_sitter_v::LANGUAGE.into()),
         ("vue", "tree-sitter-vue", tree_sitter_vue::LANGUAGE.into()),
         ("wat", "tree-sitter-wat", tree_sitter_wat::LANGUAGE.into()),
     ];
@@ -259,23 +275,23 @@ fn vendored_grammars_keep_the_small_state_retune() {
         ("tree-sitter-c-sharp", 2156),
         ("tree-sitter-coffee", 42),
         ("tree-sitter-cpp", 845),
-        ("tree-sitter-fsharp/fsharp", 2454),
+        ("tree-sitter-fsharp/fsharp", 2264),
         ("tree-sitter-fsharp/fsharp_signature", 2),
         ("tree-sitter-haskell", 117),
         ("tree-sitter-julia", 2069),
         ("tree-sitter-kotlin-sg", 1431),
         ("tree-sitter-objc", 2356),
-        ("tree-sitter-ocaml/grammars/interface", 44),
-        ("tree-sitter-ocaml/grammars/ocaml", 59),
-        ("tree-sitter-ocaml/grammars/type", 46),
-        ("tree-sitter-php/php", 204),
-        ("tree-sitter-php/php_only", 185),
+        ("tree-sitter-ocaml/grammars/interface", 102),
+        ("tree-sitter-ocaml/grammars/ocaml", 132),
+        ("tree-sitter-ocaml/grammars/type", 100),
+        ("tree-sitter-php/php", 214),
+        ("tree-sitter-php/php_only", 213),
         ("tree-sitter-powershell", 83),
         ("tree-sitter-ruby", 741),
         ("tree-sitter-rust", 67),
         ("tree-sitter-scala", 493),
         ("tree-sitter-sequel", 6),
-        ("tree-sitter-swift", 805),
+        ("tree-sitter-swift", 858),
         ("tree-sitter-typescript/tsx", 176),
         ("tree-sitter-typescript/typescript", 166),
     ];
@@ -664,6 +680,92 @@ fn vendored_fsharp_grammar_reads_static_member_val() {
         2,
         "the second member must not be swallowed by the first: {sexp}"
     );
+}
+
+#[test]
+fn vendored_fsharp_grammar_parses_let_in_after_if_and_multiline_quotations() {
+    let tree = parse_vendored(
+        tree_sitter_fsharp::LANGUAGE_FSHARP.into(),
+        "let f c = let x = if c then 1 else 2 in x\n\
+         let quote = <@\n    let x = 1\n    x + 1\n@>\n",
+    );
+    let sexp = tree.root_node().to_sexp();
+    assert!(!tree.root_node().has_error(), "{sexp}");
+    assert!(sexp.contains("if_expression"), "{sexp}");
+    assert!(sexp.contains("literal_expression"), "{sexp}");
+}
+
+#[test]
+fn vendored_haskell_grammar_names_type_synonyms_and_highlights_cases() {
+    let tree = parse_vendored(tree_sitter_haskell::LANGUAGE.into(), "type Name = String\n");
+    let sexp = tree.root_node().to_sexp();
+    assert!(!tree.root_node().has_error(), "{sexp}");
+    assert!(sexp.contains("type_synonym"), "{sexp}");
+
+    let lines = [
+        "{-# LANGUAGE LambdaCase #-}",
+        "choose = \\cases",
+        "  Just x -> x",
+        "  Nothing -> 0",
+    ];
+    let doc = prepare_test_document(DiffSyntaxLanguage::Haskell, &lines.join("\n"));
+    let kinds = token_kinds_for_line_fragment(doc, 1, lines[1], "cases");
+    assert!(kinds.contains(&SyntaxTokenKind::Keyword), "{kinds:?}");
+}
+
+#[test]
+fn vendored_ocaml_scanner_handles_deeply_nested_comments() {
+    // Recursive scanning exhausted the test thread's stack at this depth.
+    let comment = format!("{} text {}\n", "(*".repeat(32_768), "*)".repeat(32_768));
+    for (language, suffix) in [
+        (tree_sitter_ocaml::LANGUAGE_OCAML, "let x = 1\n"),
+        (tree_sitter_ocaml::LANGUAGE_OCAML_INTERFACE, "val x : int\n"),
+        (tree_sitter_ocaml::LANGUAGE_OCAML_TYPE, "int\n"),
+    ] {
+        let tree = parse_vendored(language.into(), &format!("{comment}{suffix}"));
+        let root = tree.root_node();
+        assert!(!root.has_error(), "{}", root.to_sexp());
+        let first = root
+            .named_child(0)
+            .expect("the leading comment should exist");
+        assert_eq!(first.kind(), "comment");
+        assert_eq!(first.end_byte(), comment.len() - 1);
+    }
+}
+
+#[test]
+fn vendored_php_grammar_parses_group_uses_clone_arguments_and_nowdoc_closers() {
+    let tree = parse_vendored(
+        tree_sitter_php::LANGUAGE_PHP.into(),
+        "<?php\nuse \\Foo\\{Bar, Baz};\n\
+         clone($a, withProperties: ['b' => 1]);\n\
+         get_post($id, OBJECT, 'edit');\n\
+         $a = <<<'SQL'\nx\nSQL.PHP_EOL;\n",
+    );
+    let sexp = tree.root_node().to_sexp();
+    assert!(!tree.root_node().has_error(), "{sexp}");
+    assert!(sexp.contains("clone_expression arguments:"), "{sexp}");
+    assert!(sexp.contains("nowdoc"), "{sexp}");
+}
+
+#[test]
+fn vendored_swift_grammar_parses_sending_inline_arrays_and_unsafe_expressions() {
+    let tree = parse_vendored(
+        tree_sitter_swift::LANGUAGE.into(),
+        "func send(_ value: sending Foo) -> sending Foo {\n\
+         let numbers: [3 of Int] = [1, 2, 3]\n\
+         let result = unsafe read(value)\n\
+         return copy result\n}\n",
+    );
+    let sexp = tree.root_node().to_sexp();
+    assert!(!tree.root_node().has_error(), "{sexp}");
+    assert!(sexp.contains("unsafe_expression"), "{sexp}");
+    assert!(sexp.contains("array_type"), "{sexp}");
+
+    let line = "let result = unsafe read(value)";
+    let doc = prepare_test_document(DiffSyntaxLanguage::Swift, line);
+    let kinds = token_kinds_for_line_fragment(doc, 0, line, "unsafe");
+    assert!(kinds.contains(&SyntaxTokenKind::Keyword), "{kinds:?}");
 }
 
 #[test]

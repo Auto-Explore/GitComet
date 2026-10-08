@@ -110,7 +110,7 @@ const XML_HIGHLIGHTS_QUERY: &str = tree_sitter_xml::XML_HIGHLIGHT_QUERY;
 const CPP_INJECTIONS_QUERY: &str = include_str!("queries/cpp_injections.scm");
 const CLOJURE_HIGHLIGHTS_QUERY: &str = include_str!("queries/clojure_highlights.scm");
 const JULIA_HIGHLIGHTS_QUERY: &str = include_str!("queries/julia_highlights.scm");
-const OCAML_HIGHLIGHTS_QUERY: &str = include_str!("queries/ocaml_highlights.scm");
+const OCAML_HIGHLIGHTS_QUERY: &str = tree_sitter_ocaml::HIGHLIGHTS_QUERY;
 const SOLIDITY_HIGHLIGHTS_QUERY: &str = include_str!("queries/solidity_highlights.scm");
 const SVELTE_HIGHLIGHTS_QUERY: &str = include_str!("queries/svelte_highlights.scm");
 const SVELTE_INJECTIONS_QUERY: &str = include_str!("queries/svelte_injections.scm");
@@ -373,7 +373,7 @@ pub(in crate::view) enum DiffSyntaxLanguage {
     /// `.mli`. A separate grammar rather than a mode of the one above: an
     /// interface file is a different language shape (`val f : int -> int` has no
     /// implementation counterpart), and upstream ships it as its own
-    /// `LANGUAGE_OCAML_INTERFACE`. Both share queries/ocaml_highlights.scm.
+    /// `LANGUAGE_OCAML_INTERFACE`. Both use the upstream highlights query.
     OCamlInterface,
     Solidity,
     /// Generic assembly -- GAS and Intel-flavoured alike. The grammar is
