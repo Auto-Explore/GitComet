@@ -2309,7 +2309,7 @@ checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 
 [[package]]
 name = "gitcomet"
-version = "0.2.6"
+version = "0.3.0"
 dependencies = [
  "embed-resource",
  "gitcomet-app",
@@ -2326,7 +2326,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-app"
-version = "0.2.6"
+version = "0.3.0"
 dependencies = [
  "clap",
  "fs2",
@@ -2350,7 +2350,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-core"
-version = "0.2.6"
+version = "0.3.0"
 dependencies = [
  "chardetng",
  "encoding_rs",
@@ -2379,7 +2379,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-diagrams"
-version = "0.2.6"
+version = "0.3.0"
 dependencies = [
  "criterion",
  "gitcomet-fonts",
@@ -2393,7 +2393,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-extension-api"
-version = "0.2.6"
+version = "0.3.0"
 dependencies = [
  "gitcomet-core",
  "gitcomet-state",
@@ -2438,11 +2438,11 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-fonts"
-version = "0.2.6"
+version = "0.3.0"
 
 [[package]]
 name = "gitcomet-fs-watch"
-version = "0.2.6"
+version = "0.3.0"
 dependencies = [
  "dispatch2",
  "libc",
@@ -2455,7 +2455,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-git-gix"
-version = "0.2.6"
+version = "0.3.0"
 dependencies = [
  "crc32fast",
  "filetime",
@@ -2479,7 +2479,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-state"
-version = "0.2.6"
+version = "0.3.0"
 dependencies = [
  "gitcomet-core",
  "gitcomet-fs-watch",
@@ -2498,7 +2498,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-tree-sitter-alloc"
-version = "0.2.6"
+version = "0.3.0"
 dependencies = [
  "ctor",
  "rustfs-mimalloc-sys",
@@ -2508,7 +2508,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-ui-gpui"
-version = "0.2.6"
+version = "0.3.0"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -2637,7 +2637,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-ui-kit"
-version = "0.2.6"
+version = "0.3.0"
 dependencies = [
  "fontdb 0.24.0",
  "gitcomet-core",
