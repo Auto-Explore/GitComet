@@ -427,7 +427,7 @@ fn collect_staged_status_from_tree_index(
             gix::status::tree_index::TrackRenames::AsConfigured
         },
         |change, _, _| {
-            collect_tree_index_change(change, &mut staged).or_erased()?;
+            collect_tree_index_change(change, &mut staged).or_error()?;
             Ok(std::ops::ControlFlow::Continue(()))
         },
     )
@@ -455,7 +455,7 @@ fn collect_staged_index_paths_from_tree_index(
             gix::status::tree_index::TrackRenames::AsConfigured
         },
         |change, _, _| {
-            collect_tree_index_change_paths(change, &mut paths).or_erased()?;
+            collect_tree_index_change_paths(change, &mut paths).or_error()?;
             Ok(std::ops::ControlFlow::Continue(()))
         },
     )
@@ -854,7 +854,7 @@ impl gix::status::plumbing::index_as_worktree::traits::SubmoduleStatus for NoopS
         &mut self,
         _entry: &gix::index::Entry,
         _rela_path: &gix::bstr::BStr,
-    ) -> gix::ExnResult<Option<Self::Output>> {
+    ) -> gix::Result<Option<Self::Output>> {
         Ok(None)
     }
 }
@@ -889,7 +889,7 @@ where
         false,
         std::iter::empty::<gix::bstr::BString>(),
         true,
-        || -> gix::ExnResult<gix::worktree::Stack> {
+        || -> gix::Result<gix::worktree::Stack> {
             unreachable!("empty direct-status patterns never require pathspec attributes")
         },
     )
@@ -949,7 +949,6 @@ where
         },
         gix::status::plumbing::index_as_worktree_with_renames::Options {
             sorting: None,
-            object_hash: repo.object_hash(),
             fscache: false,
             tracked_file_modifications: gix::status::plumbing::index_as_worktree::Options {
                 fs: fs_caps,

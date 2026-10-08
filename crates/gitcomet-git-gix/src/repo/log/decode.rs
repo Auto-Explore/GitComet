@@ -92,9 +92,7 @@ pub(crate) fn commit_from_walk_parts<F: gix::objs::Find + Clone>(
         Err(e) if e.is_not_found() => decode(&objects.clone()),
         result => result,
     };
-    result.map_err(|e| {
-        crate::repo::object_store::gix_error("gix commit object", &gix::Error::from(e))
-    })?
+    result.map_err(|e| crate::repo::object_store::gix_error("gix commit object", &e))?
 }
 
 pub(crate) fn commit_from_decoded<'a>(
@@ -236,7 +234,7 @@ mod tests {
             &self,
             _id: &gix::oid,
             buffer: &'a mut Vec<u8>,
-        ) -> gix::ExnResult<Option<gix::objs::Data<'a>>> {
+        ) -> gix::Result<Option<gix::objs::Data<'a>>> {
             self.reads.set(self.reads.get() + 1);
             let Some(data) = self.data.filter(|_| self.visible) else {
                 return Ok(None);

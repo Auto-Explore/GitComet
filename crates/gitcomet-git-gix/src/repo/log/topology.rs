@@ -3,7 +3,6 @@
 //! decoding objects during the explore, in-degree and output walks.
 use super::*;
 use gitcomet_core::history_perf::{Work, record};
-use gix::error::ErrorExt as _;
 use std::sync::Mutex;
 
 #[derive(Default)]
@@ -26,7 +25,7 @@ impl TopologyCache {
         tips: &[gix::ObjectId],
         cancellation: &LogWalkCancellation,
         generation: u64,
-    ) -> gix::ExnResult<Arc<Topology>> {
+    ) -> gix::Result<Arc<Topology>> {
         // Serialize initial bootstrap builds too, before windows request their
         // full index. Waiters can leave promptly when their request is cancelled.
         let mut slot = loop {
@@ -70,7 +69,7 @@ impl TopologyWalk {
         tips: &[gix::ObjectId],
         cancellation: &LogWalkCancellation,
         cache: Option<(&TopologyCache, u64)>,
-    ) -> gix::ExnResult<Self> {
+    ) -> gix::Result<Self> {
         check_cancelled(cancellation)?;
         let topology = match cache {
             Some((cache, generation)) => {
@@ -122,7 +121,7 @@ impl Topology {
         repo: &gix::ThreadSafeRepository,
         tips: &[gix::ObjectId],
         cancellation: &LogWalkCancellation,
-    ) -> gix::ExnResult<Self> {
+    ) -> gix::Result<Self> {
         record(Work::LogTopologyBuild);
         let hash_len = repo.objects.object_hash().len_in_bytes();
         let mut ids = Vec::new();
@@ -149,7 +148,7 @@ impl Topology {
             let mut time = 0;
             for token in commit {
                 use gix::objs::commit::ref_iter::Token;
-                match token.map_err(|error| error.erased())? {
+                match token? {
                     Token::Parent { id } => {
                         let parent = intern(id, &mut rows, &mut ids, &mut degrees)?;
                         degrees[parent as usize] = degrees[parent as usize]
@@ -197,7 +196,7 @@ impl Topology {
             }
         }
         if order.len() != times.len() {
-            return Err(gix::error::corruption("History topology contains a cycle").raise_erased());
+            return Err(gix::error::corruption("History topology contains a cycle").into());
         }
         Ok(Self {
             hash_len,
@@ -215,7 +214,7 @@ fn intern(
     rows: &mut FxHashMap<gix::ObjectId, u32>,
     ids: &mut Vec<u8>,
     degrees: &mut Vec<u32>,
-) -> gix::ExnResult<u32> {
+) -> gix::Result<u32> {
     match rows.entry(id) {
         std::collections::hash_map::Entry::Occupied(entry) => Ok(*entry.get()),
         std::collections::hash_map::Entry::Vacant(entry) => {
@@ -228,17 +227,16 @@ fn intern(
     }
 }
 
-fn too_large() -> gix::Exn {
-    gix::error::corruption("History topology exceeds the supported row or edge count")
-        .raise_erased()
+fn too_large() -> gix::Error {
+    gix::error::corruption("History topology exceeds the supported row or edge count").into()
 }
 
-fn check_cancelled(cancellation: &LogWalkCancellation) -> gix::ExnResult<()> {
+fn check_cancelled(cancellation: &LogWalkCancellation) -> gix::Result<()> {
     if cancellation.is_cancelled() {
-        return Err(
-            std::io::Error::new(std::io::ErrorKind::Interrupted, "log walk cancelled")
-                .raise_erased(),
-        );
+        return Err(gix::Error::from_error(std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            "log walk cancelled",
+        )));
     }
     Ok(())
 }

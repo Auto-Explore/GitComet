@@ -163,7 +163,7 @@ pub(crate) fn diff_tree_to_tree<'r>(
         &mut cache,
         &mut Default::default(),
         &repo.objects,
-        |change| -> gix::ExnResult<_> {
+        |change| -> gix::Result<_> {
             changes.push(change.into_owned());
             Ok(std::ops::ControlFlow::Continue(()))
         },

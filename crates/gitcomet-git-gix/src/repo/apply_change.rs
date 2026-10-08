@@ -8,7 +8,8 @@ use super::history::{
 use super::patch::{write_patch_file, write_pathspec_file};
 use crate::util::{
     bytes_to_text_preserving_utf8, describe_path_list, git_command_failed_error,
-    run_git_capture_bytes, run_git_raw_output, run_git_with_output, validate_hex_commit_id,
+    path_buf_from_git_bytes, run_git_capture_bytes, run_git_raw_output, run_git_with_output,
+    validate_hex_commit_id,
 };
 use gitcomet_core::domain::{
     ApplyChangeSource, ApplyChangeTarget, ApplyFileChangeIndexEntry, ApplyFileChangeRetry, CommitId,
@@ -67,7 +68,8 @@ impl FileName {
 /// an old name applies to the file as it is named now. Only headers before the
 /// first hunk are touched.
 fn retarget_patch(patch: &[u8], to: &Path) -> Result<Vec<u8>> {
-    let to = repo_path_bytes(to);
+    let path = to;
+    let to = repo_path_bytes(path)?;
     let line = |parts: &[&[u8]]| parts.concat();
     let old_path = gix::quote::ansi_c::quote(line(&[b"a/", &to]).as_slice().into()).into_owned();
     let new_path = gix::quote::ansi_c::quote(line(&[b"b/", &to]).as_slice().into()).into_owned();
@@ -110,7 +112,7 @@ fn retarget_patch(patch: &[u8], to: &Path) -> Result<Vec<u8>> {
     if !retargeted {
         return Err(backend_error(format!(
             "cannot apply a change made to {} under its old name",
-            gix::path::from_byte_slice(&to).display()
+            path.display()
         )));
     }
     Ok(out)
@@ -120,8 +122,10 @@ fn backend_error(message: String) -> Error {
     Error::new(ErrorKind::Backend(format!("apply change: {message}")))
 }
 
-fn repo_path_bytes(path: &Path) -> Vec<u8> {
-    gix::path::to_unix_separators_on_windows(gix::path::into_bstr(path)).to_vec()
+fn repo_path_bytes(path: &Path) -> Result<Vec<u8>> {
+    let bytes = gix::path::into_bstr(path)
+        .map_err(|e| backend_error(format!("encoding path {}: {e}", path.display())))?;
+    Ok(gix::path::to_unix_separators_on_windows(bytes).to_vec())
 }
 
 fn tree_version(
@@ -374,8 +378,8 @@ impl GixRepo {
                 };
                 if status.first() == Some(&b'R') {
                     renames.insert(
-                        gix::path::from_byte_slice(second).to_path_buf(),
-                        gix::path::from_byte_slice(first).to_path_buf(),
+                        path_buf_from_git_bytes(second, "apply change rename destination")?,
+                        path_buf_from_git_bytes(first, "apply change rename source")?,
                     );
                 }
             }
@@ -393,7 +397,7 @@ impl GixRepo {
         paths
             .iter()
             .map(|path| {
-                let key = repo_path_bytes(path);
+                let key = repo_path_bytes(path)?;
                 match index.entry_by_path(key.as_slice().into()) {
                     None => Ok(None),
                     Some(entry) if entry.stage_raw() != 0 => Err(backend_error(format!(
@@ -451,8 +455,8 @@ impl GixRepo {
                 .split(|byte| *byte == 0)
                 .filter(|name| !name.is_empty())
             {
-                let name = gix::path::from_byte_slice(name);
-                if let Some(path) = chunk.iter().find(|path| path.as_path() == name) {
+                let name = path_buf_from_git_bytes(name, "apply change unstaged path")?;
+                if let Some(path) = chunk.iter().find(|path| **path == name) {
                     dirty.insert(path.as_path());
                 }
             }
@@ -576,16 +580,17 @@ impl GixRepo {
         let index = repo
             .open_index()
             .map_err(|e| backend_error(format!("reading the index: {e}")))?;
-        Ok(paths
-            .iter()
-            .filter(|path| {
-                let key = repo_path_bytes(path);
-                index
-                    .entry_by_path(key.as_slice().into())
-                    .is_some_and(|entry| entry.stage_raw() != 0)
-            })
-            .map(PathBuf::as_path)
-            .collect())
+        let mut conflicted = Vec::new();
+        for path in paths {
+            let key = repo_path_bytes(path)?;
+            if index
+                .entry_by_path(key.as_slice().into())
+                .is_some_and(|entry| entry.stage_raw() != 0)
+            {
+                conflicted.push(path.as_path());
+            }
+        }
+        Ok(conflicted)
     }
 
     /// Commits exactly `paths`; `--only` leaves other files' staged work out,
@@ -596,7 +601,10 @@ impl GixRepo {
         paths: &[PathBuf],
         checkpoint: ApplyFileChangeRetry,
     ) -> Result<CommandOutput> {
-        let path_bytes: Vec<Vec<u8>> = paths.iter().map(|path| repo_path_bytes(path)).collect();
+        let path_bytes = paths
+            .iter()
+            .map(|path| repo_path_bytes(path))
+            .collect::<Result<Vec<_>>>()?;
         let pathspec = write_pathspec_file(path_bytes.iter().map(Vec::as_slice))?;
         let mut cmd = self.literal_paths_cmd();
         cmd.args(["commit", "--no-verify", "--only"]);
@@ -642,7 +650,8 @@ fn no_changes_error(path: &Path) -> Error {
 fn describe_paths<P: AsRef<Path>>(paths: &[P]) -> String {
     let bytes: Vec<Vec<u8>> = paths
         .iter()
-        .map(|path| gix::path::into_bstr(path.as_ref()).to_vec())
+        // These bytes are only rendered for display, never sent back to Git.
+        .map(|path| path.as_ref().as_os_str().as_encoded_bytes().to_vec())
         .collect();
     describe_path_list(&bytes)
 }

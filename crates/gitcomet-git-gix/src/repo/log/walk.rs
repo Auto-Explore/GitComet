@@ -53,13 +53,12 @@ impl gix::objs::Find for CancellableLogWalkFind {
         &self,
         id: &gix::oid,
         buffer: &'a mut Vec<u8>,
-    ) -> gix::ExnResult<Option<gix::objs::Data<'a>>> {
-        use gix::error::ErrorExt as _;
+    ) -> gix::Result<Option<gix::objs::Data<'a>>> {
         if self.cancellation.is_cancelled() {
-            return Err(
-                std::io::Error::new(std::io::ErrorKind::Interrupted, "log walk cancelled")
-                    .raise_erased(),
-            );
+            return Err(gix::Error::from_error(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "log walk cancelled",
+            )));
         }
         gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::LogWalkObjectRead);
         gix::objs::Find::try_find(&self.inner, id, buffer)
@@ -73,7 +72,11 @@ impl gix::objs::Find for CancellableLogWalkFind {
 /// is mtime-only and can therefore retain old contents after a timestamp
 /// collision.
 pub(crate) fn shallow_snapshot(repo: &gix::Repository) -> Result<super::ShallowSnapshot> {
-    let path = repo.shallow_file();
+    let path = repo.shallow_file().map_err(|error| {
+        Error::new(ErrorKind::Backend(format!(
+            "resolve shallow boundary: {error}"
+        )))
+    })?;
     let bytes = match std::fs::read(&path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -154,7 +157,7 @@ pub(crate) fn new_commit_time_walk(
         .sorting(gix::traverse::commit::simple::Sorting::ByCommitTime(
             CommitTimeOrder::NewestFirst,
         ))
-        .map_err(|e| crate::repo::object_store::gix_error("gix walk", &gix::Error::from(e)))?
+        .map_err(|e| crate::repo::object_store::gix_error("gix walk", &e))?
         // Set after the sorting, the way `rev_walk` does: first-parent mode
         // walks the chain in order rather than by date, and asking for it
         // swaps the queue.
@@ -240,7 +243,7 @@ pub(crate) fn new_log_paged_walk(
                 }
                 return Err(crate::repo::object_store::gix_error(
                     "gix date-order walk",
-                    &gix::Error::from(error),
+                    &error,
                 ));
             }
         }
@@ -252,7 +255,7 @@ pub(crate) fn new_log_paged_walk(
     })
 }
 
-pub(crate) fn topo_build_error_is_missing_object(error: &gix::Exn) -> bool {
+pub(crate) fn topo_build_error_is_missing_object(error: &gix::Error) -> bool {
     error.is_not_found()
 }
 

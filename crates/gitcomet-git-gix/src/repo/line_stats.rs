@@ -296,7 +296,7 @@ fn staged_line_stats(
         },
         |change, _, _| {
             use gix::diff::index::ChangeRef;
-            cancellation.check_cancelled().or_erased()?;
+            cancellation.check_cancelled().or_error()?;
             let (location, old_id, new_id) = match change {
                 ChangeRef::Addition { location, id, .. } => (location, None, Some(id.into_owned())),
                 ChangeRef::Deletion { location, id, .. } => (location, Some(id.into_owned()), None),
@@ -323,7 +323,7 @@ fn staged_line_stats(
                 ),
             };
             let path = path_buf_from_git_bytes(location.as_ref(), "gix staged line stats path")
-                .or_erased()?;
+                .or_error()?;
             let stats = memo.counts((DiffArea::Staged, old_id, new_id), || {
                 commit_file_line_stats(repo, old_id, new_id, &mut scratch)
             });
@@ -407,7 +407,9 @@ fn unstaged_entry_line_stats<'repo>(
     memo: &mut MemoScan,
     lfs_clean: &mut LfsCleanFilter<'repo>,
 ) -> LineStats {
-    let rel = gix::path::into_bstr(entry.path.as_path());
+    let Ok(rel) = gix::path::into_bstr(entry.path.as_path()) else {
+        return LineStats::UNKNOWN;
+    };
     let index_id = index.entry_by_path(rel.as_ref()).map(|found| found.id);
 
     let mut index_blob_loaded = false;
@@ -558,7 +560,10 @@ fn read_worktree_git_bytes(
         let Ok(target) = std::fs::read_link(&full) else {
             return false;
         };
-        out.extend_from_slice(gix::path::into_bstr(target).as_ref());
+        let Ok(target) = gix::path::into_bstr(target) else {
+            return false;
+        };
+        out.extend_from_slice(target.as_ref());
         return true;
     }
     if !within_worktree_cap(&metadata) {

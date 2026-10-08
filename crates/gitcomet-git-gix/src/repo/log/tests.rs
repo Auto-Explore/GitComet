@@ -194,7 +194,7 @@ fn shallow_snapshot_uses_contents_even_when_stat_metadata_collides() {
     init_test_repo(workdir);
     let repo = open_repo(workdir);
     let local_repo = repo.repo();
-    let shallow_file = local_repo.shallow_file();
+    let shallow_file = local_repo.shallow_file().expect("shallow file path");
 
     fs::write(&shallow_file, b"1111111111111111111111111111111111111111\n")
         .expect("write first shallow boundary");
@@ -228,9 +228,10 @@ fn only_a_missing_object_allows_the_date_order_fallback() {
     let missing = gix::error::not_found("An object with id 1111111 could not be found")
         .raise_erased()
         .raise(gix::error::message("date-order setup failed"))
-        .erased();
-    let corrupt = gix::error::corruption("Internal state (bitflags) not found").raise_erased();
-    let cancelled = std::io::Error::from(std::io::ErrorKind::Interrupted).raise_erased();
+        .erased()
+        .into();
+    let corrupt = gix::error::corruption("Internal state (bitflags) not found").into();
+    let cancelled = gix::Error::from_error(std::io::Error::from(std::io::ErrorKind::Interrupted));
 
     assert!(topo_build_error_is_missing_object(&missing));
     assert!(!topo_build_error_is_missing_object(&corrupt));

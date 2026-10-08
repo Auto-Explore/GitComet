@@ -35,7 +35,11 @@ pub(crate) fn map_open_error(error: gix::Error, context: &str) -> Error {
     if error.is_not_found() {
         return Error::new(ErrorKind::NotARepository);
     }
-    match error.classify().find_map(|class| class.io_kind()) {
+    match error.iter_errors().find_map(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .map(std::io::Error::kind)
+    }) {
         Some(kind) => Error::new(ErrorKind::Io(kind)),
         None => {
             // The top frame is generic ("configuration could not be loaded");
@@ -54,6 +58,17 @@ pub(crate) fn map_open_error(error: gix::Error, context: &str) -> Error {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn open_error_preserves_io_kinds_without_semantic_classifications() {
+        for kind in [std::io::ErrorKind::Other, std::io::ErrorKind::InvalidData] {
+            let error = gix::Error::from_error(std::io::Error::new(kind, "repository read failed"));
+            let mapped = super::map_open_error(error, "gix open");
+            assert!(
+                matches!(mapped.kind(), gitcomet_core::error::ErrorKind::Io(actual) if *actual == kind)
+            );
+        }
+    }
+
     #[test]
     fn open_error_names_the_innermost_cause() {
         let dir = tempfile::tempdir().unwrap();

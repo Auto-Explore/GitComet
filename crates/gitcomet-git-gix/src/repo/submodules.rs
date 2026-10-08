@@ -809,7 +809,7 @@ fn configured_submodule_row(
 /// Look up just this gitlink, including conflict stages, without collecting
 /// every file in an index or opening any sibling submodule repositories.
 fn index_gitlink_at_path(index: &gix::index::State, path: &Path) -> Option<GitlinkIndexState> {
-    let key = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(path));
+    let key = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(path).ok()?);
     let mut result = None;
     for stage in [
         gix::index::entry::Stage::Unconflicted,
@@ -1878,7 +1878,7 @@ fn git_config_get_bool_global(trust_root: &Path, key: &str) -> Result<Option<boo
 }
 
 fn pathbuf_from_gix_path(path: &gix::bstr::BStr) -> Result<PathBuf> {
-    gix::path::try_from_bstr(path)
+    gix::path::from_bstr(path)
         .map(|path| path.into_owned())
         .map_err(|_| Error::new(ErrorKind::Unsupported("path is not valid UTF-8")))
 }
