@@ -1585,18 +1585,18 @@ impl GixRepo {
             ))));
         }
 
-        let lease_ref = format!("refs/heads/{}", lease.branch);
-        let lease_arg = format!("--force-with-lease={}:{}", lease_ref, lease.expected);
-        let source_ref = format!("{}:{lease_ref}", lease.local_head);
-        let command_label = format!("git push {lease_arg} {} {source_ref}", lease.remote);
-
-        let mut cmd = self.git_workdir_cmd();
-        cmd.arg("push")
-            .arg(&lease_arg)
-            .arg("--")
-            .arg(&lease.remote)
-            .arg(source_ref);
-        run_git_with_output(cmd, &command_label)
+        // Built-in force push and multi-ref publication use the same exact
+        // lease validation and command builder. The source is the captured
+        // commit, so a branch moving after the checks cannot alter the push.
+        self.push_refs_impl(
+            &lease.remote,
+            &[gitcomet_core::services::RemoteRefUpdate {
+                branch: lease.branch.clone(),
+                expected: lease.expected.clone(),
+                new: lease.local_head.clone(),
+            }],
+            false,
+        )
     }
 
     pub(super) fn head_commit_id_impl(&self) -> Result<Option<CommitId>> {

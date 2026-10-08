@@ -349,9 +349,11 @@ fn holding_a_drag_selection_past_the_file_editor_scrolls_it(test_cx: &mut gpui::
         let repo_id = gitcomet_state::model::RepoId(1150 + case as u64);
         let workdir = unique_workdir("file_editor_drag_autoscroll");
         let file_rel = PathBuf::from(filename);
+        // Keep both axes overflowing without shaping thousands of characters
+        // per line on every drag frame. The assertions below verify overflow.
         std::fs::write(
             workdir.join(&file_rel),
-            format!("{}\n", "long line ".repeat(200)).repeat(100),
+            format!("{}\n", "long line ".repeat(40)).repeat(100),
         )
         .unwrap();
         cx.update(|_window, app| {

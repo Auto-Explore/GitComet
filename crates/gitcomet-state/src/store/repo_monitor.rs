@@ -32,6 +32,8 @@ use ignore_rules::IgnoreRules;
 #[cfg(test)]
 use monitor::{EventEffect, MAX_WORKTREE_WATCH_DIRS, MonitorState, summarize};
 use monitor::{MonitorConfig, WatchSetupOutcome, repo_monitor_thread};
+#[cfg(test)]
+use monitor::{StartupProgress, WatchSetup};
 use native_watcher::MonitorWatcher;
 use plan::WatchPlan;
 use policy::{
@@ -689,3 +691,26 @@ fn path_dir_hint(event: &notify::Event) -> Option<bool> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(feature = "benchmarks")]
+pub(crate) fn watcher_startup_for_bench(
+    root: &Path,
+    backend: &dyn GitBackend,
+    cancel_during_setup: bool,
+) -> (Duration, usize, bool) {
+    let enabled = Arc::new(AtomicBool::new(true));
+    let cancel = Arc::clone(&enabled);
+    let mut config = MonitorConfig::default();
+    if cancel_during_setup {
+        config.before_registration = Some(Box::new(move || cancel.store(false, Ordering::Relaxed)));
+    }
+    let (tx, _rx) = mpsc::channel();
+    let mut state = monitor::MonitorState::default();
+    let started = Instant::now();
+    let result = state.setup(root, backend, RepoId(1), &tx, &enabled, &mut config, true);
+    let elapsed = started.elapsed();
+    let directories = state.plan.dirs.len();
+    let ready = matches!(result, monitor::WatchSetup::Ready(..));
+    drop(result);
+    (elapsed, directories, ready)
+}

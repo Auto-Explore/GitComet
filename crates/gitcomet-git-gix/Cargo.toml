@@ -52,6 +52,7 @@ smallvec = { workspace = true }
 tempfile = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
+gitcomet-win32-window-utils = { path = "../win32-window-utils" }
 winapi-util = "0.1.11"
 
 [dev-dependencies]

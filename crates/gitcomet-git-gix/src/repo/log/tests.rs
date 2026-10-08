@@ -26,15 +26,16 @@ fn git_stdout(workdir: &Path, args: &[&str]) -> String {
 
 fn init_test_repo(workdir: &Path) {
     git_success(workdir, &["init"]);
-    for args in [
-        ["config", "core.autocrlf", "false"].as_slice(),
-        ["config", "core.eol", "lf"].as_slice(),
-        ["config", "commit.gpgsign", "false"].as_slice(),
-        ["config", "user.name", "Test User"].as_slice(),
-        ["config", "user.email", "test@example.com"].as_slice(),
-    ] {
-        git_success(workdir, args);
-    }
+    gitcomet_core::test_support::git_fixture::append_config(
+        workdir,
+        &[
+            ("core.autocrlf", "false"),
+            ("core.eol", "lf"),
+            ("commit.gpgsign", "false"),
+            ("user.name", "Test User"),
+            ("user.email", "test@example.com"),
+        ],
+    );
 }
 
 fn write_file(workdir: &Path, relative: &str, contents: &str) {
@@ -1520,15 +1521,18 @@ fn worktree_file_source_memo_serves_unchanged_files_and_notices_edits() {
 
 // A settled worktree file must memoize on its first read even though that read
 // creates the cache file: the file is private to this process, so its fresh
-// timestamps cannot hide a later write. Real time, not RacyClockSkew, because
-// the skew would also age the cache file and mask the difference.
+// timestamps cannot hide a later write. Age only the worktree input: a skew
+// applied to the cache file too would mask the difference.
 #[cfg(unix)]
 #[test]
 fn worktree_file_source_memo_trusts_a_cache_file_it_just_created() {
     let tmp = tempfile::tempdir().expect("tempdir");
     init_test_repo(tmp.path());
     commit_file(tmp.path(), "settled.txt", "settled\n", "base");
-    std::thread::sleep(std::time::Duration::from_millis(2100));
+    let _clock = crate::repo::RacyClockSkew::set_for_path(
+        tmp.path().join("settled.txt"),
+        std::time::Duration::from_secs(30),
+    );
 
     let repo = open_repo(tmp.path());
     let handle = repo.repo();
@@ -1538,6 +1542,10 @@ fn worktree_file_source_memo_trusts_a_cache_file_it_just_created() {
             .expect("file exists")
     };
     let first = read();
+    assert!(
+        crate::repo::DiskFileStamp::read_for_verification_memo(&first.path).is_none(),
+        "the cache file must still be inside its timestamp race window"
+    );
     assert_eq!(
         repo.worktree_source_memo.lock().expect("memo").len(),
         1,

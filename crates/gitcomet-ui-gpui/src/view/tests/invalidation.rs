@@ -12,19 +12,13 @@ fn sidebar_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::Tes
         let _ = window.draw(app);
         view.update(app, |this, cx| this.set_sidebar_collapsed(true, cx));
     });
-    pump_for(
-        cx,
-        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
-    );
+    finish_pane_transitions(cx, &view);
 
     cx.update(|window, app| {
         let _ = window.draw(app);
         view.update(app, |this, cx| this.set_sidebar_collapsed(false, cx));
     });
-    pump_for(
-        cx,
-        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
-    );
+    finish_pane_transitions(cx, &view);
 
     cx.update(|_window, app| {
         assert!(!view.read(app).sidebar_collapsed);
@@ -43,10 +37,7 @@ fn collapsed_rail_offers_git_annex_only_in_annex_repos(cx: &mut gpui::TestAppCon
     store.replace_snapshot_for_test(Arc::new(state.clone()));
     sync_view_snapshot(cx, &view);
     cx.update(|_window, app| view.update(app, |this, cx| this.set_sidebar_collapsed(true, cx)));
-    pump_for(
-        cx,
-        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
-    );
+    finish_pane_transitions(cx, &view);
     assert!(
         !rail_has_annex_icon(cx),
         "a repository without git-annex must not get the rail icon"
@@ -80,10 +71,7 @@ fn collapsed_rail_offers_git_annex_only_in_annex_repos(cx: &mut gpui::TestAppCon
             this.open_sidebar_collapsed_popover(CollapsedSidebarSection::Annex, cx);
         });
     });
-    pump_for(
-        cx,
-        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
-    );
+    finish_pane_transitions(cx, &view);
     assert!(
         cx.debug_bounds("annex_repository_0").is_some(),
         "the popover must list the annex repositories"
@@ -107,10 +95,7 @@ fn collapsed_rail_offers_git_annex_only_in_annex_repos(cx: &mut gpui::TestAppCon
     state.repos[0].branch_sidebar_rev += 1;
     store.replace_snapshot_for_test(Arc::new(state));
     sync_view_snapshot(cx, &view);
-    pump_for(
-        cx,
-        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
-    );
+    finish_pane_transitions(cx, &view);
     assert!(!rail_has_annex_icon(cx));
     cx.update(|_window, app| {
         assert_eq!(view.read(app).sidebar_collapsed_popover, None);
@@ -133,19 +118,13 @@ fn details_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::Tes
         let _ = window.draw(app);
         view.update(app, |this, cx| this.set_details_collapsed(true, cx));
     });
-    pump_for(
-        cx,
-        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
-    );
+    finish_pane_transitions(cx, &view);
 
     cx.update(|window, app| {
         let _ = window.draw(app);
         view.update(app, |this, cx| this.set_details_collapsed(false, cx));
     });
-    pump_for(
-        cx,
-        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
-    );
+    finish_pane_transitions(cx, &view);
 
     cx.update(|_window, app| {
         assert!(!view.read(app).details_collapsed);
@@ -201,7 +180,7 @@ fn full_chrome_layout_caches_the_pane_subviews() {
         .filter(|c| !c.is_whitespace())
         .collect();
     assert!(
-        normalized.contains("letmain_content=self.repository_main_content(cx);")
+        normalized.contains("letmain_content=self.repository_main_content();")
             && router_source.contains("stable_cached_fill_view(self.main_pane.clone())"),
         "expected the full-chrome main pane to mount through the router, cached"
     );

@@ -34,6 +34,27 @@ success-output = "immediate"
 [test-groups.git-heavy]
 max-threads = 4
 
+# Measurement candidates; the ordinary CI profile remains unchanged.
+[test-groups.native-watch-4]
+max-threads = 4
+
+[test-groups.native-watch-8]
+max-threads = 8
+
+[profile.ci-watch-limited-4]
+inherits = "ci"
+
+[[profile.ci-watch-limited-4.overrides]]
+filter = 'package(=gitcomet-fs-watch) | (package(=gitcomet-state) & (test(native_sync_) | test(native_barrier_) | test(::selective::) | test(::worktree_redirect::)))'
+test-group = 'native-watch-4'
+
+[profile.ci-watch-limited-8]
+inherits = "ci"
+
+[[profile.ci-watch-limited-8.overrides]]
+filter = 'package(=gitcomet-fs-watch) | (package(=gitcomet-state) & (test(native_sync_) | test(native_barrier_) | test(::selective::) | test(::worktree_redirect::)))'
+test-group = 'native-watch-8'
+
 [profile.ci-git-limited]
 inherits = "ci"
 
@@ -48,5 +69,13 @@ test-group = 'git-heavy'
 inherits = "ci"
 
 [[profile.ci-watch-first.overrides]]
+filter = 'package(=gitcomet-state) & (test(=store::repo_monitor::tests::selective::native_lifecycle::repeated_directory_recreation_stops_stale_callbacks_and_keeps_crud_visible) | test(=store::repo_monitor::tests::selective::efficiency::ignored_directory_replaced_by_file_keeps_creation_and_edits_visible) | test(=store::repo_monitor::tests::selective::native_monitor_rebuilds_after_ignore_edits_moves_and_atomic_saves) | test(=store::repo_monitor::tests::selective::native_lifecycle::replacing_repository_root_detaches_old_tree_and_watches_replacement) | test(=store::repo_monitor::tests::selective::native_lifecycle::recreated_external_policy_parent_is_revalidated_without_native_watches) | test(=store::repo_monitor::tests::selective::native_lifecycle::repeated_atomic_file_replacement_keeps_later_in_place_edits_visible))'
+priority = 100
+
+# Combine the existing limits and priority policy without changing coverage.
+[profile.ci-throughput]
+inherits = "ci-git-limited"
+
+[[profile.ci-throughput.overrides]]
 filter = 'package(=gitcomet-state) & (test(=store::repo_monitor::tests::selective::native_lifecycle::repeated_directory_recreation_stops_stale_callbacks_and_keeps_crud_visible) | test(=store::repo_monitor::tests::selective::efficiency::ignored_directory_replaced_by_file_keeps_creation_and_edits_visible) | test(=store::repo_monitor::tests::selective::native_monitor_rebuilds_after_ignore_edits_moves_and_atomic_saves) | test(=store::repo_monitor::tests::selective::native_lifecycle::replacing_repository_root_detaches_old_tree_and_watches_replacement) | test(=store::repo_monitor::tests::selective::native_lifecycle::recreated_external_policy_parent_is_revalidated_without_native_watches) | test(=store::repo_monitor::tests::selective::native_lifecycle::repeated_atomic_file_replacement_keeps_later_in_place_edits_visible))'
 priority = 100

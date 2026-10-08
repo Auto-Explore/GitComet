@@ -386,15 +386,15 @@ impl SettingsWindowView {
                 }),
             );
 
-        let terminal_action_bar_row = self
+        let terminal_button_row = self
             .summary_row(
-                "settings_window_terminal_action_bar",
-                "Action bar terminal button opens",
+                "settings_window_terminal_button",
+                "Terminal button opens",
                 self.terminal_preferences
-                    .action_bar_terminal_target
+                    .terminal_button_target
                     .label()
                     .into(),
-                self.expanded_section == Some(SettingsSection::TerminalActionBar),
+                self.expanded_section == Some(SettingsSection::TerminalButton),
                 theme,
             )
             .border_color(no_separator)
@@ -402,7 +402,7 @@ impl SettingsWindowView {
                 false,
                 controls::ControlActivation::Action,
                 cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                    this.toggle_section(SettingsSection::TerminalActionBar, cx);
+                    this.toggle_section(SettingsSection::TerminalButton, cx);
                 }),
             );
 
@@ -590,8 +590,8 @@ impl SettingsWindowView {
             }
         }
 
-        terminal_card = terminal_card.child(terminal_action_bar_row);
-        if self.expanded_section == Some(SettingsSection::TerminalActionBar) {
+        terminal_card = terminal_card.child(terminal_button_row);
+        if self.expanded_section == Some(SettingsSection::TerminalButton) {
             terminal_card = terminal_card
                 .child(
                     div()
@@ -600,7 +600,7 @@ impl SettingsWindowView {
                         .text_size(theme.ui_text(12.0))
                         .text_color(theme.colors.foreground.secondary)
                         .child(
-                            "Choose what the action bar terminal button opens. Global shortcuts for each can be configured separately.",
+                            "Choose what the terminal button opens. Global shortcuts for each can be configured separately.",
                         ),
                 )
                 .child(
@@ -611,17 +611,17 @@ impl SettingsWindowView {
                         .gap_1()
                         .child(
                             self.option_row(
-                                "settings_window_terminal_action_bar_embedded",
-                                ActionBarTerminalTarget::Embedded.label(),
+                                "settings_window_terminal_button_embedded",
+                                TerminalButtonTarget::Embedded.label(),
                                 Some("Toggle the embedded terminal panel".into()),
-                                self.terminal_preferences.action_bar_terminal_target
-                                    == ActionBarTerminalTarget::Embedded,
+                                self.terminal_preferences.terminal_button_target
+                                    == TerminalButtonTarget::Embedded,
                                 theme,
                             )
                             .on_activate(false, controls::ControlActivation::Action, cx.listener(
                                 |this, _e: &ClickEvent, _window, cx| {
-                                    this.set_action_bar_terminal_target(
-                                        ActionBarTerminalTarget::Embedded,
+                                    this.set_terminal_button_target(
+                                        TerminalButtonTarget::Embedded,
                                         cx,
                                     );
                                 },
@@ -629,17 +629,17 @@ impl SettingsWindowView {
                         )
                         .child(
                             self.option_row(
-                                "settings_window_terminal_action_bar_external",
-                                ActionBarTerminalTarget::External.label(),
+                                "settings_window_terminal_button_external",
+                                TerminalButtonTarget::External.label(),
                                 Some("Launch the external terminal".into()),
-                                self.terminal_preferences.action_bar_terminal_target
-                                    == ActionBarTerminalTarget::External,
+                                self.terminal_preferences.terminal_button_target
+                                    == TerminalButtonTarget::External,
                                 theme,
                             )
                             .on_activate(false, controls::ControlActivation::Action, cx.listener(
                                 |this, _e: &ClickEvent, _window, cx| {
-                                    this.set_action_bar_terminal_target(
-                                        ActionBarTerminalTarget::External,
+                                    this.set_terminal_button_target(
+                                        TerminalButtonTarget::External,
                                         cx,
                                     );
                                 },

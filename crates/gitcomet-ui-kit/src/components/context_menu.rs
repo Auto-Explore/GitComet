@@ -398,11 +398,14 @@ fn context_menu_entry<V: 'static>(
         ContextMenuIconSlot::Reserved | ContextMenuIconSlot::None => None,
     };
     let icon_color = context_menu_icon_color(theme, disabled, label.as_ref(), icon_path);
-    // An extension's own asset (`extensions/<id>/…`) is drawn as given.
+    // An extension's own asset (`extensions/<id>/…`), or a kit icon the
+    // table does not name, is drawn as given.
     let drawn_icon = icon_path
         .map(SharedString::new_static)
         .or_else(|| match &icon {
-            ContextMenuIconSlot::Icon(name) if name.starts_with("extensions/") => {
+            ContextMenuIconSlot::Icon(name)
+                if name.starts_with("extensions/") || name.starts_with("icons/") =>
+            {
                 Some(name.clone())
             }
             _ => None,
@@ -844,16 +847,24 @@ mod tests {
             cx: &mut gpui::Context<Self>,
         ) -> impl IntoElement {
             let scale = crate::ui_scale::UiScale::current(cx);
-            ContextMenuEntry::new("ext", "Mark reviewed")
-                .icon(ContextMenuIconSlot::Icon(
-                    "extensions/com.example.review/icons/review.svg".into(),
-                ))
-                .render(self.theme, scale, cx)
+            gpui::div()
+                .child(
+                    ContextMenuEntry::new("ext", "Mark reviewed")
+                        .icon(ContextMenuIconSlot::Icon(
+                            "extensions/com.example.review/icons/review.svg".into(),
+                        ))
+                        .render(self.theme, scale, cx),
+                )
+                .child(
+                    ContextMenuEntry::new("kit", "Agents")
+                        .icon(ContextMenuIconSlot::Icon("icons/terminal.svg".into()))
+                        .render(self.theme, scale, cx),
+                )
         }
     }
 
-    /// An extension's own asset is drawn as given: it is not in the kit's
-    /// icon table, and dropping it left a blank slot.
+    /// An extension's own asset, and a kit icon the table does not name, are
+    /// drawn as given: dropping them left a blank slot.
     #[gpui::test]
     fn extension_menu_icons_draw_their_asset(cx: &mut gpui::TestAppContext) {
         let _guard = crate::test_support::lock_visual_test();
@@ -864,6 +875,7 @@ mod tests {
             cx.debug_bounds("context_menu_entry_icon_Mark reviewed")
                 .is_some()
         );
+        assert!(cx.debug_bounds("context_menu_entry_icon_Agents").is_some());
     }
 
     #[gpui::test]

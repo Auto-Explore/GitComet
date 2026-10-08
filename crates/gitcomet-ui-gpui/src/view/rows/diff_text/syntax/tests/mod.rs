@@ -1,19 +1,6 @@
 use super::*;
 use std::time::{Duration, Instant};
 
-/// Serializes tests that reset or assert on the shared syntax instrumentation
-/// counters. Without this lock, concurrent tests can reset or bump those
-/// counters while another test is asserting on them, causing flaky failures
-/// under parallel test execution.
-static GLOBAL_COUNTER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-fn lock_global_counter_tests() -> std::sync::MutexGuard<'static, ()> {
-    match GLOBAL_COUNTER_TEST_LOCK.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    }
-}
-
 fn assert_token_ranges_are_utf8_safe(text: &str, tokens: &[SyntaxToken]) {
     for token in tokens {
         assert!(
@@ -46,20 +33,17 @@ fn has_token_kind_and_text(
 }
 
 struct TempFileBackedLineFixture {
-    path: std::path::PathBuf,
     raw_text: gitcomet_core::file_diff::FileDiffLineText,
+    _file: tempfile::NamedTempFile,
 }
 
 impl TempFileBackedLineFixture {
     fn new(name: &str, text: &str) -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "gitcomet_{name}_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("clock should be monotonic enough for test temp path")
-                .as_nanos()
-        ));
+        let file = tempfile::Builder::new()
+            .prefix(&format!("gitcomet_{name}_"))
+            .tempfile()
+            .unwrap();
+        let path = file.path().to_path_buf();
         std::fs::write(&path, text.as_bytes()).expect("write streamed slice fixture");
         let raw_text = gitcomet_core::file_diff::FileDiffLineText::file_slice(
             Arc::new(path.clone()),
@@ -67,13 +51,10 @@ impl TempFileBackedLineFixture {
             false,
             false,
         );
-        Self { path, raw_text }
-    }
-}
-
-impl Drop for TempFileBackedLineFixture {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        Self {
+            raw_text,
+            _file: file,
+        }
     }
 }
 
@@ -132,14 +113,6 @@ fn reset_ts_parser_test_state() {
 
 fn ts_parser_set_language_call_count() -> usize {
     TS_PARSER_SET_LANGUAGE_CALL_COUNT.with(Cell::get)
-}
-
-fn with_silenced_panic_hook<R>(f: impl FnOnce() -> R) -> R {
-    let previous_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let result = f();
-    std::panic::set_hook(previous_hook);
-    result
 }
 
 /// Incremental reparsing must leave the injection cache one document deep.
@@ -468,6 +441,7 @@ mod grammar_compat;
 mod heuristic;
 mod injection_cache;
 mod injections;
+mod isolation;
 mod language;
 mod nix_jinja;
 mod normalization;

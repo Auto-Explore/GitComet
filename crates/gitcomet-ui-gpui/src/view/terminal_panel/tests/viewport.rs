@@ -815,3 +815,39 @@ fn terminal_selection_follows_window_ownership(cx: &mut gpui::TestAppContext) {
         "another surface taking the selection must clear the terminal's"
     );
 }
+
+#[gpui::test]
+fn a_busy_parser_does_not_block_paint_or_scrollbar_reads(cx: &mut gpui::TestAppContext) {
+    let term = test_term_with_lines(30);
+    let (view, cx) = test_viewport(term.clone(), cx);
+    with_viewport(&view, cx, |view, window, cx| {
+        view.build_terminal_canvas_paint_state(test_viewport_bounds(), window, cx);
+    });
+    // Hold the parser lock in this thread: any blocking paint read would
+    // deadlock. Cached content and scrollbar metadata must remain available.
+    let parser = term.lock();
+    with_viewport(&view, cx, |view, window, cx| {
+        let state = view.build_terminal_canvas_paint_state(test_viewport_bounds(), window, cx);
+        assert!(!state.lines.is_empty());
+        assert!(view.paint_retry_scheduled);
+        let content = view.last_content.as_ref().unwrap();
+        let driver = super::super::viewport::TerminalScrollbarDriver {
+            term_lock: Some(term.clone()),
+            line_height: px(TEST_LINE_H),
+            fallback_history: content.history_size,
+            fallback_display: content.display_offset,
+        };
+        use crate::kit::ScrollbarDriver;
+        assert!(driver.max_offset(ScrollbarAxis::Vertical) > px(0.));
+        assert!(driver.raw_offset(ScrollbarAxis::Vertical) < px(0.));
+    });
+    drop(parser);
+    with_viewport(&view, cx, |view, window, cx| {
+        assert!(
+            !view
+                .build_terminal_canvas_paint_state(test_viewport_bounds(), window, cx)
+                .lines
+                .is_empty()
+        );
+    });
+}

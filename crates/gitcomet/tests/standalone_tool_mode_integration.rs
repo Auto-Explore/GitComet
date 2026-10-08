@@ -1,6 +1,7 @@
 use gitcomet_core::process::background_command as no_window_command;
 use gitcomet_core::test_support::git_fixture::{
-    FixtureTimer, LinearCommit, append_config, import_linear_history, init_repository,
+    FixtureTimer, LinearCommit, append_config, capture_tool_help, import_linear_history,
+    init_repository,
 };
 #[path = "support/gitcomet_bin.rs"]
 mod gitcomet_test_bin;
@@ -1734,7 +1735,7 @@ fn setup_local_mergetool_tool_help_lists_headless_and_gui_entries() {
     let setup_text = output_text(&setup);
     assert_eq!(setup.status.code(), Some(0), "setup failed\n{setup_text}");
 
-    let tool_help = setup_e2e_git_capture(repo, &["mergetool", "--tool-help"]);
+    let tool_help = capture_tool_help(no_window_command("git").arg("-C").arg(repo), "mergetool");
     let text = output_text(&tool_help);
     assert!(
         tool_help.status.success(),
@@ -1769,7 +1770,7 @@ fn setup_local_difftool_tool_help_lists_headless_and_gui_entries() {
     let setup_text = output_text(&setup);
     assert_eq!(setup.status.code(), Some(0), "setup failed\n{setup_text}");
 
-    let tool_help = setup_e2e_git_capture(repo, &["difftool", "--tool-help"]);
+    let tool_help = capture_tool_help(no_window_command("git").arg("-C").arg(repo), "difftool");
     let text = output_text(&tool_help);
     assert!(
         tool_help.status.success(),
@@ -2877,7 +2878,9 @@ fn setup_global_mergetool_tool_help_lists_headless_and_gui_entries() {
         "expected mergetool.guiDefault=auto in isolated global config"
     );
 
-    let tool_help = setup_e2e_git_capture_with_env(&repo, &["mergetool", "--tool-help"], &env);
+    let mut command = no_window_command("git");
+    env.apply_to_command(&mut command);
+    let tool_help = capture_tool_help(command.arg("-C").arg(&repo), "mergetool");
     let text = output_text(&tool_help);
     assert!(
         tool_help.status.success(),
@@ -2926,7 +2929,9 @@ fn setup_global_difftool_tool_help_lists_headless_and_gui_entries() {
         "expected difftool.guiDefault=auto in isolated global config"
     );
 
-    let tool_help = setup_e2e_git_capture_with_env(&repo, &["difftool", "--tool-help"], &env);
+    let mut command = no_window_command("git");
+    env.apply_to_command(&mut command);
+    let tool_help = capture_tool_help(command.arg("-C").arg(&repo), "difftool");
     let text = output_text(&tool_help);
     assert!(
         tool_help.status.success(),

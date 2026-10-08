@@ -167,6 +167,8 @@ pub(super) fn schedule_effect(
     msg_tx: StoreWorkerSender,
     effect: Effect,
 ) {
+    #[cfg(any(test, feature = "test-support"))]
+    let _test_scope = super::test_support::TestTaskScope::enter(Arc::clone(&msg_tx.test_tasks));
     let EffectExecutors {
         executor,
         repo_load_executor,

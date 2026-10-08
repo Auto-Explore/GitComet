@@ -7,38 +7,29 @@ pub(super) fn mode_toggle<V: 'static>(
     preview_disabled: bool,
     theme: AppTheme,
     cx: &mut gpui::Context<V>,
-    select: impl Fn(&mut V, RenderedPreviewMode, &mut Window, &mut gpui::Context<V>) + Clone + 'static,
+    select: impl Fn(&mut V, RenderedPreviewMode, &mut Window, &mut gpui::Context<V>) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
-    let select_preview = select.clone();
-    div()
-        .id(kind.toggle_id())
-        .debug_selector(move || kind.toggle_id().to_string())
-        .flex()
-        .items_center()
-        .gap_1()
-        .child(
-            components::Button::new(kind.rendered_button_id(), kind.rendered_label())
-                .style(if mode == RenderedPreviewMode::Rendered {
-                    components::ButtonStyle::Filled
-                } else {
-                    components::ButtonStyle::Outlined
-                })
+    let scale = ui_scale::UiScale::current(cx).with_appearance(theme.metrics);
+    components::SegmentedControl::new(kind.toggle_id())
+        .segment(
+            components::Segment::new(kind.rendered_button_id(), kind.rendered_label())
+                .selected(mode == RenderedPreviewMode::Rendered)
                 .disabled(preview_disabled)
-                .on_click(theme, cx, move |this, _, window, cx| {
-                    select_preview(this, RenderedPreviewMode::Rendered, window, cx);
-                }),
+                .tooltip("Show rendered preview", Vec::new()),
         )
-        .child(
-            components::Button::new(kind.source_button_id(), kind.source_label())
-                .style(if mode == RenderedPreviewMode::Source {
-                    components::ButtonStyle::Filled
-                } else {
-                    components::ButtonStyle::Outlined
-                })
-                .on_click(theme, cx, move |this, _, window, cx| {
-                    select(this, RenderedPreviewMode::Source, window, cx);
-                }),
+        .segment(
+            components::Segment::new(kind.source_button_id(), kind.source_label())
+                .selected(mode == RenderedPreviewMode::Source)
+                .tooltip("Show source text", Vec::new()),
         )
+        .render(theme, scale, cx, move |this, index, window, cx| {
+            let mode = if index == 0 {
+                RenderedPreviewMode::Rendered
+            } else {
+                RenderedPreviewMode::Source
+            };
+            select(this, mode, window, cx);
+        })
 }
 
 pub(super) enum PreviewContent {

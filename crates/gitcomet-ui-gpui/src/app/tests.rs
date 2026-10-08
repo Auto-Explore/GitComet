@@ -1911,6 +1911,8 @@ impl Render for KeyBindingProbe {
             .on_action(record_action_listener!(crate::kit::Redo))
             .on_action(record_action_listener!(crate::view::DiffPrevFile))
             .on_action(record_action_listener!(crate::view::DiffNextFile))
+            .on_action(record_action_listener!(crate::view::DiffPrevChange))
+            .on_action(record_action_listener!(crate::view::DiffNextChange))
             .on_action(record_action_listener!(
                 crate::view::DiffPrevSearchMatchOrChange
             ))
@@ -2222,6 +2224,10 @@ fn text_input_diff_keybindings_stay_scoped_when_app_keys_are_installed(
     let cases = [
         ("f1", crate::view::TextInputDiffPrevFile.name()),
         ("f4", crate::view::TextInputDiffNextFile.name()),
+        ("alt-up", crate::view::TextInputDiffPrevChange.name()),
+        ("alt-down", crate::view::TextInputDiffNextChange.name()),
+        ("alt-left", crate::kit::WordLeft.name()),
+        ("alt-right", crate::kit::WordRight.name()),
         (
             "f2",
             crate::view::TextInputDiffPrevSearchMatchOrChange.name(),
@@ -2487,6 +2493,10 @@ fn app_keybindings_resolve_expected_actions(cx: &mut gpui::TestAppContext) {
         ("secondary-q", Quit.name()),
         ("f1", crate::view::DiffPrevFile.name()),
         ("f4", crate::view::DiffNextFile.name()),
+        ("alt-left", crate::view::DiffPrevFile.name()),
+        ("alt-right", crate::view::DiffNextFile.name()),
+        ("alt-up", crate::view::DiffPrevChange.name()),
+        ("alt-down", crate::view::DiffNextChange.name()),
         ("f2", crate::view::DiffPrevSearchMatchOrChange.name()),
         ("f3", crate::view::DiffNextSearchMatchOrChange.name()),
     ];

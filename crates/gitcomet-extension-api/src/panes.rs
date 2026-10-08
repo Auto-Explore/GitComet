@@ -294,7 +294,10 @@ impl DiffInset {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DiffLayout {
+    /// The user's own choice in Settings > Diff, as History's diff shows it.
+    /// The pane's toolbar can still switch it.
     #[default]
+    Preferred,
     Inline,
     Split,
 }
@@ -332,6 +335,8 @@ pub struct DiffPaneOptions {
     /// annotation. Both need [`DiffPanePolicy::line_action`].
     pub on_annotation_click: Option<DiffGutterAction>,
     pub selection_actions: Vec<DiffSelectionAction>,
+    /// The bottom bar's place in the owner's list and its buttons.
+    pub bar: DiffBar,
 }
 
 /// File navigation belongs to the pane's owner and its ordered file list.
@@ -339,6 +344,71 @@ pub struct DiffPaneOptions {
 pub struct DiffFileNavigation {
     pub previous: Option<crate::HostedAction>,
     pub next: Option<crate::HostedAction>,
+}
+
+/// Where the shown file sits in its owner's list: zero-based `index` of
+/// `count`. The bar shows it as "3 of 43 files" and disables the file arrows
+/// at either end.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct DiffFilePosition {
+    pub index: usize,
+    pub count: usize,
+}
+
+impl DiffFilePosition {
+    pub fn new(index: usize, count: usize) -> Self {
+        Self { index, count }
+    }
+
+    /// The count's label, shared by the host and extension bars.
+    pub fn label(self) -> String {
+        match self.count {
+            1 => "1 of 1 file".to_string(),
+            n => format!("{} of {n} files", self.index + 1),
+        }
+    }
+}
+
+/// A toolbar action with the pane's selected file lines as its context.
+/// Use `enabled_when` for selection-dependent or other contextual eligibility.
+/// Rendering and deferred invocation are shared with the host's built-in actions.
+pub type DiffBarItem = gitcomet_ui_kit::components::ActionButton<Option<DiffLineRange>>;
+pub type DiffBarItemStyle = gitcomet_ui_kit::components::ActionButtonStyle;
+pub type DiffBarRun = gitcomet_ui_kit::components::ActionRun<Option<DiffLineRange>>;
+
+/// The pane's bottom bar, as its owner fills it: where the file sits in the
+/// owner's list, and buttons for what the owner does with it. The host draws
+/// the file arrows from [`DiffFileNavigation`] and its own format controls.
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
+pub struct DiffBar {
+    pub position: Option<DiffFilePosition>,
+    pub items: Vec<DiffBarItem>,
+    /// Arbitrary owner-built controls, mounted after the standard actions.
+    /// Their entity owns its state and redraws independently of the pane.
+    pub content: Option<AnyView>,
+}
+
+impl DiffBar {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_position(mut self, index: usize, count: usize) -> Self {
+        self.position = Some(DiffFilePosition::new(index, count));
+        self
+    }
+
+    pub fn with_item(mut self, item: DiffBarItem) -> Self {
+        self.items.push(item);
+        self
+    }
+
+    pub fn with_content(mut self, content: AnyView) -> Self {
+        self.content = Some(content);
+        self
+    }
 }
 
 /// Two texts compared without a repository, such as the files a difftool
@@ -412,6 +482,10 @@ pub trait DiffPaneImpl {
     fn scroll_anchor(&self, cx: &App) -> Option<DiffScrollAnchor>;
     fn restore_scroll_anchor(&self, anchor: DiffScrollAnchor, cx: &mut App);
     fn set_file_navigation(&self, navigation: DiffFileNavigation, cx: &mut App);
+    /// Replaces the bottom bar's position and buttons.
+    fn set_bar(&self, bar: DiffBar, cx: &mut App) {
+        let _ = (bar, cx);
+    }
 }
 
 /// An owning handle to a hosted diff pane. Mount [`DiffPane::view`] in a view
@@ -501,6 +575,11 @@ impl DiffPane {
     pub fn set_file_navigation(&self, navigation: DiffFileNavigation, cx: &mut App) {
         self.0.set_file_navigation(navigation, cx);
     }
+    /// Replaces the bottom bar's position and buttons, as
+    /// [`DiffPaneOptions::bar`] set them at creation.
+    pub fn set_bar(&self, bar: DiffBar, cx: &mut App) {
+        self.0.set_bar(bar, cx);
+    }
 }
 
 /// How a file list arranges its files. A new list starts in the layout the
@@ -526,6 +605,13 @@ pub type FileSelected = Rc<dyn Fn(&CommitFileChange, DiffTarget, &mut App)>;
 #[doc(hidden)]
 pub trait FileListImpl {
     fn view(&self) -> AnyView;
+    fn observe(
+        &self,
+        _on_change: Rc<dyn Fn(&mut App)>,
+        _cx: &mut App,
+    ) -> Option<gitcomet_ui_kit::gpui::Subscription> {
+        None
+    }
     fn set_source(&self, source: ChangeSource, cx: &mut App);
     fn set_mode(&self, mode: FileListMode, cx: &mut App);
     fn set_sort(&self, sort: crate::FileListSort, cx: &mut App);
@@ -557,6 +643,14 @@ pub trait FileListImpl {
 pub struct FileList(Rc<dyn FileListImpl>);
 
 impl FileList {
+    /// Observe list changes, including the user's sort, layout and filters.
+    pub fn observe(
+        &self,
+        on_change: impl Fn(&mut App) + 'static,
+        cx: &mut App,
+    ) -> Option<gitcomet_ui_kit::gpui::Subscription> {
+        self.0.observe(Rc::new(on_change), cx)
+    }
     /// Orders the files. A worktree source's line counts and edits come from
     /// the status lane it lists, so the edit-size and
     /// [`Edits`](crate::FileListSort::Edits) sorts work there too.

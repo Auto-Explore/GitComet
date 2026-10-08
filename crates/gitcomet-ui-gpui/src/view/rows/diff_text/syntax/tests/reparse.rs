@@ -73,7 +73,6 @@ fn treesitter_point_for_byte_maps_newline_terminated_eof_to_next_row() {
 
 #[test]
 fn small_reparse_reuses_old_tree_with_input_edit() {
-    let _lock = lock_global_counter_tests();
     reset_deferred_drop_counters();
     let base_lines = vec!["let value = 1;".to_string(); 256];
     let base_document = prepare_test_document(DiffSyntaxLanguage::Rust, &base_lines.join("\n"));
@@ -119,7 +118,6 @@ fn small_reparse_reuses_old_tree_with_input_edit() {
 
 #[test]
 fn unchanged_reparse_reuses_old_document_without_rehashing() {
-    let _lock = lock_global_counter_tests();
     reset_deferred_drop_counters();
     reset_prepared_syntax_cache();
 
@@ -168,7 +166,6 @@ fn unchanged_reparse_reuses_old_document_without_rehashing() {
 
 #[test]
 fn small_reparse_without_edit_hint_does_not_rehash_full_source() {
-    let _lock = lock_global_counter_tests();
     reset_deferred_drop_counters();
     reset_prepared_syntax_cache();
 
@@ -224,7 +221,6 @@ fn small_reparse_without_edit_hint_does_not_rehash_full_source() {
 
 #[test]
 fn small_reparse_reuses_cached_prefix_chunks_before_the_edit() {
-    let _lock = lock_global_counter_tests();
     reset_deferred_drop_counters();
     reset_prepared_syntax_cache();
 
@@ -284,7 +280,6 @@ fn small_reparse_reuses_cached_prefix_chunks_before_the_edit() {
 
 #[test]
 fn small_reparse_reuses_old_tree_with_explicit_edit_hint_text_input() {
-    let _lock = lock_global_counter_tests();
     reset_deferred_drop_counters();
 
     let base_text = "let value = 1;\n".repeat(256);
@@ -333,7 +328,6 @@ fn small_reparse_reuses_old_tree_with_explicit_edit_hint_text_input() {
 
 #[test]
 fn large_reparse_falls_back_to_full_parse() {
-    let _lock = lock_global_counter_tests();
     reset_deferred_drop_counters();
     let base_lines = vec!["let value = 1;".to_string(); 256];
     let base_document = prepare_test_document(DiffSyntaxLanguage::Rust, &base_lines.join("\n"));
@@ -367,7 +361,6 @@ fn large_reparse_falls_back_to_full_parse() {
 
 #[test]
 fn large_late_edit_with_preserved_prefix_can_stay_incremental() {
-    let _lock = lock_global_counter_tests();
     reset_deferred_drop_counters();
 
     let base_lines = (0..256)
@@ -411,7 +404,6 @@ fn large_late_edit_with_preserved_prefix_can_stay_incremental() {
 
 #[test]
 fn incremental_reparse_append_line_matches_full_parse_tokens() {
-    let _lock = lock_global_counter_tests();
     reset_deferred_drop_counters();
 
     let base_lines = vec!["let value = 41;".to_string(); 256];
@@ -476,7 +468,6 @@ fn incremental_reparse_append_line_matches_full_parse_tokens() {
 
 #[test]
 fn large_cache_replacement_uses_deferred_drop_queue() {
-    let _lock = lock_global_counter_tests();
     reset_deferred_drop_counters();
 
     let mut cache = TreesitterDocumentCache::new();
@@ -509,7 +500,6 @@ fn large_cache_replacement_uses_deferred_drop_queue() {
 
 #[test]
 fn small_cache_replacement_keeps_inline_drop_path() {
-    let _lock = lock_global_counter_tests();
     reset_deferred_drop_counters();
 
     let mut cache = TreesitterDocumentCache::new();
@@ -582,7 +572,6 @@ fn cached_document_drop_payload_bytes_match_flattened_chunks() {
 
 #[test]
 fn large_cache_eviction_uses_deferred_drop_queue() {
-    let _lock = lock_global_counter_tests();
     reset_deferred_drop_counters();
 
     let mut cache = TreesitterDocumentCache::new();
@@ -697,7 +686,6 @@ fn small_full_documents_keep_default_foreground_probe() {
 
 #[test]
 fn background_text_reparse_reuses_old_tree_without_explicit_edit_hint() {
-    let _lock = lock_global_counter_tests();
     reset_deferred_drop_counters();
 
     let base_text = "let value = 1;\n".repeat(256);
@@ -748,7 +736,6 @@ fn background_text_reparse_reuses_old_tree_without_explicit_edit_hint() {
 
 #[test]
 fn background_text_reparse_reuses_old_tree_with_explicit_edit_hint() {
-    let _lock = lock_global_counter_tests();
     reset_deferred_drop_counters();
 
     let base_text = "let value = 1;\n".repeat(256);
@@ -803,7 +790,6 @@ fn background_text_reparse_reuses_old_tree_with_explicit_edit_hint() {
 
 #[test]
 fn background_seed_reuses_cached_prefix_chunks_before_large_edit_fallback() {
-    let _lock = lock_global_counter_tests();
     reset_deferred_drop_counters();
     reset_prepared_syntax_cache();
 

@@ -31,14 +31,24 @@ fn alt_shortcut_for(suffix: &str, is_macos: bool) -> String {
     }
 }
 
-/// Tooltip for every diff surface's previous-change button.
-pub(crate) fn previous_change_tooltip() -> String {
-    format!("Previous change (F2 / Shift+F7 / {})", alt_shortcut("Up"))
+/// The keys for every diff surface's previous-file button.
+pub(crate) fn previous_file_shortcuts() -> Vec<gpui::SharedString> {
+    vec!["F1".into(), alt_shortcut("Left").into()]
 }
 
-/// Tooltip for every diff surface's next-change button.
-pub(crate) fn next_change_tooltip() -> String {
-    format!("Next change (F3 / F7 / {})", alt_shortcut("Down"))
+/// The keys for every diff surface's next-file button.
+pub(crate) fn next_file_shortcuts() -> Vec<gpui::SharedString> {
+    vec!["F4".into(), alt_shortcut("Right").into()]
+}
+
+/// The keys for every diff surface's previous-change button.
+pub(crate) fn previous_change_shortcuts() -> Vec<gpui::SharedString> {
+    vec!["F2".into(), "Shift+F7".into(), alt_shortcut("Up").into()]
+}
+
+/// The keys for every diff surface's next-change button.
+pub(crate) fn next_change_shortcuts() -> Vec<gpui::SharedString> {
+    vec!["F3".into(), "F7".into(), alt_shortcut("Down").into()]
 }
 
 /// A displayable shortcut attached to a command-palette entry.
@@ -76,43 +86,11 @@ impl Shortcut {
                 Some(if is_macos { *macos } else { *other }.to_string())
             }
             Shortcut::MacOs(label) => is_macos.then(|| (*label).to_string()),
-            Shortcut::Keystrokes(source) => Some(keystrokes_label(source, is_macos)),
+            Shortcut::Keystrokes(source) => Some(crate::kit::components::keystrokes_label_for(
+                source, is_macos,
+            )),
         }
     }
-}
-
-/// `secondary-shift-k g` → "Ctrl+Shift+K G" (Cmd on macOS). The modifiers
-/// come from GPUI's parse, which resolves `secondary` for this platform.
-fn keystrokes_label(source: &str, is_macos: bool) -> String {
-    let chords: Vec<String> = source
-        .split_whitespace()
-        .map(|chord| {
-            let Ok(keystroke) = gpui::Keystroke::parse(chord) else {
-                return chord.to_string();
-            };
-            let modifiers = keystroke.modifiers;
-            let mut parts: Vec<String> = Vec::new();
-            if modifiers.control {
-                parts.push("Ctrl".into());
-            }
-            if modifiers.alt {
-                parts.push(if is_macos { "Option" } else { "Alt" }.into());
-            }
-            if modifiers.shift {
-                parts.push("Shift".into());
-            }
-            if modifiers.platform {
-                parts.push(if is_macos { "Cmd" } else { "Super" }.into());
-            }
-            let mut key = keystroke.key.chars();
-            parts.push(match key.next() {
-                Some(first) => first.to_uppercase().chain(key).collect(),
-                None => String::new(),
-            });
-            parts.join("+")
-        })
-        .collect();
-    chords.join(" ")
 }
 
 #[cfg(test)]

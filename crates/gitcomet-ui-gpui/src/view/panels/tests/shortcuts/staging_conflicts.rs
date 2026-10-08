@@ -786,3 +786,200 @@ fn detached_window_focus_conflict_quick_pick_uses_global_diff_shortcut_fallback(
         "expected conflict quick-pick key from detached focus to pick the first conflict and advance"
     );
 }
+
+/// The bottom bar's Stage is Space by another route: it stages the shown file
+/// and opens the next one in its section, then hands focus back to the diff
+/// so the next Space carries on.
+#[gpui::test]
+fn the_bar_stage_button_stages_and_advances_like_space(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70565);
+    let commit_id = CommitId("abcdef0011223389".into());
+    let workdir =
+        std::env::temp_dir().join(format!("gitcomet_ui_test_{}_bar_stage", std::process::id()));
+    let first = std::path::PathBuf::from("src/first.rs");
+    let second = std::path::PathBuf::from("src/second.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        &[first.clone(), second.clone()],
+        &first,
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    draw_and_drain_test_window(cx);
+
+    assert_eq!(diff_bar_stage_label(cx, &view).as_deref(), Some("Stage"));
+    assert_eq!(
+        diff_bar_position(cx, &view).as_deref(),
+        Some("1 of 2 files")
+    );
+    let button = cx
+        .debug_bounds("diff_bar_stage")
+        .expect("a working-tree file offers Stage");
+    cx.simulate_click(button.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    wait_until_store_diff_target_path(cx, &view, second.as_path());
+    sync_store_snapshot(cx, &view);
+
+    assert_eq!(active_worktree_diff_target_path(cx, &view), Some(second));
+    assert!(
+        cx.update(|window, app| {
+            let main_pane = view.read(app).main_pane.clone();
+            main_pane
+                .read(app)
+                .diff_panel_focus_handle
+                .is_focused(window)
+        }),
+        "the click hands focus back to the diff"
+    );
+}
+
+/// A staged file offers Unstage.
+#[gpui::test]
+fn the_bar_offers_unstage_for_a_staged_file(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70566);
+    let commit_id = CommitId("abcdef001122338a".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_bar_unstage",
+        std::process::id()
+    ));
+    let staged = std::path::PathBuf::from("src/staged.rs");
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&staged),
+        &staged,
+    );
+    repo.status = Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
+                path: staged.clone(),
+                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                conflict: None,
+            }]),
+            unstaged: std::sync::Arc::new(vec![]),
+        }
+        .into(),
+    );
+    let target = DiffTarget::working_tree(staged, DiffArea::Staged);
+    repo.diff_state.diff_target = Some(target.clone());
+    repo.diff_state.diff = Loadable::Ready(simple_hunk_diff(target).into());
+    repo.diff_state.diff_rev = 2;
+    repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    draw_and_drain_test_window(cx);
+
+    assert_eq!(diff_bar_stage_label(cx, &view).as_deref(), Some("Unstage"));
+    assert_eq!(diff_bar_position(cx, &view).as_deref(), Some("1 of 1 file"));
+}
+
+/// With several rows selected, the button names how many it takes, and a
+/// click consumes the selection the way Space does.
+#[gpui::test]
+fn the_bar_stage_button_takes_the_selected_files(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70567);
+    let commit_id = CommitId("abcdef001122338b".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_bar_stage_selection",
+        std::process::id()
+    ));
+    let first = std::path::PathBuf::from("src/first.rs");
+    let second = std::path::PathBuf::from("src/second.rs");
+    let third = std::path::PathBuf::from("src/third.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        &[first.clone(), second.clone(), third],
+        &first,
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.status_multi_selection.insert(
+                    repo_id,
+                    StatusMultiSelection {
+                        unstaged: vec![first.clone(), second.clone()],
+                        unstaged_anchor: Some(first.clone()),
+                        ..Default::default()
+                    },
+                );
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    assert_eq!(
+        diff_bar_stage_label(cx, &view).as_deref(),
+        Some("Stage (2)")
+    );
+    let button = cx.debug_bounds("diff_bar_stage").expect("the Stage button");
+    cx.simulate_click(button.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.update(|_window, app| {
+            !view
+                .read(app)
+                .details_pane
+                .read(app)
+                .status_multi_selection
+                .contains_key(&repo_id)
+        }),
+        "staging the selection must consume it"
+    );
+}
+
+/// Editing owns the bottom-right action: staging must disappear for either area.
+#[gpui::test]
+fn edit_mode_hides_stage_and_unstage(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(70569);
+    let commit_id = CommitId("abcdef001122338d".into());
+    let directory = tempfile::tempdir().unwrap();
+    let path = std::path::PathBuf::from("file.rs");
+    std::fs::write(directory.path().join(&path), "contents\n").unwrap();
+    for area in [DiffArea::Unstaged, DiffArea::Staged] {
+        for editing in [false, true, false] {
+            let mut repo = simple_worktree_repo(
+                repo_id,
+                directory.path(),
+                &commit_id,
+                std::slice::from_ref(&path),
+                &path,
+            );
+            let target = DiffTarget::working_tree(path.clone(), area);
+            repo.diff_state.diff_target = Some(target.clone());
+            repo.diff_state.diff = Loadable::Ready(simple_hunk_diff(target).into());
+            repo.diff_state.edit_mode = editing;
+            repo.diff_state.content_preview = editing;
+            apply_state(cx, &view, app_state_with_active_repo(repo));
+            draw_and_drain_test_window(cx);
+            assert_eq!(
+                cx.debug_bounds("diff_bar_stage").is_some(),
+                !editing,
+                "{area:?}, editing: {editing}"
+            );
+        }
+    }
+}

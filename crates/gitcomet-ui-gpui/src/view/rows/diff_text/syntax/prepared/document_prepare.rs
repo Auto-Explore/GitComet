@@ -5,6 +5,10 @@ pub(crate) fn should_apply_chunk_build_result(
     current_thread: std::thread::ThreadId,
     target_cache_key: Option<PreparedSyntaxCacheKey>,
 ) -> bool {
+    #[cfg(test)]
+    if !syntax_test_scope_is_active(result.chunk_key.cache_key) {
+        return false;
+    }
     result.thread_id == current_thread
         && match target_cache_key {
             Some(cache_key) => result.chunk_key.cache_key == cache_key,
@@ -76,15 +80,11 @@ pub(crate) fn prepared_syntax_cache_metrics() -> PreparedSyntaxCacheMetrics {
 
 #[cfg(test)]
 pub(crate) fn reset_prepared_syntax_cache() {
+    reset_syntax_test_scope();
     TS_DOCUMENT_CACHE.with(|cache| {
         *cache.borrow_mut() = TreesitterDocumentCache::new();
     });
     TS_PENDING_PARSE_REQUESTS.with(|requests| requests.borrow_mut().clear());
-    let mut store = match shared_prepared_document_seed_store().lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    store.clear();
 }
 
 #[cfg(test)]
@@ -637,6 +637,8 @@ pub(crate) fn benchmark_cache_replacement_drop_step(
     for (nonce, line_tokens) in payloads.into_iter().enumerate() {
         cache.insert_document_with_mode(
             PreparedSyntaxCacheKey {
+                #[cfg(test)]
+                test_scope: syntax_test_scope(),
                 language: DiffSyntaxLanguage::Rust,
                 doc_hash: 0,
             },

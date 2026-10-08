@@ -61,6 +61,7 @@ mod discard;
 mod file_browser;
 mod git_ops;
 mod history;
+mod history_transaction;
 mod large_files;
 mod lfs;
 mod line_stats;
@@ -387,23 +388,43 @@ impl DiskFileStamp {
     fn read_for_verification_memo(path: &Path) -> Option<Self> {
         // Capture the time first: a pause after stat must not make a snapshot
         // taken inside the racy window eligible for memoization.
-        let now = racy_check_now();
+        let now = racy_check_now(path);
         Self::read(path).filter(|stamp| !stamp.is_racy_at(now))
     }
 }
 
-fn racy_check_now() -> std::time::SystemTime {
+fn racy_check_now(_path: &Path) -> std::time::SystemTime {
     let now = std::time::SystemTime::now();
     #[cfg(test)]
-    let now = now + RACY_CLOCK_SKEW.with(std::cell::Cell::get);
+    let now = RACY_CLOCK.with(|clock| {
+        let clock = clock.borrow();
+        let now = clock.now.unwrap_or(now);
+        if clock.path.as_deref().is_none_or(|path| path == _path) {
+            now + clock.skew
+        } else {
+            now
+        }
+    });
     now
 }
 
 // Tests cannot backdate ctime, so they move the racy-check clock forward instead.
 #[cfg(test)]
 thread_local! {
-    static RACY_CLOCK_SKEW: std::cell::Cell<std::time::Duration> =
-        const { std::cell::Cell::new(std::time::Duration::ZERO) };
+    static RACY_CLOCK: std::cell::RefCell<TestRacyClock> =
+        const { std::cell::RefCell::new(TestRacyClock {
+            now: None,
+            skew: std::time::Duration::ZERO,
+            path: None,
+        }) };
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct TestRacyClock {
+    now: Option<std::time::SystemTime>,
+    skew: std::time::Duration,
+    path: Option<PathBuf>,
 }
 
 #[cfg(test)]
@@ -418,21 +439,37 @@ pub(crate) fn disk_file_stats_for_test() -> usize {
 }
 
 #[cfg(test)]
-pub(crate) struct RacyClockSkew(());
+pub(crate) struct RacyClockSkew(TestRacyClock);
 
 #[cfg(test)]
 impl RacyClockSkew {
     /// Makes every stamp taken on this thread look `skew` older until dropped.
     pub(crate) fn set(skew: std::time::Duration) -> Self {
-        RACY_CLOCK_SKEW.with(|cell| cell.set(skew));
-        Self(())
+        Self::install(TestRacyClock {
+            skew,
+            ..Default::default()
+        })
+    }
+
+    /// Freeze the clock and age only the worktree input. Files created by the
+    /// read stay fresh even if the test thread is descheduled afterwards.
+    pub(crate) fn set_for_path(path: PathBuf, skew: std::time::Duration) -> Self {
+        Self::install(TestRacyClock {
+            now: Some(std::time::SystemTime::now()),
+            skew,
+            path: Some(path),
+        })
+    }
+
+    fn install(clock: TestRacyClock) -> Self {
+        Self(RACY_CLOCK.with(|cell| cell.replace(clock)))
     }
 }
 
 #[cfg(test)]
 impl Drop for RacyClockSkew {
     fn drop(&mut self) {
-        RACY_CLOCK_SKEW.with(|cell| cell.set(std::time::Duration::ZERO));
+        RACY_CLOCK.with(|cell| cell.replace(std::mem::take(&mut self.0)));
     }
 }
 
@@ -764,6 +801,38 @@ pub(crate) fn allow_test_repo_local_mergetool_command(workdir: &Path, tool_name:
 }
 
 impl GitRepository for GixRepo {
+    fn rebase_range_with_output(
+        &self,
+        range: &gitcomet_core::services::RebaseRange,
+    ) -> Result<CommandOutput> {
+        self.rebase_range_impl(range)
+    }
+    fn update_refs_with_output(
+        &self,
+        updates: &[gitcomet_core::services::RefUpdate],
+    ) -> Result<CommandOutput> {
+        self.update_refs_impl(updates)
+    }
+    fn apply_branch_updates_with_output(
+        &self,
+        updates: &[gitcomet_core::services::BranchUpdate],
+    ) -> Result<CommandOutput> {
+        self.apply_branch_updates_impl(updates, false)
+    }
+    fn recover_branch_updates_with_output(
+        &self,
+        updates: &[gitcomet_core::services::BranchUpdate],
+    ) -> Result<CommandOutput> {
+        self.apply_branch_updates_impl(updates, true)
+    }
+    fn push_refs_with_lease_with_output(
+        &self,
+        remote: &str,
+        updates: &[gitcomet_core::services::RemoteRefUpdate],
+        atomic: bool,
+    ) -> Result<CommandOutput> {
+        self.push_refs_impl(remote, updates, atomic)
+    }
     fn history_authors(
         &self,
         mode: HistoryMode,

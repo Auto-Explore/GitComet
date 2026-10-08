@@ -518,6 +518,37 @@ pub struct ForcePushLease {
     pub local_head: CommitId,
 }
 
+/// Replay only `upstream..expected_head` onto an immutable parent, without
+/// updating other branches or stashing the caller's working files.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RebaseRange {
+    pub onto: CommitId,
+    pub upstream: CommitId,
+    pub expected_head: CommitId,
+    pub preserve_merges: bool,
+}
+
+/// A compare-and-swap ref update. `None` requires the ref to be absent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefUpdate {
+    pub reference: String,
+    pub expected: Option<CommitId>,
+    pub new: CommitId,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BranchUpdate {
+    pub update: RefUpdate,
+    pub worktrees: Vec<PathBuf>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RemoteRefUpdate {
+    pub branch: String,
+    pub expected: CommitId,
+    pub new: CommitId,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SafePushAfterCommitDecision {
     Push {
@@ -533,6 +564,44 @@ pub enum SafePushAfterCommitDecision {
 }
 
 pub trait GitRepository: Send + Sync {
+    fn rebase_range_with_output(&self, _range: &RebaseRange) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "explicit-range rebase is not implemented",
+        )))
+    }
+    fn update_refs_with_output(&self, _updates: &[RefUpdate]) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "ref transactions are not implemented",
+        )))
+    }
+    /// Ref locks remain held while clean checked-out branches are synchronized.
+    /// Callers must journal the transaction before invoking this operation.
+    fn apply_branch_updates_with_output(&self, _updates: &[BranchUpdate]) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "branch transactions are not implemented",
+        )))
+    }
+    /// Resume a journalled branch transaction after interruption. Every ref and
+    /// clean index must still equal either its captured original or prepared
+    /// revision. Unexpected tips or edits are preserved and reject recovery.
+    fn recover_branch_updates_with_output(
+        &self,
+        _updates: &[BranchUpdate],
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "branch transaction recovery is not implemented",
+        )))
+    }
+    fn push_refs_with_lease_with_output(
+        &self,
+        _remote: &str,
+        _updates: &[RemoteRefUpdate],
+        _atomic: bool,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "multi-ref lease publication is not implemented",
+        )))
+    }
     fn spec(&self) -> &RepoSpec;
 
     /// Drops held object-store handles so their pack files can be deleted and

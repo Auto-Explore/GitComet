@@ -2441,13 +2441,13 @@ fn terminal_settings_sections_toggle_and_render_controls(cx: &mut gpui::TestAppC
 
     assert!(
         settings_cx
-            .debug_bounds("settings_window_terminal_action_bar_embedded")
+            .debug_bounds("settings_window_terminal_button_embedded")
             .is_none(),
-        "expected action bar terminal options to stay collapsed until opened"
+        "expected terminal button options to stay collapsed until opened"
     );
 
     let action_bar_bounds = settings_cx
-        .debug_bounds("settings_window_terminal_action_bar")
+        .debug_bounds("settings_window_terminal_button")
         .expect("expected action bar terminal row bounds");
     settings_cx.simulate_click(action_bar_bounds.center(), Modifiers::default());
     settings_cx.run_until_parked();
@@ -2456,8 +2456,8 @@ fn terminal_settings_sections_toggle_and_render_controls(cx: &mut gpui::TestAppC
     });
 
     for selector in [
-        "settings_window_terminal_action_bar_embedded",
-        "settings_window_terminal_action_bar_external",
+        "settings_window_terminal_button_embedded",
+        "settings_window_terminal_button_external",
     ] {
         assert!(
             settings_cx.debug_bounds(selector).is_some(),
@@ -2466,7 +2466,7 @@ fn terminal_settings_sections_toggle_and_render_controls(cx: &mut gpui::TestAppC
     }
 
     let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
-        settings.toggle_section(SettingsSection::TerminalActionBar, cx);
+        settings.toggle_section(SettingsSection::TerminalButton, cx);
     });
     settings_cx.run_until_parked();
     assert!(
@@ -2475,7 +2475,7 @@ fn terminal_settings_sections_toggle_and_render_controls(cx: &mut gpui::TestAppC
                 settings.expanded_section
             })
             .expect("settings window should remain readable")
-            != Some(SettingsSection::TerminalActionBar),
+            != Some(SettingsSection::TerminalButton),
         "expected action bar terminal section state to collapse when toggled again"
     );
 
@@ -2514,7 +2514,7 @@ fn terminal_settings_sections_toggle_and_render_controls(cx: &mut gpui::TestAppC
 }
 
 #[gpui::test]
-fn action_bar_terminal_target_setting_defers_main_window_update(cx: &mut gpui::TestAppContext) {
+fn terminal_button_target_setting_defers_main_window_update(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
@@ -2536,12 +2536,12 @@ fn action_bar_terminal_target_setting_defers_main_window_update(cx: &mut gpui::T
     let next_target = cx.update(|_window, app| {
         let current = settings_window
             .read_with(app, |settings, _cx| {
-                settings.terminal_preferences.action_bar_terminal_target
+                settings.terminal_preferences.terminal_button_target
             })
             .expect("settings window should be readable");
         match current {
-            ActionBarTerminalTarget::Embedded => ActionBarTerminalTarget::External,
-            ActionBarTerminalTarget::External => ActionBarTerminalTarget::Embedded,
+            TerminalButtonTarget::Embedded => TerminalButtonTarget::External,
+            TerminalButtonTarget::External => TerminalButtonTarget::Embedded,
         }
     });
 
@@ -2549,7 +2549,7 @@ fn action_bar_terminal_target_setting_defers_main_window_update(cx: &mut gpui::T
         cx.update(|_window, app| {
             main_view.update(app, |_view, cx| {
                 let _ = settings_window.update(cx, |settings, _window, cx| {
-                    settings.set_action_bar_terminal_target(next_target, cx);
+                    settings.set_terminal_button_target(next_target, cx);
                 });
             });
         });
@@ -2566,13 +2566,13 @@ fn action_bar_terminal_target_setting_defers_main_window_update(cx: &mut gpui::T
             main_view
                 .read(app)
                 .terminal_preferences_for_test()
-                .action_bar_terminal_target,
+                .terminal_button_target,
             next_target
         );
         assert_eq!(
             settings_window
                 .read_with(app, |settings, _cx| {
-                    settings.terminal_preferences.action_bar_terminal_target
+                    settings.terminal_preferences.terminal_button_target
                 })
                 .expect("settings window should remain readable"),
             next_target

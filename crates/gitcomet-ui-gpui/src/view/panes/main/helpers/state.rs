@@ -720,6 +720,12 @@ pub(crate) struct MainPaneView {
         FxHashMap<PreparedSyntaxDocumentKey, rows::PreparedDiffSyntaxDocument>,
     #[cfg(test)]
     pub(in crate::view) diff_syntax_budget_override: Option<rows::DiffSyntaxBudget>,
+    #[cfg(test)]
+    pub(in crate::view) live_syntax_unbounded_for_tests: bool,
+    #[cfg(test)]
+    pub(in crate::view) live_syntax_background_gate_for_tests: Option<smol::channel::Receiver<()>>,
+    #[cfg(test)]
+    pub(in crate::view) live_syntax_background_jobs_started: usize,
 
     // Markdown preview and the resolved preview surface.
     pub(in crate::view) diff_markdown: DiffMarkdownPreview,
@@ -866,12 +872,13 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_editor_live_syntax: Option<rows::LiveSyntaxDocument>,
     /// `(model_id, revision)` the live tree was last built or synced for.
     pub(in crate::view) file_editor_live_syntax_source: Option<(u64, u64)>,
-    pub(in crate::view) file_editor_live_syntax_building: Option<(u64, u64)>,
+    pub(in crate::view) file_editor_live_syntax_building: Option<(u64, (u64, u64))>,
     /// In-flight *first* parse. Kept apart from the reparse slot, which is
     /// cleared whenever there is no document to reparse — the state a first
     /// parse runs in.
     pub(in crate::view) file_editor_live_syntax_build: Option<gpui::Task<()>>,
     pub(in crate::view) file_editor_live_syntax_reparse: Option<gpui::Task<()>>,
+    pub(in crate::view) file_editor_live_syntax_reparsing: Option<u64>,
     /// The delimiters currently washed as the caret's bracket pair.
     pub(in crate::view) file_editor_syntax_pair: Option<rows::SyntaxPair>,
     /// Everywhere the editor's buffer names the token under the caret.
@@ -978,6 +985,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) conflict_resolved_output_live_syntax: Option<rows::LiveSyntaxDocument>,
     /// In-flight reparse for an edit that outran the foreground budget.
     pub(in crate::view) conflict_resolved_output_live_syntax_reparse: Option<gpui::Task<()>>,
+    pub(in crate::view) conflict_resolved_output_live_syntax_reparsing: Option<u64>,
     /// What the live tree was last built for: the buffer revision and the
     /// placeholder mask. Both must be unchanged for a refresh to be a no-op.
     ///
@@ -1015,7 +1023,7 @@ pub(crate) struct MainPaneView {
     /// Revision an off-thread first parse is currently running for, so repeated
     /// refreshes over the same text do not pile up duplicate builds.
     pub(in crate::view) conflict_resolved_output_live_syntax_building:
-        Option<ResolvedOutputSourceRevision>,
+        Option<(u64, ResolvedOutputSourceRevision)>,
     /// In-flight *first* parse. Kept apart from the reparse slot: that one is
     /// cleared whenever there is no document to reparse, which is exactly the
     /// state a first parse runs in -- sharing the slot would cancel it.

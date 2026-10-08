@@ -691,19 +691,17 @@ fn document_collector_reports_host_query_failure_after_collecting_injections() {
     let tree = with_ts_parser_parse_result(&ts_language, |parser| parser.parse(parsed_input, None))
         .expect("test input should parse");
 
-    let result = with_silenced_panic_hook(|| {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            collect_treesitter_document_line_tokens_for_line_window_with_host_query_status(
-                &tree,
-                &spec,
-                input,
-                &[0],
-                0,
-                1,
-                treesitter_document_hash(DiffSyntaxLanguage::Rust, "collector regression"),
-            )
-        }))
-    });
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        collect_treesitter_document_line_tokens_for_line_window_with_host_query_status(
+            &tree,
+            &spec,
+            input,
+            &[0],
+            0,
+            1,
+            treesitter_document_hash(DiffSyntaxLanguage::Rust, "collector regression"),
+        )
+    }));
     let (per_line, host_query_succeeded) =
         result.expect("the collector should recover the query panic");
 
@@ -758,9 +756,7 @@ fn parser_fast_path_reconfigures_after_recovered_query_panic() {
     assert!(!baseline.is_empty());
     assert_eq!(ts_parser_set_language_call_count(), 1);
 
-    let recovered: Option<()> = with_silenced_panic_hook(|| {
-        catch_treesitter_query_panic(|| panic!("simulate query panic"))
-    });
+    let recovered: Option<()> = catch_treesitter_query_panic(|| panic!("simulate query panic"));
     assert!(recovered.is_none());
 
     let reparsed =

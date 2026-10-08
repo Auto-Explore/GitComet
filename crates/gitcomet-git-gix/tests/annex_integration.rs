@@ -44,13 +44,14 @@ fn init_annex_repo(dir: &Path) -> PathBuf {
     let repo = dir.join("repo");
     fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q"]);
-    for (key, value) in [
-        ("user.name", "Test"),
-        ("user.email", "test@example.com"),
-        ("commit.gpgsign", "false"),
-    ] {
-        git(&repo, &["config", key, value]);
-    }
+    gitcomet_core::test_support::git_fixture::append_config(
+        &repo,
+        &[
+            ("user.name", "Test"),
+            ("user.email", "test@example.com"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
     git(&repo, &["annex", "init", "-q", "laptop"]);
     fs::write(repo.join("big.bin"), vec![7u8; 4096]).unwrap();
     git(&repo, &["annex", "add", "-q", "big.bin"]);
@@ -1551,13 +1552,13 @@ fn a_silent_content_transfer_outlives_the_silence_deadline() {
             fs::create_dir_all(&bin).unwrap();
             write_script(
                 &bin.join("git-annex-remote-slowtest"),
-                &SLOW_REMOTE.replace("@SECS@", "4"),
+                &SLOW_REMOTE.replace("@SECS@", "2"),
             );
             let passed = in_child(
                 NAME,
                 &[
                     ("PATH", path_with(&bin)),
-                    ("GITCOMET_GIT_COMMAND_TIMEOUT_SECS", "2".into()),
+                    ("GITCOMET_GIT_COMMAND_TIMEOUT_SECS", "1".into()),
                     ("GITCOMET_ANNEX_TEST_ROOT", root.clone().into()),
                 ],
             );

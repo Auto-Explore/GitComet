@@ -44,7 +44,8 @@ pub(super) fn finish_editor_saves(
     view: &gpui::Entity<GitCometView>,
     cx: &mut gpui::VisualTestContext,
 ) {
-    for _ in 0..200 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    loop {
         cx.run_until_parked();
         let drained = cx.update(|_, app| {
             let main = view.read(app).main_pane.clone();
@@ -57,9 +58,12 @@ pub(super) fn finish_editor_saves(
         if drained {
             return;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "filesystem save did not finish"
+        );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    panic!("filesystem save did not finish");
 }
 
 pub(super) fn simulate_counted_click(
@@ -1283,10 +1287,10 @@ pub(super) fn set_test_file_status_with_conflict(
 pub(super) fn set_test_conflict_file(
     repo: &mut gitcomet_state::model::RepoState,
     path: impl Into<std::path::PathBuf>,
-    base: impl Into<String>,
-    ours: impl Into<String>,
-    theirs: impl Into<String>,
-    current: impl Into<String>,
+    base: impl Into<Arc<str>>,
+    ours: impl Into<Arc<str>>,
+    theirs: impl Into<Arc<str>>,
+    current: impl Into<Arc<str>>,
 ) {
     let path = path.into();
     repo.conflict_state.conflict_file_path = Some(path.clone());
@@ -1297,10 +1301,10 @@ pub(super) fn set_test_conflict_file(
             ours_bytes: None,
             theirs_bytes: None,
             current_bytes: None,
-            base: Some(base.into().into()),
-            ours: Some(ours.into().into()),
-            theirs: Some(theirs.into().into()),
-            current: Some(current.into().into()),
+            base: Some(base.into()),
+            ours: Some(ours.into()),
+            theirs: Some(theirs.into()),
+            current: Some(current.into()),
         }));
 }
 
@@ -1314,6 +1318,69 @@ pub(super) fn focus_diff_panel(
         window.focus(&focus, app);
         let _ = window.draw(app);
     });
+}
+
+/// The bottom bar's file arrows: `Some((previous enabled, next enabled))`,
+/// or `None` when the bar shows none. The arrows come as a pair and sit in
+/// the bar, not the header.
+pub(super) fn drawn_file_arrows(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> Option<(bool, bool)> {
+    let prev = cx.debug_bounds("diff_prev_file");
+    let next = cx.debug_bounds("diff_next_file");
+    assert_eq!(
+        prev.is_some(),
+        next.is_some(),
+        "the file arrows come as a pair"
+    );
+    let (prev, next) = (prev?, next?);
+    let bar = cx
+        .debug_bounds("diff_bottom_bar")
+        .expect("the file arrows sit in the bottom bar");
+    assert!(
+        bar.contains(&prev.center()) && bar.contains(&next.center()),
+        "the file arrows sit in the bottom bar, not the header"
+    );
+    let nav = cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            let repo_id = pane.active_repo_id();
+            pane.diff_bar_nav(repo_id, cx)
+        })
+    });
+    nav.map(|nav| (nav.can_prev, nav.can_next))
+}
+
+/// The bottom bar's Stage button's label, when it shows one.
+pub(super) fn diff_bar_stage_label(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> Option<String> {
+    cx.debug_bounds("diff_bar_stage")?;
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            let repo_id = pane.active_repo_id()?;
+            pane.stage_action(repo_id, cx).map(|action| action.label())
+        })
+    })
+}
+
+/// The bottom bar's "2 of 3 files", when it shows one.
+pub(super) fn diff_bar_position(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> Option<String> {
+    cx.debug_bounds("diff_bar_position")?;
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            let repo_id = pane.active_repo_id();
+            let (index, count) = pane.diff_bar_nav(repo_id, cx)?.position?;
+            Some(super::main::position_label(index, count))
+        })
+    })
 }
 
 pub(super) const DEFAULT_MAIN_PANE_WAIT_TIMEOUT: std::time::Duration =

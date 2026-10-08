@@ -1066,11 +1066,17 @@ pub struct GitCometView {
     pub(super) window_gates: Option<super::window_gates::WindowGates>,
     pub(super) window_gated: bool,
     pub(super) extension_window: Option<super::extension_host::ExtensionWindow>,
+    /// Scopes the active extension view, so the diff keys can find the
+    /// hosted pane inside it (see `diff_shortcut_target`).
+    pub(super) repository_view_focus: FocusHandle,
     /// Present only when an extension registers a repository view.
     pub(super) repository_views: Option<super::repository_views::RepositoryViewRouter>,
     /// Present only when an extension registers a details tab.
     pub(super) details_tabs:
         Option<super::repository_views::ViewRouter<gitcomet_extension_api::DetailsTabDescriptor>>,
+    /// Present only when an extension registers a sidebar tab.
+    pub(super) sidebar_tabs:
+        Option<super::repository_views::ViewRouter<gitcomet_extension_api::SidebarTabDescriptor>>,
     /// Present only when an extension registers a sidebar section.
     pub(super) sidebar_sections: Option<super::repository_views::SidebarSections>,
     pub(super) tooltip_host: Entity<TooltipHost>,

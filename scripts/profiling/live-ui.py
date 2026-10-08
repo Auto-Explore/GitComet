@@ -222,7 +222,7 @@ def picker_scenario(ready):
             {"do": "settle", "ms": 750},
             {"do": "phase", "name": f"picker_name_{shortcut}"},
             # A fixture-specific name excludes the active repository/workspace
-            # when surveying the real GitComet and GitComet Pro checkouts.
+            # when surveying any existing working repository.
             {"do": "type", "text": PICKER_NAME_QUERY, "interval_ms": 80, "witness": witness},
             expect(PICKER_NAME_QUERY, PICKER_RECENT_COUNT), {"do": "settle", "ms": 750},
             {"do": "phase", "name": f"picker_path_{shortcut}"},
@@ -306,6 +306,10 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
     steps = {
         # Process start to usable status and history, then quit.
         "startup": [{"do": "wait_ready", "timeout_ms": 180_000}],
+        "settings": ready + [
+            {"do": "phase", "name": "settings_open"},
+            {"do": "command", "id": "open-settings"},
+            {"do": "settle", "ms": 5000}],
         # Build output churning in an ignored directory should cost nothing.
         "ignored-churn": ready + [
             {"do": "phase", "name": "ignored_churn"},
@@ -386,7 +390,7 @@ SCENARIOS = ("startup", "idle", "idle-minimized", "idle-hidden-terminal", "two-w
              "history-hover", "history-hover-stationary", "history-drag", "history-jump", "history-reopen", "repo-picker",
              "history-select-burst", "history-scroll", "status-save", "status-burst", "status-touch",
              "ignored-churn",
-             "diff-search", "terminal-output", "lifecycle")
+             "diff-search", "terminal-output", "settings", "lifecycle")
 
 
 # ---------------------------------------------------------------- one run

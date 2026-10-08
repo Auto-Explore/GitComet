@@ -20,7 +20,8 @@
 //! an empty directory, so these tests **skip** rather than fail when it has not
 //! been initialised -- a checkout without `--recurse-submodules` is normal, and
 //! a red suite would only teach people to ignore it. The skip prints why, so a
-//! run that silently checked nothing cannot be mistaken for a pass.
+//! run that silently checked nothing cannot be mistaken for a pass. CI fetches
+//! the pinned submodule and requires it with `GITCOMET_REQUIRE_SYNTAX_CORPUS=1`.
 //!
 //! ```sh
 //! git submodule update --init fixtures/syntax_test
@@ -277,6 +278,10 @@ macro_rules! corpus_or_skip {
         match corpus_root() {
             Ok(root) => root,
             Err(reason) => {
+                assert!(
+                    std::env::var("GITCOMET_REQUIRE_SYNTAX_CORPUS").as_deref() != Ok("1"),
+                    "required syntax corpus is unavailable: {reason}",
+                );
                 println!("skipping syntax corpus test: {reason}");
                 return;
             }
@@ -594,17 +599,16 @@ fn syntax_corpus_files_colour_the_construct_they_are_named_for() {
 ///
 /// ```sh
 /// GITCOMET_SYNTAX_DUMP=config/makefile/Makefile \
-///   cargo test -p gitcomet-ui-gpui --lib syntax_corpus_dump -- --nocapture
+///   cargo test -p gitcomet-ui-gpui --lib syntax_corpus_dump -- --ignored --nocapture
 /// ```
 ///
 /// `..` marks a line the grammar coloured nothing on, which is what a break looks
 /// like from here.
 #[test]
+#[ignore = "manual syntax diagnostic; requires GITCOMET_SYNTAX_DUMP"]
 fn syntax_corpus_dump() {
-    let Some(requested) = std::env::var_os("GITCOMET_SYNTAX_DUMP") else {
-        println!("skipping syntax corpus dump: set $GITCOMET_SYNTAX_DUMP to a sample path");
-        return;
-    };
+    let requested = std::env::var_os("GITCOMET_SYNTAX_DUMP")
+        .expect("set GITCOMET_SYNTAX_DUMP to a sample path");
     let requested = PathBuf::from(requested);
     let path = if requested.is_absolute() {
         requested
@@ -698,16 +702,15 @@ fn syntax_corpus_dump() {
 ///
 /// ```sh
 /// GITCOMET_SYNTAX_PAIRS=languages/php/templating.php:12 \
-///   cargo test -p gitcomet-ui-gpui --lib syntax_pair_probe -- --nocapture
+///   cargo test -p gitcomet-ui-gpui --lib syntax_pair_probe -- --ignored --nocapture
 /// ```
 #[test]
+#[ignore = "manual pair diagnostic; requires GITCOMET_SYNTAX_PAIRS"]
 fn syntax_pair_probe() {
     let tab_width = 4;
 
-    let Some(requested) = std::env::var_os("GITCOMET_SYNTAX_PAIRS") else {
-        println!("skipping pair probe: set $GITCOMET_SYNTAX_PAIRS to <path>:<line>");
-        return;
-    };
+    let requested = std::env::var_os("GITCOMET_SYNTAX_PAIRS")
+        .expect("set GITCOMET_SYNTAX_PAIRS to <path>:<line>");
     let requested = requested.to_string_lossy().into_owned();
     let (path, line_no) = requested
         .rsplit_once(':')

@@ -1,6 +1,125 @@
 use super::tests::{document_in, styles_at};
 use super::*;
 
+#[derive(Clone, Copy)]
+struct ParseClock {
+    now: Instant,
+    root_cost: Duration,
+    query_match_cost: Duration,
+}
+
+thread_local! {
+    static PARSE_CLOCK: std::cell::Cell<Option<ParseClock>> = const { std::cell::Cell::new(None) };
+}
+
+pub(super) fn parse_clock_now() -> Option<Instant> {
+    PARSE_CLOCK.with(|clock| clock.get().map(|clock| clock.now))
+}
+
+pub(super) fn root_parse_completed() {
+    PARSE_CLOCK.with(|clock| {
+        if let Some(mut value) = clock.get() {
+            value.now += value.root_cost;
+            clock.set(Some(value));
+        }
+    });
+}
+
+pub(super) fn query_match_completed() {
+    PARSE_CLOCK.with(|clock| {
+        if let Some(mut value) = clock.get() {
+            value.now += value.query_match_cost;
+            clock.set(Some(value));
+        }
+    });
+}
+
+fn with_root_parse_cost<R>(cost: Duration, run: impl FnOnce() -> R) -> R {
+    struct Reset(Option<ParseClock>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            PARSE_CLOCK.with(|clock| clock.set(self.0));
+        }
+    }
+    let _reset = Reset(PARSE_CLOCK.with(|clock| {
+        clock.replace(Some(ParseClock {
+            now: Instant::now(),
+            root_cost: cost,
+            query_match_cost: Duration::ZERO,
+        }))
+    }));
+    run()
+}
+
+#[test]
+fn root_work_consumes_the_injection_budget_and_background_recovery_is_exact() {
+    let text = "<script>const value = 1;</script>\n<style>body { color: red; }</style>\n";
+    let mut document = with_root_parse_cost(Duration::from_millis(2), || {
+        LiveSyntaxDocument::new(
+            DiffSyntaxLanguage::Html,
+            Rope::from_text(text),
+            Arc::default(),
+            Some(Duration::from_millis(1)),
+        )
+        .expect("the root finished before its deadline")
+    });
+    assert!(
+        document.injections.is_empty(),
+        "injections must not get a fresh deadline"
+    );
+    let request = document
+        .background_reparse_request()
+        .expect("unfinished discovery must recover");
+    let (version, tree, injections) = live_syntax_reparse(request).unwrap();
+    assert!(document.adopt_background_tree(version, tree, injections));
+    assert!(document.background_reparse_request().is_none());
+    let theme = AppTheme::gitcomet_dark();
+    let cold = document_in(DiffSyntaxLanguage::Html, text, Vec::new());
+    assert_eq!(
+        document
+            .snapshot(theme)
+            .highlights_for_byte_range(0..text.len()),
+        cold.snapshot(theme)
+            .highlights_for_byte_range(0..text.len())
+    );
+}
+
+#[test]
+fn expired_injection_discovery_retains_edited_layers_until_a_complete_reparse() {
+    let mut text = "<script>const value = 1;</script>\n".to_string();
+    let mut document = document_in(DiffSyntaxLanguage::Html, &text, Vec::new());
+    let at = text.find('1').unwrap();
+    text.insert(at, '2');
+    with_root_parse_cost(Duration::from_millis(2), || {
+        assert_eq!(
+            document.sync(
+                Rope::from_text(&text),
+                Arc::default(),
+                Some((at..at, at..at + 1)),
+                Some(Duration::from_millis(1))
+            ),
+            LiveSyntaxSyncOutcome::Reparsed
+        );
+    });
+    assert!(document.injections.iter().all(|layer| layer.pending));
+    assert!(
+        !document.injections.is_empty(),
+        "old edited layers must keep painting"
+    );
+    let (version, tree, injections) =
+        live_syntax_reparse(document.background_reparse_request().unwrap()).unwrap();
+    assert!(document.adopt_background_tree(version, tree, injections));
+    let theme = AppTheme::gitcomet_dark();
+    assert_eq!(
+        document
+            .snapshot(theme)
+            .highlights_for_byte_range(0..text.len()),
+        document_in(DiffSyntaxLanguage::Html, &text, Vec::new())
+            .snapshot(theme)
+            .highlights_for_byte_range(0..text.len())
+    );
+}
+
 #[derive(Clone, Copy, Default)]
 struct ParseControl {
     slots: Option<usize>,
@@ -728,7 +847,7 @@ fn nested_layers_the_budget_could_not_finish_are_reported_as_dropped() {
         document.spec,
         &document.tree,
         &[],
-        Some(Duration::ZERO),
+        Some(parse_now()),
         Vec::new(),
         None,
     );
@@ -1076,7 +1195,7 @@ fn layers_the_budget_could_not_finish_are_reported_as_dropped() {
         document.spec,
         &document.tree,
         &[],
-        Some(Duration::ZERO),
+        Some(parse_now()),
         Vec::new(),
         None,
     );
@@ -1097,7 +1216,7 @@ fn layers_the_budget_could_not_finish_are_reported_as_dropped() {
         document.spec,
         &document.tree,
         &[],
-        Some(Duration::ZERO),
+        Some(parse_now()),
         complete.clone(),
         None,
     );
@@ -1155,7 +1274,7 @@ fn markdown_inline_colors_survive_repeated_edits_while_reparsing_is_deferred() {
                     document.spec,
                     &document.tree,
                     &[],
-                    Some(Duration::ZERO),
+                    Some(parse_now()),
                     std::mem::take(&mut document.injections),
                     Some(at..at + 1),
                 );
@@ -1319,5 +1438,41 @@ fn adopting_a_background_tree_restores_the_injected_layers() {
         )
         .is_empty(),
         "the injected keyword must be highlighted again after the background parse"
+    );
+}
+
+#[test]
+fn query_deadline_never_publishes_an_incomplete_combined_injection() {
+    let text = "/// <summary>\n/// documentation\n/// </summary>\nlet value = 1\n";
+    let cold = document_in(DiffSyntaxLanguage::FSharp, text, Vec::new());
+    assert_eq!(cold.injections.len(), 1);
+    let mut document = with_root_parse_cost(Duration::ZERO, || {
+        PARSE_CLOCK.with(|clock| {
+            let mut value = clock.get().unwrap();
+            value.query_match_cost = Duration::from_millis(2);
+            clock.set(Some(value));
+        });
+        LiveSyntaxDocument::new(
+            DiffSyntaxLanguage::FSharp,
+            Rope::from_text(text),
+            Arc::default(),
+            Some(Duration::from_millis(1)),
+        )
+        .unwrap()
+    });
+    assert!(
+        document.injections.is_empty(),
+        "a partial combined group must not become visible"
+    );
+    let (version, tree, injections) =
+        live_syntax_reparse(document.background_reparse_request().unwrap()).unwrap();
+    assert!(document.adopt_background_tree(version, tree, injections));
+    let theme = AppTheme::gitcomet_dark();
+    assert_eq!(
+        document
+            .snapshot(theme)
+            .highlights_for_byte_range(0..text.len()),
+        cold.snapshot(theme)
+            .highlights_for_byte_range(0..text.len())
     );
 }

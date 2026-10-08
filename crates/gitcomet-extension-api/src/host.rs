@@ -155,6 +155,38 @@ pub trait WindowHostImpl {
         target: crate::SettingsTarget,
         cx: &mut App,
     ) -> Result<(), HostError>;
+    /// Selects a panel tab and reveals its panel, after the current update.
+    fn show_panel_tab(
+        &self,
+        _repository: &RepositoryHandle,
+        _area: crate::PanelArea,
+        _tab: &ContributionId,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unsupported)
+    }
+
+    fn show_details_tab(
+        &self,
+        repository: &RepositoryHandle,
+        tab: &ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.show_panel_tab(repository, crate::PanelArea::Details, tab, cx)
+    }
+
+    fn show_sidebar_tab(
+        &self,
+        repository: &RepositoryHandle,
+        tab: &ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.show_panel_tab(repository, crate::PanelArea::Sidebar, tab, cx)
+    }
+    /// A read-only view that renders markdown.
+    fn create_markdown_view(&self, _cx: &mut App) -> Result<crate::MarkdownView, HostError> {
+        Err(HostError::Unsupported)
+    }
     fn window_id(&self) -> WindowId;
 
     fn is_open(&self, cx: &App) -> bool;
@@ -270,6 +302,18 @@ pub trait WindowHostImpl {
         content: DialogContent,
         cx: &mut App,
     ) -> Result<DialogHandle, HostError>;
+
+    /// The host's standard actions for a changed-file row.
+    fn open_file_context_menu(
+        &self,
+        _repository: &RepositoryHandle,
+        _source: crate::ChangeSource,
+        _file: gitcomet_core::domain::CommitFileChange,
+        _anchor: gitcomet_ui_kit::gpui::Point<gitcomet_ui_kit::gpui::Pixels>,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unsupported)
+    }
 
     fn open_menu(
         &self,
@@ -407,6 +451,51 @@ impl WindowHost {
         cx: &mut App,
     ) -> Result<(), HostError> {
         self.0.open_settings_at(target, cx)
+    }
+
+    /// Reveals a registered tab in a repository panel. Navigation is deferred
+    /// and checks the repository lifetime again before changing the panel.
+    pub fn show_panel_tab(
+        &self,
+        repository: &RepositoryHandle,
+        area: crate::PanelArea,
+        tab: &ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.check(repository, cx)?;
+        self.0.show_panel_tab(repository, area, tab, cx)
+    }
+
+    /// Selects details tab `tab` (a [`crate::DetailsTabDescriptor`] listed in
+    /// the current view) for `repository`, and shows the details pane if it
+    /// is hidden. [`HostError::Unsupported`] when no such tab is listed.
+    pub fn show_details_tab(
+        &self,
+        repository: &RepositoryHandle,
+        tab: &ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.check(repository, cx)?;
+        self.0.show_details_tab(repository, tab, cx)
+    }
+
+    /// Selects sidebar tab `tab` (a [`crate::SidebarTabDescriptor`] listed in
+    /// the current view) for `repository`, and shows the sidebar if it is
+    /// hidden. [`HostError::Unsupported`] when no such tab is listed.
+    pub fn show_sidebar_tab(
+        &self,
+        repository: &RepositoryHandle,
+        tab: &ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.check(repository, cx)?;
+        self.0.show_sidebar_tab(repository, tab, cx)
+    }
+
+    /// A read-only markdown view to place in the extension's own views; set
+    /// its text with [`crate::MarkdownView::set_source`].
+    pub fn create_markdown_view(&self, cx: &mut App) -> Result<crate::MarkdownView, HostError> {
+        self.0.create_markdown_view(cx)
     }
 
     /// Invalidates only the owner of the given slot, after this update.
@@ -615,6 +704,19 @@ impl WindowHost {
     ) -> Result<DialogHandle, HostError> {
         self.0
             .open_popover(title.into(), anchor, Box::new(content), cx)
+    }
+
+    /// Open the same file actions as the host's built-in changed-file lists.
+    pub fn open_file_context_menu(
+        &self,
+        repository: &RepositoryHandle,
+        source: crate::ChangeSource,
+        file: gitcomet_core::domain::CommitFileChange,
+        anchor: gitcomet_ui_kit::gpui::Point<gitcomet_ui_kit::gpui::Pixels>,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.0
+            .open_file_context_menu(repository, source, file, anchor, cx)
     }
 
     pub fn open_menu(

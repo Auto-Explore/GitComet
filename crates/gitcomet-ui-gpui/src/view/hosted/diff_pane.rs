@@ -30,8 +30,19 @@ enum PaneSource {
     Snapshot(DiffSnapshot),
 }
 
+/// Orders panes by when the user last engaged with them, for routing the
+/// diff keys (F1–F4, F7) to the one in front of them.
+static ENGAGED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn next_engaged() -> u64 {
+    ENGAGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
+}
+
 pub(crate) struct DiffPaneView {
     host: WindowHost,
+    /// Bumped when the pane is given a file and when its diff takes focus.
+    engaged: u64,
+    _focus_in: Option<gpui::Subscription>,
     root: Option<WeakEntity<GitCometView>>,
     renderer: Option<Entity<MainPaneView>>,
     renderer_model: Option<Entity<AppUiModel>>,
@@ -106,6 +117,8 @@ impl DiffPaneView {
         }
         Self {
             host,
+            engaged: next_engaged(),
+            _focus_in: None,
             root: None,
             renderer: None,
             renderer_model: None,
@@ -178,6 +191,23 @@ impl DiffPaneView {
         pane
     }
 
+    /// Inline or Split as the user set it for diffs, for `DiffLayout::Preferred`.
+    fn preferred_view_mode(&self, cx: &App) -> DiffViewMode {
+        self.root
+            .as_ref()
+            .and_then(|root| root.upgrade())
+            .map(|root| root.read(cx).ui_model.read(cx).preferences.diff.view_mode)
+            .unwrap_or_else(|| crate::view::preferences::DiffPreferences::default().view_mode)
+    }
+
+    /// The renderer's layout, once it exists.
+    #[cfg(test)]
+    pub(in crate::view) fn view_mode_for_test(&self, cx: &App) -> Option<DiffViewMode> {
+        self.renderer
+            .as_ref()
+            .map(|renderer| renderer.read(cx).diff_view)
+    }
+
     pub(crate) fn attach_root(&mut self, root: WeakEntity<GitCometView>) {
         self.root = Some(root);
     }
@@ -224,6 +254,7 @@ impl DiffPaneView {
             }
         };
         preferences.diff.content_mode = DiffContentMode::Full;
+        let preferred = preferences.diff.view_mode;
         let model = cx.new(|_| AppUiModel::new_with_preferences(state, preferences));
         let theme = self.host.theme(cx);
         let renderer = cx.new(|cx| {
@@ -250,13 +281,16 @@ impl DiffPaneView {
             );
             pane.hosted_decor.as_mut().unwrap().file_cache = self.file_cache.clone();
             pane.annotate_enabled = self.options.policy.blame;
-            pane.diff_view = diff_view_mode(self.options.layout);
+            pane.diff_view = diff_view_mode(self.options.layout, preferred);
             pane.hosted_content_width = Some(
                 self.options
                     .content_width
                     .map(px)
                     .unwrap_or(window.viewport_size().width),
             );
+            // Like History's diff, the first file opens at its first change,
+            // unless a line was asked for already.
+            pane.diff_autoscroll_pending = self.pending_reveal.is_none();
             pane
         });
         self.renderer_subscription = Some(cx.observe(&renderer, |this, renderer, cx| {
@@ -275,8 +309,23 @@ impl DiffPaneView {
             }
             cx.notify();
         }));
+        // Focus in the diff makes this the pane the diff keys go to.
+        let focus = renderer.read(cx).diff_panel_focus_handle.clone();
+        self._focus_in = Some(cx.on_focus_in(&focus, window, |this, _, _| {
+            this.engaged = next_engaged();
+        }));
         self.renderer = Some(renderer);
         self.renderer_model = Some(model);
+    }
+
+    /// The renderer that draws this pane, once it exists.
+    pub(in crate::view) fn renderer(&self) -> Option<&Entity<MainPaneView>> {
+        self.renderer.as_ref()
+    }
+
+    /// When the user last gave this pane a file or focused its diff.
+    pub(in crate::view) fn engaged(&self) -> u64 {
+        self.engaged
     }
 
     fn snapshot_state(&self, snapshot: &DiffSnapshot) -> Arc<AppState> {
@@ -356,6 +405,7 @@ impl DiffPaneView {
 
     /// Clears what the pane showed, dropping any build still running for it.
     fn reset(&mut self, path: Option<&std::path::Path>) {
+        self.engaged = next_engaged();
         self.language = path.and_then(crate::view::rows::diff_syntax_language_for_path);
         self.build = None;
         self.building_rev = None;
@@ -670,8 +720,17 @@ impl DiffPaneView {
             let mut state = (*renderer.read(cx).store.snapshot()).clone();
             for repo in &mut state.repos {
                 repo.diff_state = Default::default();
+                // Keep the selected file's chrome mounted while its new
+                // session catches up. Clearing the target hid the bar for
+                // the frame between the pick and the store notification.
+                repo.diff_state.diff_target = Some(target.clone());
+                repo.diff_state.diff = Loadable::Loading;
+                repo.diff_state.diff_file = Loadable::Loading;
             }
             model.update(cx, |model, cx| model.set_state(Arc::new(state), cx));
+            // Each file opens at its first change once its rows are in; a
+            // reveal asked for before then cancels it.
+            renderer.update(cx, |pane, _| pane.diff_autoscroll_pending = true);
         }
         self.emit(DiffPaneEvent::TargetChanged(Some(target)), cx);
         cx.notify();
@@ -705,6 +764,8 @@ impl DiffPaneView {
         self.pending_scroll_top = top;
         if let Some(renderer) = &self.renderer {
             let found = renderer.update(cx, |pane, cx| {
+                // The line asked for, not the first change.
+                pane.diff_autoscroll_pending = false;
                 let found = pane.hosted_reveal_at(side, line, top);
                 cx.notify();
                 found
@@ -1253,6 +1314,9 @@ impl Render for DiffPaneView {
             .flex()
             .flex_col()
             .bg(theme.colors.surface.canvas)
+            // A pane may be mounted anywhere; its text should not depend on
+            // what encloses it.
+            .text_color(theme.colors.foreground.primary)
             .children(legend)
             .children(actions)
             .when_some(status, |pane, status| {
@@ -1342,10 +1406,11 @@ impl Drop for DiffPaneView {
     }
 }
 
-fn diff_view_mode(layout: DiffLayout) -> DiffViewMode {
+fn diff_view_mode(layout: DiffLayout, preferred: DiffViewMode) -> DiffViewMode {
     match layout {
         DiffLayout::Split => DiffViewMode::Split,
-        _ => DiffViewMode::Inline,
+        DiffLayout::Inline => DiffViewMode::Inline,
+        _ => preferred,
     }
 }
 
@@ -1476,9 +1541,10 @@ impl DiffPaneImpl for HostedDiffPane {
     fn set_layout(&self, layout: DiffLayout, cx: &mut App) {
         self.entity.update(cx, |pane, cx| {
             pane.options.layout = layout;
+            let preferred = pane.preferred_view_mode(cx);
             if let Some(renderer) = &pane.renderer {
                 renderer.update(cx, |pane, cx| {
-                    pane.set_diff_view_mode(diff_view_mode(layout), cx)
+                    pane.set_diff_view_mode(diff_view_mode(layout, preferred), cx)
                 });
             }
             cx.notify();
@@ -1509,6 +1575,13 @@ impl DiffPaneImpl for HostedDiffPane {
     ) {
         self.entity.update(cx, |pane, cx| {
             pane.options.file_navigation = navigation;
+            pane.sync_decor(cx);
+            cx.notify();
+        });
+    }
+    fn set_bar(&self, bar: gitcomet_extension_api::DiffBar, cx: &mut App) {
+        self.entity.update(cx, |pane, cx| {
+            pane.options.bar = bar;
             pane.sync_decor(cx);
             cx.notify();
         });

@@ -499,6 +499,8 @@ pub(super) struct PreparedSyntaxDocument {
 struct PreparedSyntaxCacheKey {
     language: DiffSyntaxLanguage,
     doc_hash: u64,
+    #[cfg(test)]
+    test_scope: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

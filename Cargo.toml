@@ -216,7 +216,7 @@ tree-sitter-dhall = { path = "vendor/tree-sitter-dhall" }
 tree-sitter-diff = "0.1.0"
 tree-sitter-ebnf = { path = "vendor/tree-sitter-ebnf" }
 tree-sitter-elixir = "0.3.5"
-tree-sitter-erlang = "0.20.0"
+tree-sitter-erlang = "0.21.0"
 tree-sitter-fsharp = { path = "vendor/tree-sitter-fsharp" }
 tree-sitter-gitcommit = { git = "https://github.com/zed-industries/tree-sitter-git-commit", rev = "88309716a69dd13ab83443721ba6e0b491d37ee9" }
 tree-sitter-gleam = "1.0.0"
