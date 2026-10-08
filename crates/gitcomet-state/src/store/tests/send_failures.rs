@@ -8,6 +8,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 static SEND_FAILURE_COUNTER_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+const STORE_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn send_failure_counter_test_lock() -> MutexGuard<'static, ()> {
     SEND_FAILURE_COUNTER_TEST_LOCK
@@ -27,7 +28,7 @@ fn wait_for_store_snapshot(
     label: &str,
     predicate: impl Fn(&AppState) -> bool,
 ) -> Arc<AppState> {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + STORE_WAIT_TIMEOUT;
     loop {
         let snapshot = store.snapshot();
         if predicate(&snapshot) {
@@ -212,7 +213,8 @@ impl GitBackend for BlockingOpenBackend {
 }
 
 struct SelectiveBlockingOpenBackend {
-    started_tx: mpsc::Sender<PathBuf>,
+    started_tx: mpsc::Sender<(PathBuf, CancellationToken)>,
+    allow_cancellation: Arc<AtomicBool>,
     release: Arc<(Mutex<bool>, Condvar)>,
 }
 
@@ -226,16 +228,7 @@ impl SelectiveBlockingOpenBackend {
 
 impl GitBackend for SelectiveBlockingOpenBackend {
     fn open(&self, path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
-        let workdir = path.to_path_buf();
-        let _ = self.started_tx.send(workdir.clone());
-        if Self::should_block(&workdir) {
-            let (lock, condvar) = &*self.release;
-            let mut released = lock.lock().unwrap_or_else(|e| e.into_inner());
-            while !*released {
-                released = condvar.wait(released).unwrap_or_else(|e| e.into_inner());
-            }
-        }
-        Ok(Arc::new(ReadyOpenRepo::new(workdir)))
+        self.open_cancellable(path, &CancellationToken::new())
     }
 
     fn open_cancellable(
@@ -245,12 +238,18 @@ impl GitBackend for SelectiveBlockingOpenBackend {
     ) -> std::result::Result<Arc<dyn GitRepository>, Error> {
         cancellation.check_cancelled()?;
         let workdir = path.to_path_buf();
-        let _ = self.started_tx.send(workdir.clone());
+        let _ = self
+            .started_tx
+            .send((workdir.clone(), cancellation.clone()));
         if Self::should_block(&workdir) {
             let (lock, condvar) = &*self.release;
             let mut released = lock.lock().unwrap_or_else(|e| e.into_inner());
             while !*released {
-                cancellation.check_cancelled()?;
+                // Hold every worker until the test has saturated the pool and
+                // queued the next open, even if an earlier tab is cancelled.
+                if self.allow_cancellation.load(Ordering::Acquire) {
+                    cancellation.check_cancelled()?;
+                }
                 let (next_released, _) = condvar
                     .wait_timeout(released, Duration::from_millis(10))
                     .unwrap_or_else(|e| e.into_inner());
@@ -654,26 +653,33 @@ fn switching_away_from_saturated_open_repos_does_not_block_next_open() {
     let temp = tempfile::tempdir().expect("create tempdir for open cancellation test");
     let repo_a = temp.path().join("repo-a");
     let repo_c = temp.path().join("repo-c");
-    let expected_repo_c = canonicalize_or_original(repo_c.clone());
-    let blocked_count = super::executor::default_worker_threads().max(1);
+    let blocked_count = super::executor::repo_load_worker_threads();
     let blocked_paths: Vec<PathBuf> = (0..blocked_count)
         .map(|ix| temp.path().join(format!("blocked-{ix}")))
         .collect();
+    for path in [&repo_a, &repo_c].into_iter().chain(&blocked_paths) {
+        std::fs::create_dir_all(path).expect("create mock repo directory");
+    }
+    let expected_repo_c = canonicalize_or_original(repo_c.clone());
 
-    let (started_tx, started_rx) = mpsc::channel::<PathBuf>();
+    let (started_tx, started_rx) = mpsc::channel::<(PathBuf, CancellationToken)>();
+    let allow_cancellation = Arc::new(AtomicBool::new(false));
     let release = Arc::new((Mutex::new(false), Condvar::new()));
     let _release_guard = BlockingOpenReleaseGuard {
         release: Arc::clone(&release),
     };
     let backend: Arc<dyn GitBackend> = Arc::new(SelectiveBlockingOpenBackend {
         started_tx,
+        allow_cancellation: Arc::clone(&allow_cancellation),
         release: Arc::clone(&release),
     });
     let (store, event_rx) = AppStore::new_test(backend);
+    // Native watcher startup and refreshes are unrelated to executor cancellation.
+    store.disable_repo_monitors_for_test();
 
     store.dispatch(Msg::OpenRepo(repo_a));
     started_rx
-        .recv_timeout(Duration::from_secs(1))
+        .recv_timeout(STORE_WAIT_TIMEOUT)
         .expect("initial repo open did not start");
     wait_for_store_snapshot(&store, &event_rx, "repo A to open", |state| {
         state
@@ -682,31 +688,51 @@ fn switching_away_from_saturated_open_repos_does_not_block_next_open() {
             .any(|repo| repo.id == RepoId(1) && matches!(repo.open, Loadable::Ready(())))
     });
 
+    let mut cancellations = Vec::with_capacity(blocked_count);
     for path in &blocked_paths {
         store.dispatch(Msg::OpenRepo(path.clone()));
-        let started = started_rx
-            .recv_timeout(Duration::from_secs(1))
+        let (started, cancellation) = started_rx
+            .recv_timeout(STORE_WAIT_TIMEOUT)
             .expect("blocked repo open did not start");
-        assert!(
-            SelectiveBlockingOpenBackend::should_block(&started),
-            "expected a blocked repo open to start, got {}",
-            started.display()
-        );
+        assert_eq!(started, canonicalize_or_original(path.clone()));
+        cancellations.push(cancellation);
     }
 
     store.dispatch(Msg::SetActiveRepo { repo_id: RepoId(1) });
-    wait_for_store_snapshot(
-        &store,
-        &event_rx,
-        "repo A to become active again",
-        |state| state.active_repo == Some(RepoId(1)),
+    // Published state precedes effect dispatch. The barrier also waits for the
+    // cancellation effects, while the mock still occupies every repo-load worker.
+    store
+        .barrier_for_test()
+        .recv_timeout(STORE_WAIT_TIMEOUT)
+        .expect("switching repos was blocked by the saturated repo-load pool");
+    assert_eq!(store.snapshot().active_repo, Some(RepoId(1)));
+    assert!(
+        cancellations.iter().all(CancellationToken::is_cancelled),
+        "switching away must cancel every blocked repo open"
     );
 
     store.dispatch(Msg::OpenRepo(repo_c));
-    let started = started_rx
-        .recv_timeout(Duration::from_secs(1))
+    store
+        .barrier_for_test()
+        .recv_timeout(STORE_WAIT_TIMEOUT)
+        .expect("queueing the next open was blocked by the saturated repo-load pool");
+    // Only cancellation may free the workers: the release guard remains armed
+    // for panic cleanup. The timeout is a deadlock guard, not a latency assertion.
+    allow_cancellation.store(true, Ordering::Release);
+    release.1.notify_all();
+    let (started, _) = started_rx
+        .recv_timeout(STORE_WAIT_TIMEOUT)
         .expect("next repo open was blocked behind cancelled opening repos");
     assert_eq!(started, expected_repo_c);
+    wait_for_store_snapshot(&store, &event_rx, "repo C to open", |state| {
+        state.repos.iter().any(|repo| {
+            repo.spec.workdir == expected_repo_c && matches!(repo.open, Loadable::Ready(()))
+        })
+    });
+    store
+        .shutdown_for_test()
+        .recv_timeout(STORE_WAIT_TIMEOUT)
+        .expect("store tasks did not stop after the cancelled opens");
 }
 
 #[test]

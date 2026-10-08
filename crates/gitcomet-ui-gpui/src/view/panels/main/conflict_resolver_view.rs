@@ -737,7 +737,8 @@ impl MainPaneView {
                                 })
                                 ;
 
-                            let preview_kind = super::super::preview_path_rendered_kind(&path);
+                            let preview_kind = super::super::preview_path_rendered_kind(&path)
+                                .filter(|kind| *kind != RenderedPreviewKind::Diagram);
                             let show_preview_toggle = preview_kind.is_some();
                             let preview_mode = self.conflict_resolver.resolver_preview_mode;
                             let is_rendered_preview_active =
@@ -1219,7 +1220,7 @@ impl MainPaneView {
                                         .render_conflict_resolver_svg_preview(theme, cx),
                                     Some(RenderedPreviewKind::Markdown) => self
                                         .render_conflict_resolver_markdown_preview(theme, cx),
-                                    None => components::empty_state(
+                                    None | Some(RenderedPreviewKind::Diagram) => components::empty_state(
                                         theme,
                                         "Preview",
                                         "Preview is not available for this file.",

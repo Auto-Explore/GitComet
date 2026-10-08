@@ -1,0 +1,81 @@
+%% Mermaid: the FIRST WORD selects among a dozen entirely different
+%% grammars. `flowchart`, `sequenceDiagram`, `classDiagram`, `stateDiagram-v2`,
+%% `erDiagram`, `gantt`, `pie`, `journey`, `gitGraph`, `mindmap`, `timeline`
+%% and `quadrantChart` share a file extension, a comment syntax and nothing
+%% else -- so a highlighter must dispatch on line one before it can lex.
+%%
+%%   mmdc -i diagrams.mmd -o diagrams.svg
+
+%% A comment is two percent signs, and it must be at the start of a line:
+%% mid-line, %% is ordinary text.
+
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#eef2ff"}, "flowchart": {"curve": "basis"}}}%%
+%% ...and the line above is a DIRECTIVE: valid JSON embedded inside what
+%% otherwise looks exactly like a comment. So the comment marker is sometimes
+%% a comment and sometimes the delimiter of a JSON configuration block.
+
+flowchart LR
+    %% --- Node shapes are chosen by the BRACKET PAIR, not by a keyword -----
+    rect[a rectangle]
+    round(a rounded box)
+    stadium([a stadium])
+    subroutine[[a subroutine]]
+    cylinder[(a cylinder)]
+    circle((a circle))
+    asymmetric>an asymmetric shape]
+    rhombus{a rhombus}
+    hexagon{{a hexagon}}
+    parallelogram[/a parallelogram/]
+    parallelogramAlt[\an alternate one\]
+    trapezoid[/a trapezoid\]
+    trapezoidAlt[\an alternate trapezoid/]
+    doubleCircle(((a double circle)))
+
+    %% Eleven shapes distinguished only by which brackets surround the label,
+    %% including four that differ by the DIRECTION of a slash or backslash.
+
+    %% --- Labels: quoting, entities and embedded HTML -----------------------
+    quoted["a label with [brackets] and (parens), which need the quotes"]
+    entity["an ampersand &amp; and a quote &quot; and a #35; hash"]
+    markup["line one<br/>line two, with <b>HTML</b> inside"]
+    unicode["emoji 😀 and an fa:fa-check icon shortcode"]
+
+    %% --- Edges: the arrow itself is the syntax ------------------------------
+    rect --> round
+    round --- stadium
+    stadium -.-> subroutine
+    subroutine ==> cylinder
+    cylinder --o circle
+    circle --x asymmetric
+    asymmetric <--> rhombus
+    rhombus o--o hexagon
+    hexagon x--x parallelogram
+
+    %% Edge labels come in two spellings, and a longer arrow means a longer
+    %% edge -- so the NUMBER OF DASHES is significant to the layout.
+    parallelogram -- a label on the arrow --> trapezoid
+    trapezoid -->|a label in pipes| doubleCircle
+    doubleCircle -...-> quoted
+    quoted ----> entity
+    entity ==text==> markup
+
+    %% --- Subgraphs, and a direction that applies only inside ----------------
+    subgraph one [A subgraph with a title]
+        direction TB
+        a1 --> a2
+    end
+
+    subgraph two
+        b1 --> b2
+    end
+
+    one --> two
+
+    %% --- Class definitions, styling and click handlers ------------------------
+    classDef highlighted fill:#fef3c7,stroke:#d97706,stroke-width:2px
+    class rect,round highlighted
+    markup:::highlighted
+    style circle fill:#dcfce7
+    linkStyle 0 stroke:#ef4444,stroke-width:2px
+    click rect "https://example.com" "a tooltip" _blank
+    click round call callbackFn() "another tooltip"

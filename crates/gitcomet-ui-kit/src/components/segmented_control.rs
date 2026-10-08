@@ -16,6 +16,7 @@ pub struct Segment {
     label: SharedString,
     icon: Option<SharedString>,
     selected: bool,
+    disabled: bool,
     tooltip: Option<(SharedString, Vec<SharedString>)>,
 }
 
@@ -27,6 +28,7 @@ impl Segment {
             label: label.into(),
             icon: None,
             selected: false,
+            disabled: false,
             tooltip: None,
         }
     }
@@ -39,6 +41,11 @@ impl Segment {
 
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
         self
     }
 
@@ -103,6 +110,7 @@ impl SegmentedControl {
                 label,
                 icon,
                 selected,
+                disabled,
                 tooltip,
             } = segment;
             let text = if selected {
@@ -135,10 +143,12 @@ impl SegmentedControl {
                 .text_color(text)
                 .control_interaction(
                     style,
-                    InteractionState::default().selected(selected, raised),
+                    InteractionState::default()
+                        .selected(selected, raised)
+                        .disabled(disabled),
                 )
                 .on_activate(
-                    false,
+                    disabled,
                     ControlActivation::Action,
                     cx.listener(move |view, _: &ClickEvent, window, cx| {
                         on_select(view, index, window, cx);
@@ -163,6 +173,7 @@ mod tests {
     struct Picker {
         theme: AppTheme,
         selected: usize,
+        split_disabled: bool,
     }
 
     impl Render for Picker {
@@ -179,7 +190,11 @@ mod tests {
                             .icon("icons/diff_inline.svg")
                             .selected(selected == 0),
                     )
-                    .segment(Segment::new("picker_split", "Split").selected(selected == 1))
+                    .segment(
+                        Segment::new("picker_split", "Split")
+                            .selected(selected == 1)
+                            .disabled(self.split_disabled),
+                    )
                     .render(
                         self.theme,
                         UiScale::current(cx),
@@ -199,7 +214,11 @@ mod tests {
     fn a_click_selects_its_segment_and_only_that_one_is_raised(cx: &mut gpui::TestAppContext) {
         let _guard = crate::test_support::lock_visual_test();
         let theme = AppTheme::gitcomet_dark();
-        let (view, cx) = cx.add_window_view(|_, _| Picker { theme, selected: 0 });
+        let (view, cx) = cx.add_window_view(|_, _| Picker {
+            theme,
+            selected: 0,
+            split_disabled: false,
+        });
         crate::test_support::redraw(cx);
         let raised: gpui::Background = theme.colors.surface.raised.into();
         let is_raised = |cx: &mut gpui::VisualTestContext, selector| {
@@ -215,5 +234,32 @@ mod tests {
         assert_eq!(cx.update(|_, app| view.read(app).selected), 1);
         assert!(is_raised(cx, "picker_split"));
         assert!(!is_raised(cx, "picker_inline"));
+    }
+
+    #[gpui::test]
+    fn disabled_segments_ignore_clicks_until_enabled(cx: &mut gpui::TestAppContext) {
+        let _guard = crate::test_support::lock_visual_test();
+        let (view, cx) = cx.add_window_view(|_, _| Picker {
+            theme: AppTheme::gitcomet_dark(),
+            selected: 0,
+            split_disabled: true,
+        });
+        crate::test_support::redraw(cx);
+        let split = cx.debug_bounds("picker_split").unwrap();
+        cx.simulate_click(split.center(), gpui::Modifiers::default());
+        crate::test_support::redraw(cx);
+        assert_eq!(cx.update(|_, app| view.read(app).selected), 0);
+
+        cx.update(|_, app| {
+            view.update(app, |view, cx| {
+                view.split_disabled = false;
+                cx.notify();
+            });
+        });
+        crate::test_support::redraw(cx);
+        let split = cx.debug_bounds("picker_split").unwrap();
+        cx.simulate_click(split.center(), gpui::Modifiers::default());
+        crate::test_support::redraw(cx);
+        assert_eq!(cx.update(|_, app| view.read(app).selected), 1);
     }
 }

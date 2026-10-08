@@ -1754,6 +1754,7 @@ fn blocks_group_the_lines_of_one_construct_together() {
             MarkdownBlock::List(rows) => format!("list({})", rows.len()),
             MarkdownBlock::Blockquote(rows) => format!("quote({})", rows.len()),
             MarkdownBlock::Code(rows) => format!("code({})", rows.len()),
+            MarkdownBlock::Diagram(rows) => format!("diagram({})", rows.len()),
             MarkdownBlock::Table(rows) => format!("table({})", rows.len()),
             MarkdownBlock::Image(_) => "img".to_string(),
             MarkdownBlock::ThematicBreak(_) => "hr".to_string(),

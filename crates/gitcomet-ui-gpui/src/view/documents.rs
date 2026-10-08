@@ -13,6 +13,8 @@ use gitcomet_state::model::SidebarMode;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
+mod diagram_tests;
 mod picker;
 pub(crate) use picker::DocumentPicker;
 
@@ -357,6 +359,9 @@ struct StandaloneBuffer {
     syntax_key: Option<(u64, u64)>,
     syntax_serial: u64,
     syntax_task: Option<gpui::Task<()>>,
+    diagram_key: Option<(PathBuf, u64, u64)>,
+    diagram_input: Option<super::diagram_preview::DiagramInput>,
+    preview_mode: RenderedPreviewMode,
     path_input: Entity<TextInput>,
     version: Option<DiskVersion>,
     /// How the file was read, so saves write it back the same way.
@@ -494,6 +499,9 @@ impl StandaloneBuffer {
             syntax_key: None,
             syntax_serial: 0,
             syntax_task: None,
+            diagram_key: None,
+            diagram_input: None,
+            preview_mode: RenderedPreviewMode::Rendered,
             path_input,
             version: None,
             text_format: None,
@@ -709,6 +717,37 @@ impl StandaloneBuffer {
         .detach();
     }
 
+    fn ensure_diagram_preview(&mut self, cx: &mut gpui::Context<Self>) {
+        use super::diagram_preview::DiagramInput;
+        use gitcomet_diagrams::DiagramKind;
+        if self.loading || self.image {
+            return;
+        }
+        let snapshot = self.input.read(cx).text_snapshot();
+        let key = (
+            self.identity.0.clone(),
+            snapshot.model_id(),
+            snapshot.revision(),
+        );
+        if self.diagram_key.as_ref() == Some(&key) {
+            return;
+        }
+        self.diagram_key = Some(key);
+        self.diagram_input = DiagramKind::for_path(&self.identity.0).map(|kind| {
+            if snapshot.len() <= gitcomet_diagrams::MAX_SOURCE_BYTES {
+                DiagramInput::Text {
+                    kind,
+                    text: snapshot.rope().to_string().into(),
+                }
+            } else {
+                // Never fall back to the saved file for an oversized unsaved buffer.
+                DiagramInput::TooLarge {
+                    revision: format!("{}:{}", snapshot.model_id(), snapshot.revision()).into(),
+                }
+            }
+        });
+    }
+
     fn refresh_syntax(&mut self, cx: &mut gpui::Context<Self>) {
         if self.loading || self.image {
             return;
@@ -899,6 +938,26 @@ impl StandaloneBuffer {
                     })
                     .gitcomet_tooltip(theme, edit_tooltip),
             );
+        if !self.loading
+            && let Some(kind @ RenderedPreviewKind::Diagram) =
+                preview_path_rendered_kind(&self.identity.0)
+        {
+            controls = controls.child(super::rendered_preview::mode_toggle(
+                kind,
+                if self.editing {
+                    RenderedPreviewMode::Source
+                } else {
+                    self.preview_mode
+                },
+                self.editing,
+                theme,
+                cx,
+                |this, mode, _, cx| {
+                    this.preview_mode = mode;
+                    cx.notify();
+                },
+            ));
+        }
         if self.editing {
             controls = controls
                 .child(
@@ -1265,6 +1324,7 @@ impl Render for StandaloneBuffer {
         let theme = self.theme;
         let ui_scale_percent = ui_scale::current(cx).percent;
         let _ = self.subscriptions.len();
+        self.ensure_diagram_preview(cx);
         // Text stays on screen through a failed save or a vanished file; only a
         // read that never produced any shows the failure in its place.
         let has_text = !self.image
@@ -1285,21 +1345,39 @@ impl Render for StandaloneBuffer {
                 .size_full()
                 .into_any_element()
         } else if image_ready {
-            div()
-                .id("document_image")
-                .debug_selector(|| "document_image".into())
-                .size_full()
-                .p_4()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(theme.colors.editor.background)
-                .child(
+            super::rendered_preview::render(
+                "document_image",
+                super::rendered_preview::PreviewContent::File(
                     gpui::img(self.identity.0.clone())
                         .size_full()
-                        .object_fit(gpui::ObjectFit::Contain),
-                )
-                .into_any_element()
+                        .object_fit(gpui::ObjectFit::Contain)
+                        .into_any_element(),
+                ),
+                theme,
+                ui_scale_percent,
+            )
+        } else if has_text
+            && self.diagram_input.is_some()
+            && self.preview_mode == RenderedPreviewMode::Rendered
+            && !self.editing
+        {
+            let input = self.diagram_input.clone().unwrap();
+            super::rendered_preview::render(
+                "document_diagram",
+                super::rendered_preview::PreviewContent::File(
+                    super::diagram_preview::DiagramPreview {
+                        id: "document_diagram".into(),
+                        input,
+                        theme,
+                        source_element: None,
+                        force_source: false,
+                        embedded: false,
+                    }
+                    .into_any_element(),
+                ),
+                theme,
+                ui_scale_percent,
+            )
         } else if has_text {
             self.render_text(ui_scale_percent, cx)
         } else {

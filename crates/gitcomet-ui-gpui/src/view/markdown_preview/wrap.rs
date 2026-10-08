@@ -283,6 +283,7 @@ pub(crate) enum MarkdownBlock {
     List(Range<usize>),
     Blockquote(Range<usize>),
     Code(Range<usize>),
+    Diagram(Range<usize>),
     Table(Range<usize>),
 }
 
@@ -297,6 +298,7 @@ impl MarkdownBlock {
             Self::List(range)
             | Self::Blockquote(range)
             | Self::Code(range)
+            | Self::Diagram(range)
             | Self::Table(range) => range.clone(),
         }
     }
@@ -370,15 +372,17 @@ pub(crate) fn markdown_blocks_in(
                 )));
             }
             MarkdownPreviewRowKind::CodeLine { .. } => {
-                blocks.push(MarkdownBlock::Code(take_run(
-                    document,
-                    &mut ix,
-                    end,
-                    |_, row| {
-                        matches!(row.kind, MarkdownPreviewRowKind::CodeLine { .. })
-                            && row.blockquote_level == quote_depth
-                    },
-                )));
+                let diagram = row.diagram.clone();
+                let range = take_run(document, &mut ix, end, |offset, row| {
+                    matches!(row.kind, MarkdownPreviewRowKind::CodeLine { is_first, .. } if offset == 0 || !is_first)
+                        && row.blockquote_level == quote_depth
+                        && row.diagram == diagram
+                });
+                blocks.push(if diagram.is_some() {
+                    MarkdownBlock::Diagram(range)
+                } else {
+                    MarkdownBlock::Code(range)
+                });
             }
             MarkdownPreviewRowKind::TableRow { .. } => {
                 // HTML tables may have no headers, or several header rows.

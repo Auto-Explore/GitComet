@@ -419,19 +419,20 @@ impl DiffViewMode {
 pub(super) enum RenderedPreviewKind {
     Svg,
     Markdown,
+    Diagram,
 }
 
 impl RenderedPreviewKind {
     pub(super) fn rendered_label(self) -> &'static str {
         match self {
             Self::Svg => "Image",
-            Self::Markdown => "Preview",
+            Self::Markdown | Self::Diagram => "Preview",
         }
     }
 
     pub(super) fn source_label(self) -> &'static str {
         match self {
-            Self::Svg => "Code",
+            Self::Svg | Self::Diagram => "Code",
             Self::Markdown => "Text",
         }
     }
@@ -440,6 +441,7 @@ impl RenderedPreviewKind {
         match self {
             Self::Svg => "svg_diff_view_image",
             Self::Markdown => "markdown_diff_view_preview",
+            Self::Diagram => "diagram_diff_view_preview",
         }
     }
 
@@ -447,6 +449,7 @@ impl RenderedPreviewKind {
         match self {
             Self::Svg => "svg_diff_view_toggle",
             Self::Markdown => "markdown_diff_view_toggle",
+            Self::Diagram => "diagram_diff_view_toggle",
         }
     }
 
@@ -454,6 +457,7 @@ impl RenderedPreviewKind {
         match self {
             Self::Svg => "svg_diff_view_code",
             Self::Markdown => "markdown_diff_view_text",
+            Self::Diagram => "diagram_diff_view_code",
         }
     }
 }
@@ -468,6 +472,7 @@ pub(super) enum RenderedPreviewMode {
 pub(super) struct RenderedPreviewModes {
     pub(super) svg: RenderedPreviewMode,
     pub(super) markdown: RenderedPreviewMode,
+    pub(super) diagram: RenderedPreviewMode,
     /// Markdown shows Source because a file's diff was too big to render, not
     /// because the reader chose it; the next file gets Rendered back.
     markdown_budget_fallback: bool,
@@ -478,6 +483,7 @@ impl Default for RenderedPreviewModes {
         Self {
             svg: RenderedPreviewMode::Rendered,
             markdown: RenderedPreviewMode::Rendered,
+            diagram: RenderedPreviewMode::Rendered,
             markdown_budget_fallback: false,
         }
     }
@@ -488,12 +494,14 @@ impl RenderedPreviewModes {
         match kind {
             RenderedPreviewKind::Svg => self.svg,
             RenderedPreviewKind::Markdown => self.markdown,
+            RenderedPreviewKind::Diagram => self.diagram,
         }
     }
 
     pub(super) fn set(&mut self, kind: RenderedPreviewKind, mode: RenderedPreviewMode) {
         match kind {
             RenderedPreviewKind::Svg => self.svg = mode,
+            RenderedPreviewKind::Diagram => self.diagram = mode,
             RenderedPreviewKind::Markdown => {
                 self.markdown = mode;
                 self.markdown_budget_fallback = false;
@@ -548,6 +556,8 @@ pub(super) fn preview_path_rendered_kind(path: &std::path::Path) -> Option<Rende
         Some(RenderedPreviewKind::Svg)
     } else if is_markdown_path(path) {
         Some(RenderedPreviewKind::Markdown)
+    } else if gitcomet_diagrams::DiagramKind::for_path(path).is_some() {
+        Some(RenderedPreviewKind::Diagram)
     } else {
         None
     }
@@ -559,6 +569,9 @@ pub(super) fn diff_target_rendered_preview_kind(
     let path = match target? {
         DiffTarget::WorkingTree { path, .. } => path.as_path(),
         DiffTarget::Commit { path, .. } => path.as_path(),
+        DiffTarget::CommitRange {
+            path: Some(path), ..
+        } => path.as_path(),
         _ => return None,
     };
     preview_path_rendered_kind(path)
@@ -577,8 +590,10 @@ pub(super) fn main_diff_rendered_preview_toggle_kind(
         // `is_file_preview` covers the content view an SVG gets when it is
         // opened from the file explorer: the picture is the whole file there
         // too, and Code is how you reach its source (and the editor).
-        RenderedPreviewKind::Svg if wants_file_diff || wants_collapsed_diff || is_file_preview => {
-            Some(RenderedPreviewKind::Svg)
+        kind @ (RenderedPreviewKind::Svg | RenderedPreviewKind::Diagram)
+            if wants_file_diff || wants_collapsed_diff || is_file_preview =>
+        {
+            Some(kind)
         }
         RenderedPreviewKind::Markdown if wants_file_diff || is_file_preview => {
             Some(RenderedPreviewKind::Markdown)

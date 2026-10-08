@@ -244,10 +244,13 @@ exact_filtered_target!(bench_clipboard_selected => bench_clipboard);
 exact_filtered_target!(bench_display_selected => bench_display);
 exact_filtered_target!(bench_real_repo_selected => bench_real_repo);
 
+exact_filtered_target!(bench_mermaid_preview_selected => bench_mermaid_preview);
+
 criterion_group! {
     name = benches;
     config = performance_benches::benchmark_criterion();
     targets =
+    bench_mermaid_preview_selected,
     bench_extensions_selected,
         bench_open_repo_selected,
         bench_sidebar_sticky_selected,

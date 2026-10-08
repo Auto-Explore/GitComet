@@ -1,0 +1,15 @@
+flowchart TD
+    A[Start] --> B{Decide}
+    B -->|yes| C[Do work]
+    C --> D{More?}
+    D -->|yes| B
+    D -->|no| E[End]
+
+    subgraph LoopBlock
+        direction LR
+        F[One] --> G[Two]
+        G --> H[Three]
+        H --> F
+    end
+
+    E --> F

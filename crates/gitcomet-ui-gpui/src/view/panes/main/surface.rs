@@ -111,8 +111,14 @@ impl MainPaneView {
             supports_diff_content_toggle && self.wants_file_diff_view(file_preview);
         let wants_collapsed_diff =
             supports_diff_content_toggle && self.wants_collapsed_diff_view(file_preview);
-        let rendered_preview_kind =
-            crate::view::diff_target_rendered_preview_kind(self.rendered_diff_target());
+        let rendered_preview_kind = crate::view::diff_target_rendered_preview_kind(
+            self.rendered_diff_target(),
+        )
+        .filter(|kind| {
+            *kind != RenderedPreviewKind::Diagram
+                || inline_submodule_diff
+                || self.conflicted_worktree_target().is_none()
+        });
         let toggle_kind = crate::view::main_diff_rendered_preview_toggle_kind(
             wants_file_diff,
             wants_collapsed_diff,

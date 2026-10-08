@@ -113,7 +113,7 @@ jobs:
           nextest: "false"
           compiled: "false"
       - name: Clippy (libraries)
-        run: cargo clippy --locked -p gitcomet-core -p gitcomet-state -p gitcomet-git-gix -p gitcomet-tree-sitter-alloc -- -D warnings
+        run: cargo clippy --locked -p gitcomet-core -p gitcomet-diagrams -p gitcomet-state -p gitcomet-git-gix -p gitcomet-tree-sitter-alloc -- -D warnings
       - name: Clippy (headless app)
         run: cargo clippy --locked -p gitcomet -p gitcomet-app --no-default-features --features gix -- -D warnings
       - name: Check crate dependency boundaries
@@ -180,13 +180,13 @@ jobs:
           python3 scripts/ci/run.py command --name headless-build-app -- cargo build --locked --profile ci-test -p gitcomet --no-default-features --features gix
       - name: Compile package test contexts
         run: |
-          for context in core state backend app; do
+          for context in core diagrams state backend app; do
             python3 scripts/ci/run.py compile --context "$context"
           done
       - name: Run every package context and doctests
         run: |
           result=0
-          for context in core state backend app; do
+          for context in core diagrams state backend app; do
             python3 scripts/ci/run.py test --context "$context" --schedule "$CI_TEST_SCHEDULE" || result=1
             python3 scripts/ci/run.py doc --context "$context" || result=1
           done

@@ -207,6 +207,7 @@ pub(crate) fn push_row(
         text: SharedString::from(row_text),
         inline_spans: spans,
         code_language: row.code_language,
+        diagram: None,
         source_line_range: row.source_line_range,
         change_hint: MarkdownChangeHint::None,
         indent_level: row.indent_level,

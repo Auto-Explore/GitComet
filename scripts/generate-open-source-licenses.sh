@@ -10,6 +10,7 @@ TMP_FILE="$(mktemp)"
 BUNDLED_ASSET_LICENSE_ROWS=(
   $'Fira Code\t6.2-103-ge50b177\tSIL OFL-1.1'
   $'IBM Plex Sans\t3.005\tSIL OFL-1.1'
+  $'Noto Emoji\t3.002\tSIL OFL-1.1'
   $'Lilex\t2.621\tSIL OFL-1.1'
   $'Catppuccin for VSCode (theme colors)\t3.19.0\tMIT'
   $'GitHub VS Code Theme (theme colors)\t6.3.5\tMIT'

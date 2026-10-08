@@ -108,17 +108,30 @@ pub(crate) fn annotate_change_hints(
     changed_old_lines: &[bool],
     changed_new_lines: &[bool],
 ) {
-    for row in &mut old_doc.rows {
+    annotate_document_change_hints(old_doc, |range| {
+        line_range_change_hint(range, changed_old_lines, true)
+    });
+    annotate_document_change_hints(new_doc, |range| {
+        line_range_change_hint(range, changed_new_lines, false)
+    });
+}
+
+pub(super) fn annotate_document_change_hints(
+    document: &mut MarkdownPreviewDocument,
+    mut hint_for_range: impl FnMut(&Range<usize>) -> MarkdownChangeHint,
+) {
+    let mut diagram_hints = rustc_hash::FxHashMap::default();
+    for row in &mut document.rows {
         if matches!(row.kind, MarkdownPreviewRowKind::Spacer) {
             continue;
         }
-        row.change_hint = line_range_change_hint(&row.source_line_range, changed_old_lines, true);
-    }
-    for row in &mut new_doc.rows {
-        if matches!(row.kind, MarkdownPreviewRowKind::Spacer) {
-            continue;
-        }
-        row.change_hint = line_range_change_hint(&row.source_line_range, changed_new_lines, false);
+        row.change_hint = if let Some(diagram) = &row.diagram {
+            *diagram_hints
+                .entry((diagram.fence_lines.start, diagram.fence_lines.end))
+                .or_insert_with(|| hint_for_range(&diagram.fence_lines))
+        } else {
+            hint_for_range(&row.source_line_range)
+        };
     }
 }
 
@@ -135,8 +148,12 @@ fn markdown_row_diff_span(
     row: &MarkdownPreviewRow,
     line_to_diff_row: &[Option<usize>],
 ) -> Option<(usize, usize)> {
-    let start = row.source_line_range.start.min(line_to_diff_row.len());
-    let end = row.source_line_range.end.min(line_to_diff_row.len());
+    let range = row
+        .diagram
+        .as_ref()
+        .map_or(&row.source_line_range, |diagram| &diagram.fence_lines);
+    let start = range.start.min(line_to_diff_row.len());
+    let end = range.end.min(line_to_diff_row.len());
     let mut rows = line_to_diff_row[start..end].iter().flatten().copied();
     let first = rows.next()?;
     Some(rows.fold((first, first), |(lo, hi), row| (lo.min(row), hi.max(row))))
@@ -157,9 +174,18 @@ pub(crate) fn markdown_diff_row_groups(
     new_line_to_diff_row: &[Option<usize>],
 ) -> Vec<MarkdownDiffRowGroup> {
     let with_spans = |rows: Vec<MarkdownPreviewRow>, map: &[Option<usize>]| {
+        let mut diagram_spans = rustc_hash::FxHashMap::default();
         rows.into_iter()
             .map(|row| {
-                let span = markdown_row_diff_span(&row, map);
+                let span = if let Some(diagram) = &row.diagram {
+                    // Every line of a diagram shares its fence span. Scan that
+                    // span once, even for diagrams with thousands of lines.
+                    *diagram_spans
+                        .entry((diagram.fence_lines.start, diagram.fence_lines.end))
+                        .or_insert_with(|| markdown_row_diff_span(&row, map))
+                } else {
+                    markdown_row_diff_span(&row, map)
+                };
                 (row, span)
             })
             .collect::<Vec<_>>()
@@ -381,6 +407,17 @@ pub(crate) fn markdown_inline_diff_rows_can_merge(
         && !matches!(new_row.kind, MarkdownPreviewRowKind::Spacer)
         && same_kind
         && old_row.text == new_row.text
+        && match (&old_row.diagram, &new_row.diagram) {
+            (Some(old), Some(new)) => {
+                old.kind == new.kind && old.info == new.info
+                    // Groups contain complete diagrams. Compare the full body
+                    // once at the opening row, rather than once per code line.
+                    && (!matches!(old_row.kind, MarkdownPreviewRowKind::CodeLine { is_first: true, .. })
+                        || old.source == new.source)
+            }
+            (None, None) => true,
+            _ => false,
+        }
         && same_spans
         && old_row.code_language == new_row.code_language
         && old_row.indent_level == new_row.indent_level

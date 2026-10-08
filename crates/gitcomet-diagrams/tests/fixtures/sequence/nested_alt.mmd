@@ -1,0 +1,37 @@
+sequenceDiagram
+    participant C as Client
+    participant API as REST API
+    participant W as Worker
+    participant DB as Database
+    participant R as Redis
+    participant S3
+    participant Q as Queue
+    participant DLQ as Dead Letter Queue
+
+    alt Application error (API failure)
+        Note over W: Exception in pipeline
+        W->>S3: PutObject (error_detail.json)
+        W->>DB: status=FAILED, s3_error_key
+        W->>R: PUBLISH failed
+        R-->>API: Event
+        API-->>C: SSE event: failed {error}
+        W->>Q: DeleteMessage
+        Note over DLQ: Does not reach DLQ
+    end
+
+    alt Infrastructure failure (OOM / crash)
+        Note over W: Worker stopped (status=IN_PROGRESS)
+        Note over Q: visibilityTimeout (360s) elapsed
+        Note over Q: maxReceiveCount (3) exceeded
+        Q->>DLQ: Move message
+        Note over DLQ: CloudWatch Alarm fires (DLQ depth > 0)
+    end
+
+    C->>API: GET /jobs/:id/stream (reconnect)
+    API->>DB: GetItem(job_id)
+    alt COMPLETED / FAILED
+        API->>S3: GetObject
+        API-->>C: Return result, close SSE
+    else IN_PROGRESS
+        Note over API: SUBSCRIBE, re-check, resume waiting
+    end

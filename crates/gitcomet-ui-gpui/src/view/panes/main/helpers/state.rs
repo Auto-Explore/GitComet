@@ -458,6 +458,9 @@ pub(crate) struct MainPaneView {
     /// stale range.
     pub(in crate::view) blame_time_range_cache: BlameTimeRangeCache,
     pub(in crate::view) rendered_preview_modes: RenderedPreviewModes,
+    /// Last observed diagram target, including asynchronous kind recognition.
+    pub(in crate::view) diagram_search_target:
+        Option<(RepoId, DiffTarget, gitcomet_diagrams::DiagramKind)>,
     pub(in crate::view) remote_markdown_images: RemoteMarkdownImages,
     pub(in crate::view) diff_word_wrap: bool,
     /// The settings' tab size; a file's attributes or the user's choice win.

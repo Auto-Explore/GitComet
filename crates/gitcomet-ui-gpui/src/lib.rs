@@ -54,6 +54,7 @@ pub use view::StartupCrashReport;
 #[cfg(feature = "benchmarks")]
 #[doc(hidden)]
 pub mod benchmarks {
+    pub use crate::view::MermaidPreviewFixture;
     pub use crate::view::rows::benchmarks::*;
 
     /// Benchmarks measure the live app: background work, timers, and

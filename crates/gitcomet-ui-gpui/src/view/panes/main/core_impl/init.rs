@@ -345,6 +345,7 @@ impl MainPaneView {
             diff_stage_gutter_cells: FxHashMap::default(),
             blame_time_range_cache: None,
             rendered_preview_modes: RenderedPreviewModes::default(),
+            diagram_search_target: None,
             remote_markdown_images: RemoteMarkdownImages::new(remote_markdown_image_policy),
             diff_word_wrap,
             default_tab_size,

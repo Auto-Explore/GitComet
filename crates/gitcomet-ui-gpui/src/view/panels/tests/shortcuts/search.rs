@@ -2,6 +2,54 @@
 
 use super::*;
 
+#[gpui::test]
+fn active_search_switches_diagram_targets_to_source_on_f1_and_f4(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let paths = ["a.mmd", "b.rs", "c.mmd"].map(std::path::PathBuf::from);
+    let repo = simple_worktree_repo(
+        RepoId(70543),
+        directory.path(),
+        &CommitId("1122334455667701".into()),
+        &paths,
+        &paths[1],
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_diff_search_input(cx, &view);
+    for (key, destination) in [("f4", &paths[2]), ("f1", &paths[1]), ("f1", &paths[0])] {
+        cx.update(|_, app| {
+            view.read(app).main_pane.clone().update(app, |pane, _| {
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Diagram, RenderedPreviewMode::Rendered);
+            });
+        });
+        cx.simulate_keystrokes(key);
+        draw_and_drain_test_window(cx);
+        wait_until_store_diff_target_path(cx, &view, destination);
+        sync_store_snapshot(cx, &view);
+        cx.update(|_, app| {
+            let pane = view.read(app).main_pane.read(app);
+            assert!(pane.diff_search_active);
+            assert_eq!(
+                pane.rendered_preview_modes
+                    .get(RenderedPreviewKind::Diagram),
+                if destination.extension().unwrap() == "mmd" {
+                    RenderedPreviewMode::Source
+                } else {
+                    RenderedPreviewMode::Rendered
+                },
+                "{key} to {}",
+                destination.display()
+            );
+        });
+        assert!(diff_search_input_is_focused(cx, &view));
+        assert!(cx.debug_bounds("diagram_preview").is_none());
+    }
+}
+
 fn wait_for_diff_search_debounce(cx: &mut gpui::VisualTestContext) {
     cx.run_until_parked();
     cx.executor().advance_clock(Duration::from_millis(150));

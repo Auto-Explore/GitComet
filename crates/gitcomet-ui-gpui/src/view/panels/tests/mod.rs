@@ -1487,6 +1487,7 @@ mod commit_file_selection;
 mod comparison;
 mod conflict;
 mod control_interaction;
+mod diagrams;
 mod diff_marker_refresh;
 mod diff_stage_gutter;
 mod error_details;
