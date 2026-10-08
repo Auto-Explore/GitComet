@@ -150,7 +150,6 @@ fn prepared_document_chunk_request_builds_in_background() {
 
 #[test]
 fn prepared_document_chunk_prefetch_shares_one_tree_state_clone() {
-    let _lock = lock_global_counter_tests();
     reset_deferred_drop_counters();
     reset_prepared_syntax_cache();
     let lines = (0..(TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS * 2))
@@ -227,7 +226,6 @@ fn document_scoped_chunk_drain_preserves_other_documents() {
 
 #[test]
 fn prepared_document_chunk_hit_does_not_clone_tree_state() {
-    let _lock = lock_global_counter_tests();
     reset_deferred_drop_counters();
     reset_prepared_syntax_cache();
     let lines = (0..(TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS * 2))
@@ -387,7 +385,6 @@ fn treesitter_document_cache_lru_touch_keeps_recent_entry_alive() {
 fn prepared_handle_rehydrates_after_thread_local_tree_eviction() {
     let tab_width = 4;
 
-    let _lock = lock_global_counter_tests();
     reset_prepared_syntax_cache();
 
     let text = "fn target() { let value = [1, 2]; }\n";
@@ -415,7 +412,6 @@ fn prepared_handle_rehydrates_after_thread_local_tree_eviction() {
 
 #[test]
 fn warm_shared_text_prepare_reuses_source_identity_without_rehashing() {
-    let _lock = lock_global_counter_tests();
     reset_prepared_syntax_cache();
     reset_deferred_drop_counters();
 
@@ -467,7 +463,6 @@ fn warm_shared_text_prepare_reuses_source_identity_without_rehashing() {
 
 #[test]
 fn cold_prepare_hashes_the_source_only_once_on_cache_miss() {
-    let _lock = lock_global_counter_tests();
     reset_prepared_syntax_cache();
     reset_deferred_drop_counters();
 
@@ -497,7 +492,6 @@ fn cold_prepare_hashes_the_source_only_once_on_cache_miss() {
 
 #[test]
 fn timed_out_prepare_reuses_pending_parse_request_in_background_without_rehashing() {
-    let _lock = lock_global_counter_tests();
     reset_prepared_syntax_cache();
     reset_deferred_drop_counters();
 
@@ -543,7 +537,6 @@ fn timed_out_prepare_reuses_pending_parse_request_in_background_without_rehashin
 
 #[test]
 fn oversized_shared_text_prepare_falls_back_without_prepared_tree_sitter() {
-    let _lock = lock_global_counter_tests();
     reset_prepared_syntax_cache();
     reset_deferred_drop_counters();
 

@@ -4,10 +4,10 @@
 import argparse
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from functools import partial
 from contextlib import ExitStack
 from datetime import datetime, timezone
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -20,6 +20,7 @@ import time
 import tempfile
 import tomllib
 import xml.etree.ElementTree as ET
+import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
 REPORTS = ROOT / "target" / "ci-reports"
@@ -30,10 +31,13 @@ UI = "gitcomet-ui-gpui"
 # process-global platform state, so each of these harnesses runs as one libtest
 # process on every platform instead of nextest's process per test.
 GPUI_PACKAGES = (UI, "gitcomet-ui-kit", "gitcomet-extension-example")
-NEXTEST_PROFILES = ("ci", "ci-git-limited", "ci-watch-first")
+NEXTEST_PROFILES = ("ci", "ci-git-limited", "ci-watch-first", "ci-throughput")
 # Audited in-memory tests: no process-global environment, filesystem, or native
 # resources. Keep this an explicit binary/prefix allowlist, not all unit tests.
-PURE_BATCHES = {"gitcomet-core": ("conflict_session::",)}
+PURE_BATCHES = {
+    "gitcomet-core": ("conflict_session::", "text_search::", "text_format::"),
+    UI: ("view::word_diff::tests::", "view::history_graph::walk::tests::"),
+}
 # The example product builds alone, so it never relies on (or leaks) the
 # workspace's feature unification: it enables the application's GUI, which the
 # headless workspace context must not inherit.
@@ -105,8 +109,8 @@ def batched_test_names(batches):
 
 
 def runner_label(package, binary_id, name, batched):
-    return ("libtest" if uses_libtest(package) else
-            "libtest-pure" if (binary_id, name) in batched else "nextest")
+    return ("libtest-pure" if (binary_id, name) in batched else
+            "libtest" if uses_libtest(package) else "nextest")
 
 
 def nextest_filter(batches, libtest_packages=(UI,)):
@@ -262,7 +266,7 @@ def configure_output():
             stream.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 
-def run(name, command, *, output=None, cwd=None, env=None, check=True, timeout=None, live=True, cancel=None, dots=False):
+def run(name, command, *, output=None, cwd=None, env=None, check=True, timeout=None, live=True, cancel=None, dots=False, resources=None, isolate_stderr=False):
     """Keep complete logs, surface runtime skips, and never mask subprocess failures.
 
     `dots` only filters the console; the log file always keeps every line.
@@ -294,11 +298,22 @@ def run(name, command, *, output=None, cwd=None, env=None, check=True, timeout=N
     with ExitStack() as stack:
         log = stack.enter_context(log_path.open("w", encoding="utf-8"))
         stdout = stack.enter_context(Path(output).open("w", encoding="utf-8")) if output else log
+        stderr_path = log_path.with_suffix(".stderr.log") if isolate_stderr else None
+        stderr = stack.enter_context(stderr_path.open("w", encoding="utf-8")) if stderr_path else log
+
+        def retain_stderr():
+            if stderr_path:
+                log.seek(0, os.SEEK_END)
+                log.write("\n--- subprocess stderr ---\n" + stderr_path.read_text(encoding="utf-8", errors="replace"))
+                log.flush()
         # Tail a file instead of blocking on a pipe that a leaked descendant
         # could hold open after its parent exits. Deadlines cover silent hangs.
         reader = stack.enter_context(log_path.open(encoding="utf-8", errors="replace"))
         process = subprocess.Popen(command, cwd=ROOT if cwd is None else cwd, env=env, stdout=stdout,
-                                   stderr=log, start_new_session=os.name != "nt")
+                                   stderr=stderr, start_new_session=os.name != "nt")
+        if resources:
+            resources.add(process.pid)
+            stack.callback(resources.remove, process.pid)
         try:
             while process.poll() is None:
                 if live:
@@ -311,10 +326,12 @@ def run(name, command, *, output=None, cwd=None, env=None, check=True, timeout=N
                     break
                 time.sleep(0.05)
             code = 124 if timed_out else process.wait()
+            retain_stderr()
             if live:
                 echo(reader.read(), final=True)
         except BaseException:
             stop_process_tree(process)
+            retain_stderr()
             record(name, time.monotonic() - start, 130, cancelled=True, timed_out=False,
                    command=[str(arg) for arg in command])
             with CONSOLE_LOCK:
@@ -505,9 +522,10 @@ def suite_env(context, suite, *, cleanup):
     return env
 
 
-def run_suite(context, binary_id, suite, *, test_filter=None, exact=False, env_overrides=None, threads=None, live=True, cancel=None, verify_names=False):
+def run_suite(context, binary_id, suite, *, test_filter=None, exact=False, env_overrides=None, threads=None, live=True, cancel=None, verify_names=False, skip_prefixes=(), resources=None):
     expected = [name for name, test in suite["testcases"].items()
-                if not test["ignored"] and (test_filter is None or
+                if not test["ignored"] and not any(prefix in name for prefix in skip_prefixes)
+                and (test_filter is None or
                     (name == test_filter if exact else test_filter in name))]
     if test_filter and not expected:
         raise RuntimeError(f"Smoke selector {test_filter!r} matches no tests in {binary_id}")
@@ -516,8 +534,6 @@ def run_suite(context, binary_id, suite, *, test_filter=None, exact=False, env_o
     dots = verify_names or test_filter is None
     if not dots:
         command = [suite["binary-path"], "--nocapture"]
-    elif verify_names:
-        command = [suite["binary-path"], "--format", "pretty"]
     else:
         command = [suite["binary-path"], "--format", "pretty", "--show-output"]
     if threads is not None:
@@ -526,6 +542,8 @@ def run_suite(context, binary_id, suite, *, test_filter=None, exact=False, env_o
         command += [test_filter]
     if exact:
         command += ["--exact"]
+    for prefix in skip_prefixes:
+        command += ["--skip", prefix]
     with ExitStack() as cleanup:
         env = suite_env(context, suite, cleanup=cleanup)
         env.update(env_overrides or {})
@@ -533,16 +551,24 @@ def run_suite(context, binary_id, suite, *, test_filter=None, exact=False, env_o
         if env_overrides:
             name += "-" + env_overrides["XDG_SESSION_TYPE"] + "-" + env_overrides["XDG_CURRENT_DESKTOP"]
         code = run(name, command, cwd=suite["cwd"], env=env, check=False,
-                   timeout=180 if test_filter else 600, live=live, cancel=cancel, dots=dots)
+                   timeout=180 if test_filter else 600, live=live, cancel=cancel, dots=dots, resources=resources,
+                   isolate_stderr=True)
     log_name = re.sub(r"[^a-zA-Z0-9_.-]", "-", name)
     log = (REPORTS / f"{log_name}.log").read_text(encoding="utf-8", errors="replace")
-    annotate_failures(name, LIBTEST_FAILED.findall(log))
+    harness_log = log.split("\n--- subprocess stderr ---\n", 1)[0]
+    annotate_failures(name, LIBTEST_FAILED.findall(harness_log))
     reject_prerequisite_skips(name, log)
-    summaries = re.findall(r"test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed;", log)
+    summaries = re.findall(r"test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed;", harness_log)
     if not code and (not summaries or sum(map(int, summaries[-1])) != len(expected)):
         raise RuntimeError(f"{name}: libtest did not execute the inventoried test count ({len(expected)})")
-    if verify_names and not code:
-        actual = re.findall(r"^test (\S+)(?: - should panic)? \.\.\. ok\s*$", log, re.MULTILINE)
+    if (verify_names or test_filter is None) and not code:
+        # --show-output ends with an authoritative list of successful names.
+        # Captured test output can itself contain strings resembling results.
+        if "\nsuccesses:\n" in harness_log:
+            names = harness_log.rsplit("\nsuccesses:\n", 1)[1].split("\ntest result:", 1)[0]
+            actual = [line.strip() for line in names.splitlines() if line.strip()]
+        else:
+            actual = re.findall(r"^test (\S+)(?: - should panic)? \.\.\. ok\s*$", harness_log, re.MULTILINE)
         if Counter(actual) != Counter(expected):
             raise RuntimeError(f"{name}: libtest test-name coverage mismatch")
     return code
@@ -570,7 +596,7 @@ def check_nextest_results(context, suites, packages, junit, *, excluded=frozense
 def run_parallel(tasks):
     """Bound concurrency and join/clean every child on orchestration failure."""
     cancel = threading.Event()
-    executor = ThreadPoolExecutor(max_workers=2)
+    executor = ThreadPoolExecutor(max_workers=min(3, len(tasks)))
     futures = []
     try:
         futures = [executor.submit(task, cancel=cancel, live=False) for task in tasks]
@@ -584,9 +610,9 @@ def run_parallel(tasks):
         executor.shutdown(wait=True, cancel_futures=True)
 
 
-def nextest_junit_path(profile):
+def nextest_junit_path(profile, config_file=None):
     """JUnit lives in nextest's configured store, independent of Cargo targets."""
-    config = tomllib.loads((ROOT / ".config/nextest.toml").read_text(encoding="utf-8"))
+    config = tomllib.loads((config_file or ROOT / ".config/nextest.toml").read_text(encoding="utf-8"))
     store = ROOT / config.get("store", {}).get("dir", "target/nextest")
     profiles = config.get("profile", {})
     visited = set()
@@ -600,42 +626,176 @@ def nextest_junit_path(profile):
     raise ValueError(f"No JUnit path configured for nextest profile: {profile}")
 
 
-def execute(context, schedule="serial", nextest_threads=None, nextest_profile="ci", ui_threads=None, batch_pure_tests="auto"):
+def available_cpus():
+    """Respect process affinity and Linux container CPU quotas."""
+    counts = [os.cpu_count() or 1]
+    if hasattr(os, "process_cpu_count"):
+        counts.append(os.process_cpu_count() or 1)
+    if hasattr(os, "sched_getaffinity"):
+        try:
+            counts.append(len(os.sched_getaffinity(0)))
+        except OSError:
+            pass
+    if sys.platform == "linux":
+        # Read the unified hierarchy, including parent limits when visible.
+        try:
+            group = next(line.split(":", 2)[2] for line in Path("/proc/self/cgroup").read_text().splitlines()
+                         if line.startswith("0::"))
+            root = Path("/sys/fs/cgroup")
+            directory = root / group.lstrip("/")
+            while directory.is_relative_to(root):
+                try:
+                    quota, period = (directory / "cpu.max").read_text().split()
+                    if quota != "max":
+                        counts.append(max(1, int(quota) // int(period)))
+                except (OSError, ValueError):
+                    pass
+                directory = directory.parent
+        except (OSError, StopIteration):
+            pass
+    return max(1, min(counts))
+
+
+def thread_budgets(cpus, families, overrides):
+    """Reserve one slot per active family, then fill bounded defaults."""
+    if any(value is not None and value < 1 for value in overrides.values()):
+        raise ValueError("thread budgets must be positive")
+    budgets = {family: overrides[family] for family in families if overrides[family] is not None}
+    unset = [family for family in ("ui", "pure", "nextest") if family in families and family not in budgets]
+    remaining = cpus - sum(budgets.values())
+    if remaining < len(unset):
+        raise ValueError("balanced thread budgets exceed available CPUs")
+    desired = {"ui": min(16, max(1, cpus // 2)), "pure": max(1, cpus // 4), "nextest": cpus}
+    for index, family in enumerate(unset):
+        value = min(desired[family], remaining - (len(unset) - index - 1))
+        budgets[family] = value
+        remaining -= value
+    for family in ("nextest", "pure", "ui"):
+        if family in unset:
+            extra = remaining if family != "ui" else min(remaining, 16 - budgets[family])
+            budgets[family] += extra
+            remaining -= extra
+    return budgets
+
+
+def validate_partition(suites, packages, batches):
+    batched = Counter((binary, name) for binary, suite, prefix in batches
+                      for name, test in suite["testcases"].items()
+                      if name.startswith(prefix) and not test["ignored"])
+    for binary, suite, prefix in batches:
+        if any(prefix in name and not name.startswith(prefix) for name in suite["testcases"]):
+            raise RuntimeError(f"{binary}: ambiguous pure-test prefix {prefix}")
+    expected = Counter((binary, name) for binary, suite in suites.items()
+                       for name, test in suite.get("testcases", {}).items() if not test["ignored"])
+    rendered = Counter(key for key in expected if uses_libtest(packages[suites[key[0]]["package-id"]]) and key not in batched)
+    isolated = Counter(key for key in expected if not uses_libtest(packages[suites[key[0]]["package-id"]]) and key not in batched)
+    if batched + rendered + isolated != expected:
+        raise RuntimeError("test partition has duplicates, missing, or unexpected tests")
+    return set(batched), bool(isolated)
+
+
+def isolated_nextest_config(context):
+    """Copy configuration, changing only the store into a run-owned directory."""
+    raw = (ROOT / ".config/nextest.toml").read_text(encoding="utf-8")
+    run_id = uuid.uuid4().hex
+    config_file = paths(context) / f"nextest-{run_id}.toml"
+    store = paths(context).resolve() / f"nextest-{run_id}"
+    try:
+        store_path = os.path.relpath(store, ROOT)
+    except ValueError:  # Windows output and checkout may be on different drives.
+        store_path = str(store)
+    assignment = "dir = " + json.dumps(store_path) + "\n"
+    match = re.search(r"(?m)^\[store\][ \t]*(?:#.*)?$", raw)
+    if match:
+        tail = raw[match.end():]
+        next_table = re.search(r"(?m)^\[", tail)
+        stop = next_table.start() if next_table else len(tail)
+        section = tail[:stop]
+        if re.search(r"(?m)^[ \t]*dir[ \t]*=", section):
+            section = re.sub(r"(?m)^[ \t]*dir[ \t]*=.*$", lambda _: assignment.rstrip(), section)
+        else:
+            section += "\n" + assignment
+        raw = raw[:match.end()] + section + tail[stop:]
+    elif re.search(r"(?m)^store\.dir[ \t]*=", raw):
+        raw = re.sub(r"(?m)^store\.dir[ \t]*=.*$", lambda _: "store." + assignment.rstrip(), raw)
+    else:
+        raw += "\n[store]\n" + assignment
+    tomllib.loads(raw)  # Fail before invoking nextest if the copy is invalid.
+    config_file.write_text(raw, encoding="utf-8")
+    return config_file
+
+
+_BINARY_HASHES = {}
+
+
+def execution_fingerprints(suites):
+    names = {binary: {"kind": suite.get("kind"), "tests": {
+        name: test["ignored"] for name, test in suite.get("testcases", {}).items()}}
+        for binary, suite in suites.items()}
+    inventory_hash = hashlib.sha256(json.dumps(names, sort_keys=True).encode()).hexdigest()
+    hashes = {}
+    for binary, suite in sorted(suites.items()):
+        if not (path := suite.get("binary-path")):
+            continue
+        path = Path(path)
+        stat = path.stat()
+        identity = (str(path.resolve()), stat.st_size, stat.st_mtime_ns)
+        if identity not in _BINARY_HASHES:
+            with path.open("rb") as source:
+                _BINARY_HASHES[identity] = hashlib.file_digest(source, "sha256").hexdigest()
+        hashes[binary] = _BINARY_HASHES[identity]
+    return inventory_hash, hashlib.sha256(json.dumps(hashes, sort_keys=True).encode()).hexdigest()
+
+
+def execute(context, schedule="serial", nextest_threads=None, nextest_profile="ci", ui_threads=None,
+            batch_pure_tests="auto", pure_threads=None, resource_stats=False):
     batch_pure_enabled(batch_pure_tests)
-    for option, threads in (("nextest", nextest_threads), ("ui", ui_threads)):
-        if threads is not None and (threads < 1 or schedule != "serial"):
-            raise ValueError(f"--{option}-threads must be positive and requires --schedule serial")
+    if schedule not in ("serial", "balanced"):
+        raise ValueError(f"Unsupported schedule: {schedule}")
+    overrides = {"nextest": nextest_threads, "ui": ui_threads, "pure": pure_threads}
+    if any(value is not None and value < 1 for value in overrides.values()):
+        raise ValueError("thread budgets must be positive")
     if nextest_profile not in NEXTEST_PROFILES:
         raise ValueError(f"Unsupported nextest profile: {nextest_profile}")
     prepare_runtime_binaries(context)
     packages = package_names(context)
     suites = inventory(context)["rust-suites"]
     batches = pure_batches(suites, batch_pure_tests)
-    batched = batched_test_names(batches)
-    # Compile labels with the default mode; record the mode this run actually uses.
+    batched, has_nextest = validate_partition(suites, packages, batches)
     coverage = paths(context) / "coverage.json"
     if coverage.exists():
         document = json.loads(coverage.read_text(encoding="utf-8"))
+        all_batched = {(binary, name) for binary, suite, prefix in batches
+                       for name in suite["testcases"] if name.startswith(prefix)}
         for test in document["tests"]:
-            test["runner"] = runner_label(test["package"], test["binary"], test["test"], batched)
+            test["runner"] = runner_label(test["package"], test["binary"], test["test"], all_batched)
         coverage.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
-    cpus = os.cpu_count() or 1
-    balanced = schedule == "balanced" and cpus > 1
+    cpus = available_cpus()
+    libtest = [(binary, suite) for binary, suite in suites.items() if uses_libtest(packages[suite["package-id"]])]
+    families = (["ui"] if libtest else []) + (["nextest"] if has_nextest else []) + (["pure"] if batches else [])
+    balanced = schedule == "balanced" and len(families) > 1 and cpus >= len(families)
+    budgets = thread_budgets(cpus, families, overrides) if balanced else {}
+    inventory_hash, binaries_hash = execution_fingerprints(suites)
+    config_file = isolated_nextest_config(context) if has_nextest else None
+    resources = None
+    if resource_stats:
+        from resources import ProcessSampler
+        resources = ProcessSampler()
+        resources.start()
     start = time.monotonic()
     codes = []
 
-    def nextest(*, cancel=None, live=True, threads=None):
-        if not any(not uses_libtest(packages[suite["package-id"]]) for suite in suites.values()):
-            return 0
-        junit = nextest_junit_path(nextest_profile)
+    def nextest(*, cancel=None, live=True):
+        junit = nextest_junit_path(nextest_profile, config_file)
         junit.unlink(missing_ok=True)
         expression = nextest_filter(batches, gpui_packages(packages))
-        command = ["cargo", "nextest", "run", *reuse_args(context),
+        command = ["cargo", "nextest", "run", *reuse_args(context), "--config-file", str(config_file),
                    "--profile", nextest_profile,
                    "--ignore-default-filter", *(["-E", expression] if expression else []), "--no-fail-fast"]
+        threads = budgets.get("nextest", nextest_threads)
         if threads is not None:
             command += ["--test-threads", str(threads)]
-        code = run(f"{context}-nextest", command, check=False, live=live, cancel=cancel, dots=True)
+        code = run(f"{context}-nextest", command, check=False, live=live, cancel=cancel, dots=True, resources=resources)
         if junit.exists():
             shutil.copyfile(junit, paths(context) / "junit.xml")
             annotate_failures(f"{context}-nextest", failed_junit_cases(junit))
@@ -644,50 +804,45 @@ def execute(context, schedule="serial", nextest_threads=None, nextest_profile="c
             raise RuntimeError(f"{context}: nextest produced no results")
         return code
 
-    libtest = [(binary_id, suite) for binary_id, suite in suites.items()
-               if uses_libtest(packages[suite["package-id"]])]
-    if not libtest or len(libtest) == len(suites):
-        # Package-only contexts have nothing to overlap. Keep their full budget.
-        balanced = False
-    effective_ui_threads = max(1, cpus // 2) if balanced else ui_threads
-    default_ui_threads = os.environ.get("RUST_TEST_THREADS", str(cpus))
-    # Invalid environment overrides will fail libtest, but must not prevent the
-    # finally block from recording that failure.
-    default_ui_threads = int(default_ui_threads) if default_ui_threads.isdecimal() else None
-
     def ui(*, cancel=None, live=True):
-        results = [run_suite(context, binary_id, suite, threads=effective_ui_threads, live=live, cancel=cancel)
-                   for binary_id, suite in libtest]
+        results = [run_suite(context, binary, suite, threads=budgets.get("ui", ui_threads), live=live, cancel=cancel,
+                             skip_prefixes=tuple(prefix for owner, _, prefix in batches if owner == binary),
+                             resources=resources) for binary, suite in libtest]
         return int(any(results))
 
+    def pure(*, cancel=None, live=True):
+        results = [run_suite(context, binary, suite, test_filter=prefix, verify_names=True,
+                             threads=budgets.get("pure", pure_threads or nextest_threads or cpus),
+                             live=live, cancel=cancel, resources=resources) for binary, suite, prefix in batches]
+        return int(any(results))
+
+    tasks = {"pure": pure, "nextest": nextest, "ui": ui}
     succeeded = False
     try:
-        for binary_id, suite, prefix in batches:
-            # libtest's filter is a substring; reject any inventory for which
-            # it would select a test outside the audited module prefix.
-            if any(prefix in name and not name.startswith(prefix) for name in suite["testcases"]):
-                raise RuntimeError(f"{binary_id}: ambiguous pure-test prefix {prefix}")
-            codes.append(run_suite(context, binary_id, suite, test_filter=prefix,
-                                   threads=nextest_threads or cpus, verify_names=True))
         if balanced:
-            codes.extend(run_parallel([partial(nextest, threads=cpus - effective_ui_threads), ui]))
+            codes.extend(run_parallel([tasks[family] for family in families]))
         else:
-            codes.append(nextest(threads=nextest_threads))
-            for binary_id, suite in libtest:
-                codes.append(run_suite(context, binary_id, suite, threads=ui_threads))
+            for family in ("pure", "nextest", "ui"):
+                if family in families:
+                    codes.append(tasks[family]())
         if any(codes):
             raise RuntimeError(f"{context}: test execution failed")
         succeeded = True
     finally:
+        if resources:
+            resources.stop()
+        default_ui = os.environ.get("RUST_TEST_THREADS", str(cpus))
         (paths(context) / "execution.json").write_text(json.dumps({
             "schedule": schedule, "effective_schedule": "balanced" if balanced else "serial",
             "nextest_profile": nextest_profile,
             "batch_pure_tests": batch_pure_tests, "batched_tests": sorted(batched),
-            "ui_threads": ui_threads,
-            "effective_ui_threads": effective_ui_threads if effective_ui_threads is not None else
-                                    default_ui_threads,
-            "effective_nextest_threads": cpus - effective_ui_threads if balanced else nextest_threads or cpus,
-            "nextest_threads": nextest_threads, "cpus": cpus, "seconds": round(time.monotonic() - start, 3), "success": succeeded,
+            "ui_threads": ui_threads, "nextest_threads": nextest_threads, "pure_threads": pure_threads,
+            "effective_ui_threads": budgets.get("ui", ui_threads if ui_threads is not None else int(default_ui) if default_ui.isdecimal() else None),
+            "effective_nextest_threads": budgets.get("nextest", nextest_threads or cpus),
+            "effective_pure_threads": budgets.get("pure", pure_threads or nextest_threads or cpus),
+            "inventory_sha256": inventory_hash, "binaries_sha256": binaries_hash,
+            "resource_stats": resources.summary() if resources else None,
+            "cpus": cpus, "seconds": round(time.monotonic() - start, 3), "success": succeeded,
         }, indent=2) + "\n", encoding="utf-8")
 
 
@@ -710,24 +865,28 @@ def main():
                         help="Compile only this integration target; repeat for multiple smoke targets")
     parser.add_argument("--name", default="command")
     parser.add_argument("--schedule", choices=["serial", "balanced"], default="serial")
-    parser.add_argument("--nextest-threads", type=int, help="Opt-in concurrency experiment (serial schedule only)")
-    parser.add_argument("--ui-threads", type=int, help="Opt-in libtest concurrency experiment (serial schedule only)")
+    parser.add_argument("--nextest-threads", type=int, help="Opt-in nextest concurrency experiment")
+    parser.add_argument("--ui-threads", type=int, help="Opt-in rendered libtest concurrency experiment")
+    parser.add_argument("--pure-threads", type=int, help="Concurrency for audited pure batches")
+    parser.add_argument("--resource-stats", action="store_true", help="Collect instrumented process-tree diagnostics")
     parser.add_argument("--nextest-profile", choices=NEXTEST_PROFILES, default="ci")
     parser.add_argument("--batch-pure-tests", choices=("auto", "on", "off"), default="auto",
                         help="Batch audited pure tests in libtest (auto enables on Windows)")
     args, extra = parser.parse_known_args()
     if args.test_target and args.phase != "compile":
         parser.error("--test-target requires compile")
-    for option in ("nextest", "ui"):
+    if args.resource_stats and args.phase != "test":
+        parser.error("--resource-stats requires test")
+    for option in ("nextest", "ui", "pure"):
         threads = getattr(args, option + "_threads")
-        if threads is not None and (args.phase != "test" or threads < 1 or args.schedule != "serial"):
-            parser.error(f"--{option}-threads must be positive and requires test --schedule serial")
+        if threads is not None and (args.phase != "test" or threads < 1):
+            parser.error(f"--{option}-threads must be positive and requires test")
     os.chdir(ROOT)
     if args.phase == "compile":
         compile_tests(args.context, args.cargo_profile, args.test_target)
     elif args.phase == "test":
         execute(args.context, args.schedule, args.nextest_threads, args.nextest_profile,
-                args.ui_threads, args.batch_pure_tests)
+                args.ui_threads, args.batch_pure_tests, args.pure_threads, args.resource_stats)
     elif args.phase == "doc":
         # The app contains only binaries, so it has no doctest targets.
         if args.context != "app":

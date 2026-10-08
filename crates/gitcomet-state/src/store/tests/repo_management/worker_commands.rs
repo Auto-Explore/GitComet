@@ -342,3 +342,90 @@ fn guarded_effect_sender_wraps_repository_load_messages() {
         _ => panic!("expected worker message"),
     }
 }
+
+#[test]
+fn worker_barrier_cannot_overtake_results_or_be_overtaken_by_later_controls() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (ack, _) = std::sync::mpsc::channel();
+    tx.send(StoreWorkerCommand::Msg(Box::new(Msg::Internal(
+        crate::msg::InternalMsg::TagsLoaded {
+            repo_id: RepoId(7),
+            result: Ok(Vec::new()),
+        },
+    ))))
+    .unwrap();
+    tx.send(StoreWorkerCommand::BarrierForTest(ack)).unwrap();
+    tx.send(StoreWorkerCommand::Msg(Box::new(Msg::CloseRepo {
+        repo_id: RepoId(7),
+    })))
+    .unwrap();
+    let mut deferred = std::collections::VecDeque::new();
+    assert!(
+        matches!(recv_next_worker_command(&rx, &mut deferred).unwrap(),
+        StoreWorkerCommand::Msg(msg) if matches!(*msg, Msg::Internal(_)))
+    );
+    assert!(matches!(
+        recv_next_worker_command(&rx, &mut deferred).unwrap(),
+        StoreWorkerCommand::BarrierForTest(_)
+    ));
+    assert!(
+        matches!(recv_next_worker_command(&rx, &mut deferred).unwrap(),
+        StoreWorkerCommand::Msg(msg) if matches!(*msg, Msg::CloseRepo { .. }))
+    );
+}
+
+#[test]
+fn store_barrier_acknowledges_publication_without_changing_preferences() {
+    let (store, _) = AppStore::new_test(Arc::new(FailingBackend));
+    store.dispatch(Msg::SetDefaultTagType(
+        crate::model::DefaultTagType::Annotated,
+    ));
+    let publication = store
+        .barrier_for_test()
+        .recv_timeout(Duration::from_secs(3))
+        .unwrap();
+    let (state, current) = store.snapshot_with_publication();
+    assert!(publication > 0);
+    assert_eq!(current, publication);
+    assert_eq!(
+        state.default_tag_type,
+        crate::model::DefaultTagType::Annotated
+    );
+    store
+        .shutdown_for_test()
+        .recv_timeout(Duration::from_secs(3))
+        .unwrap();
+    assert_eq!(
+        store
+            .barrier_for_test()
+            .recv_timeout(Duration::from_secs(3)),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+    );
+}
+
+#[test]
+fn shutdown_waits_for_its_tasks_without_draining_another_store() {
+    let (busy, _) = AppStore::new_test(Arc::new(FailingBackend));
+    let (idle, _) = AppStore::new_test(Arc::new(FailingBackend));
+    let (release, gate) = std::sync::mpsc::channel();
+    let (started, running) = std::sync::mpsc::channel();
+    let pool = TaskExecutor::shared_for_store(StoreExecutorPool::Primary, default_worker_threads());
+    {
+        let _scope = test_support::TestTaskScope::enter(Arc::clone(&busy.msg_tx.test_tasks));
+        pool.spawn(move || {
+            started.send(()).unwrap();
+            gate.recv_timeout(Duration::from_secs(5)).unwrap();
+        });
+    }
+    running.recv_timeout(Duration::from_secs(3)).unwrap();
+    let completion = busy.shutdown_for_test();
+    // The idle store must finish even while the busy store's tracked task waits.
+    let idle_result = idle
+        .shutdown_for_test()
+        .recv_timeout(Duration::from_secs(3));
+    let busy_pending = completion.try_recv();
+    release.send(()).unwrap();
+    assert!(idle_result.is_ok());
+    assert_eq!(busy_pending, Err(std::sync::mpsc::TryRecvError::Empty));
+    completion.recv_timeout(Duration::from_secs(3)).unwrap();
+}

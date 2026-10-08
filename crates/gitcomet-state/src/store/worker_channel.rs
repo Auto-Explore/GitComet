@@ -52,6 +52,9 @@ pub(super) enum StoreWorkerCommand {
     /// repositories that do not test watching stay free of watcher refreshes.
     #[cfg(any(test, feature = "test-support"))]
     DisableRepoMonitorsForTest,
+    /// An ordering barrier, never a priority control command.
+    #[cfg(any(test, feature = "test-support"))]
+    BarrierForTest(mpsc::Sender<u64>),
 }
 
 #[derive(Clone)]
@@ -69,6 +72,8 @@ pub(super) struct StoreWorkerSender {
     store_id: StoreInstanceId,
     repo_load_guard: Option<RepoLoadGuard>,
     cancellation: Option<CancellationToken>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) test_tasks: Arc<super::test_support::TestTasks>,
 }
 
 #[derive(Clone)]
@@ -130,6 +135,8 @@ impl StoreWorkerSender {
             store_id,
             repo_load_guard: None,
             cancellation: None,
+            #[cfg(any(test, feature = "test-support"))]
+            test_tasks: Arc::default(),
         }
     }
 
@@ -142,6 +149,7 @@ impl StoreWorkerSender {
             store_id: StoreInstanceId(0),
             repo_load_guard: None,
             cancellation: None,
+            test_tasks: Arc::default(),
         }
     }
 
@@ -301,6 +309,17 @@ impl StoreWorkerSender {
             #[cfg(test)]
             StoreWorkerSenderInner::MsgForTest(_) => {}
         }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn barrier_for_test(&self) -> mpsc::Receiver<u64> {
+        let (reply, receive) = mpsc::channel();
+        if self.is_alive()
+            && let StoreWorkerSenderInner::Command(sender) = &self.inner
+        {
+            let _ = sender.send(StoreWorkerCommand::BarrierForTest(reply));
+        }
+        receive
     }
 
     #[cfg(any(test, feature = "test-support"))]

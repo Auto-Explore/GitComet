@@ -25,16 +25,28 @@ on:
         type: number
         default: 1
       nextest-threads:
-        description: Workspace nextest concurrency (serial schedule only)
+        description: Workspace nextest concurrency
         type: string
         default: ''
       nextest-profile:
         description: Workspace nextest concurrency policy
         type: choice
-        options: [ci, ci-git-limited]
+        options: [ci, ci-git-limited, ci-watch-first, ci-throughput]
         default: ci
+      pure-threads:
+        description: Optional positive concurrency for audited pure batches
+        type: string
+        default: ''
+      resource-stats:
+        description: Collect instrumented process-tree diagnostics
+        type: boolean
+        default: false
+      batch-pure-tests:
+        description: Audited batching mode (auto enables on Windows)
+        type: string
+        default: auto
       ui-threads:
-        description: Workspace UI libtest concurrency (serial schedule only)
+        description: Workspace UI libtest concurrency
         type: string
         default: ''
       benchmark-profile:
@@ -66,6 +78,9 @@ jobs:
       execution-samples: ${{ inputs.execution-samples || 1 }}
       nextest-threads: ${{ inputs.nextest-threads || '' }}
       nextest-profile: ${{ inputs.nextest-profile || 'ci' }}
+      pure-threads: ${{ inputs.pure-threads || '' }}
+      resource-stats: ${{ inputs.resource-stats || false }}
+      batch-pure-tests: ${{ inputs.batch-pure-tests || 'auto' }}
       ui-threads: ${{ inputs.ui-threads || '' }}
   benchmarks:
     uses: ./.github/workflows/benchmark-targets.yml

@@ -735,7 +735,7 @@ class RunnerTests(unittest.TestCase):
                     created.append(appdata)
                     if isinstance(outcome, BaseException):
                         raise outcome
-                    (Path(directory) / "ui-suite-all.log").write_text("test result: ok. 1 passed; 0 failed;\n")
+                    (Path(directory) / "ui-suite-all.log").write_text("test test ... ok\ntest result: ok. 1 passed; 0 failed;\n")
                     return outcome
                 with patch.object(runner, "run", side_effect=execute):
                     if isinstance(outcome, BaseException):
@@ -767,7 +767,7 @@ class RunnerTests(unittest.TestCase):
 
                 def execute(name, command, **kwargs):
                     (Path(kwargs["env"]["LOCALAPPDATA"]) / "locked.db").write_text("held")
-                    (Path(directory) / "ui-suite-all.log").write_text("test result: ok. 1 passed; 0 failed;\n")
+                    (Path(directory) / "ui-suite-all.log").write_text("test test ... ok\ntest result: ok. 1 passed; 0 failed;\n")
                     return outcome
 
                 with patch.object(runner, "run", side_effect=execute), patch.object(os, "unlink", locked_unlink):
@@ -912,7 +912,7 @@ class RunnerTests(unittest.TestCase):
                 self.assertEqual(execution["effective_nextest_threads"], cpus - max(1, cpus // 2) if parallel else threads or cpus)
 
     def test_invalid_concurrency_is_rejected_before_running(self):
-        for schedule, threads in [("serial", 0), ("serial", -1), ("balanced", 8)]:
+        for schedule, threads in [("serial", 0), ("serial", -1), ("balanced", 0)]:
             with self.subTest(schedule=schedule, threads=threads), self.assertRaises(ValueError):
                 runner.execute("workspace", schedule, threads)
             with self.subTest(schedule=schedule, ui_threads=threads), self.assertRaises(ValueError):
@@ -924,6 +924,7 @@ class RunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
                 patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": ""}), redirect_stdout(io.StringIO()):
             heartbeat = Path(directory) / "heartbeat"
+            second_heartbeat = Path(directory) / "second-heartbeat"
             child = ("import pathlib, sys, time\npath = pathlib.Path(sys.argv[1])\n"
                      "while True:\n    path.write_text(str(time.monotonic_ns()))\n    time.sleep(0.02)\n")
             parent = ("import subprocess, sys, time; "
@@ -931,22 +932,28 @@ class RunnerTests(unittest.TestCase):
 
             def fail_after_start(**kwargs):
                 deadline = time.monotonic() + 10
-                while not heartbeat.exists() and time.monotonic() < deadline:
+                while not (heartbeat.exists() and second_heartbeat.exists()) and time.monotonic() < deadline:
                     time.sleep(0.02)
                 self.assertTrue(heartbeat.exists(), "child did not start")
+                self.assertTrue(second_heartbeat.exists(), "third family did not start")
                 raise RuntimeError("inventory failure")
 
             with self.assertRaisesRegex(RuntimeError, "inventory failure"):
                 runner.run_parallel([
                     partial(runner.run, "cancelled", [sys.executable, "-c", parent, child, str(heartbeat)], timeout=15),
+                    partial(runner.run, "also-cancelled", [sys.executable, "-c", parent, child, str(second_heartbeat)], timeout=15),
                     fail_after_start,
                 ])
             before = heartbeat.read_text()
+            second_before = second_heartbeat.read_text()
             time.sleep(0.15)
             self.assertEqual(heartbeat.read_text(), before, "descendant survived cancellation")
-            timing = json.loads((Path(directory) / "timings.jsonl").read_text())
-            self.assertTrue(timing["cancelled"])
-            self.assertEqual(timing["returncode"], 130)
+            self.assertEqual(second_heartbeat.read_text(), second_before, "third family survived cancellation")
+            timings = [json.loads(line) for line in (Path(directory) / "timings.jsonl").read_text().splitlines()]
+            self.assertEqual(len(timings), 2)
+            for timing in timings:
+                self.assertTrue(timing["cancelled"])
+                self.assertEqual(timing["returncode"], 130)
 
     def test_failed_runner_does_not_skip_other_tests_on_any_platform(self):
         packages = {"core": "gitcomet-core", "ui": runner.UI}
@@ -1075,7 +1082,7 @@ class RunnerTests(unittest.TestCase):
             with self.subTest(platform=platform_name, threads=threads), tempfile.TemporaryDirectory() as directory, \
                     patch.object(runner, "REPORTS", Path(directory)), patch.object(runner.sys, "platform", platform_name), \
                     patch.object(runner, "suite_env", return_value={}), patch.object(runner, "run", return_value=0) as run:
-                (Path(directory) / "workspace-ui-all.log").write_text("test result: ok. 1 passed; 0 failed;\n")
+                (Path(directory) / "workspace-ui-all.log").write_text("test required ... ok\ntest result: ok. 1 passed; 0 failed;\n")
                 self.assertEqual(runner.run_suite("workspace", "ui", suite, threads=threads), 0)
                 command = run.call_args.args[1]
                 # Captured output lands under the failing test; skip notices stay in the log.
@@ -1289,9 +1296,11 @@ class RuntimeTests(unittest.TestCase):
             (source / "binaries.json").write_text('"compiled-once"')
             (source / "execution.json").write_text('{"success": true, "seconds": 99}')
             (source / "junit.xml").write_text("stale")
+            (source / "nextest-old").mkdir()
+            (source / "nextest-old/junit.xml").write_text("stale store")
             calls = []
 
-            def execute(context, schedule, threads, profile, ui_threads, batch_pure_tests):
+            def execute(context, schedule, threads, profile, ui_threads, batch_pure_tests, **kwargs):
                 self.assertEqual(profile, "ci-git-limited")
                 self.assertEqual(ui_threads, 8)
                 self.assertEqual(batch_pure_tests, "off")
@@ -1300,6 +1309,7 @@ class RuntimeTests(unittest.TestCase):
                 self.assertEqual((sample / "binaries.json").read_text(), '"compiled-once"')
                 self.assertFalse((sample / "execution.json").exists())
                 self.assertFalse((sample / "junit.xml").exists())
+                self.assertFalse((sample / "nextest-old").exists())
                 for name in ("workspace-nextest.log", "workspace-ui-all.log", "timings.jsonl"):
                     (runtime.runner.REPORTS / name).write_text(str(len(calls)))
                 (sample / "execution.json").write_text(json.dumps(dict(success=True, seconds=len(calls))))
@@ -1335,7 +1345,7 @@ class RuntimeTests(unittest.TestCase):
                     self.assertRaisesRegex(RuntimeError, "failed"):
                 runtime.measure(root / "output", 5, "serial", None)
             record = json.loads((root / "output/runtime.json").read_text())
-            self.assertEqual(record["samples"], [{"success": False, "seconds": None, "schedule": "serial", "nextest_threads": None, "nextest_profile": "ci", "ui_threads": None}])
+            self.assertEqual(record["samples"], [{"success": False, "seconds": None, "schedule": "serial", "nextest_threads": None, "nextest_profile": "ci", "ui_threads": None, "pure_threads": None, "resource_stats": None}])
             self.assertTrue((root / "output/sample-1").is_dir())
 
     def test_source_diff_hash_matches_local_performance_for_non_utf8_and_crlf_changes(self):
@@ -1362,7 +1372,7 @@ class RuntimeTests(unittest.TestCase):
                 reports = root / "reports"
                 (reports / "workspace").mkdir(parents=True)
 
-                def execute(context, *args):
+                def execute(context, *args, **kwargs):
                     (runtime.runner.paths(context) / "execution.json").write_text('{"success": true, "seconds": 1}')
 
                 with patch.object(runtime.runner, "ROOT", repo), patch.object(runtime.runner, "REPORTS", reports), \
@@ -1657,7 +1667,7 @@ class ReportTests(unittest.TestCase):
                 return real_check_output(args, **kwargs)
             return outputs[key] if kwargs.get("text") else outputs[key].encode()
 
-        def execute(context, *args):
+        def execute(context, *args, **kwargs):
             (runtime.runner.paths(context) / "execution.json").write_text(json.dumps(
                 dict(success=True, seconds=500, schedule="serial", nextest_threads=None)))
 

@@ -503,6 +503,9 @@ fn concurrent_last_app_store_drops_shutdown_worker_once() {
         .expect("expected final AppStore drop to send worker shutdown")
     {
         super::worker_channel::StoreWorkerCommand::Shutdown => {}
+        super::worker_channel::StoreWorkerCommand::BarrierForTest(_) => {
+            panic!("expected shutdown command, got worker barrier")
+        }
         super::worker_channel::StoreWorkerCommand::Repository { .. } => {
             panic!("expected shutdown command, got repository read")
         }

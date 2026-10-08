@@ -63,6 +63,75 @@ fn commit(dir: &Path, message: &str) {
     );
 }
 
+// Keep bytes in the shared template; its construction TempDir is removed
+// immediately and each scenario receives an independently writable index.
+fn clean_repository_template() -> &'static Vec<(PathBuf, Vec<u8>)> {
+    static TEMPLATE: std::sync::OnceLock<Vec<(PathBuf, Vec<u8>)>> = std::sync::OnceLock::new();
+    TEMPLATE.get_or_init(|| {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-q", "-b", "main"]);
+        std::fs::create_dir(dir.path().join("nested")).unwrap();
+        for path in ["a.txt", "b.txt", "nested/c.txt", "nested/d.txt"] {
+            std::fs::write(dir.path().join(path), "base\n").unwrap();
+        }
+        let moved: String = (0..20).map(|line| format!("line {line}\n")).collect();
+        std::fs::write(dir.path().join("moved.txt"), moved).unwrap();
+        git(dir.path(), &["add", "."]);
+        commit(dir.path(), "base");
+        fn collect(root: &Path, path: &Path, files: &mut Vec<(PathBuf, Vec<u8>)>) {
+            for entry in std::fs::read_dir(path).unwrap() {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                if entry.file_type().unwrap().is_dir() {
+                    collect(root, &path, files);
+                } else {
+                    files.push((
+                        path.strip_prefix(root).unwrap().to_path_buf(),
+                        std::fs::read(path).unwrap(),
+                    ));
+                }
+            }
+        }
+        let mut files = Vec::new();
+        collect(dir.path(), dir.path(), &mut files);
+        files
+    })
+}
+
+struct ScenarioApp {
+    app: gpui::TestAppContext,
+    store: Option<AppStore>,
+    finished: bool,
+}
+
+impl ScenarioApp {
+    fn finish(&mut self) -> std::result::Result<(), std::sync::mpsc::RecvTimeoutError> {
+        if self.finished {
+            return Ok(());
+        }
+        self.app.quit();
+        let result = self
+            .store
+            .as_ref()
+            .map(|store| {
+                store
+                    .shutdown_for_test()
+                    .recv_timeout(std::time::Duration::from_secs(5))
+            })
+            .unwrap_or(Ok(()));
+        self.finished = true;
+        result
+    }
+}
+
+impl Drop for ScenarioApp {
+    fn drop(&mut self) {
+        if let Err(error) = self.finish() {
+            eprintln!("staging scenario teardown: {error}");
+        }
+    }
+}
+
 fn wait_for(
     cx: &mut gpui::VisualTestContext,
     view: &View,
@@ -81,6 +150,15 @@ fn wait_for(
         });
         draw_and_drain_test_window(cx);
         if is_ready {
+            return;
+        }
+        if ready(&store.snapshot().repos[0]) {
+            cx.update(|_, app| {
+                view.update(app, |this, cx| {
+                    crate::view::test_support::sync_store_snapshot(this, cx);
+                });
+            });
+            draw_and_drain_test_window(cx);
             return;
         }
         assert!(
@@ -158,17 +236,19 @@ fn exercise_with_failure(
     failure: Failure,
 ) {
     let dir = tempfile::tempdir().unwrap();
-    git(dir.path(), &["init", "-q", "-b", "main"]);
-    std::fs::create_dir(dir.path().join("nested")).unwrap();
-    let tracked = ["a.txt", "b.txt", "nested/c.txt", "nested/d.txt"];
-    for path in tracked {
-        std::fs::write(dir.path().join(path), "base\n").unwrap();
+    // Unwind cleanup closes the app before the directory declared above it.
+    let mut scenario = ScenarioApp {
+        app: cx.new_app(),
+        store: None,
+        finished: false,
+    };
+    let cx = &mut scenario.app;
+    for (path, bytes) in clean_repository_template() {
+        let path = dir.path().join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
     }
-    // Long enough that the untouched rename below is detected as one entry.
-    let moved: String = (0..20).map(|line| format!("line {line}\n")).collect();
-    std::fs::write(dir.path().join("moved.txt"), moved).unwrap();
-    git(dir.path(), &["add", "."]);
-    commit(dir.path(), "base");
+    let tracked = ["a.txt", "b.txt", "nested/c.txt", "nested/d.txt"];
     for path in tracked {
         std::fs::write(dir.path().join(path), "base\nstaged\n").unwrap();
     }
@@ -218,6 +298,8 @@ fn exercise_with_failure(
     repo.staged_status = Loadable::Ready(status.staged.clone());
     repo.status = Loadable::Ready(Arc::new(status));
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    scenario.store = Some(store.clone());
+    store.disable_repo_monitors_for_test();
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -596,11 +678,12 @@ fn exercise_with_failure(
             });
         }
     }
-    // Windows live until the GPUI test ends; stop their repository monitors
-    // before this case's temporary working directory is removed.
+    // Release this case's windows before removing its temporary directory.
     store.dispatch(Msg::CloseRepo { repo_id: REPO });
     crate::view::test_support::drain_store_worker(&view, cx);
     assert!(store.snapshot().repos.is_empty());
+    drop(view);
+    scenario.finish().expect("staging scenario teardown");
 }
 
 #[gpui::test]

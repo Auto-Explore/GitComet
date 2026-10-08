@@ -18,15 +18,27 @@ on:
         type: number
         default: 1
       nextest-threads:
-        description: Optional positive nextest concurrency (serial schedule only)
+        description: Optional positive nextest concurrency
         type: string
         default: ''
       nextest-profile:
         description: Optional limit for concurrent Git-heavy tests
         type: string
         default: ci
+      pure-threads:
+        description: Optional positive concurrency for audited pure batches
+        type: string
+        default: ''
+      resource-stats:
+        description: Collect instrumented process-tree diagnostics
+        type: boolean
+        default: false
+      batch-pure-tests:
+        description: Audited batching mode (auto enables on Windows)
+        type: string
+        default: auto
       ui-threads:
-        description: Optional positive UI libtest concurrency (serial schedule only)
+        description: Optional positive UI libtest concurrency
         type: string
         default: ''
       fixture-timings:
@@ -53,16 +65,28 @@ on:
         type: number
         default: 1
       nextest-threads:
-        description: Optional positive nextest concurrency (serial schedule only)
+        description: Optional positive nextest concurrency
         type: string
         default: ''
       nextest-profile:
         description: Optional limit for concurrent Git-heavy tests
         type: choice
-        options: [ci, ci-git-limited]
+        options: [ci, ci-git-limited, ci-watch-first, ci-throughput]
         default: ci
+      pure-threads:
+        description: Optional positive concurrency for audited pure batches
+        type: string
+        default: ''
+      resource-stats:
+        description: Collect instrumented process-tree diagnostics
+        type: boolean
+        default: false
+      batch-pure-tests:
+        description: Audited batching mode (auto enables on Windows)
+        type: string
+        default: auto
       ui-threads:
-        description: Optional positive UI libtest concurrency (serial schedule only)
+        description: Optional positive UI libtest concurrency
         type: string
         default: ''
       fixture-timings:
@@ -80,6 +104,9 @@ env:
   CI_EXECUTION_SAMPLES: ${{ inputs.execution-samples || 1 }}
   CI_NEXTEST_THREADS: ${{ inputs.nextest-threads || '' }}
   CI_NEXTEST_PROFILE: ${{ inputs.nextest-profile || 'ci' }}
+  CI_PURE_THREADS: ${{ inputs.pure-threads || '' }}
+  CI_RESOURCE_STATS: ${{ inputs.resource-stats || false }}
+  CI_BATCH_PURE_TESTS: ${{ inputs.batch-pure-tests || 'auto' }}
   CI_UI_THREADS: ${{ inputs.ui-threads || '' }}
   CI_TEST_SCHEDULE: ${{ inputs.test-schedule || 'serial' }}
   GITCOMET_CI_FIXTURE_TIMINGS: ${{ inputs.fixture-timings && format('{0}/target/ci-reports/fixture-timings', github.workspace) || '' }}
@@ -156,8 +183,10 @@ jobs:
         id: tests
         shell: bash
         run: |
-          args=(--nextest-profile "$CI_NEXTEST_PROFILE")
+          args=(--nextest-profile "$CI_NEXTEST_PROFILE" --batch-pure-tests "$CI_BATCH_PURE_TESTS")
           if [[ -n "$CI_NEXTEST_THREADS" ]]; then args+=(--nextest-threads "$CI_NEXTEST_THREADS"); fi
+          if [[ -n "$CI_PURE_THREADS" ]]; then args+=(--pure-threads "$CI_PURE_THREADS"); fi
+          if [[ "$CI_RESOURCE_STATS" == true ]]; then args+=(--resource-stats); fi
           if [[ -n "$CI_UI_THREADS" ]]; then args+=(--ui-threads "$CI_UI_THREADS"); fi
           if [[ "$CI_EXECUTION_SAMPLES" == 1 ]]; then
             python3 scripts/ci/run.py test --context workspace --schedule "$CI_TEST_SCHEDULE" "${args[@]}"
@@ -297,8 +326,10 @@ jobs:
         id: tests
         shell: bash
         run: |
-          args=(--nextest-profile "$CI_NEXTEST_PROFILE")
+          args=(--nextest-profile "$CI_NEXTEST_PROFILE" --batch-pure-tests "$CI_BATCH_PURE_TESTS")
           if [[ -n "$CI_NEXTEST_THREADS" ]]; then args+=(--nextest-threads "$CI_NEXTEST_THREADS"); fi
+          if [[ -n "$CI_PURE_THREADS" ]]; then args+=(--pure-threads "$CI_PURE_THREADS"); fi
+          if [[ "$CI_RESOURCE_STATS" == true ]]; then args+=(--resource-stats); fi
           if [[ -n "$CI_UI_THREADS" ]]; then args+=(--ui-threads "$CI_UI_THREADS"); fi
           if [[ "$CI_EXECUTION_SAMPLES" == 1 ]]; then
             python3 scripts/ci/run.py test --context workspace --schedule "$CI_TEST_SCHEDULE" "${args[@]}"

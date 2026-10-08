@@ -32,6 +32,7 @@ fn picture_offsets(
 struct RenderedPreviewFixture {
     workdir: std::path::PathBuf,
     document: Arc<crate::view::markdown_preview::MarkdownPreviewDocument>,
+    _directory: tempfile::TempDir,
 }
 
 impl RenderedPreviewFixture {
@@ -62,7 +63,8 @@ impl RenderedPreviewFixture {
         source: &str,
         status: gitcomet_core::domain::FileStatusKind,
     ) -> Self {
-        let workdir = open_rendered_markdown_preview(cx, view, repo_id, name, source, status);
+        let (workdir, directory) =
+            open_rendered_markdown_preview(cx, view, repo_id, name, source, status);
         let document = cx.update(|_window, app| {
             let pane = view.read(app).main_pane.read(app);
             match &pane.worktree_markdown.document {
@@ -70,7 +72,11 @@ impl RenderedPreviewFixture {
                 other => panic!("expected a ready preview, got {other:?}"),
             }
         });
-        Self { workdir, document }
+        Self {
+            workdir,
+            document,
+            _directory: directory,
+        }
     }
 
     /// Document index of the first row whose text is exactly `text`.
@@ -109,9 +115,12 @@ fn open_rendered_markdown_preview(
     name: &str,
     source: &str,
     status: gitcomet_core::domain::FileStatusKind,
-) -> std::path::PathBuf {
-    let workdir =
-        std::env::temp_dir().join(format!("gitcomet_ui_test_{}_{name}", std::process::id()));
+) -> (std::path::PathBuf, tempfile::TempDir) {
+    let directory = tempfile::Builder::new()
+        .prefix(&format!("gitcomet_{name}_"))
+        .tempdir()
+        .unwrap();
+    let workdir = directory.path().to_path_buf();
     let file_rel = std::path::PathBuf::from("docs/preview.md");
     let abs_path = workdir.join(&file_rel);
     let preview_lines = Arc::new(source.lines().map(ToOwned::to_owned).collect::<Vec<_>>());
@@ -120,7 +129,6 @@ fn open_rendered_markdown_preview(
         gitcomet_core::domain::DiffArea::Unstaged,
     );
 
-    let _ = std::fs::remove_dir_all(&workdir);
     std::fs::create_dir_all(abs_path.parent().expect("fixture parent dir"))
         .expect("create preview workdir");
     std::fs::write(&abs_path, source.as_bytes()).expect("write preview fixture");
@@ -181,7 +189,7 @@ fn open_rendered_markdown_preview(
         cx.run_until_parked();
     }
 
-    workdir
+    (workdir, directory)
 }
 
 fn table_row_ixs(fixture: &RenderedPreviewFixture) -> Vec<usize> {
@@ -418,7 +426,14 @@ fn open_conflict_markdown_preview(
                 gitcomet_core::domain::DiffArea::Unstaged,
             );
             let merged = format!("<<<<<<< ours\n{ours}=======\n{theirs}>>>>>>> theirs\n");
-            set_test_conflict_file(&mut repo, file_rel.clone(), base, ours, theirs, &merged);
+            set_test_conflict_file(
+                &mut repo,
+                file_rel.clone(),
+                base,
+                ours,
+                theirs,
+                merged.as_str(),
+            );
             repo.conflict_state.conflict_file_load_mode =
                 gitcomet_state::model::ConflictFileLoadMode::Full;
             push_test_state(this, app_state_with_repo(repo, repo_id), cx);

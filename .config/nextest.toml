@@ -50,3 +50,11 @@ inherits = "ci"
 [[profile.ci-watch-first.overrides]]
 filter = 'package(=gitcomet-state) & (test(=store::repo_monitor::tests::selective::native_lifecycle::repeated_directory_recreation_stops_stale_callbacks_and_keeps_crud_visible) | test(=store::repo_monitor::tests::selective::efficiency::ignored_directory_replaced_by_file_keeps_creation_and_edits_visible) | test(=store::repo_monitor::tests::selective::native_monitor_rebuilds_after_ignore_edits_moves_and_atomic_saves) | test(=store::repo_monitor::tests::selective::native_lifecycle::replacing_repository_root_detaches_old_tree_and_watches_replacement) | test(=store::repo_monitor::tests::selective::native_lifecycle::recreated_external_policy_parent_is_revalidated_without_native_watches) | test(=store::repo_monitor::tests::selective::native_lifecycle::repeated_atomic_file_replacement_keeps_later_in_place_edits_visible))'
 priority = 100
+
+# Combine the existing limits and priority policy without changing coverage.
+[profile.ci-throughput]
+inherits = "ci-git-limited"
+
+[[profile.ci-throughput.overrides]]
+filter = 'package(=gitcomet-state) & (test(=store::repo_monitor::tests::selective::native_lifecycle::repeated_directory_recreation_stops_stale_callbacks_and_keeps_crud_visible) | test(=store::repo_monitor::tests::selective::efficiency::ignored_directory_replaced_by_file_keeps_creation_and_edits_visible) | test(=store::repo_monitor::tests::selective::native_monitor_rebuilds_after_ignore_edits_moves_and_atomic_saves) | test(=store::repo_monitor::tests::selective::native_lifecycle::replacing_repository_root_detaches_old_tree_and_watches_replacement) | test(=store::repo_monitor::tests::selective::native_lifecycle::recreated_external_policy_parent_is_revalidated_without_native_watches) | test(=store::repo_monitor::tests::selective::native_lifecycle::repeated_atomic_file_replacement_keeps_later_in_place_edits_visible))'
+priority = 100
