@@ -1230,6 +1230,31 @@ class RunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "required Git test did not run"):
                 runner.run_suite("workspace", "status_integration", suite)
 
+    def test_optional_and_partial_runtime_skips_are_recorded_and_warned(self):
+        text = """normal output
+Summary: 10 tests passed, 2 skipped
+Skipping symlink fixture: Windows symlink privilege is unavailable
+skipping: git-annex is not installed
+No writable second Windows volume; cross-volume assertion skipped
+"""
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
+                redirect_stdout(io.StringIO()) as console:
+            runner.record_runtime_exclusions("workspace", text)
+            log = (Path(directory) / "runtime-exclusions.log").read_text()
+        self.assertEqual(len(log.splitlines()), 3)
+        self.assertIn("cross-volume assertion skipped", log)
+        self.assertIn("3 runtime skip notice(s)", console.getvalue())
+        self.assertIn("::warning title=Incomplete test coverage", console.getvalue())
+
+    def test_runner_supplies_its_python_and_preserves_an_explicit_interpreter(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
+                redirect_stdout(io.StringIO()), patch.dict(os.environ, {}, clear=True):
+            command = [sys.executable, "-c", 'import os; print(os.environ["GITCOMET_TEST_PYTHON"])']
+            runner.run("python-default", command)
+            runner.run("python-explicit", command, env={"GITCOMET_TEST_PYTHON": "chosen"})
+            self.assertEqual((Path(directory) / "python-default.log").read_text().strip(), sys.executable)
+            self.assertEqual((Path(directory) / "python-explicit.log").read_text().strip(), "chosen")
+
     def test_display_profiles_reuse_workspace_ui_and_headless_app(self):
         with patch.object(sys, "argv", ["run.py", "display"]), patch.object(runner, "smoke") as smoke:
             runner.main()
@@ -1500,6 +1525,37 @@ class BoundaryTests(unittest.TestCase):
 
 
 class IdentityLiteralTests(unittest.TestCase):
+    def test_lexer_preserves_literals_lines_and_nested_test_module_boundaries(self):
+        source = '''/* outer "GitComet" /* nested */ still a comment */
+const URL: &str = r##"https://example/GitComet/*not a comment*/"##;
+fn chars<'a>(_: &'a str) { let _ = ('"', '{', '\\u{7d}', '\\''); }
+#[cfg(test)] mod checks {
+    mod nested { const RAW: &str = r#"quote " } GitComet"#; }
+}
+#[cfg(not(test))] mod production { const NAME: &str = "gitcomet"; }
+const ESCAPED: &str = "a \\" quote // GitComet";
+'''
+        code = identity_literals.strip_comments_and_test_modules(source)
+        self.assertEqual((len(code), code.count("\n")), (len(source), source.count("\n")))
+        self.assertEqual(identity_literals.occurrences(source), [
+            (2, "display-name", "https://example/GitComet/*not a comment*/"),
+            (7, "identifier", "gitcomet"), (8, "display-name", 'a \\" quote // GitComet')])
+
+    def test_scan_preprocesses_each_source_once_and_excludes_test_descendants(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "crates/example/src"
+            (source / "checks").mkdir(parents=True)
+            (source / "lib.rs").write_text('#[cfg(test)] mod checks;\nconst NAME: &str = "GitComet";')
+            (source / "checks.rs").write_text('mod child; const NAME: &str = "GitComet";')
+            (source / "checks/child.rs").write_text('const NAME: &str = "GitComet";')
+            subprocess.run(["git", "init", "-q", directory], check=True)
+            with patch.object(identity_literals, "ROOT", root), \
+                    patch.object(identity_literals, "strip_comments_and_test_modules",
+                                 wraps=identity_literals.strip_comments_and_test_modules) as strip:
+                self.assertEqual(identity_literals.scan(), {("crates/example/src/lib.rs", "display-name"): 1})
+            self.assertEqual(strip.call_count, 3)
+
     def test_scan_includes_new_files_and_tolerates_deleted_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

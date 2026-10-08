@@ -58,6 +58,7 @@ GIT_PREREQUISITE_SKIP = re.compile(
     r"\bskipping\b[^\n]*(?:Git-for-Windows|(?:git|posix|sh).*shell|shell.*(?:unavailable|startup))",
     re.IGNORECASE,
 )
+RUNTIME_SKIP = re.compile(r"\bskipping\b|\b(?:assertion|test|fixture)\s+skipped\b", re.IGNORECASE)
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 LIBTEST_RESULT = re.compile(r"test \S+(?: - should panic)? \.\.\. (ok|FAILED|ignored(?:, .*)?)")
 LIBTEST_FAILED = re.compile(r"^test (\S+)(?: - should panic)? \.\.\. FAILED\s*$", re.MULTILINE)
@@ -159,6 +160,20 @@ def reject_prerequisite_skips(name, text):
         raise RuntimeError(f"{name}: required Git test did not run: {match.group()}")
 
 
+def record_runtime_exclusions(name, text):
+    notices = [line for line in text.splitlines() if RUNTIME_SKIP.search(line)]
+    if not notices:
+        return
+    with REPORT_LOCK:
+        REPORTS.mkdir(parents=True, exist_ok=True)
+        with (REPORTS / "runtime-exclusions.log").open("a", encoding="utf-8") as excluded:
+            for line in notices:
+                excluded.write(f"{name}: {line}\n")
+    with CONSOLE_LOCK:
+        print(f"::warning title=Incomplete test coverage::{name}: {len(notices)} runtime skip notice(s); "
+              "see runtime-exclusions.log in the test artifact", flush=True)
+
+
 def annotate_failures(name, tests):
     # Error annotations surface failures on the run page, outside collapsed groups.
     with CONSOLE_LOCK:
@@ -253,6 +268,8 @@ def run(name, command, *, output=None, cwd=None, env=None, check=True, timeout=N
     `dots` only filters the console; the log file always keeps every line.
     """
     configure_output()
+    env = dict(os.environ if env is None else env)
+    env.setdefault("GITCOMET_TEST_PYTHON", sys.executable)
     REPORTS.mkdir(parents=True, exist_ok=True)
     if cancel is not None and cancel.is_set():
         raise RuntimeError("test scheduling cancelled")
@@ -310,11 +327,7 @@ def run(name, command, *, output=None, cwd=None, env=None, check=True, timeout=N
             raise
     if timed_out:
         print(f"::error::{name}: exceeded {timeout}s; terminated process tree", flush=True)
-    with REPORT_LOCK:
-        with (REPORTS / "runtime-exclusions.log").open("a", encoding="utf-8") as excluded:
-            for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
-                if re.search(r"\bskipping\b", line, re.IGNORECASE):
-                    excluded.write(f"{name}: {line}\n")
+    record_runtime_exclusions(name, log_path.read_text(encoding="utf-8", errors="replace"))
     record(name, time.monotonic() - start, code, timed_out=timed_out,
            command=[str(arg) for arg in command])
     with CONSOLE_LOCK:
@@ -549,12 +562,9 @@ def check_nextest_results(context, suites, packages, junit, *, excluded=frozense
     actual = set(observed)
     if len(observed) != len(actual) or expected != actual:
         raise RuntimeError(f"{context}: nextest coverage mismatch: {len(expected - actual)} missing, {len(actual - expected)} unexpected")
-    with REPORT_LOCK, (REPORTS / "runtime-exclusions.log").open("a", encoding="utf-8") as excluded:
-        for case in xml.iter("testcase"):
-            for stream in (case.findtext("system-out", ""), case.findtext("system-err", "")):
-                for line in stream.splitlines():
-                    if re.search(r"\bskipping\b", line, re.IGNORECASE):
-                        excluded.write(f"{context}:{case.attrib['name']}: {line}\n")
+    for case in xml.iter("testcase"):
+        record_runtime_exclusions(f"{context}:{case.attrib['name']}",
+                                  case.findtext("system-out", "") + "\n" + case.findtext("system-err", ""))
 
 
 def run_parallel(tasks):

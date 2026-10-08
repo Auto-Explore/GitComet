@@ -6,6 +6,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Instant;
 
+/// Exercise Git's user-defined tool registration without scanning every
+/// installed third-party tool. Keep the empty directory alive until Git exits.
+pub fn capture_tool_help(command: &mut std::process::Command, mode: &str) -> std::process::Output {
+    let _timer = FixtureTimer::new("subprocess", "tool-help");
+    let tools = tempfile::tempdir().expect("create empty builtin tool directory");
+    command
+        .env("MERGE_TOOLS_DIR", tools.path())
+        .args([mode, "--tool-help"])
+        .output()
+        .expect("git tool-help command to run")
+}
+
 /// Append fixture-only values, with Git's quoted-string escaping. Call once per
 /// key on a fresh repository; use real Git for later changes and config tests.
 pub fn append_config(repo: &Path, values: &[(&str, &str)]) {

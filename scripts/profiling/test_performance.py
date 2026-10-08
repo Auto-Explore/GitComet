@@ -1,16 +1,20 @@
 """Run: python -m unittest discover -s scripts/profiling -p 'test_*.py'."""
 import copy
+from contextlib import closing
+import http.client
+import io
 import json
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import perf_corpus
 import perf_platform
 import performance
 import perf_report
+import perf_transport
 import perf_workloads
 
 live = perf_workloads.module("test_live_ui", "live-ui.py")
@@ -381,6 +385,81 @@ class ScenarioTests(unittest.TestCase):
         self.assertTrue(all(c["scenario"] in live.SCENARIOS for c in deep if c["layer"] == "ui"))
 
 
+class TransportFailureTests(unittest.TestCase):
+    def response(self, server):
+        with closing(http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)) as connection:
+            connection.request("GET", "/remote.git/info/refs?service=git-upload-pack")
+            reply = connection.getresponse()
+            return reply.status, reply.read()
+
+    def test_failed_cleanup_invalidates_the_record_and_retries_at_server_shutdown(self):
+        with tempfile.TemporaryDirectory() as directory:
+            process = Mock(stdout=io.BytesIO(b"Content-Type: text/plain\r\n\r\nbody"))
+            process.wait.return_value = 0
+            process.poll.return_value = None
+            errors = []
+
+            def start(*args, **kwargs):
+                errors.append(kwargs["stderr"])
+                return process
+
+            with patch.object(perf_transport.subprocess, "Popen", side_effect=start), \
+                    patch.object(perf_transport.perf_platform, "stop_tree",
+                                 side_effect=[subprocess.TimeoutExpired("git", 15), None]) as stop, \
+                    perf_transport.serve_git(Path(directory), {}) as server:
+                self.assertEqual(self.response(server), (200, b"body"))
+            record, = server.records
+            self.assertFalse(record["success"])
+            self.assertIn("cleanup failed", record["error"])
+            self.assertEqual(stop.call_count, 2)
+            self.assertFalse(server.children)
+            self.assertTrue(errors[0].closed)
+
+    def test_failed_and_malformed_cgi_headers_never_become_http_success(self):
+        cases = [
+            (b"", 1, b"git: 'http-backend' is not a git command", "complete CGI headers"),
+            (b"Content-Type: application/x-git-upload-pack-advertisement\r\n", 1, b"crashed", "complete CGI headers"),
+            (b"not a header\r\n\r\n", 0, b"", "invalid"),
+            (b"Status: 999 invalid\r\nContent-Type: text/plain\r\n\r\n", 0, b"", "invalid"),
+            (b"Status: 100 Continue\r\nContent-Type: text/plain\r\n\r\n", 0, b"", "invalid"),
+            (b"\r\n", 0, b"", "invalid"),
+            (b"X: " + b"a" * 65536, 0, b"", "complete CGI headers"),
+        ]
+        for response, code, stderr, message in cases:
+            with self.subTest(response=response[:100]), tempfile.TemporaryDirectory() as directory:
+                process = Mock(stdout=io.BytesIO(response))
+                process.wait.return_value = code
+
+                def start(*args, **kwargs):
+                    kwargs["stderr"].write(stderr)
+                    return process
+
+                with patch.object(perf_transport.subprocess, "Popen", side_effect=start), \
+                        patch.object(perf_transport.perf_platform, "stop_tree") as stop, \
+                        perf_transport.serve_git(Path(directory), {}) as server:
+                    status, _ = self.response(server)
+                    self.assertEqual(status, 500)
+                record, = server.records
+                self.assertFalse(record["success"])
+                self.assertIn(message, record["error"])
+                if stderr:
+                    self.assertIn(stderr.decode(), record["error"])
+                self.assertFalse(server.children)
+                stop.assert_called_with(process)
+
+    def test_backend_failure_after_headers_is_recorded_without_rewriting_the_stream(self):
+        with tempfile.TemporaryDirectory() as directory:
+            process = Mock(stdout=io.BytesIO(b"Content-Type: text/plain\r\n\r\npartial"))
+            process.wait.return_value = 1
+            with patch.object(perf_transport.subprocess, "Popen", return_value=process), \
+                    patch.object(perf_transport.perf_platform, "stop_tree"), \
+                    perf_transport.serve_git(Path(directory), {}) as server:
+                self.assertEqual(self.response(server), (200, b"partial"))
+            record, = server.records
+            self.assertFalse(record["success"])
+            self.assertIn("status 1", record["error"])
+
+
 class FixtureTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -412,6 +491,17 @@ class FixtureTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 perf_workloads.git(fixture["repo"], fixture["env"], *fixture["cli"])
             with self.assertRaises(AssertionError):
+                fixture["verify"]()
+
+    def test_matching_refs_cannot_hide_missing_or_failed_http_requests(self):
+        with perf_workloads.transfer(self.root / "http-witness", self.seed, "fetch-noop", live) as fixture:
+            with self.assertRaisesRegex(AssertionError, "no HTTP requests witnessed"):
+                fixture["verify"]()
+            perf_workloads.git(fixture["repo"], fixture["env"], *fixture["cli"])
+            fixture["verify"]()
+            with fixture["server"].lock:
+                fixture["server"].records.append({"success": False, "error": "backend failed after headers"})
+            with self.assertRaisesRegex(AssertionError, "failed Git HTTP transfer"):
                 fixture["verify"]()
 
     def test_worktree_identity_detects_changes_without_changing_refs(self):

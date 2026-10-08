@@ -142,11 +142,12 @@ class GpuTests(unittest.TestCase):
     def test_size_and_graph_diagnostics_use_only_the_isolated_session(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            live.seed_profile(root, Path("/fixture"), (2560, 1440), {"history_show_graph": False})
+            repository = root / "fixture"
+            live.seed_profile(root, repository, (2560, 1440), {"history_show_graph": False})
             session = json.loads((root / "session.json").read_text())
             self.assertEqual((session["window_width"], session["window_height"]), (2560, 1440))
             self.assertFalse(session["history_show_graph"])
-            self.assertEqual(session["open_repos"], ["/fixture"])
+            self.assertEqual(session["open_repos"], [str(repository)])
             self.assertFalse(session["check_for_updates_on_startup"])
 
 

@@ -527,10 +527,7 @@ pub(super) fn terminate_process_tree_and_wait(
         // exact spawned Git process tree so a hook cannot keep running after
         // the user confirms Stop. Fall back to killing Git itself if the tree
         // walk races with process exit or is unavailable.
-        let pid = child.id().to_string();
-        let mut tree_kill = Command::new("taskkill");
-        configure_background_command(&mut tree_kill);
-        let _ = tree_kill.args(["/PID", pid.as_str(), "/T", "/F"]).status();
+        let _ = gitcomet_win32_window_utils::terminate_process_tree(child.id());
         let _ = child.kill();
         child.wait()
     }
