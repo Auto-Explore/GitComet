@@ -1771,7 +1771,7 @@
         }
       ]
     },
-    "type_synomym": {
+    "type_synonym": {
       "type": "SEQ",
       "members": [
         {
@@ -6638,7 +6638,7 @@
         },
         {
           "type": "SYMBOL",
-          "name": "type_synomym"
+          "name": "type_synonym"
         },
         {
           "type": "SYMBOL",
@@ -13263,5 +13263,6 @@
     "statement",
     "qualifier",
     "guard"
-  ]
+  ],
+  "reserved": {}
 }

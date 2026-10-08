@@ -1369,6 +1369,10 @@
         {
           "type": "_type",
           "named": true
+        },
+        {
+          "type": "curried_spec",
+          "named": true
         }
       ]
     }
@@ -1654,7 +1658,7 @@
     "fields": {
       "name": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "identifier",
@@ -3185,7 +3189,7 @@
     "fields": {
       "block": {
         "multiple": true,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "member_defn",
@@ -3610,6 +3614,10 @@
         "types": [
           {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "op_identifier",
             "named": true
           }
         ]
@@ -5117,6 +5125,14 @@
   },
   {
     "type": "@\"",
+    "named": false
+  },
+  {
+    "type": "@>",
+    "named": false
+  },
+  {
+    "type": "@@>",
     "named": false
   },
   {

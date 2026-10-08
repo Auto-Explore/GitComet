@@ -7796,7 +7796,7 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-fsharp"
-version = "0.3.11"
+version = "0.3.12"
 dependencies = [
  "tree-sitter-build",
  "tree-sitter-language",
@@ -7859,7 +7859,7 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-haskell"
-version = "0.23.1"
+version = "0.24.1"
 dependencies = [
  "tree-sitter-build",
  "tree-sitter-language",
@@ -8048,7 +8048,7 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-ocaml"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "tree-sitter-build",
  "tree-sitter-language",
@@ -8075,7 +8075,7 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-php"
-version = "0.24.2"
+version = "0.25.1"
 dependencies = [
  "tree-sitter-build",
  "tree-sitter-language",
@@ -8209,7 +8209,7 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-swift"
-version = "0.7.3"
+version = "0.7.4"
 dependencies = [
  "tree-sitter-build",
  "tree-sitter-language",
