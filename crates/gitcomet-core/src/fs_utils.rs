@@ -116,8 +116,42 @@ pub fn write_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     temporary.write_all(bytes)?;
     make_file_private(temporary.as_file());
     temporary.as_file().sync_all()?;
-    temporary.persist(path).map_err(|err| err.error)?;
-    Ok(())
+    #[cfg(windows)]
+    {
+        persist_with_windows_retry(temporary, path, |file, path| file.persist(path))
+    }
+    #[cfg(not(windows))]
+    {
+        temporary.persist(path).map_err(|err| err.error)?;
+        Ok(())
+    }
+}
+
+/// MoveFileExW can reject replacement while a reader holds the destination
+/// open, even with delete sharing. Retry the same flushed file so readers see
+/// either complete version; never remove or truncate the destination first.
+#[cfg(any(windows, test))]
+fn persist_with_windows_retry(
+    mut temporary: tempfile::NamedTempFile,
+    path: &Path,
+    mut persist: impl FnMut(tempfile::NamedTempFile, &Path) -> Result<File, tempfile::PersistError>,
+) -> io::Result<()> {
+    // At most 630 ms of backoff, then surface persistent failures normally.
+    let mut delays = [10, 20, 40, 80, 160, 320].into_iter();
+    loop {
+        match persist(temporary, path) {
+            Ok(_) => return Ok(()),
+            Err(err) => {
+                // ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION.
+                let retryable = matches!(err.error.raw_os_error(), Some(5 | 32 | 33));
+                let Some(delay) = delays.next().filter(|_| retryable) else {
+                    return Err(err.error);
+                };
+                temporary = err.file;
+                std::thread::sleep(std::time::Duration::from_millis(delay));
+            }
+        }
+    }
 }
 
 /// Owner-only, via the handle so a swapped path cannot redirect it. Best-effort.
@@ -135,7 +169,7 @@ fn make_file_private(_file: &File) {}
 mod tests {
     #[cfg(unix)]
     use super::ensure_private_dir;
-    use super::{open_private_append, write_private_file};
+    use super::{open_private_append, persist_with_windows_retry, write_private_file};
     use std::io::Write as _;
 
     #[cfg(unix)]
@@ -235,5 +269,98 @@ mod tests {
         file.write_all(b" second").expect("write append");
         drop(file);
         assert_eq!(std::fs::read(path).unwrap(), b"first second");
+    }
+
+    #[test]
+    fn private_replacement_retries_windows_reader_errors_with_the_same_file() {
+        for code in [5, 32, 33] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("session.json");
+            write_private_file(&path, b"old complete session").unwrap();
+            let mut temporary = tempfile::NamedTempFile::new_in(root.path()).unwrap();
+            temporary.write_all(b"new complete session").unwrap();
+            temporary.as_file().sync_all().unwrap();
+            let original_path = temporary.path().to_path_buf();
+            let mut blocked = true;
+            persist_with_windows_retry(temporary, &path, |file, path| {
+                assert_eq!(file.path(), original_path);
+                assert_eq!(std::fs::read(file.path()).unwrap(), b"new complete session");
+                assert_eq!(std::fs::read(path).unwrap(), b"old complete session");
+                if std::mem::take(&mut blocked) {
+                    // Inject Windows errors on every platform so the recovery
+                    // and file ownership are also exercised by Linux/macOS CI.
+                    Err(tempfile::PersistError {
+                        error: std::io::Error::from_raw_os_error(code),
+                        file,
+                    })
+                } else {
+                    file.persist(path)
+                }
+            })
+            .unwrap();
+            assert_eq!(std::fs::read(&path).unwrap(), b"new complete session");
+            assert!(!original_path.exists());
+        }
+    }
+
+    #[test]
+    fn private_replacement_failures_preserve_the_destination_and_clean_up() {
+        // A persistent sharing error must eventually fail; unrelated errors
+        // must fail immediately. Neither may destroy the existing session.
+        for code in [5, 87] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("session.json");
+            write_private_file(&path, b"keep this session").unwrap();
+            let temporary = tempfile::NamedTempFile::new_in(root.path()).unwrap();
+            let temporary_path = temporary.path().to_path_buf();
+            let mut attempts = 0;
+            let err = persist_with_windows_retry(temporary, &path, |file, _| {
+                attempts += 1;
+                Err(tempfile::PersistError {
+                    error: std::io::Error::from_raw_os_error(code),
+                    file,
+                })
+            })
+            .unwrap_err();
+            assert_eq!(err.raw_os_error(), Some(code));
+            if code == 5 {
+                assert!(attempts > 1, "sharing errors should be retried");
+            } else {
+                assert_eq!(attempts, 1, "unrelated errors should not be retried");
+            }
+            assert_eq!(std::fs::read(&path).unwrap(), b"keep this session");
+            assert!(!temporary_path.exists(), "failed temporary file is removed");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn private_replacement_recovers_after_a_windows_reader_closes() {
+        use std::io::Read as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("session.json");
+        write_private_file(&path, b"old session").unwrap();
+        // The preference test polls using ordinary shared reads, including
+        // FILE_SHARE_DELETE. Legacy replacement can still reject this handle.
+        let mut reader = Some(std::fs::File::open(&path).unwrap());
+        let mut temporary = tempfile::NamedTempFile::new_in(root.path()).unwrap();
+        temporary.write_all(b"new session").unwrap();
+        temporary.as_file().sync_all().unwrap();
+        persist_with_windows_retry(temporary, &path, |file, path| {
+            let result = file.persist(path);
+            if let Some(mut reader) = reader.take() {
+                assert!(result.is_err(), "the open reader must block replacement");
+                let mut original = Vec::new();
+                reader.read_to_end(&mut original).unwrap();
+                assert_eq!(original, b"old session");
+                // Release only after a real sharing failure, with no timing
+                // dependency on the CI machine's speed or thread scheduling.
+                drop(reader);
+            }
+            result
+        })
+        .unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"new session");
     }
 }
