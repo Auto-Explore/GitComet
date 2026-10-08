@@ -36,7 +36,7 @@ on:
   workflow_dispatch:
     inputs:
       watcher-stress:
-        description: Repeat native watcher synchronization and lifecycle tests ten times
+        description: Repeat native watcher and worktree cleanup tests ten times
         type: boolean
         default: false
       cold-cache:
@@ -75,6 +75,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  GITCOMET_REQUIRE_SYNTAX_CORPUS: "1"
+  GITCOMET_REQUIRE_GIT_LFS: "1"
   CI_EXECUTION_SAMPLES: ${{ inputs.execution-samples || 1 }}
   CI_NEXTEST_THREADS: ${{ inputs.nextest-threads || '' }}
   CI_NEXTEST_PROFILE: ${{ inputs.nextest-profile || 'ci' }}
@@ -114,6 +116,8 @@ jobs:
             host: aarch64-pc-windows-msvc
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
       - name: Install Linux link dependencies
         if: runner.os == 'Linux'
         run: |
@@ -160,7 +164,7 @@ jobs:
           else
             python3 scripts/ci/runtime.py target/ci-reports/runtime --samples "$CI_EXECUTION_SAMPLES" --schedule "$CI_TEST_SCHEDULE" "${args[@]}"
           fi
-      - name: Stress native watcher synchronization
+      - name: Stress native watcher synchronization and worktree cleanup
         if: success() && inputs.watcher-stress
         shell: bash
         env:
@@ -173,7 +177,7 @@ jobs:
             --binaries-metadata target/ci-reports/workspace/binaries.json \
             --cargo-metadata target/ci-reports/workspace/cargo.json \
             --profile ci-watch-stress --stress-count 10 --no-tests=fail "${args[@]}" \
-            -E 'package(=gitcomet-fs-watch) | (package(=gitcomet-state) & (test(native_sync_) | test(native_barrier_) | test(::selective::synchronization::) | test(::selective::native_lifecycle::) | test(::selective::path_identities::)))'
+            -E 'package(=gitcomet-fs-watch) | (package(=gitcomet-state) & (test(native_sync_) | test(native_barrier_) | test(::selective::synchronization::) | test(::selective::native_lifecycle::) | test(::selective::path_identities::) | test(::worktree_redirect::)))'
       - name: Workspace doctests
         if: success() || (failure() && steps.tests.outcome == 'failure')
         shell: bash
@@ -267,6 +271,8 @@ jobs:
           sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain none
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
       - uses: ./.github/actions/ci-setup
         id: setup
         with:

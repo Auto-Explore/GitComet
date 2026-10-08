@@ -1,5 +1,35 @@
 use super::*;
 
+#[cfg(windows)]
+#[test]
+fn windows_tree_termination_helper_stops_a_running_process_without_a_console() {
+    let mut command = Command::new("cmd.exe");
+    configure_background_command(&mut command);
+    let mut child = command
+        .args(["/D", "/C", "ping -n 30 127.0.0.1 >nul"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start the synthetic process tree");
+    let result = gitcomet_win32_window_utils::terminate_process_tree(child.id());
+    // Windows termination is asynchronous; helper exit is not a notification
+    // that the target has finished exiting.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let already_exited = loop {
+        let status = child.try_wait().expect("query the process");
+        if status.is_some() || Instant::now() >= deadline {
+            break status;
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    // Keep failure paths from leaving the synthetic process running.
+    let _ = child.kill();
+    let _ = child.wait();
+    result.expect("run the process-tree termination helper");
+    assert!(already_exited.is_some_and(|status| !status.success()));
+}
+
 #[test]
 fn fnv_preserves_existing_cache_hashes() {
     for (bytes, expected) in [

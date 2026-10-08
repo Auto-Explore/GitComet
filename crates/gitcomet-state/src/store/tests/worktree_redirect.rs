@@ -286,6 +286,9 @@ fn a_linked_worktrees_changes_and_diff_load_from_its_own_checkout() {
     let (_dir, repo, worktree) = repo_with_linked_worktree();
     fs::write(worktree.join("a.txt"), "one\nlinked edit\n").expect("edit the worktree");
     let (store, _events) = AppStore::new_test(Arc::new(gitcomet_git_gix::GixBackend));
+    // This tests explicit linked-worktree loads, not filesystem notifications.
+    // Watcher refreshes would race the history baseline and fixture teardown.
+    store.disable_repo_monitors_for_test();
     let repo_id = open_repo_and_wait(&store, &repo);
     let state = |store: &AppStore| {
         store
@@ -296,6 +299,16 @@ fn a_linked_worktrees_changes_and_diff_load_from_its_own_checkout() {
             .cloned()
             .expect("repository")
     };
+    // Open readiness precedes background metadata (including Git tool probes).
+    // Let those finish before taking a stable history baseline.
+    wait_until("initial repository loads", || {
+        store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .is_some_and(|repo| !repo.loads_in_flight.any_in_flight())
+    });
     let before = state(&store);
     let lifetime = before.lifetime();
     let history = (

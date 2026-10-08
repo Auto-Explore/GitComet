@@ -37,10 +37,18 @@ fn git(repo: &Path, args: &[&str]) -> String {
 }
 
 fn git_lfs_available() -> bool {
-    Command::new("git")
+    let available = Command::new("git")
         .args(["lfs", "version"])
         .output()
-        .is_ok_and(|output| output.status.success())
+        .is_ok_and(|output| output.status.success());
+    if !available {
+        assert!(
+            std::env::var("GITCOMET_REQUIRE_GIT_LFS").as_deref() != Ok("1"),
+            "git-lfs is required for this test run",
+        );
+        eprintln!("skipping: git-lfs is not installed");
+    }
+    available
 }
 
 fn init_repo(repo: &Path) {
@@ -93,7 +101,6 @@ fn row(path: &str, kind: FileStatusKind) -> FileStatus {
 #[test]
 fn lfs_repository_reports_filter_patterns_and_store() {
     if !git_lfs_available() {
-        eprintln!("skipping: git-lfs is not installed");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -218,7 +225,6 @@ fn plain_pointer_text_diff_regression() {
 #[test]
 fn lfs_rows_report_pointer_worktree_and_presence() {
     if !git_lfs_available() {
-        eprintln!("skipping: git-lfs is not installed");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -258,7 +264,6 @@ fn lfs_rows_report_pointer_worktree_and_presence() {
 #[test]
 fn lfs_pointer_only_worktree_reports_missing_content() {
     if !git_lfs_available() {
-        eprintln!("skipping: git-lfs is not installed");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -600,7 +605,6 @@ fn edited_unlocked_annex_file_is_not_described_by_the_index_key() {
 #[test]
 fn lfs_text_diff_reads_real_content_when_present() {
     if !git_lfs_available() {
-        eprintln!("skipping: git-lfs is not installed");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -643,7 +647,6 @@ fn lfs_text_diff_reads_real_content_when_present() {
 #[test]
 fn lfs_text_diff_reports_missing_content() {
     if !git_lfs_available() {
-        eprintln!("skipping: git-lfs is not installed");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -672,7 +675,6 @@ fn lfs_text_diff_reports_missing_content() {
 #[test]
 fn lfs_image_diff_decodes_both_sides_from_the_store() {
     if !git_lfs_available() {
-        eprintln!("skipping: git-lfs is not installed");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -714,7 +716,6 @@ fn lfs_image_diff_decodes_both_sides_from_the_store() {
 #[test]
 fn commit_file_rows_carry_large_file_state() {
     if !git_lfs_available() {
-        eprintln!("skipping: git-lfs is not installed");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -777,7 +778,6 @@ fn configure_lfs_filters(repo: &Path) {
 #[test]
 fn lfs_push_all_then_pull_downloads_only_the_named_path() {
     if !git_lfs_available() {
-        eprintln!("skipping: git-lfs is not installed");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -840,7 +840,6 @@ fn lfs_push_all_then_pull_downloads_only_the_named_path() {
 #[test]
 fn lfs_track_writes_attributes_and_converts_existing_files() {
     if !git_lfs_available() {
-        eprintln!("skipping: git-lfs is not installed");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -876,7 +875,6 @@ fn lfs_track_writes_attributes_and_converts_existing_files() {
 #[test]
 fn lfs_install_local_configures_filters_and_hooks() {
     if !git_lfs_available() {
-        eprintln!("skipping: git-lfs is not installed");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -976,7 +974,7 @@ fn lfs_tracking_a_literal_filename_does_not_track_a_glob_match() {
 }
 
 /// Three revisions ensure a historical download cannot pass by fetching HEAD.
-fn clone_lfs_history(root: &Path) -> (PathBuf, String) {
+fn seed_lfs_history(root: &Path) -> (PathBuf, String) {
     // The backend canonicalizes its workdir (macOS /private/var, Windows long
     // names), so absolute paths the tests pass must be canonical too.
     let root = &canonicalize_or_original(root.to_path_buf());
@@ -999,6 +997,11 @@ fn clone_lfs_history(root: &Path) -> (PathBuf, String) {
             remote: "origin".into(),
         },
     );
+    (remote, middle)
+}
+
+fn clone_lfs_remote(root: &Path, remote: &Path) -> PathBuf {
+    let root = &canonicalize_or_original(root.to_path_buf());
     let clone = root.join("clone");
     git(
         root,
@@ -1007,11 +1010,17 @@ fn clone_lfs_history(root: &Path) -> (PathBuf, String) {
             "-q",
             "--branch",
             "main",
-            &file_url(&remote),
+            &file_url(remote),
             clone.to_str().unwrap(),
         ],
     );
     configure_lfs_filters(&clone);
+    clone
+}
+
+fn clone_lfs_history(root: &Path) -> (PathBuf, String) {
+    let (remote, middle) = seed_lfs_history(root);
+    let clone = clone_lfs_remote(root, &remote);
     (clone, middle)
 }
 
@@ -1076,9 +1085,13 @@ fn lfs_positional_fetch_preserves_default_remote_selection() {
     if !git_lfs_available() {
         return;
     }
+    // Share only the immutable remote; every scenario gets its own config,
+    // index, worktree and LFS object store.
+    let seed = tempfile::tempdir().unwrap();
+    let (remote, middle) = seed_lfs_history(seed.path());
     for selection in ["single", "lfsdefault", "branch"] {
         let dir = tempfile::tempdir().unwrap();
-        let (repo, middle) = clone_lfs_history(dir.path());
+        let repo = clone_lfs_remote(dir.path(), &remote);
         git(&repo, &["remote", "rename", "origin", "upstream"]);
         git(&repo, &["config", "--unset", "branch.main.remote"]);
         if selection != "single" {
@@ -1109,7 +1122,7 @@ fn lfs_positional_fetch_preserves_default_remote_selection() {
         }
         let opened = GixBackend.open(&repo).unwrap();
         let target = DiffTarget::commit(
-            gitcomet_core::domain::CommitId(middle.into()),
+            gitcomet_core::domain::CommitId(middle.as_str().into()),
             "a.bin".into(),
         );
         opened
@@ -1479,6 +1492,8 @@ fn lfs_diff_download_fetches_a_worktree_pointer_absent_from_head_and_index() {
     if !git_lfs_available() {
         return;
     }
+    let seed = tempfile::tempdir().unwrap();
+    let (remote, middle) = seed_lfs_history(seed.path());
     for (path, range) in [
         ("a.bin", false),
         ("nested/a [1].bin", false),
@@ -1491,7 +1506,7 @@ fn lfs_diff_download_fetches_a_worktree_pointer_absent_from_head_and_index() {
         ("a.bin", true),
     ] {
         let dir = tempfile::tempdir().unwrap();
-        let (repo, middle) = clone_lfs_history(dir.path());
+        let repo = clone_lfs_remote(dir.path(), &remote);
         let pointer = git(&repo, &["show", "HEAD~2:a.bin"]);
         git(&repo, &["config", "lfs.fetchexclude", "*.bin"]);
         git(&repo, &["reset", "-q", "--soft", "HEAD~1"]);
@@ -1502,7 +1517,7 @@ fn lfs_diff_download_fetches_a_worktree_pointer_absent_from_head_and_index() {
         fs::write(repo.join(path), &pointer).unwrap();
         let index_before = git(&repo, &["ls-files", "--stage"]);
         let target = if range {
-            DiffTarget::commit_range(CommitId(middle.into()), None, Some(path.into()))
+            DiffTarget::commit_range(CommitId(middle.as_str().into()), None, Some(path.into()))
         } else {
             DiffTarget::working_tree(
                 if path == "a.bin" {
