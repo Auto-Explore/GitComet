@@ -740,6 +740,8 @@ def available_cpus():
                     if quota != "max":
                         counts.append(max(1, int(quota) // int(period)))
                 except (OSError, ValueError):
+                    # Best-effort: some cgroup directories may be unreadable or malformed;
+                    # ignore and continue walking parent cgroups for usable limits.
                     pass
                 directory = directory.parent
         except (OSError, StopIteration):
