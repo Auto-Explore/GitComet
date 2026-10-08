@@ -272,7 +272,13 @@ struct HostWindow {
     theme: Rc<std::cell::Cell<AppTheme>>,
     observers: Rc<StateObservers>,
     bottom_panels: super::extension_panels::SharedBottomPanels,
+    diff_panes: SharedDiffPanes,
 }
+
+/// The hosted diff panes extensions made in one window, so the diff keys
+/// can find the one in front of the user.
+type SharedDiffPanes =
+    Rc<std::cell::RefCell<Vec<WeakEntity<super::hosted::diff_pane::DiffPaneView>>>>;
 
 /// State observers of one window, notified at most once per update cycle.
 #[derive(Default)]
@@ -315,6 +321,41 @@ impl StateObservers {
 }
 
 impl HostWindow {
+    /// Selects a registered panel tab once the current
+    /// update ends; `Unsupported` when no such tab is registered.
+    fn show_tab(
+        &self,
+        repository: &RepositoryHandle,
+        tab: &gitcomet_extension_api::ContributionId,
+        area: gitcomet_extension_api::PanelArea,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.live()?;
+        let registered = registry(cx).is_some_and(|registry| {
+            let tabs = match area {
+                gitcomet_extension_api::PanelArea::Details => registry.details_tabs(),
+                gitcomet_extension_api::PanelArea::Sidebar => registry.sidebar_tabs(),
+                _ => return false,
+            };
+            tabs.iter().any(|(id, _)| id == tab)
+        });
+        if !registered {
+            return Err(HostError::Unsupported);
+        }
+        let view = self.view.clone();
+        let handle = self.window_handle;
+        let repository = repository.clone();
+        let tab = tab.clone();
+        cx.defer(move |cx| {
+            let _ = handle.update(cx, |_, window, cx| {
+                let _ = view.update(cx, |root, cx| {
+                    root.show_panel_tab(&repository, area, &tab, window, cx);
+                });
+            });
+        });
+        Ok(())
+    }
+
     fn present_dialog(
         &self,
         title: SharedString,
@@ -355,6 +396,13 @@ impl HostWindow {
     }
 
     /// This window's `WindowHost`, for panes that observe it.
+    /// Keeps a weak handle to a pane made here, dropping dead ones.
+    fn remember_diff_pane(&self, pane: &Entity<super::hosted::diff_pane::DiffPaneView>) {
+        let mut panes = self.diff_panes.borrow_mut();
+        panes.retain(|pane| pane.upgrade().is_some());
+        panes.push(pane.downgrade());
+    }
+
     fn host(&self) -> Result<WindowHost, HostError> {
         self.observers
             .host
@@ -443,6 +491,28 @@ impl WindowHostImpl for HostWindow {
         Ok(())
     }
 
+    fn show_panel_tab(
+        &self,
+        repository: &RepositoryHandle,
+        area: gitcomet_extension_api::PanelArea,
+        tab: &gitcomet_extension_api::ContributionId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.show_tab(repository, tab, area, cx)
+    }
+
+    fn create_markdown_view(
+        &self,
+        cx: &mut App,
+    ) -> Result<gitcomet_extension_api::MarkdownView, HostError> {
+        self.live()?;
+        let theme = Rc::clone(&self.theme);
+        let view = cx.new(|_| super::hosted::markdown::MarkdownView::new(theme));
+        Ok(gitcomet_extension_api::MarkdownView::new(Rc::new(
+            super::hosted::markdown::HostedMarkdownView { entity: view },
+        )))
+    }
+
     fn open_settings_at(
         &self,
         target: gitcomet_extension_api::SettingsTarget,
@@ -512,6 +582,7 @@ impl WindowHostImpl for HostWindow {
             pane.attach_root(self.view.clone());
             pane
         });
+        self.remember_diff_pane(&entity);
         Ok(gitcomet_extension_api::DiffPane::new(Rc::new(
             super::hosted::diff_pane::HostedDiffPane { entity },
         )))
@@ -530,6 +601,7 @@ impl WindowHostImpl for HostWindow {
             pane.attach_root(self.view.clone());
             pane
         });
+        self.remember_diff_pane(&entity);
         Ok(gitcomet_extension_api::DiffPane::new(Rc::new(
             super::hosted::diff_pane::HostedDiffPane { entity },
         )))
@@ -701,6 +773,100 @@ impl WindowHostImpl for HostWindow {
         self.present_dialog(title, content, Some(anchor), cx)
     }
 
+    fn open_file_context_menu(
+        &self,
+        repository: &RepositoryHandle,
+        source: gitcomet_extension_api::ChangeSource,
+        file: gitcomet_core::domain::CommitFileChange,
+        anchor: Point<Pixels>,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.live()?;
+        if repository.window() != self.window_id {
+            return Err(HostError::Unsupported);
+        }
+        let repo_id = repository.repo_id();
+        let path = file.path;
+        let kind = match source {
+            gitcomet_extension_api::ChangeSource::Commit(commit_id) => {
+                PopoverKind::CommitFileMenu {
+                    repo_id,
+                    commit_id,
+                    path,
+                }
+            }
+            gitcomet_extension_api::ChangeSource::Comparison { from, to, .. } => {
+                PopoverKind::CommitRangeFileMenu {
+                    repo_id,
+                    from_commit_id: from,
+                    to_commit_id: to,
+                    path,
+                }
+            }
+            gitcomet_extension_api::ChangeSource::Worktree { area, .. } => {
+                PopoverKind::StatusFileMenu {
+                    repo_id,
+                    area,
+                    path,
+                }
+            }
+            gitcomet_extension_api::ChangeSource::LinkedWorktree {
+                path: workdir,
+                area,
+                ..
+            } if workdir == repository.workdir() => PopoverKind::StatusFileMenu {
+                repo_id,
+                area,
+                path,
+            },
+            gitcomet_extension_api::ChangeSource::LinkedWorktree { path: workdir, .. } => {
+                use gitcomet_extension_api::{HostedAction, HostedMenuItem};
+                let absolute = workdir.join(&path).to_string_lossy().into_owned();
+                let relative = path.to_string_lossy().into_owned();
+                // Linked-worktree files are read-only. Never offer main-checkout
+                // staging or editing actions against a different worktree.
+                self.open_menu(
+                    anchor,
+                    vec![
+                        HostedMenuItem::action(HostedAction::new(
+                            "Copy relative path",
+                            move |cx| {
+                                crate::clipboard::write_text(
+                                    cx,
+                                    relative.clone(),
+                                    crate::clipboard::CopySource::ContextMenu,
+                                )
+                            },
+                        )),
+                        HostedMenuItem::action(HostedAction::new(
+                            "Copy absolute path",
+                            move |cx| {
+                                crate::clipboard::write_text(
+                                    cx,
+                                    absolute.clone(),
+                                    crate::clipboard::CopySource::ContextMenu,
+                                )
+                            },
+                        )),
+                    ],
+                    cx,
+                )?;
+                return Ok(());
+            }
+            _ => return Err(HostError::Unsupported),
+        };
+        let weak = self.view.clone();
+        let window_handle = self.window_handle;
+        cx.defer(move |cx| {
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = weak.update(cx, |root, cx| {
+                    root.open_popover_at(kind, anchor, window, cx)
+                });
+            });
+        });
+        Ok(())
+    }
+
     fn open_menu(
         &self,
         anchor: Point<Pixels>,
@@ -834,6 +1000,7 @@ pub(in crate::view) struct ExtensionWindow {
     theme: Rc<std::cell::Cell<AppTheme>>,
     observers: Rc<StateObservers>,
     bottom_panels: super::extension_panels::SharedBottomPanels,
+    diff_panes: SharedDiffPanes,
 }
 
 impl ExtensionWindow {
@@ -851,6 +1018,7 @@ impl ExtensionWindow {
             (kind == gitcomet_core::identity::WindowKind::FocusedDiff)
                 .then(|| Rc::new(Registry::default()))
         })?;
+        let diff_panes: SharedDiffPanes = Rc::default();
         let bottom_panels = Rc::new(std::cell::RefCell::new(
             super::extension_panels::BottomPanels::new(registry.bottom_panels()),
         ));
@@ -895,6 +1063,7 @@ impl ExtensionWindow {
             theme: Rc::clone(&theme),
             observers: Rc::clone(&observers),
             bottom_panels: Rc::clone(&bottom_panels),
+            diff_panes: Rc::clone(&diff_panes),
         });
         *observers.host.borrow_mut() = Some(Rc::downgrade(&host_window));
         let closing_host = Rc::downgrade(&host_window);
@@ -917,6 +1086,7 @@ impl ExtensionWindow {
                 *host.state.borrow_mut() = Arc::default();
                 host.observers.observers.borrow_mut().clear();
                 *host.bottom_panels.borrow_mut() = Default::default();
+                host.diff_panes.borrow_mut().clear();
             }
         });
         Some(Self {
@@ -929,7 +1099,34 @@ impl ExtensionWindow {
             theme,
             observers,
             bottom_panels,
+            diff_panes,
         })
+    }
+
+    /// The renderer of the hosted diff pane the diff keys should act on:
+    /// among the panes drawn inside `scope` in the last frame, the one
+    /// holding focus, else the one engaged with most recently.
+    pub(in crate::view) fn diff_pane_for_keys(
+        &self,
+        scope: &gpui::FocusHandle,
+        window: &Window,
+        cx: &App,
+    ) -> Option<Entity<MainPaneView>> {
+        let mut panes = self.diff_panes.borrow_mut();
+        panes.retain(|pane| pane.upgrade().is_some());
+        panes
+            .iter()
+            .filter_map(|pane| {
+                let pane = pane.upgrade()?;
+                let pane = pane.read(cx);
+                let renderer = pane.renderer()?.clone();
+                let focus = renderer.read(cx).diff_panel_focus_handle.clone();
+                scope
+                    .contains(&focus, window)
+                    .then(|| (focus.contains_focused(window, cx), pane.engaged(), renderer))
+            })
+            .max_by_key(|(focused, engaged, _)| (*focused, *engaged))
+            .map(|(_, _, renderer)| renderer)
     }
 
     pub(in crate::view) fn host(&self) -> WindowHost {
@@ -1062,18 +1259,24 @@ pub(crate) fn window_opened(view: &Entity<GitCometView>, cx: &mut App) {
         });
         if has_status_bar && !registry.status_items().is_empty() {
             let _ = window_handle.update(cx, |_, window, cx| {
-                let items = registry
+                let (action_items, status_items): (Vec<_>, Vec<_>) = registry
                     .status_items()
                     .iter()
                     .map(|(_, item)| {
                         super::perf::extension_dispatch();
-                        (item.view.clone(), (item.build)(host.clone(), window, cx))
+                        (
+                            item.location,
+                            item.view.clone(),
+                            (item.build)(host.clone(), window, cx),
+                        )
                     })
-                    .collect();
+                    .partition(|(location, _, _)| location.is_action_bar());
                 if let Some(view) = view.upgrade() {
                     view.update(cx, |root, cx| {
                         root.bottom_status_bar
-                            .update(cx, |bar, cx| bar.set_extension_items(items, cx));
+                            .update(cx, |bar, cx| bar.set_extension_items(status_items, cx));
+                        root.action_bar
+                            .update(cx, |bar, cx| bar.set_extension_items(action_items, cx));
                     });
                 }
             });
@@ -1125,7 +1328,17 @@ impl GitCometView {
             }
             Slot::ActionBar | Slot::Navigation => self.action_bar.update(cx, |_, cx| cx.notify()),
             Slot::TitleBar => self.title_bar.update(cx, |_, cx| cx.notify()),
-            Slot::Status => self.bottom_status_bar.update(cx, |_, cx| cx.notify()),
+            Slot::Status => {
+                self.bottom_status_bar.update(cx, |_, cx| cx.notify());
+                if registry(cx).is_some_and(|registry| {
+                    registry
+                        .status_items()
+                        .iter()
+                        .any(|(_, item)| item.location.is_action_bar())
+                }) {
+                    self.action_bar.update(cx, |_, cx| cx.notify());
+                }
+            }
             Slot::Details => self.details_pane.update(cx, |_, cx| cx.notify()),
             Slot::Sidebar => self.sidebar_pane.update(cx, |_, cx| cx.notify()),
             Slot::History => self.main_pane.update(cx, |pane, cx| {

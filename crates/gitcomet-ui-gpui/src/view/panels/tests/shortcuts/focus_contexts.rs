@@ -443,10 +443,16 @@ fn diff_view_toolbar_toggle_restores_diff_panel_focus(cx: &mut gpui::TestAppCont
     let split_bounds = cx
         .debug_bounds("diff_split")
         .expect("expected split diff toolbar button");
-    assert_eq!(inline_bounds.top(), toggle_bounds.top());
-    assert_eq!(inline_bounds.bottom(), toggle_bounds.bottom());
-    assert_eq!(split_bounds.top(), toggle_bounds.top());
-    assert_eq!(split_bounds.bottom(), toggle_bounds.bottom());
+    // Both segments sit inside the track, level with each other.
+    for segment in [inline_bounds, split_bounds] {
+        assert!(segment.top() >= toggle_bounds.top());
+        assert!(segment.bottom() <= toggle_bounds.bottom());
+        assert!(segment.left() >= toggle_bounds.left());
+        assert!(segment.right() <= toggle_bounds.right());
+    }
+    assert_eq!(inline_bounds.top(), split_bounds.top());
+    assert_eq!(inline_bounds.bottom(), split_bounds.bottom());
+    assert!(inline_bounds.right() <= split_bounds.left());
 
     let file_header_bounds = cx
         .debug_bounds("diff_file_header")

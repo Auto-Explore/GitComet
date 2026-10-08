@@ -291,7 +291,36 @@ impl CollapsedSidebarSection {
     }
 }
 
+/// Extension tabs after Branches and Files for the active repository, as
+/// the window routes them.
+#[derive(Clone)]
+pub(in crate::view) struct SidebarExtensionTabs {
+    /// Each listed tab's position among the registered ones, and its title.
+    pub(in crate::view) tabs: Vec<(usize, SharedString, Option<SharedString>)>,
+    pub(in crate::view) selected: Option<usize>,
+    pub(in crate::view) host_tabs: bool,
+    /// The selected tab's view, once built.
+    pub(in crate::view) view: Option<gpui::AnyView>,
+}
+
+impl SidebarExtensionTabs {
+    /// The selected tab, when its view is there to show.
+    fn showing(&self) -> Option<usize> {
+        self.selected.filter(|_| self.view.is_some())
+    }
+
+    fn same(&self, other: &Self) -> bool {
+        self.host_tabs == other.host_tabs
+            && self.tabs == other.tabs
+            && self.selected == other.selected
+            && self.view.as_ref().map(gpui::AnyView::entity_id)
+                == other.view.as_ref().map(gpui::AnyView::entity_id)
+    }
+}
+
 pub(in super::super) struct SidebarPaneView {
+    /// Tabs contributed after Branches and Files; `None` without any.
+    extension_tabs: Option<SidebarExtensionTabs>,
     explorer_focus: gpui::FocusHandle,
     /// Input events can arrive before the store publishes the preceding click.
     explorer_pending_focus: Option<(RepoId, PathBuf)>,
@@ -612,6 +641,7 @@ impl SidebarPaneView {
             path_display_cache: std::cell::RefCell::new(path_display::PathDisplayCache::default()),
             sidebar_collapsed_items_by_repo,
             sidebar_pinned_branches_by_repo,
+            extension_tabs: None,
             root_view,
             tooltip_host,
             notify_fingerprint: initial_fingerprint,
@@ -1294,6 +1324,45 @@ impl SidebarPaneView {
         Some(presentation)
     }
 
+    /// Shows Branches or Files (`None`) or contributed tab `index`.
+    /// Deferred: a tab is clicked inside this pane's update, and the root
+    /// updates this pane again as the selection changes.
+    fn select_routed_tab(
+        &self,
+        index: Option<usize>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let root = self.root_view.clone();
+        window.defer(cx, move |window, cx| {
+            let _ = root.update(cx, |root, cx| {
+                root.select_routed_view(
+                    crate::view::repository_views::RoutedArea::Sidebar,
+                    index,
+                    window,
+                    cx,
+                )
+            });
+        });
+    }
+
+    /// The window's routing of contributed tabs for the active repository.
+    pub(in crate::view) fn set_extension_tabs(
+        &mut self,
+        tabs: Option<SidebarExtensionTabs>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let same = match (&self.extension_tabs, &tabs) {
+            (Some(current), Some(next)) => current.same(next),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            self.extension_tabs = tabs;
+            cx.notify();
+        }
+    }
+
     pub(in super::super) fn sidebar(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         self.sync_contributed_rows(cx);
         let theme = self.theme;
@@ -1301,9 +1370,20 @@ impl SidebarPaneView {
         self.apply_pending_file_browser_reveal(cx);
         let tab_bar = self.render_tab_bar(theme, cx);
         let mode = self.state.sidebar_mode;
-        let content = match mode {
-            SidebarMode::Branches => self.render_branches_content(theme, cx),
-            SidebarMode::Files => self.render_file_browser_content(theme, cx),
+        let contributed = self
+            .extension_tabs
+            .as_ref()
+            .filter(|tabs| tabs.showing().is_some())
+            .and_then(|tabs| tabs.view.clone());
+        let content = match (contributed, mode) {
+            (Some(view), _) => div()
+                .flex_1()
+                .min_h(px(0.0))
+                .debug_selector(|| "sidebar_extension_tab_content".to_string())
+                .child(view)
+                .into_any_element(),
+            (None, SidebarMode::Branches) => self.render_branches_content(theme, cx),
+            (None, SidebarMode::Files) => self.render_file_browser_content(theme, cx),
         };
 
         // `size_full`, not just `h_full`: mounted as a cached view this is laid
@@ -1511,33 +1591,36 @@ impl SidebarPaneView {
             theme.colors.surface.chrome
         };
 
-        let make_tab = |id: &'static str,
-                        label: &'static str,
-                        tab_mode: SidebarMode,
-                        cx: &mut gpui::Context<Self>| {
-            let selected = mode == tab_mode;
-            let selected_bg = if tab_mode == SidebarMode::Files && browsing_files {
-                crate::theme::historical_header_bg(
-                    theme,
-                    theme.colors.interaction.selected_background,
-                )
-            } else {
-                theme.colors.interaction.selected_background
-            };
-            let store = Arc::clone(&self.store);
-            let tab = components::navigation_tab(id, label, selected, Some(selected_bg), theme)
-                .on_click(theme, cx, move |_, _, _, _| {
-                    store.dispatch(Msg::SetSidebarMode { mode: tab_mode });
-                });
-            components::navigation_tab_metrics(tab, theme, ui_scale)
-        };
-        let branches_tab = make_tab(
-            "sidebar_tab_branches",
-            "Branches",
-            SidebarMode::Branches,
-            cx,
-        );
-        let files_tab = make_tab("sidebar_tab_files", "Files", SidebarMode::Files, cx);
+        // A contributed tab, while it shows, takes the strip's selection.
+        let contributed = self
+            .extension_tabs
+            .as_ref()
+            .and_then(SidebarExtensionTabs::showing);
+        let store = Arc::clone(&self.store);
+        let tabs = components::SegmentedControl::new("sidebar_view_toggle")
+            .segment(
+                components::Segment::new("sidebar_tab_branches", "Branches")
+                    .icon("icons/git_branch.svg")
+                    .selected(mode == SidebarMode::Branches && contributed.is_none())
+                    .tooltip("Branches", Vec::new()),
+            )
+            .segment(
+                components::Segment::new("sidebar_tab_files", "Files")
+                    .icon("icons/folder.svg")
+                    .selected(mode == SidebarMode::Files && contributed.is_none())
+                    .tooltip("Files", Vec::new()),
+            )
+            .render(theme, ui_scale, cx, move |this, index, window, cx| {
+                let mode = if index == 0 {
+                    SidebarMode::Branches
+                } else {
+                    SidebarMode::Files
+                };
+                store.dispatch(Msg::SetSidebarMode { mode });
+                if contributed.is_some() {
+                    this.select_routed_tab(None, window, cx);
+                }
+            });
 
         // Each tab keeps its locate action in the same trailing slot for the
         // whole time its tree is visible. Unavailable actions grey out instead
@@ -1560,88 +1643,124 @@ impl SidebarPaneView {
             .as_ref()
             .is_some_and(|(invoker, _)| self.active_context_menu_invoker.as_ref() == Some(invoker));
 
+        let extension_tabs: Vec<_> = self
+            .extension_tabs
+            .iter()
+            .flat_map(|tabs| tabs.tabs.iter().cloned())
+            .map(|(index, title, icon)| {
+                let mut tab =
+                    components::NavTab::new(format!("sidebar_tab_extension_{index}"), title)
+                        .selected(contributed == Some(index));
+                if let Some(icon) = icon {
+                    tab = tab.icon(icon);
+                }
+                let tab = tab.render(theme, ui_scale).on_activate(
+                    false,
+                    controls::ControlActivation::ManagedFocus,
+                    cx.listener(move |this, _, window, cx| {
+                        this.select_routed_tab(Some(index), window, cx);
+                    }),
+                );
+                div()
+                    .debug_selector(move || format!("sidebar_tab_extension_{index}"))
+                    .child(tab)
+            })
+            .collect();
+
+        let host_tabs = self
+            .extension_tabs
+            .as_ref()
+            .is_none_or(|tabs| tabs.host_tabs);
         components::navigation_tab_strip(bg, ui_scale)
-            .child(branches_tab)
-            .child(files_tab)
-            .child(div().ml_auto().child(self.render_search_toggle(
-                mode == SidebarMode::Files,
-                "sidebar_search_toggle",
-                cx,
-            )))
+            .when(host_tabs, |strip| strip.child(tabs))
+            .children(extension_tabs)
+            .child(div().ml_auto().when(contributed.is_none(), |slot| {
+                slot.child(self.render_search_toggle(
+                    mode == SidebarMode::Files,
+                    "sidebar_search_toggle",
+                    cx,
+                ))
+            }))
             // Between search and locate: both flank it as per-tab tools, and the
             // locate slot keeps its far-edge position across tabs.
-            .when(mode == SidebarMode::Files, |strip| {
-                strip.child(
-                    components::Button::new("sidebar_explorer_settings", "")
-                        .borderless()
-                        .style(components::ButtonStyle::Subtle)
-                        .open(explorer_settings_open)
-                        .disabled(explorer_settings.is_none())
-                        .selected_bg(with_alpha(
-                            theme.colors.accent.foreground,
-                            if theme.is_dark { 0.34 } else { 0.24 },
-                        ))
-                        .start_slot(crate::view::icons::svg_icon(
-                            "icons/cog.svg",
-                            if explorer_settings_open {
-                                theme.colors.accent.foreground
-                            } else if explorer_settings.is_some() {
-                                theme.colors.foreground.secondary
-                            } else {
-                                with_alpha(theme.colors.foreground.secondary, 0.45)
-                            },
-                            scaled_px(13.0),
-                        ))
-                        .on_click(theme, cx, move |this, e, window, cx| {
-                            if let Some((invoker, kind)) = explorer_settings.clone() {
-                                this.open_popover_at(
-                                    kind.invoked_by(invoker),
-                                    e.position(),
-                                    window,
-                                    cx,
-                                );
-                            }
-                        })
-                        .w(components::control_height(ui_scale))
-                        .h(components::control_height(ui_scale))
-                        .gitcomet_tooltip(theme, "Files settings".into())
-                        .debug_selector(|| "sidebar_explorer_settings".to_string()),
-                )
-            })
-            .when(mode == SidebarMode::Branches, |strip| {
-                let tooltip = active_local_branch_name.map_or_else(
-                    || SharedString::from("No active local branch to show"),
-                    |name| {
-                        SharedString::from(format!(
-                            "Show and select the active local branch: {name}"
-                        ))
-                    },
-                );
-                strip.child(
-                    components::Button::new("sidebar_locate_active_branch", "")
-                        .borderless()
-                        .style(components::ButtonStyle::Subtle)
-                        .disabled(!can_locate_active_branch)
-                        .start_slot(crate::view::icons::svg_icon(
-                            "icons/locate.svg",
-                            if can_locate_active_branch {
-                                theme.colors.foreground.secondary
-                            } else {
-                                with_alpha(theme.colors.foreground.secondary, 0.45)
-                            },
-                            scaled_px(13.0),
-                        ))
-                        .on_click(theme, cx, |this, _e, _window, cx| {
-                            this.locate_active_local_branch(cx);
-                        })
-                        // Pushed to the far edge so it reads as an action on the
-                        // strip rather than a third tab.
-                        .w(components::control_height(ui_scale))
-                        .h(components::control_height(ui_scale))
-                        .gitcomet_tooltip(theme, tooltip)
-                        .debug_selector(|| "sidebar_locate_active_branch".to_string()),
-                )
-            })
+            .when(
+                mode == SidebarMode::Files && contributed.is_none(),
+                |strip| {
+                    strip.child(
+                        components::Button::new("sidebar_explorer_settings", "")
+                            .borderless()
+                            .style(components::ButtonStyle::Subtle)
+                            .open(explorer_settings_open)
+                            .disabled(explorer_settings.is_none())
+                            .selected_bg(with_alpha(
+                                theme.colors.accent.foreground,
+                                if theme.is_dark { 0.34 } else { 0.24 },
+                            ))
+                            .start_slot(crate::view::icons::svg_icon(
+                                "icons/cog.svg",
+                                if explorer_settings_open {
+                                    theme.colors.accent.foreground
+                                } else if explorer_settings.is_some() {
+                                    theme.colors.foreground.secondary
+                                } else {
+                                    with_alpha(theme.colors.foreground.secondary, 0.45)
+                                },
+                                scaled_px(13.0),
+                            ))
+                            .on_click(theme, cx, move |this, e, window, cx| {
+                                if let Some((invoker, kind)) = explorer_settings.clone() {
+                                    this.open_popover_at(
+                                        kind.invoked_by(invoker),
+                                        e.position(),
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            })
+                            .w(components::control_height(ui_scale))
+                            .h(components::control_height(ui_scale))
+                            .gitcomet_tooltip(theme, "Files settings".into())
+                            .debug_selector(|| "sidebar_explorer_settings".to_string()),
+                    )
+                },
+            )
+            .when(
+                mode == SidebarMode::Branches && contributed.is_none(),
+                |strip| {
+                    let tooltip = active_local_branch_name.map_or_else(
+                        || SharedString::from("No active local branch to show"),
+                        |name| {
+                            SharedString::from(format!(
+                                "Show and select the active local branch: {name}"
+                            ))
+                        },
+                    );
+                    strip.child(
+                        components::Button::new("sidebar_locate_active_branch", "")
+                            .borderless()
+                            .style(components::ButtonStyle::Subtle)
+                            .disabled(!can_locate_active_branch)
+                            .start_slot(crate::view::icons::svg_icon(
+                                "icons/locate.svg",
+                                if can_locate_active_branch {
+                                    theme.colors.foreground.secondary
+                                } else {
+                                    with_alpha(theme.colors.foreground.secondary, 0.45)
+                                },
+                                scaled_px(13.0),
+                            ))
+                            .on_click(theme, cx, |this, _e, _window, cx| {
+                                this.locate_active_local_branch(cx);
+                            })
+                            // Pushed to the far edge so it reads as an action on the
+                            // strip rather than a third tab.
+                            .w(components::control_height(ui_scale))
+                            .h(components::control_height(ui_scale))
+                            .gitcomet_tooltip(theme, tooltip)
+                            .debug_selector(|| "sidebar_locate_active_branch".to_string()),
+                    )
+                },
+            )
             .when(mode == SidebarMode::Files, |strip| {
                 strip.child(
                     components::Button::new("sidebar_locate_open_file", "")

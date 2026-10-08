@@ -311,6 +311,14 @@ impl DetailsPaneView {
             repo.head_branch_rev.hash(&mut hasher);
             repo.branches_rev.hash(&mut hasher);
             repo.diff_state.diff_target_rev.hash(&mut hasher);
+            // Linked worktree rows use the inline selection, which does not
+            // bump diff_target_rev. Repaint when it changes, without invalidating
+            // the file list for updates to the loaded diff content.
+            repo.diff_state
+                .inline_submodule_diff
+                .as_ref()
+                .map(|inline| (&inline.submodule_repo_path, inline.selected_ix))
+                .hash(&mut hasher);
         }
 
         hasher.finish()

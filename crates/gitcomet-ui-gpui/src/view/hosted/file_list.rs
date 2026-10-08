@@ -41,7 +41,6 @@ pub(crate) struct FileListView {
     loading: bool,
     error: Option<SharedString>,
     on_select: FileSelected,
-    #[cfg(test)]
     scroll: UniformListScrollHandle,
     _state: Option<StateSubscription>,
 }
@@ -181,7 +180,6 @@ impl FileListView {
             loading: true,
             error: None,
             on_select,
-            #[cfg(test)]
             scroll,
             _state: state,
         }
@@ -261,6 +259,18 @@ impl FileListView {
             self.scroll.clone(),
             self.controller.borrow_mut().group_builds,
         )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_collapse_directory(&mut self, path: std::path::PathBuf) {
+        let path: Arc<Path> = path.into();
+        self.controller
+            .borrow_mut()
+            .toggle_dir(path.clone(), &[path], false);
+    }
+    #[cfg(test)]
+    pub(crate) fn test_collapse_group(&mut self, group: usize) {
+        self.controller.borrow_mut().toggle_group(group);
     }
 
     /// Regroup passes and grouped-row builds so far.
@@ -415,6 +425,7 @@ impl FileListView {
             cx,
         );
         let picked = change.path.clone();
+        let context_change = change.clone();
         let mark = self.marks.rows.get(&change.path).cloned();
         let label = mark
             .as_ref()
@@ -434,6 +445,19 @@ impl FileListView {
                     if let Some(change) = change {
                         this.pick(change, cx);
                     }
+                }),
+            )
+            .on_pointer_click(
+                gpui::MouseButton::Right,
+                cx.listener(move |list, event: &gpui::MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    let _ = list.host.open_file_context_menu(
+                        &list.repository,
+                        list.source.clone(),
+                        context_change.clone(),
+                        event.position,
+                        cx,
+                    );
                 }),
             )
             .gitcomet_tooltip(theme, tooltip)
@@ -818,6 +842,9 @@ pub(crate) struct HostedFileList {
 }
 
 impl FileListImpl for HostedFileList {
+    fn observe(&self, on_change: Rc<dyn Fn(&mut App)>, cx: &mut App) -> Option<gpui::Subscription> {
+        Some(cx.observe(&self.entity, move |_, cx| on_change(cx)))
+    }
     fn view(&self) -> gpui::AnyView {
         self.entity.clone().into()
     }
@@ -935,9 +962,11 @@ impl FileListImpl for HostedFileList {
 
     fn select_path(&self, path: &Path, cx: &mut App) -> bool {
         self.entity.update(cx, |list, cx| {
-            let change = list.controller.borrow_mut().select(path);
+            let change = list.controller.borrow_mut().select_revealed(path);
             match change {
-                Some(change) => {
+                Some((change, row)) => {
+                    list.scroll
+                        .scroll_to_item(row, gpui::ScrollStrategy::Nearest);
                     list.pick(change, cx);
                     true
                 }

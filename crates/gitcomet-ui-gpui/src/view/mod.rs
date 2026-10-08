@@ -107,6 +107,8 @@ actions!(
         DiffNextFile,
         DiffPrevSearchMatchOrChange,
         DiffNextSearchMatchOrChange,
+        DiffPrevChange,
+        DiffNextChange,
         TextInputCommitSubmit,
         TextInputDiffPrevFile,
         TextInputDiffNextFile,
@@ -348,8 +350,8 @@ use poller::Poller;
 pub(in crate::view) use preferences::FileListDefaults;
 use preferences::{HistoryBranchNamesMode, RemoteMarkdownImagePolicy, UiPreferences};
 pub(in crate::view) use terminal_preferences::{
-    ActionBarTerminalTarget, ExternalTerminalLaunchContext, ExternalTerminalMode,
-    TerminalPreferences, parse_terminal_args_multiline, resolve_embedded_shell_program,
+    ExternalTerminalLaunchContext, ExternalTerminalMode, TerminalButtonTarget, TerminalPreferences,
+    parse_terminal_args_multiline, resolve_embedded_shell_program,
     resolve_external_terminal_launch_spec,
 };
 use word_diff::{capped_word_diff_ranges, capped_word_diff_ranges_for_file_diff_texts};

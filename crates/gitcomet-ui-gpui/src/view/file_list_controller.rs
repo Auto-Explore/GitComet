@@ -480,6 +480,38 @@ impl FileListController {
         Some(change)
     }
 
+    /// Select and reveal a file in the current sort/filter/layout. Folded
+    /// directories and groups are expanded before returning its visible row.
+    pub(in crate::view) fn select_revealed(
+        &mut self,
+        path: &Path,
+    ) -> Option<(CommitFileChange, usize)> {
+        let change = self.select(path)?;
+        let shown = self.shown();
+        let ordinal = shown.iter().position(|&ix| self.files[ix].path == path)?;
+        let row = if self.mode == FileListMode::Grouped {
+            let buckets = self.buckets();
+            let group = buckets
+                .groups
+                .iter()
+                .position(|items| items.contains(&ordinal))?;
+            if let Some(collapsed) = self.collapsed_groups.get_mut(group) {
+                *collapsed = false;
+            }
+            self.grouped()
+                .rows
+                .iter()
+                .position(|row| *row == GroupedRow::File { ordinal })?
+        } else {
+            let ordinal = crate::view::rows::FileOrdinal(ordinal);
+            for chain in self.plan().reveal(ordinal) {
+                self.collapsed.expand(&chain);
+            }
+            self.plan().row_ix_for_ordinal(ordinal)?.0
+        };
+        Some((change, row))
+    }
+
     pub(in crate::view) fn selected(&self) -> Option<CommitFileChange> {
         let selected = self.selected.as_ref()?;
         self.files

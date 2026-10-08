@@ -1560,7 +1560,7 @@ fn locate_open_file_switches_to_files_and_expands_its_folders(cx: &mut gpui::Tes
 }
 
 #[gpui::test]
-fn sidebar_tabs_grow_with_density_at_each_ui_scale(cx: &mut gpui::TestAppContext) {
+fn sidebar_tabs_grow_vertically_with_density_at_each_ui_scale(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
@@ -1602,8 +1602,8 @@ fn sidebar_tabs_grow_with_density_at_each_ui_scale(cx: &mut gpui::TestAppContext
             if let Some(previous) = previous {
                 for (current, previous) in sizes.iter().zip(previous) {
                     assert!(
-                        current.width > previous.width,
-                        "tab width must grow at {density:?}"
+                        current.width >= previous.width,
+                        "tab width must not shrink at {density:?}"
                     );
                     assert!(
                         current.height > previous.height,

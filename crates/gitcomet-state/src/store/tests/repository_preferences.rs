@@ -26,6 +26,22 @@ fn update(store: &AppStore, id: RepoId, update: RepositoryPreferenceUpdate) {
     });
 }
 
+fn assert_no_preference_persistence_errors(store: &AppStore) {
+    let snapshot = store.snapshot();
+    let errors: Vec<_> = snapshot
+        .repos
+        .iter()
+        .flat_map(|repo| &repo.feedback.diagnostics)
+        .filter(|entry| {
+            entry.kind == DiagnosticKind::Error && entry.message.contains("repository preferences")
+        })
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "preference persistence failed: {errors:?}"
+    );
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn failed_legacy_migration_keeps_preferences_for_later_updates_and_windows() {
@@ -240,26 +256,8 @@ fn stale_explorer_menus_preserve_independent_toggles_across_windows() {
                 assert_eq!(browser.show_ignored, !ignored);
             }
             wait_until("independent explorer toggles persisted", || {
-                for (store, id) in [(&first, first_id), (&second, second_id)] {
-                    let state = store.snapshot();
-                    let errors: Vec<_> = state
-                        .repos
-                        .iter()
-                        .find(|repo| repo.id == id)
-                        .unwrap()
-                        .feedback
-                        .diagnostics
-                        .iter()
-                        .filter(|entry| {
-                            entry.kind == DiagnosticKind::Error
-                                && entry.message.contains("updating repository preferences")
-                        })
-                        .collect();
-                    assert!(
-                        errors.is_empty(),
-                        "explorer preference save failed: {errors:?}"
-                    );
-                }
+                assert_no_preference_persistence_errors(&first);
+                assert_no_preference_persistence_errors(&second);
                 let file: serde_json::Value =
                     serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
                 let prefs = &file["repository_preferences"]
@@ -464,6 +462,8 @@ fn preferences_sync_across_tabs_and_windows_without_lost_fields_or_clone_leakage
     );
 
     wait_until("shared preferences on disk", || {
+        assert_no_preference_persistence_errors(&first);
+        assert_no_preference_persistence_errors(&second);
         let file: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         serde_json::from_value::<SharedRepositoryPreferences>(
             file["repository_preferences"][preferences(&first, main_id).key.storage_key()].clone(),

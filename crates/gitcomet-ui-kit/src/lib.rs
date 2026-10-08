@@ -97,13 +97,11 @@ mod version_contract {
                 .lines()
                 .find(|line| line.starts_with(&prefix))
                 .unwrap_or_else(|| panic!("missing workspace dependency {dependency}"));
-            let revision = pin
-                .split_once("rev = \"")
+            pin.split_once("rev = \"")
                 .and_then(|(_, revision)| revision.split_once('"'))
                 .map(|(revision, _)| revision)
                 .filter(|revision| !revision.is_empty())
-                .unwrap_or_else(|| panic!("missing revision for {dependency}"));
-            revision
+                .unwrap_or_else(|| panic!("missing revision for {dependency}"))
         };
 
         let gpui_revision = revision("gpui");

@@ -3,10 +3,10 @@
 use crate::contributions::{
     BottomPanelDescriptor, ChromeDescriptor, CloseGuard, CommandDescriptor, DetailsTabDescriptor,
     MenuLocation, RepositoryEntryGate, RepositoryViewDescriptor, SettingsPageDescriptor,
-    SidebarSectionDescriptor, StatusItemDescriptor, WindowGateDescriptor,
+    SidebarSectionDescriptor, SidebarTabDescriptor, StatusItemDescriptor, WindowGateDescriptor,
 };
 use crate::id::{ContributionId, ExtensionId};
-use crate::{Extension, HistoryAnnotator};
+use crate::{BarItemLocation, BuiltinBarItem, Extension, HistoryAnnotator};
 use gitcomet_ui_kit::gpui::{Keystroke, SharedString};
 use std::borrow::Cow;
 use std::collections::BTreeSet;
@@ -61,9 +61,11 @@ mod key_context_contract {
 /// reported when the host builds the [`Registry`].
 pub struct Registrar {
     extension: ExtensionId,
+    bar_item_locations: Vec<(BuiltinBarItem, BarItemLocation)>,
     repository_views: Vec<(ContributionId, RepositoryViewDescriptor)>,
     bottom_panels: Vec<(ContributionId, BottomPanelDescriptor)>,
     details_tabs: Vec<(ContributionId, DetailsTabDescriptor)>,
+    sidebar_tabs: Vec<(ContributionId, SidebarTabDescriptor)>,
     sidebar_sections: Vec<(ContributionId, SidebarSectionDescriptor)>,
     history_annotators: Vec<(ContributionId, HistoryAnnotator)>,
     sidebar_providers: Vec<(ContributionId, crate::SidebarProvider)>,
@@ -85,9 +87,11 @@ impl Registrar {
     fn new(extension: ExtensionId) -> Self {
         Self {
             extension,
+            bar_item_locations: Vec::new(),
             repository_views: Vec::new(),
             bottom_panels: Vec::new(),
             details_tabs: Vec::new(),
+            sidebar_tabs: Vec::new(),
             sidebar_sections: Vec::new(),
             history_annotators: Vec::new(),
             sidebar_providers: Vec::new(),
@@ -108,6 +112,21 @@ impl Registrar {
 
     pub fn extension(&self) -> &ExtensionId {
         &self.extension
+    }
+
+    /// Moves a host-owned control to another chrome row. The owner still
+    /// supplies its state, visibility and handlers. Each item can be placed
+    /// once across all extensions; conflicting declarations fail registration.
+    ///
+    /// ```
+    /// # fn register(registrar: &mut gitcomet_extension_api::Registrar) {
+    /// use gitcomet_extension_api::{BarItemLocation, BuiltinBarItem};
+    /// registrar.place_bar_item(BuiltinBarItem::Terminal, BarItemLocation::StatusBarEnd);
+    /// # }
+    /// ```
+    pub fn place_bar_item(&mut self, item: BuiltinBarItem, location: BarItemLocation) -> &mut Self {
+        self.bar_item_locations.push((item, location));
+        self
     }
 
     fn id(&mut self, local: impl Into<Cow<'static, str>>) -> Option<ContributionId> {
@@ -153,15 +172,37 @@ impl Registrar {
         self
     }
 
+    /// Registers a tab in a repository panel. Both areas use the same
+    /// descriptor, view scoping, lifetime and validation.
+    pub fn panel_tab(
+        &mut self,
+        area: crate::PanelArea,
+        local: impl Into<Cow<'static, str>>,
+        descriptor: crate::PanelTabDescriptor,
+    ) -> &mut Self {
+        if let Some(id) = self.id(local) {
+            match area {
+                crate::PanelArea::Details => self.details_tabs.push((id, descriptor)),
+                crate::PanelArea::Sidebar => self.sidebar_tabs.push((id, descriptor)),
+            }
+        }
+        self
+    }
+
     pub fn details_tab(
         &mut self,
         local: impl Into<Cow<'static, str>>,
         descriptor: DetailsTabDescriptor,
     ) -> &mut Self {
-        if let Some(id) = self.id(local) {
-            self.details_tabs.push((id, descriptor));
-        }
-        self
+        self.panel_tab(crate::PanelArea::Details, local, descriptor)
+    }
+
+    pub fn sidebar_tab(
+        &mut self,
+        local: impl Into<Cow<'static, str>>,
+        descriptor: SidebarTabDescriptor,
+    ) -> &mut Self {
+        self.panel_tab(crate::PanelArea::Sidebar, local, descriptor)
     }
 
     pub fn sidebar_provider(
@@ -328,9 +369,11 @@ impl Registrar {
 pub struct Registry {
     instances: Vec<Rc<dyn Extension>>,
     extensions: Vec<ExtensionId>,
+    bar_item_locations: Vec<(BuiltinBarItem, BarItemLocation)>,
     repository_views: Vec<(ContributionId, RepositoryViewDescriptor)>,
     bottom_panels: Vec<(ContributionId, BottomPanelDescriptor)>,
     details_tabs: Vec<(ContributionId, DetailsTabDescriptor)>,
+    sidebar_tabs: Vec<(ContributionId, SidebarTabDescriptor)>,
     sidebar_sections: Vec<(ContributionId, SidebarSectionDescriptor)>,
     history_annotators: Vec<(ContributionId, HistoryAnnotator)>,
     sidebar_providers: Vec<(ContributionId, crate::SidebarProvider)>,
@@ -361,6 +404,7 @@ impl Registry {
             })
         };
         let mut seen_extensions = BTreeSet::new();
+        let mut placed_bar_items = BTreeSet::new();
         for extension in extensions {
             let extension: Rc<dyn Extension> = Rc::from(extension);
             let id = extension.id();
@@ -373,11 +417,19 @@ impl Registry {
             for message in std::mem::take(&mut registrar.errors) {
                 error(&id, message);
             }
+            for (item, location) in registrar.bar_item_locations {
+                if placed_bar_items.insert(item) {
+                    registry.bar_item_locations.push((item, location));
+                } else {
+                    error(&id, format!("bar item {item:?} is placed twice"));
+                }
+            }
             registry.extensions.push(id.clone());
             registry.instances.push(extension);
             registry.repository_views.extend(registrar.repository_views);
             registry.bottom_panels.extend(registrar.bottom_panels);
             registry.details_tabs.extend(registrar.details_tabs);
+            registry.sidebar_tabs.extend(registrar.sidebar_tabs);
             registry.sidebar_sections.extend(registrar.sidebar_sections);
             registry
                 .history_annotators
@@ -420,6 +472,10 @@ impl Registry {
             (
                 "details tab",
                 duplicates(registry.details_tabs.iter().map(|(id, _)| id)),
+            ),
+            (
+                "sidebar tab",
+                duplicates(registry.sidebar_tabs.iter().map(|(id, _)| id)),
             ),
             (
                 "sidebar section",
@@ -530,6 +586,18 @@ impl Registry {
         &self.extensions
     }
 
+    /// The chosen placement, falling back to the upstream layout.
+    pub fn bar_item_location(&self, item: BuiltinBarItem) -> BarItemLocation {
+        self.bar_item_locations
+            .iter()
+            .find_map(|(placed, location)| (*placed == item).then_some(*location))
+            .unwrap_or_else(|| item.default_location())
+    }
+
+    pub fn bar_item_locations(&self) -> &[(BuiltinBarItem, BarItemLocation)] {
+        &self.bar_item_locations
+    }
+
     #[doc(hidden)]
     pub fn instances(&self) -> &[Rc<dyn Extension>] {
         &self.instances
@@ -549,6 +617,10 @@ impl Registry {
 
     pub fn details_tabs(&self) -> &[(ContributionId, DetailsTabDescriptor)] {
         &self.details_tabs
+    }
+
+    pub fn sidebar_tabs(&self) -> &[(ContributionId, SidebarTabDescriptor)] {
+        &self.sidebar_tabs
     }
 
     pub fn sidebar_providers(&self) -> &[(ContributionId, crate::SidebarProvider)] {
@@ -741,5 +813,74 @@ mod tests {
                 "missing {expected:?} in {messages:#?}"
             );
         }
+    }
+
+    #[test]
+    fn bar_placement_defaults_and_overrides_are_independent() {
+        let registry = build(vec![Fixture {
+            id: "com.example.layout",
+            register: |registrar| {
+                registrar
+                    .place_bar_item(BuiltinBarItem::Terminal, BarItemLocation::StatusBarEnd)
+                    .place_bar_item(
+                        BuiltinBarItem::DetailsToggle,
+                        BarItemLocation::ActionBarStart,
+                    );
+            },
+        }])
+        .unwrap();
+        assert_eq!(
+            Registry::default().bar_item_location(BuiltinBarItem::Terminal),
+            BarItemLocation::ActionBarEnd
+        );
+        assert_eq!(
+            registry.bar_item_location(BuiltinBarItem::Terminal),
+            BarItemLocation::StatusBarEnd
+        );
+        assert_eq!(
+            registry.bar_item_location(BuiltinBarItem::DetailsToggle),
+            BarItemLocation::ActionBarStart
+        );
+        assert_eq!(
+            registry.bar_item_location(BuiltinBarItem::Stash),
+            BarItemLocation::ActionBarEnd
+        );
+        assert_eq!(registry.bar_item_locations().len(), 2);
+    }
+
+    #[test]
+    fn bar_placement_conflicts_are_rejected_with_the_declaring_extension() {
+        let errors = build(vec![
+            Fixture {
+                id: "com.example.a",
+                register: |registrar| {
+                    registrar
+                        .place_bar_item(BuiltinBarItem::Terminal, BarItemLocation::StatusBarEnd)
+                        .place_bar_item(BuiltinBarItem::Terminal, BarItemLocation::StatusBarStart);
+                },
+            },
+            Fixture {
+                id: "com.example.b",
+                register: |registrar| {
+                    registrar
+                        .place_bar_item(BuiltinBarItem::Terminal, BarItemLocation::ActionBarEnd);
+                },
+            },
+        ])
+        .err()
+        .expect("conflicting placements");
+        assert_eq!(
+            errors,
+            [
+                RegistrationError {
+                    extension: "com.example.a".into(),
+                    message: "bar item Terminal is placed twice".into(),
+                },
+                RegistrationError {
+                    extension: "com.example.b".into(),
+                    message: "bar item Terminal is placed twice".into(),
+                },
+            ]
+        );
     }
 }

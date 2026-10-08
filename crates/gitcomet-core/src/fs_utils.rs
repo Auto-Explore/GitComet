@@ -366,4 +366,57 @@ mod tests {
         drop(file);
         assert_eq!(std::fs::read(path).unwrap(), b"first second");
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn private_replacement_retries_until_a_reader_releases_the_destination() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let path = root.path().join("session.json");
+        write_private_file(&path, b"old").expect("initial contents");
+        // Allow reads and writes but deny deletion, as a scanner can do.
+        let reader = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1 | 2)
+            .open(&path)
+            .expect("open reader that prevents replacement");
+        let mut temporary = tempfile::NamedTempFile::new_in(root.path()).unwrap();
+        temporary.write_all(b"new").unwrap();
+        let blocked = temporary
+            .persist(&path)
+            .expect_err("reader blocks replacement");
+        assert!(matches!(blocked.error.raw_os_error(), Some(5 | 32 | 33)));
+        assert_eq!(std::fs::read(&path).unwrap(), b"old");
+
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                drop(reader);
+            });
+            super::persist_with_windows_retry(blocked.file, |temporary| temporary.persist(&path))
+                .expect("retry replacement");
+        });
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn private_replacement_reports_a_persistent_lock_and_cleans_up() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let path = root.path().join("session.json");
+        write_private_file(&path, b"old").expect("initial contents");
+        let _reader = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1 | 2)
+            .open(&path)
+            .expect("open reader that prevents replacement");
+        let error = write_private_file(&path, b"new").expect_err("lock remains held");
+        assert!(matches!(error.raw_os_error(), Some(5 | 32 | 33)));
+        assert_eq!(std::fs::read(&path).unwrap(), b"old");
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    }
 }

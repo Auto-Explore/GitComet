@@ -14,6 +14,21 @@ pub enum SplitButtonStyle {
     Borderless,
 }
 
+/// The neutral frame shared by Commit and single primary actions.
+pub fn filled_action_frame(theme: AppTheme, scale: UiScale) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .h(control_height(scale))
+        .rounded(px(theme.radii.control))
+        .bg(gpui::rgba(0x00000000))
+        .border_1()
+        .border_color(with_alpha(
+            theme.colors.foreground.secondary,
+            if theme.is_dark { 0.34 } else { 0.26 },
+        ))
+}
+
 pub struct SplitButton {
     left: AnyElement,
     right: AnyElement,
@@ -136,7 +151,7 @@ impl SplitButton {
         } else {
             // Frame at rest only, for the same reason: the halves own hover, and
             // the hovered one's border sits directly inside this one.
-            outer.border_1().border_color(border_color).child(inner)
+            filled_action_frame(theme, ui_scale).child(inner)
         }
     }
 }

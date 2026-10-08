@@ -5,6 +5,7 @@ use super::*;
 pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     crate::window_focus::observe_tab_navigation(cx).detach();
     install_global_diff_shortcut_fallback(cx);
+    install_global_diff_navigation_actions(cx);
 
     let new_window_backend = Arc::clone(&backend);
     cx.on_action(move |_: &NewWindow, cx| {
@@ -159,6 +160,48 @@ fn step_window_ui_scale(cx: &mut App, step: fn(u32) -> u32) {
     });
 }
 
+/// Navigation also reaches a visible diff when focus is outside the
+/// window's view tree. A window handler stops propagation when it acts.
+pub(super) fn install_global_diff_navigation_actions(cx: &mut App) {
+    cx.on_action(|_: &DiffPrevFile, cx| {
+        defer_global_diff_navigation(cx, |view, cx| {
+            view.defer_adjacent_diff_file_navigation(-1, cx);
+        });
+    });
+    cx.on_action(|_: &DiffNextFile, cx| {
+        defer_global_diff_navigation(cx, |view, cx| {
+            view.defer_adjacent_diff_file_navigation(1, cx);
+        });
+    });
+    cx.on_action(|_: &DiffPrevChange, cx| {
+        defer_global_diff_navigation(cx, |view, cx| {
+            view.defer_diff_change_navigation(true, cx);
+        });
+    });
+    cx.on_action(|_: &DiffNextChange, cx| {
+        defer_global_diff_navigation(cx, |view, cx| {
+            view.defer_diff_change_navigation(false, cx);
+        });
+    });
+}
+
+fn defer_global_diff_navigation(
+    cx: &mut App,
+    navigate: impl FnOnce(&mut GitCometView, &mut gpui::Context<GitCometView>) + 'static,
+) {
+    // Capture the dispatching window before deferring. A keystroke belongs
+    // to that window even if native activation has not caught up yet.
+    let window_id = cx
+        .current_window_id()
+        .or_else(|| cx.active_window().map(|window| window.window_id()));
+    let Some(window) = window_id.and_then(|id| normal_gitcomet_window_by_id(cx, id)) else {
+        return;
+    };
+    cx.defer(move |cx| {
+        let _ = window.view.update(cx, navigate);
+    });
+}
+
 pub(super) fn install_global_diff_shortcut_fallback(cx: &mut App) {
     cx.observe_keystrokes(|event, window, cx| {
         // Observers also run after a bound action handled the keystroke (gpui
@@ -240,6 +283,10 @@ pub(super) fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary-q", Quit, None),
         KeyBinding::new("f1", DiffPrevFile, None),
         KeyBinding::new("f4", DiffNextFile, None),
+        KeyBinding::new("alt-left", DiffPrevFile, None),
+        KeyBinding::new("alt-right", DiffNextFile, None),
+        KeyBinding::new("alt-up", DiffPrevChange, None),
+        KeyBinding::new("alt-down", DiffNextChange, None),
         KeyBinding::new("f2", DiffPrevSearchMatchOrChange, None),
         KeyBinding::new("f3", DiffNextSearchMatchOrChange, None),
         #[cfg(target_os = "macos")]

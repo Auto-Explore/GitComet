@@ -123,7 +123,7 @@ fn without_extensions_the_host_adds_nothing(cx: &mut gpui::TestAppContext) {
         cx.run_until_parked();
         test_support::redraw(cx);
         assert!(
-            cx.debug_bounds("repository_view_strip").is_none(),
+            cx.debug_bounds("repository_view_tabs").is_none(),
             "{mode:?}"
         );
         cx.update(|_window, app| {
@@ -364,8 +364,8 @@ fn saved_workspace_state_is_restored_when_a_window_opens(cx: &mut gpui::TestAppC
     cx.update(|app| assert_eq!(review::reviews(app).read(app).count(window_id, &repo), 3));
 }
 
-/// Both strips show an icon on every tab: the built-in one's own and each
-/// contribution's.
+/// The action bar's view tabs and the details strip show an icon on every
+/// tab: the built-in one's own and each contribution's.
 #[gpui::test]
 fn view_and_details_tabs_show_their_icons(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
@@ -449,7 +449,7 @@ fn repository_views_switch_with_history_and_are_kept(cx: &mut gpui::TestAppConte
         });
     });
     test_support::redraw(cx);
-    assert!(cx.debug_bounds("repository_view_strip").is_some());
+    assert!(cx.debug_bounds("repository_view_tabs").is_some());
     assert!(cx.debug_bounds("example_review_view").is_none());
 
     click_debug_selector(cx, "repository_view_0");

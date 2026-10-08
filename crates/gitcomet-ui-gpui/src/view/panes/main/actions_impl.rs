@@ -366,9 +366,7 @@ impl MainPaneView {
     }
 
     fn has_active_diff_target(&self) -> bool {
-        self.active_repo()
-            .and_then(|repo| self.bound_diff_state(repo).diff_target.as_ref())
-            .is_some()
+        self.rendered_diff_target().is_some()
     }
 
     fn navigate_diff_change(&mut self, previous: bool, cx: &mut gpui::Context<Self>) -> bool {
@@ -513,8 +511,12 @@ impl MainPaneView {
         // clamps to the top when the first block is near it, keeping a
         // collapsed hunk's header in view.
         self.scroll_diff_to_item_strict(target, gpui::ScrollStrategy::Center);
-        self.diff_selection_anchor = Some(target);
-        self.diff_selection_range = None;
+        // A hosted pane reports its selection to the extension that made
+        // it; opening at a change is not selecting it.
+        if self.hosted_decor.is_none() {
+            self.diff_selection_anchor = Some(target);
+            self.diff_selection_range = None;
+        }
         if entries.is_empty() {
             self.diff_focused_change_block = None;
         } else {

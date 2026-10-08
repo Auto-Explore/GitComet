@@ -721,8 +721,11 @@ def main():
     elif args.phase == "doc":
         # The app contains only binaries, so it has no doctest targets.
         if args.context != "app":
+            # Cargo adds native library paths to rustdoc's Windows PATH, which
+            # can exceed CMD's limit. Resolve LLD before entering that environment.
             run(f"{args.context}-doctests", ["cargo", "test", *CONTEXTS[args.context],
-                "--doc", "--locked", "--profile", args.cargo_profile, "--no-fail-fast"])
+                "--doc", "--locked", "--profile", args.cargo_profile, "--no-fail-fast"],
+                env=windows_linker_environment())
     elif args.phase == "display":
         for name, values in DISPLAY_PROFILES.items():
             env = dict(zip(["DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP"], values))
