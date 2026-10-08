@@ -170,6 +170,12 @@ These shortcuts apply in the main diff panel, including conflict resolution view
 | Align selected lines manually | `Cmd-Y` | `Ctrl-Y` | Conflict resolver only (kdiff3 manual diff help). |
 | Clear all manual alignments | `Cmd-Shift-Y` | `Ctrl-Shift-Y` | Conflict resolver only. |
 
+In a focused status section, `Space` also stages or unstages its single selected
+file and advances when that file is shown in the diff. Keyboard focus stays in
+the list, so another `Space` acts on the next file and `Ctrl-A` / `Cmd-A` still
+selects the section's files. At the end of the section, advancement selects the
+previous file; when the section is empty, it clears the diff.
+
 Preview-mode note:
 - Rendered markdown preview hides the raw diff navigation controls and ignores the raw-diff-only view toggles, whitespace toggle, and conflict navigation hotkeys until you return to source mode.
 - The diff navigation keys above still work while a GitComet text input has focus, but search activation, `Escape`, view toggles, and staging `Space` remain tied to the active diff surface rather than text inputs.

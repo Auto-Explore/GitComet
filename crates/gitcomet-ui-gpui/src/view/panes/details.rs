@@ -2859,6 +2859,46 @@ impl DetailsPaneView {
         &self.status_section_focus_handles[Self::status_section_alignment_key(section) as usize]
     }
 
+    /// The shared action reads and clears our selection, so release the details
+    /// pane before calling it. Keep section focus for the next Space or Ctrl+A.
+    pub(in crate::view) fn defer_status_stage_and_advance(
+        &self,
+        repo_id: RepoId,
+        section: StatusSection,
+        target: DiffTarget,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let details_pane = cx.weak_entity();
+        let main_pane = self.main_pane.clone();
+        let window_handle = window.window_handle();
+        cx.defer(move |cx| {
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let still_selected = details_pane
+                    .read_with(cx, |pane, _cx| {
+                        pane.status_section_focus_handle(section).is_focused(window)
+                            && pane
+                                .status_section_stage_and_advance_target(repo_id, section)
+                                .as_ref()
+                                == Some(&target)
+                    })
+                    .unwrap_or(false);
+                if !still_selected {
+                    return;
+                }
+                let _ = main_pane.update(cx, |pane, cx| {
+                    if pane.active_repo().is_some_and(|repo| {
+                        repo.id == repo_id && repo.diff_state.diff_target.as_ref() == Some(&target)
+                    }) && pane.toggle_stage_shown_file(window, cx)
+                    {
+                        cx.notify();
+                        window.refresh();
+                    }
+                });
+            });
+        });
+    }
+
     pub(in crate::view) fn focus_status_section(
         &self,
         section: StatusSection,
