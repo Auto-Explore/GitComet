@@ -31,7 +31,7 @@ on:
       nextest-profile:
         description: Workspace nextest concurrency policy
         type: choice
-        options: [ci, ci-git-limited]
+        options: [ci, ci-git-limited, ci-watch-limited-4, ci-watch-limited-8]
         default: ci
       ui-threads:
         description: Workspace UI libtest concurrency (serial schedule only)

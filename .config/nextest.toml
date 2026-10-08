@@ -34,6 +34,27 @@ success-output = "immediate"
 [test-groups.git-heavy]
 max-threads = 4
 
+# Measurement candidates; the ordinary CI profile remains unchanged.
+[test-groups.native-watch-4]
+max-threads = 4
+
+[test-groups.native-watch-8]
+max-threads = 8
+
+[profile.ci-watch-limited-4]
+inherits = "ci"
+
+[[profile.ci-watch-limited-4.overrides]]
+filter = 'package(=gitcomet-fs-watch) | (package(=gitcomet-state) & (test(native_sync_) | test(native_barrier_) | test(::selective::) | test(::worktree_redirect::)))'
+test-group = 'native-watch-4'
+
+[profile.ci-watch-limited-8]
+inherits = "ci"
+
+[[profile.ci-watch-limited-8.overrides]]
+filter = 'package(=gitcomet-fs-watch) | (package(=gitcomet-state) & (test(native_sync_) | test(native_barrier_) | test(::selective::) | test(::worktree_redirect::)))'
+test-group = 'native-watch-8'
+
 [profile.ci-git-limited]
 inherits = "ci"
 
