@@ -725,6 +725,7 @@ def available_cpus():
         try:
             counts.append(len(os.sched_getaffinity(0)))
         except OSError:
+            # Best-effort probe: if affinity is unavailable, keep other CPU estimates.
             pass
     if sys.platform == "linux":
         # Read the unified hierarchy, including parent limits when visible.
