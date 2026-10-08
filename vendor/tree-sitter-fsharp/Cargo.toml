@@ -1,42 +1,30 @@
-# Vendored from https://github.com/ionide/tree-sitter-fsharp at 0d3ccbb
-# (MIT -- see LICENSE), to regenerate `src/parser.c` with a larger small-state
-# threshold.
+# Vendored from https://github.com/ionide/tree-sitter-fsharp at
+# aefd0c8741bdf3aeb827a228aa4a996a6536697e (MIT -- see LICENSE).
 #
-# Past the 0.3.11 release for two fixes in valid F#, both of which used to
-# produce no ERROR and the wrong tree: `static member val Count = 0 with get,
-# set` fell through to the generic member rule with `val` as the method name and
-# swallowed the declaration after it into an application expression, and
-# `new (args) as this = ...` parsed only by accident, as an application of the
-# identifiers `as` and `this`. The same commit reserves `as`, `namespace`,
-# `open` and `type`, which makes F# that FSC rejects report an error here too.
+# Updated in the 2026-10-08 upstream sweep to 0.3.12: let-in after an if,
+# match or lambda, multiline quotations, inline values, unnamed/by-ref extern
+# parameters, generic properties, named delegate parameters and member operators.
+# The previous static-member-val and constructor-as fixes remain included.
+# Upstream highlights and locals queries move with the grammar.
 #
-# Both parsers match upstream's own counts (fsharp 22357/538,
-# fsharp_signature 15412/412).
+# Generated with tree-sitter-cli 0.27.0, ABI 15, TS_SMALL_STATE_THRESHOLD=128.
+# Both parsers reproduce upstream's automata exactly: STATE_COUNT/SYMBOL_COUNT
+# 21942/539 (fsharp) and 15693/413 (signature). grammar.json and node-types.json
+# are byte-identical; only LARGE_STATE_COUNT changes (8771 -> 2264 and 530 -> 2).
+# Regenerate from each grammar's src/grammar.json with the patched CLI described
+# in vendor/README.md. Shared headers come from vendor/tree-sitter-headers.
 #
-# `tree-sitter generate` decides per parse state whether to emit a dense row in
-# `ts_parse_table` (SYMBOL_COUNT * 2 bytes, O(1) lookup) or a compact entry in
-# `ts_small_parse_table` (scanned), using
-# `threshold = min(64, symbol_count / 2)`. That 64 is only the break-even for a
-# grammar with <= 128 symbols; every large grammar has far more, so thousands of
-# states get a dense row costing several times the compact form. Regenerating
-# with `TS_SMALL_STATE_THRESHOLD=128` saves 5.20 MiB here.
+# Across the F# compiler/core corpus and fixtures, no previously clean source or
+# signature file starts failing; three previously failing signatures become
+# clean. Recovery changes in already failing signatures are recorded in the
+# sweep report in vendor/README.md. GitComet uses the main grammar for .fsi too;
+# signature-specific upstream queries are not the main grammar's queries.
 #
-# It is a representation change only -- the automaton, and so every parse tree, is
-# byte-identical. `vendor/README.md` has the procedure and the proof.
-#
-# Generated with tree-sitter-cli 0.26.13 at ABI 15, the ABI upstream ships,
-# and the `tree_sitter/` headers come from vendor/tree-sitter-headers -- see the
-# README there.
-#
-# `queries/` *is* vendored here, unlike most of vendor/: GitComet reads this
-# grammar's upstream query consts rather than authoring its own, so dropping the
-# directory would compile them out (`vendor/tree-sitter-build` sets the
-# `with_*_query` cfgs from the files that are present) and the language would go
-# uncoloured.
+# queries/ is vendored because GitComet uses the upstream query constants.
 [package]
 name = "tree-sitter-fsharp"
 description = "fsharp grammar for the tree-sitter parsing library"
-version = "0.3.11"
+version = "0.3.12"
 repository = "https://github.com/ionide/tree-sitter-fsharp"
 edition = "2021"
 license = "MIT"

@@ -1,32 +1,28 @@
-# Vendored from the `tree-sitter-ocaml 0.25.0` crates.io release
-# (https://github.com/tree-sitter/tree-sitter-ocaml, MIT -- see LICENSE), to
-# regenerate `src/parser.c` with a larger small-state threshold.
+# Vendored from https://github.com/tree-sitter/tree-sitter-ocaml at
+# 3b2e14e0697d405c9aa0beddfa09b71f45abc504 (0.26.0, MIT -- see LICENSE).
 #
-# `tree-sitter generate` decides per parse state whether to emit a dense row in
-# `ts_parse_table` (SYMBOL_COUNT * 2 bytes, O(1) lookup) or a compact entry in
-# `ts_small_parse_table` (scanned), using
-# `threshold = min(64, symbol_count / 2)`. That 64 is only the break-even for a
-# grammar with <= 128 symbols; every large grammar has far more, so thousands of
-# states get a dense row costing several times the compact form. Regenerating
-# with `TS_SMALL_STATE_THRESHOLD=128` saves 1.72 MiB here (0.97 + 0.75 across its two linked parsers).
+# Updated in the 2026-10-08 upstream sweep: nested comments use an iterative
+# scanner rather than recursive calls that can overflow the stack; OxCaml modes
+# and the intervening grammar/fuzzer fixes are included. Unlike the previous
+# sweep's candidate, this revision introduces no additional parse errors in the
+# checked OCaml compiler/stdlib sources and project fixtures (481 .ml/.mli files).
 #
-# It is a representation change only -- the automaton, and so every parse tree, is
-# byte-identical. `vendor/README.md` has the procedure and the proof.
+# Upstream removed the implementation-only shebang node from its highlights
+# query, so that query now compiles against both .ml and .mli. GitComet uses
+# HIGHLIGHTS_QUERY directly; its old duplicate query is no longer needed.
 #
-# Generated with tree-sitter-cli 0.26.13 at ABI 15, the ABI upstream ships,
-# and the `tree_sitter/` headers come from vendor/tree-sitter-headers -- see the
-# README there.
+# Generated with tree-sitter-cli 0.27.0, ABI 15, TS_SMALL_STATE_THRESHOLD=128.
+# STATE_COUNT/SYMBOL_COUNT match upstream for all three parsers: 13556/537
+# (ocaml), 12097/536 (interface), 11973/536 (type). grammar.json and node-types.json
+# are byte-identical. Only LARGE_STATE_COUNT changes: 3273 -> 132, 2690 -> 102,
+# 2587 -> 100. Regenerate each grammar from its src/grammar.json using the patched
+# CLI in vendor/README.md. Shared headers come from vendor/tree-sitter-headers.
 #
-# `queries/` *is* vendored here, unlike most of vendor/, but not for the reason
-# the other query-carrying crates give: what the app ships is GitComet's own
-# `queries/ocaml_highlights.scm` (upstream's, minus `(shebang)`). Only a test
-# reads `tree_sitter_ocaml::HIGHLIGHTS_QUERY`, and dropping the directory would
-# compile that const out (`vendor/tree-sitter-build` sets the `with_*_query`
-# cfgs from the files that are present) and stop the crate building.
+# queries/ is vendored because GitComet uses the upstream query constants.
 [package]
 name = "tree-sitter-ocaml"
 description = "OCaml grammar for tree-sitter"
-version = "0.25.0"
+version = "0.26.0"
 repository = "https://github.com/tree-sitter/tree-sitter-ocaml"
 edition = "2021"
 license = "MIT"

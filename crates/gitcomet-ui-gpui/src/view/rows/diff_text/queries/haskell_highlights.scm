@@ -1,6 +1,6 @@
 ; Haskell.
 ;
-; Vendored from tree-sitter-haskell 0.23.1's queries/highlights.scm (Apache-2.0)
+; Vendored from tree-sitter-haskell 0.24.1's queries/highlights.scm (Apache-2.0)
 ; rather than used through `tree_sitter_haskell::HIGHLIGHTS_QUERY`, for one line.
 ;
 ; Under the "Types" heading upstream writes an *unscoped* `(variable) @type`.
@@ -86,6 +86,7 @@
   "then"
   "else"
   "case"
+  "cases"
   "of"
 ] @keyword.conditional
 
@@ -149,11 +150,12 @@
 
 ; ----------------------------------------------------------------------------
 ; Functions and variables
-(decl
-  [
-   name: (variable) @function
-   names: (binding_list (variable) @function)
-  ])
+[
+  (decl/function name: (variable) @function)
+  (decl/bind name: (variable) @function)
+  (decl/signature name: (variable) @function)
+  (decl/signature names: (binding_list (variable) @function))
+]
 
 (decl/bind
   name: (variable) @variable)
@@ -168,8 +170,10 @@
   name: (variable) @_name
   type: (type))
   .
-  (decl
-    name: (variable) @variable)
+  [
+    (decl/function name: (variable) @variable)
+    (decl/bind name: (variable) @variable)
+  ]
     match: (_)
   (#eq? @_name @variable))
 
@@ -186,8 +190,10 @@
     constructor: (name) @_type)
   (#eq? @_type "IO"))
   .
-  (decl
-    name: (variable) @function)
+  [
+    (decl/function name: (variable) @function)
+    (decl/bind name: (variable) @function)
+  ]
     match: (_)
   (#eq? @_name @function))
 
