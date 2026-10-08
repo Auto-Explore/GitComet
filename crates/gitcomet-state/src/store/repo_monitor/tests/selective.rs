@@ -594,6 +594,7 @@ struct RunningMonitor {
     native_events: Arc<AtomicU64>,
     observations: Arc<NativeObservations>,
     callbacks_redirected: bool,
+    enabled: Arc<AtomicBool>,
 }
 impl RunningMonitor {
     fn revalidate(&self) {
@@ -635,6 +636,11 @@ impl RunningMonitor {
         let thread_tx = callback_tx.unwrap_or_else(|| tx.clone());
         let native_events = Arc::new(AtomicU64::new(0));
         config.native_events = Some(native_events.clone());
+        let enabled = Arc::new(AtomicBool::new(true));
+        let thread_enabled = Arc::clone(&enabled);
+        let progress = Arc::new(std::sync::Mutex::new(StartupProgress::default()));
+        config.startup_progress = Some(Arc::clone(&progress));
+        let started = Instant::now();
         let thread = std::thread::spawn(move || {
             repo_monitor_thread(
                 RepoId(1),
@@ -643,22 +649,48 @@ impl RunningMonitor {
                 rx,
                 thread_tx,
                 Arc::new(AtomicU64::new(1)),
-                Arc::new(AtomicBool::new(true)),
+                thread_enabled,
                 backend,
                 config,
             )
         });
-        let (ready_tx, ready_rx) = mpsc::channel();
-        tx.send(MonitorMsg::Barrier(ready_tx)).unwrap();
-        ready_rx.recv_timeout(Duration::from_secs(10)).unwrap();
-        Self {
+        // Own cancellation and joining before any readiness operation can panic.
+        let monitor = Self {
             tx,
             rx: store_rx,
             thread: Some(thread),
             native_events,
             observations,
             callbacks_redirected,
+            enabled,
+        };
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let ready = monitor
+            .tx
+            .send(MonitorMsg::Barrier(ready_tx))
+            .map_err(|_| "worker disconnected".to_string())
+            .and_then(|_| {
+                ready_rx
+                    .recv_timeout(Duration::from_secs(10))
+                    .map_err(|e| e.to_string())
+            });
+        if let Err(error) = ready {
+            let progress = progress.lock().unwrap_or_else(|e| e.into_inner());
+            panic!(
+                "watcher readiness failed: {error}; elapsed={:?}; phase={}; attempt={}; directories={}; native_events={}; observations={:?}; worker_finished={}",
+                started.elapsed(),
+                progress.phase,
+                progress.attempt,
+                progress.directories,
+                monitor.native_events.load(Ordering::Relaxed),
+                monitor.observations,
+                monitor
+                    .thread
+                    .as_ref()
+                    .is_none_or(|thread| thread.is_finished())
+            );
         }
+        monitor
     }
     #[track_caller]
     fn refresh(&self) {
@@ -860,9 +892,16 @@ impl Drop for RunningMonitor {
     fn drop(&mut self) {
         let _timer =
             gitcomet_core::test_support::git_fixture::FixtureTimer::new("cleanup", "monitor-stop");
+        self.enabled.store(false, Ordering::Relaxed);
         let _ = self.tx.send(MonitorMsg::Stop);
         if let Some(thread) = self.thread.take() {
-            thread.join().unwrap();
+            if let Err(error) = thread.join() {
+                if std::thread::panicking() {
+                    eprintln!("monitor worker also panicked during cleanup: {error:?}");
+                } else {
+                    std::panic::resume_unwind(error);
+                }
+            }
         }
     }
 }

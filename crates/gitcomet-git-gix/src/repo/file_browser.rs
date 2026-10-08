@@ -306,12 +306,13 @@ mod tests {
 
     fn init_test_repo(workdir: &Path) {
         git_success(workdir, &["init"]);
-        for args in [
-            ["config", "user.name", "Test User"].as_slice(),
-            ["config", "user.email", "test@example.com"].as_slice(),
-        ] {
-            git_success(workdir, args);
-        }
+        gitcomet_core::test_support::git_fixture::append_config(
+            workdir,
+            &[
+                ("user.name", "Test User"),
+                ("user.email", "test@example.com"),
+            ],
+        );
     }
 
     fn write_file(workdir: &Path, relative: &str, contents: &str) {

@@ -19,6 +19,8 @@ mod repo_load_trace;
 mod repo_monitor;
 mod repository_preferences;
 mod send_diagnostics;
+#[cfg(any(test, feature = "test-support"))]
+mod test_support;
 mod worker_channel;
 
 use effects::RepoTaskToken;
@@ -87,6 +89,8 @@ fn is_control_command(command: &StoreWorkerCommand) -> bool {
         StoreWorkerCommand::InsertRepoForTest { .. } => true,
         #[cfg(any(test, feature = "test-support"))]
         StoreWorkerCommand::DisableRepoMonitorsForTest => true,
+        #[cfg(any(test, feature = "test-support"))]
+        StoreWorkerCommand::BarrierForTest(_) => false,
     }
 }
 
@@ -504,6 +508,22 @@ impl Clone for AppStore {
 }
 
 impl AppStore {
+    /// Acknowledge queued reductions and return their publication sequence.
+    /// Effects scheduled by those reductions can still finish afterwards.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn barrier_for_test(&self) -> mpsc::Receiver<u64> {
+        self.msg_tx.barrier_for_test()
+    }
+
+    /// Stop this store and acknowledge its worker, private pools, and effects.
+    /// This stops all clones of the store; shared pools remain available.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn shutdown_for_test(&self) -> mpsc::Receiver<()> {
+        let completion = self.msg_tx.test_tasks.completion();
+        self.msg_tx.shutdown();
+        completion
+    }
+
     pub fn reducer_diagnostics() -> StoreReducerDiagnostics {
         reducer_diagnostics::snapshot()
     }
@@ -558,8 +578,12 @@ impl AppStore {
         let thread_msg_tx = msg_tx.clone();
         let publication = Arc::new(AtomicU64::new(0));
         let thread_publication = Arc::clone(&publication);
+        #[cfg(any(test, feature = "test-support"))]
+        let worker_receipt = thread_msg_tx.test_tasks.task();
 
         let worker = thread::Builder::new().name("gitcomet-store".into()).spawn(move || {
+            #[cfg(any(test, feature = "test-support"))]
+            let _worker_receipt = worker_receipt;
             // General effects share process-wide workers. Repository loads
             // need a bounded pool per window: blocking opens and filesystem
             // scans in one window must not consume another window's capacity.
@@ -567,9 +591,11 @@ impl AppStore {
                 StoreExecutorPool::Primary,
                 default_worker_threads(),
             );
-            let repo_load_executor =
+            #[allow(unused_mut)]
+            let mut repo_load_executor =
                 TaskExecutor::named("gitcomet-repo-load", repo_load_worker_threads());
-            let worktree_scan_executor: std::sync::LazyLock<TaskExecutor> =
+            #[allow(unused_mut)]
+            let mut worktree_scan_executor: std::sync::LazyLock<TaskExecutor> =
                 std::sync::LazyLock::new(|| TaskExecutor::named(&WORKTREE_SCAN_THREAD_NAME, 1));
             let metadata_executor = TaskExecutor::shared_for_store(
                 StoreExecutorPool::Metadata,
@@ -580,7 +606,8 @@ impl AppStore {
             let session_persist_executor =
                 TaskExecutor::shared_for_store(StoreExecutorPool::SessionPersist, 1);
             // Find scans read all of history, so each window gets its own.
-            let history_find_executor: std::sync::LazyLock<TaskExecutor> =
+            #[allow(unused_mut)]
+            let mut history_find_executor: std::sync::LazyLock<TaskExecutor> =
                 std::sync::LazyLock::new(|| {
                     TaskExecutor::named(crate::history_find::HISTORY_FIND_THREAD, 1)
                 });
@@ -619,6 +646,11 @@ impl AppStore {
                     #[cfg(any(test, feature = "test-support"))]
                     StoreWorkerCommand::DisableRepoMonitorsForTest => {
                         repo_monitors.disable();
+                        continue;
+                    }
+                    #[cfg(any(test, feature = "test-support"))]
+                    StoreWorkerCommand::BarrierForTest(reply) => {
+                        let _ = reply.send(thread_publication.load(Ordering::Acquire));
                         continue;
                     }
                 };
@@ -877,6 +909,16 @@ impl AppStore {
                 repo.history_state.commit_signatures_cancellation.cancel();
             }
             repo_monitors.stop_all();
+            #[cfg(any(test, feature = "test-support"))]
+            {
+                repo_load_executor.join_workers();
+                if let Some(executor) = std::sync::LazyLock::get_mut(&mut worktree_scan_executor) {
+                    executor.join_workers();
+                }
+                if let Some(executor) = std::sync::LazyLock::get_mut(&mut history_find_executor) {
+                    executor.join_workers();
+                }
+            }
         });
         worker.expect("spawn store worker thread");
 
@@ -1224,3 +1266,6 @@ mod path_tests {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(feature = "benchmarks")]
+pub(crate) use repo_monitor::watcher_startup_for_bench;

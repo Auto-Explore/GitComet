@@ -289,11 +289,16 @@ fn markers_are_current_after_editing_reloading_and_reopening_the_diff(
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx))
         });
     });
-    for _ in 0..5 {
-        draw_and_drain_test_window(cx);
-    }
+    super::shortcuts::wait_until(cx, "the editor text", |cx| {
+        cx.update(|_, app| {
+            let pane = view.read(app).main_pane.read(app);
+            !pane.file_editor_loading
+                && pane.file_editor_input.read(app).text() == lines(&[(35, "changed near the end")])
+        })
+    });
 
     // Another program fills the blank line 6; Reload.
+    let before_refresh = store.snapshot().repos[0].worktree_change_rev;
     std::fs::write(
         root.join("a.rs"),
         lines(&[(5, "asdads;"), (35, "changed near the end")]),
@@ -303,20 +308,34 @@ fn markers_are_current_after_editing_reloading_and_reopening_the_diff(
         repo_id,
         change: gitcomet_state::msg::RepoExternalChange::worktree(),
     });
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    crate::view::test_support::drain_store_worker(&view, cx);
     let snapshot = wait_store(&store, "the refresh", |state| {
-        !state.repos[0].diff_state.diff_reload_in_flight
+        state.repos[0].worktree_change_rev != before_refresh
     });
     show(cx, &view, snapshot);
+    super::shortcuts::wait_until(cx, "the changed-file notice", |cx| {
+        cx.update(|_, app| {
+            view.read(app)
+                .main_pane
+                .read(app)
+                .file_disk_notice
+                .is_some()
+        })
+    });
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.main_pane
                 .update(cx, |pane, cx| pane.reload_file_from_disk_notice(cx))
         });
     });
-    for _ in 0..5 {
-        draw_and_drain_test_window(cx);
-    }
+    super::shortcuts::wait_until(cx, "the reloaded editor text", |cx| {
+        cx.update(|_, app| {
+            let pane = view.read(app).main_pane.read(app);
+            !pane.file_editor_loading
+                && pane.file_editor_input.read(app).text()
+                    == lines(&[(5, "asdads;"), (35, "changed near the end")])
+        })
+    });
 
     // Close the diff, then open the file's diff again.
     store.dispatch(Msg::ExitDiffEditMode { repo_id });

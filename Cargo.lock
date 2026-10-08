@@ -2415,6 +2415,7 @@ dependencies = [
  "flate2",
  "fnv",
  "gitcomet-core",
+ "gitcomet-win32-window-utils",
  "gix",
  "itertools 0.15.0",
  "lru",

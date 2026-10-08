@@ -128,6 +128,8 @@ impl TaskExecutor {
         task: impl FnOnce() + Send + 'static,
     ) -> bool {
         let context = mergetool_trace::current_capture_context();
+        #[cfg(any(test, feature = "test-support"))]
+        let task = super::test_support::track_task(task);
         // Traced at request time: a replacement also replaces the operation
         // the running task is attributed to.
         let task = op_trace::wrap_task(self.name, task);
@@ -232,14 +234,19 @@ impl TaskExecutor {
     /// Closes the queue and waits for the workers, so a test process never
     /// exits with store workers still running.
     #[cfg(test)]
-    pub(super) fn join(self) {
-        let Self {
-            tx,
-            _threads: threads,
-            ..
-        } = self;
-        drop(tx);
-        for thread in threads {
+    pub(super) fn join(mut self) {
+        self.join_workers();
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn join_workers(&mut self) {
+        // Only private pools own handles. Never close a shared pool's sender.
+        if self._threads.is_empty() {
+            return;
+        }
+        let (disconnected, _) = mpsc::channel();
+        drop(std::mem::replace(&mut self.tx, disconnected));
+        for thread in self._threads.drain(..) {
             thread.join().expect("store executor worker panicked");
         }
     }
@@ -254,6 +261,8 @@ impl TaskExecutor {
     }
 
     fn try_spawn_untraced(&self, task: impl FnOnce() + Send + 'static) -> bool {
+        #[cfg(any(test, feature = "test-support"))]
+        let task = super::test_support::track_task(task);
         let mergetool_trace_context = mergetool_trace::current_capture_context();
         send_or_log(
             &self.tx,

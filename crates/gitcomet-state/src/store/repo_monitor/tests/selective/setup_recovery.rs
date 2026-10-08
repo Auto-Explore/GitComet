@@ -346,3 +346,68 @@ fn ignore_replacement_refreshes_all_state() {
 fn degraded_recovery_refreshes_all_state() {
     replacement_reconciles_all_state(false, true);
 }
+
+#[test]
+fn cancellation_during_registration_releases_setup_without_readiness_or_warning() {
+    let (_temp, root) = repository();
+    let enabled = Arc::new(AtomicBool::new(true));
+    let cancel = Arc::clone(&enabled);
+    let mut config = MonitorConfig::default();
+    config.before_registration = Some(Box::new(move || cancel.store(false, Ordering::Relaxed)));
+    let (tx, _rx) = mpsc::channel();
+    let mut state = MonitorState::default();
+    assert!(matches!(
+        state.setup(
+            &root,
+            &gitcomet_git_gix::GixBackend,
+            RepoId(1),
+            &tx,
+            &enabled,
+            &mut config,
+            true
+        ),
+        WatchSetup::Cancelled
+    ));
+    assert!(state.plan.dirs.is_empty());
+}
+
+#[test]
+fn readiness_failure_joins_a_panicked_worker_without_a_second_panic() {
+    let (_temp, root) = repository();
+    let mut config = MonitorConfig::default();
+    config.before_registration = Some(Box::new(|| panic!("controlled registration failure")));
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        RunningMonitor::start_custom(&root, Arc::new(gitcomet_git_gix::GixBackend), config);
+    }))
+    .expect_err("registration failure must be reported");
+    let message = failure
+        .downcast_ref::<String>()
+        .expect("readiness diagnostics");
+    assert!(message.contains("watcher readiness failed"));
+    assert!(message.contains("phase="));
+    assert!(message.contains("worker_finished="));
+}
+
+#[test]
+fn traversal_cancellation_stops_before_enumerating_children() {
+    let (_temp, root) = repository();
+    fs::create_dir_all(root.join("child/grandchild")).unwrap();
+    let enabled = std::cell::Cell::new(true);
+    let mut state = load_gitignore_rules(&root);
+    let snapshot = state.state.snapshot();
+    let complete = state.state.plan.walk_while(
+        [root.clone()],
+        true,
+        &snapshot,
+        &mut state.state.rules,
+        &mut state.state.inputs,
+        usize::MAX,
+        |_| {
+            enabled.set(false);
+            Ok(())
+        },
+        || enabled.get(),
+    );
+    assert!(!complete);
+    assert_eq!(state.state.plan.dirs.len(), 1);
+}

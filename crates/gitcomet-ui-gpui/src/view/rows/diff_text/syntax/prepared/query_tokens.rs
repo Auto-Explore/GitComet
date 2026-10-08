@@ -60,6 +60,8 @@ pub(crate) fn treesitter_document_cache_key(
     TS_DOCUMENT_HASH_COUNT.with(|count| count.set(count.get().saturating_add(1)));
 
     PreparedSyntaxCacheKey {
+        #[cfg(test)]
+        test_scope: syntax_test_scope(),
         language,
         doc_hash: treesitter_document_hash(language, input),
     }

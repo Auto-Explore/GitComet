@@ -126,7 +126,16 @@ impl MainPaneView {
         &mut self,
         budget: rows::DiffSyntaxBudget,
     ) {
+        self.live_syntax_unbounded_for_tests = false;
         self.diff_syntax_budget_override = Some(budget);
+    }
+
+    pub(in crate::view) fn live_syntax_foreground_budget(&self) -> Option<std::time::Duration> {
+        #[cfg(test)]
+        if self.live_syntax_unbounded_for_tests {
+            return None;
+        }
+        Some(self.full_document_syntax_budget().foreground_parse)
     }
 
     /// Turns the eager source-backed prepare off so a test can drive the

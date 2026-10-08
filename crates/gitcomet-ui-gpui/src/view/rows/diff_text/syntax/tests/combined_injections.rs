@@ -981,8 +981,17 @@ fn nested_script_clicks_build_trees_without_tokenizing_and_later_paint_reuses_th
     ensure_injection_chain_cached_for_click_lookup(&state, offset, Some(layers), Instant::now());
     assert!(TS_INJECTION_CACHE.with(|cache| cache.borrow().is_empty()));
 
+    // Exercise cold tree construction with a correctness-test budget. The
+    // production click budget is tested separately; scheduler delays under
+    // parallel test load must not turn this cache-reuse assertion into a timer.
+    ensure_injection_chain_cached_for_click_lookup(
+        &state,
+        offset,
+        Some(layers),
+        Instant::now() + Duration::from_secs(5),
+    );
     let pair = prepared_document_syntax_pair_at_display_offset(tab_width, document, 0, offset)
-        .expect("cold script tree should answer a bracket click");
+        .expect("cached script tree should answer a bracket click");
     assert_eq!(pair.kind, SyntaxPairKind::Bracket);
     let key = TS_INJECTION_CACHE.with(|cache| {
         let cache = cache.borrow();

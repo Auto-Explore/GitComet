@@ -203,6 +203,10 @@ def transfer(root, seed, operation, live, shape="smoke", latency_ms=0, bandwidth
             else:
                 observed = git(repo, env, "rev-parse", "HEAD").decode().strip()
             assert observed == expected, f"incorrect resulting ref: {observed} != {expected}"
+            with server.lock:
+                requests = list(server.records)
+            assert requests, "no HTTP requests witnessed"
+            assert all(r["success"] for r in requests), f"failed Git HTTP transfer: {requests}"
             if changed:
                 if operation.startswith(("fetch", "push")):
                     payload_repo = remote if operation.startswith("push") else repo

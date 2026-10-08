@@ -499,6 +499,12 @@ impl MainPaneView {
             prepared_syntax_documents: FxHashMap::default(),
             #[cfg(test)]
             diff_syntax_budget_override: None,
+            #[cfg(test)]
+            live_syntax_unbounded_for_tests: false,
+            #[cfg(test)]
+            live_syntax_background_gate_for_tests: None,
+            #[cfg(test)]
+            live_syntax_background_jobs_started: 0,
             diff_markdown: DiffMarkdownPreview::default(),
             markdown_interaction: MarkdownPreviewInteraction::default(),
             worktree_markdown: WorktreeMarkdownPreview::default(),
@@ -573,6 +579,7 @@ impl MainPaneView {
             file_editor_live_syntax_building: None,
             file_editor_live_syntax_build: None,
             file_editor_live_syntax_reparse: None,
+            file_editor_live_syntax_reparsing: None,
             file_editor_syntax_pair: None,
             file_editor_occurrences: Vec::new(),
             file_editor_occurrences_version: None,
@@ -629,6 +636,7 @@ impl MainPaneView {
             conflict_resolved_preview_line_starts: Arc::default(),
             conflict_resolved_output_live_syntax: None,
             conflict_resolved_output_live_syntax_reparse: None,
+            conflict_resolved_output_live_syntax_reparsing: None,
             conflict_resolved_output_live_syntax_source: None,
             conflict_resolved_output_provider_theme_epoch: 1,
             conflict_resolved_output_highlighted_conflict: None,

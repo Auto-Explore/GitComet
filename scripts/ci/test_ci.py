@@ -596,6 +596,122 @@ class CacheTests(unittest.TestCase):
 
 
 class RunnerTests(unittest.TestCase):
+    def watcher_stress_results(self, outcomes, *, fail_inventory=False):
+        selected = {"state": {"package-id": "state", "testcases": {
+            "required": {"ignored": False, "filter-match": {"status": "matches"}},
+            "unrelated": {"ignored": False, "filter-match": {"status": "mismatch"}},
+            "manual": {"ignored": True, "filter-match": {"status": "matches"}},
+        }}}
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(runner, "REPORTS", Path(directory)), \
+                patch.object(runner, "prepare_runtime_binaries"), \
+                patch.object(runner, "reuse_args", return_value=[]), \
+                patch.object(runner, "package_names", return_value={"state": "gitcomet-state"}), \
+                redirect_stdout(io.StringIO()):
+            junit = Path(directory) / "nextest.xml"
+            junit.write_text("stale")
+            root = runner.paths("workspace") / "watcher-stress"
+            root.mkdir()
+            (root / "summary.json").write_text('{"success": true}')
+            executions = []
+
+            def invoke(name, command, **kwargs):
+                self.assertNotIn("--stress-count", command)
+                if "list" in command:
+                    if fail_inventory:
+                        raise RuntimeError("inventory failed")
+                    Path(kwargs["output"]).write_text(json.dumps({"rust-suites": selected}))
+                    return 0
+                self.assertFalse(junit.exists(), "stale JUnit survived between iterations")
+                self.assertEqual(command[command.index("--test-threads") + 1], "4")
+                outcome = outcomes[len(executions)]
+                executions.append(name)
+                if isinstance(outcome, BaseException):
+                    raise outcome
+                code, report = outcome
+                if report is not None:
+                    junit.write_text(report)
+                if isinstance(code, BaseException):
+                    raise code
+                return code
+
+            error = None
+            with patch.object(runner, "nextest_junit_path", return_value=junit), \
+                    patch.object(runner, "run", side_effect=invoke):
+                try:
+                    runner.watcher_stress(iterations=len(outcomes), nextest_threads=4)
+                except (RuntimeError, KeyboardInterrupt) as caught:
+                    error = caught
+            root = Path(directory) / "workspace/watcher-stress"
+            summary = json.loads((root / "summary.json").read_text())
+            reports = {index: (root / f"iteration-{index}/junit.xml").read_text()
+                       for index in range(1, len(outcomes) + 1)
+                       if (root / f"iteration-{index}/junit.xml").exists()}
+            return error, summary, reports
+
+    @staticmethod
+    def watcher_junit(body=""):
+        return '<testsuites><testsuite name="state"><testcase name="required">' + body + \
+               '</testcase></testsuite></testsuites>'
+
+    def test_ordinary_validation_rejects_failed_junit_even_with_successful_execution(self):
+        suites = {"state": {"package-id": "state", "testcases": {"required": {"ignored": False}}}}
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
+            junit = Path(directory) / "junit.xml"
+            junit.write_text(self.watcher_junit('<failure message="panic"/>'))
+            with self.assertRaisesRegex(RuntimeError, "reported 1 failed"):
+                runner.check_nextest_results("workspace", suites, {"state": "gitcomet-state"}, junit)
+
+    def test_watcher_stress_cannot_hide_an_earlier_failure_with_a_later_pass(self):
+        failed = self.watcher_junit('<failure message="panic"/>')
+        passed = self.watcher_junit()
+        for code in (0, 100):
+            with self.subTest(returncode=code):
+                error, summary, reports = self.watcher_stress_results([(code, failed), (0, passed)])
+                self.assertIsInstance(error, RuntimeError)
+                self.assertFalse(summary["success"])
+                self.assertEqual([row["success"] for row in summary["results"]], [False, True])
+                self.assertEqual(reports, {1: failed, 2: passed})
+
+    def test_watcher_stress_rejects_missing_malformed_incomplete_and_skipped_reports(self):
+        error, summary, _ = self.watcher_stress_results([None], fail_inventory=True)
+        self.assertIsInstance(error, RuntimeError)
+        self.assertFalse(summary["success"])
+        self.assertEqual(summary["results"], [])
+        reports = (None, "broken XML", '<testsuites/>', self.watcher_junit().replace('<testsuites>', '<testsuites errors="1">'), self.watcher_junit().replace('<testsuites>', '<testsuites errors="invalid">'), '<testsuites><testsuite><testcase/></testsuite></testsuites>', self.watcher_junit('<skipped/>'),
+                   self.watcher_junit('<error message="crash"/>'),
+                   self.watcher_junit('<system-err>skipping Git-for-Windows shell startup</system-err>'),
+                   self.watcher_junit('<system-err>skipping: git-lfs is not installed</system-err>'),
+                   self.watcher_junit('<system-out>skipping syntax corpus test: unavailable</system-out>'))
+        for report in reports:
+            with self.subTest(report=report):
+                error, summary, _ = self.watcher_stress_results([(0, report), (0, self.watcher_junit())])
+                self.assertIsInstance(error, RuntimeError)
+                self.assertFalse(summary["success"])
+                self.assertEqual(len(summary["results"]), 2)
+
+    def test_watcher_stress_keeps_nonzero_status_and_interruption(self):
+        error, summary, _ = self.watcher_stress_results([(100, self.watcher_junit())])
+        self.assertIsInstance(error, RuntimeError)
+        self.assertFalse(summary["success"])
+        error, summary, _ = self.watcher_stress_results([(0, self.watcher_junit()), KeyboardInterrupt()])
+        self.assertIsInstance(error, KeyboardInterrupt)
+        self.assertFalse(summary["success"])
+        self.assertFalse(summary["results"][-1]["success"])
+        partial = self.watcher_junit('<error message="interrupted"/>')
+        error, summary, reports = self.watcher_stress_results([(KeyboardInterrupt(), partial)])
+        self.assertIsInstance(error, KeyboardInterrupt)
+        self.assertFalse(summary["success"])
+        self.assertEqual(reports, {1: partial})
+
+    def test_watcher_stress_validates_selected_coverage_and_preserves_worktree_cases(self):
+        error, summary, reports = self.watcher_stress_results([(0, self.watcher_junit())] * 2)
+        self.assertIsNone(error)
+        self.assertTrue(summary["success"])
+        self.assertEqual(len(reports), 2)
+        self.assertIn("::worktree_redirect::", runner.WATCHER_FILTER)
+        self.assertIn("::selective::", runner.WATCHER_FILTER)
+
     def test_pure_batch_partition_is_explicit_and_preserves_ignored_tests(self):
         suite = {"package-name": "gitcomet-core", "package-id": "core", "kind": "lib",
                  "testcases": {"conflict_session::pure": {"ignored": False},
@@ -735,7 +851,7 @@ class RunnerTests(unittest.TestCase):
                     created.append(appdata)
                     if isinstance(outcome, BaseException):
                         raise outcome
-                    (Path(directory) / "ui-suite-all.log").write_text("test result: ok. 1 passed; 0 failed;\n")
+                    (Path(directory) / "ui-suite-all.log").write_text("test test ... ok\ntest result: ok. 1 passed; 0 failed;\n")
                     return outcome
                 with patch.object(runner, "run", side_effect=execute):
                     if isinstance(outcome, BaseException):
@@ -767,7 +883,7 @@ class RunnerTests(unittest.TestCase):
 
                 def execute(name, command, **kwargs):
                     (Path(kwargs["env"]["LOCALAPPDATA"]) / "locked.db").write_text("held")
-                    (Path(directory) / "ui-suite-all.log").write_text("test result: ok. 1 passed; 0 failed;\n")
+                    (Path(directory) / "ui-suite-all.log").write_text("test test ... ok\ntest result: ok. 1 passed; 0 failed;\n")
                     return outcome
 
                 with patch.object(runner, "run", side_effect=execute), patch.object(os, "unlink", locked_unlink):
@@ -857,7 +973,7 @@ class RunnerTests(unittest.TestCase):
             with self.subTest(platform=platform_name, schedule=schedule, cpus=cpus, group=group, profile=profile), \
                     tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
                     patch.object(runner.sys, "platform", platform_name), \
-                    patch.object(runner.os, "cpu_count", return_value=cpus):
+                    patch.object(runner, "available_cpus", return_value=cpus):
                 selected = (nextest_suites | ui_suites) if group == "both" else nextest_suites if group == "nextest" else ui_suites
                 parallel = schedule == "balanced" and cpus > 1 and group == "both"
                 target = Path(directory)
@@ -905,6 +1021,7 @@ class RunnerTests(unittest.TestCase):
                 self.assertCountEqual(completed, expected)
                 execution = json.loads((target / "workspace/execution.json").read_text())
                 self.assertTrue(execution["success"])
+                self.assertEqual(execution["cpus"], cpus)
                 self.assertEqual(execution["nextest_profile"], profile)
                 self.assertEqual(execution["effective_schedule"], "balanced" if parallel else "serial")
                 self.assertEqual(execution["ui_threads"], ui_threads)
@@ -912,7 +1029,7 @@ class RunnerTests(unittest.TestCase):
                 self.assertEqual(execution["effective_nextest_threads"], cpus - max(1, cpus // 2) if parallel else threads or cpus)
 
     def test_invalid_concurrency_is_rejected_before_running(self):
-        for schedule, threads in [("serial", 0), ("serial", -1), ("balanced", 8)]:
+        for schedule, threads in [("serial", 0), ("serial", -1), ("balanced", 0)]:
             with self.subTest(schedule=schedule, threads=threads), self.assertRaises(ValueError):
                 runner.execute("workspace", schedule, threads)
             with self.subTest(schedule=schedule, ui_threads=threads), self.assertRaises(ValueError):
@@ -924,6 +1041,7 @@ class RunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
                 patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": ""}), redirect_stdout(io.StringIO()):
             heartbeat = Path(directory) / "heartbeat"
+            second_heartbeat = Path(directory) / "second-heartbeat"
             child = ("import pathlib, sys, time\npath = pathlib.Path(sys.argv[1])\n"
                      "while True:\n    path.write_text(str(time.monotonic_ns()))\n    time.sleep(0.02)\n")
             parent = ("import subprocess, sys, time; "
@@ -931,22 +1049,28 @@ class RunnerTests(unittest.TestCase):
 
             def fail_after_start(**kwargs):
                 deadline = time.monotonic() + 10
-                while not heartbeat.exists() and time.monotonic() < deadline:
+                while not (heartbeat.exists() and second_heartbeat.exists()) and time.monotonic() < deadline:
                     time.sleep(0.02)
                 self.assertTrue(heartbeat.exists(), "child did not start")
+                self.assertTrue(second_heartbeat.exists(), "third family did not start")
                 raise RuntimeError("inventory failure")
 
             with self.assertRaisesRegex(RuntimeError, "inventory failure"):
                 runner.run_parallel([
                     partial(runner.run, "cancelled", [sys.executable, "-c", parent, child, str(heartbeat)], timeout=15),
+                    partial(runner.run, "also-cancelled", [sys.executable, "-c", parent, child, str(second_heartbeat)], timeout=15),
                     fail_after_start,
                 ])
             before = heartbeat.read_text()
+            second_before = second_heartbeat.read_text()
             time.sleep(0.15)
             self.assertEqual(heartbeat.read_text(), before, "descendant survived cancellation")
-            timing = json.loads((Path(directory) / "timings.jsonl").read_text())
-            self.assertTrue(timing["cancelled"])
-            self.assertEqual(timing["returncode"], 130)
+            self.assertEqual(second_heartbeat.read_text(), second_before, "third family survived cancellation")
+            timings = [json.loads(line) for line in (Path(directory) / "timings.jsonl").read_text().splitlines()]
+            self.assertEqual(len(timings), 2)
+            for timing in timings:
+                self.assertTrue(timing["cancelled"])
+                self.assertEqual(timing["returncode"], 130)
 
     def test_failed_runner_does_not_skip_other_tests_on_any_platform(self):
         packages = {"core": "gitcomet-core", "ui": runner.UI}
@@ -955,7 +1079,7 @@ class RunnerTests(unittest.TestCase):
         for platform_name, schedule, failed in product(("linux", "darwin", "win32"), ("serial", "balanced"), ("nextest", "ui")):
             with self.subTest(platform=platform_name, schedule=schedule, failed=failed), \
                     tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
-                    patch.object(runner.sys, "platform", platform_name), patch.object(runner.os, "cpu_count", return_value=4):
+                    patch.object(runner.sys, "platform", platform_name), patch.object(runner, "available_cpus", return_value=4):
                 target = Path(directory)
                 (target / "workspace").mkdir()
                 (target / "workspace/binaries.json").write_text(json.dumps({"rust-build-meta": {"target-directory": directory}}))
@@ -978,7 +1102,9 @@ class RunnerTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, "test execution failed"):
                         runner.execute("workspace", schedule)
                 self.assertCountEqual(completed, ["nextest", "ui"], "one failed runner must not skip the rest")
-                self.assertFalse(json.loads((target / "workspace/execution.json").read_text())["success"])
+                execution = json.loads((target / "workspace/execution.json").read_text())
+                self.assertFalse(execution["success"])
+                self.assertEqual(execution["effective_schedule"], schedule)
 
     def test_all_git_integration_suites_require_nextest_results_on_every_platform(self):
         suites = self.git_integration_suites()
@@ -1075,7 +1201,7 @@ class RunnerTests(unittest.TestCase):
             with self.subTest(platform=platform_name, threads=threads), tempfile.TemporaryDirectory() as directory, \
                     patch.object(runner, "REPORTS", Path(directory)), patch.object(runner.sys, "platform", platform_name), \
                     patch.object(runner, "suite_env", return_value={}), patch.object(runner, "run", return_value=0) as run:
-                (Path(directory) / "workspace-ui-all.log").write_text("test result: ok. 1 passed; 0 failed;\n")
+                (Path(directory) / "workspace-ui-all.log").write_text("test required ... ok\ntest result: ok. 1 passed; 0 failed;\n")
                 self.assertEqual(runner.run_suite("workspace", "ui", suite, threads=threads), 0)
                 command = run.call_args.args[1]
                 # Captured output lands under the failing test; skip notices stay in the log.
@@ -1230,6 +1356,31 @@ class RunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "required Git test did not run"):
                 runner.run_suite("workspace", "status_integration", suite)
 
+    def test_optional_and_partial_runtime_skips_are_recorded_and_warned(self):
+        text = """normal output
+Summary: 10 tests passed, 2 skipped
+Skipping symlink fixture: Windows symlink privilege is unavailable
+skipping: git-annex is not installed
+No writable second Windows volume; cross-volume assertion skipped
+"""
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
+                redirect_stdout(io.StringIO()) as console:
+            runner.record_runtime_exclusions("workspace", text)
+            log = (Path(directory) / "runtime-exclusions.log").read_text()
+        self.assertEqual(len(log.splitlines()), 3)
+        self.assertIn("cross-volume assertion skipped", log)
+        self.assertIn("3 runtime skip notice(s)", console.getvalue())
+        self.assertIn("::warning title=Incomplete test coverage", console.getvalue())
+
+    def test_runner_supplies_its_python_and_preserves_an_explicit_interpreter(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
+                redirect_stdout(io.StringIO()), patch.dict(os.environ, {}, clear=True):
+            command = [sys.executable, "-c", 'import os; print(os.environ["GITCOMET_TEST_PYTHON"])']
+            runner.run("python-default", command)
+            runner.run("python-explicit", command, env={"GITCOMET_TEST_PYTHON": "chosen"})
+            self.assertEqual((Path(directory) / "python-default.log").read_text().strip(), sys.executable)
+            self.assertEqual((Path(directory) / "python-explicit.log").read_text().strip(), "chosen")
+
     def test_display_profiles_reuse_workspace_ui_and_headless_app(self):
         with patch.object(sys, "argv", ["run.py", "display"]), patch.object(runner, "smoke") as smoke:
             runner.main()
@@ -1264,9 +1415,11 @@ class RuntimeTests(unittest.TestCase):
             (source / "binaries.json").write_text('"compiled-once"')
             (source / "execution.json").write_text('{"success": true, "seconds": 99}')
             (source / "junit.xml").write_text("stale")
+            (source / "nextest-old").mkdir()
+            (source / "nextest-old/junit.xml").write_text("stale store")
             calls = []
 
-            def execute(context, schedule, threads, profile, ui_threads, batch_pure_tests):
+            def execute(context, schedule, threads, profile, ui_threads, batch_pure_tests, **kwargs):
                 self.assertEqual(profile, "ci-git-limited")
                 self.assertEqual(ui_threads, 8)
                 self.assertEqual(batch_pure_tests, "off")
@@ -1275,6 +1428,7 @@ class RuntimeTests(unittest.TestCase):
                 self.assertEqual((sample / "binaries.json").read_text(), '"compiled-once"')
                 self.assertFalse((sample / "execution.json").exists())
                 self.assertFalse((sample / "junit.xml").exists())
+                self.assertFalse((sample / "nextest-old").exists())
                 for name in ("workspace-nextest.log", "workspace-ui-all.log", "timings.jsonl"):
                     (runtime.runner.REPORTS / name).write_text(str(len(calls)))
                 (sample / "execution.json").write_text(json.dumps(dict(success=True, seconds=len(calls))))
@@ -1310,7 +1464,7 @@ class RuntimeTests(unittest.TestCase):
                     self.assertRaisesRegex(RuntimeError, "failed"):
                 runtime.measure(root / "output", 5, "serial", None)
             record = json.loads((root / "output/runtime.json").read_text())
-            self.assertEqual(record["samples"], [{"success": False, "seconds": None, "schedule": "serial", "nextest_threads": None, "nextest_profile": "ci", "ui_threads": None}])
+            self.assertEqual(record["samples"], [{"success": False, "seconds": None, "schedule": "serial", "nextest_threads": None, "nextest_profile": "ci", "ui_threads": None, "pure_threads": None, "resource_stats": None}])
             self.assertTrue((root / "output/sample-1").is_dir())
 
     def test_source_diff_hash_matches_local_performance_for_non_utf8_and_crlf_changes(self):
@@ -1337,7 +1491,7 @@ class RuntimeTests(unittest.TestCase):
                 reports = root / "reports"
                 (reports / "workspace").mkdir(parents=True)
 
-                def execute(context, *args):
+                def execute(context, *args, **kwargs):
                     (runtime.runner.paths(context) / "execution.json").write_text('{"success": true, "seconds": 1}')
 
                 with patch.object(runtime.runner, "ROOT", repo), patch.object(runtime.runner, "REPORTS", reports), \
@@ -1500,6 +1654,50 @@ class BoundaryTests(unittest.TestCase):
 
 
 class IdentityLiteralTests(unittest.TestCase):
+    def test_lexer_preserves_literals_lines_and_nested_test_module_boundaries(self):
+        source = '''/* outer "GitComet" /* nested */ still a comment */
+const URL: &str = r##"https://example/GitComet/*not a comment*/"##;
+fn chars<'a>(_: &'a str) { let _ = ('"', '{', '\\u{7d}', '\\''); }
+#[cfg(test)] mod checks {
+    mod nested { const RAW: &str = r#"quote " } GitComet"#; }
+}
+#[cfg(not(test))] mod production { const NAME: &str = "gitcomet"; }
+const ESCAPED: &str = "a \\" quote // GitComet";
+'''
+        code = identity_literals.strip_comments_and_test_modules(source)
+        self.assertEqual((len(code), code.count("\n")), (len(source), source.count("\n")))
+        self.assertEqual(identity_literals.occurrences(source), [
+            (2, "display-name", "https://example/GitComet/*not a comment*/"),
+            (7, "identifier", "gitcomet"), (8, "display-name", 'a \\" quote // GitComet')])
+
+    def test_scan_shares_lexical_pass_and_excludes_test_descendants(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "crates/example/src"
+            source.mkdir(parents=True)
+            (source / "lib.rs").write_text(
+                '#[cfg(test)] mod checks;\nconst NAME: &str = "GitComet";')
+            (source / "checks.rs").write_text('mod child;\nconst TEST: &str = "GitComet";')
+            (source / "checks").mkdir()
+            (source / "checks/child.rs").write_text('const TEST: &str = "GitComet";')
+            (source / "smoke_tests.rs").write_text(
+                'mod child;\n#[cfg(test)] #[path="relocated.rs"] mod relocated;\n'
+                'const TEST: &str = "GitComet";')
+            (source / "smoke_tests").mkdir()
+            (source / "smoke_tests/child.rs").write_text('const TEST: &str = "GitComet";')
+            (source / "relocated.rs").write_text('const TEST: &str = "GitComet";')
+            (source / "simple_tests.rs").write_text('const TEST: &str = "GitComet";')
+            subprocess.run(["git", "init", "-q", directory], check=True)
+            strip = identity_literals.strip_comments_and_test_modules
+            with patch.object(identity_literals, "ROOT", root), \
+                    patch.object(identity_literals, "strip_comments_and_test_modules", wraps=strip) as lexical_pass:
+                self.assertEqual(identity_literals.scan(),
+                                 {("crates/example/src/lib.rs", "display-name"): 1})
+            # Each source shares its pass between discovery and counting,
+            # except known tests with no cfg declarations. Test files that
+            # declare modules in other directories still need discovery.
+            self.assertEqual(lexical_pass.call_count, 6)
+
     def test_scan_includes_new_files_and_tolerates_deleted_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1588,7 +1786,7 @@ class ReportTests(unittest.TestCase):
                 return real_check_output(args, **kwargs)
             return outputs[key] if kwargs.get("text") else outputs[key].encode()
 
-        def execute(context, *args):
+        def execute(context, *args, **kwargs):
             (runtime.runner.paths(context) / "execution.json").write_text(json.dumps(
                 dict(success=True, seconds=500, schedule="serial", nextest_threads=None)))
 

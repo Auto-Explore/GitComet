@@ -1813,6 +1813,7 @@ impl MainPaneView {
         self.file_editor_live_syntax_building = None;
         self.file_editor_live_syntax_build = None;
         self.file_editor_live_syntax_reparse = None;
+        self.file_editor_live_syntax_reparsing = None;
     }
 
     /// Bring the live tree up to date with `snapshot` and rebind the provider.
@@ -1845,6 +1846,7 @@ impl MainPaneView {
             .is_some_and(|document| Some(document.language()) == language);
 
         if edit.is_none() && text_is_unchanged && language_is_unchanged {
+            self.ensure_file_editor_live_syntax_reparse(cx);
             self.rebind_file_editor_highlight_provider(cx);
             return;
         }
@@ -1852,7 +1854,7 @@ impl MainPaneView {
         // Everything below reads through the rope; the whole document is never
         // flattened on the keystroke path.
         let rope = snapshot.rope();
-        let budget = Some(self.full_document_syntax_budget().foreground_parse);
+        let budget = self.live_syntax_foreground_budget();
         let reusable = self
             .file_editor_live_syntax
             .as_ref()
@@ -1876,7 +1878,7 @@ impl MainPaneView {
             None => {
                 // Worth one budgeted attempt: a small file finishes inside it
                 // and never shows a frame of unhighlighted text. Skipped when a
-                // build for exactly this text is already off-thread — that
+                // background work is already in flight — that
                 // attempt has demonstrably failed once.
                 // The two permanent reasons a build can fail — no wired grammar,
                 // and text past the parse ceiling — are asked directly rather
@@ -1887,7 +1889,8 @@ impl MainPaneView {
                 let supported = language.is_some_and(|language| {
                     rows::live_syntax_document_supported(language, rope.len())
                 });
-                let already_building = self.file_editor_live_syntax_building == Some(revision);
+                let already_building = self.file_editor_live_syntax_building.is_some()
+                    || self.file_editor_live_syntax_reparsing.is_some();
                 self.file_editor_live_syntax = language
                     .filter(|_| supported && !already_building)
                     .and_then(|language| {
@@ -1923,85 +1926,106 @@ impl MainPaneView {
         revision: (u64, u64),
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.file_editor_live_syntax_building == Some(revision) {
+        if self.file_editor_live_syntax_building.is_some()
+            || self.file_editor_live_syntax_reparsing.is_some()
+        {
             return;
         }
-        self.file_editor_live_syntax_building = Some(revision);
-        self.file_editor_live_syntax_build =
-            Some(cx.spawn(async move |view: WeakEntity<MainPaneView>, cx| {
-                let build =
-                    move || rows::LiveSyntaxDocument::new(language, rope, Arc::default(), None);
-                let built = if crate::ui_runtime::current().uses_background_compute() {
-                    smol::unblock(build).await
-                } else {
-                    build()
+        let ownership = (Self::next_live_syntax_job_id(), revision);
+        self.file_editor_live_syntax_building = Some(ownership);
+        self.file_editor_live_syntax_build = Some(self.run_live_syntax_background_compute(
+            cx,
+            move || rows::LiveSyntaxDocument::new(language, rope, Arc::default(), None),
+            move |this, cx, built| {
+                if this.file_editor_live_syntax_building != Some(ownership) {
+                    return;
+                }
+                this.file_editor_live_syntax_building = None;
+                this.file_editor_live_syntax_build = None;
+                let snapshot = this
+                    .file_editor_input
+                    .read_with(cx, |input, _| input.text_snapshot());
+                if (snapshot.model_id(), snapshot.revision()) != revision
+                    || this.file_editor_language != Some(language)
+                {
+                    // Zed's `parse_again`: a tree for text the buffer has
+                    // moved past is useless, but so is waiting.
+                    this.refresh_file_editor_syntax(&snapshot, None, cx);
+                    return;
+                }
+                let Some(document) = built else {
+                    // Leave a failed current build retryable on refresh.
+                    return;
                 };
-                let _ = view.update(cx, |this, cx| {
-                    if this.file_editor_live_syntax_building != Some(revision) {
-                        return;
-                    }
-                    this.file_editor_live_syntax_building = None;
-                    let Some(document) = built else {
-                        // The caller already established that this file *can* be
-                        // parsed, so reaching here is a transient failure. Leave
-                        // everything retryable and let the next refresh try
-                        // again rather than latching the file as unhighlightable.
-                        return;
-                    };
-                    let snapshot = this
-                        .file_editor_input
-                        .read_with(cx, |input, _| input.text_snapshot());
-                    if (snapshot.model_id(), snapshot.revision()) != revision {
-                        // Zed's `parse_again`: a tree for text the buffer has
-                        // moved past is useless, but so is waiting.
-                        this.refresh_file_editor_syntax(&snapshot, None, cx);
-                        return;
-                    }
-                    this.file_editor_live_syntax = Some(document);
-                    this.file_editor_live_syntax_source = Some(revision);
-                    this.rebind_file_editor_highlight_provider(cx);
-                });
-            }));
+                this.file_editor_live_syntax = Some(document);
+                this.file_editor_live_syntax_source = Some(revision);
+                this.rebind_file_editor_highlight_provider(cx);
+            },
+        ));
     }
 
     fn ensure_file_editor_live_syntax_reparse(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.file_editor_live_syntax_reparsing.is_some()
+            || self.file_editor_live_syntax_building.is_some()
+        {
+            return;
+        }
         let Some(request) = self
             .file_editor_live_syntax
             .as_ref()
             .and_then(rows::LiveSyntaxDocument::background_reparse_request)
         else {
-            self.file_editor_live_syntax_reparse = None;
             return;
         };
-
-        self.file_editor_live_syntax_reparse =
-            Some(cx.spawn(async move |view: WeakEntity<MainPaneView>, cx| {
-                let reparse = move || rows::live_syntax_reparse(request);
-                let parsed = if crate::ui_runtime::current().uses_background_compute() {
-                    smol::unblock(reparse).await
-                } else {
-                    reparse()
-                };
+        let requested_version = request.version();
+        self.file_editor_live_syntax_reparsing = Some(requested_version);
+        self.file_editor_live_syntax_reparse = Some(self.run_live_syntax_background_compute(
+            cx,
+            move || rows::live_syntax_reparse(request),
+            move |this, cx, parsed| {
+                if this.file_editor_live_syntax_reparsing != Some(requested_version) {
+                    return;
+                }
+                this.file_editor_live_syntax_reparsing = None;
+                this.file_editor_live_syntax_reparse = None;
                 let Some((version, tree, injections)) = parsed else {
+                    if this.file_editor_live_syntax.is_none() {
+                        let snapshot = this
+                            .file_editor_input
+                            .read_with(cx, |input, _| input.text_snapshot());
+                        this.refresh_file_editor_syntax(&snapshot, None, cx);
+                    } else if this
+                        .file_editor_live_syntax
+                        .as_ref()
+                        .map(rows::LiveSyntaxDocument::version)
+                        != Some(requested_version)
+                    {
+                        this.ensure_file_editor_live_syntax_reparse(cx);
+                    }
                     return;
                 };
-                let _ = view.update(cx, |this, cx| {
-                    let adopted = this
-                        .file_editor_live_syntax
-                        .as_mut()
-                        .is_some_and(|document| {
-                            document.adopt_background_tree(version, tree, injections)
-                        });
-                    this.file_editor_live_syntax_reparse = None;
-                    if !adopted {
-                        // The buffer moved while this was in flight, so the tree
-                        // describes text that no longer exists.
+                let adopted = this
+                    .file_editor_live_syntax
+                    .as_mut()
+                    .is_some_and(|document| {
+                        document.adopt_background_tree(version, tree, injections)
+                    });
+                if !adopted {
+                    // The buffer moved while this was in flight, so the tree
+                    // describes text that no longer exists.
+                    if this.file_editor_live_syntax.is_none() {
+                        let snapshot = this
+                            .file_editor_input
+                            .read_with(cx, |input, _| input.text_snapshot());
+                        this.refresh_file_editor_syntax(&snapshot, None, cx);
+                    } else {
                         this.ensure_file_editor_live_syntax_reparse(cx);
-                        return;
                     }
-                    this.rebind_file_editor_highlight_provider(cx);
-                });
-            }));
+                    return;
+                }
+                this.rebind_file_editor_highlight_provider(cx);
+            },
+        ));
     }
 
     /// Hand the input a provider over the document's current tree, with the

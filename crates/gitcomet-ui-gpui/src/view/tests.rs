@@ -50,6 +50,17 @@ impl GitBackend for BlockingFailingBackend {
     }
 }
 
+/// Deterministic pane transitions complete inline; draw their final geometry.
+fn finish_pane_transitions(cx: &mut gpui::VisualTestContext, view: &Entity<GitCometView>) {
+    pump_until(cx, "pane transitions", |cx| {
+        cx.update(|_, app| {
+            let view = view.read(app);
+            !view.sidebar_width_animating && !view.details_width_animating
+        })
+    });
+    test_support::redraw(cx);
+}
+
 fn pump_for(cx: &mut gpui::VisualTestContext, duration: Duration) {
     let _timer = FixtureTimer::new("ui-wait", "timed-pump");
     let deadline = Instant::now() + duration;

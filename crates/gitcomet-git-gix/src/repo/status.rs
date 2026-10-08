@@ -707,7 +707,10 @@ fn collect_index_worktree_status_direct(
     // it can carry a coarser mtime from the second before (the file clock
     // lags the wall clock), so the stamp stays one second back: such a write
     // still compares racy, as it would against git's own index mtime.
-    let stamp = filetime::FileTime::from_unix_time(filetime::FileTime::now().unix_seconds() - 1, 0);
+    let walk_started = filetime::FileTime::now();
+    #[cfg(test)]
+    let walk_started = tests::STAT_REFRESH_CLOCK.with(|clock| clock.get().unwrap_or(walk_started));
+    let stamp = filetime::FileTime::from_unix_time(walk_started.unix_seconds() - 1, 0);
     let result = collect_index_worktree_status_direct_from_index(
         repo,
         refreshed
@@ -1457,6 +1460,25 @@ pub(crate) mod tests {
     use std::process::{Command, Output};
     use std::sync::OnceLock;
 
+    thread_local! {
+        pub(super) static STAT_REFRESH_CLOCK: std::cell::Cell<Option<filetime::FileTime>> =
+            const { std::cell::Cell::new(None) };
+    }
+
+    struct StatRefreshClock(Option<filetime::FileTime>);
+
+    impl StatRefreshClock {
+        fn set(now: filetime::FileTime) -> Self {
+            Self(STAT_REFRESH_CLOCK.with(|clock| clock.replace(Some(now))))
+        }
+    }
+
+    impl Drop for StatRefreshClock {
+        fn drop(&mut self) {
+            STAT_REFRESH_CLOCK.with(|clock| clock.set(self.0));
+        }
+    }
+
     #[cfg(unix)]
     use std::{fs::Permissions, os::unix::fs::PermissionsExt as _};
 
@@ -1552,18 +1574,19 @@ pub(crate) mod tests {
     pub(crate) fn init_test_repo(workdir: &Path) {
         let _ = ensure_isolated_git_test_env();
         git_success(workdir, &["init"]);
-        for args in [
-            ["config", "core.autocrlf", "false"].as_slice(),
-            ["config", "core.eol", "lf"].as_slice(),
-            ["config", "credential.helper", ""].as_slice(),
-            ["config", "credential.interactive", "never"].as_slice(),
-            ["config", "protocol.file.allow", "always"].as_slice(),
-            ["config", "commit.gpgsign", "false"].as_slice(),
-            ["config", "user.name", "Test User"].as_slice(),
-            ["config", "user.email", "test@example.com"].as_slice(),
-        ] {
-            git_success(workdir, args);
-        }
+        gitcomet_core::test_support::git_fixture::append_config(
+            workdir,
+            &[
+                ("core.autocrlf", "false"),
+                ("core.eol", "lf"),
+                ("credential.helper", ""),
+                ("credential.interactive", "never"),
+                ("protocol.file.allow", "always"),
+                ("commit.gpgsign", "false"),
+                ("user.name", "Test User"),
+                ("user.email", "test@example.com"),
+            ],
+        );
     }
 
     pub(crate) fn write_file(workdir: &Path, relative: &str, contents: &str) {
@@ -2831,9 +2854,13 @@ pub(crate) mod tests {
         // Same size and mtime as the index entry, different content.
         write_file(workdir, "racy.txt", "bar\n");
         filetime::set_file_mtime(workdir.join("racy.txt"), entry_mtime).expect("mtime");
-        std::thread::sleep(std::time::Duration::from_millis(1100));
         for index in 0..touched {
             write_file(workdir, &format!("touched/{index:03}.txt"), "same\n");
+            filetime::set_file_mtime(
+                workdir.join(format!("touched/{index:03}.txt")),
+                filetime::FileTime::from_unix_time(now - 10, 0),
+            )
+            .expect("touched mtime");
         }
         // An index older than the entry makes it racy.
         filetime::set_file_mtime(
@@ -2874,26 +2901,26 @@ pub(crate) mod tests {
             write_file(workdir, &format!("touched/{index:03}.txt"), "same\n");
         }
         let repo = open_repo(workdir);
-
-        // Early in a second, so the walk below stays inside it.
-        let now = loop {
-            let now = filetime::FileTime::now();
-            if now.nanoseconds() < 300_000_000 {
-                break now;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        };
+        // Freeze only this thread's walk clock. Filesystem timestamps below
+        // are explicit, so a busy runner cannot move the walk into another
+        // second or turn this regression into a scheduler timing assertion.
+        let now = filetime::FileTime::from_unix_time(1_700_000_100, 100_000_000);
+        let _clock = StatRefreshClock::set(now);
         // The stamp a write a few milliseconds after the walk starts can get
         // from the file clock: the last instant of the previous second.
         let just_before = filetime::FileTime::from_unix_time(now.unix_seconds() - 1, 999_000_000);
         filetime::set_file_mtime(workdir.join("racy.txt"), just_before).expect("mtime");
         assert_eq!(repo.worktree_status_impl().expect("status"), vec![]);
         assert_eq!(
-            filetime::FileTime::now().unix_seconds(),
-            now.unix_seconds(),
-            "the walk left the second it started in; rerun"
+            repo.stat_refreshed_index
+                .lock()
+                .expect("lock")
+                .as_ref()
+                .expect("stat refresh")
+                .index
+                .timestamp(),
+            filetime::FileTime::from_unix_time(now.unix_seconds() - 1, 0),
         );
-        assert!(repo.stat_refreshed_index.lock().expect("lock").is_some());
 
         // Same size and stat as the refreshed entry, different content.
         write_file(workdir, "racy.txt", "bar\n");

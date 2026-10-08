@@ -3338,3 +3338,115 @@ impl ConflictResolvedOutputLiveSyntaxFixture {
         .unwrap_or(0)
     }
 }
+
+/// A bounded edit trace for root and injected grammars. Insert/delete pairs
+/// restore the same document size, and recovery is measured separately.
+pub struct LiveSyntaxEditTraceFixture {
+    rope: crate::kit::rope::Rope,
+    document: super::diff_text::LiveSyntaxDocument,
+    language: super::diff_text::DiffSyntaxLanguage,
+    at: usize,
+    inserted: bool,
+}
+impl LiveSyntaxEditTraceFixture {
+    pub fn new(language: &str, lines: usize) -> Self {
+        let blocks = if lines < 1000 { 4 } else { 16 };
+        let body_lines = lines.div_ceil(blocks).saturating_sub(2);
+        let (language, text) = match language {
+            "rust" => (
+                DiffSyntaxLanguage::Rust,
+                "let value: usize = compute(shared());\n".repeat(lines),
+            ),
+            "markdown" => (
+                DiffSyntaxLanguage::Markdown,
+                format!(
+                    "```rust\n{}```\n",
+                    "let value: usize = compute(shared());\n".repeat(body_lines)
+                )
+                .repeat(blocks),
+            ),
+            "html" => (
+                DiffSyntaxLanguage::Html,
+                format!(
+                    "<script>\n{}</script>\n",
+                    "const value = compute(shared());\n".repeat(body_lines)
+                )
+                .repeat(blocks),
+            ),
+            _ => panic!("unsupported edit trace language"),
+        };
+        let rope = crate::kit::rope::Rope::from_text(&text);
+        let document =
+            super::diff_text::LiveSyntaxDocument::new(language, rope.clone(), Arc::default(), None)
+                .unwrap();
+        let at = text.find("value").unwrap() + 2;
+        Self {
+            rope,
+            document,
+            language,
+            at,
+            inserted: false,
+        }
+    }
+    /// Outcome: 0 reparsed, 1 deferred, 2 abandoned. Pending injected layers
+    /// can require recovery even when the root reparsed successfully.
+    pub fn edit(&mut self) -> u8 {
+        self.edit_with_budget(Duration::from_millis(1))
+    }
+    pub fn defer_edit(&mut self) {
+        self.edit_with_budget(Duration::ZERO);
+    }
+    fn edit_with_budget(&mut self, budget: Duration) -> u8 {
+        let (old, new) = if self.inserted {
+            self.rope.replace(self.at..self.at + 1, "");
+            (self.at..self.at + 1, self.at..self.at)
+        } else {
+            self.rope.replace(self.at..self.at, "x");
+            (self.at..self.at, self.at..self.at + 1)
+        };
+        self.inserted = !self.inserted;
+        match self.document.sync(
+            self.rope.clone(),
+            Arc::default(),
+            Some((old, new)),
+            Some(budget),
+        ) {
+            super::diff_text::LiveSyntaxSyncOutcome::Reparsed => 0,
+            super::diff_text::LiveSyntaxSyncOutcome::Deferred => 1,
+            super::diff_text::LiveSyntaxSyncOutcome::Abandoned => 2,
+        }
+    }
+    pub fn recover(&mut self) -> bool {
+        let Some(request) = self.document.background_reparse_request() else {
+            return false;
+        };
+        let (version, tree, injections) = super::diff_text::live_syntax_reparse(request).unwrap();
+        assert!(
+            self.document
+                .adopt_background_tree(version, tree, injections)
+        );
+        true
+    }
+    pub fn text_bytes(&self) -> usize {
+        self.rope.len()
+    }
+    /// Call outside all timing and allocation measurements.
+    pub fn verify(&self) {
+        assert!(self.document.background_reparse_request().is_none());
+        let cold = super::diff_text::LiveSyntaxDocument::new(
+            self.language,
+            self.rope.clone(),
+            Arc::default(),
+            None,
+        )
+        .unwrap();
+        let theme = AppTheme::gitcomet_dark();
+        assert_eq!(
+            self.document
+                .snapshot(theme)
+                .highlights_for_byte_range(0..self.rope.len()),
+            cold.snapshot(theme)
+                .highlights_for_byte_range(0..self.rope.len())
+        );
+    }
+}

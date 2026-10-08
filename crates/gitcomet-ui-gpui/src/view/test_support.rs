@@ -180,31 +180,30 @@ pub(crate) fn redraw(cx: &mut gpui::VisualTestContext) {
 /// GPUI's test executor does not drive the worker thread, so a snapshot read
 /// right after a dispatch may predate it. A plain message sent now is reduced
 /// strictly after everything already queued (only control messages overtake,
-/// and only internal ones), so once its effect is visible, so is every earlier
-/// dispatch. The message flips the default tag type, which nothing here reads.
+/// and only internal ones), so its acknowledgment covers every earlier
+/// dispatch without changing preferences.
 /// Messages the worker itself sends while handling a command's effects can
 /// still land later; wait on their own state when a test depends on them.
 pub(crate) fn drain_store_worker(
     view: &gpui::Entity<GitCometView>,
     cx: &mut gpui::VisualTestContext,
 ) {
-    use gitcomet_state::model::DefaultTagType;
     let store = cx.update(|_window, app| view.read(app).store.clone());
-    let sentinel = match store.snapshot().default_tag_type {
-        DefaultTagType::Lightweight => DefaultTagType::Annotated,
-        DefaultTagType::Annotated => DefaultTagType::Lightweight,
-    };
-    store.dispatch(gitcomet_state::msg::Msg::SetDefaultTagType(sentinel));
+    let barrier = store.barrier_for_test();
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     loop {
         redraw(cx);
         cx.run_until_parked();
-        if store.snapshot().default_tag_type == sentinel {
-            return;
+        match barrier.try_recv() {
+            Ok(_) => return,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                panic!("store worker stopped before its barrier")
+            }
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "the store worker did not reduce the sentinel message"
+            "the store worker did not acknowledge its barrier"
         );
         std::thread::sleep(Duration::from_millis(10));
     }

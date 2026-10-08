@@ -1982,9 +1982,14 @@ mod tests {
 
     fn init_test_repo(workdir: &Path) {
         run_git(workdir, &["init"]);
-        run_git(workdir, &["config", "commit.gpgsign", "false"]);
-        run_git(workdir, &["config", "user.name", "Test User"]);
-        run_git(workdir, &["config", "user.email", "test@example.com"]);
+        gitcomet_core::test_support::git_fixture::append_config(
+            workdir,
+            &[
+                ("commit.gpgsign", "false"),
+                ("user.name", "Test User"),
+                ("user.email", "test@example.com"),
+            ],
+        );
     }
 
     fn open_repo(workdir: &Path) -> GixRepo {

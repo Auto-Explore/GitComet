@@ -3,7 +3,7 @@
 Latency is per request; the bandwidth limit is shared across concurrent bodies.
 The fixture server is a separate process tree from the measured application.
 """
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import subprocess
@@ -84,60 +84,94 @@ class GitHandler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         started, sent, received = time.monotonic(), 0, 0
-        process, success = None, False
-        try:
-            self.connection.settimeout(300)
-            if self.server.stop.wait(self.server.latency):
-                return
-            if self.server.fault == "stall" and self.command == "POST":
-                self.server.stop.wait(300)
-                return
-            with tempfile.TemporaryFile(dir=self.server.root) as body, tempfile.TemporaryFile(dir=self.server.root) as errors:
-                received = self.request_body(body)
-                body.seek(0)
-                env = dict(self.server.env, GIT_PROJECT_ROOT=str(self.server.root), GIT_HTTP_EXPORT_ALL="1",
-                           REQUEST_METHOD=self.command, PATH_INFO=path, QUERY_STRING=parsed.query,
-                           CONTENT_TYPE=self.headers.get("Content-Type", ""), CONTENT_LENGTH=str(received),
-                           REMOTE_ADDR="127.0.0.1", REMOTE_USER="performance", SERVER_PROTOCOL="HTTP/1.0")
-                if self.headers.get("Git-Protocol"):
-                    env["HTTP_GIT_PROTOCOL"] = self.headers["Git-Protocol"]
-                process = subprocess.Popen(["git", "http-backend"], stdin=body, stdout=subprocess.PIPE,
-                                           stderr=errors, env=env, start_new_session=True)
+        process, success, error, responded = None, False, None, False
+        with ExitStack() as cleanup:
+            errors = None
+            try:
+                self.connection.settimeout(300)
+                if self.server.stop.wait(self.server.latency):
+                    return
+                if self.server.fault == "stall" and self.command == "POST":
+                    self.server.stop.wait(300)
+                    return
+                with tempfile.TemporaryFile(dir=self.server.root) as body:
+                    errors = cleanup.enter_context(tempfile.TemporaryFile(dir=self.server.root))
+                    received = self.request_body(body)
+                    body.seek(0)
+                    env = dict(self.server.env, GIT_PROJECT_ROOT=str(self.server.root), GIT_HTTP_EXPORT_ALL="1",
+                               REQUEST_METHOD=self.command, PATH_INFO=path, QUERY_STRING=parsed.query,
+                               CONTENT_TYPE=self.headers.get("Content-Type", ""), CONTENT_LENGTH=str(received),
+                               REMOTE_ADDR="127.0.0.1", REMOTE_USER="performance", SERVER_PROTOCOL="HTTP/1.0")
+                    if self.headers.get("Git-Protocol"):
+                        env["HTTP_GIT_PROTOCOL"] = self.headers["Git-Protocol"]
+                    process = subprocess.Popen(["git", "http-backend"], stdin=body, stdout=subprocess.PIPE,
+                                               stderr=errors, env=env, start_new_session=True)
+                    with self.server.lock:
+                        self.server.children.add(process)
+                    headers, status = [], 200
+                    header_bytes = 0
+                    while True:
+                        line = process.stdout.readline(65536)
+                        header_bytes += len(line)
+                        if not line or header_bytes > 65536:
+                            raise ValueError("git http-backend did not produce complete CGI headers; verify the Git installation")
+                        if line in (b"\r\n", b"\n"):
+                            break
+                        key, separator, value = line.decode("latin1").strip().partition(":")
+                        if not separator or not key:
+                            raise ValueError("invalid git http-backend CGI header")
+                        if key.lower() == "status":
+                            status = int(value.strip().split(" ", 1)[0])
+                        else:
+                            headers.append((key, value.strip()))
+                    if not 200 <= status <= 599 or not any(key.lower() == "content-type" for key, _ in headers):
+                        raise ValueError("invalid git http-backend CGI response")
+                    self.send_response(status)
+                    for key, value in headers:
+                        self.send_header(key, value)
+                    self.end_headers()
+                    responded = True
+                    while data := process.stdout.read(65536):
+                        if self.server.fault == "disconnect" and self.command == "POST":
+                            raise ConnectionAbortedError("injected transport disconnect")
+                        self.server.pace(len(data))
+                        self.wfile.write(data)
+                        sent += len(data)
+                    code = process.wait(timeout=30)
+                    success = code == 0 and status == 200
+                    if code:
+                        error = f"git http-backend exited with status {code}"
+            except (OSError, ValueError, subprocess.SubprocessError) as failure:
+                error = str(failure)
+                if not responded:
+                    try:
+                        self.send_error(500, "Git fixture backend failed")
+                    except OSError:
+                        # Best effort only: if the client disconnected, sending the
+                        # fallback HTTP error can fail and should not mask the root cause.
+                        pass
+                self.close_connection = True
+            finally:
+                if process:
+                    try:
+                        perf_platform.stop_tree(process)
+                    except (OSError, subprocess.SubprocessError) as failure:
+                        success = False
+                        error = f"git http-backend cleanup failed: {failure}"
+                    process.stdout.close()
+                    if process.poll() is not None:
+                        with self.server.lock:
+                            self.server.children.discard(process)
+                if errors is not None:
+                    errors.seek(0)
+                    detail = errors.read(8192).decode("utf-8", errors="replace").strip()
+                    if detail and not success:
+                        error = f"{error or 'git http-backend failed'}: {detail}"
                 with self.server.lock:
-                    self.server.children.add(process)
-                headers, status = [], 200
-                while True:
-                    line = process.stdout.readline(65536)
-                    if line in (b"\r\n", b"\n", b""):
-                        break
-                    key, value = line.decode("latin1").strip().split(":", 1)
-                    if key.lower() == "status":
-                        status = int(value.strip().split()[0])
-                    else:
-                        headers.append((key, value.strip()))
-                self.send_response(status)
-                for key, value in headers:
-                    self.send_header(key, value)
-                self.end_headers()
-                while data := process.stdout.read(65536):
-                    if self.server.fault == "disconnect" and self.command == "POST":
-                        raise ConnectionAbortedError("injected transport disconnect")
-                    self.server.pace(len(data))
-                    self.wfile.write(data)
-                    sent += len(data)
-                success = process.wait(timeout=30) == 0 and status == 200
-        except (OSError, ValueError, subprocess.SubprocessError):
-            self.close_connection = True
-        finally:
-            if process:
-                perf_platform.stop_tree(process)
-                process.stdout.close()
-                with self.server.lock:
-                    self.server.children.discard(process)
-            with self.server.lock:
-                self.server.records.append({"path": path, "method": self.command, "success": success,
-                                            "sent_bytes": sent, "received_bytes": received,
-                                            "milliseconds": (time.monotonic() - started) * 1000})
+                    self.server.records.append({"path": path, "method": self.command, "success": success,
+                                                "error": error,
+                                                "sent_bytes": sent, "received_bytes": received,
+                                                "milliseconds": (time.monotonic() - started) * 1000})
 
     do_GET = handle_git
     do_POST = handle_git
@@ -156,6 +190,8 @@ def serve_git(root, env, **settings):
             children = list(server.children)
         for process in children:
             perf_platform.stop_tree(process)
+            with server.lock:
+                server.children.discard(process)
         server.shutdown()
         server.server_close()
         thread.join()

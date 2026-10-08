@@ -1,6 +1,41 @@
 use super::*;
 
 impl MainPaneView {
+    pub(in crate::view) fn next_live_syntax_job_id() -> u64 {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+impl MainPaneView {
+    pub(in crate::view) fn run_live_syntax_background_compute<O, F, A>(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+        compute: F,
+        apply: A,
+    ) -> gpui::Task<()>
+    where
+        O: Send + 'static,
+        F: FnOnce() -> O + Send + 'static,
+        A: FnOnce(&mut Self, &mut gpui::Context<Self>, O) + 'static,
+    {
+        #[cfg(test)]
+        let gate = {
+            self.live_syntax_background_jobs_started += 1;
+            self.live_syntax_background_gate_for_tests.clone()
+        };
+        cx.spawn(async move |view: gpui::WeakEntity<Self>, cx| {
+            let output = crate::ui_runtime::background_compute(compute).await;
+            // Hold completed output so edits and destruction race the adoption,
+            // rather than merely delaying when computation starts.
+            #[cfg(test)]
+            if let Some(gate) = gate {
+                let _ = gate.recv().await;
+            }
+            let _ = view.update(cx, |this, cx| apply(this, cx, output));
+        })
+    }
+
     /// Unresolved rows for `snapshot`, from the cache when it is still current.
     ///
     /// A miss only happens when navigation runs before any refresh has scanned
@@ -189,32 +224,30 @@ impl MainPaneView {
         revision: ResolvedOutputSourceRevision,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.conflict_resolved_output_live_syntax_building == Some(revision) {
+        if self.conflict_resolved_output_live_syntax_building.is_some()
+            || self
+                .conflict_resolved_output_live_syntax_reparsing
+                .is_some()
+        {
             return;
         }
-        self.conflict_resolved_output_live_syntax_building = Some(revision);
+        let ownership = (Self::next_live_syntax_job_id(), revision);
+        self.conflict_resolved_output_live_syntax_building = Some(ownership);
 
         let build_mask = Arc::clone(&mask);
         self.conflict_resolved_output_live_syntax_build =
-            Some(crate::ui_runtime::run_background_compute(
+            Some(self.run_live_syntax_background_compute(
                 cx,
                 move || rows::LiveSyntaxDocument::new(language, rope, build_mask, None),
                 move |this, cx, built| {
-                    if this.conflict_resolved_output_live_syntax_building != Some(revision) {
+                    if this.conflict_resolved_output_live_syntax_building != Some(ownership) {
                         // A newer generation owns the guard. Leave it alone --
                         // clearing it here would let its own scheduling check
                         // pass again and start a duplicate build.
                         return;
                     }
                     this.conflict_resolved_output_live_syntax_building = None;
-                    let Some(document) = built else {
-                        // Unbudgeted, so this is not a timeout: the text is past
-                        // the size ceiling or the language has no wired grammar.
-                        // Both are permanent, so re-issuing would spin. The
-                        // heuristic arm of the refresh is the right answer here,
-                        // and it is the same one the diff panes take.
-                        return;
-                    };
+                    this.conflict_resolved_output_live_syntax_build = None;
                     // Zed's `parse_again` (`Buffer::reparse`): a result for text
                     // the buffer has moved past is useless, but so is waiting --
                     // nothing else is guaranteed to come along and ask again, so
@@ -222,10 +255,16 @@ impl MainPaneView {
                     let still_current = this.conflict_resolver_input.read_with(cx, |input, _| {
                         ResolvedOutputSourceRevision::from_snapshot(&input.text_snapshot())
                     }) == revision;
-                    if !still_current {
+                    if !still_current
+                        || this.conflict_resolved_preview_syntax_language != Some(language)
+                    {
                         this.reissue_conflict_resolved_output_live_syntax_build(cx);
                         return;
                     }
+                    let Some(document) = built else {
+                        // A failed current build stays retryable on refresh.
+                        return;
+                    };
                     this.conflict_resolved_output_live_syntax = Some(document);
                     // Record what it was built for, or the next refresh sees a
                     // stale source, retries in the foreground, fails the budget
@@ -257,6 +296,9 @@ impl MainPaneView {
             .conflict_resolver_input
             .read_with(cx, |input, _| input.text_snapshot());
         let rope = output_snapshot.rope();
+        if !rows::live_syntax_document_supported(language, rope.len()) {
+            return;
+        }
         let protected_ranges = resolved_output_placeholder_protected_ranges(&rope);
         let mask = resolved_output_live_syntax_mask(protected_ranges.as_ref(), &rope);
         let revision = ResolvedOutputSourceRevision::from_snapshot(&output_snapshot);
@@ -279,21 +321,45 @@ impl MainPaneView {
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self
+            .conflict_resolved_output_live_syntax_reparsing
+            .is_some()
+            || self.conflict_resolved_output_live_syntax_building.is_some()
+        {
+            return;
+        }
         let Some(request) = self
             .conflict_resolved_output_live_syntax
             .as_ref()
             .and_then(rows::LiveSyntaxDocument::background_reparse_request)
         else {
-            self.conflict_resolved_output_live_syntax_reparse = None;
             return;
         };
-
+        let requested_version = request.version();
+        self.conflict_resolved_output_live_syntax_reparsing = Some(requested_version);
         self.conflict_resolved_output_live_syntax_reparse =
-            Some(crate::ui_runtime::run_background_compute(
+            Some(self.run_live_syntax_background_compute(
                 cx,
                 move || rows::live_syntax_reparse(request),
                 move |this, cx, parsed| {
+                    if this.conflict_resolved_output_live_syntax_reparsing
+                        != Some(requested_version)
+                    {
+                        return;
+                    }
+                    this.conflict_resolved_output_live_syntax_reparsing = None;
+                    this.conflict_resolved_output_live_syntax_reparse = None;
                     let Some((version, tree, injections)) = parsed else {
+                        if this.conflict_resolved_output_live_syntax.is_none() {
+                            this.reissue_conflict_resolved_output_live_syntax_build(cx);
+                        } else if this
+                            .conflict_resolved_output_live_syntax
+                            .as_ref()
+                            .map(rows::LiveSyntaxDocument::version)
+                            != Some(requested_version)
+                        {
+                            this.ensure_conflict_resolved_output_live_syntax_reparse(cx);
+                        }
                         return;
                     };
                     let adopted = this
@@ -306,11 +372,13 @@ impl MainPaneView {
                         // The buffer moved while this was in flight, so the tree
                         // describes text that no longer exists. Re-issue from
                         // wherever the document is now.
-                        this.conflict_resolved_output_live_syntax_reparse = None;
-                        this.ensure_conflict_resolved_output_live_syntax_reparse(cx);
+                        if this.conflict_resolved_output_live_syntax.is_none() {
+                            this.reissue_conflict_resolved_output_live_syntax_build(cx);
+                        } else {
+                            this.ensure_conflict_resolved_output_live_syntax_reparse(cx);
+                        }
                         return;
                     }
-                    this.conflict_resolved_output_live_syntax_reparse = None;
                     this.rebind_conflict_resolved_output_highlight_provider(cx);
                 },
             ));
@@ -364,13 +432,9 @@ impl MainPaneView {
     /// reparse reuses it, rather than rebuilding the prepared document this
     /// replaced.
     ///
-    /// The root parse is incremental; the *injected* layers are not. A reparse
-    /// re-runs the injection query over the whole document and reparses every
-    /// injected region from scratch, each with its own copy of the foreground
-    /// budget. On a document with many injections (fenced blocks, `<script>`
-    /// bodies) that is the dominant per-keystroke cost and does scale with the
-    /// document — the outstanding gap against Zed's `SyntaxMap`, which keys
-    /// layers by (language, range) and reparses them incrementally.
+    /// Root parsing, injection discovery, and injected parses share the
+    /// foreground deadline. Edited layers remain provisional until the single
+    /// background computation can finish the newest revision.
     pub(super) fn refresh_conflict_resolved_output_syntax(
         &mut self,
         output_snapshot: &TextModelSnapshot,
@@ -405,6 +469,7 @@ impl MainPaneView {
                 Some(document.language()) == self.conflict_resolved_preview_syntax_language
             });
         if edit.is_none() && text_is_unchanged && language_is_unchanged {
+            self.ensure_conflict_resolved_output_live_syntax_reparse(cx);
             self.conflict_resolved_output_highlighted_conflict =
                 self.conflict_resolver.active_conflict;
             self.rebind_conflict_resolved_output_highlight_provider(cx);
@@ -443,7 +508,7 @@ impl MainPaneView {
         // parser, which would otherwise read `<Merge Conflict>` as code.
         let protected_ranges = resolved_output_placeholder_protected_ranges(&rope);
         let mask = resolved_output_live_syntax_mask(protected_ranges.as_ref(), &rope);
-        let budget = Some(self.full_document_syntax_budget().foreground_parse);
+        let budget = self.live_syntax_foreground_budget();
 
         let language = self.conflict_resolved_preview_syntax_language;
         let reusable = self
@@ -488,11 +553,13 @@ impl MainPaneView {
                 // Zed's fast path (`Buffer::reparse` under `sync_parse_timeout`):
                 // worth a budgeted attempt because a small buffer finishes inside
                 // it and never shows a frame of unhighlighted text. Skipped when
-                // a build for exactly this text is already off-thread -- that
+                // background work is already in flight -- that
                 // attempt has demonstrably failed once, so re-running it on the
                 // keystroke path is pure latency.
-                let already_building =
-                    self.conflict_resolved_output_live_syntax_building == Some(revision);
+                let already_building = self.conflict_resolved_output_live_syntax_building.is_some()
+                    || self
+                        .conflict_resolved_output_live_syntax_reparsing
+                        .is_some();
                 self.conflict_resolved_output_live_syntax =
                     language.filter(|_| !already_building).and_then(|language| {
                         rows::LiveSyntaxDocument::new(

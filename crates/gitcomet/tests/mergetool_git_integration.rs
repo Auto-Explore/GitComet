@@ -1,6 +1,7 @@
 use gitcomet_core::process::background_command as no_window_command;
 use gitcomet_core::test_support::git_fixture::{
-    FixtureTimer, LinearCommit, append_config, import_linear_history, init_repository,
+    FixtureTimer, LinearCommit, append_config, capture_tool_help, import_linear_history,
+    init_repository,
 };
 #[path = "support/gitcomet_bin.rs"]
 mod gitcomet_test_bin;
@@ -1647,7 +1648,9 @@ fn git_mergetool_tool_help_lists_gitcomet_tool() {
     init_repo(repo);
     configure_gitcomet_mergetool(repo);
 
-    let output = run_git_capture(repo, &["mergetool", "--tool-help"]);
+    let mut command = no_window_command("git");
+    apply_isolated_git_config_env(&mut command);
+    let output = capture_tool_help(command.arg("-C").arg(repo), "mergetool");
     let text = output_text(&output);
     assert!(
         output.status.success(),

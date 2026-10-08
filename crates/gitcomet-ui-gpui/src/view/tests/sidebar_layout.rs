@@ -1205,10 +1205,7 @@ fn collapsed_files_popover_uses_branch_style_rows_and_scrolls(cx: &mut gpui::Tes
             this.open_sidebar_collapsed_popover(CollapsedSidebarSection::Files, cx);
         });
     });
-    pump_for(
-        cx,
-        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
-    );
+    finish_pane_transitions(cx, &view);
 
     let panel = cx
         .debug_bounds("collapsed_sidebar_popover")
@@ -1274,10 +1271,7 @@ fn collapsed_branch_popover_search_keeps_its_section_scope(cx: &mut gpui::TestAp
             this.open_sidebar_collapsed_popover(CollapsedSidebarSection::Local, cx);
         });
     });
-    pump_for(
-        cx,
-        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
-    );
+    finish_pane_transitions(cx, &view);
 
     assert!(
         cx.debug_bounds("sidebar_branches_search").is_none(),
@@ -1371,10 +1365,7 @@ fn collapsed_worktrees_popover_offers_its_section_menu(cx: &mut gpui::TestAppCon
             this.open_sidebar_collapsed_popover(CollapsedSidebarSection::Worktrees, cx);
         });
     });
-    pump_for(
-        cx,
-        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
-    );
+    finish_pane_transitions(cx, &view);
 
     let panel = cx
         .debug_bounds("collapsed_sidebar_popover")
@@ -1432,10 +1423,7 @@ fn collapsed_files_popover_offers_the_files_settings_menu(cx: &mut gpui::TestApp
             this.open_sidebar_collapsed_popover(CollapsedSidebarSection::Files, cx);
         });
     });
-    pump_for(
-        cx,
-        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
-    );
+    finish_pane_transitions(cx, &view);
 
     let button = cx
         .debug_bounds("collapsed_popover_section_menu")

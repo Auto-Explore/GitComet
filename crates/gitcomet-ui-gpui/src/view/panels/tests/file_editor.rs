@@ -5120,3 +5120,177 @@ async fn closing_a_repository_tab_prompts_for_its_unsaved_edits(cx: &mut gpui::T
     });
     let _ = std::fs::remove_dir_all(&workdir);
 }
+
+#[gpui::test]
+fn syntax_builds_coalesce_edits_and_file_switch_discards_obsolete_completion(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = lock_visual_test();
+    cx.skip_drawing();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let directory = tempfile::tempdir().unwrap();
+    let workdir = directory.path().canonicalize().unwrap();
+    let repo_id = gitcomet_state::model::RepoId(998);
+    let first = Path::new("first.rs");
+    let second = Path::new("second.rs");
+    std::fs::write(workdir.join(first), "fn first() {}\n").unwrap();
+    std::fs::write(workdir.join(second), "fn second() {}\n").unwrap();
+    let (release, gate) = smol::channel::unbounded();
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            push_test_state(view, editor_state(repo_id, &workdir, first), cx);
+            view.main_pane.update(cx, |pane, cx| {
+                pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
+                    foreground_parse: std::time::Duration::ZERO,
+                });
+                pane.live_syntax_background_gate_for_tests = Some(gate);
+                pane.auto_save_file_edits = false;
+                pane.ensure_file_editor_loaded(cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+    let pane = cx.update(|_, app| view.read(app).main_pane.clone());
+    cx.update(|_, app| pane.update(app, |pane, cx| pane.ensure_file_editor_loaded(cx)));
+    cx.run_until_parked();
+    for _ in 0..3 {
+        cx.update(|_, app| {
+            pane.update(app, |pane, cx| {
+                pane.file_editor_input.update(cx, |input, cx| {
+                    input.replace_utf8_range(0..0, "// edit\n", cx);
+                });
+            })
+        });
+        cx.run_until_parked();
+    }
+    cx.update(|_, app| {
+        assert_eq!(
+            pane.read(app).live_syntax_background_jobs_started,
+            1,
+            "loading={} language={:?} text={:?} error={:?}",
+            pane.read(app).file_editor_loading,
+            pane.read(app).file_editor_language,
+            pane.read(app).file_editor_input.read(app).text(),
+            pane.read(app).file_editor_error
+        )
+    });
+    release.try_send(()).unwrap();
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        assert_eq!(pane.read(app).live_syntax_background_jobs_started, 2);
+        assert!(pane.read(app).file_editor_live_syntax_building.is_some());
+    });
+    release.try_send(()).unwrap();
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        let pane = pane.read(app);
+        assert!(pane.file_editor_live_syntax_building.is_none());
+        assert!(pane.file_editor_live_syntax.is_some());
+        let snapshot = pane.file_editor_input.read(app).text_snapshot();
+        assert_eq!(
+            pane.file_editor_live_syntax_source,
+            Some((snapshot.model_id(), snapshot.revision()))
+        );
+    });
+    // A wholesale replacement changes recovery from a reparse to a cold build.
+    // It must wait for the same document's active computation to finish.
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            pane.file_editor_input.update(cx, |input, cx| {
+                input.replace_utf8_range(0..0, "// before replacement\n", cx);
+            });
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            pane.file_editor_input.update(cx, |input, cx| {
+                input.set_text("fn replaced() {}\n", cx);
+            });
+            let snapshot = pane.file_editor_input.read(cx).text_snapshot();
+            pane.refresh_file_editor_syntax(&snapshot, None, cx);
+            assert!(pane.file_editor_live_syntax.is_none());
+            assert!(pane.file_editor_live_syntax_reparsing.is_some());
+            assert!(pane.file_editor_live_syntax_building.is_none());
+            assert_eq!(pane.live_syntax_background_jobs_started, 3);
+        });
+    });
+    cx.run_until_parked();
+    release.try_send(()).unwrap();
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        assert_eq!(pane.read(app).live_syntax_background_jobs_started, 4);
+        assert!(pane.read(app).file_editor_live_syntax_building.is_some());
+        assert!(pane.read(app).file_editor_live_syntax_reparsing.is_none());
+    });
+    release.try_send(()).unwrap();
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        let pane = pane.read(app);
+        assert_eq!(
+            pane.file_editor_input.read(app).text(),
+            "fn replaced() {}\n"
+        );
+        assert!(pane.file_editor_live_syntax.is_some());
+        assert!(pane.file_editor_live_syntax_building.is_none());
+    });
+    // Hold a reparse for A, then switch documents before it is allowed to finish.
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            pane.file_editor_input.update(cx, |input, cx| {
+                input.replace_utf8_range(0..0, "/* pending */\n", cx)
+            });
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            push_test_state(view, editor_state(repo_id, &workdir, second), cx)
+        });
+        pane.update(app, |pane, cx| pane.ensure_file_editor_loaded(cx));
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| pane.update(app, |pane, cx| pane.ensure_file_editor_loaded(cx)));
+    cx.run_until_parked();
+    release.try_send(()).unwrap();
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        let pane = pane.read(app);
+        assert_eq!(pane.file_editor_input.read(app).text(), "fn second() {}\n");
+        assert!(pane.file_editor_live_syntax.is_some());
+        assert!(pane.file_editor_live_syntax_building.is_none());
+        assert!(pane.file_editor_live_syntax_reparsing.is_none());
+    });
+    // Destruction cancels the completion owner while work is pending.
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            pane.file_editor_input.update(cx, |input, cx| {
+                input.replace_utf8_range(0..0, "// pending destruction\n", cx)
+            });
+        })
+    });
+    cx.run_until_parked();
+    let weak = pane.downgrade();
+    struct EmptyPane;
+    impl gpui::Render for EmptyPane {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::div()
+        }
+    }
+    cx.update(|window, app| {
+        window.replace_root(app, |_, _| EmptyPane);
+    });
+    drop(pane);
+    drop(view);
+    cx.cx.update(|_| {});
+    cx.run_until_parked();
+    assert!(weak.upgrade().is_none());
+    let _ = release.try_send(());
+    cx.run_until_parked();
+}

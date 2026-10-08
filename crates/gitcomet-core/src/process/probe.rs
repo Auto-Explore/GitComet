@@ -131,7 +131,9 @@ mod tests {
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
         assert!(started.elapsed() < Duration::from_secs(2));
         assert!(marker.with_extension("started").exists());
-        thread::sleep(Duration::from_secs(2));
+        // probe_output joins both pipe readers before returning. The fixture
+        // holds those pipes until it writes the marker and exits, so an escaped
+        // descendant would already have written it by the time we get here.
         assert!(!marker.exists(), "descendant escaped the owned group/job");
     }
 

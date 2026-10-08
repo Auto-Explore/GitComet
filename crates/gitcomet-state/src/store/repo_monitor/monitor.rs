@@ -12,6 +12,65 @@ pub(super) enum WatchSetupOutcome {
     PolicyFailed,
 }
 
+pub(super) enum WatchSetup {
+    Ready(MonitorWatcher, WatchSetupOutcome),
+    Unavailable,
+    Cancelled,
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+pub(super) struct StartupProgress {
+    pub phase: &'static str,
+    pub attempt: usize,
+    pub directories: usize,
+}
+
+#[cfg(test)]
+impl Default for StartupProgress {
+    fn default() -> Self {
+        Self {
+            phase: "worker-start",
+            attempt: 0,
+            directories: 0,
+        }
+    }
+}
+
+struct SetupPhase {
+    name: &'static str,
+    attempt: usize,
+    started: Option<Instant>,
+}
+impl SetupPhase {
+    fn new(config: &MonitorConfig, name: &'static str, attempt: usize) -> Self {
+        #[cfg(test)]
+        if let Some(progress) = &config.startup_progress {
+            let mut progress = progress.lock().unwrap_or_else(|e| e.into_inner());
+            progress.phase = name;
+            progress.attempt = attempt + 1;
+        }
+        let _ = config;
+        Self {
+            name,
+            attempt: attempt + 1,
+            started: repo_load_trace::enabled().then(Instant::now),
+        }
+    }
+}
+impl Drop for SetupPhase {
+    fn drop(&mut self) {
+        if let Some(started) = self.started {
+            repo_load_trace::trace!(
+                "repo_monitor_setup phase={} attempt={} elapsed_us={}",
+                self.name,
+                self.attempt,
+                started.elapsed().as_micros()
+            );
+        }
+    }
+}
+
 pub(super) struct MonitorConfig {
     pub debounce: Duration,
     pub max_delay: Duration,
@@ -19,6 +78,9 @@ pub(super) struct MonitorConfig {
     pub recovery_interval: Duration,
     pub setup_passes: usize,
     pub dir_limit: usize,
+    pub enabled: Arc<AtomicBool>,
+    #[cfg(test)]
+    pub startup_progress: Option<Arc<std::sync::Mutex<StartupProgress>>>,
     pub before_registration: Option<Box<dyn FnMut() + Send>>,
     /// Set while a watch lease holds this repository: its changes are
     /// delivered even when another repository is active.
@@ -38,6 +100,9 @@ impl Default for MonitorConfig {
             recovery_interval: DEGRADED_WATCH_RECHECK_INTERVAL,
             setup_passes: 3,
             dir_limit: MAX_WORKTREE_WATCH_DIRS,
+            enabled: Arc::new(AtomicBool::new(true)),
+            #[cfg(test)]
+            startup_progress: None,
             before_registration: None,
             leased: Arc::default(),
             worktree_owner: None,
@@ -119,22 +184,45 @@ impl MonitorState {
         enabled: &Arc<AtomicBool>,
         config: &mut MonitorConfig,
         mut reload: bool,
-    ) -> Option<(MonitorWatcher, WatchSetupOutcome)> {
+    ) -> WatchSetup {
         #[cfg(test)]
         let _timing = test_sync::WaitTiming::new("registration");
+        config.enabled = Arc::clone(enabled);
         for attempt in 0..config.setup_passes.max(1) {
+            if !enabled.load(Ordering::Relaxed) {
+                return WatchSetup::Cancelled;
+            }
             if reload {
+                let _phase = SetupPhase::new(config, "input-reload", attempt);
                 self.reload(workdir, backend, false);
+            }
+            if !enabled.load(Ordering::Relaxed) {
+                return WatchSetup::Cancelled;
+            }
+            #[cfg(test)]
+            if let Some(progress) = &config.startup_progress {
+                progress
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .directories = 0;
             }
             self.plan = WatchPlan::default();
             self.publish(PolicySnapshot::new(workdir, &self.inputs));
-            if let Some(hook) = &mut config.before_registration {
-                hook();
+            {
+                let _phase = SetupPhase::new(config, "before-registration", attempt);
+                if let Some(hook) = &mut config.before_registration {
+                    hook();
+                }
+            }
+            if !enabled.load(Ordering::Relaxed) {
+                return WatchSetup::Cancelled;
             }
             // Linux registers each directory in the BFS. Windows establishes
             // recursive root coverage first. macOS needs the final boundaries
             // before creating its streams; recursive coverage includes any
             // directories created during that scan as well.
+            #[cfg(not(target_os = "macos"))]
+            let _phase = SetupPhase::new(config, "native-registration", attempt);
             #[cfg(not(target_os = "macos"))]
             let (mut watcher, failures) = match MonitorWatcher::new(
                 repo_id,
@@ -149,43 +237,70 @@ impl MonitorState {
             ) {
                 Ok(result) => result,
                 Err(error) => {
+                    if !enabled.load(Ordering::Relaxed) {
+                        return WatchSetup::Cancelled;
+                    }
                     record_monitor_failure(MonitorFailureKind::Start, "create watcher", error);
-                    return None;
+                    return WatchSetup::Unavailable;
                 }
             };
             #[cfg(not(target_os = "macos"))]
             {
                 self.plan.failures += failures;
             }
+            #[cfg(not(target_os = "macos"))]
+            drop(_phase);
+            if !enabled.load(Ordering::Relaxed) {
+                return WatchSetup::Cancelled;
+            }
             let snapshot = self.snapshot();
             let mut roots: Vec<_> = snapshot.git_roots.iter().cloned().collect();
             roots.sort();
-            for (roots, worktree) in [(roots, false), (vec![workdir.to_path_buf()], true)] {
-                self.plan.walk(
-                    roots,
-                    worktree,
-                    &snapshot,
-                    &mut self.rules,
-                    &mut self.inputs,
-                    config.dir_limit,
-                    |path| {
-                        #[cfg(not(target_os = "macos"))]
-                        {
-                            watcher.add(path)
-                        }
-                        #[cfg(target_os = "macos")]
-                        {
-                            let _ = path;
-                            Ok(())
-                        }
-                    },
-                );
+            {
+                let _phase = SetupPhase::new(config, "directory-discovery", attempt);
+                for (roots, worktree) in [(roots, false), (vec![workdir.to_path_buf()], true)] {
+                    let complete = self.plan.walk_while(
+                        roots,
+                        worktree,
+                        &snapshot,
+                        &mut self.rules,
+                        &mut self.inputs,
+                        config.dir_limit,
+                        |path| {
+                            #[cfg(test)]
+                            if let Some(progress) = &config.startup_progress {
+                                progress
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .directories += 1;
+                            }
+                            #[cfg(not(target_os = "macos"))]
+                            {
+                                watcher.add(path)
+                            }
+                            #[cfg(target_os = "macos")]
+                            {
+                                let _ = path;
+                                Ok(())
+                            }
+                        },
+                        || enabled.load(Ordering::Relaxed),
+                    );
+                    if !complete {
+                        return WatchSetup::Cancelled;
+                    }
+                }
+            }
+            if !enabled.load(Ordering::Relaxed) {
+                return WatchSetup::Cancelled;
             }
             let mut snapshot = PolicySnapshot::new(workdir, &self.inputs);
             snapshot
                 .excluded_roots
                 .extend(self.plan.boundaries.iter().cloned());
             self.publish(snapshot);
+            #[cfg(target_os = "macos")]
+            let _phase = SetupPhase::new(config, "native-registration", attempt);
             #[cfg(target_os = "macos")]
             let watcher = match MonitorWatcher::new(
                 repo_id,
@@ -203,24 +318,37 @@ impl MonitorState {
                     watcher
                 }
                 Err(error) => {
+                    if !enabled.load(Ordering::Relaxed) {
+                        return WatchSetup::Cancelled;
+                    }
                     record_monitor_failure(MonitorFailureKind::Start, "create watcher", error);
-                    return None;
+                    return WatchSetup::Unavailable;
                 }
             };
-            if !self.inputs.stamps.changed() && !self.inputs.indexes.changed() {
-                return Some((
+            #[cfg(target_os = "macos")]
+            drop(_phase);
+            if !enabled.load(Ordering::Relaxed) {
+                return WatchSetup::Cancelled;
+            }
+            let _phase = SetupPhase::new(config, "policy-revalidation", attempt);
+            let stable = !self.inputs.stamps.changed() && !self.inputs.indexes.changed();
+            if !enabled.load(Ordering::Relaxed) {
+                return WatchSetup::Cancelled;
+            }
+            if stable {
+                return WatchSetup::Ready(
                     watcher,
                     self.plan.outcome(&self.rules, &self.inputs, WATCH_MODE),
-                ));
+                );
             }
             if attempt + 1 == config.setup_passes.max(1) {
                 // Keep useful partial coverage and retry through ordinary input
                 // revalidation. No synthetic event can create a retry loop.
                 self.plan.failures += 1;
-                return Some((
+                return WatchSetup::Ready(
                     watcher,
                     self.plan.outcome(&self.rules, &self.inputs, WATCH_MODE),
-                ));
+                );
             }
             drop(watcher);
             reload = true;
@@ -249,7 +377,10 @@ impl MonitorState {
             .boundaries
             .extend(effect.new_ignored_dirs.iter().cloned());
         for (path, worktree) in &effect.dir_added {
-            self.plan.walk(
+            if !config.enabled.load(Ordering::Relaxed) {
+                return;
+            }
+            if !self.plan.walk_while(
                 [path.clone()],
                 *worktree,
                 &snapshot,
@@ -257,7 +388,13 @@ impl MonitorState {
                 &mut self.inputs,
                 config.dir_limit,
                 |dir| watcher.add(dir),
-            );
+                || config.enabled.load(Ordering::Relaxed),
+            ) {
+                return;
+            }
+        }
+        if !config.enabled.load(Ordering::Relaxed) {
+            return;
         }
         if self.plan.boundaries.len() != previous_boundaries
             || !effect.dir_added.is_empty()
@@ -518,9 +655,13 @@ pub(super) fn repo_monitor_thread(
         true,
     );
     let (mut watcher, mut outcome) = match initial {
-        Some((watcher, outcome)) => (Some(watcher), outcome),
-        None => (None, WatchSetupOutcome::Watching { failed_dirs: 1 }),
+        WatchSetup::Ready(watcher, outcome) => (Some(watcher), outcome),
+        WatchSetup::Unavailable => (None, WatchSetupOutcome::Watching { failed_dirs: 1 }),
+        WatchSetup::Cancelled => return,
     };
+    if !monitor_enabled.load(Ordering::Relaxed) {
+        return;
+    }
     let mut degraded = false;
     note_watch_outcome(&msg_tx, repo_id, &mut degraded, outcome);
     let mut last_recovery = degraded.then(Instant::now);
@@ -552,6 +693,9 @@ pub(super) fn repo_monitor_thread(
         }
     };
     loop {
+        if !monitor_enabled.load(Ordering::Relaxed) {
+            break;
+        }
         let now = Instant::now();
         let timeout = debouncer
             .next_timeout(now)
@@ -563,6 +707,9 @@ pub(super) fn repo_monitor_thread(
             Ok(MonitorMsg::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
             #[cfg(test)]
             Ok(MonitorMsg::Barrier(tx)) => {
+                if !monitor_enabled.load(Ordering::Relaxed) {
+                    break;
+                }
                 let _ = tx.send(());
             }
             #[cfg(test)]
@@ -732,11 +879,14 @@ pub(super) fn repo_monitor_thread(
                     &mut config,
                     !loaded,
                 ) {
-                    Some((new, result)) => {
+                    WatchSetup::Ready(new, result) => {
                         watcher = Some(new);
                         outcome = result;
                     }
-                    None => outcome = WatchSetupOutcome::Watching { failed_dirs: 1 },
+                    WatchSetup::Unavailable => {
+                        outcome = WatchSetupOutcome::Watching { failed_dirs: 1 }
+                    }
+                    WatchSetup::Cancelled => break,
                 }
                 note_watch_outcome(&msg_tx, repo_id, &mut degraded, outcome);
                 debouncer.take();

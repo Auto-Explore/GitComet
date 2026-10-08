@@ -418,3 +418,12 @@ mod tests {
         assert_eq!(state.repos[0].conflict_state.conflict_rev, before_rev + 1);
     }
 }
+
+/// Native setup, excluding fixture creation and watcher teardown.
+pub fn watcher_startup(
+    root: &std::path::Path,
+    backend: &dyn gitcomet_core::services::GitBackend,
+    cancel_during_setup: bool,
+) -> (std::time::Duration, usize, bool) {
+    crate::store::watcher_startup_for_bench(root, backend, cancel_during_setup)
+}

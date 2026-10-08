@@ -294,7 +294,7 @@ fn structured_conflict_edit_reuses_stashed_outline_base_while_background_recompu
     let repo_id = gitcomet_state::model::RepoId(168);
     let fixture = SyntheticLargeConflictFixture::new(
         "resolved_outline_pending_incremental",
-        "fixtures/resolved_outline_pending.html",
+        "fixtures/resolved_outline_pending.txt",
         20_000,
         4,
     );
@@ -499,7 +499,7 @@ fn giant_two_way_resync_rebuilds_split_index_after_manual_session_edit(
     let repo_id = gitcomet_state::model::RepoId(172);
     let fixture = SyntheticLargeConflictFixture::new(
         "giant_two_way_resync_manual_edit",
-        "fixtures/resync_manual_edit.html",
+        "fixtures/resync_manual_edit.txt",
         20_001,
         4,
     );
@@ -1106,6 +1106,21 @@ fn large_conflict_resolved_output_above_the_old_line_gate_is_highlighted(
 fn edited_conflict_resolved_output_highlights_multiline_comment_on_the_keystroke(
     cx: &mut gpui::TestAppContext,
 ) {
+    edited_conflict_multiline_comment(cx, 64, false);
+}
+
+#[gpui::test]
+fn edited_conflict_resolved_output_defers_large_comment_edits_and_recovers_latest_revision(
+    cx: &mut gpui::TestAppContext,
+) {
+    edited_conflict_multiline_comment(cx, 20_001, true);
+}
+
+fn edited_conflict_multiline_comment(
+    cx: &mut gpui::TestAppContext,
+    fixture_line_count: usize,
+    deferred: bool,
+) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1113,14 +1128,13 @@ fn edited_conflict_resolved_output_highlights_multiline_comment_on_the_keystroke
 
     let repo_id = gitcomet_state::model::RepoId(63);
     let workdir = std::env::temp_dir().join(format!(
-        "gitcomet_ui_test_{}_edited_conflict_resolved_output_background_syntax",
-        std::process::id()
+        "gitcomet_ui_test_{}_edited_conflict_resolved_output_background_syntax_{fixture_line_count}",
+        std::process::id(),
     ));
     let file_rel = std::path::PathBuf::from("src/edited_conflict_resolved_bg.rs");
     let abs_path = workdir.join(&file_rel);
     let inserted_comment_line = "still inside block comment";
     let inserted_prefix = format!("/* start block comment\n{inserted_comment_line}\nend */\n");
-    let fixture_line_count = 20_001usize;
 
     let mut base_lines = vec![
         "fn large_demo() {".to_string(),
@@ -1165,9 +1179,7 @@ fn edited_conflict_resolved_output_highlights_multiline_comment_on_the_keystroke
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, _cx| {
-                pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
-                    foreground_parse: std::time::Duration::from_secs(1),
-                });
+                pane.live_syntax_unbounded_for_tests = true;
             });
 
             let mut repo = opening_repo_state(repo_id, &workdir);
@@ -1258,11 +1270,25 @@ fn edited_conflict_resolved_output_highlights_multiline_comment_on_the_keystroke
     });
 
     // Insert a block comment whose body runs onto the next row. Getting that row
-    // right needs the reparse to have happened — `tree.edit` alone only shifts
-    // existing nodes, it cannot invent a comment node — so this is a test that
-    // the keystroke path reparses synchronously within its budget. (The
-    // budget-exhausted path is covered by `syntax::live`'s own tests, where the
-    // deferred tree keeps painting until a background pass catches up.)
+    // right needs a completed reparse: `tree.edit` cannot invent a comment node.
+    // The small fixture removes the clock from the immediate correctness test;
+    // the large fixture forces exhaustion and explicitly releases recovery.
+    let (release, gate) = smol::channel::unbounded();
+    let jobs_before = cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, _cx| {
+                if deferred {
+                    pane.set_full_document_syntax_budget_override_for_tests(
+                        rows::DiffSyntaxBudget {
+                            foreground_parse: std::time::Duration::ZERO,
+                        },
+                    );
+                    pane.live_syntax_background_gate_for_tests = Some(gate);
+                }
+                pane.live_syntax_background_jobs_started
+            })
+        })
+    });
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
@@ -1273,8 +1299,122 @@ fn edited_conflict_resolved_output_highlights_multiline_comment_on_the_keystroke
         });
     });
 
-    // No `wait_for_*`: the assertion is that this is already true, on the very
-    // next look, with no background pass and no debounce elapsed.
+    if deferred {
+        cx.run_until_parked();
+        for _ in 0..3 {
+            cx.update(|_window, app| {
+                view.update(app, |this, cx| {
+                    this.main_pane.update(cx, |pane, cx| {
+                        pane.conflict_resolver_input.update(cx, |input, cx| {
+                            let end = input.text().len();
+                            input.replace_utf8_range(end..end, "\n// latest revision", cx);
+                        });
+                    })
+                });
+            });
+            cx.run_until_parked();
+        }
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            assert_eq!(
+                pane.live_syntax_background_jobs_started - jobs_before,
+                1,
+                "rapid edits must share the in-flight reparse"
+            );
+            assert!(
+                pane.conflict_resolved_output_live_syntax_reparsing
+                    .is_some()
+            );
+        });
+        release.try_send(()).unwrap();
+        cx.run_until_parked();
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            assert_eq!(
+                pane.live_syntax_background_jobs_started - jobs_before,
+                2,
+                "obsolete completion must schedule the newest revision once"
+            );
+            assert!(
+                pane.conflict_resolved_output_live_syntax_reparsing
+                    .is_some()
+            );
+        });
+        release.try_send(()).unwrap();
+        cx.run_until_parked();
+        // Replacing the whole buffer while a later reparse is in flight must
+        // hand off to one cold build, rather than overlap the two computations.
+        cx.update(|_, app| {
+            view.read(app).main_pane.clone().update(app, |pane, cx| {
+                pane.conflict_resolver_input.update(cx, |input, cx| {
+                    let end = input.text().len();
+                    input.replace_utf8_range(end..end, "\n// pending replacement", cx);
+                });
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|_, app| {
+            view.read(app).main_pane.clone().update(app, |pane, cx| {
+                pane.conflict_resolver_input.update(cx, |input, cx| {
+                    input.set_text(format!("{}\n// replaced", input.text()), cx);
+                });
+                pane.recompute_conflict_resolved_outline_for_tests(cx);
+                assert!(pane.conflict_resolved_output_live_syntax.is_none());
+                assert!(
+                    pane.conflict_resolved_output_live_syntax_reparsing
+                        .is_some()
+                );
+                assert!(pane.conflict_resolved_output_live_syntax_building.is_none());
+                assert_eq!(pane.live_syntax_background_jobs_started - jobs_before, 3);
+            });
+        });
+        cx.run_until_parked();
+        release.try_send(()).unwrap();
+        cx.run_until_parked();
+        cx.update(|_, app| {
+            let pane = view.read(app).main_pane.read(app);
+            assert_eq!(pane.live_syntax_background_jobs_started - jobs_before, 4);
+            assert!(pane.conflict_resolved_output_live_syntax_building.is_some());
+            assert!(
+                pane.conflict_resolved_output_live_syntax_reparsing
+                    .is_none()
+            );
+        });
+        release.try_send(()).unwrap();
+        cx.run_until_parked();
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    assert!(
+                        pane.conflict_resolved_output_live_syntax_reparsing
+                            .is_none()
+                    );
+                    let document = pane.conflict_resolved_output_live_syntax.as_ref().unwrap();
+                    assert!(document.background_reparse_request().is_none());
+                    let snapshot = pane.conflict_resolver_input.read(cx).text_snapshot();
+                    let text = snapshot.as_shared_string();
+                    let cold = rows::LiveSyntaxDocument::new(
+                        rows::DiffSyntaxLanguage::Rust,
+                        snapshot.rope(),
+                        resolved_output_placeholder_protected_ranges_for_test(&text),
+                        None,
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        document
+                            .snapshot(pane.theme)
+                            .highlights_for_byte_range(0..text.len()),
+                        cold.snapshot(pane.theme)
+                            .highlights_for_byte_range(0..text.len())
+                    );
+                    pane.live_syntax_background_gate_for_tests = None;
+                })
+            });
+        });
+    }
+
+    // The immediate case reaches this assertion without polling or waiting.
+    // The deferred case reaches it only after the controlled recovery above.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
@@ -1292,8 +1432,7 @@ fn edited_conflict_resolved_output_highlights_multiline_comment_on_the_keystroke
                             && range.end >= line_end
                             && style.color == Some(comment_color.into_color())
                     }),
-                    "the row inside the inserted block comment should be comment-coloured \
-                     on the keystroke, not after a background upgrade: {highlights:?}"
+                    "the inserted block comment must have exact highlights: {highlights:?}"
                 );
             });
         });
