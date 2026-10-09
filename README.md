@@ -15,7 +15,11 @@ GitComet is built for teams that want fast Git operations with local-first priva
 
 Available for Linux, Windows, and macOS.
 
-<img alt="GitComet demo" src="assets/gitcomet-0.2.0.gif"/>
+
+
+https://github.com/user-attachments/assets/acc45615-7e13-4952-aebe-36f600cc4f24
+
+
 
 ### Download
 
