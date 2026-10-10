@@ -162,6 +162,27 @@ clock. WindowServer's GPU time per second rises a little after the change
 because its unchanged compositing work now runs at that lower clock, which costs
 far less energy.
 
+4. **Large rounded opaque quads blended.** The content card behind the panes
+   has rounded left corners and covers 69% of the window. Because of the
+   corners, the whole card blended, so the background beneath it was shaded
+   wherever no opaque pane covered the card.
+   - Fix (gpui-ce, Metal): draw such a quad as a plain opaque interior plus four
+     blended strips along its edges. The strips hold the corners and keep the
+     original quad, clipped to each strip. Every pixel is shaded by the same
+     math as before.
+
+   | Interaction | GPU per frame before | after | Whole-GPU power before | after |
+   | --- | ---: | ---: | ---: | ---: |
+   | Hover | 3.76 ms | 2.75 ms | 250 mW | 190 mW |
+   | Scroll | 3.70 ms | 2.67 ms | 273 mW | 204 mW |
+   | Selection | 3.57 ms | 2.58 ms | 82 mW | 64 mW |
+
+   The "before" column already includes fixes 1-3.
+
+   Against the original build, a hover redraw costs 68% less GPU time
+   (8.5 → 2.75 ms) and whole-GPU power during the sweep is 75% lower
+   (768 → 190 mW).
+
 ### CPU
 
 - **Hover.** A hovered-row change re-renders the root view, the main pane and
@@ -267,13 +288,18 @@ These were measured but not changed yet.
    separate store publications, and each one re-renders the main pane. Delivering
    them as one publication, and not bumping revisions when attributes are
    unchanged, would remove 2-3 frames per open.
-3. **Rounded content card.** The white card behind the main and details panes
-   has rounded left corners, so it blends. The GPU therefore shades the two
-   opaque layers beneath it, about 69% of the window.
-   - Option 1: drop the background layers that are hidden anyway (the window
-     surface and workspace backgrounds under the card).
-   - Option 2: split rounded opaque quads in the renderer into an opaque
-     interior plus blended corners.
+3. **Extra frames from measuring during paint.** `GPUI_TRACE_NOTIFY=1` logs
+   every notify with its caller. A notify issued while a frame is drawing costs
+   the whole next frame. Each diff open had 2-3 such follow-up frames, from two
+   callers:
+   - the diff view recording wider lines as it paints them, which updates the
+     horizontal scroll extent;
+   - the scrollbar's thumb-visibility change, which lets the layout reserve the
+     scrollbar gutter.
+
+   Deferring the width update did not reduce frames measurably, so it was not
+   kept. Removing the follow-ups for real means computing both before layout,
+   from the row count and the widest known line.
 4. **GPUI per-frame bookkeeping.** In every frame:
    - inserting into the bounds tree takes about 8% of the main thread;
    - replaying cached views' paint takes about 8%;
