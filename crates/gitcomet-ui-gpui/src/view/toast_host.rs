@@ -281,7 +281,7 @@ impl ToastHost {
             body: ToastBody::Error(std::rc::Rc::new(ErrorNotice::new(report))),
             actions: Vec::new(),
             dismiss_behavior: ToastDismissBehavior::Remove,
-            ttl: None,
+            leaving: false,
         });
         cx.notify();
     }
@@ -545,15 +545,29 @@ impl ToastHost {
             },
             actions,
             dismiss_behavior,
-            ttl,
+            leaving: false,
         });
         cx.notify();
 
         if let Some(ttl) = ttl {
             let lifetime = toast_total_lifetime(ttl);
+            let fade_out = toast_fade_out_duration();
             cx.spawn(
                 async move |view: WeakEntity<ToastHost>, cx: &mut gpui::AsyncApp| {
-                    smol::Timer::after(lifetime).await;
+                    smol::Timer::after(lifetime.saturating_sub(fade_out)).await;
+                    let still_shown = view.update(cx, |this, cx| {
+                        let Some(toast) = this.toasts.iter_mut().find(|toast| toast.id == id)
+                        else {
+                            return false;
+                        };
+                        toast.leaving = true;
+                        cx.notify();
+                        true
+                    });
+                    if !matches!(still_shown, Ok(true)) {
+                        return;
+                    }
+                    smol::Timer::after(fade_out).await;
                     let _ = view.update(cx, |this, cx| {
                         this.remove_toast(id, cx);
                     });
@@ -1312,21 +1326,26 @@ impl ToastHost {
                     .child(close),
             )
             .with_animations(
-                ("toast", toast.id),
+                // A new id restarts the animation state for the fade-out.
+                (
+                    if toast.leaving {
+                        "toast_leaving"
+                    } else {
+                        "toast"
+                    },
+                    toast.id,
+                ),
                 animations,
-                move |toast, animation_ix, delta| {
-                    let opacity = match animation_ix {
-                        0 => delta,
-                        1 => 1.0,
-                        2 => 1.0 - delta,
-                        _ => 1.0,
-                    };
-                    let slide_x = match animation_ix {
-                        0 => -(1.0 - delta) * TOAST_SLIDE_PX,
-                        2 => -delta * TOAST_SLIDE_PX,
-                        _ => 0.0,
-                    };
-                    toast.opacity(opacity).relative().left(px(slide_x))
+                {
+                    let leaving = toast.leaving;
+                    move |toast, _animation_ix, delta| {
+                        let (opacity, slide_x) = if leaving {
+                            (1.0 - delta, -delta * TOAST_SLIDE_PX)
+                        } else {
+                            (delta, -(1.0 - delta) * TOAST_SLIDE_PX)
+                        };
+                        toast.opacity(opacity).relative().left(px(slide_x))
+                    }
                 },
             )
             .into_any_element()
@@ -1514,13 +1533,10 @@ impl Render for ToastHost {
         let mut children = displayed
             .drain(..)
             .map(move |t| {
-                let animations = match t.ttl {
-                    Some(ttl) => vec![
-                        Animation::new(fade_in).with_easing(gpui::quadratic),
-                        Animation::new(ttl),
-                        Animation::new(fade_out).with_easing(gpui::quadratic),
-                    ],
-                    None => vec![Animation::new(fade_in).with_easing(gpui::quadratic)],
+                let animations = if t.leaving {
+                    vec![Animation::new(fade_out).with_easing(gpui::quadratic)]
+                } else {
+                    vec![Animation::new(fade_in).with_easing(gpui::quadratic)]
                 };
 
                 let toast_id = t.id;

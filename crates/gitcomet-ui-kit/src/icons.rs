@@ -20,6 +20,11 @@ pub fn svg_icon(path: impl Into<gpui::SharedString>, color: gpui::Rgba, size: Pi
         .flex_shrink_0()
 }
 
+/// Spinner frame rate. Every animation frame redraws the whole window, so an
+/// uncapped spinner costs a full frame per display refresh (60-120 Hz) for as
+/// long as it is visible; at 30 Hz the 850 ms turn still reads as smooth.
+const SPINNER_MAX_FPS: f32 = 30.0;
+
 pub fn svg_spinner(id: impl Into<ElementId>, color: gpui::Rgba, size: Pixels) -> impl IntoElement {
     gpui::svg()
         .path("icons/spinner.svg")
@@ -29,7 +34,9 @@ pub fn svg_spinner(id: impl Into<ElementId>, color: gpui::Rgba, size: Pixels) ->
         .flex_shrink_0()
         .with_animation(
             id,
-            Animation::new(std::time::Duration::from_millis(850)).repeat(),
+            Animation::new(std::time::Duration::from_millis(850))
+                .repeat()
+                .with_max_fps(SPINNER_MAX_FPS),
             |svg, delta| {
                 svg.with_transformation(Transformation::rotate(gpui::radians(
                     delta * std::f32::consts::TAU,

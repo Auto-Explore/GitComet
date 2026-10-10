@@ -212,7 +212,21 @@ struct IndexedFileDiffSource {
     source_len: usize,
     line_starts: Arc<[usize]>,
     line_flags: Arc<[u8]>,
+    recent_lines: Arc<RecentFileLines>,
 }
+
+/// Lines of a file-backed source handed out recently. A line's text loads
+/// lazily from disk (open, seek, read) the first time it is shown; returning
+/// the same shared text for the same line keeps that read for the frames
+/// after it instead of repeating it in every frame that paints the row.
+/// Direct-mapped by line index, so a full pass (search) only cycles slots.
+#[derive(Debug, Default)]
+struct RecentFileLines {
+    slots: std::sync::Mutex<Vec<Option<(usize, gitcomet_core::file_diff::FileDiffLineText)>>>,
+}
+
+const RECENT_FILE_LINES: usize = 1024;
+const RECENT_FILE_LINE_MAX_BYTES: usize = 16 * 1024;
 
 impl IndexedFileDiffSource {
     fn empty() -> Self {
@@ -221,6 +235,7 @@ impl IndexedFileDiffSource {
             source_len: 0,
             line_starts: Arc::default(),
             line_flags: Arc::default(),
+            recent_lines: Arc::default(),
         }
     }
 
@@ -242,6 +257,7 @@ impl IndexedFileDiffSource {
             source_len: text.len(),
             line_starts,
             line_flags: Arc::from(line_flags),
+            recent_lines: Arc::default(),
         }
     }
 
@@ -322,6 +338,7 @@ impl IndexedFileDiffSource {
             source_len,
             line_starts: Arc::from(line_starts),
             line_flags: Arc::from(line_flags),
+            recent_lines: Arc::default(),
         })
     }
 
@@ -359,12 +376,33 @@ impl IndexedFileDiffSource {
                 gitcomet_core::file_diff::FileDiffLineText::shared_slice(Arc::clone(text), range),
             ),
             IndexedFileDiffContent::File(path) => {
-                Some(gitcomet_core::file_diff::FileDiffLineText::file_slice(
-                    Arc::clone(path),
-                    range,
-                    preview_line_is_ascii_without_loading(flags),
-                    preview_line_has_tabs_without_loading(flags),
-                ))
+                let fresh = || {
+                    gitcomet_core::file_diff::FileDiffLineText::file_slice(
+                        Arc::clone(path),
+                        range.clone(),
+                        preview_line_is_ascii_without_loading(flags),
+                        preview_line_has_tabs_without_loading(flags),
+                    )
+                };
+                // Long lines (minified files) are not retained.
+                if range.len() > RECENT_FILE_LINE_MAX_BYTES {
+                    return Some(fresh());
+                }
+                let Ok(mut slots) = self.recent_lines.slots.lock() else {
+                    return Some(fresh());
+                };
+                if slots.is_empty() {
+                    slots.resize(RECENT_FILE_LINES, None);
+                }
+                let slot = &mut slots[line_ix % RECENT_FILE_LINES];
+                if let Some((cached_ix, text)) = slot.as_ref()
+                    && *cached_ix == line_ix
+                {
+                    return Some(text.clone());
+                }
+                let text = fresh();
+                *slot = Some((line_ix, text.clone()));
+                Some(text)
             }
         }
     }
