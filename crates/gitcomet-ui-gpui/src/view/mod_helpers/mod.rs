@@ -1247,6 +1247,9 @@ pub struct GitCometView {
     pub(super) startup_crash_report: Option<StartupCrashReport>,
     #[cfg(target_os = "macos")]
     pub(super) recent_repos_menu_fingerprint: Vec<std::path::PathBuf>,
+    /// Session file stamp when `recent_repos_menu_fingerprint` was last read.
+    #[cfg(target_os = "macos")]
+    pub(super) recent_repos_session_stamp: Option<(u64, std::time::SystemTime)>,
 
     pub(super) auth_prompt_username_input: Entity<components::TextInput>,
     pub(super) auth_prompt_secret_input: Entity<components::TextInput>,

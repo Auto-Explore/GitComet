@@ -2039,6 +2039,8 @@ impl GitCometView {
             startup_crash_report,
             #[cfg(target_os = "macos")]
             recent_repos_menu_fingerprint: ui_session.recent_repos.clone(),
+            #[cfg(target_os = "macos")]
+            recent_repos_session_stamp: None,
             auth_prompt_username_input,
             auth_prompt_secret_input,
             auth_prompt_key: None,

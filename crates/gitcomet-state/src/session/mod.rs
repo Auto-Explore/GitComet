@@ -276,6 +276,14 @@ pub fn load() -> UiSession {
     load_from_path(&path)
 }
 
+/// Size and modification time of the session file, or `None` when it cannot
+/// be read. A `stat`, not a parse: callers polling for external changes (the
+/// macOS recent-repositories menu) reload only when this changes.
+pub fn file_stamp() -> Option<(u64, std::time::SystemTime)> {
+    let metadata = fs::metadata(default_session_file_path()?).ok()?;
+    Some((metadata.len(), metadata.modified().ok()?))
+}
+
 pub fn load_from_path(path: &Path) -> UiSession {
     let Some(mut file) = load_file(path) else {
         return UiSession::default();
