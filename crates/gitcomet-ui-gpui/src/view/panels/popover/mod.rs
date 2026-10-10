@@ -209,6 +209,7 @@ pub(in super::super) struct PopoverHost {
     /// Held here because menu models are built while the root view's update
     /// borrow is active, so its entity can't be read at that point.
     root_view_mode: GitCometViewMode,
+    pub(in crate::view) extension_editor_available: bool,
     tooltip_host: WeakEntity<TooltipHost>,
     main_pane: Entity<MainPaneView>,
     details_pane: Entity<DetailsPaneView>,

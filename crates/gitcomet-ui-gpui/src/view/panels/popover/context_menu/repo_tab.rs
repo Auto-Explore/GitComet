@@ -9,12 +9,13 @@ pub(super) fn model(host: &PopoverHost, repo_id: RepoId) -> ContextMenuModel {
         .iter()
         .find(|repo| repo.id == repo_id)
         .map(|repo| repo.spec.workdir.clone());
-    let mut model = model_for_state(
+    let mut model = model_for_state_with_editor(
         host.state.as_ref(),
         repo_id,
         workdir,
         &host.cached_workspaces,
         host.cached_workspace_id,
+        host.external_editor_available(),
     );
     if !host.extension_repo_tab_menu.is_empty() && !model.items.is_empty() {
         // Above the Close group, which stays last.
@@ -44,12 +45,31 @@ pub(super) fn model(host: &PopoverHost, repo_id: RepoId) -> ContextMenuModel {
     model
 }
 
+#[cfg(test)]
 fn model_for_state(
     state: &AppState,
     repo_id: RepoId,
     workdir: Option<std::path::PathBuf>,
     workspaces: &[session::Workspace],
     current_workspace: Option<session::WorkspaceId>,
+) -> ContextMenuModel {
+    model_for_state_with_editor(
+        state,
+        repo_id,
+        workdir,
+        workspaces,
+        current_workspace,
+        crate::external_editor::configured_setting().is_some(),
+    )
+}
+
+fn model_for_state_with_editor(
+    state: &AppState,
+    repo_id: RepoId,
+    workdir: Option<std::path::PathBuf>,
+    workspaces: &[session::Workspace],
+    current_workspace: Option<session::WorkspaceId>,
+    editor_available: bool,
 ) -> ContextMenuModel {
     let Some(repo_ix) = state.repos.iter().position(|repo| repo.id == repo_id) else {
         return ContextMenuModel::new(Vec::new());
@@ -93,9 +113,7 @@ fn model_for_state(
         });
     }
 
-    if crate::external_editor::configured_setting().is_some()
-        && let Some(ref workdir) = workdir
-    {
+    if editor_available && let Some(ref workdir) = workdir {
         items.push(ContextMenuItem::Entry {
             label: "Open in code editor".into(),
             icon: Some("icons/open_external.svg".into()),

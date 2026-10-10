@@ -188,7 +188,7 @@ pub(super) fn model(
             path: path.to_path_buf(),
         }),
     });
-    if crate::external_editor::configured_setting().is_some() {
+    if this.external_editor_available() {
         items.push(ContextMenuItem::Entry {
             label: "Open in code editor".into(),
             icon: Some("icons/open_external.svg".into()),
@@ -572,7 +572,7 @@ fn submodule_status_model(
             path: submodule_menu_state.open_path.clone().unwrap_or_default(),
         }),
     });
-    if crate::external_editor::configured_setting().is_some() {
+    if this.external_editor_available() {
         items.push(ContextMenuItem::Entry {
             label: "Open in code editor".into(),
             icon: Some("icons/open_external.svg".into()),

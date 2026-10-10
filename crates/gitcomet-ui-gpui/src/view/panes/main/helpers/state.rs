@@ -400,6 +400,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view::panes::main) _ui_model_subscription: gpui::Subscription,
     pub(in crate::view::panes::main) _text_selection_owner_subscription: gpui::Subscription,
     pub(in crate::view) root_view: WeakEntity<GitCometView>,
+    pub(in crate::view) extension_editor_available: bool,
     pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
     pub(in crate::view::panes::main) notify_fingerprint: u64,
     pub(in crate::view) active_context_menu_invoker: Option<SharedString>,

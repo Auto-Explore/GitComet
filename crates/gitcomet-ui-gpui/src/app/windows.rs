@@ -606,43 +606,6 @@ pub(crate) fn close_active_window_or_warn(cx: &mut App) {
 pub(crate) struct PendingRestart(pub(crate) bool);
 impl gpui::Global for PendingRestart {}
 
-#[cfg(test)]
-mod restart_tests {
-    use super::*;
-    #[gpui::test]
-    async fn approved_restart_uses_the_existing_helper_without_replaying_arguments(
-        cx: &mut gpui::TestAppContext,
-    ) {
-        let restart = cx.expect_restart();
-        cx.update(|cx| {
-            cx.set_global(PendingRestart(true));
-            finish_quit_or_restart(cx);
-            assert!(!cx.global::<PendingRestart>().0);
-        });
-        let (path, arguments) = restart.await.unwrap();
-        assert!(path.is_none());
-        assert!(arguments.is_empty());
-    }
-    #[cfg(target_os = "windows")]
-    #[gpui::test]
-    fn cancellation_retains_saved_renderer_for_the_next_launch(cx: &mut gpui::TestAppContext) {
-        use crate::windows_renderer::{RendererPreference, RendererSession, RendererState};
-        cx.update(|cx| {
-            let mut state = RendererState::new(RendererPreference::Auto, true);
-            state.saved = RendererPreference::Dx11;
-            let session = RendererSession(std::rc::Rc::new(std::cell::RefCell::new(state)));
-            cx.set_global(session.clone());
-            cx.set_global(PendingRestart(true));
-            cancel_pending_restart(cx);
-            assert!(!cx.global::<PendingRestart>().0);
-            cancel_pending_restart(cx);
-            assert!(!cx.global::<PendingRestart>().0);
-            assert_eq!(session.0.borrow().saved, RendererPreference::Dx11);
-            assert!(session.0.borrow().restart_required());
-        });
-    }
-}
-
 #[cfg(target_os = "windows")]
 pub(crate) fn request_restart(cx: &mut App) {
     if cx
@@ -834,4 +797,41 @@ pub(super) fn live_normal_windows(cx: &mut App) -> Vec<GitCometWindowEntry> {
         .into_iter()
         .filter(|entry| entry.view_mode == GitCometViewMode::Normal)
         .collect()
+}
+
+#[cfg(test)]
+mod restart_tests {
+    use super::*;
+    #[gpui::test]
+    async fn approved_restart_uses_the_existing_helper_without_replaying_arguments(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let restart = cx.expect_restart();
+        cx.update(|cx| {
+            cx.set_global(PendingRestart(true));
+            finish_quit_or_restart(cx);
+            assert!(!cx.global::<PendingRestart>().0);
+        });
+        let (path, arguments) = restart.await.unwrap();
+        assert!(path.is_none());
+        assert!(arguments.is_empty());
+    }
+    #[cfg(target_os = "windows")]
+    #[gpui::test]
+    fn cancellation_retains_saved_renderer_for_the_next_launch(cx: &mut gpui::TestAppContext) {
+        use crate::windows_renderer::{RendererPreference, RendererSession, RendererState};
+        cx.update(|cx| {
+            let mut state = RendererState::new(RendererPreference::Auto, true);
+            state.saved = RendererPreference::Dx11;
+            let session = RendererSession(std::rc::Rc::new(std::cell::RefCell::new(state)));
+            cx.set_global(session.clone());
+            cx.set_global(PendingRestart(true));
+            cancel_pending_restart(cx);
+            assert!(!cx.global::<PendingRestart>().0);
+            cancel_pending_restart(cx);
+            assert!(!cx.global::<PendingRestart>().0);
+            assert_eq!(session.0.borrow().saved, RendererPreference::Dx11);
+            assert!(session.0.borrow().restart_required());
+        });
+    }
 }

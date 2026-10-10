@@ -495,6 +495,7 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
 
     let started = std::time::Instant::now();
     super::super::WorkerLoopContext {
+        commit_identity: &crate::store::EMPTY_TEST_COMMIT_IDENTITY,
         thread_state: &thread_state,
         active_repo_id: &active_repo_id,
         event_tx: &event_tx,
@@ -688,6 +689,7 @@ fn a_watch_lease_keeps_a_background_repositorys_monitor_running() {
 
     let mut handle = |repo_monitors: &mut monitor_impl::RepoMonitorManager| {
         super::super::WorkerLoopContext {
+            commit_identity: &crate::store::EMPTY_TEST_COMMIT_IDENTITY,
             thread_state: &thread_state,
             active_repo_id: &active_repo_id,
             event_tx: &event_tx,

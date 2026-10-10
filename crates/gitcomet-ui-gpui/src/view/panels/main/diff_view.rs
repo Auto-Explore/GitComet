@@ -663,7 +663,7 @@ impl MainPaneView {
                     );
                     handled = true;
                 }
-                "e" if !mods.shift && crate::external_editor::configured_setting().is_some() => {
+                "e" if !mods.shift && self.external_editor_available() => {
                     let full_path = repo.spec.workdir.join(&path);
                     let root_view = self.root_view.clone();
                     let bound = self.store.binding.is_some();
@@ -730,9 +730,7 @@ impl MainPaneView {
                         handled = true;
                     }
 
-                    "e" if !mods.shift
-                        && crate::external_editor::configured_setting().is_some() =>
-                    {
+                    "e" if !mods.shift && self.external_editor_available() => {
                         let full_path = repo.spec.workdir.join(&path);
                         let root_view = self.root_view.clone();
                         let bound = self.store.binding.is_some();

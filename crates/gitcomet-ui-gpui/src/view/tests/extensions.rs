@@ -1204,3 +1204,63 @@ fn repository_watches_lease_the_watcher_until_dropped(cx: &mut gpui::TestAppCont
         store_for_assert.snapshot().watch_leases.is_empty()
     });
 }
+
+#[gpui::test]
+fn extension_branch_defaults_are_editable_and_scoped_to_one_window(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    cx.update(install_example);
+    let first = open_window_with_repo(
+        cx,
+        named_workspace("first"),
+        Path::new("/tmp/first-defaults"),
+    );
+    let second = open_window_with_repo(
+        cx,
+        named_workspace("second"),
+        Path::new("/tmp/second-defaults"),
+    );
+    let host = first
+        .update(cx, |view, _, _| {
+            view.extension_window.as_ref().unwrap().host()
+        })
+        .unwrap();
+    cx.update(|app| {
+        host.set_branch_search(
+            "^(main|release/[^/]+)$".into(),
+            gitcomet_core::text_search::TextSearchOptions {
+                regex: true,
+                match_case: true,
+                ..Default::default()
+            },
+            app,
+        )
+        .unwrap()
+    });
+    cx.run_until_parked();
+    first
+        .update(cx, |view, _, app| {
+            let sidebar = view.sidebar_pane.read(app);
+            assert_eq!(sidebar.branch_filter_query, "^(main|release/[^/]+)$");
+        })
+        .unwrap();
+    second
+        .update(cx, |view, _, app| {
+            assert!(view.sidebar_pane.read(app).branch_filter_query.is_empty())
+        })
+        .unwrap();
+    cx.update(|app| {
+        assert!(matches!(
+            host.set_external_editor(Some("not-an-installed-editor".into()), app),
+            Err(HostError::InvalidRequest(_))
+        ));
+        host.set_external_editor(None, app).unwrap();
+        host.set_branch_search(String::new(), Default::default(), app)
+            .unwrap();
+    });
+    cx.run_until_parked();
+    first
+        .update(cx, |view, _, app| {
+            assert!(view.sidebar_pane.read(app).branch_filter_query.is_empty())
+        })
+        .unwrap();
+}

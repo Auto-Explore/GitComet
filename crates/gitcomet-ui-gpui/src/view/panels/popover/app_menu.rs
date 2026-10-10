@@ -36,7 +36,7 @@ pub(super) fn model_with_update_checks_disabled(
 ) -> ContextMenuModel {
     let active_repo_id = this.active_repo().map(|repo| repo.id);
     let active_repo_workdir = this.active_repo().map(|repo| repo.spec.workdir.clone());
-    let external_editor_configured = crate::external_editor::configured_setting().is_some();
+    let external_editor_configured = this.external_editor_available();
     let show_command_palette = command_palette_available(this.root_view_mode);
 
     let mut items = Vec::new();

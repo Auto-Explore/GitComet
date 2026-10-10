@@ -445,6 +445,7 @@ fn dispatch_increments_failure_counter_when_channel_is_disconnected() {
     );
 
     let store = AppStore {
+        commit_identity: Arc::new(RwLock::new(None)),
         backend: Arc::new(FailingBackend),
         state: Arc::new(RwLock::new(Arc::new(AppState::test_default()))),
         publication: Default::default(),
@@ -471,6 +472,7 @@ fn concurrent_last_app_store_drops_shutdown_worker_once() {
         crate::store::repository_preferences::PreferenceHub::new(None),
     );
     let store = AppStore {
+        commit_identity: Arc::new(RwLock::new(None)),
         backend: Arc::new(FailingBackend),
         state: Arc::new(RwLock::new(Arc::new(AppState::test_default()))),
         publication: Default::default(),

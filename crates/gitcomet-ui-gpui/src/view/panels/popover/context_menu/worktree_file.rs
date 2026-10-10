@@ -96,7 +96,7 @@ pub(super) fn model(
             },
         ),
     ];
-    if crate::external_editor::configured_setting().is_some() {
+    if host.external_editor_available() {
         items.push(entry(
             "Open in code editor",
             "icons/open_external.svg",

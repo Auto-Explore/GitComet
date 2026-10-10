@@ -6,6 +6,7 @@ pub(super) fn model(
     repo_id: RepoId,
     path: &std::path::Path,
     branch: Option<&str>,
+    editor_available: bool,
 ) -> ContextMenuModel {
     let mut items = vec![ContextMenuItem::Header("Worktree".into())];
     items.push(ContextMenuItem::Label(
@@ -21,7 +22,7 @@ pub(super) fn model(
             path: path.to_path_buf(),
         }),
     });
-    if crate::external_editor::configured_setting().is_some() {
+    if editor_available {
         items.push(ContextMenuItem::Entry {
             label: "Open in code editor".into(),
             icon: Some("icons/open_external.svg".into()),
@@ -61,7 +62,7 @@ mod tests {
     fn model_includes_open_in_new_tab() {
         let repo_id = RepoId(1);
         let path = std::path::PathBuf::from("/tmp/worktree");
-        let model = model(repo_id, &path, None);
+        let model = model(repo_id, &path, None, false);
 
         let open_action = model
             .items
@@ -86,7 +87,7 @@ mod tests {
     fn model_routes_remove_through_branch_aware_confirm_when_branch_is_provided() {
         let repo_id = RepoId(1);
         let path = std::path::PathBuf::from("/tmp/worktree");
-        let model = model(repo_id, &path, Some("feature/workspace"));
+        let model = model(repo_id, &path, Some("feature/workspace"), false);
 
         let remove_action = model
             .items
@@ -111,5 +112,21 @@ mod tests {
                 },
             } if rid == repo_id && remove_path == path && branch == "feature/workspace"
         ));
+    }
+
+    #[test]
+    fn window_editor_override_exposes_the_worktree_action() {
+        let path = std::path::Path::new("/tmp/worktree");
+        let has_editor = |available| {
+            model(RepoId(1), path, None, available)
+                .items
+                .iter()
+                .any(|item| {
+                    matches!(item, ContextMenuItem::Entry { action, .. }
+                if matches!(**action, ContextMenuAction::OpenInCodeEditor { .. }))
+                })
+        };
+        assert!(!has_editor(false));
+        assert!(has_editor(true));
     }
 }
