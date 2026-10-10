@@ -43,6 +43,10 @@ fn stale_checkout_remote_branch_prompt(
 }
 
 impl PopoverHost {
+    pub(in crate::view) fn external_editor_available(&self) -> bool {
+        self.extension_editor_available || crate::external_editor::configured_setting().is_some()
+    }
+
     #[cfg(test)]
     pub(in crate::view) fn create_branch_input_focus_handle_for_test(
         &self,
@@ -848,6 +852,7 @@ impl PopoverHost {
             notify_fingerprint: 0,
             root_view,
             root_view_mode,
+            extension_editor_available: false,
             tooltip_host,
             main_pane,
             details_pane,

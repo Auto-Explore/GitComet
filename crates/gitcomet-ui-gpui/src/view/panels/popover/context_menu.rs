@@ -646,7 +646,12 @@ impl PopoverHost {
             PopoverKind::Repo {
                 repo_id,
                 kind: RepoPopoverKind::Worktree(WorktreePopoverKind::Menu { path, branch }),
-            } => Some(worktree::model(*repo_id, path, branch.as_deref())),
+            } => Some(worktree::model(
+                *repo_id,
+                path,
+                branch.as_deref(),
+                self.external_editor_available(),
+            )),
             PopoverKind::Repo {
                 repo_id,
                 kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::SectionMenu),
@@ -794,6 +799,7 @@ impl PopoverHost {
                 *lines_count,
                 copy_text,
                 *copy_target,
+                self.external_editor_available(),
             )),
             PopoverKind::ConflictResolverInputRowMenu {
                 line_label,

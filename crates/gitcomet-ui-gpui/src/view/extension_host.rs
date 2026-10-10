@@ -783,7 +783,7 @@ impl WindowHostImpl for HostWindow {
             })
             .collect()
     }
-    fn set_external_editor(&self, id: Option<String>, _cx: &mut App) -> Result<(), HostError> {
+    fn set_external_editor(&self, id: Option<String>, cx: &mut App) -> Result<(), HostError> {
         self.live()?;
         let editor = id
             .map(|id| {
@@ -799,7 +799,21 @@ impl WindowHostImpl for HostWindow {
                     .ok_or_else(|| HostError::InvalidRequest("This editor is not installed".into()))
             })
             .transpose()?;
+        let available = editor.is_some();
         *self.external_editor.borrow_mut() = editor;
+        let view = self.view.clone();
+        cx.defer(move |cx| {
+            let _ = view.update(cx, |root, cx| {
+                root.main_pane.update(cx, |pane, cx| {
+                    pane.extension_editor_available = available;
+                    cx.notify();
+                });
+                root.popover_host.update(cx, |popover, cx| {
+                    popover.extension_editor_available = available;
+                    cx.notify();
+                });
+            });
+        });
         self.notifier
             .notify(gitcomet_extension_api::Slot::ActionBar);
         Ok(())
