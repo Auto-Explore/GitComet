@@ -307,6 +307,14 @@ impl WindowHostImpl for SettingsHost {
     fn is_current(&self, _: &RepositoryHandle, _: &App) -> bool {
         false
     }
+    fn open_workspace(
+        &self,
+        paths: Vec<std::path::PathBuf>,
+        cx: &mut App,
+    ) -> Result<WindowHost, HostError> {
+        self.live()?;
+        crate::app::open_extension_workspace(paths, cx)
+    }
     fn dispatch(&self, _: Msg, _: &mut App) -> Result<(), HostError> {
         self.unsupported()
     }

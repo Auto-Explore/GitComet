@@ -573,11 +573,13 @@ pub enum Effect {
     Commit {
         repo_id: RepoId,
         message: String,
+        identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
         auth: Option<StagedGitAuth>,
     },
     CommitAmend {
         repo_id: RepoId,
         message: String,
+        identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
         auth: Option<StagedGitAuth>,
     },
     SafePushAfterCommit {

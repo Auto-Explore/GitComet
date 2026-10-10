@@ -303,6 +303,7 @@ pub(super) fn commit(repo_id: RepoId, message: String) -> Vec<Effect> {
     vec![Effect::Commit {
         repo_id,
         message,
+        identity: None,
         auth: None,
     }]
 }
@@ -311,6 +312,7 @@ pub(super) fn commit_amend(repo_id: RepoId, message: String) -> Vec<Effect> {
     vec![Effect::CommitAmend {
         repo_id,
         message,
+        identity: None,
         auth: None,
     }]
 }

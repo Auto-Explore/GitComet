@@ -284,6 +284,17 @@ pub trait WindowHostImpl {
     fn is_current(&self, repository: &RepositoryHandle, cx: &App) -> bool;
 
     /// Dispatches an existing message to the window's store.
+    fn set_commit_identity_resolver(
+        &self,
+        _resolver: Option<crate::CommitIdentityResolver>,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unsupported)
+    }
+    fn open_workspace(&self, _paths: Vec<PathBuf>, _cx: &mut App) -> Result<WindowHost, HostError> {
+        Err(HostError::Unsupported)
+    }
+
     fn dispatch(&self, msg: Msg, cx: &mut App) -> Result<(), HostError>;
 
     /// Shows `content` in a modal dialog titled `title`, deferred to the next
@@ -538,6 +549,24 @@ impl WindowHost {
         } else {
             Err(HostError::RepositoryClosed)
         }
+    }
+
+    /// Resolve commit identity independently in this window, at operation time.
+    pub fn set_commit_identity_resolver(
+        &self,
+        resolver: Option<crate::CommitIdentityResolver>,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.0.set_commit_identity_resolver(resolver, cx)
+    }
+    /// Open these repositories together in a new main window, from any host
+    /// kind including Settings. Repository entry gates still run normally.
+    pub fn open_workspace(
+        &self,
+        paths: Vec<PathBuf>,
+        cx: &mut App,
+    ) -> Result<WindowHost, HostError> {
+        self.0.open_workspace(paths, cx)
     }
 
     pub fn dispatch(&self, msg: Msg, cx: &mut App) -> Result<(), HostError> {

@@ -747,6 +747,26 @@ impl WindowHostImpl for HostWindow {
             })
     }
 
+    fn open_workspace(
+        &self,
+        paths: Vec<std::path::PathBuf>,
+        cx: &mut App,
+    ) -> Result<WindowHost, HostError> {
+        self.live()?;
+        crate::app::open_extension_workspace(paths, cx)
+    }
+    fn set_commit_identity_resolver(
+        &self,
+        resolver: Option<gitcomet_extension_api::CommitIdentityResolver>,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.live()?;
+        self.store
+            .upgrade()
+            .ok_or(HostError::WindowClosed)?
+            .set_commit_identity_resolver(resolver);
+        Ok(())
+    }
     fn dispatch(&self, msg: Msg, _cx: &mut App) -> Result<(), HostError> {
         self.live()?;
         let store = self.store.upgrade().ok_or(HostError::WindowClosed)?;
@@ -1314,6 +1334,18 @@ pub(in crate::view) fn command_id_from_palette(palette_id: &str) -> Option<&str>
 }
 
 impl GitCometView {
+    pub(crate) fn extension_open_repositories(
+        &mut self,
+        paths: Vec<std::path::PathBuf>,
+    ) -> Result<WindowHost, HostError> {
+        for path in paths {
+            self.store.dispatch(Msg::OpenRepo(path));
+        }
+        self.extension_window
+            .as_ref()
+            .map(ExtensionWindow::host)
+            .ok_or(HostError::Unsupported)
+    }
     pub(in crate::view) fn invalidate_extension_slot(
         &mut self,
         slot: Slot,

@@ -894,13 +894,13 @@ impl Drop for RunningMonitor {
             gitcomet_core::test_support::git_fixture::FixtureTimer::new("cleanup", "monitor-stop");
         self.enabled.store(false, Ordering::Relaxed);
         let _ = self.tx.send(MonitorMsg::Stop);
-        if let Some(thread) = self.thread.take() {
-            if let Err(error) = thread.join() {
-                if std::thread::panicking() {
-                    eprintln!("monitor worker also panicked during cleanup: {error:?}");
-                } else {
-                    std::panic::resume_unwind(error);
-                }
+        if let Some(thread) = self.thread.take()
+            && let Err(error) = thread.join()
+        {
+            if std::thread::panicking() {
+                eprintln!("monitor worker also panicked during cleanup: {error:?}");
+            } else {
+                std::panic::resume_unwind(error);
             }
         }
     }
