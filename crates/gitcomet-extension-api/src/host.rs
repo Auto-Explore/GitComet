@@ -43,6 +43,13 @@ impl fmt::Display for HostError {
 
 impl std::error::Error for HostError {}
 
+/// A locally detected editor. An extension stores its stable id, never a shell command.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExternalEditor {
+    pub id: String,
+    pub label: String,
+}
+
 /// A repository in one window. `RepoId`s are per window and may be reused,
 /// so the handle also carries the repository's lifetime token; a handle
 /// never silently points at a different repository.
@@ -289,6 +296,20 @@ pub trait WindowHostImpl {
         _resolver: Option<crate::CommitIdentityResolver>,
         _cx: &mut App,
     ) -> Result<(), HostError> {
+        Err(HostError::Unsupported)
+    }
+    fn set_branch_search(
+        &self,
+        _query: String,
+        _options: gitcomet_core::text_search::TextSearchOptions,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unsupported)
+    }
+    fn external_editors(&self, _cx: &App) -> Vec<ExternalEditor> {
+        Vec::new()
+    }
+    fn set_external_editor(&self, _id: Option<String>, _cx: &mut App) -> Result<(), HostError> {
         Err(HostError::Unsupported)
     }
     fn open_workspace(&self, _paths: Vec<PathBuf>, _cx: &mut App) -> Result<WindowHost, HostError> {
@@ -552,6 +573,23 @@ impl WindowHost {
     }
 
     /// Resolve commit identity independently in this window, at operation time.
+    /// Set this window's editable branch search without changing saved Git configuration.
+    pub fn set_branch_search(
+        &self,
+        query: String,
+        options: gitcomet_core::text_search::TextSearchOptions,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.0.set_branch_search(query, options, cx)
+    }
+    pub fn external_editors(&self, cx: &App) -> Vec<ExternalEditor> {
+        self.0.external_editors(cx)
+    }
+    /// Override the editor for this window; `None` restores the global preference.
+    pub fn set_external_editor(&self, id: Option<String>, cx: &mut App) -> Result<(), HostError> {
+        self.0.set_external_editor(id, cx)
+    }
+
     pub fn set_commit_identity_resolver(
         &self,
         resolver: Option<crate::CommitIdentityResolver>,

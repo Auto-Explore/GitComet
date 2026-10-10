@@ -273,6 +273,8 @@ struct HostWindow {
     observers: Rc<StateObservers>,
     bottom_panels: super::extension_panels::SharedBottomPanels,
     diff_panes: SharedDiffPanes,
+    external_editor:
+        Rc<std::cell::RefCell<Option<gitcomet_state::session::ExternalCodeEditorSetting>>>,
 }
 
 /// The hosted diff panes extensions made in one window, so the diff keys
@@ -755,6 +757,53 @@ impl WindowHostImpl for HostWindow {
         self.live()?;
         crate::app::open_extension_workspace(paths, cx)
     }
+    fn set_branch_search(
+        &self,
+        query: String,
+        options: gitcomet_core::text_search::TextSearchOptions,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.live()?;
+        let view = self.view.clone();
+        cx.defer(move |cx| {
+            let _ = view.update(cx, |root, cx| {
+                root.sidebar_pane.update(cx, |pane, cx| {
+                    pane.set_extension_branch_search(query, options, cx)
+                });
+            });
+        });
+        Ok(())
+    }
+    fn external_editors(&self, _cx: &App) -> Vec<gitcomet_extension_api::host::ExternalEditor> {
+        crate::external_editor::detect_external_editors()
+            .into_iter()
+            .map(|editor| gitcomet_extension_api::host::ExternalEditor {
+                id: editor.id,
+                label: editor.label,
+            })
+            .collect()
+    }
+    fn set_external_editor(&self, id: Option<String>, _cx: &mut App) -> Result<(), HostError> {
+        self.live()?;
+        let editor = id
+            .map(|id| {
+                crate::external_editor::detect_external_editors()
+                    .into_iter()
+                    .find(|editor| editor.id == id)
+                    .map(
+                        |editor| gitcomet_state::session::ExternalCodeEditorSetting::Detected {
+                            id: editor.id,
+                            path: editor.path,
+                        },
+                    )
+                    .ok_or_else(|| HostError::InvalidRequest("This editor is not installed".into()))
+            })
+            .transpose()?;
+        *self.external_editor.borrow_mut() = editor;
+        self.notifier
+            .notify(gitcomet_extension_api::Slot::ActionBar);
+        Ok(())
+    }
     fn set_commit_identity_resolver(
         &self,
         resolver: Option<gitcomet_extension_api::CommitIdentityResolver>,
@@ -1021,6 +1070,8 @@ pub(in crate::view) struct ExtensionWindow {
     observers: Rc<StateObservers>,
     bottom_panels: super::extension_panels::SharedBottomPanels,
     diff_panes: SharedDiffPanes,
+    external_editor:
+        Rc<std::cell::RefCell<Option<gitcomet_state::session::ExternalCodeEditorSetting>>>,
 }
 
 impl ExtensionWindow {
@@ -1038,6 +1089,7 @@ impl ExtensionWindow {
             (kind == gitcomet_core::identity::WindowKind::FocusedDiff)
                 .then(|| Rc::new(Registry::default()))
         })?;
+        let external_editor = Rc::default();
         let diff_panes: SharedDiffPanes = Rc::default();
         let bottom_panels = Rc::new(std::cell::RefCell::new(
             super::extension_panels::BottomPanels::new(registry.bottom_panels()),
@@ -1084,6 +1136,7 @@ impl ExtensionWindow {
             observers: Rc::clone(&observers),
             bottom_panels: Rc::clone(&bottom_panels),
             diff_panes: Rc::clone(&diff_panes),
+            external_editor: Rc::clone(&external_editor),
         });
         *observers.host.borrow_mut() = Some(Rc::downgrade(&host_window));
         let closing_host = Rc::downgrade(&host_window);
@@ -1120,6 +1173,7 @@ impl ExtensionWindow {
             observers,
             bottom_panels,
             diff_panes,
+            external_editor,
         })
     }
 
@@ -1147,6 +1201,12 @@ impl ExtensionWindow {
             })
             .max_by_key(|(focused, engaged, _)| (*focused, *engaged))
             .map(|(_, _, renderer)| renderer)
+    }
+
+    pub(in crate::view) fn external_editor(
+        &self,
+    ) -> Option<gitcomet_state::session::ExternalCodeEditorSetting> {
+        self.external_editor.borrow().clone()
     }
 
     pub(in crate::view) fn host(&self) -> WindowHost {
