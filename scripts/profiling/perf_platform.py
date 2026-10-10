@@ -12,6 +12,8 @@ import stat
 import subprocess
 import time
 
+import perf_macos
+
 
 def windows_sample(pid):
     """Query the process directly; starting PowerShell per sample perturbs it."""
@@ -55,7 +57,7 @@ def capabilities():
     system = platform.system()
     return {"os": system, "native_validation": "run_on_this_host",
             "process_sampler": {"Linux": "procfs", "Windows": "win32",
-                                "Darwin": "ps"}.get(system),
+                                "Darwin": "proc_pid_rusage" if perf_macos.available() else "ps"}.get(system),
             "pss": system == "Linux", "private_bytes": system == "Windows",
             "per_thread_cpu": system == "Linux", "main_thread_cpu": system in ("Linux", "Windows"),
             "display_completion": False,
@@ -104,7 +106,12 @@ def sample_process(pid):
     result = dict.fromkeys(FIELDS)
     result.update(unix_ms=time.time() * 1000, pid=pid)
     try:
-        if platform.system() == "Darwin":
+        if platform.system() == "Darwin" and perf_macos.available():
+            sample = perf_macos.process_sample(pid)
+            if sample is None:
+                return None
+            result.update(sample)
+        elif platform.system() == "Darwin":
             row = subprocess.run(["ps", "-p", str(pid), "-o", "rss=,time="],
                                  capture_output=True, text=True, timeout=3, check=True).stdout.split()
             if len(row) < 2:
