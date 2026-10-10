@@ -765,3 +765,37 @@ fn linked_worktree_leases_count_and_do_not_cross_repository_lifetimes() {
         1
     );
 }
+
+#[test]
+fn repo_monitor_manager_reports_unchanged_since_inactive_once() {
+    let mut monitors = monitor_impl::RepoMonitorManager::new();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let (exited_tx, exited_rx) = std::sync::mpsc::channel();
+    monitors.insert_blocked_monitor_for_test(RepoId(7), release_rx, exited_tx);
+
+    // No mark: never left while watched.
+    assert!(!monitors.unchanged_since_inactive(RepoId(7)));
+    monitors.mark_inactive(RepoId(7));
+    assert!(monitors.unchanged_since_inactive(RepoId(7)));
+    // The mark is consumed by the switch that reads it.
+    assert!(!monitors.unchanged_since_inactive(RepoId(7)));
+
+    monitors.mark_inactive(RepoId(7));
+    monitors.bump_change_generation_for_test(RepoId(7));
+    assert!(!monitors.unchanged_since_inactive(RepoId(7)));
+
+    // A stopped monitor proves nothing.
+    monitors.mark_inactive(RepoId(7));
+    monitors.stop(RepoId(7));
+    assert!(!monitors.unchanged_since_inactive(RepoId(7)));
+    // Unknown repositories are never unchanged.
+    monitors.mark_inactive(RepoId(8));
+    assert!(!monitors.unchanged_since_inactive(RepoId(8)));
+
+    release_tx
+        .send(())
+        .expect("test monitor release signal should send");
+    exited_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("test monitor thread should exit after release");
+}
