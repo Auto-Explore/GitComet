@@ -206,7 +206,7 @@ pub(in crate::view) fn window_top_left_corner(window: &Window) -> Point<Pixels> 
     window_surface_bounds(window).origin
 }
 
-/// The shadow band the client-side frame pads around the window surface, per
+/// The decoration inset the client-side frame pads around the window surface, per
 /// side: `inset` on every edge the compositor has not tiled, nothing for a
 /// native or suppressed frame. `window_frame` pads by it and popovers fit
 /// inside it.
@@ -230,7 +230,7 @@ pub(in crate::view) fn frame_insets(
 
 /// The visible window surface in window coordinates. Size and place things
 /// against this, never `window_bounds()`: that is the restore size while the
-/// window is maximized or fullscreen, and it includes the shadow band.
+/// window is maximized or fullscreen, and it includes the decoration inset.
 pub(in crate::view) fn window_surface_bounds(window: &Window) -> Bounds<Pixels> {
     let insets = frame_insets(
         window.window_decorations(),
@@ -1093,7 +1093,7 @@ pub(crate) fn window_frame(
                 d.border_1().border_color(window_frame_outline_color(theme))
             })
             .when(!cfg!(target_os = "macos"), |d| {
-                d.rounded(px(theme.radii.window)).shadow_lg()
+                d.rounded(px(theme.radii.window))
             });
     }
 
@@ -1244,7 +1244,7 @@ mod tests {
     }
 
     /// Popovers fit inside the same padding the frame draws, so the two can
-    /// only agree if a tiled edge loses its shadow band in both.
+    /// only agree if a tiled edge loses its decoration inset in both.
     #[test]
     fn frame_insets_pad_only_the_untiled_edges_of_a_client_frame() {
         let inset = px(10.0);
