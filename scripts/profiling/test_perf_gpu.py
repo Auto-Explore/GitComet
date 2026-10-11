@@ -1,8 +1,11 @@
 """GPU telemetry attribution, missing-data and sampling-boundary regressions."""
 import io
 import json
+import os
 from pathlib import Path
+import platform
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -77,13 +80,43 @@ class GpuTests(unittest.TestCase):
         self.assertEqual(summary["devices"]["0"]["memory_used_mib"]["mean"], 500)
 
     def test_unavailable_collector_is_explicit_and_does_not_launch_helpers(self):
+        # Linux without nvidia-smi; macOS has its own collector (below).
         with tempfile.TemporaryDirectory() as directory, patch.object(perf_gpu.shutil, "which", return_value=None), \
+                patch.object(perf_gpu.platform, "system", return_value="Linux"), \
                 patch.object(perf_gpu.subprocess, "Popen") as launch:
             sampler = perf_gpu.NvidiaSampler(directory, {"app": 41})
             result = sampler.close()
             self.assertEqual(result["status"], "unavailable")
             self.assertIn("requires Linux", result["reason"])
             self.assertEqual(perf_gpu.load(directory), [])
+            launch.assert_not_called()
+
+    def test_macos_phase_summary_uses_cumulative_gpu_time_and_energy(self):
+        records = [
+            {"scope": "process", "gpu_index": "0", "pid": 41, "role": "app", "sample_unix_ms": 1000.0,
+             "gpu_time_ns": 1_000_000},
+            {"scope": "process", "gpu_index": "0", "pid": 41, "role": "app", "sample_unix_ms": 2000.0,
+             "gpu_time_ns": 51_000_000},
+            {"scope": "soc", "gpu_index": "0", "interval_start_unix_ms": 1000.0, "interval_end_unix_ms": 2000.0,
+             "gpu_energy_nj": 300_000_000, "gpu_states": {"OFF": 18_000_000, "P1": 4_000_000, "P3": 2_000_000}},
+        ]
+        summary = perf_gpu.summarize_phase(records, 900.0, 2100.0, live.distribution)
+        app = summary["processes"]["app"]["0"]
+        self.assertAlmostEqual(app["gpu_ms"], 50.0)
+        self.assertAlmostEqual(app["gpu_ms_per_s"], 50.0)
+        soc = summary["soc"]
+        self.assertAlmostEqual(soc["gpu_power_mw"], 300.0)
+        self.assertAlmostEqual(soc["gpu_active_fraction"], 0.25)
+        self.assertAlmostEqual(soc["gpu_active_mean_pstate"], (1 * 4 + 3 * 2) / 6)
+
+    @unittest.skipUnless(platform.system() == "Darwin", "IOKit collector")
+    def test_macos_collector_samples_without_helpers(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(perf_gpu.subprocess, "Popen") as launch:
+            sampler = perf_gpu.Sampler(directory, {"app": os.getpid()})
+            time.sleep(0.6)
+            result = sampler.close()
+            self.assertEqual(result["backend"], "iokit-agx")
+            self.assertTrue(any(row["scope"] == "device" for row in perf_gpu.load(directory)))
             launch.assert_not_called()
 
     def test_collector_filters_other_processes_and_keeps_compositor_separate(self):

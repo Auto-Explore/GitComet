@@ -85,6 +85,13 @@ pub(super) struct MonitorConfig {
     /// Set while a watch lease holds this repository: its changes are
     /// delivered even when another repository is active.
     pub leased: Arc<AtomicBool>,
+    /// Counts every change this monitor flushes, delivered or not. A monitor
+    /// kept running for an inactive repository drops its changes; an unchanged
+    /// count across the inactive stretch proves nothing changed meanwhile.
+    pub change_generation: Arc<AtomicU64>,
+    /// Coverage is incomplete (see `note_watch_outcome`), so an unchanged
+    /// count proves nothing.
+    pub degraded: Arc<AtomicBool>,
     pub worktree_owner: Option<(u64, PathBuf)>,
     #[cfg(test)]
     pub native_events: Option<Arc<AtomicU64>>,
@@ -105,6 +112,8 @@ impl Default for MonitorConfig {
             startup_progress: None,
             before_registration: None,
             leased: Arc::default(),
+            change_generation: Arc::default(),
+            degraded: Arc::default(),
             worktree_owner: None,
             #[cfg(test)]
             native_events: None,
@@ -673,8 +682,12 @@ pub(super) fn repo_monitor_thread(
     let mut rebuild = None;
     let mut idle_at = Instant::now() + config.idle_tick;
     let leased = Arc::clone(&config.leased);
+    let change_generation = Arc::clone(&config.change_generation);
+    let degraded_flag = Arc::clone(&config.degraded);
+    degraded_flag.store(degraded, Ordering::SeqCst);
     let worktree_owner = config.worktree_owner.clone();
     let flush = |change| {
+        change_generation.fetch_add(1, Ordering::SeqCst);
         let active = active_repo_id.load(Ordering::Relaxed);
         if active == repo_id.0 || leased.load(Ordering::Relaxed) {
             trace_repo_monitor_flush("flush", repo_id, &change, active);
@@ -765,6 +778,7 @@ pub(super) fn repo_monitor_thread(
                                             &mut degraded,
                                             outcome,
                                         );
+                                        degraded_flag.store(degraded, Ordering::SeqCst);
                                         if degraded && !was_degraded {
                                             last_recovery = Some(Instant::now());
                                         }
@@ -797,6 +811,7 @@ pub(super) fn repo_monitor_thread(
                 if state.rules.failed && outcome != WatchSetupOutcome::PolicyFailed {
                     outcome = WatchSetupOutcome::PolicyFailed;
                     note_watch_outcome(&msg_tx, repo_id, &mut degraded, outcome);
+                    degraded_flag.store(degraded, Ordering::SeqCst);
                     rebuild = Some("ignore-lookup");
                     due_change = debouncer
                         .push(RepoExternalChange::all(), Instant::now())
@@ -889,6 +904,7 @@ pub(super) fn repo_monitor_thread(
                     WatchSetup::Cancelled => break,
                 }
                 note_watch_outcome(&msg_tx, repo_id, &mut degraded, outcome);
+                degraded_flag.store(degraded, Ordering::SeqCst);
                 debouncer.take();
                 due_change = Some(RepoExternalChange {
                     verification_context: policy_dirty,

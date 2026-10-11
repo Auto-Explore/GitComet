@@ -164,7 +164,7 @@ impl HistoryRefsHoverHost {
     fn show_now(
         &mut self,
         next: HistoryRefsHoverState,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         self.close_seq = self.close_seq.wrapping_add(1);
@@ -178,8 +178,10 @@ impl HistoryRefsHoverHost {
             self.pinned_item_ix = None;
             *self.panel_bounds.borrow_mut() = None;
             self.state = Some(next);
+            // The host is an uncached overlay of the root view, so notifying it
+            // redraws the card; `window.refresh()` would also re-render every
+            // cached pane for this frame.
             cx.notify();
-            window.refresh();
         }
     }
 

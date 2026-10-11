@@ -315,6 +315,9 @@ impl DebouncedChange {
 pub(super) struct RepoMonitorManager {
     handles: FxHashMap<RepoId, RepoMonitorHandle>,
     worktree_handles: FxHashMap<(RepoId, u64, PathBuf), RepoMonitorHandle>,
+    /// Change count of each running monitor when its repository last stopped
+    /// being active; see [`Self::unchanged_since_inactive`].
+    inactive_marks: FxHashMap<RepoId, u64>,
     /// Set by tests: no monitor is ever started.
     disabled: bool,
 }
@@ -324,8 +327,38 @@ impl RepoMonitorManager {
         Self {
             handles: FxHashMap::default(),
             worktree_handles: FxHashMap::default(),
+            inactive_marks: FxHashMap::default(),
             disabled: false,
         }
+    }
+
+    /// Records that `repo_id` is about to stop being active while its monitor
+    /// keeps running. Call before the switch is reduced: a change flushed
+    /// after this mark, even one delivered while the repository was still
+    /// active, makes [`Self::unchanged_since_inactive`] false.
+    pub(super) fn mark_inactive(&mut self, repo_id: RepoId) {
+        match self.handles.get(&repo_id) {
+            Some(handle) if handle.monitor_enabled.load(Ordering::Relaxed) => {
+                self.inactive_marks
+                    .insert(repo_id, handle.change_generation.load(Ordering::SeqCst));
+            }
+            _ => {
+                self.inactive_marks.remove(&repo_id);
+            }
+        }
+    }
+
+    /// Whether `repo_id`'s monitor ran with full coverage and flushed nothing
+    /// since [`Self::mark_inactive`]. Consumes the mark.
+    pub(super) fn unchanged_since_inactive(&mut self, repo_id: RepoId) -> bool {
+        let Some(mark) = self.inactive_marks.remove(&repo_id) else {
+            return false;
+        };
+        self.handles.get(&repo_id).is_some_and(|handle| {
+            handle.monitor_enabled.load(Ordering::Relaxed)
+                && !handle.degraded.load(Ordering::SeqCst)
+                && handle.change_generation.load(Ordering::SeqCst) == mark
+        })
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -347,9 +380,11 @@ impl RepoMonitorManager {
         for (repo_id, handle) in self.handles.drain() {
             stop_monitor_handle(repo_id, handle, "RepoMonitorManager::stop_all");
         }
+        self.inactive_marks.clear();
     }
 
     pub(super) fn stop(&mut self, repo_id: RepoId) {
+        self.inactive_marks.remove(&repo_id);
         let Some(handle) = self.handles.remove(&repo_id) else {
             return;
         };
@@ -478,9 +513,18 @@ impl RepoMonitorManager {
                 join,
                 monitor_enabled: Arc::clone(&monitor_enabled),
                 leased: Arc::default(),
+                change_generation: Arc::default(),
+                degraded: Arc::default(),
             },
         );
         monitor_enabled
+    }
+
+    #[cfg(test)]
+    pub(super) fn bump_change_generation_for_test(&self, repo_id: RepoId) {
+        if let Some(handle) = self.handles.get(&repo_id) {
+            handle.change_generation.fetch_add(1, Ordering::SeqCst);
+        }
     }
 }
 
@@ -489,6 +533,8 @@ struct RepoMonitorHandle {
     join: thread::JoinHandle<()>,
     monitor_enabled: Arc<AtomicBool>,
     leased: Arc<AtomicBool>,
+    change_generation: Arc<AtomicU64>,
+    degraded: Arc<AtomicBool>,
 }
 
 /// Named, or the thread shows under its creator's name (the store worker)
@@ -504,6 +550,8 @@ fn spawn_monitor(
     let (monitor_tx, monitor_rx) = mpsc::channel::<MonitorMsg>();
     let monitor_enabled = Arc::new(AtomicBool::new(true));
     let leased = Arc::clone(&config.leased);
+    let change_generation = Arc::clone(&config.change_generation);
+    let degraded = Arc::clone(&config.degraded);
     let join = {
         let monitor_tx = monitor_tx.clone();
         let monitor_enabled = Arc::clone(&monitor_enabled);
@@ -529,6 +577,8 @@ fn spawn_monitor(
         join,
         monitor_enabled,
         leased,
+        change_generation,
+        degraded,
     }
 }
 

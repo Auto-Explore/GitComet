@@ -400,17 +400,32 @@ fn report_error(state: &mut AppState, repo_id: Option<RepoId>, message: String) 
     }
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 pub(crate) fn fill_set_active_repo_inline(
     repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
     state: &mut AppState,
     repo_id: RepoId,
     effects: &mut SetActiveRepoEffects,
 ) {
+    fill_set_active_repo_inline_reusing(repos, state, repo_id, false, effects);
+}
+
+/// [`fill_set_active_repo_inline`] for a tab switch whose target kept a file
+/// monitor running while inactive. `unchanged` reports that the monitor saw
+/// no change since the repository was left, so its retained state is current
+/// and the refresh a switch normally starts can be skipped.
+pub(crate) fn fill_set_active_repo_inline_reusing(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    unchanged: bool,
+    effects: &mut SetActiveRepoEffects,
+) {
     // The store handles tab switches on this inline path instead of calling
     // `reduce`, so bracket the mutation with the same navigation reconciliation
     // and state finalizers the ordinary reducer wrapper applies.
     reconcile_active_nav_history(state, false);
-    repo_management::fill_set_active_repo_inline(repos, state, repo_id, effects);
+    repo_management::fill_set_active_repo_inline_reusing(repos, state, repo_id, unchanged, effects);
     effects::follow_history_selection(state, effects);
     finalize_reduced_state(state, Some(false));
 }

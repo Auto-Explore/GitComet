@@ -452,6 +452,20 @@ unprimed interval is excluded too. Short phases may have no usable samples;
 prefer phases lasting at least five to ten seconds. Means use only available
 driver samples, and do not fill unreported intervals with zero.
 
+On macOS, `--gpu` uses IOKit and IOReport instead, without root:
+- each process's Metal GPU time (`accumulatedGPUTime` of its AGX clients), for
+  GitComet and for WindowServer;
+- whole-device utilization;
+- whole-GPU energy and performance-state residency.
+
+`perf_macos.py` has the details. `macos-usage.py` runs the hover, scroll,
+selection, diff-open, repo-tab and idle set with interleaved repeats, and
+`macos-usage-report.py` prints GPU ms/s, GPU ms per frame, GPU mW and the mean
+P-state per phase. See [macOS CPU and GPU usage](../../docs/macos-gpu-usage.md)
+for the method and results. Launch the executable inside an app bundle
+(`GitComet.app/Contents/MacOS/gitcomet`). A bare binary relaunches itself from
+a bundle and exits.
+
 These measurements describe coarse GPU utilization and memory, not GPU duration
 per frame or display completion. GPU monitoring is opt-in; enable it on both
 sides of a timing comparison. Unsupported GPUs/operating systems produce an

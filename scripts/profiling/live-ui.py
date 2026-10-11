@@ -192,6 +192,9 @@ def file_text(repository, path):
         raise ValueError(f"{path} must be an existing UTF-8 file: {error}") from error
 
 
+TAB_SWITCHES = 30
+EDIT_MARKER = "inactive-tab-edit.txt"
+DIFF_OPEN_CYCLES = 4
 PICKER_RECENT_COUNT = 40
 PICKER_NAME_QUERY = "GitComet-perf-picker"
 # The version-3 session migrates into one workspace containing the active repo.
@@ -256,6 +259,66 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
     ready.append({"do": "settle", "ms": 3000})
     if name == "repo-picker":
         return picker_scenario(ready)
+    others = list(secondary) if isinstance(secondary, (list, tuple)) else ([secondary] if secondary else [])
+    if name == "repo-tabs":
+        # Several open repositories; the measured phase cycles through their
+        # tabs. Each switch is witnessed (that tab active and loaded), then
+        # settles so background work a switch starts lands inside the phase.
+        if not others:
+            raise ValueError("repo-tabs needs --secondary-repository (repeatable)")
+        order = [Path(repository).resolve(), *(Path(path).resolve() for path in others)]
+        steps = list(ready)
+        for path in order[1:]:
+            steps += [{"do": "open_repo", "path": str(path)}, {"do": "wait_ready", "timeout_ms": 180_000}]
+        steps += [{"do": "settle", "ms": 3000}, {"do": "phase", "name": "tab_switch"}]
+        current = len(order) - 1
+        for _ in range(TAB_SWITCHES):
+            current = (current + 1) % len(order)
+            steps += [{"do": "command", "id": "next-repo-tab",
+                       "witness": {"kind": "repo_open", "path": str(order[current])}},
+                      {"do": "settle", "ms": 600}]
+        steps += [{"do": "phase", "name": "tab_idle"}, {"do": "settle", "ms": 3000}]
+        return {"version": 1, "steps": steps}
+    if name == "repo-tabs-edit":
+        # An edit made while the tab is inactive must show after switching
+        # back, and must survive an unchanged round trip (a switch that reuses
+        # the tab's retained state). Leaves EDIT_MARKER in the repository.
+        if not others:
+            raise ValueError("repo-tabs-edit needs --secondary-repository")
+        first, second = Path(repository).resolve(), Path(others[0]).resolve()
+        marker = first / EDIT_MARKER
+        steps = list(ready) + [
+            {"do": "open_repo", "path": str(second)}, {"do": "wait_ready", "timeout_ms": 180_000},
+            {"do": "settle", "ms": 2000},
+            {"do": "phase", "name": "edit_inactive"},
+            {"do": "write_files", "paths": [str(marker)], "contents": "edited while inactive\n",
+             "rounds": 1, "interval_ms": 0, "expect_status": False, "keep": True},
+            {"do": "settle", "ms": 1500},
+            {"do": "command", "id": "next-repo-tab", "witness": {"kind": "repo_open", "path": str(first)}},
+            {"do": "expect_status", "path": EDIT_MARKER, "present": True, "timeout_ms": 10_000},
+            {"do": "phase", "name": "unchanged_round_trip"},
+            {"do": "command", "id": "next-repo-tab", "witness": {"kind": "repo_open", "path": str(second)}},
+            {"do": "settle", "ms": 600},
+            {"do": "command", "id": "next-repo-tab", "witness": {"kind": "repo_open", "path": str(first)}},
+            {"do": "expect_status", "path": EDIT_MARKER, "present": True, "timeout_ms": 10_000},
+            {"do": "settle", "ms": 600},
+        ]
+        return {"version": 1, "steps": steps}
+    if name == "diff-open":
+        # Opens each changed file's diff in turn from the changes list. The
+        # repository needs at least two unstaged files.
+        changed = [line for line in git(repository, "status", "--porcelain").stdout.decode().splitlines()
+                   if line[1:2] != " "]
+        if len(changed) < 2:
+            raise ValueError("diff-open needs a repository with at least two unstaged changes")
+        steps = ready + [{"do": "phase", "name": "diff_open"}]
+        for _ in range(DIFF_OPEN_CYCLES):
+            for index in range(len(changed)):
+                steps += [{"do": "click", "target": {"list": "unstaged_row", "index": index},
+                           "witness": {"kind": "diff_loaded"}},
+                          {"do": "settle", "ms": 800}]
+        steps += [{"do": "phase", "name": "diff_idle"}, {"do": "settle", "ms": 3000}]
+        return {"version": 1, "steps": steps}
     if name == "history-jump":
         return {"steps": ready + [{"do": "phase", "name": "jump"}]
                 + [step for fraction in (.9, .1, .8, .2, .95, .05) for step in (
@@ -281,8 +344,9 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
         return {"version": 1, "steps": ready + [{"do": "phase", "name": "drag"},
                 {"do": "drag_history", "to_fraction": .8, "steps": 90, "interval_ms": 16}]}
     if name == "lifecycle":
-        if secondary is None:
+        if not others:
             raise ValueError("lifecycle needs --secondary-repository")
+        secondary = others[0]
         # Warm caches first; resources should then plateau across cycles.
         return {"steps": ready
                 + [{"do": "phase", "name": "warmup_cycles"}]
@@ -342,6 +406,8 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
             {"do": "phase", "name": "idle_two_windows"},
             {"do": "settle", "ms": 60_000}],
         "idle": ready + [{"do": "phase", "name": "idle"}, {"do": "settle", "ms": 60_000}],
+        # A settled window for screenshots (e.g. renderer pixel comparisons).
+        "still": ready + [{"do": "phase", "name": "still"}, {"do": "settle", "ms": 8000}],
         "idle-minimized": ready + [{"do": "minimize"}, {"do": "settle", "ms": 2000},
                                    {"do": "phase", "name": "idle_minimized"}, {"do": "settle", "ms": 60_000}],
         # Selections faster than details load: latest wins, obsolete loads
@@ -390,7 +456,7 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
 SCENARIOS = ("startup", "idle", "idle-minimized", "idle-hidden-terminal", "two-windows-idle", "history-select",
              "history-hover", "history-hover-stationary", "history-drag", "history-jump", "history-reopen", "repo-picker",
              "history-select-burst", "history-scroll", "status-save", "status-burst", "status-touch",
-             "ignored-churn",
+             "ignored-churn", "repo-tabs", "repo-tabs-edit", "diff-open", "still",
              "diff-search", "terminal-output", "settings", "lifecycle")
 
 
@@ -644,11 +710,19 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
         raise ValueError("Headless captures require Linux; use --display desktop on this platform")
     if wrap and platform.system() != "Linux":
         raise ValueError("Launch native profilers around a desktop run; --wrap currently requires Linux PID discovery")
+    if platform.system() == "Darwin" and ".app/Contents/MacOS/" not in str(binary):
+        # A bare executable copies itself into a GitComet.app, relaunches from
+        # there and exits, so the measured process would be gone in a second.
+        raise ValueError("On macOS pass the executable inside an app bundle (GitComet.app/Contents/MacOS/gitcomet); "
+                         "a bare binary relaunches itself from a bundle and exits")
     output.mkdir(parents=True, exist_ok=False)
     run_id = str(uuid.uuid4())
     env = seed_profile(output, repository, window_size, session_overrides)
     scenario_file = output / "scenario.json"
-    secondary = secondary.resolve() if secondary else None
+    if isinstance(secondary, (list, tuple)):
+        secondary = [path.resolve() for path in secondary] or None
+    else:
+        secondary = secondary.resolve() if secondary else None
     session_path = output / "session.json"
     session = json.loads(session_path.read_text(encoding="utf-8"))
     session["ui_scale_percent"] = ui_scale
@@ -1085,6 +1159,13 @@ def analyse_phase(begin, end, draws, submits, by_op, applied, records, threads, 
         "process_cpu_cores": delta("cpu_s") / sample_seconds if delta("cpu_s") is not None and sample_seconds else None,
         "children_cpu_s": delta("children_cpu_s"),
         "wakeups_per_second": delta("voluntary_switches") / sample_seconds if delta("voluntary_switches") is not None and sample_seconds else None,
+        # macOS proc_pid_rusage counters; None elsewhere.
+        "idle_wakeups_per_second": delta("idle_wakeups") / sample_seconds if delta("idle_wakeups") is not None and sample_seconds else None,
+        "interrupt_wakeups_per_second": delta("interrupt_wakeups") / sample_seconds if delta("interrupt_wakeups") is not None and sample_seconds else None,
+        # The kernel's CPU-only energy estimate: mJ per second is mW.
+        "cpu_energy_mw": delta("cpu_energy_nj") / 1e6 / sample_seconds if delta("cpu_energy_nj") is not None and sample_seconds else None,
+        "instructions_per_second": delta("instructions") / sample_seconds if delta("instructions") is not None and sample_seconds else None,
+        "phys_footprint_kib": distribution(s.get("phys_footprint_kib") for s in phase_process),
         "rss_kib": distribution(s["rss_kib"] for s in phase_process),
         "pss_kib": distribution(s["pss_kib"] for s in phase_process),
         "private_kib": distribution(s.get("private_kib") for s in phase_process),
@@ -1334,13 +1415,14 @@ def main():
     single.add_argument("--display", choices=("headless", "desktop"), default="headless")
     single.add_argument("--ping-ms", type=int)
     single.add_argument("--gpu-timings", action="store_true", help="asynchronous native GPU frame and pass timestamps")
-    single.add_argument("--gpu", action="store_true", help="sample Windows PDH or Linux NVIDIA process/device GPU counters")
+    single.add_argument("--gpu", action="store_true", help="sample process/device GPU usage (PDH on Windows, NVIDIA on Linux, IOKit on macOS)")
     single.add_argument("--input-route", choices=("synthetic", "native"), default="synthetic", help="Windows native SendInput or in-app dispatch")
     single.add_argument("--window-size", type=positive_int, nargs=2, default=WINDOW_SIZE,
                         metavar=("WIDTH", "HEIGHT"), help="window dimensions in logical pixels")
     single.add_argument("--save-file", default=SAVE_FILE, help="tracked file status-save and status-touch rewrite")
     single.add_argument("--wrap", help="diagnostic wrapper command, e.g. 'perf record -o {output}/cpu.data --'")
-    single.add_argument("--secondary-repository", type=Path, help="repository lifecycle opens and closes")
+    single.add_argument("--secondary-repository", type=Path, action="append",
+                        help="repository lifecycle opens and closes; repo-tabs opens every one given")
     single.add_argument("--cycles", type=positive_int, default=100,
                         help="measured lifecycle cycles; comparing two counts isolates per-cycle retention")
     single.add_argument("--env", action="append", default=[], metavar="KEY=VALUE",
@@ -1357,10 +1439,11 @@ def main():
     paired.add_argument("--timeout", type=int, default=600)
     paired.add_argument("--display", choices=("headless", "desktop"), default="headless")
     paired.add_argument("--gpu-timings", action="store_true", help="collect native GPU timestamps on both sides")
-    paired.add_argument("--gpu", action="store_true", help="sample GPU usage on both sides of each pair")
+    paired.add_argument("--gpu", action="store_true", help="sample GPU usage on both sides of each pair (PDH on Windows, NVIDIA on Linux, IOKit on macOS)")
     paired.add_argument("--input-route", choices=("synthetic", "native"), default="synthetic")
     paired.add_argument("--save-file", default=SAVE_FILE, help="tracked file status-save and status-touch rewrite")
-    paired.add_argument("--secondary-repository", type=Path, help="repository lifecycle opens and closes")
+    paired.add_argument("--secondary-repository", type=Path, action="append",
+                        help="repository lifecycle opens and closes; repo-tabs opens every one given")
     paired.add_argument("--max-load", type=float,
                         help="wait before each run until the 1-minute load average is below this")
     paired.add_argument("--candidate-wrap", help="launch prefix for candidate runs only (runtime-only candidates)")
