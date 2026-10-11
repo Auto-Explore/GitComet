@@ -227,10 +227,10 @@ far less energy.
        2,373 frames.
    - The damage tracker reads only the GPUI scene, so the other renderers could
      reuse it. The retained texture and the copy are Metal code.
-   - gpui-ce `d7edc63041` replaced the tracker with the planner D3D11 and WGPU
-     use (`gpui_render/src/damage.rs`). That planner repaints in full above
-     2 MiB of primitives (about 16k glyphs), or 8192 primitives in its tiled
-     stage; the tracker had no cap. The numbers below predate it.
+   - gpui-ce `d7edc63041` moved Metal onto the planner D3D11 and WGPU use
+     (`gpui_render/src/damage.rs`), and `c9dd7f32fa` made that planner hash
+     tiles the way this tracker did, for all three backends and without caps.
+     The numbers below predate both.
 
    Same build with partial redraw off (`GPUI_METAL_EXPERIMENTS=no-partial-redraw`)
    and on, 3 interleaved runs of each case, medians:
