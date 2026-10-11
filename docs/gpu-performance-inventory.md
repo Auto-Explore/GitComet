@@ -2,7 +2,7 @@
 
 This is every rendering optimization on `perf/consolidate_results` as of
 2026-10-11: GitComet after the vendored renderer's removal, and GPUI at
-`76c3d5bd29`. "Default" means the behavior with no environment overrides. No
+`d7edc63041`. "Default" means the behavior with no environment overrides. No
 entry has a paired A/A baseline yet, so every gain listed is a hypothesis until
 the consolidated validation measures it.
 
@@ -10,8 +10,8 @@ the consolidated validation measures it.
 
 | Optimization | Commit | Backends | Default | Tests | Evidence |
 |---|---|---|---|---|---|
-| Shared damage planner (`gpui_render/src/damage.rs`): exact strict comparison, then a 64 px tiled comparison, into a retained target | `001647ec24`…`be63d15823` | D3D11; WGPU, Windows only | Off. `GPUI_GPU_EXPERIMENTS=partial-redraw`, which GitComet sets on Windows | `damage.rs` unit tests; D3D11 `retained_*` pixel tests (Windows); WGPU headless `retained_*` | None in the tree |
-| Metal tile-hash damage with Copy, Partial, Retained and Direct frames | `effbe66cc2` | Metal | On. `GPUI_METAL_EXPERIMENTS=no-partial-redraw` turns it off | `gpui_apple` damage unit tests; one Metal pixel test with four Partial fixtures | `macos-gpu-usage.md`: 3 runs in one session |
+| Shared damage planner (`gpui_render/src/damage.rs`): exact strict comparison, then a 64 px tiled comparison, into a retained target. It repaints in full above 2 MiB of primitives, or 8192 primitives in the tiled stage | `001647ec24`…`d7edc63041` | D3D11, WGPU, Metal | D3D11 and WGPU: off. `GPUI_GPU_EXPERIMENTS=partial-redraw`, which GitComet sets on Windows. Metal: see the next row | `damage.rs` and `retained.rs` unit tests; D3D11 `retained_*` pixel tests (Windows); WGPU headless `retained_*`; the Metal pixel test | None in the tree |
+| Metal Copy, Partial (one scissor over the damage), Retained and Direct frames. Its tile-hash tracker, which had no cap, was replaced by the shared planner in `d7edc63041` | `effbe66cc2`, `d7edc63041` | Metal | On. `GPUI_METAL_EXPERIMENTS=no-partial-redraw` turns it off | One Metal pixel test, 15 frames | `macos-gpu-usage.md`: 3 runs in one session, with the tracker |
 | Retained copy to the swapchain | `be63d15823` | WGPU DX12 | Off. `retained-copy`, which GitComet sets | WGPU headless, Windows only | None in the tree |
 | Cropped path targets | `d0e01e8854` | WGPU | On for Linux. `cropped-paths`, which GitComet sets on Windows | `cropped_path_targets_match_full_viewport_pixels_*` | Profiling README; raw data only under `target/` |
 | Quad vertex clipping to the content mask | `c18428832b` | All | On | `vertex_clipping_matches_fragment_masking_on_pixel_center_edges` | Commit message: rasterized quad area went from 10.6× to 3.6× the window |
