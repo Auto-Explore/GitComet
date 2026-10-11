@@ -44,13 +44,13 @@ def pinned_renderer(manifest, lock):
 
 def native_tests(system):
     commands = [("render-tests", ["-p", "gpui_ce_render", "--lib"])]
+    wgpu = ("wgpu-renderer-tests", ["-p", "gpui_ce_wgpu", "--features", "test-support", "--lib"])
     if system == "Windows":
-        commands += [("windows-renderer-tests", ["-p", "gpui_ce_windows", "--lib"]),
-                     ("wgpu-crop-policy", ["-p", "gpui_ce_wgpu", "--features", "test-support", "--lib", "cropped_path_target_experiments"])]
+        commands += [("windows-renderer-tests", ["-p", "gpui_ce_windows", "--lib"]), wgpu]
     elif system == "Darwin":
         commands.append(("metal-renderer-tests", ["-p", "gpui_ce_apple", "--lib"]))
     elif system == "Linux":
-        commands.append(("wgpu-renderer-tests", ["-p", "gpui_ce_wgpu", "--features", "test-support", "--lib"]))
+        commands.append(wgpu)
     else:
         raise ValueError(f"unsupported native validation host: {system}")
     return commands

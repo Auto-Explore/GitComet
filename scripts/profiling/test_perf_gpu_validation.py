@@ -15,6 +15,10 @@ class ValidationTests(unittest.TestCase):
                 tests = validation.native_tests(host)
                 self.assertTrue(any(package in argv for _, argv in tests))
                 self.assertTrue(any("--lib" in argv for _, argv in tests))
+        # WGPU DX12 is Windows' default renderer, so its whole suite runs there.
+        wgpu = ["-p", "gpui_ce_wgpu", "--features", "test-support", "--lib"]
+        for host in ("Windows", "Linux"):
+            self.assertIn(wgpu, [argv for _, argv in validation.native_tests(host)])
         with self.assertRaisesRegex(ValueError, "unsupported"):
             validation.native_tests("Unknown")
 
