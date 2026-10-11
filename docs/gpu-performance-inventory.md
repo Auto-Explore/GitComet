@@ -2,7 +2,7 @@
 
 This is every rendering optimization on `perf/consolidate_results` as of
 2026-10-11: GitComet after the vendored renderer's removal, and GPUI at
-`626422d615`. "Default" means the behavior with no environment overrides. No
+`76c3d5bd29`. "Default" means the behavior with no environment overrides. No
 entry has a paired A/A baseline yet, so every gain listed is a hypothesis until
 the consolidated validation measures it.
 
@@ -14,12 +14,11 @@ the consolidated validation measures it.
 | Metal tile-hash damage with Copy, Partial, Retained and Direct frames | `effbe66cc2` | Metal | On. `GPUI_METAL_EXPERIMENTS=no-partial-redraw` turns it off | `gpui_apple` damage unit tests; one Metal pixel test with four Partial fixtures | `macos-gpu-usage.md`: 3 runs in one session |
 | Retained copy to the swapchain | `be63d15823` | WGPU DX12 | Off. `retained-copy`, which GitComet sets | WGPU headless, Windows only | None in the tree |
 | Cropped path targets | `d0e01e8854` | WGPU | On for Linux. `cropped-paths`, which GitComet sets on Windows | `cropped_path_targets_match_full_viewport_pixels_*` | Profiling README; raw data only under `target/` |
-| Quad scissor runs (`quad_clipping.rs`) | `83fa34ea0f` | D3D11, WGPU | Off. `clipped-quads` | `clipped_quads_match_full_pixels_*` | None. Possibly redundant since vertex clipping |
 | Quad vertex clipping to the content mask | `c18428832b` | All | On | `vertex_clipping_matches_fragment_masking_on_pixel_center_edges` | Commit message: rasterized quad area went from 10.6× to 3.6× the window |
-| Shadow vertex clipping to the content mask | GitComet `8a3b2ec4`, moving to gpui-ce | All | On once ported | Same test | Linux record (the clipped-shadow candidate) |
+| Shadow vertex clipping to the content mask | `30e0192c0c` (from GitComet `8a3b2ec4`) | All | On | Same test | Linux record (the clipped-shadow candidate) |
 | Cropped path prepass, at most 3 layers | `c3c2ef65c1` | Metal | On. `no-path-prepass` | Metal pixel test | `macos-gpu-usage.md` |
 | Opaque quads, hidden-quad skip, split rounded quads | `c3c2ef65c1`, `caf833a3c3` | Metal | On. `no-opaque-quads`, `no-split-rounded` | Metal pixel test | `macos-gpu-usage.md` |
-| Windows input-rate keepalive | `001647ec24` | Windows | GitComet sets `GPUI_WINDOWS_INPUT_RATE_KEEPALIVE=off` | `gpui_windows` unit tests | None in the tree |
+| Input-rate keepalive skipped on X11, whose windows never get variable refresh | `76c3d5bd29` | X11 | On | Keepalive policy test in `test_app.rs` | None |
 
 ## GitComet
 
@@ -43,3 +42,10 @@ build as committed.
 | Windows predecessor | `b0bf1604` | `be63d158` |
 | macOS predecessor | `df2f597f` | `effbe66c` |
 | Linux predecessor | `d22e3e6c` | `f7474ab1` + vendored shadow clip |
+
+Removed in `4194aee0aa`: quad scissor runs (`clipped-quads`, redundant with
+vertex clipping), GPU timestamp telemetry, renderer capability records,
+diagnostic ablations, the scene-diff dump, Metal frame stats and dumps,
+`GPUI_TRACE_NOTIFY`, the Windows native input hooks and the Windows keepalive
+override. GPU work is measured outside the app (PDH, PresentMon, nvidia-smi,
+powermetrics).

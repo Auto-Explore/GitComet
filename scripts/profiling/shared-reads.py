@@ -28,7 +28,6 @@ def comparison(records, pairs):
                     and all(record["result"]["valid"]
                             and not record["result"].get("allocation_tracking", False)
                             and not record["result"].get("debug_assertions", False)
-                            and not record["result"].get("gpu_timings_requested", False)
                             for record in selected))
         phases = set.union(*(set(record["result"]["phases"]) for record in selected))
         metrics = []

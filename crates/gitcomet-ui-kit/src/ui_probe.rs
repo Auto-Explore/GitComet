@@ -297,7 +297,6 @@ fn frame_record(event: &gpui::profiler::FrameEvent, origin: Instant) -> Value {
     match event {
         gpui::profiler::FrameEvent::Draw(frame) => json!({
             "event": "draw", "window": format!("{:?}", frame.window_id),
-            "scene_revision": frame.scene_revision,
             "at_ms": timestamp(frame.draw_end), "start_ms": timestamp(frame.draw_start),
             "dirty_ms": frame.dirty_at.map(timestamp), "duration_ms": milliseconds(frame.draw_duration()),
             "invalidations": frame.invalidations,
@@ -308,23 +307,7 @@ fn frame_record(event: &gpui::profiler::FrameEvent, origin: Instant) -> Value {
             "duration_ms": milliseconds(frame.present_duration()),
             "animation_interval_ms": frame.animation_interval.map(milliseconds),
         }),
-        gpui::profiler::FrameEvent::Submission(frame) => json!({
-            "event": "submission", "window": format!("{:?}", frame.window_id),
-            "submission_id": frame.submission_id, "scene_revision": frame.scene_revision,
-            "reused_scene": frame.reused_scene, "reason": frame.reason.as_str(),
-            "at_ms": timestamp(frame.present_end), "start_ms": timestamp(frame.present_start),
-            "duration_ms": milliseconds(frame.present_end.duration_since(frame.present_start)),
-        }),
-        gpui::profiler::FrameEvent::NativeInput(frame) => json!({
-            "event": "native_input_arrival", "window": format!("{:?}", frame.window_id),
-            "sequence": frame.sequence, "arrival_qpc": frame.arrival_qpc,
-            "qpc_frequency": frame.qpc_frequency, "at_ms": timestamp(frame.dispatch_start),
-        }),
     }
-}
-
-fn performance_counter() -> Option<(u64, u64)> {
-    gpui::profiler::gpu::diagnostic_qpc()
 }
 
 fn thread_record(thread: &gitcomet_core::op_trace::ThreadInfo) -> Value {
@@ -423,9 +406,7 @@ pub fn start_if_enabled(cx: &mut gpui::App) {
     {
         return;
     }
-    let qpc_before = performance_counter();
     let started = Instant::now();
-    let qpc_after = performance_counter();
     let unix_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()
@@ -458,10 +439,7 @@ pub fn start_if_enabled(cx: &mut gpui::App) {
     if jsonl_enabled {
         gitcomet_core::op_trace::enable(started);
     }
-    write_json(&[json!({"event": "start", "version": 4, "unix_ms": unix_ms,
-        "qpc_before": qpc_before.map(|(counter, _)| counter),
-        "qpc_after": qpc_after.map(|(counter, _)| counter),
-        "qpc_frequency": qpc_after.map(|(_, frequency)| frequency),
+    write_json(&[json!({"event": "start", "version": 3, "unix_ms": unix_ms,
         "pid": std::process::id(), "os": std::env::consts::OS,
         "debug_assertions": cfg!(debug_assertions), "interval_ms": interval.as_millis(),
         "run_id": std::env::var("GITCOMET_PERF_RUN_ID").ok().filter(|id| !id.is_empty()),
@@ -488,7 +466,6 @@ pub fn start_if_enabled(cx: &mut gpui::App) {
         let mut cpu_at_sample_start = main_cpu.cpu_time();
         let mut main_cpu_pct = None;
         let mut previous_input = HashMap::<gpui::WindowId, gpui::profiler::InputLatencySnapshot>::new();
-        let mut previous_capabilities = HashMap::<gpui::WindowId, Value>::new();
 
         loop {
             let Ok(sent_at) = ping_rx.recv().await else {
@@ -513,12 +490,6 @@ pub fn start_if_enabled(cx: &mut gpui::App) {
             let frames = frame_collector.collect_unseen();
             if LOG.get().is_some_and(|log| log.jsonl) {
                 let mut records: Vec<_> = frames.iter().map(|frame| frame_record(frame, started)).collect();
-                let (gpu_events, gpu_records_dropped) = gpui::profiler::gpu::take_gpu_events();
-                for event in gpu_events {
-                    let mut value = serde_json::to_value(&event).expect("GPU telemetry serializes");
-                    value["at_ms"] = json!(milliseconds(event.submitted_at.saturating_duration_since(started)));
-                    records.push(value);
-                }
                 let traced = gitcomet_core::op_trace::drain();
                 let work = gitcomet_core::history_perf::snapshot();
                 let work_units: serde_json::Map<String, serde_json::Value> =
@@ -529,24 +500,13 @@ pub fn start_if_enabled(cx: &mut gpui::App) {
                     "work_units": work_units,
                     "records_dropped": LOG.get().map(|log| log.dropped.load(Ordering::Relaxed)).unwrap_or(0),
                     "stage_records_dropped": traced.dropped,
-                    "gpu_records_dropped": gpu_records_dropped,
                     "wall_ms": milliseconds(now.duration_since(interval_started)), "main_cpu_percent": main_cpu_pct,
                     "wake_ms": wake_latencies.iter().copied().map(milliseconds).collect::<Vec<_>>() }));
                 cx.update(|app| {
                     let windows = app.windows();
                     previous_input.retain(|id, _| windows.iter().any(|window| window.window_id() == *id));
-                    previous_capabilities.retain(|id, _| windows.iter().any(|window| window.window_id() == *id));
                     for handle in windows {
                         let _ = handle.update(app, |_, window, _| {
-                            let mut capabilities = serde_json::to_value(window.renderer_profile_capabilities())
-                                .expect("renderer capabilities serialize");
-                            if previous_capabilities.get(&handle.window_id()) != Some(&capabilities) {
-                                previous_capabilities.insert(handle.window_id(), capabilities.clone());
-                                capabilities["event"] = json!("renderer_capabilities");
-                                capabilities["window"] = json!(format!("{:?}", handle.window_id()));
-                                capabilities["at_ms"] = json!(milliseconds(now.duration_since(started)));
-                                records.push(capabilities);
-                            }
                             let snapshot = window.input_latency_snapshot();
                             let mut latency = snapshot.latency_histogram.clone();
                             let mut dropped = snapshot.mid_draw_events_dropped;
@@ -663,9 +623,6 @@ impl IntervalSummary {
         let mut submissions = Vec::with_capacity(frame_events.len());
         let mut dirty_to_draws = Vec::with_capacity(frame_events.len());
         let mut invalidations = 0;
-        let all_submissions = frame_events
-            .iter()
-            .any(|event| matches!(event, gpui::profiler::FrameEvent::Submission(_)));
         for event in frame_events {
             match event {
                 gpui::profiler::FrameEvent::Draw(frame) => {
@@ -674,14 +631,8 @@ impl IntervalSummary {
                     invalidations += frame.invalidations;
                 }
                 gpui::profiler::FrameEvent::Present(frame) => {
-                    if !all_submissions {
-                        submissions.push(frame.present_duration());
-                    }
+                    submissions.push(frame.present_duration())
                 }
-                gpui::profiler::FrameEvent::Submission(frame) => {
-                    submissions.push(frame.present_end.duration_since(frame.present_start))
-                }
-                gpui::profiler::FrameEvent::NativeInput(_) => {}
             }
         }
 
@@ -912,7 +863,6 @@ mod tests {
                 window_id: 1_u64.into(),
                 dirty_at: Some(origin),
                 invalidations: 2,
-                scene_revision: 1,
                 draw_start: origin + Duration::from_millis(8),
                 draw_end: origin + Duration::from_millis(12),
             }),
@@ -940,67 +890,6 @@ mod tests {
         assert_eq!(raw["start_ms"], 12.0);
         assert_eq!(raw["at_ms"], 34.0);
         assert_eq!(raw["duration_ms"], 22.0);
-    }
-
-    #[test]
-    fn every_submission_is_counted_without_duplicating_compatibility_presents() {
-        use gpui::profiler::{FrameEvent, PresentTiming, PresentationReason, SubmissionTiming};
-        let origin = Instant::now();
-        let events = [
-            FrameEvent::Present(PresentTiming {
-                window_id: 1_u64.into(),
-                present_start: origin,
-                present_end: origin + Duration::from_millis(2),
-                animation_interval: None,
-            }),
-            FrameEvent::Submission(SubmissionTiming {
-                window_id: 1_u64.into(),
-                submission_id: 1,
-                scene_revision: 7,
-                present_start: origin,
-                present_end: origin + Duration::from_millis(2),
-                reason: PresentationReason::Dirty,
-                reused_scene: false,
-            }),
-            FrameEvent::Submission(SubmissionTiming {
-                window_id: 1_u64.into(),
-                submission_id: 2,
-                scene_revision: 7,
-                present_start: origin + Duration::from_millis(16),
-                present_end: origin + Duration::from_millis(20),
-                reason: PresentationReason::InputRateKeepalive,
-                reused_scene: true,
-            }),
-        ];
-        let summary = IntervalSummary::new(Duration::from_secs(1), &events, &mut [], None);
-        let submits = summary.submit.unwrap();
-        assert_eq!(submits.count, 2);
-        assert_eq!(submits.avg, Duration::from_millis(3));
-        let raw = frame_record(&events[2], origin);
-        assert_eq!(raw["event"], "submission");
-        assert_eq!(raw["scene_revision"], 7);
-        assert_eq!(raw["submission_id"], 2);
-        assert_eq!(raw["reason"], "input_rate_keepalive");
-        assert_eq!(raw["reused_scene"], true);
-    }
-
-    #[test]
-    fn native_arrival_preserves_the_monotonic_clock_and_sequence() {
-        use gpui::profiler::{FrameEvent, NativeInputTiming};
-        let origin = Instant::now();
-        let event = FrameEvent::NativeInput(NativeInputTiming {
-            window_id: 1_u64.into(),
-            sequence: 42,
-            arrival_qpc: 123_456,
-            qpc_frequency: 10_000_000,
-            dispatch_start: origin + Duration::from_millis(9),
-        });
-        let raw = frame_record(&event, origin);
-        assert_eq!(raw["event"], "native_input_arrival");
-        assert_eq!(raw["sequence"], 42);
-        assert_eq!(raw["arrival_qpc"], 123_456);
-        assert_eq!(raw["qpc_frequency"], 10_000_000);
-        assert_eq!(raw["at_ms"], 9.0);
     }
 
     #[test]

@@ -662,12 +662,12 @@ results were not added by this repeat. The release build and all 21 targeted
 frame, resize, focus and component tests passed.
 
 The Linux captures above used GPUI revision `f7474ab`; the consolidated
-workspace uses a newer pin with the Windows diagnostics and renderer
-optimizations described below. Archived measurements describe their frozen
-binaries. For new captures, verify the backend capability and active settings
-rather than assuming support from an older revision.
+workspace uses a newer pin with the renderer optimizations described below.
+Archived measurements describe their frozen binaries. For new captures, record
+the GPUI revision and active settings rather than assuming support from an
+older revision.
 
-## Windows GPU and native hover measurements
+## Windows GPU measurements
 
 ### Application defaults and runtime overrides
 
@@ -678,7 +678,6 @@ including an empty value, is preserved.
 | Variable | Application default | Effect |
 | --- | --- | --- |
 | `GPUI_GPU_EXPERIMENTS` | `partial-redraw,retained-copy,cropped-paths` | Retained damage redraw on both Windows backends; cropped paths and retained texture copy on supported DX12 targets. |
-| `GPUI_WINDOWS_INPUT_RATE_KEEPALIVE` | `off` | Avoid unchanged input-rate presentations while retaining dirty, forced and required presentations. |
 | `GPUI_WINDOWS_DX12_PRESENT_MODE` | `immediate` | Use the measured DX12 presentation policy. |
 
 The renderer preference is unchanged: **Automatic** tries DirectX 12 and falls
@@ -688,26 +687,22 @@ back to DirectX 11; the saved DirectX 11 preference and an explicit
 Retained copy remains guarded by the actual target format, copy support and alpha
 mode. Unsupported scenes, target changes or retention budgets use a full redraw.
 
-In earlier experimental builds, `GITCOMET_GPU_GRAPH_QUADS=1` separately replaced
-axis-aligned connector paths with butt-cap quads. The consolidated implementation
-uses the pixel-aligned optimization without that environment flag.
+Earlier experimental builds read `GITCOMET_GPU_GRAPH_QUADS=1`; pixel-aligned
+straight graph connectors now always use quads, while fractional, clipped and
+faded connectors keep paths.
 
 The `GPUI_GPU_EXPERIMENTS` name is retained for compatibility, but the tokens above
 are now application defaults. Pass an explicit empty value to disable those
 optimizations for a baseline, or an explicit comma-separated set to isolate
-them. Set `GPUI_WINDOWS_INPUT_RATE_KEEPALIVE=auto` to restore the previous
-refresh-dependent policy, or `on` to require input-rate keepalive. Profiling
-runners pass explicit runtime settings for each side; their baseline is therefore
-distinct from an ordinary launch with the new defaults. Freeze a newly built
-binary after changing defaults; archived captures retain their original policy.
+them. Profiling runners pass explicit runtime settings for each side; their
+baseline is therefore distinct from an ordinary launch with the new defaults.
+Freeze a newly built binary after changing defaults; archived captures retain
+their original policy.
 
-GPU timestamp queries, UI probes, scenarios and pixel-removal ablations remain
-opt-in. The defaults do not enable `GPUI_GPU_TIMINGS`,
-`GPUI_GPU_DIAGNOSTIC_ABLATIONS` or `GITCOMET_GPU_GRAPH_QUADS`;
-`clipped-quads` remains disabled. Pixel-aligned straight graph connectors now
-use quads by default; fractional, clipped and faded connectors retain paths.
-Cheap scene/submission context needed for retention does not enable timing
-queries or detailed observer journals.
+GPUI no longer carries in-process GPU timestamps, renderer capability records,
+diagnostic ablations or native input hooks. Measure GPU work with samplers
+outside the app: PDH (below) and PresentMon on Windows, nvidia-smi on Linux and
+powermetrics on macOS.
 
 `live-ui.py --gpu` now collects Windows PDH GPU Engine and GPU Process/Adapter
 Memory counters on a background thread at one-second intervals. It keeps the
@@ -721,7 +716,7 @@ Memory-only adapter records remain in memory summaries and are excluded from
 engine occupancy; an observed invalid engine still makes occupancy unavailable.
 DWM discovery uses Toolhelp names and a WTS session fallback when protected DWM
 denies session lookup. The collector records its PID, session and missing reason.
-Root-cost and formal reports expose app, DWM and whole-device occupancy separately.
+Reports expose app, DWM and whole-device occupancy separately.
 Each is the busiest observed adapter's duration-weighted engine occupancy, never
 a sum across processes or GPUs. App occupancy remains the acceptance counter;
 DWM/device rankings are descriptive desktop context and cannot attribute work
@@ -729,188 +724,20 @@ to GitComet. Missing or invalid active-adapter counters remain unavailable.
 Windows GPU clocks, thermals, HAGS and power policy may need separate recording;
 unavailable metadata never establishes identical operating conditions.
 
-A release binary with the new GPUI diagnostic instrumentation supports
-`--gpu-timings`. The `renderer_capabilities` event is the authority for each
-backend's timestamp support and implemented experiments. Unsupported timestamp
-queries, disjoint/error queries, readback ring exhaustion, incomplete shutdown
-queries and probe drops are explicit failure statuses. `gpu_frame` uses the
-original submission timestamp even when readback completes in another phase.
-`submission` records every presentation, including reused scenes; `draw` and the
-legacy `submit` records alone cannot count input-rate keepalive work. Summaries
-join exact window/submission IDs and require complete coverage.
-
-Measured GPU render elapsed spans the first through last pass timestamps and can
-include gaps. `render_elapsed_ms_per_second` totals every timed presentation in a
-phase. It is a useful local rendering metric. It is not the union of GPU engine
-execution, nor display completion. The latter require GPU ETW execution intervals
-and PresentMon/WPR display events. Access-denied or absent external collection
-must remain unavailable. No collector substitutes zero for these metrics.
-
-`live-ui.py run --display desktop --input-route native` replays Windows pointer
-moves with `SendInput`, preserving the synthetic route for controls. The app
-writes physical screen coordinates and operation sequence requests; the Python
-worker requires that HWND to be visible, foreground and owned by the measured
-process. It never steals focus. Tagged native arrivals distinguish replay input
-from ordinary user input. Each request has a flushed ACK with QPC timestamps.
-The marker fits in the preserved low 32 bits of Windows mouse extra info:
-`0x4743` occupies the upper 16 bits and sequences occupy the lower 16 bits.
-Sequences must be 1..65535; overflow fails instead of aliasing earlier input.
-The app schedules requests independently of painting, so native coalescing is
-observed instead of forcing a paint after every move. The final requested history
-hover must settle. History `move_pointer` steps use `hover_rows: true`.
-
-Causal `hover_target`/`hover_paint` witnesses validate the requested row and clearing
-of the old hover, then join the painted scene revision to its actual submission.
-Same-target unchanged moves and inputs explicitly superseded before paint are
-counted separately. A delivered native event that never targets a history row
-fails coverage; only absent native arrivals can be counted as OS coalescing.
-`native_dispatch_to_submit_ms` uses the probe's bracketed QPC anchor and the
-SendInput QPC timestamp, using the conservative latency bound; anchor uncertainty
-is retained. This is immediate row
-feedback latency to submission. Tooltip dwell is a separate intentional delay.
-Displayed latency is still unavailable until a native display trace is joined.
-
-The Windows matrix isolates the `dx11`/`wgpu-dx12` choices, WGPU
-`cropped-paths`, `partial-redraw`, and
-`GPUI_WINDOWS_INPUT_RATE_KEEPALIVE=off`. The diagnostic `fifo-dx12` variant
-sets `GPUI_WINDOWS_DX12_PRESENT_MODE=fifo`; its actual capability must report FIFO.
-Baseline DX12 explicitly requests immediate and disables renderer experiments. A
-capability record must confirm every requested renderer experiment. Support
-alone does not establish activation. Current gates require `active_experiments`
-to equal the requested set even when timestamp queries are disabled. Older
-`shared-resources`, `cached-layers`, `batched-paths` and `pooled-targets` matrix
-claims do not describe the current dependency pin and have been removed from the
-available matrix. Historical results below describe their archived binaries only.
-
-To isolate the dominant draw cost, both Windows backends implement the opt-in
-`GPUI_GPU_DIAGNOSTIC_ABLATIONS` controls `no-mono-glyphs`,
-`no-subpixel-glyphs`, `no-shadows`, `no-paths`, `no-quads`, `no-images`, and
-`clear-only`. Use comma-separated tokens and compare one category at a time.
-`clear-only` still clears and presents the window; `no-paths` removes path
-rasterization, resolve, and compositing together. Capabilities report supported
-and active diagnostics, and every GPU timing event records the active set.
-Diagnostics bypass retained frames. These captures deliberately omit pixels and
-cannot pass visual or hover latency acceptance. Corroborate their timing results
-with PDH captures that disable GPU timestamps, since different query counts can
-change observer overhead. All diagnostic controls are disabled by default.
-
-`windows-hover-root-cost.py` is the tracked root-cost screening runner. It
-compares renderer choices, keepalive, retained damage, graph visibility, width,
-FIFO, existing WGPU cropped paths and individual pixel-removal controls. The
-`crop-dx12`, `crop-keepalive-dx12` and `crop-damage-keepalive-dx12` variants isolate
-crop alone and its combinations. The default-off `clipped-quads`
-prototype uses ordered hardware scissors around unchanged quad vertices and
-shader interpolation; measure and validate it before relying on it. Query-enabled
-GPU events report actual `quad_draw_calls` and additional `quad_scissor_splits`.
-Phase summaries include means, complete sums/rates and explicit counter coverage;
-missing older fields remain unavailable rather than zero. Only fully covered
-counters produce a phase total or rate.
-
-New renderer capabilities report the actual `surface_alpha_mode`; GPU events
-report `damage_fallback_reason` separately from timestamp errors. Summaries keep
-each reason's count, explicit nulls, missing legacy fields and coverage. A null
-reason means the renderer reported no fallback; an absent field does not.
-Query-free occupancy runs cannot supply per-frame damage fallback counts.
-
-The caller must declare the full GPUI revision used to build the frozen binary;
-the runner verifies that checkout and freezes its patch/untracked content hashes,
-GitComet source, fixture and executable before and after every capture. This
-declaration is build provenance supplied by the caller, not compiler attestation.
-
-```powershell
-python scripts/profiling/windows-hover-root-cost.py --binary C:/path/gitcomet.exe --repository C:/path/history --output target/profiling/root-cost --gpui-path C:/path/gpui-fork --expected-gpui-head FULL_40_CHARACTER_BUILD_REVISION --variants baseline-dx12 no-glyphs-dx12 no-quads-dx12 clear-only-dx12 --mode diagnostic --input-route native
-```
-
-Run `--mode occupancy` for the same PDH/native/scene/submission checks with GPU
-timestamps disabled, to corroborate apparent ablation savings without differing
-query counts. `--input-route synthetic` supplies a separate renderer-isolation
-control, with separate experimental rankings and no latency acceptance; it
-cannot be combined with clean latency mode. All routes report actual HWND pixel
-size and DPI. Native is required for the formal matrix. `--list` only prints the
-planned work. Short protocol debugging can reduce warmup/sweep/tail durations,
-but only relaxes the minimum PDH interval count; missing occupancy, unsupported
-flags, native ACK/row witness failures and missing GPU joins still fail.
-
-Run five A/A pairs before A/B. Split each stage into independently launched
-sessions of three and two pairs, with alternating order. Use the same frozen
-release binary, fixture, source patch, display/scale and workload in all stages:
-
-```powershell
-python scripts/profiling/windows-hover.py measure --binary C:/path/gitcomet.exe --repository C:/path/history --output target/profiling/hover-aa-first --stage aa --session first
-python scripts/profiling/windows-hover.py measure --binary C:/path/gitcomet.exe --repository C:/path/history --output target/profiling/hover-aa-second --stage aa --session second
-python scripts/profiling/windows-hover.py measure --binary C:/path/gitcomet.exe --repository C:/path/history --output target/profiling/hover-ab-first --stage ab --session first
-python scripts/profiling/windows-hover.py measure --binary C:/path/gitcomet.exe --repository C:/path/history --output target/profiling/hover-ab-second --stage ab --session second
-python scripts/profiling/windows-hover.py report target/profiling/hover-aa-first target/profiling/hover-aa-second target/profiling/hover-ab-first target/profiling/hover-ab-second --output target/profiling/hover-report.json
-```
-
-The window becomes active before a ten-second warmup, then receives thirty
-seconds of history-viewport row moves and a five-second tail. Each pair has
-separate diagnostic GPU/PDH and clean native latency runs. Clean
-runs keep causal probe records but disable GPU queries/PDH observers. GPU ranking
-requires both total query render elapsed and per-process PDH busiest-engine
-occupancy to improve. Each uses paired run-level log ratios, seeded bootstrap
-95% intervals, a reduction larger than the A/A noise envelope and the same
-direction in both sessions. There
-is no blanket ten-percent threshold in this matrix: cheap, reproducible smaller
-gains can pass. Native submission latency guards require p95 regression below
-`max(5%, 1 ms)` and p99 below `max(5%, 2 ms)`, plus absolute 50/100 ms caps. Missing
-causal or GPU coverage fails closed. Session environment differences and clock/
-thermal drift must be reviewed before relying on a local rank.
-Formal diagnostic hover captures requesting `partial-redraw` must observe actual
-Partial frames and a positive measured retained allocation peak. Capability
-activation, reuse-only captures and Full-only fallbacks do not establish the
-retained hover optimization. Clean latency runs are unaffected; the root-cost
-screen still accepts truthful Full-only captures as diagnostic evidence.
-
-A passing local result is `local_gpu_and_submit_gates_passed`, accompanied by
-`display_validation_pending`; enabling application defaults does not establish
-displayed latency or representative low-end performance.
 Verify displayed latency, pixels, resize/DPI/occlusion/device recovery and resource
 lifetime on affected native backends, then repeat on representative low-end
-hardware before making broader performance claims. Use `validate-gpu.py --stage tests` for native
-renderer checks. Every cargo test command must execute at least one passing test;
-a successful command with a stale filter and zero tests now fails validation.
-`gpu-matrix.py` retains simpler legacy per-frame gates for cross-platform
-exploration; use `windows-hover.py` for Windows A/A noise, all-presentation GPU
-work and native row latency decisions.
+hardware before making broader performance claims. Use `validate-gpu.py` for the
+pinned renderer's native tests. Every cargo test command must execute at least
+one passing test; a successful command with a stale filter and zero tests fails
+validation.
 
 Each session freezes `environment.json` and a readable `environment.txt` with
 the binary hash, tracked patch hash, content hashes of untracked sources, Windows
 active base power plan/effective power overlay, driver, nominal display refresh
-and collector DPI. Native replay also records actual app HWND physical client
-dimensions/origin and DPI. Missing API fields remain explicit. Nominal refresh
+and collector DPI. Missing API fields remain explicit. Nominal refresh
 does not establish VRR state, and GPU clocks/thermals/HAGS still need a separate
 collector. Preserve the separate GPUI checkout's source identity as well as the
 GitComet source identity when using a local dependency checkout.
-
-Measure observer overhead before interpreting small GPU gains. A previously
-validated native run provides the physical history sweep for an external replay:
-
-```powershell
-python scripts/profiling/windows-hover-occupancy.py pilot --binary C:/path/gitcomet.exe --repository C:/path/history --validated-run target/profiling/valid-native-run --output target/profiling/observer-pilot
-python scripts/profiling/windows-hover-occupancy.py run --binary C:/path/gitcomet.exe --repository C:/path/history --validated-run target/profiling/valid-native-run --output target/profiling/shipping-occupancy --variant dx11
-```
-
-The pilot runs three alternating shipping/probe pairs, then three alternating
-probe/probe-with-timestamps pairs. All use the same external 8 ms sweep and PDH
-collector: ten-second warmup, thirty-second hover and five-second tail. The
-shipping occupancy route clears inherited probe, scenario, optrace and timestamp
-settings. It requires the same frozen binary/fixture, matching physical client
-size/DPI/monitor and an already-foreground HWND owned by the newly launched app.
-It translates previously validated points by client origin and stops on focus or
-geometry changes. It never activates another window. It requires at least 25
-fully contained valid PDH intervals and 80 percent hover coverage.
-
-This route provides occupancy evidence only. With app observers disabled it has
-no fresh ready/row/submission witness or latency metric, and cannot satisfy the
-causal, displayed-latency or shipping acceptance gates. Three-pair bootstrap
-results assess observer overhead as a pilot; formal decisions still require the
-five-pair A/A and A/B sessions above.
-The observer pilot uses external replay in every mode. Its pairs isolate the
-probe/trace and timestamp factors, but do not quantify the app scenario's native
-request/ACK and causal-witness overhead in the root-cost runner. Probe modes
-require actual backend, active experiment set, empty diagnostic controls,
-keepalive/present policy and timestamp activation to match the requested runtime.
 
 ### Linux comparison of GPUI 325cedb (2026-10-05)
 

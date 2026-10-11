@@ -631,11 +631,7 @@ fn history_table_row(
         );
     }
 
-    place_history_row(
-        crate::view::scenario_driver::hover::attach(row, ix),
-        row_top,
-    )
-    .into_any_element()
+    place_history_row(row, row_top).into_any_element()
 }
 
 /// One linked worktree's uncommitted changes, rendered directly above the commit
@@ -911,11 +907,7 @@ fn worktree_uncommitted_history_row(
         .when(show_date, |row| row.child(div().w(col_date).flex_none()))
         .when(show_sha, |row| row.child(div().w(col_sha).flex_none()));
 
-    place_history_row(
-        crate::view::scenario_driver::hover::attach(row, list_ix),
-        row_top,
-    )
-    .into_any_element()
+    place_history_row(row, row_top).into_any_element()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1136,8 +1128,7 @@ fn working_tree_summary_history_row(
             }),
         );
 
-    place_history_row(crate::view::scenario_driver::hover::attach(row, 0), row_top)
-        .into_any_element()
+    place_history_row(row, row_top).into_any_element()
 }
 
 mod markdown_preview_rows;

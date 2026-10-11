@@ -336,14 +336,15 @@ Fixed in GitComet so far:
   `still` (a settled window for pixel comparison). The scenario driver gained an
   `expect_status` step and a `keep` option for `write_files`. The `diff_loaded`
   witness now requires a new diff target.
-- gpui-ce diagnostics:
+- gpui-ce diagnostics, removed in gpui-ce `4194aee0aa` (the findings above stand):
   - `GPUI_SCENE_STATS=1|2|3` prints scene composition per frame. With partial
     redraw it also prints each frame's mode, repainted share and damage time
     (`gpui-damage`).
   - `GPUI_DUMP_FRAME=prefix` writes the last frame as PNG. With partial redraw
     it also compares every frame's retained texture with a full render
     (`gpui-damage-check`) and saves the first mismatch.
-  - `GPUI_METAL_EXPERIMENTS` provides opt-outs and attribution switches.
+  - `GPUI_METAL_EXPERIMENTS` provides opt-outs; its `skip-*` and `opaque-rounded`
+    attribution switches were removed.
 
 ## Next steps
 
@@ -368,8 +369,8 @@ These were measured but not changed yet.
    separate store publications, and each one re-renders the main pane. Delivering
    them as one publication, and not bumping revisions when attributes are
    unchanged, would remove 2-3 frames per open.
-3. **Extra frames from measuring during paint.** `GPUI_TRACE_NOTIFY=1` logs
-   every notify with its caller. A notify issued while a frame is drawing costs
+3. **Extra frames from measuring during paint.** `GPUI_TRACE_NOTIFY=1`, since
+   removed, logged every notify with its caller. A notify issued while a frame is drawing costs
    the whole next frame. Each diff open had 2-3 such follow-up frames, from two
    callers:
    - the diff view recording wider lines as it paints them, which updates the

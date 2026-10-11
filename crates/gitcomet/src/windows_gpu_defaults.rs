@@ -5,12 +5,11 @@
 //! Backend selection remains with the saved preference and GPUI's normal
 //! Automatic DX12-to-DX11 fallback.
 
-const DEFAULTS: [(&str, &str); 3] = [
+const DEFAULTS: [(&str, &str); 2] = [
     (
         "GPUI_GPU_EXPERIMENTS",
         "partial-redraw,retained-copy,cropped-paths",
     ),
-    ("GPUI_WINDOWS_INPUT_RATE_KEEPALIVE", "off"),
     ("GPUI_WINDOWS_DX12_PRESENT_MODE", "immediate"),
 ];
 
@@ -53,7 +52,6 @@ mod tests {
             experiments.split(',').collect::<Vec<_>>(),
             ["partial-redraw", "retained-copy", "cropped-paths"]
         );
-        assert!(defaults.contains(&("GPUI_WINDOWS_INPUT_RATE_KEEPALIVE", "off")));
         assert!(defaults.contains(&("GPUI_WINDOWS_DX12_PRESENT_MODE", "immediate")));
     }
 
@@ -61,7 +59,7 @@ mod tests {
     fn each_explicit_setting_preserves_the_other_missing_defaults() {
         for key in DEFAULTS.map(|(key, _)| key) {
             let defaults = planned_defaults(&[(key, OsString::from("explicit"))]);
-            assert_eq!(defaults.len(), 2);
+            assert_eq!(defaults.len(), 1);
             assert!(defaults.iter().all(|(default_key, _)| *default_key != key));
         }
     }
@@ -74,30 +72,22 @@ mod tests {
                 .iter()
                 .all(|(key, _)| *key != "GPUI_GPU_EXPERIMENTS")
         );
-        assert_eq!(defaults.len(), 2);
+        assert_eq!(defaults.len(), 1);
     }
 
     #[test]
     fn all_explicit_overrides_leave_no_startup_changes() {
         let values = [
             ("GPUI_GPU_EXPERIMENTS", OsString::new()),
-            ("GPUI_WINDOWS_INPUT_RATE_KEEPALIVE", OsString::from("on")),
             ("GPUI_WINDOWS_DX12_PRESENT_MODE", OsString::from("fifo")),
         ];
         assert!(planned_defaults(&values).is_empty());
     }
 
     #[test]
-    fn defaults_do_not_select_a_backend_or_enable_diagnostic_observers() {
-        assert_eq!(DEFAULTS.len(), 3);
-        for key in [
-            "GPUI_WINDOWS_RENDERER",
-            "GPUI_GPU_TIMINGS",
-            "GPUI_GPU_DIAGNOSTIC_ABLATIONS",
-            "GPUI_GPU_DIAGNOSTIC_SCENE_DIFF",
-            "GITCOMET_GPU_GRAPH_QUADS",
-            "GITCOMET_UI_PROBE",
-        ] {
+    fn defaults_do_not_select_a_backend_or_enable_the_probe() {
+        assert_eq!(DEFAULTS.len(), 2);
+        for key in ["GPUI_WINDOWS_RENDERER", "GITCOMET_UI_PROBE"] {
             assert!(DEFAULTS.iter().all(|(default_key, _)| *default_key != key));
         }
     }

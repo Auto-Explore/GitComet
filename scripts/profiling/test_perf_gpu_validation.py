@@ -1,5 +1,4 @@
-"""Cross-platform validation plans must retain instrumentation and pin boundaries."""
-import argparse
+"""Native renderer validation must test the pinned revision and fail on empty suites."""
 from pathlib import Path
 import tempfile
 import unittest
@@ -19,24 +18,10 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported"):
             validation.native_tests("Unknown")
 
-    def test_clean_commands_exclude_instrumentation_and_lifecycle_exercises_both_sides(self):
-        args = argparse.Namespace(repositories=[Path("repository with spaces"), Path("history")],
-                                  pairs=5, inputs=120, display="desktop", variants=["crop"],
-                                  windows=[1, 4], sizes=["1400x900"], scales=[100],
-                                  gpu=True, cycles=100, output=Path("output with spaces"))
-        commands = dict(validation.measurement_commands(args, Path("frozen/gitcomet.exe")))
-        self.assertIn("--gpu", commands["gpu-matrix"])
-        clean = commands["clean-input"]
-        self.assertNotIn("--gpu", clean)
-        self.assertEqual(clean[clean.index("--timing-mode") + 1], "clean")
-        self.assertIn("repository with spaces", clean)
-        baseline, candidate = commands["lifecycle-baseline"], commands["lifecycle-candidate"]
-        self.assertIn("GPUI_GPU_EXPERIMENTS=", baseline)
-        self.assertTrue(any("cropped-paths" in arg and "partial-redraw" in arg for arg in candidate))
-        self.assertIn(str(Path("frozen/gitcomet.exe")), candidate)
-        self.assertEqual(candidate[candidate.index("--cycles") + 1], "100")
-        args.cycles = 0
-        self.assertFalse(any(name.startswith("lifecycle") for name, _ in validation.measurement_commands(args, Path("binary"))))
+    def test_zero_executed_tests_fail_closed(self):
+        with self.assertRaisesRegex(ValueError, "zero"):
+            validation.require_executed_tests("test result: ok. 0 passed; 0 failed; 3 filtered out")
+        self.assertEqual(validation.require_executed_tests("test result: ok. 2 passed; 0 failed"), 2)
 
     def test_mismatched_dependency_pins_fail_before_testing_another_renderer(self):
         url = "https://example.invalid/gpui.git"

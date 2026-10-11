@@ -58,7 +58,7 @@ def matrix(repositories, count, idle_ms, inputs):
               {"do": "expect_windows", "count": count},
               phase("hover"),
               {"do": "move_pointer", "positions": [[.55, .08 + row * .022] for row in range(24)],
-               "repeat": inputs * 2, "interval_ms": 8, "hover_rows": True},
+               "repeat": inputs * 2, "interval_ms": 8},
               phase("scroll"),
               {"do": "scroll", "target": "history", "delta_px": -72, "repeat": inputs,
                "interval_ms": 16, "flip_every": 60, "witness": {"kind": "history_scrolled"}}]
@@ -220,7 +220,6 @@ def main():
     parser.add_argument("--cycles", type=int, default=10)
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--display", choices=["headless", "desktop"], default="headless")
-    parser.add_argument("--gpu-timings", action="store_true", help="collect native GPU frame/pass timings")
     parser.add_argument("--gpu", action="store_true", help="record process and device GPU usage on Linux/NVIDIA")
     parser.add_argument("--window-size", type=live.positive_int, nargs=2, default=live.WINDOW_SIZE,
                         metavar=("WIDTH", "HEIGHT"), help="window dimensions in logical pixels")
@@ -252,7 +251,7 @@ def main():
             print(f"sample={sample} {key}", flush=True)
             result = live.run_once(binary, repositories[0], key, directory, args.timeout,
                                    display=args.display, ping_ms=1000, scenario_steps=steps, extra_env=extra_env, gpu=args.gpu,
-                                   window_size=args.window_size, gpu_timings=args.gpu_timings,
+                                   window_size=args.window_size,
                                    session_overrides={"history_show_graph": False} if args.hide_graph else None)
             try:
                 verify_isolation(directory)
