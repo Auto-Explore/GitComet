@@ -46,7 +46,7 @@ def native_tests(system):
     commands = [("render-tests", ["-p", "gpui_ce_render", "--lib"])]
     wgpu = ("wgpu-renderer-tests", ["-p", "gpui_ce_wgpu", "--features", "test-support", "--lib"])
     if system == "Windows":
-        commands += [("windows-renderer-tests", ["-p", "gpui_ce_windows", "--lib"]), wgpu]
+        commands += [("windows-renderer-tests", ["-p", "gpui_ce_windows", "--features", "windows-wgpu", "--lib"]), wgpu]
     elif system == "Darwin":
         commands.append(("metal-renderer-tests", ["-p", "gpui_ce_apple", "--lib"]))
     elif system == "Linux":

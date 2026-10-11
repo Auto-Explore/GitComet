@@ -7,7 +7,8 @@ import platform
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import perf_gpu
 import perf_workloads
@@ -84,6 +85,19 @@ class GpuTests(unittest.TestCase):
                 self.assertEqual(load["ratio"]["median_ratio"], 0.5)
                 # Present time includes the renderer's CPU work.
                 self.assertEqual(compared["submit_ms.p95"]["ratio"]["median_ratio"], 0.5)
+
+    def test_windows_app_load_keeps_invalid_active_adapters_unavailable(self):
+        def adapter(load, engines):
+            return {"engine_instances_observed": engines,
+                    "busiest_engine_percent": {"duration_weighted_mean": load}}
+
+        for secondary, expected in ((adapter(None, 0), 10.0),
+                                    (adapter(None, 1), None),
+                                    (adapter(20.0, 1), 20.0)):
+            with self.subTest(secondary=secondary):
+                phase = {"gpu": {"processes": {"app": {"first": adapter(10.0, 1),
+                                                         "second": secondary}}}}
+                self.assertEqual(live.app_gpu_load(phase), expected)
 
     def test_device_counters_and_process_counters_are_not_combined(self):
         device = perf_gpu.parse_device('2026/10/04 14:00:03.100, 0, GPU-test, "NVIDIA, test", 90, 12, 500, 8192, [N/A], 32, 1700, 5005, P0')
@@ -204,6 +218,85 @@ class GpuTests(unittest.TestCase):
             self.assertFalse(session["history_show_graph"])
             self.assertEqual(session["open_repos"], [str(repository)])
             self.assertFalse(session["check_for_updates_on_startup"])
+
+    def test_capture_distinguishes_default_and_explicitly_disabled_experiments(self):
+        for experiments in (None, "", "retained_copy"):
+            with self.subTest(experiments=experiments), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                binary = root / "binary"
+                binary.write_bytes(b"binary")
+                output = root / "capture"
+                process = Mock(pid=41, returncode=0)
+                process.poll.return_value = 0
+                extra_env = {} if experiments is None else {"GPUI_GPU_EXPERIMENTS": experiments}
+                with patch.dict(live.os.environ, {}, clear=True), \
+                        patch.object(live.platform, "system", return_value="Windows"), \
+                        patch.object(live, "git", return_value=SimpleNamespace(stdout=b"head\n")), \
+                        patch.object(live.subprocess, "Popen", return_value=process) as launch, \
+                        patch.object(live, "summarize", return_value={}):
+                    live.run_once(binary, root / "repository", "still", output, 60,
+                                  metadata=False, display="desktop", extra_env=extra_env,
+                                  scenario_steps={"steps": []})
+                capture = json.loads((output / "capture.json").read_text(encoding="utf-8"))
+                self.assertEqual(capture["renderer_experiments"], experiments)
+                launched_env = launch.call_args.kwargs["env"]
+                if experiments is None:
+                    self.assertNotIn("GPUI_GPU_EXPERIMENTS", launched_env)
+                else:
+                    self.assertEqual(launched_env["GPUI_GPU_EXPERIMENTS"], experiments)
+
+
+class PairedDesktopTests(unittest.TestCase):
+    def test_native_desktop_pairs_preserve_order_gpu_samples_and_dirty_fixture(self):
+        for host in ("Windows", "Darwin", "Linux"):
+            with self.subTest(host=host), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                baseline, candidate = root / "baseline", root / "candidate"
+                baseline.write_bytes(b"baseline binary")
+                candidate.write_bytes(b"candidate binary")
+                args = SimpleNamespace(repository=root / "repository", output=root / "session",
+                                       baseline=baseline, candidate=candidate, display="desktop",
+                                       pairs=2, reverse=True, session="first", scenarios=["still"],
+                                       candidate_wrap=None, candidate_env=[], max_load=None,
+                                       gpu=True, timeout=60, save_file=live.SAVE_FILE,
+                                       secondary_repository=None)
+
+                def fixture_status(repository, *arguments):
+                    return SimpleNamespace(stdout=b"head\n" if arguments[0] == "rev-parse"
+                                           else b" M graph.txt\n M search.txt\n")
+
+                def run(binary, repository, name, output, timeout, **options):
+                    return {"binary_sha256": live.perf_metadata.sha256_file(binary), "valid": True,
+                            "phases": {"still": {"gpu": {"processes": {"app": {
+                                "0": {"gpu_ms_per_s": 4.0}}}}}}}
+
+                with patch.object(live.platform, "system", return_value=host), \
+                        patch.object(live, "git", side_effect=fixture_status), \
+                        patch.object(live.perf_metadata, "collect", return_value={}), \
+                        patch.object(live, "run_once", side_effect=run) as capture:
+                    live.measure(args)
+                self.assertEqual([call.args[0] for call in capture.call_args_list],
+                                 [candidate, baseline, baseline, candidate])
+                self.assertTrue(all(call.kwargs["display"] == "desktop" and call.kwargs["gpu"]
+                                    for call in capture.call_args_list))
+                saved = json.loads((args.output / "session.json").read_text(encoding="utf-8"))
+                self.assertTrue(saved["complete"])
+                self.assertEqual(len(saved["samples"]), 4)
+                self.assertIn("gpu.app_load", saved["comparisons"]["still"]["still"])
+
+    def test_incompatible_display_or_host_fails_before_creating_output(self):
+        for host, display, reason in (("Windows", "headless", "Headless captures require Linux"),
+                                      ("Darwin", "headless", "Headless captures require Linux"),
+                                      ("Unknown", "desktop", "unsupported measurement host")):
+            with self.subTest(host=host), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "session"
+                args = SimpleNamespace(display=display, output=output)
+                with patch.object(live.platform, "system", return_value=host), \
+                        patch.object(live, "run_once") as capture:
+                    with self.assertRaisesRegex(ValueError, reason):
+                        live.measure(args)
+                capture.assert_not_called()
+                self.assertFalse(output.exists())
 
 
 if __name__ == "__main__":

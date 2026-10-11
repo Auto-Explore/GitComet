@@ -757,7 +757,7 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
                "ping_ms": ping_ms, "wrap": wrap, "gpu_cache": "cold" if cold_gpu_cache else "warm",
                "load_before": load_average(), "outcome": "failed",
                "cycles": cycles if name == "lifecycle" else None, "extra_env": extra_env or {}}
-    capture["renderer_experiments"] = env.get("GPUI_GPU_EXPERIMENTS", "")
+    capture["renderer_experiments"] = env.get("GPUI_GPU_EXPERIMENTS")
     capture["gpu_capture"] = {"requested": gpu}
     if metadata:
         environment = perf_metadata.collect(
@@ -1217,6 +1217,10 @@ def app_gpu_load(phase):
         load = adapter.get("gpu_ms_per_s")
         for metric in ("sm_percent", "busiest_engine_percent"):
             load = load if load is not None else lookup(adapter, metric + ".duration_weighted_mean")
+        # Memory-only Windows adapters are harmless, but an observed active
+        # adapter with unavailable counters could be the busiest one.
+        if load is None and (adapter.get("engine_instances_observed") or 0) > 0:
+            return None
         if load is not None:
             loads.append(load)
     return max(loads, default=None)
@@ -1288,8 +1292,11 @@ def compare(samples, scenarios):
 
 
 def measure(args):
-    if sys.platform not in ("linux", "darwin"):
-        raise ValueError("live-ui.py paired captures require Linux or macOS; use ui-responsiveness.py on Windows")
+    system = platform.system()
+    if system not in ("Linux", "Windows", "Darwin"):
+        raise ValueError(f"unsupported measurement host: {system}")
+    if args.display == "headless" and system != "Linux":
+        raise ValueError("Headless captures require Linux; use --display desktop on this platform")
     if args.pairs < 1:
         raise ValueError("--pairs must be positive")
     repository = args.repository.resolve()

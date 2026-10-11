@@ -19,6 +19,9 @@ class ValidationTests(unittest.TestCase):
         wgpu = ["-p", "gpui_ce_wgpu", "--features", "test-support", "--lib"]
         for host in ("Windows", "Linux"):
             self.assertIn(wgpu, [argv for _, argv in validation.native_tests(host)])
+        # Match the application's Windows bridge so its WGPU integration tests execute.
+        windows = ["-p", "gpui_ce_windows", "--features", "windows-wgpu", "--lib"]
+        self.assertIn(windows, [argv for _, argv in validation.native_tests("Windows")])
         with self.assertRaisesRegex(ValueError, "unsupported"):
             validation.native_tests("Unknown")
 
