@@ -99,6 +99,10 @@ class GpuTests(unittest.TestCase):
                                                          "second": secondary}}}}
                 self.assertEqual(live.app_gpu_load(phase), expected)
 
+    def test_profiles_mark_the_current_survey_answered(self):
+        # A stale id lets the survey toast animate through every measured run.
+        self.assertTrue(live.survey_id().startswith("gitcomet_user_survey_"))
+
     def test_device_counters_and_process_counters_are_not_combined(self):
         device = perf_gpu.parse_device('2026/10/04 14:00:03.100, 0, GPU-test, "NVIDIA, test", 90, 12, 500, 8192, [N/A], 32, 1700, 5005, P0')
         self.assertEqual(device["name"], "NVIDIA, test")

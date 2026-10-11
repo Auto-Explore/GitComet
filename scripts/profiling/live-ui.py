@@ -53,7 +53,7 @@ import perf_metadata  # noqa: E402
 import perf_platform  # noqa: E402
 import perf_gpu  # noqa: E402
 
-SURVEY_SOURCE = ROOT / "crates/gitcomet-ui-gpui/src/view/user_survey.rs"
+SURVEY_SOURCE = ROOT / "crates/gitcomet-core/src/identity.rs"
 SAVE_FILE = "save-target.txt"
 SEARCH_FILE = "search-target.txt"
 IGNORED_DIR = "build"
@@ -461,7 +461,7 @@ SCENARIOS = ("startup", "idle", "idle-minimized", "idle-hidden-terminal", "two-w
 # ---------------------------------------------------------------- one run
 
 def survey_id():
-    match = re.search(r'SURVEY_ID: &str = "([^"]+)"', SURVEY_SOURCE.read_text(encoding="utf-8"))
+    match = re.search(r'SurveyLink \{\s*id: Cow::Borrowed\("([^"]+)"\)', SURVEY_SOURCE.read_text(encoding="utf-8"))
     return match.group(1) if match else "unknown"
 
 
