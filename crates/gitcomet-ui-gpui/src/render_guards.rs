@@ -216,7 +216,7 @@ mod tests {
     }
 
     /// `window_bounds()` reports the *restore* size while the window is
-    /// maximized or fullscreen, and includes the client-side shadow band, so
+    /// maximized or fullscreen, and includes the client-side decoration inset, so
     /// anything sized or placed from it misfits the visible window. Views use
     /// `chrome::window_surface_bounds`.
     #[test]

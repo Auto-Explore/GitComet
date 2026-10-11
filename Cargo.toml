@@ -17,6 +17,7 @@ members = [
   "crates/gitcomet-ui-kit",
 ]
 exclude = [
+  "vendor/gpui-ce-render",
   "vendor/mermaid-rs-renderer",
   "crates/gitcomet-filesystem-native",
   "crates/win32-window-utils",
@@ -68,6 +69,10 @@ default-members = [
   "crates/gitcomet-ui-gpui",
   "crates/gitcomet-ui-kit",
 ]
+
+# Keep the renderer fix local and reproducible with the pinned framework.
+[patch."https://github.com/Havunen/gpui-ce.git"]
+gpui_ce_render = { path = "vendor/gpui-ce-render" }
 
 [workspace.package]
 version = "0.3.0"

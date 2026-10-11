@@ -3878,7 +3878,6 @@ dependencies = [
 [[package]]
 name = "gpui_ce_render"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=f7474ab18033dee1e58770494c3b56afb3938b24#f7474ab18033dee1e58770494c3b56afb3938b24"
 dependencies = [
  "gpui-ce",
  "naga 24.0.0",
