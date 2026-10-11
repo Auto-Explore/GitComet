@@ -93,6 +93,9 @@ branch, 3 runs of each case, medians.
 | Switch repo tabs | 188 → 53 (-72%) | 36 → 17 (-52%) | 7.49 → 3.59 (-52%) | 78 → 29 (-63%) | 106 → 21 (-81%) |
 | Idle (focused) | 4.11 → 4.20 (+2%) | 0.17 → 0.07 (-60%) | 10 → 4.13 (-60%) | 9.13 → 8.49 (-7%) | 0.38 → 0.39 (+5%) |
 
+This comparison predates GPU fixes 4 and 5 below, which bring a hover frame from
+3.69 to 1.27 ms of GPU time.
+
 ## Root causes and fixes
 
 ### GPU: the Metal renderer did 2-3 times the necessary work per frame
@@ -225,7 +228,29 @@ far less energy.
    - The damage tracker reads only the GPUI scene, so the other renderers could
      reuse it. The retained texture and the copy are Metal code.
 
-   PR_AB_TABLE
+   Same build with partial redraw off (`GPUI_METAL_EXPERIMENTS=no-partial-redraw`)
+   and on, 3 interleaved runs of each case, medians:
+
+   | Interaction | GPU per frame off | on | Whole-GPU power off | on |
+   | --- | ---: | ---: | ---: | ---: |
+   | Hover sweep | 2.64 ms | 1.27 ms | 182 mW | 92 mW |
+   | Hover, large repository | 2.64 ms | 1.27 ms | 182 mW | 91 mW |
+   | History scroll | 2.60 ms | 2.02 ms | 198 mW | 147 mW |
+   | Commit selection | 2.62 ms | 1.95 ms | 63 mW | 48 mW |
+   | Open diffs | 2.72 ms | 2.07 ms | 26 mW | 22 mW |
+   | Switch repository tabs | 2.60 ms | 2.26 ms | 21 mW | 19 mW |
+
+   - Process CPU is unchanged within run-to-run noise. Damage tracking costs
+     about 1 ms/s.
+   - WindowServer's GPU time stays at 76-79 ms/s during hover: it still
+     composites the whole window.
+   - The measured build predates the large-change rule. One run of the final
+     build gave 1.64 ms per frame for selection, 1.91 ms for diff open and
+     2.07 ms for tab switches.
+
+   Against the original build, a hover frame costs 85% less GPU time
+   (8.5 → 1.27 ms) and whole-GPU power during the sweep is 88% lower
+   (768 → 92 mW).
 
 ### CPU
 
@@ -373,11 +398,10 @@ These were measured but not changed yet.
 
 ## Shipping the renderer changes
 
-The renderer changes are in a gpui-ce checkout on branch `macOS_gpu_usage`.
-GitComet pins gpui-ce by revision in `Cargo.toml`. To ship them:
-1. Push that branch to the fork.
-2. Bump the `rev` of `gpui`, `gpui_platform`, `gpui_wgpu` and `gpui_parley`.
+The renderer changes are on the fork's gpui-ce branch `macOS_gpu_usage`.
+GitComet's `Cargo.toml` pins its head (`effbe66cc2`) for `gpui`,
+`gpui_platform`, `gpui_wgpu` and `gpui_parley`.
 
-Local builds used a `[patch]` config passed with `cargo --config`. The tracked
-`Cargo.toml` did not change; the patch rewrites `Cargo.lock` while it is applied.
+During the measurements, local builds used a `[patch]` config passed with
+`cargo --config`, which rewrites `Cargo.lock` while it is applied.
 
