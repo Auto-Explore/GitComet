@@ -1288,8 +1288,8 @@ def compare(samples, scenarios):
 
 
 def measure(args):
-    if sys.platform != "linux":
-        raise ValueError("live-ui.py drives the Linux application; use ui-responsiveness.py on Windows")
+    if sys.platform not in ("linux", "darwin"):
+        raise ValueError("live-ui.py paired captures require Linux or macOS; use ui-responsiveness.py on Windows")
     if args.pairs < 1:
         raise ValueError("--pairs must be positive")
     repository = args.repository.resolve()

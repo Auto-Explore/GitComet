@@ -88,9 +88,38 @@ class ReportingTests(unittest.TestCase):
         self.assertEqual(perf_report.findings(result), [])
 
     def test_unsupported_headless_mode_does_not_silently_use_the_desktop(self):
-        with patch.object(live.platform, "system", return_value="Windows"):
-            with self.assertRaisesRegex(ValueError, "Headless captures require Linux"):
-                live.run_once(Path("app"), Path("repo"), "startup", Path("unused"), 1)
+        for system in ("Windows", "Darwin"):
+            with self.subTest(system=system), patch.object(live.platform, "system", return_value=system):
+                with self.assertRaisesRegex(ValueError, "Headless captures require Linux"):
+                    live.run_once(Path("app"), Path("repo"), "startup", Path("unused"), 1)
+
+    def test_macos_desktop_measurement_preserves_pair_order_and_gpu_sampling(self):
+        for reverse in (False, True):
+            with self.subTest(reverse=reverse), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp).resolve()
+                baseline = root / "baseline.app/Contents/MacOS/gitcomet"
+                candidate = root / "candidate.app/Contents/MacOS/gitcomet"
+                args = live.argparse.Namespace(
+                    baseline=baseline, candidate=candidate, repository=root / "repo", output=root / "output",
+                    session="test", pairs=2, reverse=reverse, scenarios=["still"], display="desktop", gpu=True,
+                    timeout=60, save_file=live.SAVE_FILE, secondary_repository=None,
+                    candidate_wrap=None, candidate_env=[], max_load=None)
+                summary = {"binary_sha256": "same", "valid": True, "phases": {}}
+                with patch.object(live.sys, "platform", "darwin"), \
+                        patch.object(live, "git", return_value=Mock(stdout=b"fixed\n")), \
+                        patch.object(live.perf_metadata, "sha256_file", return_value="same"), \
+                        patch.object(live.perf_metadata, "collect", return_value={}), \
+                        patch.object(live, "run_once", return_value=summary) as run:
+                    live.measure(args)
+                order = [candidate, baseline, baseline, candidate] if reverse else [baseline, candidate, candidate, baseline]
+                self.assertEqual([call.args[0] for call in run.call_args_list], order)
+                for call in run.call_args_list:
+                    self.assertEqual(call.kwargs["display"], "desktop")
+                    self.assertTrue(call.kwargs["gpu"])
+                session = json.loads((args.output / "session.json").read_text(encoding="utf-8"))
+                self.assertTrue(session["complete"])
+                self.assertTrue(session["gpu_sampling"])
+                self.assertEqual(len(session["samples"]), 4)
 
     def test_profiler_loss_or_missing_quality_is_not_a_valid_capture(self):
         self.assertTrue(perf_report.perf_quality("# Total Lost Samples: 0\n")["valid"])

@@ -141,7 +141,8 @@ class GpuTests(unittest.TestCase):
             launch.assert_not_called()
 
     def test_collector_filters_other_processes_and_keeps_compositor_separate(self):
-        with tempfile.TemporaryDirectory() as directory, patch.object(perf_gpu.shutil, "which", return_value=None):
+        with tempfile.TemporaryDirectory() as directory, patch.object(perf_gpu.shutil, "which", return_value=None), \
+                patch.object(perf_gpu.platform, "system", return_value="Linux"):
             sampler = perf_gpu.NvidiaSampler(directory, {"app": 41, "compositor": 42})
             process = type("FakeProcess", (), {"stdout": io.StringIO(HEADER + row(1, pid=99) + row(1, pid=41) + row(1, pid=42))})()
             sampler._read("process", process)
