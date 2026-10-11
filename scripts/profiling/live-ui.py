@@ -1185,6 +1185,8 @@ METRICS = [
     ("inputs.input_to_witness_ms.p50", "lower"), ("inputs.input_to_witness_ms.p95", "lower"),
     ("inputs.dispatch_delay_ms.p95", "lower"), ("inputs.apply_ms.p95", "lower"),
     ("draw_ms.p50", "lower"), ("draw_ms.p95", "lower"), ("draw_ms.p99", "lower"),
+    # Present, including the renderer's CPU work.
+    ("submit_ms.p50", "lower"), ("submit_ms.p95", "lower"), ("submit_ms.p99", "lower"),
     ("dirty_to_draw_ms.p95", "lower"), ("wake_ms.p99", "lower"),
     ("main_cpu_percent", "lower"), ("process_cpu_cores", "lower"), ("wakeups_per_second", "lower"),
     ("frames_per_second", "info"), ("pss_kib.max", "lower"), ("rss_kib.max", "lower"),
