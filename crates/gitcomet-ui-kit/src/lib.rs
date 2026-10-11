@@ -114,4 +114,64 @@ mod version_contract {
             );
         }
     }
+
+    const FORK: &str = "https://github.com/Havunen/gpui-ce.git";
+
+    /// GPUI patches, and GPUI packages the lock resolves (by name or source)
+    /// from anything other than the pinned fork revision.
+    fn unpinned_gpui(manifest: &str, lock: &str, revision: &str) -> Vec<String> {
+        let pinned = format!("git+{FORK}?rev={revision}#{revision}");
+        let mut problems: Vec<String> = manifest
+            .lines()
+            .filter(|line| line.starts_with("[patch") && line.contains("gpui-ce"))
+            .map(str::to_owned)
+            .collect();
+        let mut resolved = 0;
+        for package in lock.split("[[package]]").skip(1) {
+            let field = |key: &str| {
+                package.lines().find_map(|line| {
+                    line.strip_prefix(key)?
+                        .strip_prefix(" = \"")?
+                        .strip_suffix('"')
+                })
+            };
+            let name = field("name").unwrap_or_default();
+            let source = field("source");
+            if name == "gpui-ce"
+                || name == "gpui_xim"
+                || name.starts_with("gpui_ce_")
+                || source.is_some_and(|source| source.contains(FORK))
+            {
+                resolved += 1;
+                if source != Some(pinned.as_str()) {
+                    problems.push(format!("{name} resolves from {source:?}"));
+                }
+            }
+        }
+        if resolved == 0 {
+            problems.push("Cargo.lock lists no GPUI packages".to_owned());
+        }
+        problems
+    }
+
+    /// The lock decides what is built: a `[patch]` or a stale lock can
+    /// resolve GPUI crates from a path or another revision behind the pins.
+    #[test]
+    fn resolved_gpui_packages_come_from_the_pinned_revision() {
+        let manifest = include_str!("../../../Cargo.toml");
+        let lock = include_str!("../../../Cargo.lock");
+        let revision = super::GPUI_REVISION;
+        assert_eq!(
+            unpinned_gpui(manifest, lock, revision),
+            Vec::<String>::new()
+        );
+
+        let stale = lock.replace(revision, &"0".repeat(revision.len()));
+        assert!(unpinned_gpui(manifest, &stale, revision).len() > 1);
+        let pinned_source = format!("source = \"git+{FORK}?rev={revision}#{revision}\"\n");
+        let path_patched = lock.replacen(&pinned_source, "", 1);
+        assert_eq!(unpinned_gpui(manifest, &path_patched, revision).len(), 1);
+        let patched = format!("{manifest}\n[patch.\"{FORK}\"]\n");
+        assert_eq!(unpinned_gpui(&patched, lock, revision).len(), 1);
+    }
 }

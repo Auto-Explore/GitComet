@@ -39,16 +39,32 @@ class ValidationTests(unittest.TestCase):
         self.assertFalse(any(name.startswith("lifecycle") for name, _ in validation.measurement_commands(args, Path("binary"))))
 
     def test_mismatched_dependency_pins_fail_before_testing_another_renderer(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "Cargo.toml"
-            lines = ['[workspace.dependencies]']
-            for name in ("gpui", "gpui_platform", "gpui_wgpu"):
-                lines.append(f'{name} = {{ git = "https://example.invalid/gpui.git", rev = "same" }}')
-            path.write_text("\n".join(lines), encoding="utf-8")
-            self.assertEqual(validation.pinned_renderer(path)[1], "same")
-            path.write_text(path.read_text().replace('rev = "same"', 'rev = "different"', 1), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "same pinned revision"):
-                validation.pinned_renderer(path)
+        url = "https://example.invalid/gpui.git"
+        pinned = f'source = "git+{url}?rev=same#same"'
+        pins = "\n".join(f'{name} = {{ git = "{url}", rev = "same" }}'
+                         for name in ("gpui", "gpui_platform", "gpui_wgpu", "gpui_parley"))
+        packages = {"gpui-ce": pinned, "gpui_ce_render": pinned, "xim-parser": pinned,
+                    "serde": 'source = "registry+https://github.com/rust-lang/crates.io-index"'}
+
+        def check(manifest=f"[workspace.dependencies]\n{pins}\n", **overrides):
+            with tempfile.TemporaryDirectory() as tmp:
+                lock = "version = 4\n" + "".join(
+                    f'\n[[package]]\nname = "{name}"\nversion = "0.1.0"\n{source}\n'
+                    for name, source in {**packages, **overrides}.items())
+                (Path(tmp) / "Cargo.toml").write_text(manifest, encoding="utf-8")
+                (Path(tmp) / "Cargo.lock").write_text(lock, encoding="utf-8")
+                return validation.pinned_renderer(Path(tmp) / "Cargo.toml", Path(tmp) / "Cargo.lock")
+
+        self.assertEqual(check(), (url, "same"))
+        mismatched = pins.replace('rev = "same"', 'rev = "other"', 1)
+        with self.assertRaisesRegex(ValueError, "same pinned revision"):
+            check(f"[workspace.dependencies]\n{mismatched}\n")
+        with self.assertRaisesRegex(ValueError, "must not be patched"):
+            check(f'[workspace.dependencies]\n{pins}\n[patch."{url}"]\ngpui_ce_render = {{ path = "vendor" }}\n')
+        with self.assertRaisesRegex(ValueError, r"outside same: \['gpui_ce_render'\]"):
+            check(gpui_ce_render="")
+        with self.assertRaisesRegex(ValueError, r"outside same: \['xim-parser'\]"):
+            check(**{"xim-parser": f'source = "git+{url}?rev=old#old"'})
 
 
 if __name__ == "__main__":

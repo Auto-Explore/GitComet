@@ -25,13 +25,25 @@ HERE = Path(__file__).resolve().parent
 matrix = perf_workloads.module("native_validation_matrix", "gpu-matrix.py")
 
 
-def pinned_renderer(manifest):
-    dependencies = tomllib.loads(manifest.read_text(encoding="utf-8"))["workspace"]["dependencies"]
+def pinned_renderer(manifest, lock):
+    """The one GPUI pin, once the lock resolves every GPUI package from it."""
+    data = tomllib.loads(manifest.read_text(encoding="utf-8"))
+    dependencies = data["workspace"]["dependencies"]
     pins = {(dependencies[name]["git"], dependencies[name]["rev"])
-            for name in ("gpui", "gpui_platform", "gpui_wgpu")}
+            for name in ("gpui", "gpui_platform", "gpui_wgpu", "gpui_parley")}
     if len(pins) != 1:
         raise ValueError("all GPUI dependencies must use the same pinned revision")
-    return pins.pop()
+    url, revision = pins.pop()
+    if any(url in source for source in data.get("patch", {})):
+        raise ValueError("GPUI crates must not be patched")
+    pinned = f"git+{url}?rev={revision}#{revision}"
+    packages = [package for package in tomllib.loads(lock.read_text(encoding="utf-8")).get("package", [])
+                if package["name"] in ("gpui-ce", "gpui_xim") or package["name"].startswith("gpui_ce_")
+                or url in package.get("source", "")]
+    unpinned = sorted(package["name"] for package in packages if package.get("source") != pinned)
+    if not packages or unpinned:
+        raise ValueError(f"Cargo.lock resolves GPUI outside {revision}: {unpinned or 'no packages'}")
+    return url, revision
 
 
 def measurement_commands(args, binary):
@@ -118,7 +130,7 @@ def main():
     args.output = args.output.resolve()
     args.repositories = [repo.resolve() for repo in args.repositories]
     binary = args.output / ("gitcomet.exe" if platform.system() == "Windows" else "gitcomet")
-    url, revision = pinned_renderer(ROOT / "Cargo.toml")
+    url, revision = pinned_renderer(ROOT / "Cargo.toml", ROOT / "Cargo.lock")
     tests = native_tests(platform.system())
     if args.list:
         print(json.dumps({"gpui": {"url": url, "revision": revision}, "tests": tests,

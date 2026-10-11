@@ -528,16 +528,15 @@ must not require a GPU:
 
 ```sh
 cargo test -p gitcomet-ui-gpui --lib pixel_aligned_connectors_match_original_gpu_paths -- --include-ignored --nocapture
-cargo test --manifest-path vendor/gpui-ce-render/Cargo.toml --target-dir target --lib
 ```
 
 Application window frames omit shadows. The native connector comparisons cover
-fractional scales, endpoints, clipping and alpha. The local
-[renderer patch](../../vendor/gpui-ce-render/README.gitcomet.md) clips remaining shadow
-vertices to their content mask: fragment masking alone still rasterized and
-blended transparent rectangles. The vendor crate comes from the Linux captures'
-GPUI pin (`f7474ab`); only its shadow vertex shader and standalone package manifest
-differ from that revision.
+fractional scales, endpoints, clipping and alpha. GPUI clips quad and shadow
+vertices to their content mask, since fragment masking alone still rasterized
+and blended transparent rectangles. In a gpui-ce checkout,
+`cargo test -p gpui_ce_wgpu --features test-support --lib vertex_clipping`
+checks that clipping against unmasked frames. The Linux captures below used GPUI
+`f7474ab` with the shadow clip applied as a local renderer patch, since removed.
 Straight graph connectors use ordinary quads only when every physical edge is
 aligned and the stroke is fully inside a mask without fades. Other connectors
 retain the previous path rasterization and antialiasing.
