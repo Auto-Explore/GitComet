@@ -64,6 +64,24 @@ class GpuTests(unittest.TestCase):
         short = perf_gpu.summarize_phase(records, lo + 100, lo + 900, live.distribution)
         self.assertIsNone(short["processes"]["app"]["0"]["sm_percent"]["mean"])
 
+    def test_paired_reports_compare_the_apps_gpu_load_on_every_platform(self):
+        shapes = {
+            "macos": lambda load: {"processes": {"app": {"0": {"gpu_ms_per_s": load}}}},
+            "nvidia": lambda load: {"processes": {"app": {"0": {"sm_percent": {"duration_weighted_mean": load}}}}},
+            # A memory-only adapter reports no engine occupancy.
+            "windows": lambda load: {"processes": {"app": {
+                "a_phys_0": {"busiest_engine_percent": {"duration_weighted_mean": None}},
+                "b_phys_0": {"busiest_engine_percent": {"duration_weighted_mean": load}}}}},
+        }
+        for name, shape in shapes.items():
+            with self.subTest(name):
+                samples = [{"session": "first", "pair": pair, "scenario": "still", "variant": variant,
+                            "summary": {"phases": {"still": {"gpu": shape(load)}}}}
+                           for pair in (0, 1) for variant, load in (("baseline", 4.0), ("candidate", 2.0))]
+                load = live.compare(samples, ["still"])["still"]["still"]["gpu.app_load"]
+                self.assertEqual((load["baseline_median"], load["candidate_median"]), (4.0, 2.0))
+                self.assertEqual(load["ratio"]["median_ratio"], 0.5)
+
     def test_device_counters_and_process_counters_are_not_combined(self):
         device = perf_gpu.parse_device('2026/10/04 14:00:03.100, 0, GPU-test, "NVIDIA, test", 90, 12, 500, 8192, [N/A], 32, 1700, 5005, P0')
         self.assertEqual(device["name"], "NVIDIA, test")

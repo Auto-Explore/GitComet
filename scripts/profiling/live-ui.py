@@ -1190,6 +1190,8 @@ METRICS = [
     ("frames_per_second", "info"), ("pss_kib.max", "lower"), ("rss_kib.max", "lower"),
     ("slow_frames_16ms", "lower"), ("inputs.witnessed", "higher"), ("inputs.superseded", "lower"),
     ("inputs.superseded_task_ms", "lower"),
+    # GPU: the app's load (see app_gpu_load), NVIDIA board and Apple SoC GPU power.
+    ("gpu.app_load", "lower"), ("gpu.devices.0.power_w.mean", "lower"), ("gpu.soc.gpu_power_mw", "lower"),
 ]
 # Percentiles over completed inputs only compare like with like when both
 # variants completed the same inputs; a variant that let most inputs be
@@ -1203,6 +1205,23 @@ def lookup(data, dotted):
     for key in dotted.split("."):
         data = data.get(key) if isinstance(data, dict) else None
     return data
+
+
+def app_gpu_load(phase):
+    """The app's GPU load on its busiest adapter: GPU ms per second on macOS,
+    otherwise the interval-weighted NVIDIA SM or Windows busiest-engine percent."""
+    loads = []
+    for adapter in (lookup(phase, "gpu.processes.app") or {}).values():
+        load = adapter.get("gpu_ms_per_s")
+        for metric in ("sm_percent", "busiest_engine_percent"):
+            load = load if load is not None else lookup(adapter, metric + ".duration_weighted_mean")
+        if load is not None:
+            loads.append(load)
+    return max(loads, default=None)
+
+
+def phase_metric(phase, metric):
+    return app_gpu_load(phase) if metric == "gpu.app_load" else lookup(phase, metric)
 
 
 def bootstrap_ratio(pairs, rounds=4000, seed=7):
@@ -1233,8 +1252,8 @@ def compare(samples, scenarios):
         for phase, pairs in phases.items():
             result[name][phase] = {}
             for metric, direction in METRICS:
-                values = [(lookup(p["baseline"]["summary"]["phases"][phase], metric),
-                           lookup(p["candidate"]["summary"]["phases"].get(phase, {}), metric)) for p in pairs]
+                values = [(phase_metric(p["baseline"]["summary"]["phases"][phase], metric),
+                           phase_metric(p["candidate"]["summary"]["phases"].get(phase, {}), metric)) for p in pairs]
                 values = [(b, c) for b, c in values if b is not None and c is not None]
                 if not values:
                     continue
