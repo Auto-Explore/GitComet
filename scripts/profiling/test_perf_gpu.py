@@ -79,7 +79,7 @@ class GpuTests(unittest.TestCase):
     def test_unavailable_collector_is_explicit_and_does_not_launch_helpers(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(perf_gpu.shutil, "which", return_value=None), \
                 patch.object(perf_gpu.subprocess, "Popen") as launch:
-            sampler = perf_gpu.Sampler(directory, {"app": 41})
+            sampler = perf_gpu.NvidiaSampler(directory, {"app": 41})
             result = sampler.close()
             self.assertEqual(result["status"], "unavailable")
             self.assertIn("requires Linux", result["reason"])
@@ -88,7 +88,7 @@ class GpuTests(unittest.TestCase):
 
     def test_collector_filters_other_processes_and_keeps_compositor_separate(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(perf_gpu.shutil, "which", return_value=None):
-            sampler = perf_gpu.Sampler(directory, {"app": 41, "compositor": 42})
+            sampler = perf_gpu.NvidiaSampler(directory, {"app": 41, "compositor": 42})
             process = type("FakeProcess", (), {"stdout": io.StringIO(HEADER + row(1, pid=99) + row(1, pid=41) + row(1, pid=42))})()
             sampler._read("process", process)
             sampler.close()

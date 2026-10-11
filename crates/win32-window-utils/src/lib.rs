@@ -5,6 +5,19 @@ use std::time::Duration;
 mod process;
 pub use process::terminate_process_tree;
 
+/// Set a process environment default without replacing an existing value,
+/// including an explicitly empty value. Intended for application startup.
+#[cfg(target_os = "windows")]
+pub fn set_process_environment_default(key: &str, value: &str) {
+    if std::env::var_os(key).is_none() {
+        // SAFETY: this function is Windows-only. Rust documents set_var as
+        // always sound on Windows, including multithreaded programs:
+        // https://doc.rust-lang.org/std/env/fn.set_var.html#safety
+        // GitComet installs its rendering defaults before application startup.
+        unsafe { std::env::set_var(key, value) };
+    }
+}
+
 use windows_sys::Win32::Foundation::{
     CloseHandle, FALSE, FILETIME, HANDLE, HWND, LPARAM, POINT, TRUE, WPARAM,
 };

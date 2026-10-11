@@ -82,7 +82,7 @@ def parse_device(line):
             **{name: number(row[key]) for key, name in DEVICE_METRICS.items()}}
 
 
-class Sampler:
+class NvidiaSampler:
     """Two persistent nvidia-smi processes, drained off the app/sampling thread.
 
     Captures only named PIDs and device totals. Unrelated process details are
@@ -193,6 +193,13 @@ def load(directory):
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
+def Sampler(output, pids):
+    if platform.system() == "Windows":
+        from perf_gpu_windows import WindowsSampler
+        return WindowsSampler(output, pids)
+    return NvidiaSampler(output, pids)
+
+
 def summarize_phase(records, begin_unix_ms, end_unix_ms, distribution):
     """Exclude boundary-straddling utilization buckets and unprimed first samples.
 
@@ -205,7 +212,8 @@ def summarize_phase(records, begin_unix_ms, end_unix_ms, distribution):
         key = (row["scope"], row.get("role"), row["gpu_index"])
         groups.setdefault(key, []).append(row)
     for (scope, role, gpu), rows in groups.items():
-        metrics = PROCESS_METRICS.values() if scope == "process" else DEVICE_METRICS.values()
+        windows = any(r.get("backend") == "windows-pdh" for r in rows)
+        metrics = ("busiest_engine_percent", "dedicated_mib", "shared_mib", "committed_mib") if windows else (PROCESS_METRICS.values() if scope == "process" else DEVICE_METRICS.values())
         values = {}
         for metric in metrics:
             interval = metric.endswith("percent")
@@ -215,8 +223,21 @@ def summarize_phase(records, begin_unix_ms, end_unix_ms, distribution):
                       and r[prefix + "_end_unix_ms"] <= end_unix_ms]
             data = distribution(r.get(metric) for r in inside)
             data["missing"] = sum(r.get(metric) is None for r in inside)
+            if interval:
+                available = [r for r in inside if r.get(metric) is not None]
+                duration = sum(r["interval_end_unix_ms"] - r["interval_start_unix_ms"] for r in available)
+                data["covered_ms"] = duration
+                data["duration_weighted_mean"] = sum(r[metric] * (r["interval_end_unix_ms"] - r["interval_start_unix_ms"]) for r in available) / duration if duration else None
             values[metric] = data
         identity = {key: rows[-1].get(key) for key in ("uuid", "name") if key in rows[-1]}
+        if windows:
+            engine_rows = [r for r in rows if r.get("interval_start_unix_ms") is not None
+                           and begin_unix_ms <= r["interval_start_unix_ms"]
+                           and r["interval_end_unix_ms"] <= end_unix_ms]
+            # PDH also emits process-memory rows for adapters with no engines
+            # used by this process. Preserve their memory, but do not mistake
+            # their missing occupancy for a failed active rendering adapter.
+            identity["engine_instances_observed"] = len({name for r in engine_rows for name in r.get("engines",{})})
         group = result["processes"].setdefault(role, {}) if scope == "process" else result["devices"]
         group[gpu] = {**identity, **values}
     return result

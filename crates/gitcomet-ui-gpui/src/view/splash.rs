@@ -443,18 +443,6 @@ impl GitCometView {
                             .border_1()
                             .border_color(border_glow)
                             .rounded(px(theme.radii.panel))
-                            .shadow(vec![gpui::BoxShadow {
-                                color: gpui::rgba(if theme.is_dark {
-                                    0x00000052
-                                } else {
-                                    0x171a3b14
-                                })
-                                .into(),
-                                offset: point(px(0.0), px(22.0)),
-                                blur_radius: px(52.0),
-                                spread_radius: px(0.0),
-                                inset: false,
-                            }])
                             .p_4()
                             .child(self.git_unavailable_panel_content(theme, cx)),
                     ),
@@ -618,7 +606,6 @@ impl GitCometView {
             .border_1()
             .border_color(theme.colors.stroke.default)
             .bg(theme.colors.surface.raised)
-            .shadow_lg()
             // Claim clicks anywhere on the panel so its empty regions don't fall
             // through to the dismiss scrim underneath.
             .occlude()

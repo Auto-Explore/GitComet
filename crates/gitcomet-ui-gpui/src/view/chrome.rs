@@ -1093,7 +1093,7 @@ pub(crate) fn window_frame(
                 d.border_1().border_color(window_frame_outline_color(theme))
             })
             .when(!cfg!(target_os = "macos"), |d| {
-                d.rounded(px(theme.radii.window)).shadow_lg()
+                d.rounded(px(theme.radii.window))
             });
     }
 

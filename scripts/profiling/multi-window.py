@@ -58,7 +58,7 @@ def matrix(repositories, count, idle_ms, inputs):
               {"do": "expect_windows", "count": count},
               phase("hover"),
               {"do": "move_pointer", "positions": [[.55, .08 + row * .022] for row in range(24)],
-               "repeat": inputs * 2, "interval_ms": 8},
+               "repeat": inputs * 2, "interval_ms": 8, "hover_rows": True},
               phase("scroll"),
               {"do": "scroll", "target": "history", "delta_px": -72, "repeat": inputs,
                "interval_ms": 16, "flip_every": 60, "witness": {"kind": "history_scrolled"}}]

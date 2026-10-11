@@ -1449,19 +1449,8 @@ fn resolve_syntax_colors(
     }
 }
 
-fn shadow_layer(base: Rgba, alpha: f32, y: f32, blur: f32) -> gpui::BoxShadow {
-    gpui::BoxShadow {
-        color: with_alpha(base, alpha).into(),
-        offset: gpui::point(gpui::px(0.0), gpui::px(y)),
-        blur_radius: gpui::px(blur),
-        spread_radius: gpui::px(0.0),
-        inset: false,
-    }
-}
-
-// Design-system stance: modern developer tools lean on borders, not shadows,
-// for separation. Inline surfaces stay flat (no shadow); only elements that
-// genuinely float off the canvas (menus, dialogs) get a single, restrained lift.
+// Surfaces use their background and border for separation. Decorative shadows
+// are disabled to avoid the extra rendering work, including on floating surfaces.
 
 /// Resting "elevation" for inline cards/panels — intentionally flat. Separation
 /// comes from the default and subtle strokes, not shadow.
@@ -1469,21 +1458,14 @@ pub fn shadow_surface(_theme: AppTheme) -> Vec<gpui::BoxShadow> {
     Vec::new()
 }
 
-/// A single, restrained lift for dropdowns, context menus and hover panels.
-pub fn shadow_popover(theme: AppTheme) -> Vec<gpui::BoxShadow> {
-    let base = theme.colors.shadow;
-    let m = if theme.is_dark { 1.0 } else { 0.5 };
-    vec![shadow_layer(base, 0.22 * m, 4.0, 12.0)]
+/// Floating surfaces retain their border and background without a shadow.
+pub fn shadow_popover(_theme: AppTheme) -> Vec<gpui::BoxShadow> {
+    Vec::new()
 }
 
-/// Slightly stronger (still understated) lift for modal dialogs.
-pub fn shadow_modal(theme: AppTheme) -> Vec<gpui::BoxShadow> {
-    let base = theme.colors.shadow;
-    let m = if theme.is_dark { 1.0 } else { 0.6 };
-    vec![
-        shadow_layer(base, 0.24 * m, 2.0, 8.0),
-        shadow_layer(base, 0.18 * m, 10.0, 28.0),
-    ]
+/// Modal surfaces retain their border and background without a shadow.
+pub fn shadow_modal(_theme: AppTheme) -> Vec<gpui::BoxShadow> {
+    Vec::new()
 }
 
 fn embedded_theme_cache() -> &'static FxHashMap<String, RuntimeThemeSpec> {

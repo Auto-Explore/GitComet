@@ -10,6 +10,9 @@
 #[cfg(not(feature = "perf-alloc"))]
 use rustfs_mimalloc::MiMalloc;
 
+#[cfg(all(target_os = "windows", feature = "ui-gpui-runtime"))]
+mod windows_gpu_defaults;
+
 /// This covers Rust only. tree-sitter is C and calls `malloc`, which resolves to
 /// libc unless it is told otherwise, so it needs pointing at mimalloc separately
 /// -- but *not* from here. `gitcomet-ui-gpui` does it from the lazy initialisers
@@ -26,5 +29,8 @@ static GLOBAL: &gitcomet_ui_gpui::perf_alloc::PerfTrackingAllocator =
     &gitcomet_ui_gpui::perf_alloc::TRACKING_MIMALLOC;
 
 fn main() -> ! {
+    #[cfg(all(target_os = "windows", feature = "ui-gpui-runtime"))]
+    windows_gpu_defaults::install();
+
     gitcomet_app::App::new().run()
 }

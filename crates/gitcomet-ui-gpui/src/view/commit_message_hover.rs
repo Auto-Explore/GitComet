@@ -496,7 +496,6 @@ impl Render for CommitMessageHoverHost {
                     .border_1()
                     .border_color(theme.colors.stroke.default)
                     .rounded(px(theme.radii.popover))
-                    .shadow(crate::theme::shadow_popover(theme))
                     .text_size(theme.ui_text(12.0))
                     .text_color(theme.colors.foreground.primary)
                     .child(message_text)

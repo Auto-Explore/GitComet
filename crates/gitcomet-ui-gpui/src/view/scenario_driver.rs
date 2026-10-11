@@ -8,7 +8,15 @@
 //! Input goes through the production paths: keys via
 //! `Window::dispatch_keystroke` (keymap, interceptors, text input), mouse and
 //! wheel events via `Window::dispatch_event` at positions taken from the
-//! rendered layout. Each input is its own traced operation, so its store,
+//! rendered layout. Windows profiling can opt into `GITCOMET_UI_INPUT_ROUTE=native`
+//! to rendezvous with the external SendInput worker. Native arrival and causal
+//! hover paint records then measure application feedback independently of request
+//! enqueue timing. A `move_pointer` step with `hover_rows: true` requires the final
+//! history row to paint its hover state and clear the previous row in one scene.
+//! Native operation IDs must be 1..=65535 without reuse during one application
+//! run: Windows preserves only the low 32 bits of mouse extra information, and
+//! the correlation marker reserves 16 of those bits. Longer runs fail closed.
+//! Each input is its own traced operation, so its store,
 //! worker and publication stages share its id. Inputs follow a fixed schedule;
 //! a late input is dispatched late rather than skipped, and the delay is
 //! recorded. A completion witness per input proves the result reached the UI;
@@ -29,6 +37,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
+pub(in crate::view) mod hover;
+mod native_pointer;
 mod operations;
 mod windows;
 use operations::Operation;
@@ -169,6 +179,9 @@ enum Step {
         positions: Vec<[f32; 2]>,
         repeat: usize,
         interval_ms: u64,
+        /// Require the final input to reach an actual history row paint.
+        #[serde(default)]
+        hover_rows: bool,
         #[serde(default)]
         witness: Option<WitnessKind>,
     },
@@ -423,6 +436,7 @@ impl Driver {
                 .await;
         };
         let (changed, observers) = Self::observe_view(&view, cx);
+        hover::install(window.window_id());
         Ok(Self {
             window,
             windows: [("primary".into(), window)].into_iter().collect(),
@@ -757,6 +771,7 @@ impl Driver {
                 positions,
                 repeat,
                 interval_ms,
+                hover_rows,
                 witness,
             } => {
                 if positions.is_empty()
@@ -792,21 +807,13 @@ impl Driver {
                     })
                     .collect();
                 self.pointer_expected = Some(points[(*repeat - 1) % points.len()]);
-                self.scheduled(
+                self.move_pointer(
+                    points,
                     *repeat,
                     *interval_ms,
+                    *hover_rows,
                     witness.clone(),
                     cx,
-                    |ix, window, cx| {
-                        window.dispatch_event(
-                            PlatformInput::MouseMove(MouseMoveEvent {
-                                position: points[ix % points.len()],
-                                pressed_button: None,
-                                modifiers: Modifiers::default(),
-                            }),
-                            cx,
-                        );
-                    },
                 )
                 .await
             }

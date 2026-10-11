@@ -850,7 +850,6 @@ impl ToastHost {
             .border_1()
             .border_color(shell_border)
             .rounded(px(theme.radii.popover))
-            .shadow(crate::theme::shadow_popover(theme))
             .text_size(theme.ui_text(14.0))
             .text_color(theme.colors.foreground.primary)
             .px(ui_scale.px(14.0))
@@ -1261,7 +1260,6 @@ impl ToastHost {
             .border_color(clone_progress_shell_border_color(theme))
             .rounded(px(theme.radii.popover))
             .overflow_hidden()
-            .shadow(crate::theme::shadow_popover(theme))
             .text_color(theme.colors.foreground.primary)
             .child(svg_spinner(
                 ("hook_progress_spinner", operation_id.0),
@@ -1497,7 +1495,6 @@ impl Render for ToastHost {
                 .border_1()
                 .border_color(theme.colors.stroke.default)
                 .rounded(px(theme.radii.popover))
-                .shadow(crate::theme::shadow_popover(theme))
                 .child(
                     components::Button::new("toast_more_errors", label)
                         .style(components::ButtonStyle::Transparent)

@@ -9,7 +9,7 @@ use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, Background, CursorStyle, Div, FontWeight, SharedString, Stateful, StyleRefinement,
-    div, point, px,
+    div, px,
 };
 
 /// The card's widest extent, before scaling.
@@ -117,18 +117,6 @@ pub fn interstitial(
                 .border_1()
                 .border_color(border_glow)
                 .rounded(px(theme.radii.panel))
-                .shadow(vec![gpui::BoxShadow {
-                    color: gpui::rgba(if theme.is_dark {
-                        0x00000052
-                    } else {
-                        0x171a3b14
-                    })
-                    .into(),
-                    offset: point(px(0.0), px(22.0)),
-                    blur_radius: px(52.0),
-                    spread_radius: px(0.0),
-                    inset: false,
-                }])
                 .p_4()
                 .child(content),
         )

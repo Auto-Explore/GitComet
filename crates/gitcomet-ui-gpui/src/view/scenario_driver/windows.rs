@@ -41,6 +41,7 @@ impl Driver {
             }
             self.sleep(WITNESS_POLL, cx).await;
         };
+        hover::install(window.window_id());
         self.windows.insert(name.into(), window);
         self.switch_window(name, cx).await
     }
@@ -115,6 +116,7 @@ impl Driver {
             }
             self.sleep(WITNESS_POLL, cx).await;
         }
+        hover::uninstall(window.window_id());
         self.windows.remove(name);
         self.record_windows(cx)?;
         Ok(())

@@ -625,7 +625,6 @@ impl Render for HistoryRefsHoverHost {
             .border_1()
             .border_color(theme.colors.stroke.default)
             .rounded(px(theme.radii.popover))
-            .shadow(crate::theme::shadow_popover(theme))
             .occlude()
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _window, cx| {
                 this.keep_open_at(e.position);

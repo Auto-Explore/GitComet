@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -43,7 +44,7 @@ def measurement_commands(args, binary):
     commands = [
         ("gpu-matrix", common + cases + gpu + ["--output", str(args.output / "gpu-matrix")]),
         ("clean-input", common + cases + ["--timing-mode", "clean", "--output", str(args.output / "clean-input")]),
-        ("graph-hidden", common + ["--variants", "paths", "--windows", "1", "--sizes", args.sizes[0],
+        ("graph-hidden", common + ["--variants", "crop", "--windows", "1", "--sizes", args.sizes[0],
                                    "--scales", str(args.scales[0]), "--graph-hidden", *gpu,
                                    "--output", str(args.output / "graph-hidden")]),
     ]
@@ -64,16 +65,24 @@ def measurement_commands(args, binary):
 
 def native_tests(system):
     commands = [("render-tests", ["-p", "gpui_ce_render", "--lib"])]
-    if system in ("Darwin", "Windows"):
-        package = "gpui_ce_apple" if system == "Darwin" else "gpui_ce_windows"
-        for test in ("cropped_path_targets", "native_gpu_experiments", "shared_atlas"):
-            commands.append((test, ["-p", package, "--lib", test]))
+    if system == "Windows":
+        commands += [("windows-renderer-tests", ["-p", "gpui_ce_windows", "--lib"]),
+                     ("windows-input-diagnostics", ["-p", "gpui_ce_windows", "--lib", "input_diagnostics::tests"]),
+                     ("wgpu-crop-policy", ["-p", "gpui_ce_wgpu", "--features", "test-support", "--lib", "cropped_path_target_experiments"])]
+    elif system == "Darwin":
+        commands.append(("metal-renderer-tests", ["-p", "gpui_ce_apple", "--lib"]))
     elif system == "Linux":
-        for test in ("path_target_tests", "path_cache::tests", "shared_atlas", "shared::tests", "texture_pool::tests"):
-            commands.append((test.replace("::", "-"), ["-p", "gpui_ce_wgpu", "--features", "test-support", "--lib", test]))
+        commands.append(("wgpu-renderer-tests", ["-p", "gpui_ce_wgpu", "--features", "test-support", "--lib"]))
     else:
         raise ValueError(f"unsupported native validation host: {system}")
     return commands
+
+
+def require_executed_tests(log):
+    passed = sum(int(count) for count in re.findall(r"test result: ok\. (\d+) passed", log))
+    if passed <= 0:
+        raise ValueError("native test command executed zero passing tests; stale filter or unavailable suite")
+    return passed
 
 
 def main():
@@ -82,7 +91,7 @@ def main():
                         help="existing test repositories (for example Git, Bun, history-100000)")
     parser.add_argument("--output", type=Path, required=True, help="new directory for logs and captures")
     parser.add_argument("--variants", nargs="+", choices=matrix.VARIANTS,
-                        default=["crop", "share", "batch", "cache-after-batch", "paths", "damage", "pool", "connectors"])
+                        default=["crop", "damage", "connectors"])
     parser.add_argument("--windows", type=int, nargs="+", choices=(1, 2, 4), default=[1, 2, 4])
     parser.add_argument("--sizes", nargs="+", default=["1400x900", "2560x1440"])
     parser.add_argument("--scales", type=int, nargs="+", default=[100, 200])
@@ -162,6 +171,8 @@ def main():
                 run(name, ["cargo", "test", "--manifest-path", str(source / "Cargo.toml"),
                            "--target", host, "--target-dir", str(ROOT / "target" / "gpu-validation-renderer"),
                            *arguments, "--", "--test-threads=1"], {"GPUI_GPU_TIMINGS": "1"})
+                count = require_executed_tests((args.output / (name + ".log")).read_text(encoding="utf-8"))
+                manifest["commands"][-1]["passed_tests"] = count
             shutil.copy2(source / "Cargo.lock", args.output / "renderer-Cargo.lock")
         if args.stage != "tests":
             if args.binary:

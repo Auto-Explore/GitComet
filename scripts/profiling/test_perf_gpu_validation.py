@@ -15,13 +15,13 @@ class ValidationTests(unittest.TestCase):
             with self.subTest(host=host):
                 tests = validation.native_tests(host)
                 self.assertTrue(any(package in argv for _, argv in tests))
-                self.assertTrue(any("shared_atlas" in argv for _, argv in tests))
+                self.assertTrue(any("--lib" in argv for _, argv in tests))
         with self.assertRaisesRegex(ValueError, "unsupported"):
             validation.native_tests("Unknown")
 
     def test_clean_commands_exclude_instrumentation_and_lifecycle_exercises_both_sides(self):
         args = argparse.Namespace(repositories=[Path("repository with spaces"), Path("history")],
-                                  pairs=5, inputs=120, display="desktop", variants=["batch"],
+                                  pairs=5, inputs=120, display="desktop", variants=["crop"],
                                   windows=[1, 4], sizes=["1400x900"], scales=[100],
                                   gpu=True, cycles=100, output=Path("output with spaces"))
         commands = dict(validation.measurement_commands(args, Path("frozen/gitcomet.exe")))
@@ -32,7 +32,7 @@ class ValidationTests(unittest.TestCase):
         self.assertIn("repository with spaces", clean)
         baseline, candidate = commands["lifecycle-baseline"], commands["lifecycle-candidate"]
         self.assertIn("GPUI_GPU_EXPERIMENTS=", baseline)
-        self.assertTrue(any("cached-layers" in arg and "pooled-targets" in arg for arg in candidate))
+        self.assertTrue(any("cropped-paths" in arg and "partial-redraw" in arg for arg in candidate))
         self.assertIn(str(Path("frozen/gitcomet.exe")), candidate)
         self.assertEqual(candidate[candidate.index("--cycles") + 1], "100")
         args.cycles = 0

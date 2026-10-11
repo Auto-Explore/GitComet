@@ -53,6 +53,7 @@ import perf_metadata  # noqa: E402
 import perf_platform  # noqa: E402
 import perf_gpu  # noqa: E402
 import perf_gpu_frames  # noqa: E402
+import perf_hover  # noqa: E402
 
 SURVEY_SOURCE = ROOT / "crates/gitcomet-ui-gpui/src/view/user_survey.rs"
 SAVE_FILE = "save-target.txt"
@@ -270,10 +271,10 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
         points = [[.55, .08]] if name == "history-hover-stationary" else [
             [.55, .08 + row * .022] for row in range(24)]
         steps = ready + [{"do": "phase", "name": "hover"},
-                         {"do": "move_pointer", "positions": points, "repeat": 1200, "interval_ms": 8},
+                         {"do": "move_pointer", "positions": points, "repeat": 1200, "interval_ms": 8, "hover_rows": True},
                          {"do": "phase", "name": "hover_dwell"},
                          {"do": "move_pointer", "positions": [[.55, .08]], "repeat": 1,
-                          "interval_ms": 0, "witness": {"kind": "message_hover"}},
+                          "interval_ms": 0, "hover_rows": True, "witness": {"kind": "message_hover"}},
                          {"do": "phase", "name": "hover_idle"}, {"do": "settle", "ms": 2000}]
         return {"version": 1, "steps": steps}
     if name == "history-drag":
@@ -632,9 +633,13 @@ class HeadlessCompositor:
 def run_once(binary, repository, name, output, timeout, metadata=True, display="headless",
              ping_ms=None, save_file=SAVE_FILE, wrap=None, cold_gpu_cache=False, secondary=None,
              cycles=100, extra_env=None, scenario_steps=None, ui_scale=100, refresh_hz=None, gpu=False,
-             window_size=WINDOW_SIZE, session_overrides=None, gpu_timings=False):
+             window_size=WINDOW_SIZE, session_overrides=None, gpu_timings=False, input_route="synthetic"):
     # Absolute: the app runs with its working directory in `output`.
     binary, repository, output = binary.resolve(), repository.resolve(), output.resolve()
+    if input_route not in ("synthetic", "native"):
+        raise ValueError("input_route must be synthetic or native")
+    if input_route == "native" and platform.system() != "Windows":
+        raise ValueError("Native pointer replay currently requires Windows")
     if display == "headless" and platform.system() != "Linux":
         raise ValueError("Headless captures require Linux; use --display desktop on this platform")
     if wrap and platform.system() != "Linux":
@@ -658,6 +663,9 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
     env.update(GITCOMET_UI_PROBE="1", GITCOMET_UI_PROBE_JSONL=str(frames),
                GITCOMET_UI_PROBE_LOG=str(output / "ui.log"), GITCOMET_UI_SCENARIO=str(scenario_file),
                GITCOMET_PERF_RUN_ID=run_id)
+    env.update(GITCOMET_UI_INPUT_ROUTE=input_route,
+               GITCOMET_UI_NATIVE_INPUT_JSONL=str(output / "native-input-requests.jsonl"),
+               GITCOMET_UI_NATIVE_INPUT_ACK_JSONL=str(output / "native-input-acks.jsonl"))
     env.pop("GPUI_GPU_TIMINGS", None)
     if gpu_timings:
         env["GPUI_GPU_TIMINGS"] = "1"
@@ -678,11 +686,13 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
     capture = {"version": 2, "run_id": run_id, "scenario": name, "binary": str(binary),
                "binary_sha256": perf_metadata.sha256_file(binary), "repository": str(repository),
                "repository_head": git(repository, "rev-parse", "HEAD").stdout.decode().strip(),
+               "repository_status_sha256": hashlib.sha256(git(repository,"status","--porcelain=v1","-z").stdout).hexdigest(),
                "window_size": window_size, "display": display, "session_overrides": session_overrides or {},
                "refresh_hz": (refresh_hz or REFRESH_HZ) if display == "headless" else refresh_hz,
                "ui_scale_percent": ui_scale, "capabilities": perf_platform.capabilities(),
                "probe_interval_ms": int(env["GITCOMET_UI_PROBE_INTERVAL_MS"]),
-               "measurement_kind": "diagnostic" if wrap or gpu_timings else "live_application",
+               "measurement_kind": "diagnostic" if wrap or gpu_timings or gpu else "live_application",
+               "input_route": input_route,
                "ping_ms": ping_ms, "wrap": wrap, "gpu_cache": "cold" if cold_gpu_cache else "warm",
                "load_before": load_average(), "outcome": "failed",
                "cycles": cycles if name == "lifecycle" else None, "extra_env": extra_env or {}}
@@ -691,9 +701,11 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
     capture["graph_quad_experiment"] = env.get("GITCOMET_GPU_GRAPH_QUADS", "0")
     capture["gpu_capture"] = {"requested": gpu}
     if metadata:
-        (output / "environment.json").write_text(json.dumps(perf_metadata.collect(
+        environment = perf_metadata.collect(
             binaries=[("gitcomet", binary)], fixtures=[("repository", repository)],
-            command=" ".join(sys.argv)), indent=2) + "\n", encoding="utf-8")
+            command=" ".join(sys.argv))
+        (output / "environment.json").write_text(json.dumps(environment, indent=2) + "\n", encoding="utf-8")
+        (output / "environment.txt").write_text(perf_metadata.readable(environment),encoding="utf-8")
     samples = []
     compositor = HeadlessCompositor(output, refresh_hz or REFRESH_HZ, window_size) if display == "headless" else None
     if compositor:
@@ -709,8 +721,13 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
         process = subprocess.Popen([*prefix, str(binary)], env=env, cwd=output, stdin=subprocess.DEVNULL,
                                    stdout=subprocess.DEVNULL, stderr=stderr, start_new_session=True)
         gpu_sampler = None
+        native_replay = None
+        capture["window_geometries"] = {}
         try:
             app_pid = process.pid
+            if input_route == "native":
+                from perf_native_input import NativeReplay
+                native_replay = NativeReplay(output, app_pid)
             if gpu:
                 gpu_sampler = perf_gpu.Sampler(output, {"app": None if prefix else app_pid,
                                                        "compositor": compositor.pid if compositor else None})
@@ -731,6 +748,9 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
                     if len(samples) % 20 == 0:
                         sample["pss_breakdown_kib"] = smaps_breakdown(app_pid)
                     samples.append(sample)
+                if platform.system() == "Windows" and not capture["window_geometries"]:
+                    import perf_windows_environment
+                    capture["window_geometries"] = perf_windows_environment.process_windows(app_pid)
                 time.sleep(0.25)
         except TimeoutError as error:
             timeout_problem = str(error)
@@ -739,10 +759,14 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
             perf_platform.stop_tree(process)
             raise
         finally:
-            if gpu_sampler:
-                capture["gpu_capture"] = gpu_sampler.close()
-            if compositor:
-                compositor.close()
+            for key, resource in (("native_replay", native_replay), ("gpu_capture", gpu_sampler), (None, compositor)):
+                if resource:
+                    try:
+                        result = resource.close()
+                        if key:
+                            capture[key] = result
+                    except Exception as error:
+                        capture.setdefault("cleanup_errors", []).append(str(error))
             capture["exit_code"] = process.returncode
             capture["wall_s"] = time.time() - started
             capture["load_after"] = load_average()
@@ -800,6 +824,11 @@ def summarize(directory):
         problems.append(capture["timeout"])
     if capture.get("crash_reports"):
         problems.append(f"crash reports: {capture['crash_reports']}")
+    problems.extend(capture.get("cleanup_errors", []))
+    if capture.get("input_route") == "native":
+        replay = capture.get("native_replay", {})
+        if not replay.get("sent") or replay.get("errors"):
+            problems.append(f"native replay missing or failed: {replay}")
     records = load_records(directory)
     gpu_records = perf_gpu.load(directory)
     starts = [r for r in records if r["event"] == "start"]
@@ -845,6 +874,9 @@ def summarize(directory):
             begin = begins.pop(name)
             phases[name] = analyse_phase(begin, record, draws, submits, by_op, applied,
                                          records, threads, process, start)
+            phases[name]["all_submissions"] = perf_hover.submission_summary(records, begin["at_ms"], record["at_ms"], distribution)
+            phases[name]["hover"] = perf_hover.summarize(records, begin["at_ms"], record["at_ms"], distribution,
+                                                       perf_hover.load_replay(directory))
             if capture.get("gpu_timings_requested"):
                 phases[name]["gpu_frames"] = perf_gpu_frames.summarize(records, begin["at_ms"], record["at_ms"], distribution)
             if capture.get("gpu_capture", {}).get("requested"):
@@ -917,6 +949,11 @@ def summarize(directory):
                "operations": operations, "operation_results": operation_results, "unfinished_operations": unfinished,
                "binary_sha256": capture["binary_sha256"], "repository_head": capture["repository_head"],
                "gpu_timings_requested": capture.get("gpu_timings_requested", False),
+               "renderer_capabilities": [r.get("detail", r) for r in records if r.get("event") == "renderer_capabilities"],
+               "input_route": capture.get("input_route", "synthetic"),
+               "native_window_geometries": capture.get("native_replay",{}).get("window_geometries",{}),
+               "window_geometries": capture.get("window_geometries",{}),
+               "native_input_note": "Native input_handled stages time request enqueue/flush; actual app arrival and hover scene submission are in the hover metrics." if capture.get("input_route") == "native" else None,
                "gpu_capture": capture.get("gpu_capture", {"requested": False}),
                "valid": not problems, "problems": problems, "load_before": capture.get("load_before"),
                "load_after": capture.get("load_after"), "phases": phases,
@@ -1225,7 +1262,8 @@ def measure(args):
                     summary = run_once(binaries[variant], repository, name, output, args.timeout,
                                        metadata=False, display=args.display, save_file=args.save_file,
                                        secondary=args.secondary_repository, wrap=runtime["wrap"],
-                                       extra_env=runtime["env"], gpu=args.gpu, gpu_timings=args.gpu_timings)
+                                       extra_env=runtime["env"], gpu=args.gpu, gpu_timings=args.gpu_timings,
+                                       input_route=args.input_route)
                     if summary["binary_sha256"] != hashes[variant]:
                         raise ValueError(f"{variant} binary changed during the session")
                     if not summary["valid"]:
@@ -1296,7 +1334,8 @@ def main():
     single.add_argument("--display", choices=("headless", "desktop"), default="headless")
     single.add_argument("--ping-ms", type=int)
     single.add_argument("--gpu-timings", action="store_true", help="asynchronous native GPU frame and pass timestamps")
-    single.add_argument("--gpu", action="store_true", help="sample NVIDIA process/device GPU usage on Linux")
+    single.add_argument("--gpu", action="store_true", help="sample Windows PDH or Linux NVIDIA process/device GPU counters")
+    single.add_argument("--input-route", choices=("synthetic", "native"), default="synthetic", help="Windows native SendInput or in-app dispatch")
     single.add_argument("--window-size", type=positive_int, nargs=2, default=WINDOW_SIZE,
                         metavar=("WIDTH", "HEIGHT"), help="window dimensions in logical pixels")
     single.add_argument("--save-file", default=SAVE_FILE, help="tracked file status-save and status-touch rewrite")
@@ -1319,6 +1358,7 @@ def main():
     paired.add_argument("--display", choices=("headless", "desktop"), default="headless")
     paired.add_argument("--gpu-timings", action="store_true", help="collect native GPU timestamps on both sides")
     paired.add_argument("--gpu", action="store_true", help="sample GPU usage on both sides of each pair")
+    paired.add_argument("--input-route", choices=("synthetic", "native"), default="synthetic")
     paired.add_argument("--save-file", default=SAVE_FILE, help="tracked file status-save and status-touch rewrite")
     paired.add_argument("--secondary-repository", type=Path, help="repository lifecycle opens and closes")
     paired.add_argument("--max-load", type=float,
@@ -1341,7 +1381,7 @@ def main():
                           wrap=args.wrap, cold_gpu_cache=args.cold_gpu_cache,
                           secondary=args.secondary_repository, cycles=args.cycles,
                           extra_env=dict(item.split("=", 1) for item in args.env), gpu=args.gpu,
-                          window_size=args.window_size, gpu_timings=args.gpu_timings)
+                          window_size=args.window_size, gpu_timings=args.gpu_timings, input_route=args.input_route)
         print(json.dumps({"valid": result["valid"], "problems": result["problems"]}, indent=2))
         if not result["valid"]:
             sys.exit(1)

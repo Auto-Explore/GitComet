@@ -11,21 +11,16 @@ import platform
 import statistics
 
 import perf_metadata
+import perf_gpu_frames
 import perf_workloads
 
 live = perf_workloads.module("gpu_matrix_live", "live-ui.py")
 multi = perf_workloads.module("gpu_matrix_multi", "multi-window.py")
-FOUNDATION = "cropped-paths,shared-resources"
+FOUNDATION = "cropped-paths"
 VARIANTS = {
     "crop": ("", "cropped-paths"),
-    "share": ("cropped-paths", FOUNDATION),
-    "cache": (FOUNDATION, FOUNDATION + ",cached-layers"),
-    "batch": (FOUNDATION, FOUNDATION + ",batched-paths"),
-    "paths": (FOUNDATION, FOUNDATION + ",cached-layers,batched-paths"),
-    "cache-after-batch": (FOUNDATION + ",batched-paths", FOUNDATION + ",batched-paths,cached-layers"),
     "damage": (FOUNDATION, FOUNDATION + ",partial-redraw"),
-    "pool": (FOUNDATION, FOUNDATION + ",pooled-targets"),
-    "combined": ("", FOUNDATION + ",cached-layers,batched-paths,partial-redraw,pooled-targets"),
+    "combined": ("", FOUNDATION + ",partial-redraw"),
     "connectors": ("cropped-paths", "cropped-paths"),
 }
 
@@ -42,10 +37,14 @@ def evaluate(pairs, variant, gpu_timings=True):
             if not baseline.get("valid") or not candidate.get("valid"):
                 reasons.append("invalid application run")
                 continue
+            for side, result in enumerate((baseline, candidate)):
+                requested = set(VARIANTS[variant][side].split(",")) - {""}
+                capabilities = [{"event": "renderer_capabilities", **r} for r in result.get("renderer_capabilities", [])]
+                reasons.extend(perf_gpu_frames.capability_errors(capabilities, requested, timings=gpu_timings))
             sides = [side.get("phases", {}).get(phase, {}) for side in (baseline, candidate)]
             gpu = [side.get("gpu_frames", {}) for side in sides]
             if gpu_timings:
-                if any((g.get("coverage") or 0) < .95 or g.get("timed_frames", 0) < 20
+                if any((g.get("coverage") or 0) != 1 or g.get("all_submission_records", 0) < 20 or g.get("timed_frames", 0) < 20
                        or g.get("query_samples_dropped", 0) or g.get("records_dropped") != 0 for g in gpu):
                     reasons.append(f"{phase}: missing or dropped GPU measurements")
                     continue
@@ -73,12 +72,14 @@ def evaluate(pairs, variant, gpu_timings=True):
                 values["gpu_p95_delta"].append(c["p95"] - b["p95"])
                 values["gpu_p95_limit"].append(max(.1, b["p95"] * .05))
             latency = [s.get("inputs", {}).get("input_to_submit_ms", {}).get("p95") for s in sides]
-            # Pointer motion has no causal witness; use the recorded draw duration
-            # as a separate CPU guard without presenting it as input latency.
+            if phase == "hover":
+                latency = [s.get("hover", {}).get("immediate_feedback_ms", {}).get("p95") for s in sides]
+                if any(s.get("hover", {}).get("problems") or s.get("hover", {}).get("unaccounted") or not s.get("hover", {}).get("final_witness") for s in sides):
+                    reasons.append("hover: causal row paint/final witness incomplete")
             if all(v is not None for v in latency):
                 values["input_p95_delta"].append(latency[1] - latency[0])
                 values["input_p95_limit"].append(max(1., latency[0] * .05))
-            elif phase != "hover":
+            else:
                 reasons.append(f"{phase}: missing input-to-submit measurements")
             draw = [s.get("draw_ms", {}).get("p95") for s in sides]
             if all(v is not None for v in draw):
@@ -96,12 +97,13 @@ def evaluate(pairs, variant, gpu_timings=True):
             reasons.append(f"{phase}: CPU draw p95 regression")
         if medians["input_p95_delta"] is not None and medians["input_p95_delta"] > medians["input_p95_limit"]:
             reasons.append(f"{phase}: input p95 regression")
-    if gpu_timings and variant in ("cache", "batch", "damage", "paths", "cache-after-batch") and not any(improvements):
+    if gpu_timings and variant in ("damage", "combined") and not any(improvements):
         reasons.append("no active phase achieved the 10% median GPU improvement gate")
     return {"status": "needs_review" if reasons else ("local_gates_passed" if gpu_timings else "input_guards_passed"),
             "gpu_timings": gpu_timings,
             "reasons": sorted(set(reasons)), "phases": metrics,
-            "shipping_default": "disabled_pending_all_native_backends"}
+            "shipping_default": "unchanged_pending_display_and_native_correctness_validation",
+            "display_validation": "pending"}
 
 
 def environment(variant, side):
