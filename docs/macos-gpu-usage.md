@@ -183,6 +183,50 @@ far less energy.
    (8.5 → 2.75 ms) and whole-GPU power during the sweep is 75% lower
    (768 → 190 mW).
 
+5. **Every frame repainted the whole window.** A hover frame changes one or
+   two rows, about 8% of the window, and a scroll frame changes the history
+   list, about 45%. GPUI still rendered the whole scene every frame.
+   - Fix (gpui-ce, Metal): partial redraw (`crates/gpui_apple/src/damage.rs`).
+     - Each frame hashes every primitive into the 64-pixel tiles it covers, in
+       draw order. Coverage is the area its shader can touch: the content-mask
+       clip, a shadow's blur, a transformed sprite's bounds. Tiles whose hash
+       changed form the damaged rectangle. This costs 15-40 µs of CPU per frame.
+     - Frames render into a retained window-sized texture, which a fullscreen
+       pass copies to the drawable.
+     - A frame that changed at most half of the window loads the previous
+       frame, clears the damaged rectangle and draws the scene clipped to it
+       (scissor). An unchanged frame only copies.
+     - A larger change repaints the retained texture in full. A second large
+       change in a row renders straight to the drawable instead, which skips
+       the copy.
+     - Some frames always repaint in full: live resize and window activation
+       (synchronous presents), size and atlas changes, and scenes with surfaces,
+       backdrop or content filters, or subpixel text.
+   - Cost:
+     - one window-sized texture, 19 MB at 2800x1706;
+     - the copy, about 0.46 ms of GPU time per frame at the lowest GPU clock.
+       It is now the largest part of a hover frame: a partial frame takes
+       0.69-0.81 ms, and a full render took 2.24 ms (fragment time, Metal System
+       Trace).
+     - Cropping the partial pass to the damaged rectangle's right and bottom
+       edges measured no faster, so tiles outside the scissor cost next to
+       nothing.
+   - Rendering is unchanged:
+     - A renderer test renders 15 frames partially, opaque and transparent, and
+       compares each with a full render pixel for pixel. The frames cover hover
+       changes, a moved path, a moved blurred shadow, a removed translucent quad,
+       a rotated sprite and large changes. The test fails when the blur margin,
+       the sprite transform, the clearing, the path layers or the scissor is
+       deliberately broken.
+     - In the app, `GPUI_DUMP_FRAME` also renders every frame in full and
+       compares it with the retained texture. Hover, scroll, selection, diff
+       open and tab switching passed with no pixel differing, in
+       2,373 frames.
+   - The damage tracker reads only the GPUI scene, so the other renderers could
+     reuse it. The retained texture and the copy are Metal code.
+
+   PR_AB_TABLE
+
 ### CPU
 
 - **Hover.** A hovered-row change re-renders the root view, the main pane and
@@ -268,8 +312,12 @@ Fixed in GitComet so far:
   `expect_status` step and a `keep` option for `write_files`. The `diff_loaded`
   witness now requires a new diff target.
 - gpui-ce diagnostics:
-  - `GPUI_SCENE_STATS=1|2|3` prints scene composition per frame.
-  - `GPUI_DUMP_FRAME=prefix` writes the last frame as PNG.
+  - `GPUI_SCENE_STATS=1|2|3` prints scene composition per frame. With partial
+    redraw it also prints each frame's mode, repainted share and damage time
+    (`gpui-damage`).
+  - `GPUI_DUMP_FRAME=prefix` writes the last frame as PNG. With partial redraw
+    it also compares every frame's retained texture with a full render
+    (`gpui-damage-check`) and saves the first mismatch.
   - `GPUI_METAL_EXPERIMENTS` provides opt-outs and attribution switches.
 
 ## Next steps
@@ -279,9 +327,16 @@ These were measured but not changed yet.
 1. **Hover CPU.** Hovering a history row re-renders the whole history view. In a
    hover frame, the view's render, layout, prepaint and row painting are about
    half of the main thread's time. The root and main-pane renders are under 2%.
-   - Proposal: move the rows into a cached child view. Draw the hover highlight
-     and the lane badge from a small overlay that tracks the hovered row.
-   - The row divs then drop their `.hover()` styles.
+   - Why: the rows' `.hover()` styles notify the history view on every hover
+     change, which also marks the main pane and the root dirty.
+   - A cached child view for the rows would not help by itself. When a cached
+     view re-renders, GPUI re-renders every cached view inside it too
+     (`window.refreshing` in `AnyView::prepaint`).
+   - Options:
+     - Draw the hover highlight and the lane badge from an overlay outside the
+       main pane, so a hover change dirties only the overlay and the root. The
+       highlight would then draw over the row text instead of under it.
+     - Change GPUI to reuse a clean cached view inside a re-rendering one.
    - Expected gain: roughly half of the hover CPU.
 2. **Diff open.** Opening a diff costs about 38 ms of main-thread time and about
    5 frames. The selection, text attributes, patch and file text arrive as
@@ -308,6 +363,13 @@ These were measured but not changed yet.
    40 idle wakeups per second. The CVDisplayLink still wakes the main thread
    on every vsync while the window is visible; pausing it after a few clean
    frames would remove most of the rest.
+6. **Whole-window presents.** Partial redraw still presents a full drawable.
+   - Cost: WindowServer composites the whole window again (about 80 ms/s of
+     its GPU time during a hover sweep), and the copy into the drawable is
+     most of a hover frame's GPU time.
+   - Presenting only the damaged region needs drawables that keep their
+     contents. CAMetalLayer does not document that, so it would mean
+     IOSurface-backed layers owned by the renderer.
 
 ## Shipping the renderer changes
 
