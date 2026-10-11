@@ -23,6 +23,10 @@ fn coalesced<T: Copy, K: Eq + std::hash::Hash>(
     winners
 }
 
+#[cfg(all(test, any(target_os = "linux", target_os = "windows")))]
+#[path = "history_graph_paint_gpu_tests.rs"]
+mod gpu_tests;
+
 fn x_key(x: Pixels) -> u32 {
     f32::from(x).to_bits()
 }
@@ -1014,9 +1018,10 @@ pub(super) fn paint_vertical_segment(
     ));
 }
 
-/// Preserve the stroke's butt caps and painter order when a connector is axis aligned.
-/// Nearly collinear connectors still need a path: rounding them to an axis would
-/// move an endpoint at fractional display scales.
+/// Pixel-aligned straight connectors are rectangles. Avoid a path scratch
+/// texture and rasterization/compositing passes for these ordinary lane exits.
+/// Fractional edges, clipped strokes and nearly collinear connectors retain
+/// the original path so their MSAA coverage and endpoints stay unchanged.
 pub(super) fn paint_straight_connector(
     from: gpui::Point<Pixels>,
     to: gpui::Point<Pixels>,
@@ -1027,12 +1032,7 @@ pub(super) fn paint_straight_connector(
     if from == to || width <= px(0.0) {
         return;
     }
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    let enabled = cfg!(test)
-        || *ENABLED.get_or_init(|| gitcomet_ui_kit::ui_probe::env_flag("GITCOMET_GPU_GRAPH_QUADS"));
-    let bounds = if !enabled {
-        None
-    } else if from.x == to.x {
+    let bounds = if from.x == to.x {
         Some(Bounds::new(
             point(from.x - width * 0.5, from.y.min(to.y)),
             size(width, (to.y - from.y).abs()),
@@ -1045,7 +1045,21 @@ pub(super) fn paint_straight_connector(
     } else {
         None
     };
-    if let Some(bounds) = bounds {
+    let scale = window.scale_factor();
+    let aligned = |value: Pixels| {
+        let device = f32::from(value) * scale;
+        (device - device.round()).abs() < 0.001
+    };
+    let mask = window.content_mask();
+    if let Some(bounds) = bounds.filter(|bounds| {
+        // Paths preserve fractional clip coverage; quads snap their masks.
+        // Keep that behavior when a connector reaches a clip or fade edge.
+        bounds.intersect(&mask.bounds) == *bounds
+            && mask.fade_out == gpui::Edges::default()
+            && [bounds.left(), bounds.right(), bounds.top(), bounds.bottom()]
+                .into_iter()
+                .all(aligned)
+    }) {
         gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintSegmentQuad);
         window.paint_layer(bounds, |window| window.paint_quad(fill(bounds, color)));
     } else {
@@ -2082,7 +2096,13 @@ mod coalescing_regressions {
                     gpui::canvas(
                         |_, _, _| (),
                         move |_, (), window, _| {
-                            let p = |x, y| point(px(x * scale), px(y * scale));
+                            let grid = GraphGrid::for_scale(
+                                window.scale_factor(),
+                                ui_scale::UiScale::from_percent((scale * 100.0) as u32),
+                            );
+                            let p =
+                                |x, y| point(grid.snap(px(x * scale)), grid.snap(px(y * scale)));
+                            let stroke = grid.stroke_width;
                             let colour = gpui::rgb(0xabcdef);
                             // Both fork directions, both vertical directions and the node exit.
                             for (from, to) in [
@@ -2091,16 +2111,16 @@ mod coalescing_regressions {
                                 (p(10.0, 10.0), p(10.0, 30.0)),
                                 (p(20.0, 30.0), p(20.0, 10.0)),
                             ] {
-                                paint_straight_connector(from, to, px(1.6 * scale), colour, window);
+                                paint_straight_connector(from, to, stroke, colour, window);
                             }
                             paint_node_to_lane(
                                 px(0.0),
-                                px(40.0 * scale),
-                                px(40.0 * scale),
-                                px(10.0 * scale),
-                                px(30.0 * scale),
+                                grid.snap(px(40.0 * scale)),
+                                grid.snap(px(40.0 * scale)),
+                                grid.snap(px(10.0 * scale)),
+                                grid.snap(px(30.0 * scale)),
                                 px(4.0 * scale),
-                                px(1.6 * scale),
+                                stroke,
                                 colour,
                                 window,
                             );

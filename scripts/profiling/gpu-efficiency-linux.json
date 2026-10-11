@@ -1,0 +1,6052 @@
+{
+  "schema_version": 1,
+  "platform": "Linux",
+  "record_date": "2026-10-11",
+  "scope": "Completed Linux measurements of the original build, the clipped-window-shadow/connector-quad candidate, and the subsequent build with the window-frame shadow removed. Windows and macOS evidence will be supplied separately for consolidation.",
+  "hardware": {
+    "gpu": "NVIDIA GeForce GTX 1080",
+    "driver": "580.178.04",
+    "backend": "Vulkan",
+    "window_system": "Wayland",
+    "cpu": "AMD Ryzen 9 5950X",
+    "os": "Arch Linux"
+  },
+  "measurement": {
+    "metric": "application-process SM utilization percent from nvidia-smi pmon",
+    "definition_url": "https://docs.nvidia.com/deploy/nvidia-smi/index.html#process-monitoring",
+    "interval_ms": 1000,
+    "gpu_duration_timestamps_available": false,
+    "display": "private hardware-rendered headless Mutter display",
+    "refresh_hz": 60,
+    "display_scale": 1,
+    "app_ui_scale_percent": 100,
+    "history_pointer_events_per_second": 125,
+    "diff_changes_per_second": 20,
+    "repository_changes_per_second": 20,
+    "seconds_per_active_phase": 30,
+    "diff_and_repository_changes_per_run": 600,
+    "cache": "fresh application process/profile, warm shared shader cache",
+    "runtime_experiment_overrides": "none; normal Linux cropped-paths default",
+    "clock_policy": "Relative SM reductions require graphics and memory clocks within 5 percent.",
+    "missing_counter_policy": "Missing values are excluded from means, never replaced with zero."
+  },
+  "builds": {
+    "baseline_revision": "fcf343124fd56bc6fd411e69824eb01e1fd28a7f",
+    "cargo_profile": "release",
+    "build_command": "cargo build --release -p gitcomet --bin gitcomet",
+    "binary_sha256": {
+      "baseline": "6802fe9fb9a4bd40245237b7fad715968e2fbd6f653ffa1cd90819ff65242bd8",
+      "candidate": "c3c9aca8ed12735bcfbc9910c5115def107f6289e9e3b3abf27fd10ed19d0c1f"
+    },
+    "gpui_revision": "f7474ab18033dee1e58770494c3b56afb3938b24",
+    "renderer_patch": "vendor/gpui-ce-render",
+    "frozen_patch": "target/performance/gpu-efficiency/binaries/candidate-final.patch",
+    "frozen_patch_sha256": "af6f13902a6a079d2027baf308ebb539554a2367daafc514876968eccfa1e60c",
+    "production_and_test_source_sha256": {
+      "Cargo.lock": "238d87e7115167d79f62b87e043a330493ba5f152302d8366c54dc7ccc18db65",
+      "Cargo.toml": "177f1809f8b55c08c937f336b8050a03de9e9655583364eaa86ec075bd004802",
+      "crates/gitcomet-ui-gpui/Cargo.toml": "599646a80deac1a6c1ef96918ff2fe7ca22635ca7a0c1db4d304c8db142ea0bd",
+      "crates/gitcomet-ui-gpui/src/view/chrome.rs": "2635d4c9f6b5424888f36829fb13cfa97c544811389f289c0b0875ba338ebe68",
+      "crates/gitcomet-ui-gpui/src/view/rows/history_graph_paint.rs": "3b1286f30252163ad8543a43ac284c01febf5b55a9b91511edb9c9daa9a4bb29",
+      "crates/gitcomet-ui-gpui/src/view/chrome/window_shadow.rs": "1af5f197c58cab7697d3f277196df01a6de80ab0e70e01ac3c33668f3cda8d1a",
+      "crates/gitcomet-ui-gpui/src/view/rows/history_graph_paint_gpu_tests.rs": "5c7461a16f538087e18148992da12d6087b1c43e2ad0405a3ca4196dd6e34154",
+      "vendor/gpui-ce-render/Cargo.toml": "a43f5bd4f93e4a338e77e3cc6c2a785ab27c7f13a894c3eca05452e5269ee9a1",
+      "vendor/gpui-ce-render/LICENSE.md": "8515b253f740ad80926e77b7dec06938258fd70994564d3846b82a676e15c8ba",
+      "vendor/gpui-ce-render/README.gitcomet.md": "8f0d67a49503cae8484d7e5b5fcf9440ffb3a7522bcd5333b2cd1e7cf247658c",
+      "vendor/gpui-ce-render/THIRD_PARTY_NOTICES.md": "d78a7b5008483a3455dedbe1347869260d4f11795541cc067a3683a5cdb40e42",
+      "vendor/gpui-ce-render/build.rs": "d41d4952346c2655cad36432b8dc4ec154c85106fbde06d23af6920e8809074b",
+      "vendor/gpui-ce-render/src/artifacts.rs": "dc0388df15090eebd889d81adf8fe66cb6f1147fe92b63c5cba7bdb69cf83bbb",
+      "vendor/gpui-ce-render/src/blur.rs": "69f5a9a95f2cce353aaa0ece701cce512b48fc8fd87e28e28138c68839d7e81a",
+      "vendor/gpui-ce-render/src/gpui_render.rs": "511cbe465a7017a07d4ea820fd794d2da147a533d62957056fe37836ec0af3c3",
+      "vendor/gpui-ce-render/src/instances.rs": "88a2fc9601050e319a9d0787f4aa2d3f264685b93ed9dc10cbd0b74e80ac05df",
+      "vendor/gpui-ce-render/src/path_types.rs": "9d75ba24f1ead043786edc93dd8bca37bb789d10a46d716a5ac0a5fa43793037",
+      "vendor/gpui-ce-render/src/shaders/common.rs": "51cc1939808f3074745152208be374bb0e80f7510d196f1c873ed5ec457b8dda",
+      "vendor/gpui-ce-render/src/shaders/corner_smoothing.rs": "b996f855b506a592c7210fe54d8755499ce76946f5dd3c54f3f6f21db39f7d00",
+      "vendor/gpui-ce-render/src/shaders/emoji.rs": "82fcc5bd8c3e630b58170d8609020ad71ee84531b14be0e9cbbac4a46769155a",
+      "vendor/gpui-ce-render/src/shaders/filters.rs": "c5c4fa7ec68e82d13e39c174e30249f6f41df35188f4f5875da29146ef592315",
+      "vendor/gpui-ce-render/src/shaders/host.rs": "b3bce2b4df7aff53e8d04aafe3ee31c530d7fb3219306af807d7e446a4c88f8d",
+      "vendor/gpui-ce-render/src/shaders/interface.rs": "bb9f0c6401246acd527438630a6e71676c3c15bfd82a41d16eacda91fcd82f91",
+      "vendor/gpui-ce-render/src/shaders/linkage.rs": "fd37d109b2a38f5651a95b3d208e166bb77a49a6686fb698d68a46245e73e662",
+      "vendor/gpui-ce-render/src/shaders/mod.rs": "174fd011d5d6e644ae8f543faa92d748cb7a0a31ccdd6259cd5724bb2214975e",
+      "vendor/gpui-ce-render/src/shaders/paths.rs": "9caf004fc37073be7a7f9c498354d787d04a0efaab12362804a2aeb9ca3e685d",
+      "vendor/gpui-ce-render/src/shaders/quads.rs": "8e578b9b90d19038953daae490bf397f1b085223687d366f45e14e058ca03269",
+      "vendor/gpui-ce-render/src/shaders/shadows.rs": "95d46fb9e40583be7755b28f80c41f4605ed0c9da11389eca0352c52cfa4048b",
+      "vendor/gpui-ce-render/src/shaders/sprites.rs": "71d8a0cfe6bce23017dcd8c0492e8c878a2a28bb10e2a461325d8540d4feaba7",
+      "vendor/gpui-ce-render/src/shaders/tests.rs": "a8ebe78f310876f947fe69693ac869c2447f52859ead6b4b3428d2ced3fcdfe0",
+      "vendor/gpui-ce-render/windows_bindings.rs": "3066b7bae6ae7814248791502f41864c7eb88ddb5b0878d13cce8e4f08386b00"
+    }
+  },
+  "fixtures": {
+    "/home/sampo/git/GitComet3/target/performance/gpu-efficiency/fixture": {
+      "head": "fcf343124fd56bc6fd411e69824eb01e1fd28a7f",
+      "diff_sha256": "cbf8a4faabdacba85d9775cddb11b7ae711b10f1a2aa376eb755de4536647f05",
+      "status_sha256": "e8e32f093b7645fa6ac27db8347116b8b9491a1d956e3a4d48ee7895f465140b"
+    },
+    "/home/sampo/git/GitComet3/target/performance/gpu-efficiency/secondary": {
+      "head": "fcf343124fd56bc6fd411e69824eb01e1fd28a7f",
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "sessions": {
+    "paired-final": {
+      "pairs": 3,
+      "complete": true,
+      "report": "target/performance/gpu-efficiency/paired-final/report.json",
+      "harness_hashes": {
+        "gpu-interactions.py": "35c89ebb066ef214267341b6cb36f5e249937961f42efaa3dd23d31c9e7d4ccf",
+        "live-ui.py": "a127286b85e4f55e709b2a6f197dcee7bf54301ee136ee8a96757342ecdccb7d",
+        "perf_gpu.py": "78a8c53b1f8c39cfb9e3279c1f1d1ccb1325db64829fd0e74e4bf8e85a2b0ae2"
+      },
+      "comparisons": [
+        {
+          "geometry": "3840x2160",
+          "scale": 100,
+          "phase": "history_hover",
+          "baseline": {
+            "sm_percent": 29.22222222222222,
+            "memory_busy_percent": 5.2592592592592595,
+            "framebuffer_mb": 183.0,
+            "graphics_clock_mhz": 1480.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 3.220999,
+            "submit_p95_ms": 0.44168,
+            "input_to_draw_p95_ms": null
+          },
+          "candidate": {
+            "sm_percent": 19.392857142857142,
+            "memory_busy_percent": 3.4642857142857144,
+            "framebuffer_mb": 151.0,
+            "graphics_clock_mhz": 1247.6,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 3.449569,
+            "submit_p95_ms": 0.43609,
+            "input_to_draw_p95_ms": null
+          },
+          "gpu_clocks_comparable": false,
+          "paired_sm_reductions_percent": [],
+          "sm_reduction_percent": null
+        },
+        {
+          "geometry": "3840x2160",
+          "scale": 100,
+          "phase": "diff_view",
+          "baseline": {
+            "sm_percent": 17.962962962962962,
+            "memory_busy_percent": 2.7037037037037037,
+            "framebuffer_mb": 183.0,
+            "graphics_clock_mhz": 1626.3,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 10.565526,
+            "submit_p95_ms": 0.6634,
+            "input_to_draw_p95_ms": 11.51706600000034
+          },
+          "candidate": {
+            "sm_percent": 13.642857142857142,
+            "memory_busy_percent": 1.8214285714285714,
+            "framebuffer_mb": 151.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 11.065116,
+            "submit_p95_ms": 0.68573,
+            "input_to_draw_p95_ms": 21.381063000000722
+          },
+          "gpu_clocks_comparable": false,
+          "paired_sm_reductions_percent": [],
+          "sm_reduction_percent": null
+        },
+        {
+          "geometry": "3840x2160",
+          "scale": 100,
+          "phase": "repo_tabs",
+          "baseline": {
+            "sm_percent": 16.066666666666666,
+            "memory_busy_percent": 2.3666666666666667,
+            "framebuffer_mb": 183.0,
+            "graphics_clock_mhz": 1451.4375,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 11.848086,
+            "submit_p95_ms": 0.733379,
+            "input_to_draw_p95_ms": 21.46771299999091
+          },
+          "candidate": {
+            "sm_percent": 11.285714285714286,
+            "memory_busy_percent": 1.6896551724137931,
+            "framebuffer_mb": 167.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 11.803726000000001,
+            "submit_p95_ms": 0.74424,
+            "input_to_draw_p95_ms": 20.224072999990312
+          },
+          "gpu_clocks_comparable": false,
+          "paired_sm_reductions_percent": [],
+          "sm_reduction_percent": null
+        },
+        {
+          "geometry": "2560x1440",
+          "scale": 100,
+          "phase": "history_hover",
+          "baseline": {
+            "sm_percent": 15.333333333333334,
+            "memory_busy_percent": 3.074074074074074,
+            "framebuffer_mb": 117.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 2.4554139999999998,
+            "submit_p95_ms": 0.36501,
+            "input_to_draw_p95_ms": null
+          },
+          "candidate": {
+            "sm_percent": 9.0,
+            "memory_busy_percent": 2.142857142857143,
+            "framebuffer_mb": 85.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 2.303213,
+            "submit_p95_ms": 0.339069,
+            "input_to_draw_p95_ms": null
+          },
+          "gpu_clocks_comparable": true,
+          "paired_sm_reductions_percent": [
+            39.90683229813665,
+            41.67814113597247,
+            40.44117647058824
+          ],
+          "sm_reduction_percent": 41.30434782608696
+        },
+        {
+          "geometry": "2560x1440",
+          "scale": 100,
+          "phase": "diff_view",
+          "baseline": {
+            "sm_percent": 12.37037037037037,
+            "memory_busy_percent": 2.3333333333333335,
+            "framebuffer_mb": 117.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 7.525698,
+            "submit_p95_ms": 0.508049,
+            "input_to_draw_p95_ms": 17.979503000002296
+          },
+          "candidate": {
+            "sm_percent": 7.607142857142857,
+            "memory_busy_percent": 1.5714285714285714,
+            "framebuffer_mb": 85.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 7.5551070000000005,
+            "submit_p95_ms": 0.512558,
+            "input_to_draw_p95_ms": 17.927036000000953
+          },
+          "gpu_clocks_comparable": true,
+          "paired_sm_reductions_percent": [
+            34.01759530791788,
+            40.531491943921324,
+            38.50513259195895
+          ],
+          "sm_reduction_percent": 38.50513259195895
+        },
+        {
+          "geometry": "2560x1440",
+          "scale": 100,
+          "phase": "repo_tabs",
+          "baseline": {
+            "sm_percent": 7.482758620689655,
+            "memory_busy_percent": 1.4482758620689655,
+            "framebuffer_mb": 117.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 8.256746,
+            "submit_p95_ms": 0.635038,
+            "input_to_draw_p95_ms": 14.20103999999992
+          },
+          "candidate": {
+            "sm_percent": 4.931034482758621,
+            "memory_busy_percent": 1.3793103448275863,
+            "framebuffer_mb": 117.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 8.111447,
+            "submit_p95_ms": 0.633598,
+            "input_to_draw_p95_ms": 13.022846000007121
+          },
+          "gpu_clocks_comparable": true,
+          "paired_sm_reductions_percent": [
+            34.01015228426396,
+            34.10138248847926,
+            28.99705014749263
+          ],
+          "sm_reduction_percent": 34.10138248847926
+        },
+        {
+          "geometry": "1400x900",
+          "scale": 100,
+          "phase": "history_hover",
+          "baseline": {
+            "sm_percent": 6.285714285714286,
+            "memory_busy_percent": 2.2857142857142856,
+            "framebuffer_mb": 55.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 1.5697969999999999,
+            "submit_p95_ms": 0.32521999999999995,
+            "input_to_draw_p95_ms": null
+          },
+          "candidate": {
+            "sm_percent": 4.107142857142857,
+            "memory_busy_percent": 2.2857142857142856,
+            "framebuffer_mb": 55.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 1.761748,
+            "submit_p95_ms": 0.312909,
+            "input_to_draw_p95_ms": null
+          },
+          "gpu_clocks_comparable": true,
+          "paired_sm_reductions_percent": [
+            36.93181818181818,
+            36.111111111111114,
+            30.952380952380942
+          ],
+          "sm_reduction_percent": 34.65909090909092
+        },
+        {
+          "geometry": "1400x900",
+          "scale": 100,
+          "phase": "diff_view",
+          "baseline": {
+            "sm_percent": 4.962962962962963,
+            "memory_busy_percent": 1.8518518518518519,
+            "framebuffer_mb": 55.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 5.528614,
+            "submit_p95_ms": 0.40742,
+            "input_to_draw_p95_ms": 14.311243000003742
+          },
+          "candidate": {
+            "sm_percent": 3.4074074074074074,
+            "memory_busy_percent": 1.8148148148148149,
+            "framebuffer_mb": 55.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 5.563102000000001,
+            "submit_p95_ms": 0.40882,
+            "input_to_draw_p95_ms": 14.079613999994763
+          },
+          "gpu_clocks_comparable": true,
+          "paired_sm_reductions_percent": [
+            29.007633587786263,
+            40.97222222222221,
+            31.343283582089555
+          ],
+          "sm_reduction_percent": 31.343283582089555
+        },
+        {
+          "geometry": "1400x900",
+          "scale": 100,
+          "phase": "repo_tabs",
+          "baseline": {
+            "sm_percent": 3.0,
+            "memory_busy_percent": 1.0,
+            "framebuffer_mb": 55.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 6.161209,
+            "submit_p95_ms": 0.476259,
+            "input_to_draw_p95_ms": 9.88432300000568
+          },
+          "candidate": {
+            "sm_percent": 2.0,
+            "memory_busy_percent": 0.9642857142857143,
+            "framebuffer_mb": 55.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 6.197201000000001,
+            "submit_p95_ms": 0.46872899999999995,
+            "input_to_draw_p95_ms": 9.714845999988029
+          },
+          "gpu_clocks_comparable": true,
+          "paired_sm_reductions_percent": [
+            26.190476190476186,
+            40.0,
+            26.315789473684216
+          ],
+          "sm_reduction_percent": 33.333333333333336
+        }
+      ]
+    },
+    "paired-confirm": {
+      "pairs": 2,
+      "complete": true,
+      "report": "target/performance/gpu-efficiency/paired-confirm/report.json",
+      "harness_hashes": {
+        "gpu-interactions.py": "35c89ebb066ef214267341b6cb36f5e249937961f42efaa3dd23d31c9e7d4ccf",
+        "live-ui.py": "a127286b85e4f55e709b2a6f197dcee7bf54301ee136ee8a96757342ecdccb7d",
+        "perf_gpu.py": "78a8c53b1f8c39cfb9e3279c1f1d1ccb1325db64829fd0e74e4bf8e85a2b0ae2"
+      },
+      "comparisons": [
+        {
+          "geometry": "2560x1440",
+          "scale": 100,
+          "phase": "history_hover",
+          "baseline": {
+            "sm_percent": 13.212962962962962,
+            "memory_busy_percent": 3.113756613756614,
+            "framebuffer_mb": 117.0,
+            "graphics_clock_mhz": 1248.0166666666667,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 2.3485609999999997,
+            "submit_p95_ms": 0.3866145,
+            "input_to_draw_p95_ms": null
+          },
+          "candidate": {
+            "sm_percent": 7.582417582417582,
+            "memory_busy_percent": 1.875,
+            "framebuffer_mb": 85.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 2.6150205,
+            "submit_p95_ms": 0.375484,
+            "input_to_draw_p95_ms": null
+          },
+          "gpu_clocks_comparable": true,
+          "paired_sm_reductions_percent": [
+            43.93412438625205,
+            41.142857142857146
+          ],
+          "sm_reduction_percent": 42.61379825500357
+        },
+        {
+          "geometry": "2560x1440",
+          "scale": 100,
+          "phase": "diff_view",
+          "baseline": {
+            "sm_percent": 10.407407407407408,
+            "memory_busy_percent": 1.8283475783475782,
+            "framebuffer_mb": 117.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 7.623137,
+            "submit_p95_ms": 0.537334,
+            "input_to_draw_p95_ms": 18.353838000002725
+          },
+          "candidate": {
+            "sm_percent": 6.933571428571428,
+            "memory_busy_percent": 1.5792857142857142,
+            "framebuffer_mb": 85.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 7.7535620000000005,
+            "submit_p95_ms": 0.522369,
+            "input_to_draw_p95_ms": 17.891554999998334
+          },
+          "gpu_clocks_comparable": true,
+          "paired_sm_reductions_percent": [
+            34.28326810176125,
+            32.400000000000006
+          ],
+          "sm_reduction_percent": 33.37849517031013
+        },
+        {
+          "geometry": "2560x1440",
+          "scale": 100,
+          "phase": "repo_tabs",
+          "baseline": {
+            "sm_percent": 7.086206896551724,
+            "memory_busy_percent": 1.2413793103448276,
+            "framebuffer_mb": 117.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 8.4262655,
+            "submit_p95_ms": 0.685664,
+            "input_to_draw_p95_ms": 14.471130499994615
+          },
+          "candidate": {
+            "sm_percent": 3.896551724137931,
+            "memory_busy_percent": 1.0,
+            "framebuffer_mb": 117.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 8.309991,
+            "submit_p95_ms": 0.6508639999999999,
+            "input_to_draw_p95_ms": 13.52393149999989
+          },
+          "gpu_clocks_comparable": true,
+          "paired_sm_reductions_percent": [
+            40.64171122994652,
+            48.66071428571429
+          ],
+          "sm_reduction_percent": 45.01216545012166
+        }
+      ]
+    }
+  },
+  "paired_2560x1440_summary": {
+    "history_hover": {
+      "pairs": 5,
+      "sessions": 2,
+      "paired_reductions_percent": [
+        39.90683229813665,
+        41.67814113597247,
+        40.44117647058824,
+        43.93412438625205,
+        41.142857142857146
+      ],
+      "median_paired_reduction_percent": 41.142857142857146,
+      "min_paired_reduction_percent": 39.90683229813665,
+      "max_paired_reduction_percent": 43.93412438625205,
+      "run_pair_bootstrap_95_percent_interval": [
+        39.90683229813665,
+        43.93412438625205
+      ]
+    },
+    "diff_view": {
+      "pairs": 5,
+      "sessions": 2,
+      "paired_reductions_percent": [
+        34.01759530791788,
+        40.531491943921324,
+        38.50513259195895,
+        34.28326810176125,
+        32.400000000000006
+      ],
+      "median_paired_reduction_percent": 34.28326810176125,
+      "min_paired_reduction_percent": 32.400000000000006,
+      "max_paired_reduction_percent": 40.531491943921324,
+      "run_pair_bootstrap_95_percent_interval": [
+        32.400000000000006,
+        40.531491943921324
+      ]
+    },
+    "repo_tabs": {
+      "pairs": 5,
+      "sessions": 2,
+      "paired_reductions_percent": [
+        34.01015228426396,
+        34.10138248847926,
+        28.99705014749263,
+        40.64171122994652,
+        48.66071428571429
+      ],
+      "median_paired_reduction_percent": 34.10138248847926,
+      "min_paired_reduction_percent": 28.99705014749263,
+      "max_paired_reduction_percent": 48.66071428571429,
+      "run_pair_bootstrap_95_percent_interval": [
+        28.99705014749263,
+        48.66071428571429
+      ]
+    }
+  },
+  "paired_2560x1440_runs": [
+    {
+      "geometry": "2560x1440",
+      "scale": 100,
+      "pair": 0,
+      "variant": "baseline",
+      "graphics": [
+        {
+          "backend": "Vulkan",
+          "device_name": "NVIDIA GeForce GTX 1080",
+          "driver_info": "580.178.04",
+          "driver_name": "NVIDIA",
+          "rendering": "Hardware",
+          "window_system": "Wayland"
+        }
+      ],
+      "session": "paired-final",
+      "capture": "target/performance/gpu-efficiency/paired-final/2560x1440-100-0-baseline",
+      "phases": {
+        "history_hover": {
+          "seconds": 29.992338681999996,
+          "draws": 1801,
+          "draw_p95_ms": 2.6000300000000003,
+          "submit_p95_ms": 0.36501,
+          "input_to_draw_p95_ms": null,
+          "inputs": 3750,
+          "witnessed": 0,
+          "sm_percent": {
+            "count": 27,
+            "mean": 15.333333333333334,
+            "missing": 0
+          },
+          "memory_busy_percent": {
+            "count": 27,
+            "mean": 3.074074074074074,
+            "missing": 0
+          },
+          "framebuffer_mb": {
+            "count": 28,
+            "mean": 117.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 30,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 30,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 1801,
+          "graph_segment_quads": 129672
+        },
+        "diff_view": {
+          "seconds": 30.180317912000007,
+          "draws": 1811,
+          "draw_p95_ms": 7.525698,
+          "submit_p95_ms": 0.5030600000000001,
+          "input_to_draw_p95_ms": 17.979503000002296,
+          "inputs": 600,
+          "witnessed": 600,
+          "sm_percent": {
+            "count": 28,
+            "mean": 12.178571428571429,
+            "missing": 0
+          },
+          "memory_busy_percent": {
+            "count": 28,
+            "mean": 2.2142857142857144,
+            "missing": 0
+          },
+          "framebuffer_mb": {
+            "count": 29,
+            "mean": 117.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 30,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 30,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 0,
+          "graph_segment_quads": 0
+        },
+        "repo_tabs": {
+          "seconds": 31.632270136000006,
+          "draws": 1801,
+          "draw_p95_ms": 8.256746,
+          "submit_p95_ms": 0.635038,
+          "input_to_draw_p95_ms": 14.281833999993978,
+          "inputs": 600,
+          "witnessed": 600,
+          "sm_percent": {
+            "count": 29,
+            "mean": 6.793103448275862,
+            "missing": 0
+          },
+          "memory_busy_percent": {
+            "count": 29,
+            "mean": 1.4137931034482758,
+            "missing": 0
+          },
+          "framebuffer_mb": {
+            "count": 30,
+            "mean": 117.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 31,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 31,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 0,
+          "graph_segment_quads": 43873
+        }
+      }
+    },
+    {
+      "geometry": "2560x1440",
+      "scale": 100,
+      "pair": 0,
+      "variant": "candidate",
+      "graphics": [
+        {
+          "backend": "Vulkan",
+          "device_name": "NVIDIA GeForce GTX 1080",
+          "driver_info": "580.178.04",
+          "driver_name": "NVIDIA",
+          "rendering": "Hardware",
+          "window_system": "Wayland"
+        }
+      ],
+      "session": "paired-final",
+      "capture": "target/performance/gpu-efficiency/paired-final/2560x1440-100-0-candidate",
+      "phases": {
+        "history_hover": {
+          "seconds": 29.992114988000004,
+          "draws": 1801,
+          "draw_p95_ms": 2.355521,
+          "submit_p95_ms": 0.330029,
+          "input_to_draw_p95_ms": null,
+          "inputs": 3750,
+          "witnessed": 0,
+          "sm_percent": {
+            "count": 28,
+            "mean": 9.214285714285714,
+            "missing": 0
+          },
+          "memory_busy_percent": {
+            "count": 28,
+            "mean": 2.2142857142857144,
+            "missing": 0
+          },
+          "framebuffer_mb": {
+            "count": 29,
+            "mean": 85.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 30,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 30,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 0,
+          "graph_segment_quads": 131473
+        },
+        "diff_view": {
+          "seconds": 30.181411650999994,
+          "draws": 1811,
+          "draw_p95_ms": 7.681762,
+          "submit_p95_ms": 0.512558,
+          "input_to_draw_p95_ms": 18.262534999994386,
+          "inputs": 600,
+          "witnessed": 600,
+          "sm_percent": {
+            "count": 28,
+            "mean": 8.035714285714286,
+            "missing": 0
+          },
+          "memory_busy_percent": {
+            "count": 28,
+            "mean": 1.6428571428571428,
+            "missing": 0
+          },
+          "framebuffer_mb": {
+            "count": 29,
+            "mean": 85.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 30,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 30,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 0,
+          "graph_segment_quads": 0
+        },
+        "repo_tabs": {
+          "seconds": 31.652608011000005,
+          "draws": 1801,
+          "draw_p95_ms": 8.288003,
+          "submit_p95_ms": 0.629648,
+          "input_to_draw_p95_ms": 13.398456000009901,
+          "inputs": 600,
+          "witnessed": 600,
+          "sm_percent": {
+            "count": 29,
+            "mean": 4.482758620689655,
+            "missing": 0
+          },
+          "memory_busy_percent": {
+            "count": 29,
+            "mean": 1.2413793103448276,
+            "missing": 0
+          },
+          "framebuffer_mb": {
+            "count": 30,
+            "mean": 117.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 31,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 31,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 0,
+          "graph_segment_quads": 43873
+        }
+      }
+    },
+    {
+      "geometry": "2560x1440",
+      "scale": 100,
+      "pair": 1,
+      "variant": "candidate",
+      "graphics": [
+        {
+          "backend": "Vulkan",
+          "device_name": "NVIDIA GeForce GTX 1080",
+          "driver_info": "580.178.04",
+          "driver_name": "NVIDIA",
+          "rendering": "Hardware",
+          "window_system": "Wayland"
+        }
+      ],
+      "session": "paired-final",
+      "capture": "target/performance/gpu-efficiency/paired-final/2560x1440-100-1-candidate",
+      "phases": {
+        "history_hover": {
+          "seconds": 29.992117740999998,
+          "draws": 1801,
+          "draw_p95_ms": 2.303213,
+          "submit_p95_ms": 0.355479,
+          "input_to_draw_p95_ms": null,
+          "inputs": 3750,
+          "witnessed": 0,
+          "sm_percent": {
+            "count": 28,
+            "mean": 8.964285714285714,
+            "missing": 0
+          },
+          "memory_busy_percent": {
+            "count": 28,
+            "mean": 2.142857142857143,
+            "missing": 0
+          },
+          "framebuffer_mb": {
+            "count": 29,
+            "mean": 85.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 30,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 30,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 0,
+          "graph_segment_quads": 131473
+        },
+        "diff_view": {
+          "seconds": 30.175179747,
+          "draws": 1811,
+          "draw_p95_ms": 7.5551070000000005,
+          "submit_p95_ms": 0.510218,
+          "input_to_draw_p95_ms": 17.465039000002434,
+          "inputs": 600,
+          "witnessed": 600,
+          "sm_percent": {
+            "count": 27,
+            "mean": 7.518518518518518,
+            "missing": 1
+          },
+          "memory_busy_percent": {
+            "count": 27,
+            "mean": 1.4444444444444444,
+            "missing": 1
+          },
+          "framebuffer_mb": {
+            "count": 29,
+            "mean": 85.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 30,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 30,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 0,
+          "graph_segment_quads": 0
+        },
+        "repo_tabs": {
+          "seconds": 31.635120419,
+          "draws": 1801,
+          "draw_p95_ms": 8.111447,
+          "submit_p95_ms": 0.633598,
+          "input_to_draw_p95_ms": 13.01771300000837,
+          "inputs": 600,
+          "witnessed": 600,
+          "sm_percent": {
+            "count": 29,
+            "mean": 4.931034482758621,
+            "missing": 0
+          },
+          "memory_busy_percent": {
+            "count": 29,
+            "mean": 1.3793103448275863,
+            "missing": 0
+          },
+          "framebuffer_mb": {
+            "count": 30,
+            "mean": 117.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 31,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 31,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 0,
+          "graph_segment_quads": 43873
+        }
+      }
+    },
+    {
+      "geometry": "2560x1440",
+      "scale": 100,
+      "pair": 1,
+      "variant": "baseline",
+      "graphics": [
+        {
+          "backend": "Vulkan",
+          "device_name": "NVIDIA GeForce GTX 1080",
+          "driver_info": "580.178.04",
+          "driver_name": "NVIDIA",
+          "rendering": "Hardware",
+          "window_system": "Wayland"
+        }
+      ],
+      "session": "paired-final",
+      "capture": "target/performance/gpu-efficiency/paired-final/2560x1440-100-1-baseline",
+      "phases": {
+        "history_hover": {
+          "seconds": 29.992127218,
+          "draws": 1801,
+          "draw_p95_ms": 2.207794,
+          "submit_p95_ms": 0.36257900000000004,
+          "input_to_draw_p95_ms": null,
+          "inputs": 3750,
+          "witnessed": 0,
+          "sm_percent": {
+            "count": 27,
+            "mean": 15.37037037037037,
+            "missing": 0
+          },
+          "memory_busy_percent": {
+            "count": 27,
+            "mean": 3.185185185185185,
+            "missing": 0
+          },
+          "framebuffer_mb": {
+            "count": 28,
+            "mean": 117.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 30,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 30,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 1801,
+          "graph_segment_quads": 129672
+        },
+        "diff_view": {
+          "seconds": 30.177743677,
+          "draws": 1811,
+          "draw_p95_ms": 7.356491,
+          "submit_p95_ms": 0.508049,
+          "input_to_draw_p95_ms": 17.7813129999995,
+          "inputs": 600,
+          "witnessed": 600,
+          "sm_percent": {
+            "count": 28,
+            "mean": 12.642857142857142,
+            "missing": 0
+          },
+          "memory_busy_percent": {
+            "count": 28,
+            "mean": 2.392857142857143,
+            "missing": 0
+          },
+          "framebuffer_mb": {
+            "count": 29,
+            "mean": 117.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 30,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 30,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 0,
+          "graph_segment_quads": 0
+        },
+        "repo_tabs": {
+          "seconds": 31.615177207000002,
+          "draws": 1801,
+          "draw_p95_ms": 8.209,
+          "submit_p95_ms": 0.623239,
+          "input_to_draw_p95_ms": 14.093245999989449,
+          "inputs": 600,
+          "witnessed": 600,
+          "sm_percent": {
+            "count": 29,
+            "mean": 7.482758620689655,
+            "missing": 0
+          },
+          "memory_busy_percent": {
+            "count": 29,
+            "mean": 1.4482758620689655,
+            "missing": 0
+          },
+          "framebuffer_mb": {
+            "count": 30,
+            "mean": 117.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 31,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 31,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 0,
+          "graph_segment_quads": 43873
+        }
+      }
+    },
+    {
+      "geometry": "2560x1440",
+      "scale": 100,
+      "pair": 2,
+      "variant": "baseline",
+      "graphics": [
+        {
+          "backend": "Vulkan",
+          "device_name": "NVIDIA GeForce GTX 1080",
+          "driver_info": "580.178.04",
+          "driver_name": "NVIDIA",
+          "rendering": "Hardware",
+          "window_system": "Wayland"
+        }
+      ],
+      "session": "paired-final",
+      "capture": "target/performance/gpu-efficiency/paired-final/2560x1440-100-2-baseline",
+      "phases": {
+        "history_hover": {
+          "seconds": 29.992113346000007,
+          "draws": 1801,
+          "draw_p95_ms": 2.4554139999999998,
+          "submit_p95_ms": 0.37289,
+          "input_to_draw_p95_ms": null,
+          "inputs": 3750,
+          "witnessed": 0,
+          "sm_percent": {
+            "count": 27,
+            "mean": 15.11111111111111,
+            "missing": 0
+          },
+          "memory_busy_percent": {
+            "count": 27,
+            "mean": 3.0,
+            "missing": 0
+          },
+          "framebuffer_mb": {
+            "count": 28,
+            "mean": 117.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 30,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 30,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 1801,
+          "graph_segment_quads": 129672
+        },
+        "diff_view": {
+          "seconds": 30.179174571999997,
+          "draws": 1811,
+          "draw_p95_ms": 7.603673,
+          "submit_p95_ms": 0.512899,
+          "input_to_draw_p95_ms": 18.367818999999145,
+          "inputs": 600,
+          "witnessed": 600,
+          "sm_percent": {
+            "count": 27,
+            "mean": 12.37037037037037,
+            "missing": 1
+          },
+          "memory_busy_percent": {
+            "count": 27,
+            "mean": 2.3333333333333335,
+            "missing": 1
+          },
+          "framebuffer_mb": {
+            "count": 29,
+            "mean": 117.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 30,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 30,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 0,
+          "graph_segment_quads": 0
+        },
+        "repo_tabs": {
+          "seconds": 31.629289007,
+          "draws": 1801,
+          "draw_p95_ms": 8.320022999999999,
+          "submit_p95_ms": 0.639509,
+          "input_to_draw_p95_ms": 14.20103999999992,
+          "inputs": 600,
+          "witnessed": 600,
+          "sm_percent": {
+            "count": 29,
+            "mean": 7.793103448275862,
+            "missing": 0
+          },
+          "memory_busy_percent": {
+            "count": 29,
+            "mean": 1.4482758620689655,
+            "missing": 0
+          },
+          "framebuffer_mb": {
+            "count": 30,
+            "mean": 117.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 31,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 31,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 0,
+          "graph_segment_quads": 43873
+        }
+      }
+    },
+    {
+      "geometry": "2560x1440",
+      "scale": 100,
+      "pair": 2,
+      "variant": "candidate",
+      "graphics": [
+        {
+          "backend": "Vulkan",
+          "device_name": "NVIDIA GeForce GTX 1080",
+          "driver_info": "580.178.04",
+          "driver_name": "NVIDIA",
+          "rendering": "Hardware",
+          "window_system": "Wayland"
+        }
+      ],
+      "session": "paired-final",
+      "capture": "target/performance/gpu-efficiency/paired-final/2560x1440-100-2-candidate",
+      "phases": {
+        "history_hover": {
+          "seconds": 29.992176476,
+          "draws": 1801,
+          "draw_p95_ms": 2.214396,
+          "submit_p95_ms": 0.339069,
+          "input_to_draw_p95_ms": null,
+          "inputs": 3750,
+          "witnessed": 0,
+          "sm_percent": {
+            "count": 27,
+            "mean": 9.0,
+            "missing": 0
+          },
+          "memory_busy_percent": {
+            "count": 27,
+            "mean": 2.074074074074074,
+            "missing": 0
+          },
+          "framebuffer_mb": {
+            "count": 28,
+            "mean": 85.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 30,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 30,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 0,
+          "graph_segment_quads": 131473
+        },
+        "diff_view": {
+          "seconds": 30.178394237999992,
+          "draws": 1811,
+          "draw_p95_ms": 7.5402450000000005,
+          "submit_p95_ms": 0.5256390000000001,
+          "input_to_draw_p95_ms": 17.927036000000953,
+          "inputs": 600,
+          "witnessed": 600,
+          "sm_percent": {
+            "count": 28,
+            "mean": 7.607142857142857,
+            "missing": 0
+          },
+          "memory_busy_percent": {
+            "count": 28,
+            "mean": 1.5714285714285714,
+            "missing": 0
+          },
+          "framebuffer_mb": {
+            "count": 29,
+            "mean": 85.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 30,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 30,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 0,
+          "graph_segment_quads": 0
+        },
+        "repo_tabs": {
+          "seconds": 31.651944686000004,
+          "draws": 1801,
+          "draw_p95_ms": 8.075995,
+          "submit_p95_ms": 0.683658,
+          "input_to_draw_p95_ms": 13.022846000007121,
+          "inputs": 600,
+          "witnessed": 600,
+          "sm_percent": {
+            "count": 30,
+            "mean": 5.533333333333333,
+            "missing": 0
+          },
+          "memory_busy_percent": {
+            "count": 30,
+            "mean": 1.6666666666666667,
+            "missing": 0
+          },
+          "framebuffer_mb": {
+            "count": 31,
+            "mean": 117.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 31,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 31,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 0,
+          "graph_segment_quads": 43873
+        }
+      }
+    },
+    {
+      "geometry": "2560x1440",
+      "scale": 100,
+      "pair": 0,
+      "variant": "candidate",
+      "graphics": [
+        {
+          "backend": "Vulkan",
+          "device_name": "NVIDIA GeForce GTX 1080",
+          "driver_info": "580.178.04",
+          "driver_name": "NVIDIA",
+          "rendering": "Hardware",
+          "window_system": "Wayland"
+        }
+      ],
+      "session": "paired-confirm",
+      "capture": "target/performance/gpu-efficiency/paired-confirm/2560x1440-100-0-candidate",
+      "phases": {
+        "history_hover": {
+          "seconds": 29.992159497999996,
+          "draws": 1801,
+          "draw_p95_ms": 2.644656,
+          "submit_p95_ms": 0.387979,
+          "input_to_draw_p95_ms": null,
+          "inputs": 3750,
+          "witnessed": 0,
+          "sm_percent": {
+            "count": 26,
+            "mean": 7.8076923076923075,
+            "missing": 1
+          },
+          "memory_busy_percent": {
+            "count": 26,
+            "mean": 2.0,
+            "missing": 1
+          },
+          "framebuffer_mb": {
+            "count": 28,
+            "mean": 85.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 30,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 30,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 0,
+          "graph_segment_quads": 131473
+        },
+        "diff_view": {
+          "seconds": 30.187291749999996,
+          "draws": 1812,
+          "draw_p95_ms": 7.856247000000001,
+          "submit_p95_ms": 0.529709,
+          "input_to_draw_p95_ms": 18.106479999994917,
+          "inputs": 600,
+          "witnessed": 600,
+          "sm_percent": {
+            "count": 28,
+            "mean": 7.107142857142857,
+            "missing": 0
+          },
+          "memory_busy_percent": {
+            "count": 28,
+            "mean": 1.6785714285714286,
+            "missing": 0
+          },
+          "framebuffer_mb": {
+            "count": 29,
+            "mean": 85.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 30,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 30,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 0,
+          "graph_segment_quads": 0
+        },
+        "repo_tabs": {
+          "seconds": 31.707295281,
+          "draws": 1801,
+          "draw_p95_ms": 8.315976,
+          "submit_p95_ms": 0.649539,
+          "input_to_draw_p95_ms": 13.615666999990935,
+          "inputs": 600,
+          "witnessed": 600,
+          "sm_percent": {
+            "count": 29,
+            "mean": 3.8275862068965516,
+            "missing": 0
+          },
+          "memory_busy_percent": {
+            "count": 29,
+            "mean": 1.0,
+            "missing": 0
+          },
+          "framebuffer_mb": {
+            "count": 30,
+            "mean": 117.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 32,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 32,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 0,
+          "graph_segment_quads": 43873
+        }
+      }
+    },
+    {
+      "geometry": "2560x1440",
+      "scale": 100,
+      "pair": 0,
+      "variant": "baseline",
+      "graphics": [
+        {
+          "backend": "Vulkan",
+          "device_name": "NVIDIA GeForce GTX 1080",
+          "driver_info": "580.178.04",
+          "driver_name": "NVIDIA",
+          "rendering": "Hardware",
+          "window_system": "Wayland"
+        }
+      ],
+      "session": "paired-confirm",
+      "capture": "target/performance/gpu-efficiency/paired-confirm/2560x1440-100-0-baseline",
+      "phases": {
+        "history_hover": {
+          "seconds": 29.992131657999998,
+          "draws": 1801,
+          "draw_p95_ms": 2.3218959999999997,
+          "submit_p95_ms": 0.39120900000000003,
+          "input_to_draw_p95_ms": null,
+          "inputs": 3750,
+          "witnessed": 0,
+          "sm_percent": {
+            "count": 27,
+            "mean": 13.925925925925926,
+            "missing": 0
+          },
+          "memory_busy_percent": {
+            "count": 27,
+            "mean": 3.3703703703703702,
+            "missing": 0
+          },
+          "framebuffer_mb": {
+            "count": 28,
+            "mean": 117.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 30,
+            "mean": 1256.0333333333333,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 30,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 1801,
+          "graph_segment_quads": 129672
+        },
+        "diff_view": {
+          "seconds": 30.180676235,
+          "draws": 1811,
+          "draw_p95_ms": 7.549457,
+          "submit_p95_ms": 0.545749,
+          "input_to_draw_p95_ms": 18.142808000004152,
+          "inputs": 600,
+          "witnessed": 600,
+          "sm_percent": {
+            "count": 27,
+            "mean": 10.814814814814815,
+            "missing": 1
+          },
+          "memory_busy_percent": {
+            "count": 27,
+            "mean": 1.9259259259259258,
+            "missing": 1
+          },
+          "framebuffer_mb": {
+            "count": 29,
+            "mean": 117.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 30,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 30,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 0,
+          "graph_segment_quads": 0
+        },
+        "repo_tabs": {
+          "seconds": 31.709875388,
+          "draws": 1801,
+          "draw_p95_ms": 8.551715999999999,
+          "submit_p95_ms": 0.713029,
+          "input_to_draw_p95_ms": 14.62692499998957,
+          "inputs": 600,
+          "witnessed": 600,
+          "sm_percent": {
+            "count": 29,
+            "mean": 6.448275862068965,
+            "missing": 0
+          },
+          "memory_busy_percent": {
+            "count": 29,
+            "mean": 1.1379310344827587,
+            "missing": 0
+          },
+          "framebuffer_mb": {
+            "count": 30,
+            "mean": 117.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 31,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 31,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 0,
+          "graph_segment_quads": 43873
+        }
+      }
+    },
+    {
+      "geometry": "2560x1440",
+      "scale": 100,
+      "pair": 1,
+      "variant": "baseline",
+      "graphics": [
+        {
+          "backend": "Vulkan",
+          "device_name": "NVIDIA GeForce GTX 1080",
+          "driver_info": "580.178.04",
+          "driver_name": "NVIDIA",
+          "rendering": "Hardware",
+          "window_system": "Wayland"
+        }
+      ],
+      "session": "paired-confirm",
+      "capture": "target/performance/gpu-efficiency/paired-confirm/2560x1440-100-1-baseline",
+      "phases": {
+        "history_hover": {
+          "seconds": 29.993850112000004,
+          "draws": 1801,
+          "draw_p95_ms": 2.3752259999999996,
+          "submit_p95_ms": 0.38202,
+          "input_to_draw_p95_ms": null,
+          "inputs": 3750,
+          "witnessed": 0,
+          "sm_percent": {
+            "count": 28,
+            "mean": 12.5,
+            "missing": 0
+          },
+          "memory_busy_percent": {
+            "count": 28,
+            "mean": 2.857142857142857,
+            "missing": 0
+          },
+          "framebuffer_mb": {
+            "count": 29,
+            "mean": 117.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 30,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 30,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 1801,
+          "graph_segment_quads": 129672
+        },
+        "diff_view": {
+          "seconds": 30.190498015000006,
+          "draws": 1811,
+          "draw_p95_ms": 7.696817,
+          "submit_p95_ms": 0.528919,
+          "input_to_draw_p95_ms": 18.564868000001297,
+          "inputs": 600,
+          "witnessed": 600,
+          "sm_percent": {
+            "count": 26,
+            "mean": 10.0,
+            "missing": 1
+          },
+          "memory_busy_percent": {
+            "count": 26,
+            "mean": 1.7307692307692308,
+            "missing": 1
+          },
+          "framebuffer_mb": {
+            "count": 28,
+            "mean": 117.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 30,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 30,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 0,
+          "graph_segment_quads": 0
+        },
+        "repo_tabs": {
+          "seconds": 31.659419067999988,
+          "draws": 1801,
+          "draw_p95_ms": 8.300815,
+          "submit_p95_ms": 0.658299,
+          "input_to_draw_p95_ms": 14.315335999999661,
+          "inputs": 600,
+          "witnessed": 600,
+          "sm_percent": {
+            "count": 29,
+            "mean": 7.724137931034483,
+            "missing": 0
+          },
+          "memory_busy_percent": {
+            "count": 29,
+            "mean": 1.3448275862068966,
+            "missing": 0
+          },
+          "framebuffer_mb": {
+            "count": 30,
+            "mean": 117.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 31,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 31,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 0,
+          "graph_segment_quads": 43873
+        }
+      }
+    },
+    {
+      "geometry": "2560x1440",
+      "scale": 100,
+      "pair": 1,
+      "variant": "candidate",
+      "graphics": [
+        {
+          "backend": "Vulkan",
+          "device_name": "NVIDIA GeForce GTX 1080",
+          "driver_info": "580.178.04",
+          "driver_name": "NVIDIA",
+          "rendering": "Hardware",
+          "window_system": "Wayland"
+        }
+      ],
+      "session": "paired-confirm",
+      "capture": "target/performance/gpu-efficiency/paired-confirm/2560x1440-100-1-candidate",
+      "phases": {
+        "history_hover": {
+          "seconds": 29.992145112999996,
+          "draws": 1801,
+          "draw_p95_ms": 2.585385,
+          "submit_p95_ms": 0.36298899999999995,
+          "input_to_draw_p95_ms": null,
+          "inputs": 3750,
+          "witnessed": 0,
+          "sm_percent": {
+            "count": 28,
+            "mean": 7.357142857142857,
+            "missing": 0
+          },
+          "memory_busy_percent": {
+            "count": 28,
+            "mean": 1.75,
+            "missing": 0
+          },
+          "framebuffer_mb": {
+            "count": 29,
+            "mean": 85.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 30,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 30,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 0,
+          "graph_segment_quads": 131473
+        },
+        "diff_view": {
+          "seconds": 30.18093165600001,
+          "draws": 1811,
+          "draw_p95_ms": 7.650877,
+          "submit_p95_ms": 0.515029,
+          "input_to_draw_p95_ms": 17.67663000000175,
+          "inputs": 600,
+          "witnessed": 600,
+          "sm_percent": {
+            "count": 25,
+            "mean": 6.76,
+            "missing": 2
+          },
+          "memory_busy_percent": {
+            "count": 25,
+            "mean": 1.48,
+            "missing": 2
+          },
+          "framebuffer_mb": {
+            "count": 28,
+            "mean": 85.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 30,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 30,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 0,
+          "graph_segment_quads": 0
+        },
+        "repo_tabs": {
+          "seconds": 31.699704447000013,
+          "draws": 1801,
+          "draw_p95_ms": 8.304006,
+          "submit_p95_ms": 0.6521889999999999,
+          "input_to_draw_p95_ms": 13.432196000008844,
+          "inputs": 600,
+          "witnessed": 600,
+          "sm_percent": {
+            "count": 29,
+            "mean": 3.9655172413793105,
+            "missing": 0
+          },
+          "memory_busy_percent": {
+            "count": 29,
+            "mean": 1.0,
+            "missing": 0
+          },
+          "framebuffer_mb": {
+            "count": 30,
+            "mean": 117.0,
+            "missing": 0
+          },
+          "graphics_clock_mhz": {
+            "count": 31,
+            "mean": 1240.0,
+            "missing": 0
+          },
+          "memory_clock_mhz": {
+            "count": 31,
+            "mean": 5005.0,
+            "missing": 0
+          },
+          "graph_paths": 0,
+          "graph_segment_quads": 43873
+        }
+      }
+    }
+  ],
+  "validation": {
+    "full_ui_tests": {
+      "passed": 4644,
+      "failed": 0,
+      "ignored": 26
+    },
+    "renderer_shader_and_abi_tests": {
+      "passed": 34,
+      "failed": 0
+    },
+    "graph_tests_including_native_pixels": {
+      "passed": 41,
+      "failed": 0
+    },
+    "shadow_tests_including_native_pixels_and_diagnostic": {
+      "passed": 4,
+      "failed": 0
+    },
+    "native_image_comparisons": {
+      "total": 336,
+      "shadows": 72,
+      "production_frames": 24,
+      "connectors": 240,
+      "max_allowed_channel_difference": 1
+    },
+    "gpu_collector_python_tests": {
+      "passed": 21,
+      "failed": 0
+    },
+    "full_hardware_application_captures": 22,
+    "witnessed_diff_and_repository_inputs": 26400,
+    "shadow_render_and_gpu_completion_diagnostic_ms": {
+      "description": "Isolated 2560x1440 physical-pixel frame; CPU submission plus GPU completion, not pure GPU time.",
+      "baseline_p50": [
+        1.3609,
+        1.1798
+      ],
+      "optimized_p50": [
+        0.6363,
+        0.6092
+      ],
+      "baseline_p95": [
+        1.521,
+        1.2076
+      ],
+      "optimized_p95": [
+        0.6547,
+        0.6326
+      ],
+      "measured_frames_per_round": 120,
+      "warmup_frames_per_round": 20
+    }
+  },
+  "limits": [
+    "Five paired runs across two sessions support the 2560x1440 SM comparisons; other sizes have three pairs in one session.",
+    "4K builds boosted to different clocks; raw activity and clocks are retained, with no attributed percentage reduction.",
+    "Hover sweeps have no per-row visual witness, so hover input-to-draw latency is not reported.",
+    "CPU/input timings include vendor monitoring. Separate clean timings were not run before wrap-up.",
+    "The dense-merge queue was interrupted on request; its partial capture is excluded.",
+    "The 144 Hz comparison was planned but not run before wrap-up. Fractional display scales were represented in connector pixel comparisons, not live performance captures.",
+    "Linux measurements do not establish Windows or macOS performance."
+  ],
+  "window_frame_shadow_removal": {
+    "description": "Remeasurement of the current release without the custom window-frame shadow, against both the optimized shadow-enabled release and the original release. Earlier renderer and graph optimizations are retained.",
+    "record_date": "2026-10-11",
+    "geometry": "2560x1440",
+    "refresh_hz": 60,
+    "ui_scale_percent": 100,
+    "seconds_per_phase": 30,
+    "changes_per_second": 20,
+    "metric": "application-process SM utilization percent from nvidia-smi pmon",
+    "aggregation": "Activity/timing values are medians of per-run means/p95s from clock-comparable pairs. Percentage savings are medians of the individual paired ratios.",
+    "new_build": {
+      "head": "4c5ea2fda11e48807ecb55dc671be92f0d53301a",
+      "sha256": "df71e1abc0646f2d7bf4a2218ad1af1b65c6d7e97ea694dc16c3a7be6e33815d",
+      "profile": "release",
+      "build_command": "cargo build --release --locked -p gitcomet",
+      "gpui": "f7474ab18033dee1e58770494c3b56afb3938b24",
+      "renderer_patch": "vendor/gpui-ce-render",
+      "change": "Remove the custom window-frame shadow, retaining renderer clipping and graph connector optimizations.",
+      "patch": "target/performance/gpu-efficiency/binaries/candidate-shadowless.patch",
+      "patch_sha256": "fa0141c705a1ef677e0b2692e9e84b1e726b0d629fb8f559d38b366e8f4e1947",
+      "changed_source_archive": "target/performance/gpu-efficiency/binaries/candidate-shadowless.sources.tar.gz",
+      "changed_source_archive_sha256": "a663bfcd4105164fd08af6da258a088ed5edb8ab79fbba39885418d70b7846b0",
+      "source_files_sha256": {
+        "Cargo.lock": "2b895c99b7696212d0a1c05f6c767ccd0862f49c02b95fc91a3cf8d8c6699ba9",
+        "Cargo.toml": "177f1809f8b55c08c937f336b8050a03de9e9655583364eaa86ec075bd004802",
+        "crates/gitcomet-ui-gpui/Cargo.toml": "9217d5b6878f923ae532e3c08b7d2013856fba2c74a6890cb7d9f6cb2c393466",
+        "crates/gitcomet-ui-gpui/src/render_guards.rs": "4cb52084f63875840d736b6a0aabc05bfb331c22eb81ab2d5ed8685497fc3d6a",
+        "crates/gitcomet-ui-gpui/src/smoke_tests.rs": "5bb8efd1e8ddf96daee843cb641a6b053264ddea9922227c6f100d33b0806911",
+        "crates/gitcomet-ui-gpui/src/view/rows/history_graph_paint.rs": "3b1286f30252163ad8543a43ac284c01febf5b55a9b91511edb9c9daa9a4bb29",
+        "crates/gitcomet-ui-gpui/src/view/rows/history_graph_paint_gpu_tests.rs": "5c7461a16f538087e18148992da12d6087b1c43e2ad0405a3ca4196dd6e34154",
+        "scripts/profiling/README.md": "ce3d007882cf94031b811e330cf87e41641f34b0232da2fa0cf84f3246c2d4e8",
+        "scripts/profiling/gpu-efficiency-linux.json": "62d994ef7d970697da29511bb3cc0380518de394a56b58071583b9e12c221f19",
+        "scripts/profiling/gpu-interactions.py": "76cded6e5b034ff4b698d29165c07253f58721738e9cc9b798d2d33703b8fc29",
+        "vendor/gpui-ce-render/Cargo.toml": "a43f5bd4f93e4a338e77e3cc6c2a785ab27c7f13a894c3eca05452e5269ee9a1",
+        "vendor/gpui-ce-render/LICENSE.md": "8515b253f740ad80926e77b7dec06938258fd70994564d3846b82a676e15c8ba",
+        "vendor/gpui-ce-render/README.gitcomet.md": "dd29048ea5ba69ddd8e5ad960b8ee9b7438c5d1139d714cff6c8b3d202df4d65",
+        "vendor/gpui-ce-render/THIRD_PARTY_NOTICES.md": "d78a7b5008483a3455dedbe1347869260d4f11795541cc067a3683a5cdb40e42",
+        "vendor/gpui-ce-render/build.rs": "d41d4952346c2655cad36432b8dc4ec154c85106fbde06d23af6920e8809074b",
+        "vendor/gpui-ce-render/src/artifacts.rs": "dc0388df15090eebd889d81adf8fe66cb6f1147fe92b63c5cba7bdb69cf83bbb",
+        "vendor/gpui-ce-render/src/blur.rs": "69f5a9a95f2cce353aaa0ece701cce512b48fc8fd87e28e28138c68839d7e81a",
+        "vendor/gpui-ce-render/src/gpui_render.rs": "511cbe465a7017a07d4ea820fd794d2da147a533d62957056fe37836ec0af3c3",
+        "vendor/gpui-ce-render/src/instances.rs": "88a2fc9601050e319a9d0787f4aa2d3f264685b93ed9dc10cbd0b74e80ac05df",
+        "vendor/gpui-ce-render/src/path_types.rs": "9d75ba24f1ead043786edc93dd8bca37bb789d10a46d716a5ac0a5fa43793037",
+        "vendor/gpui-ce-render/src/shaders/common.rs": "51cc1939808f3074745152208be374bb0e80f7510d196f1c873ed5ec457b8dda",
+        "vendor/gpui-ce-render/src/shaders/corner_smoothing.rs": "b996f855b506a592c7210fe54d8755499ce76946f5dd3c54f3f6f21db39f7d00",
+        "vendor/gpui-ce-render/src/shaders/emoji.rs": "82fcc5bd8c3e630b58170d8609020ad71ee84531b14be0e9cbbac4a46769155a",
+        "vendor/gpui-ce-render/src/shaders/filters.rs": "c5c4fa7ec68e82d13e39c174e30249f6f41df35188f4f5875da29146ef592315",
+        "vendor/gpui-ce-render/src/shaders/host.rs": "b3bce2b4df7aff53e8d04aafe3ee31c530d7fb3219306af807d7e446a4c88f8d",
+        "vendor/gpui-ce-render/src/shaders/interface.rs": "bb9f0c6401246acd527438630a6e71676c3c15bfd82a41d16eacda91fcd82f91",
+        "vendor/gpui-ce-render/src/shaders/linkage.rs": "fd37d109b2a38f5651a95b3d208e166bb77a49a6686fb698d68a46245e73e662",
+        "vendor/gpui-ce-render/src/shaders/mod.rs": "174fd011d5d6e644ae8f543faa92d748cb7a0a31ccdd6259cd5724bb2214975e",
+        "vendor/gpui-ce-render/src/shaders/paths.rs": "9caf004fc37073be7a7f9c498354d787d04a0efaab12362804a2aeb9ca3e685d",
+        "vendor/gpui-ce-render/src/shaders/quads.rs": "8e578b9b90d19038953daae490bf397f1b085223687d366f45e14e058ca03269",
+        "vendor/gpui-ce-render/src/shaders/shadows.rs": "95d46fb9e40583be7755b28f80c41f4605ed0c9da11389eca0352c52cfa4048b",
+        "vendor/gpui-ce-render/src/shaders/sprites.rs": "71d8a0cfe6bce23017dcd8c0492e8c878a2a28bb10e2a461325d8540d4feaba7",
+        "vendor/gpui-ce-render/src/shaders/tests.rs": "a8ebe78f310876f947fe69693ac869c2447f52859ead6b4b3428d2ced3fcdfe0",
+        "vendor/gpui-ce-render/windows_bindings.rs": "3066b7bae6ae7814248791502f41864c7eb88ddb5b0878d13cce8e4f08386b00"
+      }
+    },
+    "sessions": {
+      "paired-shadowless-frame": {
+        "pairs": 3,
+        "complete": true,
+        "binary_hashes": {
+          "baseline": "c3c9aca8ed12735bcfbc9910c5115def107f6289e9e3b3abf27fd10ed19d0c1f",
+          "candidate": "df71e1abc0646f2d7bf4a2218ad1af1b65c6d7e97ea694dc16c3a7be6e33815d"
+        },
+        "harness_hashes": {
+          "gpu-interactions.py": "76cded6e5b034ff4b698d29165c07253f58721738e9cc9b798d2d33703b8fc29",
+          "live-ui.py": "a127286b85e4f55e709b2a6f197dcee7bf54301ee136ee8a96757342ecdccb7d",
+          "perf_gpu.py": "78a8c53b1f8c39cfb9e3279c1f1d1ccb1325db64829fd0e74e4bf8e85a2b0ae2"
+        },
+        "comparisons": [
+          {
+            "geometry": "2560x1440",
+            "scale": 100,
+            "phase": "history_hover",
+            "baseline": {
+              "sm_percent": 7.814814814814815,
+              "memory_busy_percent": 1.9259259259259258,
+              "framebuffer_mb": 85.0,
+              "graphics_clock_mhz": 1240.0,
+              "memory_clock_mhz": 5005.0,
+              "draw_p95_ms": 2.3656960000000002,
+              "submit_p95_ms": 0.36900900000000003,
+              "input_to_draw_p95_ms": null
+            },
+            "candidate": {
+              "sm_percent": 6.678571428571429,
+              "memory_busy_percent": 1.6785714285714286,
+              "framebuffer_mb": 85.0,
+              "graphics_clock_mhz": 1240.0,
+              "memory_clock_mhz": 5005.0,
+              "draw_p95_ms": 2.336016,
+              "submit_p95_ms": 0.36511,
+              "input_to_draw_p95_ms": null
+            },
+            "gpu_clocks_comparable": true,
+            "paired_sm_reductions_percent": [
+              5.3994583615436635,
+              18.03571428571429,
+              5.690737833594984
+            ],
+            "sm_reduction_percent": 14.539607312119163
+          },
+          {
+            "geometry": "2560x1440",
+            "scale": 100,
+            "phase": "diff_view",
+            "baseline": {
+              "sm_percent": 6.714285714285714,
+              "memory_busy_percent": 1.6071428571428572,
+              "framebuffer_mb": 85.0,
+              "graphics_clock_mhz": 1240.0,
+              "memory_clock_mhz": 5005.0,
+              "draw_p95_ms": 7.653717,
+              "submit_p95_ms": 0.5236190000000001,
+              "input_to_draw_p95_ms": 18.05240799999592
+            },
+            "candidate": {
+              "sm_percent": 7.48,
+              "memory_busy_percent": 1.8,
+              "framebuffer_mb": 85.0,
+              "graphics_clock_mhz": 1240.0,
+              "memory_clock_mhz": 5005.0,
+              "draw_p95_ms": 7.773006,
+              "submit_p95_ms": 0.537249,
+              "input_to_draw_p95_ms": 18.054537999996683
+            },
+            "gpu_clocks_comparable": true,
+            "paired_sm_reductions_percent": [
+              -26.53254437869821,
+              -2.1658536585365873,
+              0.3273322422258529
+            ],
+            "sm_reduction_percent": -11.404255319148948
+          },
+          {
+            "geometry": "2560x1440",
+            "scale": 100,
+            "phase": "repo_tabs",
+            "baseline": {
+              "sm_percent": 4.535714285714286,
+              "memory_busy_percent": 1.2142857142857142,
+              "framebuffer_mb": 117.0,
+              "graphics_clock_mhz": 1240.0,
+              "memory_clock_mhz": 5005.0,
+              "draw_p95_ms": 8.293695999999999,
+              "submit_p95_ms": 0.6665179999999999,
+              "input_to_draw_p95_ms": 13.356406999999308
+            },
+            "candidate": {
+              "sm_percent": 4.0,
+              "memory_busy_percent": 1.0,
+              "framebuffer_mb": 117.0,
+              "graphics_clock_mhz": 1240.0,
+              "memory_clock_mhz": 5005.0,
+              "draw_p95_ms": 8.343875,
+              "submit_p95_ms": 0.671729,
+              "input_to_draw_p95_ms": 13.522985999996308
+            },
+            "gpu_clocks_comparable": true,
+            "paired_sm_reductions_percent": [
+              9.677419354838712,
+              18.561995597945714,
+              11.811023622047244
+            ],
+            "sm_reduction_percent": 11.811023622047244
+          }
+        ],
+        "report": "target/performance/gpu-efficiency/paired-shadowless-frame/report.json"
+      },
+      "paired-shadowless-baseline": {
+        "pairs": 3,
+        "complete": true,
+        "binary_hashes": {
+          "baseline": "6802fe9fb9a4bd40245237b7fad715968e2fbd6f653ffa1cd90819ff65242bd8",
+          "candidate": "df71e1abc0646f2d7bf4a2218ad1af1b65c6d7e97ea694dc16c3a7be6e33815d"
+        },
+        "harness_hashes": {
+          "gpu-interactions.py": "76cded6e5b034ff4b698d29165c07253f58721738e9cc9b798d2d33703b8fc29",
+          "live-ui.py": "a127286b85e4f55e709b2a6f197dcee7bf54301ee136ee8a96757342ecdccb7d",
+          "perf_gpu.py": "78a8c53b1f8c39cfb9e3279c1f1d1ccb1325db64829fd0e74e4bf8e85a2b0ae2"
+        },
+        "comparisons": [
+          {
+            "geometry": "2560x1440",
+            "scale": 100,
+            "phase": "history_hover",
+            "baseline": {
+              "sm_percent": 12.703703703703704,
+              "memory_busy_percent": 2.962962962962963,
+              "framebuffer_mb": 117.0,
+              "graphics_clock_mhz": 1240.0,
+              "memory_clock_mhz": 5005.0,
+              "draw_p95_ms": 2.6439749999999997,
+              "submit_p95_ms": 0.39928,
+              "input_to_draw_p95_ms": null
+            },
+            "candidate": {
+              "sm_percent": 6.678571428571429,
+              "memory_busy_percent": 1.6071428571428572,
+              "framebuffer_mb": 85.0,
+              "graphics_clock_mhz": 1240.0,
+              "memory_clock_mhz": 5005.0,
+              "draw_p95_ms": 2.353166,
+              "submit_p95_ms": 0.39381900000000003,
+              "input_to_draw_p95_ms": null
+            },
+            "gpu_clocks_comparable": true,
+            "paired_sm_reductions_percent": [
+              39.09574468085106,
+              46.875
+            ],
+            "sm_reduction_percent": 47.428154935443565
+          },
+          {
+            "geometry": "2560x1440",
+            "scale": 100,
+            "phase": "diff_view",
+            "baseline": {
+              "sm_percent": 10.25925925925926,
+              "memory_busy_percent": 1.8518518518518519,
+              "framebuffer_mb": 117.0,
+              "graphics_clock_mhz": 1240.0,
+              "memory_clock_mhz": 5005.0,
+              "draw_p95_ms": 7.6271070000000005,
+              "submit_p95_ms": 0.529119,
+              "input_to_draw_p95_ms": 18.229167999998026
+            },
+            "candidate": {
+              "sm_percent": 6.52,
+              "memory_busy_percent": 1.44,
+              "framebuffer_mb": 85.0,
+              "graphics_clock_mhz": 1240.0,
+              "memory_clock_mhz": 5005.0,
+              "draw_p95_ms": 7.584416,
+              "submit_p95_ms": 0.529119,
+              "input_to_draw_p95_ms": 17.632439000000886
+            },
+            "gpu_clocks_comparable": true,
+            "paired_sm_reductions_percent": [
+              35.19163763066202,
+              40.82296380090498,
+              36.44765342960289
+            ],
+            "sm_reduction_percent": 36.44765342960289
+          },
+          {
+            "geometry": "2560x1440",
+            "scale": 100,
+            "phase": "repo_tabs",
+            "baseline": {
+              "sm_percent": 6.448275862068965,
+              "memory_busy_percent": 1.2307692307692308,
+              "framebuffer_mb": 117.0,
+              "graphics_clock_mhz": 1240.0,
+              "memory_clock_mhz": 5005.0,
+              "draw_p95_ms": 8.473205,
+              "submit_p95_ms": 0.668489,
+              "input_to_draw_p95_ms": 14.385974999997416
+            },
+            "candidate": {
+              "sm_percent": 4.074074074074074,
+              "memory_busy_percent": 1.1379310344827587,
+              "framebuffer_mb": 117.0,
+              "graphics_clock_mhz": 1240.0,
+              "memory_clock_mhz": 5005.0,
+              "draw_p95_ms": 8.321436,
+              "submit_p95_ms": 0.662569,
+              "input_to_draw_p95_ms": 13.28228699999454
+            },
+            "gpu_clocks_comparable": true,
+            "paired_sm_reductions_percent": [
+              46.54377880184332,
+              32.085561497326196
+            ],
+            "sm_reduction_percent": 36.81917211328975
+          }
+        ],
+        "report": "target/performance/gpu-efficiency/paired-shadowless-baseline/report.json"
+      },
+      "paired-shadowless-baseline-confirm": {
+        "pairs": 1,
+        "complete": true,
+        "binary_hashes": {
+          "baseline": "6802fe9fb9a4bd40245237b7fad715968e2fbd6f653ffa1cd90819ff65242bd8",
+          "candidate": "df71e1abc0646f2d7bf4a2218ad1af1b65c6d7e97ea694dc16c3a7be6e33815d"
+        },
+        "harness_hashes": {
+          "gpu-interactions.py": "76cded6e5b034ff4b698d29165c07253f58721738e9cc9b798d2d33703b8fc29",
+          "live-ui.py": "a127286b85e4f55e709b2a6f197dcee7bf54301ee136ee8a96757342ecdccb7d",
+          "perf_gpu.py": "78a8c53b1f8c39cfb9e3279c1f1d1ccb1325db64829fd0e74e4bf8e85a2b0ae2"
+        },
+        "comparisons": [
+          {
+            "geometry": "2560x1440",
+            "scale": 100,
+            "phase": "history_hover",
+            "baseline": {
+              "sm_percent": 14.0,
+              "memory_busy_percent": 3.0,
+              "framebuffer_mb": 117.0,
+              "graphics_clock_mhz": 1240.0,
+              "memory_clock_mhz": 5005.0,
+              "draw_p95_ms": 2.5237749999999997,
+              "submit_p95_ms": 0.398379,
+              "input_to_draw_p95_ms": null
+            },
+            "candidate": {
+              "sm_percent": 7.321428571428571,
+              "memory_busy_percent": 1.5714285714285714,
+              "framebuffer_mb": 85.0,
+              "graphics_clock_mhz": 1240.0,
+              "memory_clock_mhz": 5005.0,
+              "draw_p95_ms": 2.505425,
+              "submit_p95_ms": 0.42329,
+              "input_to_draw_p95_ms": null
+            },
+            "gpu_clocks_comparable": true,
+            "paired_sm_reductions_percent": [
+              47.704081632653065
+            ],
+            "sm_reduction_percent": 47.704081632653065
+          },
+          {
+            "geometry": "2560x1440",
+            "scale": 100,
+            "phase": "diff_view",
+            "baseline": {
+              "sm_percent": 11.115384615384615,
+              "memory_busy_percent": 1.9230769230769231,
+              "framebuffer_mb": 117.0,
+              "graphics_clock_mhz": 1240.0,
+              "memory_clock_mhz": 5005.0,
+              "draw_p95_ms": 7.694727,
+              "submit_p95_ms": 0.5230290000000001,
+              "input_to_draw_p95_ms": 18.239858000000822
+            },
+            "candidate": {
+              "sm_percent": 6.592592592592593,
+              "memory_busy_percent": 1.2962962962962963,
+              "framebuffer_mb": 85.0,
+              "graphics_clock_mhz": 1240.0,
+              "memory_clock_mhz": 5005.0,
+              "draw_p95_ms": 8.859864,
+              "submit_p95_ms": 0.6522290000000001,
+              "input_to_draw_p95_ms": 19.45369499998924
+            },
+            "gpu_clocks_comparable": true,
+            "paired_sm_reductions_percent": [
+              40.689478405741376
+            ],
+            "sm_reduction_percent": 40.689478405741376
+          },
+          {
+            "geometry": "2560x1440",
+            "scale": 100,
+            "phase": "repo_tabs",
+            "baseline": {
+              "sm_percent": 5.551724137931035,
+              "memory_busy_percent": 0.896551724137931,
+              "framebuffer_mb": 117.0,
+              "graphics_clock_mhz": 1240.0,
+              "memory_clock_mhz": 5005.0,
+              "draw_p95_ms": 8.427365,
+              "submit_p95_ms": 0.663678,
+              "input_to_draw_p95_ms": 14.535564000005252
+            },
+            "candidate": {
+              "sm_percent": 4.6,
+              "memory_busy_percent": 1.3333333333333333,
+              "framebuffer_mb": 117.0,
+              "graphics_clock_mhz": 1240.0,
+              "memory_clock_mhz": 5005.0,
+              "draw_p95_ms": 8.262725,
+              "submit_p95_ms": 0.677449,
+              "input_to_draw_p95_ms": 13.393597000002046
+            },
+            "gpu_clocks_comparable": true,
+            "paired_sm_reductions_percent": [
+              17.14285714285715
+            ],
+            "sm_reduction_percent": 17.14285714285715
+          }
+        ],
+        "report": "target/performance/gpu-efficiency/paired-shadowless-baseline-confirm/report.json"
+      }
+    },
+    "comparisons": {
+      "optimized_with_frame_shadow": {
+        "history_hover": {
+          "control": {
+            "sm_percent": 7.814814814814815,
+            "memory_busy_percent": 1.9259259259259258,
+            "framebuffer_mb": 85.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 2.3656960000000002,
+            "submit_p95_ms": 0.36900900000000003,
+            "input_to_draw_p95_ms": null
+          },
+          "shadowless": {
+            "sm_percent": 6.678571428571429,
+            "memory_busy_percent": 1.6785714285714286,
+            "framebuffer_mb": 85.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 2.336016,
+            "submit_p95_ms": 0.36511,
+            "input_to_draw_p95_ms": null
+          },
+          "paired_reductions_percent": [
+            5.3994583615436635,
+            18.03571428571429,
+            5.690737833594984
+          ],
+          "median_paired_reduction_percent": 5.690737833594984,
+          "clock_comparable_pairs": 3,
+          "total_pairs": 3,
+          "run_pair_bootstrap_95_percent_interval": [
+            5.3994583615436635,
+            18.03571428571429
+          ],
+          "paired_draw_counts": [
+            {
+              "session": "paired-shadowless-frame",
+              "pair": 0,
+              "candidate": 1801,
+              "baseline": 1801
+            },
+            {
+              "session": "paired-shadowless-frame",
+              "pair": 1,
+              "baseline": 1801,
+              "candidate": 1799
+            },
+            {
+              "session": "paired-shadowless-frame",
+              "pair": 2,
+              "candidate": 1801,
+              "baseline": 1801
+            }
+          ],
+          "excluded_pairs": []
+        },
+        "diff_view": {
+          "control": {
+            "sm_percent": 6.714285714285714,
+            "memory_busy_percent": 1.6071428571428572,
+            "framebuffer_mb": 85.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 7.653717,
+            "submit_p95_ms": 0.5236190000000001,
+            "input_to_draw_p95_ms": 18.05240799999592
+          },
+          "shadowless": {
+            "sm_percent": 7.48,
+            "memory_busy_percent": 1.8,
+            "framebuffer_mb": 85.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 7.773006,
+            "submit_p95_ms": 0.537249,
+            "input_to_draw_p95_ms": 18.054537999996683
+          },
+          "paired_reductions_percent": [
+            -26.53254437869821,
+            -2.1658536585365873,
+            0.3273322422258529
+          ],
+          "median_paired_reduction_percent": -2.1658536585365873,
+          "clock_comparable_pairs": 3,
+          "total_pairs": 3,
+          "run_pair_bootstrap_95_percent_interval": [
+            -26.53254437869821,
+            0.3273322422258529
+          ],
+          "paired_draw_counts": [
+            {
+              "session": "paired-shadowless-frame",
+              "pair": 0,
+              "candidate": 1812,
+              "baseline": 1812
+            },
+            {
+              "session": "paired-shadowless-frame",
+              "pair": 1,
+              "baseline": 1811,
+              "candidate": 1812
+            },
+            {
+              "session": "paired-shadowless-frame",
+              "pair": 2,
+              "candidate": 1811,
+              "baseline": 1812
+            }
+          ],
+          "excluded_pairs": []
+        },
+        "repo_tabs": {
+          "control": {
+            "sm_percent": 4.535714285714286,
+            "memory_busy_percent": 1.2142857142857142,
+            "framebuffer_mb": 117.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 8.293695999999999,
+            "submit_p95_ms": 0.6665179999999999,
+            "input_to_draw_p95_ms": 13.356406999999308
+          },
+          "shadowless": {
+            "sm_percent": 4.0,
+            "memory_busy_percent": 1.0,
+            "framebuffer_mb": 117.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 8.343875,
+            "submit_p95_ms": 0.671729,
+            "input_to_draw_p95_ms": 13.522985999996308
+          },
+          "paired_reductions_percent": [
+            9.677419354838712,
+            18.561995597945714,
+            11.811023622047244
+          ],
+          "median_paired_reduction_percent": 11.811023622047244,
+          "clock_comparable_pairs": 3,
+          "total_pairs": 3,
+          "run_pair_bootstrap_95_percent_interval": [
+            9.677419354838712,
+            18.561995597945714
+          ],
+          "paired_draw_counts": [
+            {
+              "session": "paired-shadowless-frame",
+              "pair": 0,
+              "candidate": 1801,
+              "baseline": 1801
+            },
+            {
+              "session": "paired-shadowless-frame",
+              "pair": 1,
+              "baseline": 1801,
+              "candidate": 1801
+            },
+            {
+              "session": "paired-shadowless-frame",
+              "pair": 2,
+              "candidate": 1801,
+              "baseline": 1801
+            }
+          ],
+          "excluded_pairs": []
+        }
+      },
+      "original": {
+        "history_hover": {
+          "control": {
+            "sm_percent": 13.428571428571429,
+            "memory_busy_percent": 3.0,
+            "framebuffer_mb": 117.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 2.588556,
+            "submit_p95_ms": 0.398379,
+            "input_to_draw_p95_ms": null
+          },
+          "shadowless": {
+            "sm_percent": 7.321428571428571,
+            "memory_busy_percent": 1.6071428571428572,
+            "framebuffer_mb": 85.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 2.353166,
+            "submit_p95_ms": 0.42329,
+            "input_to_draw_p95_ms": null
+          },
+          "paired_reductions_percent": [
+            39.09574468085106,
+            46.875,
+            47.704081632653065
+          ],
+          "median_paired_reduction_percent": 46.875,
+          "clock_comparable_pairs": 3,
+          "total_pairs": 4,
+          "run_pair_bootstrap_95_percent_interval": [
+            39.09574468085106,
+            47.704081632653065
+          ],
+          "paired_draw_counts": [
+            {
+              "session": "paired-shadowless-baseline",
+              "pair": 0,
+              "baseline": 1801,
+              "candidate": 1801
+            },
+            {
+              "session": "paired-shadowless-baseline",
+              "pair": 1,
+              "candidate": 1801,
+              "baseline": 1801
+            },
+            {
+              "session": "paired-shadowless-baseline",
+              "pair": 2,
+              "baseline": 1800,
+              "candidate": 1801
+            },
+            {
+              "session": "paired-shadowless-baseline-confirm",
+              "pair": 0,
+              "candidate": 1801,
+              "baseline": 1801
+            }
+          ],
+          "excluded_pairs": [
+            {
+              "session": "paired-shadowless-baseline",
+              "pair": 2,
+              "reason": "GPU clocks differ by more than 5 percent",
+              "control_graphics_clock_mhz": 1240.0,
+              "shadowless_graphics_clock_mhz": 1612.0
+            }
+          ]
+        },
+        "diff_view": {
+          "control": {
+            "sm_percent": 10.444444444444445,
+            "memory_busy_percent": 1.8703703703703702,
+            "framebuffer_mb": 117.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 7.660917,
+            "submit_p95_ms": 0.526474,
+            "input_to_draw_p95_ms": 18.234512999999424
+          },
+          "shadowless": {
+            "sm_percent": 6.556296296296296,
+            "memory_busy_percent": 1.4123076923076923,
+            "framebuffer_mb": 85.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 7.671756,
+            "submit_p95_ms": 0.553324,
+            "input_to_draw_p95_ms": 17.927793500002736
+          },
+          "paired_reductions_percent": [
+            35.19163763066202,
+            40.82296380090498,
+            36.44765342960289,
+            40.689478405741376
+          ],
+          "median_paired_reduction_percent": 38.56856591767213,
+          "clock_comparable_pairs": 4,
+          "total_pairs": 4,
+          "run_pair_bootstrap_95_percent_interval": [
+            35.19163763066202,
+            40.82296380090498
+          ],
+          "paired_draw_counts": [
+            {
+              "session": "paired-shadowless-baseline",
+              "pair": 0,
+              "baseline": 1810,
+              "candidate": 1812
+            },
+            {
+              "session": "paired-shadowless-baseline",
+              "pair": 1,
+              "candidate": 1811,
+              "baseline": 1812
+            },
+            {
+              "session": "paired-shadowless-baseline",
+              "pair": 2,
+              "baseline": 1812,
+              "candidate": 1811
+            },
+            {
+              "session": "paired-shadowless-baseline-confirm",
+              "pair": 0,
+              "candidate": 1804,
+              "baseline": 1811
+            }
+          ],
+          "excluded_pairs": []
+        },
+        "repo_tabs": {
+          "control": {
+            "sm_percent": 6.448275862068965,
+            "memory_busy_percent": 1.0689655172413792,
+            "framebuffer_mb": 117.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 8.427365,
+            "submit_p95_ms": 0.668268,
+            "input_to_draw_p95_ms": 14.385974999997416
+          },
+          "shadowless": {
+            "sm_percent": 4.379310344827586,
+            "memory_busy_percent": 1.1379310344827587,
+            "framebuffer_mb": 117.0,
+            "graphics_clock_mhz": 1240.0,
+            "memory_clock_mhz": 5005.0,
+            "draw_p95_ms": 8.262725,
+            "submit_p95_ms": 0.662569,
+            "input_to_draw_p95_ms": 13.28228699999454
+          },
+          "paired_reductions_percent": [
+            46.54377880184332,
+            32.085561497326196,
+            17.14285714285715
+          ],
+          "median_paired_reduction_percent": 32.085561497326196,
+          "clock_comparable_pairs": 3,
+          "total_pairs": 4,
+          "run_pair_bootstrap_95_percent_interval": [
+            17.14285714285715,
+            46.54377880184332
+          ],
+          "paired_draw_counts": [
+            {
+              "session": "paired-shadowless-baseline",
+              "pair": 0,
+              "baseline": 1801,
+              "candidate": 1801
+            },
+            {
+              "session": "paired-shadowless-baseline",
+              "pair": 1,
+              "candidate": 1801,
+              "baseline": 1801
+            },
+            {
+              "session": "paired-shadowless-baseline",
+              "pair": 2,
+              "baseline": 1801,
+              "candidate": 1801
+            },
+            {
+              "session": "paired-shadowless-baseline-confirm",
+              "pair": 0,
+              "candidate": 1801,
+              "baseline": 1801
+            }
+          ],
+          "excluded_pairs": [
+            {
+              "session": "paired-shadowless-baseline",
+              "pair": 2,
+              "reason": "GPU clocks differ by more than 5 percent",
+              "control_graphics_clock_mhz": 1434.4375,
+              "shadowless_graphics_clock_mhz": 1240.0
+            }
+          ]
+        }
+      }
+    },
+    "runs": [
+      {
+        "geometry": "2560x1440",
+        "scale": 100,
+        "pair": 0,
+        "graphics": [
+          {
+            "backend": "Vulkan",
+            "device_name": "NVIDIA GeForce GTX 1080",
+            "driver_info": "580.178.04",
+            "driver_name": "NVIDIA",
+            "rendering": "Hardware",
+            "window_system": "Wayland"
+          }
+        ],
+        "phases": {
+          "history_hover": {
+            "seconds": 29.992125055000002,
+            "draws": 1801,
+            "draw_p95_ms": 2.327286,
+            "submit_p95_ms": 0.36488,
+            "input_to_draw_p95_ms": null,
+            "inputs": 3750,
+            "witnessed": 0,
+            "sm_percent": {
+              "count": 28,
+              "mean": 7.392857142857143,
+              "p50": 7.0,
+              "p95": 11.0,
+              "p99": 11.0,
+              "max": 11.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 28,
+              "mean": 1.8571428571428572,
+              "p50": 2.0,
+              "p95": 3.0,
+              "p99": 3.0,
+              "max": 3.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 29,
+              "mean": 85.0,
+              "p50": 85.0,
+              "p95": 85.0,
+              "p99": 85.0,
+              "max": 85.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 131473,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          },
+          "diff_view": {
+            "seconds": 30.192483991000007,
+            "draws": 1812,
+            "draw_p95_ms": 7.773006,
+            "submit_p95_ms": 0.541299,
+            "input_to_draw_p95_ms": 18.054537999996683,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 25,
+              "mean": 7.92,
+              "p50": 8.0,
+              "p95": 12.0,
+              "p99": 13.0,
+              "max": 13.0,
+              "missing": 3
+            },
+            "memory_busy_percent": {
+              "count": 25,
+              "mean": 1.8,
+              "p50": 2.0,
+              "p95": 3.0,
+              "p99": 3.0,
+              "max": 3.0,
+              "missing": 3
+            },
+            "framebuffer_mb": {
+              "count": 29,
+              "mean": 85.0,
+              "p50": 85.0,
+              "p95": 85.0,
+              "p99": 85.0,
+              "max": 85.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 0,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 1,
+              "text_window_build": 0
+            }
+          },
+          "repo_tabs": {
+            "seconds": 31.748319455000004,
+            "draws": 1801,
+            "draw_p95_ms": 8.343875,
+            "submit_p95_ms": 0.722999,
+            "input_to_draw_p95_ms": 13.618986000001314,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 28,
+              "mean": 4.0,
+              "p50": 4.0,
+              "p95": 6.0,
+              "p99": 6.0,
+              "max": 6.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 28,
+              "mean": 1.0,
+              "p50": 1.0,
+              "p95": 2.0,
+              "p99": 2.0,
+              "max": 2.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 29,
+              "mean": 117.0,
+              "p50": 117.0,
+              "p95": 117.0,
+              "p99": 117.0,
+              "max": 117.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 31,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 31,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 43873,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          }
+        },
+        "session": "paired-shadowless-frame",
+        "variant": "shadowless",
+        "capture": "target/performance/gpu-efficiency/paired-shadowless-frame/2560x1440-100-0-candidate"
+      },
+      {
+        "geometry": "2560x1440",
+        "scale": 100,
+        "pair": 0,
+        "graphics": [
+          {
+            "backend": "Vulkan",
+            "device_name": "NVIDIA GeForce GTX 1080",
+            "driver_info": "580.178.04",
+            "driver_name": "NVIDIA",
+            "rendering": "Hardware",
+            "window_system": "Wayland"
+          }
+        ],
+        "phases": {
+          "history_hover": {
+            "seconds": 29.992114864,
+            "draws": 1801,
+            "draw_p95_ms": 2.3656960000000002,
+            "submit_p95_ms": 0.36900900000000003,
+            "input_to_draw_p95_ms": null,
+            "inputs": 3750,
+            "witnessed": 0,
+            "sm_percent": {
+              "count": 27,
+              "mean": 7.814814814814815,
+              "p50": 8.0,
+              "p95": 11.0,
+              "p99": 11.0,
+              "max": 11.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 27,
+              "mean": 1.9259259259259258,
+              "p50": 2.0,
+              "p95": 3.0,
+              "p99": 3.0,
+              "max": 3.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 28,
+              "mean": 85.0,
+              "p50": 85.0,
+              "p95": 85.0,
+              "p99": 85.0,
+              "max": 85.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 131473,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          },
+          "diff_view": {
+            "seconds": 30.18955962500001,
+            "draws": 1812,
+            "draw_p95_ms": 7.840065999999999,
+            "submit_p95_ms": 0.5348189999999999,
+            "input_to_draw_p95_ms": 18.475196999999753,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 27,
+              "mean": 6.2592592592592595,
+              "p50": 6.0,
+              "p95": 12.0,
+              "p99": 12.0,
+              "max": 12.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 27,
+              "mean": 1.4444444444444444,
+              "p50": 1.0,
+              "p95": 3.0,
+              "p99": 3.0,
+              "max": 3.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 28,
+              "mean": 85.0,
+              "p50": 85.0,
+              "p95": 85.0,
+              "p99": 85.0,
+              "max": 85.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 0,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 1,
+              "text_window_build": 0
+            }
+          },
+          "repo_tabs": {
+            "seconds": 31.73746822400001,
+            "draws": 1801,
+            "draw_p95_ms": 8.640915000000001,
+            "submit_p95_ms": 0.649629,
+            "input_to_draw_p95_ms": 13.875056000018958,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 28,
+              "mean": 4.428571428571429,
+              "p50": 4.0,
+              "p95": 6.0,
+              "p99": 7.0,
+              "max": 7.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 28,
+              "mean": 1.1428571428571428,
+              "p50": 1.0,
+              "p95": 2.0,
+              "p99": 2.0,
+              "max": 2.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 29,
+              "mean": 117.0,
+              "p50": 117.0,
+              "p95": 117.0,
+              "p99": 117.0,
+              "max": 117.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 32,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 32,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 43873,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          }
+        },
+        "session": "paired-shadowless-frame",
+        "variant": "optimized_with_frame_shadow",
+        "capture": "target/performance/gpu-efficiency/paired-shadowless-frame/2560x1440-100-0-baseline"
+      },
+      {
+        "geometry": "2560x1440",
+        "scale": 100,
+        "pair": 1,
+        "graphics": [
+          {
+            "backend": "Vulkan",
+            "device_name": "NVIDIA GeForce GTX 1080",
+            "driver_info": "580.178.04",
+            "driver_name": "NVIDIA",
+            "rendering": "Hardware",
+            "window_system": "Wayland"
+          }
+        ],
+        "phases": {
+          "history_hover": {
+            "seconds": 29.992114024,
+            "draws": 1801,
+            "draw_p95_ms": 2.688345,
+            "submit_p95_ms": 0.39057000000000003,
+            "input_to_draw_p95_ms": null,
+            "inputs": 3750,
+            "witnessed": 0,
+            "sm_percent": {
+              "count": 27,
+              "mean": 8.148148148148149,
+              "p50": 8.0,
+              "p95": 11.0,
+              "p99": 11.0,
+              "max": 11.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 27,
+              "mean": 2.111111111111111,
+              "p50": 2.0,
+              "p95": 3.0,
+              "p99": 3.0,
+              "max": 3.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 28,
+              "mean": 85.0,
+              "p50": 85.0,
+              "p95": 85.0,
+              "p99": 85.0,
+              "max": 85.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1256.0333333333333,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1721.0,
+              "max": 1721.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 131473,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          },
+          "diff_view": {
+            "seconds": 30.174492103,
+            "draws": 1811,
+            "draw_p95_ms": 7.653717,
+            "submit_p95_ms": 0.5236190000000001,
+            "input_to_draw_p95_ms": 17.708388999999443,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 28,
+              "mean": 7.321428571428571,
+              "p50": 6.0,
+              "p95": 12.0,
+              "p99": 13.0,
+              "max": 13.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 28,
+              "mean": 1.6071428571428572,
+              "p50": 1.0,
+              "p95": 3.0,
+              "p99": 3.0,
+              "max": 3.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 29,
+              "mean": 85.0,
+              "p50": 85.0,
+              "p95": 85.0,
+              "p99": 85.0,
+              "max": 85.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 0,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 1,
+              "text_window_build": 0
+            }
+          },
+          "repo_tabs": {
+            "seconds": 31.705567670000004,
+            "draws": 1801,
+            "draw_p95_ms": 8.293695999999999,
+            "submit_p95_ms": 0.673608,
+            "input_to_draw_p95_ms": 13.356406999999308,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 30,
+              "mean": 4.7,
+              "p50": 5.0,
+              "p95": 7.0,
+              "p99": 7.0,
+              "max": 7.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 30,
+              "mean": 1.2666666666666666,
+              "p50": 1.0,
+              "p95": 2.0,
+              "p99": 2.0,
+              "max": 2.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 31,
+              "mean": 117.0,
+              "p50": 117.0,
+              "p95": 117.0,
+              "p99": 117.0,
+              "max": 117.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 31,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 31,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 43873,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          }
+        },
+        "session": "paired-shadowless-frame",
+        "variant": "optimized_with_frame_shadow",
+        "capture": "target/performance/gpu-efficiency/paired-shadowless-frame/2560x1440-100-1-baseline"
+      },
+      {
+        "geometry": "2560x1440",
+        "scale": 100,
+        "pair": 1,
+        "graphics": [
+          {
+            "backend": "Vulkan",
+            "device_name": "NVIDIA GeForce GTX 1080",
+            "driver_info": "580.178.04",
+            "driver_name": "NVIDIA",
+            "rendering": "Hardware",
+            "window_system": "Wayland"
+          }
+        ],
+        "phases": {
+          "history_hover": {
+            "seconds": 29.992131453,
+            "draws": 1799,
+            "draw_p95_ms": 2.7337149999999997,
+            "submit_p95_ms": 0.39467,
+            "input_to_draw_p95_ms": null,
+            "inputs": 3750,
+            "witnessed": 0,
+            "sm_percent": {
+              "count": 28,
+              "mean": 6.678571428571429,
+              "p50": 7.0,
+              "p95": 10.0,
+              "p99": 11.0,
+              "max": 11.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 28,
+              "mean": 1.6785714285714286,
+              "p50": 2.0,
+              "p95": 3.0,
+              "p99": 3.0,
+              "max": 3.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 29,
+              "mean": 85.0,
+              "p50": 85.0,
+              "p95": 85.0,
+              "p99": 85.0,
+              "max": 85.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 131327,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          },
+          "diff_view": {
+            "seconds": 30.18796534799999,
+            "draws": 1812,
+            "draw_p95_ms": 7.852335999999999,
+            "submit_p95_ms": 0.537249,
+            "input_to_draw_p95_ms": 18.672767000010936,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 25,
+              "mean": 7.48,
+              "p50": 7.0,
+              "p95": 12.0,
+              "p99": 12.0,
+              "max": 12.0,
+              "missing": 2
+            },
+            "memory_busy_percent": {
+              "count": 25,
+              "mean": 1.84,
+              "p50": 2.0,
+              "p95": 3.0,
+              "p99": 3.0,
+              "max": 3.0,
+              "missing": 2
+            },
+            "framebuffer_mb": {
+              "count": 28,
+              "mean": 85.0,
+              "p50": 85.0,
+              "p95": 85.0,
+              "p99": 85.0,
+              "max": 85.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 0,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 1,
+              "text_window_build": 0
+            }
+          },
+          "repo_tabs": {
+            "seconds": 31.712637247000007,
+            "draws": 1801,
+            "draw_p95_ms": 8.401105000000001,
+            "submit_p95_ms": 0.671729,
+            "input_to_draw_p95_ms": 13.522985999996308,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 29,
+              "mean": 3.8275862068965516,
+              "p50": 4.0,
+              "p95": 6.0,
+              "p99": 6.0,
+              "max": 6.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 29,
+              "mean": 1.0,
+              "p50": 1.0,
+              "p95": 2.0,
+              "p99": 2.0,
+              "max": 2.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 30,
+              "mean": 117.0,
+              "p50": 117.0,
+              "p95": 117.0,
+              "p99": 117.0,
+              "max": 117.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 31,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 31,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 43873,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          }
+        },
+        "session": "paired-shadowless-frame",
+        "variant": "shadowless",
+        "capture": "target/performance/gpu-efficiency/paired-shadowless-frame/2560x1440-100-1-candidate"
+      },
+      {
+        "geometry": "2560x1440",
+        "scale": 100,
+        "pair": 2,
+        "graphics": [
+          {
+            "backend": "Vulkan",
+            "device_name": "NVIDIA GeForce GTX 1080",
+            "driver_info": "580.178.04",
+            "driver_name": "NVIDIA",
+            "rendering": "Hardware",
+            "window_system": "Wayland"
+          }
+        ],
+        "phases": {
+          "history_hover": {
+            "seconds": 29.992128224000005,
+            "draws": 1801,
+            "draw_p95_ms": 2.336016,
+            "submit_p95_ms": 0.36511,
+            "input_to_draw_p95_ms": null,
+            "inputs": 3750,
+            "witnessed": 0,
+            "sm_percent": {
+              "count": 28,
+              "mean": 6.357142857142857,
+              "p50": 6.0,
+              "p95": 11.0,
+              "p99": 11.0,
+              "max": 11.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 28,
+              "mean": 1.4285714285714286,
+              "p50": 1.0,
+              "p95": 3.0,
+              "p99": 3.0,
+              "max": 3.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 29,
+              "mean": 85.0,
+              "p50": 85.0,
+              "p95": 85.0,
+              "p99": 85.0,
+              "max": 85.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 131473,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          },
+          "diff_view": {
+            "seconds": 30.175453991,
+            "draws": 1811,
+            "draw_p95_ms": 7.412297,
+            "submit_p95_ms": 0.5142690000000001,
+            "input_to_draw_p95_ms": 17.748197999993863,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 26,
+              "mean": 6.6923076923076925,
+              "p50": 7.0,
+              "p95": 12.0,
+              "p99": 13.0,
+              "max": 13.0,
+              "missing": 1
+            },
+            "memory_busy_percent": {
+              "count": 26,
+              "mean": 1.6153846153846154,
+              "p50": 2.0,
+              "p95": 3.0,
+              "p99": 4.0,
+              "max": 4.0,
+              "missing": 1
+            },
+            "framebuffer_mb": {
+              "count": 28,
+              "mean": 85.0,
+              "p50": 85.0,
+              "p95": 85.0,
+              "p99": 85.0,
+              "max": 85.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 0,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 1,
+              "text_window_build": 0
+            }
+          },
+          "repo_tabs": {
+            "seconds": 31.694466828999996,
+            "draws": 1801,
+            "draw_p95_ms": 8.295325,
+            "submit_p95_ms": 0.666778,
+            "input_to_draw_p95_ms": 13.261576000004425,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 29,
+              "mean": 4.0,
+              "p50": 4.0,
+              "p95": 6.0,
+              "p99": 7.0,
+              "max": 7.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 29,
+              "mean": 1.103448275862069,
+              "p50": 1.0,
+              "p95": 2.0,
+              "p99": 2.0,
+              "max": 2.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 30,
+              "mean": 117.0,
+              "p50": 117.0,
+              "p95": 117.0,
+              "p99": 117.0,
+              "max": 117.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 31,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 31,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 43873,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          }
+        },
+        "session": "paired-shadowless-frame",
+        "variant": "shadowless",
+        "capture": "target/performance/gpu-efficiency/paired-shadowless-frame/2560x1440-100-2-candidate"
+      },
+      {
+        "geometry": "2560x1440",
+        "scale": 100,
+        "pair": 2,
+        "graphics": [
+          {
+            "backend": "Vulkan",
+            "device_name": "NVIDIA GeForce GTX 1080",
+            "driver_info": "580.178.04",
+            "driver_name": "NVIDIA",
+            "rendering": "Hardware",
+            "window_system": "Wayland"
+          }
+        ],
+        "phases": {
+          "history_hover": {
+            "seconds": 29.992120254000007,
+            "draws": 1801,
+            "draw_p95_ms": 2.268066,
+            "submit_p95_ms": 0.359679,
+            "input_to_draw_p95_ms": null,
+            "inputs": 3750,
+            "witnessed": 0,
+            "sm_percent": {
+              "count": 27,
+              "mean": 6.7407407407407405,
+              "p50": 7.0,
+              "p95": 11.0,
+              "p99": 11.0,
+              "max": 11.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 27,
+              "mean": 1.7407407407407407,
+              "p50": 2.0,
+              "p95": 3.0,
+              "p99": 3.0,
+              "max": 3.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 28,
+              "mean": 85.0,
+              "p50": 85.0,
+              "p95": 85.0,
+              "p99": 85.0,
+              "max": 85.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 131473,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          },
+          "diff_view": {
+            "seconds": 30.18474710400001,
+            "draws": 1812,
+            "draw_p95_ms": 7.555727,
+            "submit_p95_ms": 0.513909,
+            "input_to_draw_p95_ms": 18.05240799999592,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 28,
+              "mean": 6.714285714285714,
+              "p50": 7.0,
+              "p95": 11.0,
+              "p99": 13.0,
+              "max": 13.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 28,
+              "mean": 1.6428571428571428,
+              "p50": 2.0,
+              "p95": 3.0,
+              "p99": 3.0,
+              "max": 3.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 29,
+              "mean": 85.0,
+              "p50": 85.0,
+              "p95": 85.0,
+              "p99": 85.0,
+              "max": 85.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 0,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 1,
+              "text_window_build": 0
+            }
+          },
+          "repo_tabs": {
+            "seconds": 31.693050541000005,
+            "draws": 1801,
+            "draw_p95_ms": 8.189185,
+            "submit_p95_ms": 0.6665179999999999,
+            "input_to_draw_p95_ms": 13.277266000004602,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 28,
+              "mean": 4.535714285714286,
+              "p50": 4.0,
+              "p95": 7.0,
+              "p99": 8.0,
+              "max": 8.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 28,
+              "mean": 1.2142857142857142,
+              "p50": 1.0,
+              "p95": 2.0,
+              "p99": 2.0,
+              "max": 2.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 29,
+              "mean": 117.0,
+              "p50": 117.0,
+              "p95": 117.0,
+              "p99": 117.0,
+              "max": 117.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 31,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 31,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 43873,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          }
+        },
+        "session": "paired-shadowless-frame",
+        "variant": "optimized_with_frame_shadow",
+        "capture": "target/performance/gpu-efficiency/paired-shadowless-frame/2560x1440-100-2-baseline"
+      },
+      {
+        "geometry": "2560x1440",
+        "scale": 100,
+        "pair": 0,
+        "graphics": [
+          {
+            "backend": "Vulkan",
+            "device_name": "NVIDIA GeForce GTX 1080",
+            "driver_info": "580.178.04",
+            "driver_name": "NVIDIA",
+            "rendering": "Hardware",
+            "window_system": "Wayland"
+          }
+        ],
+        "phases": {
+          "history_hover": {
+            "seconds": 29.992154863,
+            "draws": 1801,
+            "draw_p95_ms": 2.673666,
+            "submit_p95_ms": 0.41918,
+            "input_to_draw_p95_ms": null,
+            "inputs": 3750,
+            "witnessed": 0,
+            "sm_percent": {
+              "count": 28,
+              "mean": 13.428571428571429,
+              "p50": 14.0,
+              "p95": 18.0,
+              "p99": 18.0,
+              "max": 18.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 28,
+              "mean": 3.0357142857142856,
+              "p50": 3.0,
+              "p95": 4.0,
+              "p99": 4.0,
+              "max": 4.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 29,
+              "mean": 117.0,
+              "p50": 117.0,
+              "p95": 117.0,
+              "p99": 117.0,
+              "max": 117.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 1801,
+              "paint_row": 0,
+              "paint_segment_quad": 129672,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          },
+          "diff_view": {
+            "seconds": 30.186114700999997,
+            "draws": 1810,
+            "draw_p95_ms": 7.816146,
+            "submit_p95_ms": 0.5297989999999999,
+            "input_to_draw_p95_ms": 18.422306999993452,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 27,
+              "mean": 10.62962962962963,
+              "p50": 10.0,
+              "p95": 18.0,
+              "p99": 19.0,
+              "max": 19.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 27,
+              "mean": 1.8518518518518519,
+              "p50": 2.0,
+              "p95": 3.0,
+              "p99": 3.0,
+              "max": 3.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 28,
+              "mean": 117.0,
+              "p50": 117.0,
+              "p95": 117.0,
+              "p99": 117.0,
+              "max": 117.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 0,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 1,
+              "text_window_build": 0
+            }
+          },
+          "repo_tabs": {
+            "seconds": 31.690598306,
+            "draws": 1801,
+            "draw_p95_ms": 8.315145,
+            "submit_p95_ms": 0.668268,
+            "input_to_draw_p95_ms": 14.270355000000563,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 29,
+              "mean": 7.482758620689655,
+              "p50": 7.0,
+              "p95": 10.0,
+              "p99": 10.0,
+              "max": 10.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 29,
+              "mean": 1.2758620689655173,
+              "p50": 1.0,
+              "p95": 2.0,
+              "p99": 2.0,
+              "max": 2.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 30,
+              "mean": 117.0,
+              "p50": 117.0,
+              "p95": 117.0,
+              "p99": 117.0,
+              "max": 117.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 31,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 31,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 43873,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          }
+        },
+        "session": "paired-shadowless-baseline",
+        "variant": "original",
+        "capture": "target/performance/gpu-efficiency/paired-shadowless-baseline/2560x1440-100-0-baseline"
+      },
+      {
+        "geometry": "2560x1440",
+        "scale": 100,
+        "pair": 0,
+        "graphics": [
+          {
+            "backend": "Vulkan",
+            "device_name": "NVIDIA GeForce GTX 1080",
+            "driver_info": "580.178.04",
+            "driver_name": "NVIDIA",
+            "rendering": "Hardware",
+            "window_system": "Wayland"
+          }
+        ],
+        "phases": {
+          "history_hover": {
+            "seconds": 29.992118773999994,
+            "draws": 1801,
+            "draw_p95_ms": 2.353166,
+            "submit_p95_ms": 0.436089,
+            "input_to_draw_p95_ms": null,
+            "inputs": 3750,
+            "witnessed": 0,
+            "sm_percent": {
+              "count": 28,
+              "mean": 8.178571428571429,
+              "p50": 8.0,
+              "p95": 11.0,
+              "p99": 11.0,
+              "max": 11.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 28,
+              "mean": 2.142857142857143,
+              "p50": 2.0,
+              "p95": 3.0,
+              "p99": 3.0,
+              "max": 3.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 29,
+              "mean": 85.0,
+              "p50": 85.0,
+              "p95": 85.0,
+              "p99": 85.0,
+              "max": 85.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 131473,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          },
+          "diff_view": {
+            "seconds": 30.186415550000007,
+            "draws": 1812,
+            "draw_p95_ms": 7.759096,
+            "submit_p95_ms": 0.5775290000000001,
+            "input_to_draw_p95_ms": 18.223148000004585,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 27,
+              "mean": 6.888888888888889,
+              "p50": 6.0,
+              "p95": 11.0,
+              "p99": 11.0,
+              "max": 11.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 27,
+              "mean": 1.5925925925925926,
+              "p50": 1.0,
+              "p95": 3.0,
+              "p99": 3.0,
+              "max": 3.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 28,
+              "mean": 85.0,
+              "p50": 85.0,
+              "p95": 85.0,
+              "p99": 85.0,
+              "max": 85.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 0,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 1,
+              "text_window_build": 0
+            }
+          },
+          "repo_tabs": {
+            "seconds": 31.69433803899998,
+            "draws": 1801,
+            "draw_p95_ms": 8.206406,
+            "submit_p95_ms": 0.662569,
+            "input_to_draw_p95_ms": 13.195206999997026,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 29,
+              "mean": 4.0,
+              "p50": 4.0,
+              "p95": 7.0,
+              "p99": 7.0,
+              "max": 7.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 29,
+              "mean": 1.1379310344827587,
+              "p50": 1.0,
+              "p95": 2.0,
+              "p99": 2.0,
+              "max": 2.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 30,
+              "mean": 117.0,
+              "p50": 117.0,
+              "p95": 117.0,
+              "p99": 117.0,
+              "max": 117.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 31,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 31,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 43873,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          }
+        },
+        "session": "paired-shadowless-baseline",
+        "variant": "shadowless",
+        "capture": "target/performance/gpu-efficiency/paired-shadowless-baseline/2560x1440-100-0-candidate"
+      },
+      {
+        "geometry": "2560x1440",
+        "scale": 100,
+        "pair": 1,
+        "graphics": [
+          {
+            "backend": "Vulkan",
+            "device_name": "NVIDIA GeForce GTX 1080",
+            "driver_info": "580.178.04",
+            "driver_name": "NVIDIA",
+            "rendering": "Hardware",
+            "window_system": "Wayland"
+          }
+        ],
+        "phases": {
+          "history_hover": {
+            "seconds": 29.992127803,
+            "draws": 1801,
+            "draw_p95_ms": 2.244516,
+            "submit_p95_ms": 0.361059,
+            "input_to_draw_p95_ms": null,
+            "inputs": 3750,
+            "witnessed": 0,
+            "sm_percent": {
+              "count": 28,
+              "mean": 6.678571428571429,
+              "p50": 6.0,
+              "p95": 11.0,
+              "p99": 11.0,
+              "max": 11.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 28,
+              "mean": 1.6071428571428572,
+              "p50": 2.0,
+              "p95": 3.0,
+              "p99": 3.0,
+              "max": 3.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 29,
+              "mean": 85.0,
+              "p50": 85.0,
+              "p95": 85.0,
+              "p99": 85.0,
+              "max": 85.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 131473,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          },
+          "diff_view": {
+            "seconds": 30.181751169,
+            "draws": 1811,
+            "draw_p95_ms": 7.4592670000000005,
+            "submit_p95_ms": 0.516709,
+            "input_to_draw_p95_ms": 17.566338999997242,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 26,
+              "mean": 5.961538461538462,
+              "p50": 5.0,
+              "p95": 11.0,
+              "p99": 12.0,
+              "max": 12.0,
+              "missing": 1
+            },
+            "memory_busy_percent": {
+              "count": 26,
+              "mean": 1.3846153846153846,
+              "p50": 1.0,
+              "p95": 3.0,
+              "p99": 3.0,
+              "max": 3.0,
+              "missing": 1
+            },
+            "framebuffer_mb": {
+              "count": 28,
+              "mean": 85.0,
+              "p50": 85.0,
+              "p95": 85.0,
+              "p99": 85.0,
+              "max": 85.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 0,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 1,
+              "text_window_build": 0
+            }
+          },
+          "repo_tabs": {
+            "seconds": 31.690786175,
+            "draws": 1801,
+            "draw_p95_ms": 8.344725,
+            "submit_p95_ms": 0.6555690000000001,
+            "input_to_draw_p95_ms": 13.28228699999454,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 29,
+              "mean": 4.379310344827586,
+              "p50": 4.0,
+              "p95": 7.0,
+              "p99": 7.0,
+              "max": 7.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 29,
+              "mean": 1.1379310344827587,
+              "p50": 1.0,
+              "p95": 2.0,
+              "p99": 2.0,
+              "max": 2.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 30,
+              "mean": 117.0,
+              "p50": 117.0,
+              "p95": 117.0,
+              "p99": 117.0,
+              "max": 117.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 31,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 31,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 43873,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          }
+        },
+        "session": "paired-shadowless-baseline",
+        "variant": "shadowless",
+        "capture": "target/performance/gpu-efficiency/paired-shadowless-baseline/2560x1440-100-1-candidate"
+      },
+      {
+        "geometry": "2560x1440",
+        "scale": 100,
+        "pair": 1,
+        "graphics": [
+          {
+            "backend": "Vulkan",
+            "device_name": "NVIDIA GeForce GTX 1080",
+            "driver_info": "580.178.04",
+            "driver_name": "NVIDIA",
+            "rendering": "Hardware",
+            "window_system": "Wayland"
+          }
+        ],
+        "phases": {
+          "history_hover": {
+            "seconds": 29.992107003999998,
+            "draws": 1801,
+            "draw_p95_ms": 2.588556,
+            "submit_p95_ms": 0.394869,
+            "input_to_draw_p95_ms": null,
+            "inputs": 3750,
+            "witnessed": 0,
+            "sm_percent": {
+              "count": 28,
+              "mean": 12.571428571428571,
+              "p50": 12.0,
+              "p95": 18.0,
+              "p99": 19.0,
+              "max": 19.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 28,
+              "mean": 2.892857142857143,
+              "p50": 3.0,
+              "p95": 4.0,
+              "p99": 4.0,
+              "max": 4.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 29,
+              "mean": 117.0,
+              "p50": 117.0,
+              "p95": 117.0,
+              "p99": 117.0,
+              "max": 117.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 1801,
+              "paint_row": 0,
+              "paint_segment_quad": 129672,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          },
+          "diff_view": {
+            "seconds": 30.189264704999996,
+            "draws": 1812,
+            "draw_p95_ms": 7.6271070000000005,
+            "submit_p95_ms": 0.523829,
+            "input_to_draw_p95_ms": 18.229167999998026,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 27,
+              "mean": 10.074074074074074,
+              "p50": 10.0,
+              "p95": 16.0,
+              "p99": 17.0,
+              "max": 17.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 27,
+              "mean": 1.8888888888888888,
+              "p50": 2.0,
+              "p95": 3.0,
+              "p99": 3.0,
+              "max": 3.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 28,
+              "mean": 117.0,
+              "p50": 117.0,
+              "p95": 117.0,
+              "p99": 117.0,
+              "max": 117.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 0,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 1,
+              "text_window_build": 0
+            }
+          },
+          "repo_tabs": {
+            "seconds": 31.662189625,
+            "draws": 1801,
+            "draw_p95_ms": 8.480455,
+            "submit_p95_ms": 0.668489,
+            "input_to_draw_p95_ms": 14.385974999997416,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 29,
+              "mean": 6.448275862068965,
+              "p50": 6.0,
+              "p95": 11.0,
+              "p99": 12.0,
+              "max": 12.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 29,
+              "mean": 1.0689655172413792,
+              "p50": 1.0,
+              "p95": 2.0,
+              "p99": 2.0,
+              "max": 2.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 30,
+              "mean": 117.0,
+              "p50": 117.0,
+              "p95": 117.0,
+              "p99": 117.0,
+              "max": 117.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 31,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 31,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 43873,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          }
+        },
+        "session": "paired-shadowless-baseline",
+        "variant": "original",
+        "capture": "target/performance/gpu-efficiency/paired-shadowless-baseline/2560x1440-100-1-baseline"
+      },
+      {
+        "geometry": "2560x1440",
+        "scale": 100,
+        "pair": 2,
+        "graphics": [
+          {
+            "backend": "Vulkan",
+            "device_name": "NVIDIA GeForce GTX 1080",
+            "driver_info": "580.178.04",
+            "driver_name": "NVIDIA",
+            "rendering": "Hardware",
+            "window_system": "Wayland"
+          }
+        ],
+        "phases": {
+          "history_hover": {
+            "seconds": 29.993046191,
+            "draws": 1800,
+            "draw_p95_ms": 2.6439749999999997,
+            "submit_p95_ms": 0.39928,
+            "input_to_draw_p95_ms": null,
+            "inputs": 3750,
+            "witnessed": 0,
+            "sm_percent": {
+              "count": 27,
+              "mean": 12.703703703703704,
+              "p50": 12.0,
+              "p95": 18.0,
+              "p99": 18.0,
+              "max": 18.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 27,
+              "mean": 2.962962962962963,
+              "p50": 3.0,
+              "p95": 5.0,
+              "p99": 5.0,
+              "max": 5.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 28,
+              "mean": 117.0,
+              "p50": 117.0,
+              "p95": 117.0,
+              "p99": 117.0,
+              "max": 117.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 1800,
+              "paint_row": 0,
+              "paint_segment_quad": 129600,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          },
+          "diff_view": {
+            "seconds": 30.193830357,
+            "draws": 1812,
+            "draw_p95_ms": 7.619257,
+            "submit_p95_ms": 0.529119,
+            "input_to_draw_p95_ms": 18.187088000006042,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 27,
+              "mean": 10.25925925925926,
+              "p50": 11.0,
+              "p95": 19.0,
+              "p99": 19.0,
+              "max": 19.0,
+              "missing": 1
+            },
+            "memory_busy_percent": {
+              "count": 27,
+              "mean": 1.7037037037037037,
+              "p50": 2.0,
+              "p95": 3.0,
+              "p99": 4.0,
+              "max": 4.0,
+              "missing": 1
+            },
+            "framebuffer_mb": {
+              "count": 29,
+              "mean": 117.0,
+              "p50": 117.0,
+              "p95": 117.0,
+              "p99": 117.0,
+              "max": 117.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 0,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 1,
+              "text_window_build": 0
+            }
+          },
+          "repo_tabs": {
+            "seconds": 31.72906705700001,
+            "draws": 1801,
+            "draw_p95_ms": 8.473205,
+            "submit_p95_ms": 0.696319,
+            "input_to_draw_p95_ms": 14.706394000008004,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 26,
+              "mean": 5.846153846153846,
+              "p50": 5.0,
+              "p95": 10.0,
+              "p99": 12.0,
+              "max": 12.0,
+              "missing": 2
+            },
+            "memory_busy_percent": {
+              "count": 26,
+              "mean": 1.2307692307692308,
+              "p50": 1.0,
+              "p95": 3.0,
+              "p99": 3.0,
+              "max": 3.0,
+              "missing": 2
+            },
+            "framebuffer_mb": {
+              "count": 29,
+              "mean": 117.0,
+              "p50": 117.0,
+              "p95": 117.0,
+              "p99": 117.0,
+              "max": 117.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 32,
+              "mean": 1434.4375,
+              "p50": 1240.0,
+              "p95": 1809.0,
+              "p99": 1860.0,
+              "max": 1860.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 32,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 43873,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          }
+        },
+        "session": "paired-shadowless-baseline",
+        "variant": "original",
+        "capture": "target/performance/gpu-efficiency/paired-shadowless-baseline/2560x1440-100-2-baseline"
+      },
+      {
+        "geometry": "2560x1440",
+        "scale": 100,
+        "pair": 2,
+        "graphics": [
+          {
+            "backend": "Vulkan",
+            "device_name": "NVIDIA GeForce GTX 1080",
+            "driver_info": "580.178.04",
+            "driver_name": "NVIDIA",
+            "rendering": "Hardware",
+            "window_system": "Wayland"
+          }
+        ],
+        "phases": {
+          "history_hover": {
+            "seconds": 29.992116622999994,
+            "draws": 1801,
+            "draw_p95_ms": 2.5627850000000003,
+            "submit_p95_ms": 0.39381900000000003,
+            "input_to_draw_p95_ms": null,
+            "inputs": 3750,
+            "witnessed": 0,
+            "sm_percent": {
+              "count": 27,
+              "mean": 4.888888888888889,
+              "p50": 5.0,
+              "p95": 9.0,
+              "p99": 10.0,
+              "max": 10.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 27,
+              "mean": 1.5555555555555556,
+              "p50": 2.0,
+              "p95": 3.0,
+              "p99": 3.0,
+              "max": 3.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 28,
+              "mean": 85.0,
+              "p50": 85.0,
+              "p95": 85.0,
+              "p99": 85.0,
+              "max": 85.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1612.0,
+              "p50": 1860.0,
+              "p95": 1860.0,
+              "p99": 1860.0,
+              "max": 1860.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 131473,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          },
+          "diff_view": {
+            "seconds": 30.180985650000004,
+            "draws": 1811,
+            "draw_p95_ms": 7.584416,
+            "submit_p95_ms": 0.529119,
+            "input_to_draw_p95_ms": 17.632439000000886,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 25,
+              "mean": 6.52,
+              "p50": 7.0,
+              "p95": 12.0,
+              "p99": 13.0,
+              "max": 13.0,
+              "missing": 3
+            },
+            "memory_busy_percent": {
+              "count": 25,
+              "mean": 1.44,
+              "p50": 2.0,
+              "p95": 3.0,
+              "p99": 3.0,
+              "max": 3.0,
+              "missing": 3
+            },
+            "framebuffer_mb": {
+              "count": 29,
+              "mean": 85.0,
+              "p50": 85.0,
+              "p95": 85.0,
+              "p99": 85.0,
+              "max": 85.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 0,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 1,
+              "text_window_build": 0
+            }
+          },
+          "repo_tabs": {
+            "seconds": 31.72514157400001,
+            "draws": 1801,
+            "draw_p95_ms": 8.321436,
+            "submit_p95_ms": 0.6952389999999999,
+            "input_to_draw_p95_ms": 13.479407000006177,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 27,
+              "mean": 4.074074074074074,
+              "p50": 4.0,
+              "p95": 7.0,
+              "p99": 7.0,
+              "max": 7.0,
+              "missing": 1
+            },
+            "memory_busy_percent": {
+              "count": 27,
+              "mean": 0.9259259259259259,
+              "p50": 1.0,
+              "p95": 2.0,
+              "p99": 2.0,
+              "max": 2.0,
+              "missing": 1
+            },
+            "framebuffer_mb": {
+              "count": 29,
+              "mean": 117.0,
+              "p50": 117.0,
+              "p95": 117.0,
+              "p99": 117.0,
+              "max": 117.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 32,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 32,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 43873,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          }
+        },
+        "session": "paired-shadowless-baseline",
+        "variant": "shadowless",
+        "capture": "target/performance/gpu-efficiency/paired-shadowless-baseline/2560x1440-100-2-candidate"
+      },
+      {
+        "geometry": "2560x1440",
+        "scale": 100,
+        "pair": 0,
+        "graphics": [
+          {
+            "backend": "Vulkan",
+            "device_name": "NVIDIA GeForce GTX 1080",
+            "driver_info": "580.178.04",
+            "driver_name": "NVIDIA",
+            "rendering": "Hardware",
+            "window_system": "Wayland"
+          }
+        ],
+        "phases": {
+          "history_hover": {
+            "seconds": 29.992132482999995,
+            "draws": 1801,
+            "draw_p95_ms": 2.505425,
+            "submit_p95_ms": 0.42329,
+            "input_to_draw_p95_ms": null,
+            "inputs": 3750,
+            "witnessed": 0,
+            "sm_percent": {
+              "count": 28,
+              "mean": 7.321428571428571,
+              "p50": 7.0,
+              "p95": 11.0,
+              "p99": 11.0,
+              "max": 11.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 28,
+              "mean": 1.5714285714285714,
+              "p50": 2.0,
+              "p95": 3.0,
+              "p99": 3.0,
+              "max": 3.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 29,
+              "mean": 85.0,
+              "p50": 85.0,
+              "p95": 85.0,
+              "p99": 85.0,
+              "max": 85.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 131473,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          },
+          "diff_view": {
+            "seconds": 30.432665664999988,
+            "draws": 1804,
+            "draw_p95_ms": 8.859864,
+            "submit_p95_ms": 0.6522290000000001,
+            "input_to_draw_p95_ms": 19.45369499998924,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 27,
+              "mean": 6.592592592592593,
+              "p50": 6.0,
+              "p95": 12.0,
+              "p99": 13.0,
+              "max": 13.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 27,
+              "mean": 1.2962962962962963,
+              "p50": 1.0,
+              "p95": 3.0,
+              "p99": 3.0,
+              "max": 3.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 28,
+              "mean": 85.0,
+              "p50": 85.0,
+              "p95": 85.0,
+              "p99": 85.0,
+              "max": 85.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 0,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 1,
+              "text_window_build": 0
+            }
+          },
+          "repo_tabs": {
+            "seconds": 31.689980226999992,
+            "draws": 1801,
+            "draw_p95_ms": 8.262725,
+            "submit_p95_ms": 0.677449,
+            "input_to_draw_p95_ms": 13.393597000002046,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 30,
+              "mean": 4.6,
+              "p50": 4.0,
+              "p95": 9.0,
+              "p99": 9.0,
+              "max": 9.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 30,
+              "mean": 1.3333333333333333,
+              "p50": 1.0,
+              "p95": 3.0,
+              "p99": 3.0,
+              "max": 3.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 31,
+              "mean": 117.0,
+              "p50": 117.0,
+              "p95": 117.0,
+              "p99": 117.0,
+              "max": 117.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 32,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 32,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 43873,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          }
+        },
+        "session": "paired-shadowless-baseline-confirm",
+        "variant": "shadowless",
+        "capture": "target/performance/gpu-efficiency/paired-shadowless-baseline-confirm/2560x1440-100-0-candidate"
+      },
+      {
+        "geometry": "2560x1440",
+        "scale": 100,
+        "pair": 0,
+        "graphics": [
+          {
+            "backend": "Vulkan",
+            "device_name": "NVIDIA GeForce GTX 1080",
+            "driver_info": "580.178.04",
+            "driver_name": "NVIDIA",
+            "rendering": "Hardware",
+            "window_system": "Wayland"
+          }
+        ],
+        "phases": {
+          "history_hover": {
+            "seconds": 29.992138983000004,
+            "draws": 1801,
+            "draw_p95_ms": 2.5237749999999997,
+            "submit_p95_ms": 0.398379,
+            "input_to_draw_p95_ms": null,
+            "inputs": 3750,
+            "witnessed": 0,
+            "sm_percent": {
+              "count": 27,
+              "mean": 14.0,
+              "p50": 14.0,
+              "p95": 18.0,
+              "p99": 19.0,
+              "max": 19.0,
+              "missing": 1
+            },
+            "memory_busy_percent": {
+              "count": 27,
+              "mean": 3.0,
+              "p50": 3.0,
+              "p95": 4.0,
+              "p99": 4.0,
+              "max": 4.0,
+              "missing": 1
+            },
+            "framebuffer_mb": {
+              "count": 29,
+              "mean": 117.0,
+              "p50": 117.0,
+              "p95": 117.0,
+              "p99": 117.0,
+              "max": 117.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 1801,
+              "paint_row": 0,
+              "paint_segment_quad": 129672,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          },
+          "diff_view": {
+            "seconds": 30.183468334999997,
+            "draws": 1811,
+            "draw_p95_ms": 7.694727,
+            "submit_p95_ms": 0.5230290000000001,
+            "input_to_draw_p95_ms": 18.239858000000822,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 26,
+              "mean": 11.115384615384615,
+              "p50": 11.0,
+              "p95": 16.0,
+              "p99": 17.0,
+              "max": 17.0,
+              "missing": 1
+            },
+            "memory_busy_percent": {
+              "count": 26,
+              "mean": 1.9230769230769231,
+              "p50": 2.0,
+              "p95": 3.0,
+              "p99": 3.0,
+              "max": 3.0,
+              "missing": 1
+            },
+            "framebuffer_mb": {
+              "count": 28,
+              "mean": 117.0,
+              "p50": 117.0,
+              "p95": 117.0,
+              "p99": 117.0,
+              "max": 117.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 30,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 30,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 0,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 1,
+              "text_window_build": 0
+            }
+          },
+          "repo_tabs": {
+            "seconds": 31.673091616000004,
+            "draws": 1801,
+            "draw_p95_ms": 8.427365,
+            "submit_p95_ms": 0.663678,
+            "input_to_draw_p95_ms": 14.535564000005252,
+            "inputs": 600,
+            "witnessed": 600,
+            "sm_percent": {
+              "count": 29,
+              "mean": 5.551724137931035,
+              "p50": 6.0,
+              "p95": 8.0,
+              "p99": 9.0,
+              "max": 9.0,
+              "missing": 0
+            },
+            "memory_busy_percent": {
+              "count": 29,
+              "mean": 0.896551724137931,
+              "p50": 1.0,
+              "p95": 1.0,
+              "p99": 2.0,
+              "max": 2.0,
+              "missing": 0
+            },
+            "framebuffer_mb": {
+              "count": 30,
+              "mean": 117.0,
+              "p50": 117.0,
+              "p95": 117.0,
+              "p99": 117.0,
+              "max": 117.0,
+              "missing": 0
+            },
+            "graphics_clock_mhz": {
+              "count": 31,
+              "mean": 1240.0,
+              "p50": 1240.0,
+              "p95": 1240.0,
+              "p99": 1240.0,
+              "max": 1240.0,
+              "missing": 0
+            },
+            "memory_clock_mhz": {
+              "count": 31,
+              "mean": 5005.0,
+              "p50": 5005.0,
+              "p95": 5005.0,
+              "p99": 5005.0,
+              "max": 5005.0,
+              "missing": 0
+            },
+            "work_units": {
+              "checkpoint_restore": 0,
+              "comparison_card": 0,
+              "containment_walk": 0,
+              "decoration_build": 0,
+              "graph_transition": 0,
+              "history_index_build": 0,
+              "index_object_read": 0,
+              "log_topology_build": 0,
+              "log_walk_object_read": 0,
+              "paint_path": 0,
+              "paint_row": 0,
+              "paint_segment_quad": 43873,
+              "picker_filter_item": 0,
+              "picker_model_build": 0,
+              "range_object_read": 0,
+              "range_store_reopen": 0,
+              "text_measurement": 0,
+              "text_window_build": 0
+            }
+          }
+        },
+        "session": "paired-shadowless-baseline-confirm",
+        "variant": "original",
+        "capture": "target/performance/gpu-efficiency/paired-shadowless-baseline-confirm/2560x1440-100-0-baseline"
+      }
+    ],
+    "validation": {
+      "full_hardware_application_captures": 14,
+      "witnessed_diff_and_repository_inputs": 16800,
+      "targeted_frame_resize_focus_and_component_tests_passed": 21,
+      "release_build_passed": true,
+      "fixture_and_binary_fingerprints_match": true
+    },
+    "limits": [
+      "Application-process SM utilization is a sampled activity percentage, not a GPU execution timer.",
+      "Percentage reductions only use pairs whose graphics and memory clocks agree within 5 percent.",
+      "Each control/workload has at least three clock-comparable pairs. This small host/workload sample does not establish Windows/macOS results.",
+      "The last original-baseline pair had mismatched clocks for hover and tabs; those phase comparisons are preserved but excluded, and a confirmation pair was run.",
+      "CPU/input timings include vendor monitoring, and hover has no per-row visual completion witness.",
+      "This repeat uses 2560x1440 at 60 Hz and 100 percent application UI scale."
+    ]
+  }
+}
