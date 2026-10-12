@@ -232,8 +232,8 @@ far less energy.
      tiles the way this tracker did, for all three backends and without caps.
      The numbers below predate both.
 
-   Same build with partial redraw off (`GPUI_METAL_EXPERIMENTS=no-partial-redraw`)
-   and on, 3 interleaved runs of each case, medians:
+   Same build with partial redraw off (`GPUI_METAL_EXPERIMENTS=no-partial-redraw`,
+   now `GPUI_GPU_EXPERIMENTS=no-partial-redraw`) and on, 3 interleaved runs of each case, medians:
 
    | Interaction | GPU per frame off | on | Whole-GPU power off | on |
    | --- | ---: | ---: | ---: | ---: |
@@ -347,8 +347,9 @@ Fixed in GitComet so far:
   - `GPUI_DUMP_FRAME=prefix` writes the last frame as PNG. With partial redraw
     it also compares every frame's retained texture with a full render
     (`gpui-damage-check`) and saves the first mismatch.
-  - `GPUI_METAL_EXPERIMENTS` provides opt-outs; its `skip-*` and `opaque-rounded`
-    attribution switches were removed.
+  - `GPUI_METAL_EXPERIMENTS` provided opt-outs; its `skip-*` and `opaque-rounded`
+    attribution switches went first, and gpui-ce `8066816f55` replaced the rest
+    with the shared `GPUI_GPU_EXPERIMENTS=no-partial-redraw`.
 
 ## Next steps
 

@@ -669,34 +669,32 @@ older revision.
 
 ## Windows GPU measurements
 
-### Application defaults and runtime overrides
+### Renderer defaults and overrides
 
-Normal Windows `gitcomet.exe` startup supplies these defaults before initializing
-GPUI. It sets each variable only when that variable is absent; an explicit value,
-including an empty value, is preserved.
+GPUI repaints only what changed by default on both Windows backends and on Linux
+WGPU, copies the retained frame to supported DX12 swapchains, and crops path
+targets; DX12 presents in immediate mode. `gitcomet.exe` sets no renderer
+environment variables.
 
-| Variable | Application default | Effect |
-| --- | --- | --- |
-| `GPUI_GPU_EXPERIMENTS` | `partial-redraw,retained-copy,cropped-paths` | Retained damage redraw on both Windows backends; cropped paths and retained texture copy on supported DX12 targets. |
-| `GPUI_WINDOWS_DX12_PRESENT_MODE` | `immediate` | Use the measured DX12 presentation policy. |
+| Variable | Effect |
+| --- | --- |
+| `GPUI_GPU_EXPERIMENTS=no-partial-redraw` | Draw every frame in full: the baseline for comparisons. |
+| `GPUI_WINDOWS_DX12_PRESENT_MODE=fifo` | Wait for vertical blank instead of presenting immediately. |
 
 The renderer preference is unchanged: **Automatic** tries DirectX 12 and falls
 back to DirectX 11; the saved DirectX 11 preference and an explicit
-`GPUI_WINDOWS_RENDERER` override still apply. Native DirectX 11 uses
-`partial-redraw`; it does not implement `retained-copy` or `cropped-paths`.
-Retained copy remains guarded by the actual target format, copy support and alpha
-mode. Unsupported scenes, target changes or retention budgets use a full redraw.
+`GPUI_WINDOWS_RENDERER` override still apply. Native DirectX 11 has partial
+redraw but no retained copy or cropped paths. Retained copy remains guarded by
+the actual target format, copy support and alpha mode. Unsupported scenes,
+target changes or retention budgets use a full redraw.
 
 Earlier experimental builds read `GITCOMET_GPU_GRAPH_QUADS=1`; pixel-aligned
 straight graph connectors now always use quads, while fractional, clipped and
 faded connectors keep paths.
 
-The `GPUI_GPU_EXPERIMENTS` name is retained for compatibility, but the tokens above
-are now application defaults. Pass an explicit empty value to disable those
-optimizations for a baseline, or an explicit comma-separated set to isolate
-them. Profiling runners pass explicit runtime settings for each side; their
-baseline is therefore distinct from an ordinary launch with the new defaults.
-Freeze a newly built binary after changing defaults; archived captures retain
+Until 2026-10-12 these optimizations were opt-in `GPUI_GPU_EXPERIMENTS` tokens
+(`partial-redraw,retained-copy,cropped-paths`) that `gitcomet.exe` set on
+Windows. An empty value no longer disables anything; archived captures retain
 their original policy.
 
 GPUI no longer carries in-process GPU timestamps, renderer capability records,
