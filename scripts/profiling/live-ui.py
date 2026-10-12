@@ -757,7 +757,6 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
                "ping_ms": ping_ms, "wrap": wrap, "gpu_cache": "cold" if cold_gpu_cache else "warm",
                "load_before": load_average(), "outcome": "failed",
                "cycles": cycles if name == "lifecycle" else None, "extra_env": extra_env or {}}
-    capture["renderer_experiments"] = env.get("GPUI_GPU_EXPERIMENTS")
     capture["gpu_capture"] = {"requested": gpu}
     if metadata:
         environment = perf_metadata.collect(

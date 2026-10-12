@@ -223,16 +223,16 @@ class GpuTests(unittest.TestCase):
             self.assertEqual(session["open_repos"], [str(repository)])
             self.assertFalse(session["check_for_updates_on_startup"])
 
-    def test_capture_distinguishes_default_and_explicitly_disabled_experiments(self):
-        for experiments in (None, "", "retained_copy"):
-            with self.subTest(experiments=experiments), tempfile.TemporaryDirectory() as directory:
+    def test_capture_records_and_forwards_extra_environment(self):
+        for value in (None, "", "1"):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 binary = root / "binary"
                 binary.write_bytes(b"binary")
                 output = root / "capture"
                 process = Mock(pid=41, returncode=0)
                 process.poll.return_value = 0
-                extra_env = {} if experiments is None else {"GPUI_GPU_EXPERIMENTS": experiments}
+                extra_env = {} if value is None else {"GITCOMET_TEST_EXTRA": value}
                 with patch.dict(live.os.environ, {}, clear=True), \
                         patch.object(live.platform, "system", return_value="Windows"), \
                         patch.object(live, "git", return_value=SimpleNamespace(stdout=b"head\n")), \
@@ -242,12 +242,12 @@ class GpuTests(unittest.TestCase):
                                   metadata=False, display="desktop", extra_env=extra_env,
                                   scenario_steps={"steps": []})
                 capture = json.loads((output / "capture.json").read_text(encoding="utf-8"))
-                self.assertEqual(capture["renderer_experiments"], experiments)
+                self.assertEqual(capture["extra_env"], extra_env)
                 launched_env = launch.call_args.kwargs["env"]
-                if experiments is None:
-                    self.assertNotIn("GPUI_GPU_EXPERIMENTS", launched_env)
+                if value is None:
+                    self.assertNotIn("GITCOMET_TEST_EXTRA", launched_env)
                 else:
-                    self.assertEqual(launched_env["GPUI_GPU_EXPERIMENTS"], experiments)
+                    self.assertEqual(launched_env["GITCOMET_TEST_EXTRA"], value)
 
 
 class PairedDesktopTests(unittest.TestCase):

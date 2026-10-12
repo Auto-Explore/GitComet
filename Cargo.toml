@@ -120,10 +120,10 @@ futures = "0.3.34"
 gix = { version = "0.89.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "status", "blame", "sha1", "sha256"] }
 # Already in the tree via gix; Git-compatible quoting for attribute patterns.
 gix-quote = "0.10.0"
-gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "ec31c4aee237f2e3e3fc1dd62a90b2d1bca7b2ae" }
-gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "ec31c4aee237f2e3e3fc1dd62a90b2d1bca7b2ae", features = ["font-kit"] }
-gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "ec31c4aee237f2e3e3fc1dd62a90b2d1bca7b2ae" }
-gpui_parley = { package = "gpui_ce_parley", git = "https://github.com/Havunen/gpui-ce.git", rev = "ec31c4aee237f2e3e3fc1dd62a90b2d1bca7b2ae", default-features = false }
+gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "28045891bfe87768a2c8e0aefd43403939844318" }
+gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "28045891bfe87768a2c8e0aefd43403939844318", features = ["font-kit"] }
+gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "28045891bfe87768a2c8e0aefd43403939844318" }
+gpui_parley = { package = "gpui_ce_parley", git = "https://github.com/Havunen/gpui-ce.git", rev = "28045891bfe87768a2c8e0aefd43403939844318", default-features = false }
 image = "0.25.10"
 # Already in the dependency graph; merges sorted reference streams lazily.
 itertools = "0.15.0"

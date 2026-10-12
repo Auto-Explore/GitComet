@@ -669,17 +669,13 @@ older revision.
 
 ## Windows GPU measurements
 
-### Renderer defaults and overrides
+### Renderer defaults
 
-GPUI repaints only what changed by default on both Windows backends and on Linux
-WGPU, copies the retained frame to supported DX12 swapchains, and crops path
-targets; DX12 presents in immediate mode. `gitcomet.exe` sets no renderer
-environment variables.
-
-| Variable | Effect |
-| --- | --- |
-| `GPUI_GPU_EXPERIMENTS=no-partial-redraw` | Draw every frame in full: the baseline for comparisons. |
-| `GPUI_WINDOWS_DX12_PRESENT_MODE=fifo` | Wait for vertical blank instead of presenting immediately. |
+GPUI repaints only what changed on both Windows backends and on Linux WGPU,
+copies the retained frame to supported DX12 swapchains, and crops path targets;
+DX12 always presents in immediate mode. Nothing turns these off at run time and
+`gitcomet.exe` sets no renderer environment variables, so a comparison needs two
+builds (see the reference builds in `docs/gpu-performance-inventory.md`).
 
 The renderer preference is unchanged: **Automatic** tries DirectX 12 and falls
 back to DirectX 11; the saved DirectX 11 preference and an explicit
@@ -694,8 +690,9 @@ faded connectors keep paths.
 
 Until 2026-10-12 these optimizations were opt-in `GPUI_GPU_EXPERIMENTS` tokens
 (`partial-redraw,retained-copy,cropped-paths`) that `gitcomet.exe` set on
-Windows. An empty value no longer disables anything; archived captures retain
-their original policy.
+Windows. GPUI no longer reads that variable or
+`GPUI_WINDOWS_DX12_PRESENT_MODE`; archived captures retain their original
+policy.
 
 GPUI no longer carries in-process GPU timestamps, renderer capability records,
 diagnostic ablations or native input hooks. Measure GPU work with samplers

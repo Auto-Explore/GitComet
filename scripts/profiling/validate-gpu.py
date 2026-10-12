@@ -82,10 +82,9 @@ def main():
     def save():
         (args.output / "validation.json").write_text(json.dumps(manifest, indent=2, default=str) + "\n", encoding="utf-8")
 
-    # Do not inherit experimental renderer flags or cross-compilation shortcuts.
+    # Do not inherit cross-compilation shortcuts.
     env = dict(os.environ)
-    for key in ("GPUI_GPU_EXPERIMENTS", "GPUI_RENDER_ALLOW_MISSING_DXBC"):
-        env.pop(key, None)
+    env.pop("GPUI_RENDER_ALLOW_MISSING_DXBC", None)
 
     def run(name, command):
         print(f"{name}: starting (log: {args.output / (name + '.log')})", flush=True)

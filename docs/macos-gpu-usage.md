@@ -233,7 +233,7 @@ far less energy.
      The numbers below predate both.
 
    Same build with partial redraw off (`GPUI_METAL_EXPERIMENTS=no-partial-redraw`,
-   now `GPUI_GPU_EXPERIMENTS=no-partial-redraw`) and on, 3 interleaved runs of each case, medians:
+   a switch since removed) and on, 3 interleaved runs of each case, medians:
 
    | Interaction | GPU per frame off | on | Whole-GPU power off | on |
    | --- | ---: | ---: | ---: | ---: |
@@ -348,8 +348,9 @@ Fixed in GitComet so far:
     it also compares every frame's retained texture with a full render
     (`gpui-damage-check`) and saves the first mismatch.
   - `GPUI_METAL_EXPERIMENTS` provided opt-outs; its `skip-*` and `opaque-rounded`
-    attribution switches went first, and gpui-ce `8066816f55` replaced the rest
-    with the shared `GPUI_GPU_EXPERIMENTS=no-partial-redraw`.
+    attribution switches went first, gpui-ce `8066816f55` replaced the rest
+    with the shared `GPUI_GPU_EXPERIMENTS=no-partial-redraw`, and `409338f77a`
+    removed that too.
 
 ## Next steps
 
