@@ -300,7 +300,7 @@ jobs:
       # exercises the pipeline.
       - name: Upload Windows Breakpad symbols
         if: ${{ needs.prepare.outputs.release_id != '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: symbols-${{ matrix.target_platform }}
           path: dist/symbols
@@ -311,7 +311,7 @@ jobs:
       # symbols for the binary that was built.
       - name: Upload Windows debug symbols
         if: ${{ needs.prepare.outputs.release_id != '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           # Deliberately not named `windows-release-artifacts-*`:
           # `publish_release_assets` globs that prefix into the published
@@ -426,7 +426,7 @@ jobs:
             -SignToolPath $env:SIGNTOOL_PATH
 
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-release-artifacts-${{ matrix.target_platform }}
           path: |
@@ -550,7 +550,7 @@ jobs:
       # Release-only; see the Breakpad symbol upload above.
       - name: Upload Linux Breakpad symbols
         if: ${{ needs.prepare.outputs.release_id != '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: symbols-${{ matrix.target_platform }}
           path: dist/symbols
@@ -607,7 +607,7 @@ jobs:
             --appimage-arch "${APPIMAGE_ARCH}" --appimagetool /tmp/appimagetool.AppImage --out dist
 
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-release-artifacts-${{ matrix.target_platform }}
           path: |
@@ -801,7 +801,7 @@ jobs:
       # Release-only; see the Breakpad symbol upload above.
       - name: Upload macOS Breakpad symbols
         if: ${{ needs.prepare.outputs.release_id != '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: symbols-${{ matrix.target_platform }}
           path: dist/symbols
@@ -841,7 +841,7 @@ jobs:
 
       - name: Upload macOS dSYM
         if: ${{ needs.prepare.outputs.release_id != '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-dsym-${{ matrix.target_platform }}
           path: ${{ runner.temp }}/gitcomet-dsym/gitcomet-${{ matrix.arch }}.dSYM.tar.gz
@@ -879,7 +879,7 @@ jobs:
           fi
 
       - name: Upload macOS artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-release-artifacts-${{ matrix.target_platform }}
           path: dist/*.dmg
@@ -1083,7 +1083,7 @@ jobs:
             "$sha_file"
 
       - name: Upload payload artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-payload
           path: dist/release/*
