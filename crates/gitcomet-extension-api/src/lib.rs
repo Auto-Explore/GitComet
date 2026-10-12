@@ -85,3 +85,7 @@ pub trait Extension: 'static {
         None
     }
 }
+
+mod startup;
+pub use gitcomet_core::commit_identity::{CommitIdentity, CommitIdentityResolver};
+pub use startup::{StartupContinuation, StartupWorkflow};

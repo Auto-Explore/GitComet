@@ -10,6 +10,10 @@ pub(in crate::view) struct MainPaneInit {
 }
 
 impl MainPaneView {
+    pub(in crate::view) fn external_editor_available(&self) -> bool {
+        self.extension_editor_available || crate::external_editor::configured_setting().is_some()
+    }
+
     pub(in crate::view) fn new(
         store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
@@ -322,6 +326,7 @@ impl MainPaneView {
             _ui_model_subscription: subscription,
             _text_selection_owner_subscription: text_selection_owner_subscription,
             root_view,
+            extension_editor_available: false,
             tooltip_host,
             notify_fingerprint: initial_fingerprint,
             active_context_menu_invoker: None,

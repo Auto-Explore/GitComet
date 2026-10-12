@@ -352,8 +352,10 @@ fn cancellation_during_registration_releases_setup_without_readiness_or_warning(
     let (_temp, root) = repository();
     let enabled = Arc::new(AtomicBool::new(true));
     let cancel = Arc::clone(&enabled);
-    let mut config = MonitorConfig::default();
-    config.before_registration = Some(Box::new(move || cancel.store(false, Ordering::Relaxed)));
+    let mut config = MonitorConfig {
+        before_registration: Some(Box::new(move || cancel.store(false, Ordering::Relaxed))),
+        ..Default::default()
+    };
     let (tx, _rx) = mpsc::channel();
     let mut state = MonitorState::default();
     assert!(matches!(
@@ -374,8 +376,10 @@ fn cancellation_during_registration_releases_setup_without_readiness_or_warning(
 #[test]
 fn readiness_failure_joins_a_panicked_worker_without_a_second_panic() {
     let (_temp, root) = repository();
-    let mut config = MonitorConfig::default();
-    config.before_registration = Some(Box::new(|| panic!("controlled registration failure")));
+    let config = MonitorConfig {
+        before_registration: Some(Box::new(|| panic!("controlled registration failure"))),
+        ..Default::default()
+    };
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         RunningMonitor::start_custom(&root, Arc::new(gitcomet_git_gix::GixBackend), config);
     }))

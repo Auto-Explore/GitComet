@@ -936,6 +936,7 @@ pub(super) fn schedule_commit(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     message: String,
+    identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
     auth: Option<StagedGitAuth>,
 ) {
     let context = message_subject(&message).or_else(|| Some("No commit message".to_string()));
@@ -946,7 +947,11 @@ pub(super) fn schedule_commit(
         repo_id,
         "Commit",
         context,
-        move |repo| run_with_git_auth(auth, || repo.commit_with_outcome(&message)),
+        move |repo| {
+            run_with_git_auth(auth, || {
+                repo.commit_with_identity(&message, identity.as_ref())
+            })
+        },
         |repo_id, result| InternalMsg::CommitFinished { repo_id, result },
     );
 }
@@ -957,6 +962,7 @@ pub(super) fn schedule_commit_amend(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     message: String,
+    identity: Option<gitcomet_core::commit_identity::CommitIdentity>,
     auth: Option<StagedGitAuth>,
 ) {
     let context = message_subject(&message).or_else(|| Some("No commit message".to_string()));
@@ -967,7 +973,11 @@ pub(super) fn schedule_commit_amend(
         repo_id,
         "Amend commit",
         context,
-        move |repo| run_with_git_auth(auth, || repo.commit_amend_with_outcome(&message)),
+        move |repo| {
+            run_with_git_auth(auth, || {
+                repo.commit_amend_with_identity(&message, identity.as_ref())
+            })
+        },
         |repo_id, result| InternalMsg::CommitAmendFinished { repo_id, result },
     );
 }

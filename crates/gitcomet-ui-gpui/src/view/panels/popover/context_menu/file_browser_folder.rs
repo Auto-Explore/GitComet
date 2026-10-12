@@ -107,7 +107,7 @@ pub(super) fn model(
             });
             // Same gate every other menu applies: without a configured editor the
             // entry can only ever produce a "not configured" error toast.
-            if crate::external_editor::configured_setting().is_some() {
+            if this.external_editor_available() {
                 items.push(ContextMenuItem::Entry {
                     label: "Open in code editor".into(),
                     icon: Some("icons/open_external.svg".into()),
