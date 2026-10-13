@@ -595,6 +595,7 @@ struct RunningMonitor {
     observations: Arc<NativeObservations>,
     callbacks_redirected: bool,
     enabled: Arc<AtomicBool>,
+    active_repo_id: Arc<AtomicU64>,
 }
 impl RunningMonitor {
     fn revalidate(&self) {
@@ -638,6 +639,8 @@ impl RunningMonitor {
         config.native_events = Some(native_events.clone());
         let enabled = Arc::new(AtomicBool::new(true));
         let thread_enabled = Arc::clone(&enabled);
+        let active_repo_id = Arc::new(AtomicU64::new(1));
+        let thread_active_repo_id = Arc::clone(&active_repo_id);
         let progress = Arc::new(std::sync::Mutex::new(StartupProgress::default()));
         config.startup_progress = Some(Arc::clone(&progress));
         let started = Instant::now();
@@ -648,7 +651,7 @@ impl RunningMonitor {
                 StoreWorkerSender::for_test_msg_sender(store_tx),
                 rx,
                 thread_tx,
-                Arc::new(AtomicU64::new(1)),
+                thread_active_repo_id,
                 thread_enabled,
                 backend,
                 config,
@@ -663,6 +666,7 @@ impl RunningMonitor {
             observations,
             callbacks_redirected,
             enabled,
+            active_repo_id,
         };
         let (ready_tx, ready_rx) = mpsc::channel();
         let ready = monitor

@@ -32,11 +32,15 @@ use executor::{
 #[cfg(feature = "benchmarks")]
 use reducer::fill_select_diff_inline;
 use reducer::{
-    fill_reorder_repo_tabs_inline, fill_set_active_repo_inline_reusing, fill_stage_path_inline,
+    fill_reorder_repo_tabs_inline, fill_set_active_repo_inline, fill_stage_path_inline,
     fill_stage_paths_inline, fill_unstage_path_inline, fill_unstage_paths_inline, reduce,
     reset_conflict_resolutions_inline, set_conflict_region_choice_inline,
 };
 use repo_monitor::RepoMonitorManager;
+use send_diagnostics::try_send_state_changed_or_log;
+use worker_channel::{StoreInstanceId, StoreWorkerCommand, StoreWorkerSender};
+
+pub use reducer_diagnostics::StoreReducerDiagnostics;
 
 /// Inactive repositories whose file monitors keep running, most recently
 /// active first. A macOS FSEvents stream is one recursive registration per
@@ -46,10 +50,27 @@ use repo_monitor::RepoMonitorManager;
 const WARM_INACTIVE_REPO_MONITORS: usize = 2;
 #[cfg(not(target_os = "macos"))]
 const WARM_INACTIVE_REPO_MONITORS: usize = 0;
-use send_diagnostics::try_send_state_changed_or_log;
-use worker_channel::{StoreInstanceId, StoreWorkerCommand, StoreWorkerSender};
 
-pub use reducer_diagnostics::StoreReducerDiagnostics;
+/// The `count` most recently active open tabs that are neither active nor
+/// leased, most recent first.
+fn warm_inactive_repos(state: &AppState, count: usize) -> Vec<RepoId> {
+    if count == 0 {
+        return Vec::new();
+    }
+    let mut recent: Vec<_> = state
+        .repos
+        .iter()
+        .filter(|repo| {
+            state.active_repo != Some(repo.id)
+                && !state.watch_leases.contains_key(&repo.id)
+                && matches!(repo.open, crate::model::Loadable::Ready(()))
+                && repo.last_active_at.is_some()
+        })
+        .collect();
+    recent.sort_by_key(|repo| std::cmp::Reverse(repo.last_active_at));
+    recent.truncate(count);
+    recent.into_iter().map(|repo| repo.id).collect()
+}
 
 // Executor trace labels need a static name; derive it once from the product identity.
 static WORKTREE_SCAN_THREAD_NAME: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
@@ -296,7 +317,7 @@ impl WorkerLoopContext<'_> {
             .active_repo
             .map(|id| id.0)
             .unwrap_or(0);
-        self.active_repo_id.store(active_value, Ordering::Relaxed);
+        self.active_repo_id.store(active_value, Ordering::SeqCst);
 
         try_send_state_changed_or_log(
             self.event_tx,
@@ -311,25 +332,14 @@ impl WorkerLoopContext<'_> {
         // a refresh when nothing changed (`unchanged_since_inactive`).
         let (active_repo, watched): (Option<RepoId>, Vec<(RepoId, std::path::PathBuf, bool)>) = {
             let state = self.thread_state.read().unwrap_or_else(|e| e.into_inner());
-            let mut recent: Vec<_> = state
-                .repos
-                .iter()
-                .filter(|repo| {
-                    state.active_repo != Some(repo.id)
-                        && !state.watch_leases.contains_key(&repo.id)
-                        && matches!(repo.open, crate::model::Loadable::Ready(()))
-                        && repo.last_active_at.is_some()
-                })
-                .collect();
-            recent.sort_by_key(|repo| std::cmp::Reverse(repo.last_active_at));
-            recent.truncate(WARM_INACTIVE_REPO_MONITORS);
+            let warm = warm_inactive_repos(&state, WARM_INACTIVE_REPO_MONITORS);
             let watched = state
                 .repos
                 .iter()
                 .filter(|repo| {
                     state.active_repo == Some(repo.id)
                         || state.watch_leases.contains_key(&repo.id)
-                        || recent.iter().any(|warm| warm.id == repo.id)
+                        || warm.contains(&repo.id)
                 })
                 .map(|repo| {
                     let leased = state.watch_leases.contains_key(&repo.id);
@@ -832,22 +842,31 @@ impl AppStore {
 
                 match msg {
                     Msg::SetActiveRepo { repo_id } => {
-                        let previous = worker_ctx
-                            .thread_state
-                            .read()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .active_repo;
-                        let unchanged = previous != Some(repo_id)
-                            && worker_ctx.repo_monitors.unchanged_since_inactive(repo_id);
-                        if let Some(previous) = previous.filter(|previous| *previous != repo_id) {
-                            worker_ctx.repo_monitors.mark_inactive(previous);
+                        let (previous, switching) = {
+                            let state = worker_ctx
+                                .thread_state
+                                .read()
+                                .unwrap_or_else(|e| e.into_inner());
+                            let known = state.repos.iter().any(|repo| repo.id == repo_id);
+                            (state.active_repo, known && state.active_repo != Some(repo_id))
+                        };
+                        if switching {
+                            if let Some(previous) = previous {
+                                worker_ctx.repo_monitors.mark_inactive(previous);
+                            }
+                            // Publish before reading the generation: a flush
+                            // racing this switch has either moved it already
+                            // or sees `repo_id` active and delivers.
+                            worker_ctx.active_repo_id.store(repo_id.0, Ordering::SeqCst);
                         }
+                        let unchanged = switching
+                            && worker_ctx.repo_monitors.unchanged_since_inactive(repo_id);
                         worker_ctx.reduce_and_handle(
                             &mut repos,
                             &id_alloc,
                             |app_state, repos, _| {
                                 let mut effects = reducer::SetActiveRepoEffects::new();
-                                fill_set_active_repo_inline_reusing(
+                                fill_set_active_repo_inline(
                                     repos,
                                     app_state,
                                     repo_id,
@@ -1175,7 +1194,7 @@ pub(crate) fn with_set_active_repo_inline_for_bench<T>(
 ) -> T {
     let repos = FxHashMap::default();
     let mut effects = reducer::SetActiveRepoEffects::new();
-    reducer::fill_set_active_repo_inline(&repos, state, repo_id, &mut effects);
+    fill_set_active_repo_inline(&repos, state, repo_id, false, &mut effects);
     f(state, &effects)
 }
 

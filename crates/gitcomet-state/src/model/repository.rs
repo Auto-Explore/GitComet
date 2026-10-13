@@ -191,6 +191,10 @@ pub struct RepoState {
     /// command *starts*, which would spend the signal before the disk changed.
     pub local_worktree_write_rev: u64,
     pub last_active_at: Option<SystemTime>,
+    /// The tab was left with loads or a diff reload in flight. Leaving
+    /// cancelled them, so the values they were replacing stay stale until the
+    /// tab is refreshed on its next activation.
+    pub left_mid_refresh: bool,
 
     pub feedback: RepoFeedbackState,
     pub pending: RepoPendingState,
@@ -344,6 +348,7 @@ impl RepoState {
             change_lists: Arc::default(),
             local_worktree_write_rev: 0,
             last_active_at: None,
+            left_mid_refresh: false,
             feedback: RepoFeedbackState::default(),
             pending: RepoPendingState::default(),
             load_epoch: 0,

@@ -842,7 +842,7 @@ pub(super) fn set_active_repo(
     repo_id: RepoId,
 ) -> Vec<Effect> {
     let mut effects = SetActiveRepoEffects::new();
-    fill_set_active_repo_inline(repos, state, repo_id, &mut effects);
+    fill_set_active_repo_inline(repos, state, repo_id, false, &mut effects);
     effects.into_vec()
 }
 
@@ -864,25 +864,18 @@ pub(super) fn fill_set_active_repo_inline(
     repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
     state: &mut AppState,
     repo_id: RepoId,
-    effects: &mut SetActiveRepoEffects,
-) {
-    fill_set_active_repo_inline_impl(repos, state, repo_id, effects, true, false);
-}
-
-pub(super) fn fill_set_active_repo_inline_reusing(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
-    state: &mut AppState,
-    repo_id: RepoId,
     unchanged: bool,
     effects: &mut SetActiveRepoEffects,
 ) {
     fill_set_active_repo_inline_impl(repos, state, repo_id, effects, true, unchanged);
 }
 
-/// Everything a switch would reload is loaded and nothing for the repository
-/// is in flight, so its retained state can be shown as is.
+/// Everything a switch would reload is loaded, nothing for the repository is
+/// in flight and nothing was cancelled when it was left, so its retained state
+/// can be shown as is.
 fn repo_switch_state_complete(repo_state: &RepoState, git_log_settings: GitLogSettings) -> bool {
-    repo_switch_secondary_metadata_ready(repo_state, git_log_settings)
+    !repo_state.left_mid_refresh
+        && repo_switch_secondary_metadata_ready(repo_state, git_log_settings)
         && matches!(repo_state.head_branch, Loadable::Ready(_))
         && matches!(repo_state.upstream_divergence, Loadable::Ready(_))
         && matches!(repo_state.status, Loadable::Ready(_))
@@ -919,8 +912,16 @@ fn fill_set_active_repo_inline_impl(
         // attached to it. Refresh its retained path before capturing the diff
         // reload plan below.
         super::refresh_selected_head_gitlink(repos, state, repo_id);
-    }
-    if changed {
+        // Leaving cancels whatever is in flight, but keeps the values it was
+        // about to replace.
+        if let Some(previous) = state
+            .repos
+            .iter_mut()
+            .find(|repo| Some(repo.id) == previous_active)
+        {
+            previous.left_mid_refresh = previous.loads_in_flight.any_in_flight()
+                || previous.diff_state.diff_reload_in_flight;
+        }
         append_cancel_loads_for_deactivated_repo(state, previous_active, effects);
     }
     if changed && state.git_log_settings.verify_commit_signatures {
@@ -997,6 +998,7 @@ fn fill_set_active_repo_inline_impl(
     // would load again. The retained diff is current for the same reason.
     let reuse_retained =
         changed && unchanged && repo_switch_state_complete(repo_state, git_log_settings);
+    repo_state.left_mid_refresh = false;
     let use_full_refresh = changed
         && !reuse_retained
         && !repo_switch_can_use_primary_refresh(repo_state, git_log_settings, now);

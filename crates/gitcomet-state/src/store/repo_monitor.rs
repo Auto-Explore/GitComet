@@ -356,6 +356,8 @@ impl RepoMonitorManager {
         };
         self.handles.get(&repo_id).is_some_and(|handle| {
             handle.monitor_enabled.load(Ordering::Relaxed)
+                // A panicked monitor flushes nothing.
+                && !handle.join.is_finished()
                 && !handle.degraded.load(Ordering::SeqCst)
                 && handle.change_generation.load(Ordering::SeqCst) == mark
         })
@@ -526,6 +528,13 @@ impl RepoMonitorManager {
             handle.change_generation.fetch_add(1, Ordering::SeqCst);
         }
     }
+
+    #[cfg(test)]
+    pub(super) fn set_degraded_for_test(&self, repo_id: RepoId, degraded: bool) {
+        if let Some(handle) = self.handles.get(&repo_id) {
+            handle.degraded.store(degraded, Ordering::SeqCst);
+        }
+    }
 }
 
 struct RepoMonitorHandle {
@@ -627,6 +636,7 @@ fn note_watch_outcome(
     msg_tx: &StoreWorkerSender,
     repo_id: RepoId,
     previously_degraded: &mut bool,
+    degraded_flag: &AtomicBool,
     outcome: WatchSetupOutcome,
 ) {
     if let Some(reason) = watch_degraded_transition(previously_degraded, outcome) {
@@ -635,6 +645,7 @@ fn note_watch_outcome(
             "repo monitor watch degraded",
         );
     }
+    degraded_flag.store(*previously_degraded, Ordering::SeqCst);
 }
 
 /// While degraded (worktree over budget), re-check for recovery at most this often rather than on
