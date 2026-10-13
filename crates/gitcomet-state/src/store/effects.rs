@@ -1528,16 +1528,22 @@ pub(super) fn schedule_effect(
         Effect::Commit {
             repo_id,
             message,
+            identity,
             auth,
         } => {
-            repo_actions::schedule_commit(executor, repos, msg_tx, repo_id, message, auth);
+            repo_actions::schedule_commit(
+                executor, repos, msg_tx, repo_id, message, identity, auth,
+            );
         }
         Effect::CommitAmend {
             repo_id,
             message,
+            identity,
             auth,
         } => {
-            repo_actions::schedule_commit_amend(executor, repos, msg_tx, repo_id, message, auth);
+            repo_actions::schedule_commit_amend(
+                executor, repos, msg_tx, repo_id, message, identity, auth,
+            );
         }
         Effect::SafePushAfterCommit {
             repo_id,

@@ -629,10 +629,29 @@ pub(super) fn run_windowed_app(
         bind_text_input_keys(cx);
         bind_terminal_keys(cx);
 
-        open_initial_gitcomet_windows(cx, Arc::clone(&backend), &launch);
-        crate::view::scenario_driver::start_if_requested(cx);
-
-        cx.activate(true);
+        let launch_is_normal = launch.view_config.view_mode == GitCometViewMode::Normal;
+        let resume = move |cx: &mut App| {
+            open_initial_gitcomet_windows(cx, Arc::clone(&backend), &launch);
+            crate::view::scenario_driver::start_if_requested(cx);
+            cx.activate(true);
+        };
+        let workflows: Vec<_> = crate::view::extension_host::registry(cx)
+            .filter(|_| launch_is_normal)
+            .map(|registry| {
+                registry
+                    .startup_workflows()
+                    .iter()
+                    .map(|(_, workflow)| workflow.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut next: Box<dyn FnOnce(&mut App)> = Box::new(resume);
+        for workflow in workflows.into_iter().rev() {
+            next = Box::new(move |cx| {
+                workflow(gitcomet_extension_api::StartupContinuation::new(next), cx)
+            });
+        }
+        next(cx);
     });
 }
 
@@ -978,4 +997,22 @@ pub(crate) fn ensure_graphics_device_available(
     _context: &'static str,
 ) -> Result<(), UiLaunchError> {
     Ok(())
+}
+
+/// Opens a fresh workspace on behalf of an extension. The returned handle is
+/// weak and the normal repository entry gates apply to each path.
+pub(crate) fn open_extension_workspace(
+    paths: Vec<PathBuf>,
+    cx: &mut App,
+) -> Result<gitcomet_extension_api::WindowHost, gitcomet_extension_api::HostError> {
+    let backend = cx
+        .try_global::<GitCometBackendGlobal>()
+        .ok_or(gitcomet_extension_api::HostError::Unsupported)?
+        .0
+        .clone();
+    let launch = normal_empty_launch_config(None);
+    let window = open_gitcomet_window(cx, backend, &launch);
+    window
+        .update(cx, |view, _, _| view.extension_open_repositories(paths))
+        .map_err(|_| gitcomet_extension_api::HostError::WindowClosed)?
 }

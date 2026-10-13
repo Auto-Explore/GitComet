@@ -195,7 +195,7 @@ impl GitCometView {
         });
         command_palette::PaletteContext {
             has_active_repo: repo.is_some(),
-            external_editor: crate::external_editor::configured_setting().is_some(),
+            external_editor: self.effective_external_editor().is_some(),
             merging: repo.is_some_and(merge_in_progress),
             sequencer: repo.is_some_and(|repo| {
                 active_sequencer_state(repo) != gitcomet_core::services::SequencerState::None
@@ -971,7 +971,6 @@ impl GitCometView {
         source_bounds: Bounds<Pixels>,
         items: Arc<[HistoryRefListItem]>,
         pointer: Point<Pixels>,
-        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         // Don't surface the refs hover while an overlay (popover, dialog, or
@@ -984,15 +983,7 @@ impl GitCometView {
             return;
         }
         self.history_refs_hover_host.update(cx, |host, cx| {
-            host.show(
-                repo_id,
-                commit_id,
-                source_bounds,
-                items,
-                pointer,
-                window,
-                cx,
-            )
+            host.show(repo_id, commit_id, source_bounds, items, pointer, cx)
         });
     }
 
@@ -2040,6 +2031,8 @@ impl GitCometView {
             startup_crash_report,
             #[cfg(target_os = "macos")]
             recent_repos_menu_fingerprint: ui_session.recent_repos.clone(),
+            #[cfg(target_os = "macos")]
+            recent_repos_session_stamp: None,
             auth_prompt_username_input,
             auth_prompt_secret_input,
             auth_prompt_key: None,
@@ -3008,6 +3001,15 @@ impl GitCometView {
         }
     }
 
+    pub(in crate::view) fn effective_external_editor(
+        &self,
+    ) -> Option<gitcomet_state::session::ExternalCodeEditorSetting> {
+        self.extension_window
+            .as_ref()
+            .and_then(|window| window.external_editor())
+            .or_else(crate::external_editor::configured_setting)
+    }
+
     pub(in crate::view) fn open_path_in_external_code_editor(
         &mut self,
         path: std::path::PathBuf,
@@ -3022,7 +3024,11 @@ impl GitCometView {
             return;
         }
 
-        let command = match crate::external_editor::launch_command_for_configured_editor(&path) {
+        let command = match self
+            .effective_external_editor()
+            .ok_or(crate::external_editor::ExternalEditorError::NotConfigured)
+            .and_then(|setting| crate::external_editor::launch_command_for_setting(&setting, &path))
+        {
             Ok(command) => command,
             Err(err) => {
                 self.push_toast(

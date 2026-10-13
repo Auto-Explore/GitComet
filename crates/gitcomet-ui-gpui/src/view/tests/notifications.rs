@@ -124,15 +124,6 @@ fn reporting_startup_crash_keeps_report_and_notification(cx: &mut gpui::TestAppC
 }
 
 #[test]
-fn toast_total_lifetime_includes_fade_in_and_out() {
-    let ttl = Duration::from_secs(6);
-    assert_eq!(
-        toast_total_lifetime(ttl),
-        ttl + Duration::from_millis(TOAST_FADE_IN_MS + TOAST_FADE_OUT_MS)
-    );
-}
-
-#[test]
 fn worktree_tooltip_includes_branch_name() {
     let mut repo = RepoState::new_opening(
         RepoId(1),

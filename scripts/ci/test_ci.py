@@ -369,12 +369,12 @@ class LiveUiMeasurementTests(unittest.TestCase):
 
     def test_quiet_gate_waits_for_the_load_to_drop(self):
         loads = iter([["9.0", "5", "5"], ["4.0", "5", "5"], ["1.5", "5", "5"]])
-        with patch.object(live_ui, "load_average", lambda: next(loads)), \
+        with patch.object(live_ui.perf_platform, "load_average", lambda: next(loads)), \
                 patch.object(live_ui.time, "sleep", lambda _: None):
             live_ui.wait_for_quiet(2.0)
         with self.assertRaises(StopIteration):
             next(loads)
-        with patch.object(live_ui, "load_average", lambda: ["9.0", "5", "5"]), \
+        with patch.object(live_ui.perf_platform, "load_average", lambda: ["9.0", "5", "5"]), \
                 patch.object(live_ui.time, "sleep", lambda _: None), \
                 self.assertRaises(TimeoutError):
             live_ui.wait_for_quiet(2.0, timeout_s=0)

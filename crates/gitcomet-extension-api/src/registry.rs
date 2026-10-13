@@ -80,6 +80,7 @@ pub struct Registrar {
     entry_gates: Vec<(ContributionId, RepositoryEntryGate)>,
     window_gates: Vec<(ContributionId, WindowGateDescriptor)>,
     close_guards: Vec<(ContributionId, CloseGuard)>,
+    startup_workflows: Vec<(ContributionId, crate::StartupWorkflow)>,
     errors: Vec<String>,
 }
 
@@ -106,6 +107,7 @@ impl Registrar {
             entry_gates: Vec::new(),
             window_gates: Vec::new(),
             close_guards: Vec::new(),
+            startup_workflows: Vec::new(),
             errors: Vec::new(),
         }
     }
@@ -351,6 +353,19 @@ impl Registrar {
         self
     }
 
+    /// Runs once in a normal cold launch, before saved workspaces are read.
+    /// Focused tool windows and forwarded requests do not run this workflow.
+    pub fn startup_workflow(
+        &mut self,
+        local: impl Into<Cow<'static, str>>,
+        workflow: crate::StartupWorkflow,
+    ) -> &mut Self {
+        if let Some(id) = self.id(local) {
+            self.startup_workflows.push((id, workflow));
+        }
+        self
+    }
+
     pub fn close_guard(
         &mut self,
         local: impl Into<Cow<'static, str>>,
@@ -388,6 +403,7 @@ pub struct Registry {
     entry_gates: Vec<(ContributionId, RepositoryEntryGate)>,
     window_gates: Vec<(ContributionId, WindowGateDescriptor)>,
     close_guards: Vec<(ContributionId, CloseGuard)>,
+    startup_workflows: Vec<(ContributionId, crate::StartupWorkflow)>,
 }
 
 impl Registry {
@@ -448,6 +464,9 @@ impl Registry {
             registry.entry_gates.extend(registrar.entry_gates);
             registry.window_gates.extend(registrar.window_gates);
             registry.close_guards.extend(registrar.close_guards);
+            registry
+                .startup_workflows
+                .extend(registrar.startup_workflows);
         }
 
         fn duplicates<'a>(
@@ -504,6 +523,10 @@ impl Registry {
             (
                 "entry gate",
                 duplicates(registry.entry_gates.iter().map(|(id, _)| id)),
+            ),
+            (
+                "startup workflow",
+                duplicates(registry.startup_workflows.iter().map(|(id, _)| id)),
             ),
             (
                 "close guard",
@@ -690,6 +713,10 @@ impl Registry {
 
     pub fn entry_gates(&self) -> &[(ContributionId, RepositoryEntryGate)] {
         &self.entry_gates
+    }
+
+    pub fn startup_workflows(&self) -> &[(ContributionId, crate::StartupWorkflow)] {
+        &self.startup_workflows
     }
 
     pub fn close_guards(&self) -> &[(ContributionId, CloseGuard)] {

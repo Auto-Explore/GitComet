@@ -1461,6 +1461,35 @@ pub trait GitRepository: Send + Sync {
         Ok(CommitOperationOutcome::default())
     }
 
+    /// Identity override for this operation. Existing implementations remain
+    /// compatible and refuse overrides until they implement this method.
+    fn commit_with_identity(
+        &self,
+        message: &str,
+        identity: Option<&crate::commit_identity::CommitIdentity>,
+    ) -> Result<CommitOperationOutcome> {
+        if identity.is_some() {
+            return Err(Error::new(ErrorKind::Unsupported(
+                "operation commit identity is not supported by this backend",
+            )));
+        }
+        self.commit_with_outcome(message)
+    }
+    /// Git retains the original author when amending; the override selects the
+    /// committer. No repository configuration is written.
+    fn commit_amend_with_identity(
+        &self,
+        message: &str,
+        identity: Option<&crate::commit_identity::CommitIdentity>,
+    ) -> Result<CommitOperationOutcome> {
+        if identity.is_some() {
+            return Err(Error::new(ErrorKind::Unsupported(
+                "operation commit identity is not supported by this backend",
+            )));
+        }
+        self.commit_amend_with_outcome(message)
+    }
+
     fn rebase_with_output(&self, _onto: &str) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "git rebase is not implemented for this backend",

@@ -88,9 +88,10 @@ class ReportingTests(unittest.TestCase):
         self.assertEqual(perf_report.findings(result), [])
 
     def test_unsupported_headless_mode_does_not_silently_use_the_desktop(self):
-        with patch.object(live.platform, "system", return_value="Windows"):
-            with self.assertRaisesRegex(ValueError, "Headless captures require Linux"):
-                live.run_once(Path("app"), Path("repo"), "startup", Path("unused"), 1)
+        for system in ("Windows", "Darwin"):
+            with self.subTest(system=system), patch.object(live.platform, "system", return_value=system):
+                with self.assertRaisesRegex(ValueError, "Headless captures require Linux"):
+                    live.run_once(Path("app"), Path("repo"), "startup", Path("unused"), 1)
 
     def test_profiler_loss_or_missing_quality_is_not_a_valid_capture(self):
         self.assertTrue(perf_report.perf_quality("# Total Lost Samples: 0\n")["valid"])

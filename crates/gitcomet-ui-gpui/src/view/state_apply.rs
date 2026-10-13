@@ -592,9 +592,12 @@ impl GitCometView {
             for path in newly_opened_repo_paths(&self.state, next.as_ref()) {
                 cx.add_recent_document(&path);
             }
-            let recent_repos = session::load().recent_repos;
-            if self.recent_repos_menu_fingerprint != recent_repos {
-                self.recent_repos_menu_fingerprint = recent_repos;
+            // Every publication lands here; re-read the session file (a read
+            // and JSON parse on the UI thread) only after it was written.
+            if let Some(loaded) = session::load_if_changed(&mut self.recent_repos_session_stamp)
+                && self.recent_repos_menu_fingerprint != loaded.recent_repos
+            {
+                self.recent_repos_menu_fingerprint = loaded.recent_repos;
                 crate::app::refresh_macos_app_menus(cx);
             }
         }

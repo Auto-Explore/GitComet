@@ -13,10 +13,6 @@ pub(super) fn toast_fade_out_duration() -> Duration {
     Duration::from_millis(TOAST_FADE_OUT_MS)
 }
 
-pub(super) fn toast_total_lifetime(ttl: Duration) -> Duration {
-    toast_fade_in_duration() + ttl + toast_fade_out_duration()
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::view) struct SelectedBranch {
     pub(in crate::view) repo_id: RepoId,
@@ -1247,6 +1243,9 @@ pub struct GitCometView {
     pub(super) startup_crash_report: Option<StartupCrashReport>,
     #[cfg(target_os = "macos")]
     pub(super) recent_repos_menu_fingerprint: Vec<std::path::PathBuf>,
+    /// Session file stamp when `recent_repos_menu_fingerprint` was last read.
+    #[cfg(target_os = "macos")]
+    pub(super) recent_repos_session_stamp: Option<gitcomet_state::session::SessionFileStamp>,
 
     pub(super) auth_prompt_username_input: Entity<components::TextInput>,
     pub(super) auth_prompt_secret_input: Entity<components::TextInput>,

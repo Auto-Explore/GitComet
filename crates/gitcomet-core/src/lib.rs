@@ -45,3 +45,5 @@ pub mod test_support;
 pub mod tag_push;
 
 pub mod history_perf;
+
+pub mod commit_identity;

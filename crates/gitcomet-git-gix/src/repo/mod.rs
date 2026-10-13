@@ -1542,6 +1542,21 @@ impl GitRepository for GixRepo {
         self.commit_amend_with_outcome_impl(message)
     }
 
+    fn commit_with_identity(
+        &self,
+        message: &str,
+        identity: Option<&gitcomet_core::commit_identity::CommitIdentity>,
+    ) -> Result<CommitOperationOutcome> {
+        self.commit_with_identity_impl(message, identity, false)
+    }
+    fn commit_amend_with_identity(
+        &self,
+        message: &str,
+        identity: Option<&gitcomet_core::commit_identity::CommitIdentity>,
+    ) -> Result<CommitOperationOutcome> {
+        self.commit_with_identity_impl(message, identity, true)
+    }
+
     fn fetch_all(&self) -> Result<()> {
         self.fetch_all_impl(true)
     }

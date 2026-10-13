@@ -1481,6 +1481,9 @@ fn refreshes_shorter_than_the_spinner_delay_leave_the_chrome_alone(cx: &mut gpui
     cx.update(|_window, app| {
         let tabs = view.read(app).repo_tabs_bar.clone();
         tabs.update(app, |tabs, _| tabs.use_spinner_delay_for_tests());
+        // A static spinner: its frame-rate-capped animation notifies the tab
+        // bar on a timer, which this count of chrome notifications excludes.
+        app.set_reduce_motion(true);
     });
     publish(&idle, cx);
     test_support::redraw(cx);

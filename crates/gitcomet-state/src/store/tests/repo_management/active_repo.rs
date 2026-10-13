@@ -1366,6 +1366,7 @@ fn set_active_repo_inline_retires_the_activated_worktrees_orphaned_diff() {
         &repos,
         &mut state,
         target_repo,
+        false,
         &mut effects,
     );
 
@@ -1414,6 +1415,7 @@ fn set_active_repo_inline_folds_the_reset_selection_into_navigation_tail() {
         &repos,
         &mut state,
         target_repo,
+        false,
         &mut effects,
     );
 
@@ -1515,6 +1517,7 @@ fn set_active_repo_inline_realigns_a_mid_stack_reset_before_new_navigation() {
         &repos,
         &mut state,
         target_repo,
+        false,
         &mut effects,
     );
 
@@ -2237,4 +2240,149 @@ fn set_active_repo_skips_file_browser_load_in_branches_mode() {
             .any(|effect| matches!(effect, Effect::LoadFileBrowser { .. })),
         "expected no file browser load while the Branches sidebar is showing"
     );
+}
+
+/// Everything a tab switch would reload, already loaded.
+fn mark_switch_state_complete(state: &mut AppState, repo_id: RepoId) {
+    let repo = state
+        .repos
+        .iter_mut()
+        .find(|repo| repo.id == repo_id)
+        .expect("repo exists");
+    repo.head_branch = Loadable::Ready("main".to_string());
+    repo.upstream_divergence = Loadable::Ready(None);
+    repo.branches = Loadable::Ready(Arc::new(Vec::new()));
+    repo.tags = Loadable::Ready(Arc::new(Vec::new()));
+    repo.remotes = Loadable::Ready(Arc::new(Vec::new()));
+    repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+    repo.stashes = Loadable::Ready(Arc::new(Vec::new()));
+    repo.rebase_in_progress = Loadable::Ready(false);
+    repo.merge_commit_message = Loadable::Ready(None);
+    repo.worktrees = Loadable::Ready(Arc::new(Vec::new()));
+    repo.set_status(Loadable::Ready(Arc::new(RepoStatus::default())));
+    repo.set_log(Loadable::Ready(Arc::new(LogPage {
+        commits: Vec::new(),
+        next_cursor: None,
+    })));
+    repo.loads_in_flight = Default::default();
+}
+
+/// The repository reloads a tab switch can start.
+fn switch_reloads(effects: &[Effect]) -> Vec<&'static str> {
+    effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::LoadStatus { .. } => Some("status"),
+            Effect::LoadLog { .. } => Some("log"),
+            Effect::LoadHeadBranch { .. } => Some("head"),
+            Effect::LoadUpstreamDivergence { .. } => Some("upstream"),
+            Effect::LoadBranches { .. } => Some("branches"),
+            Effect::LoadWorktrees { .. } => Some("worktrees"),
+            _ => None,
+        })
+        .collect()
+}
+
+fn switch_to(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    unchanged: bool,
+) -> Vec<Effect> {
+    let mut effects = crate::store::reducer::SetActiveRepoEffects::new();
+    crate::store::reducer::fill_set_active_repo_inline(
+        repos,
+        state,
+        repo_id,
+        unchanged,
+        &mut effects,
+    );
+    effects.into_vec()
+}
+
+#[test]
+fn switching_to_a_tab_whose_monitor_saw_no_change_reuses_its_state() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let target = open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
+    mark_switch_state_complete(&mut state, target);
+
+    let effects = switch_to(&repos, &mut state, target, true);
+
+    assert_eq!(state.active_repo, Some(target));
+    assert!(
+        switch_reloads(&effects).is_empty(),
+        "an unchanged, fully loaded tab needs no reloads: {effects:?}"
+    );
+}
+
+#[test]
+fn switching_to_a_changed_or_incomplete_tab_still_refreshes() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let target = open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    let other = open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
+
+    // The monitor saw a change.
+    mark_switch_state_complete(&mut state, target);
+    let effects = switch_to(&repos, &mut state, target, false);
+    let reloads = switch_reloads(&effects);
+    assert!(
+        reloads.contains(&"status") && reloads.contains(&"log"),
+        "a changed tab refreshes: {reloads:?}"
+    );
+
+    // Unchanged, but its status never finished loading.
+    switch_to(&repos, &mut state, other, false);
+    mark_switch_state_complete(&mut state, target);
+    state
+        .repos
+        .iter_mut()
+        .find(|repo| repo.id == target)
+        .expect("repo exists")
+        .set_status(Loadable::NotLoaded);
+    let effects = switch_to(&repos, &mut state, target, true);
+    assert!(
+        switch_reloads(&effects).contains(&"status"),
+        "an incomplete tab refreshes: {effects:?}"
+    );
+}
+
+#[test]
+fn a_tab_left_mid_refresh_refreshes_when_it_comes_back() {
+    for diff_reload in [false, true] {
+        let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+        let id_alloc = AtomicU64::new(1);
+        let mut state = AppState::test_default();
+        let target = open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+        let other = open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
+        switch_to(&repos, &mut state, target, false);
+        mark_switch_state_complete(&mut state, target);
+        let repo = state
+            .repos
+            .iter_mut()
+            .find(|repo| repo.id == target)
+            .expect("repo exists");
+        if diff_reload {
+            repo.diff_state.diff_reload_in_flight = true;
+        } else {
+            assert!(
+                repo.loads_in_flight
+                    .request(RepoLoadsInFlight::WORKTREE_STATUS)
+            );
+        }
+
+        // Leaving cancels the refresh but keeps the values it was replacing, so
+        // they are stale although the monitor reports no change afterwards.
+        switch_to(&repos, &mut state, other, false);
+        let effects = switch_to(&repos, &mut state, target, true);
+        let reloads = switch_reloads(&effects);
+        assert!(
+            reloads.contains(&"status") && reloads.contains(&"log"),
+            "a tab left mid-refresh (diff reload: {diff_reload}) refreshes: {reloads:?}"
+        );
+    }
 }

@@ -2,10 +2,9 @@
 
 ## GPUI text storage
 
-GPUI is pinned to Havunen/gpui-ce revision
-`d0e01e8854d87ff749168b84ab16566b1e1919b6` in the root workspace manifest.
-This revision stores shaped-line decorations in the shared layout instead of
-reserving 32 decoration runs in every shaped line. It supersedes the compact
+The root workspace manifest pins GPUI to a Havunen/gpui-ce revision. Since
+`d0e01e8854` it stores shaped-line decorations in the shared layout instead of
+reserving 32 decoration runs in every shaped line. That superseded the compact
 text-storage patch previously vendored in `gpui/`, so that crate and the Cargo
 patch are no longer needed. Platform, renderer and test text-backend crates use
 the same upstream revision.

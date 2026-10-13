@@ -14,6 +14,7 @@ pub(super) fn model(
     lines_count: usize,
     copy_text: &Option<String>,
     copy_target: Option<(usize, DiffTextRegion)>,
+    editor_available: bool,
 ) -> ContextMenuModel {
     let title: SharedString = path
         .as_ref()
@@ -132,7 +133,7 @@ pub(super) fn model(
                 path: path.clone(),
             }),
         });
-        if crate::external_editor::configured_setting().is_some() {
+        if editor_available {
             items.push(ContextMenuItem::Entry {
                 label: "Open in code editor".into(),
                 icon: Some("icons/open_external.svg".into()),

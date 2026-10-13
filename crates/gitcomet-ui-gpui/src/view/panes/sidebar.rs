@@ -1997,6 +1997,23 @@ impl SidebarPaneView {
         self.render_sidebar_search(false, theme, cx)
     }
 
+    pub(in crate::view) fn set_extension_branch_search(
+        &mut self,
+        query: String,
+        options: TextSearchOptions,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.branch_search_options = options;
+        self.branch_filter_query = query.clone();
+        self.branch_filter_input
+            .update(cx, |input, cx| input.set_text(query, cx));
+        self.branch_search_open = !self.branch_filter_query.is_empty();
+        self.sidebar_presentation_cache = SidebarPresentationCache::default();
+        self.sticky_context = None;
+        self.sync_popover_branch_filter(cx);
+        cx.notify();
+    }
+
     fn clear_branch_filter(&mut self, cx: &mut gpui::Context<Self>) {
         self.branch_filter_input.update(cx, |input, cx| {
             input.set_text("", cx);
@@ -3290,6 +3307,7 @@ impl Render for SidebarPaneView {
         if self.explorer_name_edit.is_some() {
             let height = ui_scale::UiScale::current(cx).px(sidebar_list_row_height_px(self.theme));
             self.explorer_name_input.update(cx, |input, cx| {
+                input.set_theme(self.theme, cx);
                 input.set_line_height(Some(height - px(4.0)), cx)
             });
             if self

@@ -1065,14 +1065,32 @@ impl GixRepo {
     }
 
     pub(super) fn commit_impl(&self, message: &str) -> Result<()> {
+        self.commit_identity_impl(message, None, false)
+    }
+
+    fn commit_identity_impl(
+        &self,
+        message: &str,
+        identity: Option<&gitcomet_core::commit_identity::CommitIdentity>,
+        amend: bool,
+    ) -> Result<()> {
         let merge_in_progress = self.merge_in_progress_for_commit()?;
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("commit");
+        if amend {
+            self.refuse_amending_annex_adjustment()?;
+            cmd.arg("--amend");
+        }
+        if let Some(identity) = identity {
+            identity.apply(&mut cmd)?;
+        }
         if merge_in_progress {
             cmd.arg("--allow-empty");
         }
         cmd.arg("-m").arg(message);
-        let label = if merge_in_progress {
+        let label = if amend {
+            "git commit --amend"
+        } else if merge_in_progress {
             "git commit --allow-empty"
         } else {
             "git commit"
@@ -1098,10 +1116,24 @@ impl GixRepo {
     }
 
     pub(super) fn commit_amend_impl(&self, message: &str) -> Result<()> {
-        self.refuse_amending_annex_adjustment()?;
-        let mut cmd = self.git_workdir_cmd();
-        cmd.arg("commit").arg("--amend").arg("-m").arg(message);
-        run_git_simple(cmd, "git commit --amend")
+        self.commit_identity_impl(message, None, true)
+    }
+
+    pub(super) fn commit_with_identity_impl(
+        &self,
+        message: &str,
+        identity: Option<&gitcomet_core::commit_identity::CommitIdentity>,
+        amend: bool,
+    ) -> Result<CommitOperationOutcome> {
+        let local_branch = self.current_branch_name_for_outcome()?;
+        let pre_head = self.head_commit_id_for_outcome()?;
+        self.commit_identity_impl(message, identity, amend)?;
+        let post_head = self.head_commit_id_for_outcome()?;
+        Ok(CommitOperationOutcome {
+            local_branch,
+            pre_head,
+            post_head,
+        })
     }
 
     pub(super) fn commit_amend_with_outcome_impl(

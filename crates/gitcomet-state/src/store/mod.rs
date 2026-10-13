@@ -42,6 +42,36 @@ use worker_channel::{StoreInstanceId, StoreWorkerCommand, StoreWorkerSender};
 
 pub use reducer_diagnostics::StoreReducerDiagnostics;
 
+/// Inactive repositories whose file monitors keep running, most recently
+/// active first. A macOS FSEvents stream is one recursive registration per
+/// root, so a warm monitor costs little; inotify registers every directory,
+/// so elsewhere only the active repository is watched.
+#[cfg(target_os = "macos")]
+const WARM_INACTIVE_REPO_MONITORS: usize = 2;
+#[cfg(not(target_os = "macos"))]
+const WARM_INACTIVE_REPO_MONITORS: usize = 0;
+
+/// The `count` most recently active open tabs that are neither active nor
+/// leased, most recent first.
+fn warm_inactive_repos(state: &AppState, count: usize) -> Vec<RepoId> {
+    if count == 0 {
+        return Vec::new();
+    }
+    let mut recent: Vec<_> = state
+        .repos
+        .iter()
+        .filter(|repo| {
+            state.active_repo != Some(repo.id)
+                && !state.watch_leases.contains_key(&repo.id)
+                && matches!(repo.open, crate::model::Loadable::Ready(()))
+                && repo.last_active_at.is_some()
+        })
+        .collect();
+    recent.sort_by_key(|repo| std::cmp::Reverse(repo.last_active_at));
+    recent.truncate(count);
+    recent.into_iter().map(|repo| repo.id).collect()
+}
+
 // Executor trace labels need a static name; derive it once from the product identity.
 static WORKTREE_SCAN_THREAD_NAME: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     format!(
@@ -174,7 +204,14 @@ fn selection_index_builds_for_test() -> usize {
 
 /// Per-message scratch context for the store worker loop: the shared handles
 /// for the reduce-then-handle skeleton plus the effect dispatch machinery.
+#[cfg(test)]
+static EMPTY_TEST_COMMIT_IDENTITY: std::sync::LazyLock<
+    Arc<RwLock<Option<gitcomet_core::commit_identity::CommitIdentityResolver>>>,
+> = std::sync::LazyLock::new(|| Arc::new(RwLock::new(None)));
+
 struct WorkerLoopContext<'a> {
+    commit_identity:
+        &'a Arc<RwLock<Option<gitcomet_core::commit_identity::CommitIdentityResolver>>>,
     thread_state: &'a Arc<RwLock<Arc<AppState>>>,
     active_repo_id: &'a Arc<AtomicU64>,
     event_tx: &'a smol::channel::Sender<StoreEvent>,
@@ -280,7 +317,7 @@ impl WorkerLoopContext<'_> {
             .active_repo
             .map(|id| id.0)
             .unwrap_or(0);
-        self.active_repo_id.store(active_value, Ordering::Relaxed);
+        self.active_repo_id.store(active_value, Ordering::SeqCst);
 
         try_send_state_changed_or_log(
             self.event_tx,
@@ -290,14 +327,19 @@ impl WorkerLoopContext<'_> {
 
         // Keep filesystem monitoring scoped to the active repository, plus any
         // a watch lease holds, to minimize OS watcher load in large multi-repo
-        // sessions.
+        // sessions. Where watching is cheap, the most recently active tabs stay
+        // watched too: switching back then needs neither a watcher rebuild nor
+        // a refresh when nothing changed (`unchanged_since_inactive`).
         let (active_repo, watched): (Option<RepoId>, Vec<(RepoId, std::path::PathBuf, bool)>) = {
             let state = self.thread_state.read().unwrap_or_else(|e| e.into_inner());
+            let warm = warm_inactive_repos(&state, WARM_INACTIVE_REPO_MONITORS);
             let watched = state
                 .repos
                 .iter()
                 .filter(|repo| {
-                    state.active_repo == Some(repo.id) || state.watch_leases.contains_key(&repo.id)
+                    state.active_repo == Some(repo.id)
+                        || state.watch_leases.contains_key(&repo.id)
+                        || warm.contains(&repo.id)
                 })
                 .map(|repo| {
                     let leased = state.watch_leases.contains_key(&repo.id);
@@ -356,7 +398,23 @@ impl WorkerLoopContext<'_> {
             Arc::clone(self.backend),
         );
 
-        for effect in effects {
+        for mut effect in effects {
+            if let crate::msg::Effect::Commit {
+                repo_id, identity, ..
+            }
+            | crate::msg::Effect::CommitAmend {
+                repo_id, identity, ..
+            } = &mut effect
+            {
+                let resolver = self
+                    .commit_identity
+                    .read()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
+                if let (Some(resolver), Some(repo)) = (resolver, repos.get(repo_id)) {
+                    *identity = resolver(&repo.spec().workdir);
+                }
+            }
             gitcomet_core::op_trace::record_current(
                 gitcomet_core::op_trace::Stage::EffectQueued,
                 repo_load_trace::effect_name(&effect),
@@ -464,6 +522,7 @@ impl std::fmt::Debug for WatchLease {
 }
 
 pub struct AppStore {
+    commit_identity: Arc<RwLock<Option<gitcomet_core::commit_identity::CommitIdentityResolver>>>,
     state: Arc<RwLock<Arc<AppState>>>,
     /// Count of reducer passes that published state; see
     /// [`AppStore::snapshot_with_publication`].
@@ -499,6 +558,7 @@ impl Clone for AppStore {
     fn clone(&self) -> Self {
         Self {
             state: Arc::clone(&self.state),
+            commit_identity: Arc::clone(&self.commit_identity),
             publication: Arc::clone(&self.publication),
             msg_tx: self.msg_tx.clone(),
             public_lifetime: Arc::clone(&self.public_lifetime),
@@ -574,6 +634,8 @@ impl AppStore {
         // Coalesced "state changed" notifications: at most one pending.
         let (event_tx, event_rx) = smol::channel::bounded::<StoreEvent>(1);
 
+        let commit_identity = Arc::new(RwLock::new(None));
+        let thread_commit_identity = Arc::clone(&commit_identity);
         let thread_state = Arc::clone(&state);
         let thread_msg_tx = msg_tx.clone();
         let publication = Arc::new(AtomicU64::new(0));
@@ -760,6 +822,7 @@ impl AppStore {
                 }
 
                 let mut worker_ctx = WorkerLoopContext {
+                    commit_identity: &thread_commit_identity,
                     thread_state: &thread_state,
                     active_repo_id: &active_repo_id,
                     event_tx: &event_tx,
@@ -779,6 +842,25 @@ impl AppStore {
 
                 match msg {
                     Msg::SetActiveRepo { repo_id } => {
+                        let (previous, switching) = {
+                            let state = worker_ctx
+                                .thread_state
+                                .read()
+                                .unwrap_or_else(|e| e.into_inner());
+                            let known = state.repos.iter().any(|repo| repo.id == repo_id);
+                            (state.active_repo, known && state.active_repo != Some(repo_id))
+                        };
+                        if switching {
+                            if let Some(previous) = previous {
+                                worker_ctx.repo_monitors.mark_inactive(previous);
+                            }
+                            // Publish before reading the generation: a flush
+                            // racing this switch has either moved it already
+                            // or sees `repo_id` active and delivers.
+                            worker_ctx.active_repo_id.store(repo_id.0, Ordering::SeqCst);
+                        }
+                        let unchanged = switching
+                            && worker_ctx.repo_monitors.unchanged_since_inactive(repo_id);
                         worker_ctx.reduce_and_handle(
                             &mut repos,
                             &id_alloc,
@@ -788,6 +870,7 @@ impl AppStore {
                                     repos,
                                     app_state,
                                     repo_id,
+                                    unchanged,
                                     &mut effects,
                                 );
                                 effects
@@ -924,6 +1007,7 @@ impl AppStore {
 
         (
             Self {
+                commit_identity,
                 state,
                 publication,
                 msg_tx: msg_tx.clone(),
@@ -932,6 +1016,19 @@ impl AppStore {
             },
             event_rx,
         )
+    }
+
+    /// Installs a resolver for this store only. Resolved identities are copied
+    /// into effects, so a queued operation cannot inherit a later window's
+    /// selection. Calling this does not write Git configuration.
+    pub fn set_commit_identity_resolver(
+        &self,
+        resolver: Option<gitcomet_core::commit_identity::CommitIdentityResolver>,
+    ) {
+        *self
+            .commit_identity
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = resolver;
     }
 
     pub fn dispatch(&self, msg: Msg) {
@@ -1097,7 +1194,7 @@ pub(crate) fn with_set_active_repo_inline_for_bench<T>(
 ) -> T {
     let repos = FxHashMap::default();
     let mut effects = reducer::SetActiveRepoEffects::new();
-    fill_set_active_repo_inline(&repos, state, repo_id, &mut effects);
+    fill_set_active_repo_inline(&repos, state, repo_id, false, &mut effects);
     f(state, &effects)
 }
 

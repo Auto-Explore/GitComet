@@ -280,6 +280,30 @@ pub fn load() -> UiSession {
     load_from_path(&path)
 }
 
+/// The session file's size and modification time.
+pub type SessionFileStamp = (u64, std::time::SystemTime);
+
+/// The session, unless the file's stamp still equals `stamp`, which is then
+/// updated. A `stat` instead of a parse for callers polling for external
+/// writes (the macOS recent-repositories menu).
+pub fn load_if_changed(stamp: &mut Option<SessionFileStamp>) -> Option<UiSession> {
+    load_from_path_if_changed(&default_session_file_path()?, stamp)
+}
+
+fn load_from_path_if_changed(
+    path: &Path,
+    stamp: &mut Option<SessionFileStamp>,
+) -> Option<UiSession> {
+    let current = fs::metadata(path)
+        .ok()
+        .and_then(|metadata| Some((metadata.len(), metadata.modified().ok()?)));
+    if current == *stamp {
+        return None;
+    }
+    *stamp = current;
+    Some(load_from_path(path))
+}
+
 pub fn load_from_path(path: &Path) -> UiSession {
     let Some(mut file) = load_file(path) else {
         return UiSession::default();
