@@ -203,7 +203,7 @@ fn file_diff_index_line_capacity_hint(source_len_hint: usize) -> usize {
 enum IndexedFileDiffContent {
     Empty,
     Shared(Arc<str>),
-    File(Arc<std::path::PathBuf>),
+    File(Arc<std::path::PathBuf>, Arc<RecentFileLines>),
 }
 
 #[derive(Clone, Debug)]
@@ -212,7 +212,6 @@ struct IndexedFileDiffSource {
     source_len: usize,
     line_starts: Arc<[usize]>,
     line_flags: Arc<[u8]>,
-    recent_lines: Arc<RecentFileLines>,
 }
 
 /// Lines of a file-backed source handed out recently. A line's text loads
@@ -235,7 +234,6 @@ impl IndexedFileDiffSource {
             source_len: 0,
             line_starts: Arc::default(),
             line_flags: Arc::default(),
-            recent_lines: Arc::default(),
         }
     }
 
@@ -257,7 +255,6 @@ impl IndexedFileDiffSource {
             source_len: text.len(),
             line_starts,
             line_flags: Arc::from(line_flags),
-            recent_lines: Arc::default(),
         }
     }
 
@@ -334,11 +331,10 @@ impl IndexedFileDiffSource {
         }
 
         Ok(Self {
-            content: IndexedFileDiffContent::File(Arc::new(path.to_path_buf())),
+            content: IndexedFileDiffContent::File(Arc::new(path.to_path_buf()), Arc::default()),
             source_len,
             line_starts: Arc::from(line_starts),
             line_flags: Arc::from(line_flags),
-            recent_lines: Arc::default(),
         })
     }
 
@@ -375,7 +371,7 @@ impl IndexedFileDiffSource {
             IndexedFileDiffContent::Shared(text) => Some(
                 gitcomet_core::file_diff::FileDiffLineText::shared_slice(Arc::clone(text), range),
             ),
-            IndexedFileDiffContent::File(path) => {
+            IndexedFileDiffContent::File(path, recent_lines) => {
                 let fresh = || {
                     gitcomet_core::file_diff::FileDiffLineText::file_slice(
                         Arc::clone(path),
@@ -388,7 +384,7 @@ impl IndexedFileDiffSource {
                 if range.len() > RECENT_FILE_LINE_MAX_BYTES {
                     return Some(fresh());
                 }
-                let Ok(mut slots) = self.recent_lines.slots.lock() else {
+                let Ok(mut slots) = recent_lines.slots.lock() else {
                     return Some(fresh());
                 };
                 if slots.is_empty() {
@@ -1636,7 +1632,7 @@ impl gitcomet_core::domain::DiffRowProvider for PagedFileDiffInlineRows {
 fn file_diff_source_text(source: &IndexedFileDiffSource) -> SharedString {
     match &source.content {
         IndexedFileDiffContent::Shared(text) => SharedString::from(Arc::clone(text)),
-        IndexedFileDiffContent::Empty | IndexedFileDiffContent::File(_) => SharedString::default(),
+        IndexedFileDiffContent::Empty | IndexedFileDiffContent::File(..) => SharedString::default(),
     }
 }
 
@@ -1648,7 +1644,7 @@ fn file_diff_source_text(source: &IndexedFileDiffSource) -> SharedString {
 /// it back from here on demand instead of forcing every diff to hold it.
 fn file_diff_source_path(source: &IndexedFileDiffSource) -> Option<Arc<std::path::PathBuf>> {
     match &source.content {
-        IndexedFileDiffContent::File(path) => Some(Arc::clone(path)),
+        IndexedFileDiffContent::File(path, _) => Some(Arc::clone(path)),
         IndexedFileDiffContent::Shared(_) | IndexedFileDiffContent::Empty => None,
     }
 }
@@ -1671,7 +1667,7 @@ fn file_diff_source_plan_text(source: &IndexedFileDiffSource) -> Result<SharedSt
     match &source.content {
         IndexedFileDiffContent::Shared(text) => Ok(SharedString::from(Arc::clone(text))),
         IndexedFileDiffContent::Empty => Ok(SharedString::default()),
-        IndexedFileDiffContent::File(path) => std::fs::read_to_string(path.as_ref())
+        IndexedFileDiffContent::File(path, _) => std::fs::read_to_string(path.as_ref())
             .map(SharedString::from)
             .map_err(|error| {
                 format!(
@@ -2103,6 +2099,23 @@ pub(in crate::view) fn build_file_diff_cache_rebuild_with_patch(
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn file_backed_lines_are_read_once_across_frames() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("source.txt");
+        std::fs::write(&path, "zero\none\ntwo\n").expect("write source");
+        let source = IndexedFileDiffSource::from_file(&path).expect("index source");
+        let _ = gitcomet_core::file_diff::take_file_slice_opens_for_tests();
+        // Each frame asks a clone of the source for the row's text again.
+        for source in [source.clone(), source] {
+            assert_eq!(source.line_text(1).expect("line").as_str(), "one");
+        }
+        assert_eq!(
+            gitcomet_core::file_diff::take_file_slice_opens_for_tests(),
+            1
+        );
+    }
 
     fn streamed_file_diff_source_for_test_with_mode(
         old: &str,

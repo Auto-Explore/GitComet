@@ -80,7 +80,6 @@ impl HistoryRefsHoverHost {
         source_bounds: Bounds<Pixels>,
         items: Arc<[HistoryRefListItem]>,
         pointer: Point<Pixels>,
-        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         if items.is_empty() {
@@ -113,7 +112,7 @@ impl HistoryRefsHoverHost {
 
         if self.state.is_some() {
             self.cancel_pending_show();
-            self.show_now(next, window, cx);
+            self.show_now(next, cx);
             return;
         }
 
@@ -161,12 +160,7 @@ impl HistoryRefsHoverHost {
         .detach();
     }
 
-    fn show_now(
-        &mut self,
-        next: HistoryRefsHoverState,
-        _window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
+    fn show_now(&mut self, next: HistoryRefsHoverState, cx: &mut gpui::Context<Self>) {
         self.close_seq = self.close_seq.wrapping_add(1);
         let changed = self
             .state

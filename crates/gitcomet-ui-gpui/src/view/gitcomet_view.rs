@@ -971,7 +971,6 @@ impl GitCometView {
         source_bounds: Bounds<Pixels>,
         items: Arc<[HistoryRefListItem]>,
         pointer: Point<Pixels>,
-        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         // Don't surface the refs hover while an overlay (popover, dialog, or
@@ -984,15 +983,7 @@ impl GitCometView {
             return;
         }
         self.history_refs_hover_host.update(cx, |host, cx| {
-            host.show(
-                repo_id,
-                commit_id,
-                source_bounds,
-                items,
-                pointer,
-                window,
-                cx,
-            )
+            host.show(repo_id, commit_id, source_bounds, items, pointer, cx)
         });
     }
 

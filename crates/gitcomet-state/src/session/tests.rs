@@ -1282,6 +1282,40 @@ fn remove_recent_repo_drops_matching_entry() {
 }
 
 #[test]
+fn load_if_changed_rereads_only_a_written_file() {
+    let dir = unique_session_test_dir("stamp");
+    let path = dir.join("session.json");
+    let repo = dir.join("repo");
+    let _ = fs::create_dir_all(&repo);
+    let mut stamp = None;
+    assert!(
+        load_from_path_if_changed(&path, &mut stamp).is_none(),
+        "no file, nothing to read"
+    );
+
+    persist_to_path(
+        &path,
+        &UiSessionFile {
+            version: CURRENT_SESSION_FILE_VERSION,
+            recent_repos: Some(vec![path_storage_key(&repo)]),
+            ..UiSessionFile::default()
+        },
+    )
+    .expect("seed session file");
+    let session = load_from_path_if_changed(&path, &mut stamp).expect("a new file is read");
+    assert_eq!(session.recent_repos, vec![repo]);
+    assert!(
+        load_from_path_if_changed(&path, &mut stamp).is_none(),
+        "an unchanged file is not read again"
+    );
+
+    fs::remove_file(&path).expect("remove session file");
+    let session = load_from_path_if_changed(&path, &mut stamp).expect("a removal is read");
+    assert!(session.recent_repos.is_empty());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn persist_pinned_repo_appends_in_pin_order_and_dedupes() {
     let dir = env::temp_dir().join(format!(
         "gitcomet-pinned-repos-test-{}-{}",

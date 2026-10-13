@@ -173,9 +173,6 @@ gitcomet-ui-kit = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }
 criterion = { workspace = true }
 
-[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dev-dependencies]
-gpui_wgpu = { workspace = true, features = ["test-support"] }
-
 [build-dependencies]
 resvg = { workspace = true }
 

@@ -1688,7 +1688,6 @@ fn branch_reveal_closes_open_history_refs_hover_without_reentrant_root_update(
                 history_row_bounds,
                 hover_items.clone(),
                 history_row_bounds.center(),
-                window,
                 cx,
             );
         });

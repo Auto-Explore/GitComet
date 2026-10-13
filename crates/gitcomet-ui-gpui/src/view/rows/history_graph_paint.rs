@@ -23,10 +23,6 @@ fn coalesced<T: Copy, K: Eq + std::hash::Hash>(
     winners
 }
 
-#[cfg(all(test, any(target_os = "linux", target_os = "windows")))]
-#[path = "history_graph_paint_gpu_tests.rs"]
-mod gpu_tests;
-
 fn x_key(x: Pixels) -> u32 {
     f32::from(x).to_bits()
 }
@@ -1061,6 +1057,7 @@ pub(super) fn paint_straight_connector(
                 .all(aligned)
     }) {
         gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintSegmentQuad);
+        // Its own layer keeps the stroke's painter order, as a path's would.
         window.paint_layer(bounds, |window| window.paint_quad(fill(bounds, color)));
     } else {
         let mut path = gpui::PathBuilder::stroke(width);
@@ -2144,6 +2141,65 @@ mod coalescing_regressions {
                 5,
                 "scale={scale}"
             );
+        }
+    }
+
+    #[gpui::test]
+    fn connectors_off_the_pixel_grid_or_at_a_mask_edge_stay_paths(cx: &mut gpui::TestAppContext) {
+        use gitcomet_core::history_perf::{self, Work};
+        let _guard = crate::test_support::lock_visual_test();
+        let cx = cx.add_empty_window();
+        let canvas = Bounds::new(point(px(0.0), px(0.0)), size(px(60.0), px(40.0)));
+        let unmasked = gpui::ContentMask {
+            bounds: canvas,
+            ..Default::default()
+        };
+        let clipped = gpui::ContentMask {
+            bounds: Bounds::new(canvas.origin, size(px(20.0), px(40.0))),
+            ..Default::default()
+        };
+        let faded = gpui::ContentMask {
+            bounds: canvas,
+            fade_out: gpui::Edges {
+                right: px(8.0),
+                ..Default::default()
+            },
+        };
+        // A 2 px stroke at whole pixels has whole-pixel edges.
+        for (case, mask, from_x, quads) in [
+            ("aligned", unmasked, 10.0, 1),
+            ("fractional", unmasked, 10.3, 0),
+            ("clipped", clipped, 10.0, 0),
+            ("faded", faded, 10.0, 0),
+        ] {
+            let _capture = history_perf::capture();
+            cx.draw(
+                point(px(0.0), px(0.0)),
+                size(
+                    gpui::AvailableSpace::Definite(px(60.0)),
+                    gpui::AvailableSpace::Definite(px(40.0)),
+                ),
+                |_, _| {
+                    gpui::canvas(
+                        |_, _, _| (),
+                        move |_, (), window, _| {
+                            window.with_content_mask(Some(mask), |window| {
+                                paint_straight_connector(
+                                    point(px(from_x), px(20.0)),
+                                    point(px(from_x + 20.0), px(20.0)),
+                                    px(2.0),
+                                    gpui::rgb(0xabcdef),
+                                    window,
+                                );
+                            });
+                        },
+                    )
+                    .w(px(60.0))
+                    .h(px(40.0))
+                },
+            );
+            assert_eq!(history_perf::count(Work::PaintSegmentQuad), quads, "{case}");
+            assert_eq!(history_perf::count(Work::PaintPath), 1 - quads, "{case}");
         }
     }
 

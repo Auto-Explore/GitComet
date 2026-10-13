@@ -131,6 +131,8 @@ impl Render for TooltipBubbleView {
                     .px_2()
                     .py_1()
                     .bg(self.theme.colors.tooltip.background)
+                    .border_1()
+                    .border_color(self.theme.colors.stroke.default)
                     .rounded(px(self.theme.radii.row))
                     .text_size(self.theme.ui_text(12.0))
                     .text_color(self.theme.colors.tooltip.foreground)

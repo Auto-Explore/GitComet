@@ -258,6 +258,8 @@ impl Render for TooltipHost {
                             .px_2()
                             .py_1()
                             .bg(tooltip_bg)
+                            .border_1()
+                            .border_color(theme.colors.stroke.default)
                             .rounded(px(theme.radii.row))
                             .text_size(theme.ui_text(12.0))
                             .text_color(tooltip_text_color)

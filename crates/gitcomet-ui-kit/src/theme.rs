@@ -1449,25 +1449,6 @@ fn resolve_syntax_colors(
     }
 }
 
-// Surfaces use their background and border for separation. Decorative shadows
-// are disabled to avoid the extra rendering work, including on floating surfaces.
-
-/// Resting "elevation" for inline cards/panels — intentionally flat. Separation
-/// comes from the default and subtle strokes, not shadow.
-pub fn shadow_surface(_theme: AppTheme) -> Vec<gpui::BoxShadow> {
-    Vec::new()
-}
-
-/// Floating surfaces retain their border and background without a shadow.
-pub fn shadow_popover(_theme: AppTheme) -> Vec<gpui::BoxShadow> {
-    Vec::new()
-}
-
-/// Modal surfaces retain their border and background without a shadow.
-pub fn shadow_modal(_theme: AppTheme) -> Vec<gpui::BoxShadow> {
-    Vec::new()
-}
-
 fn embedded_theme_cache() -> &'static FxHashMap<String, RuntimeThemeSpec> {
     EMBEDDED_THEME_CACHE.get_or_init(|| {
         let mut themes = FxHashMap::default();

@@ -741,36 +741,23 @@ impl Driver {
                 timeout_ms,
             } => {
                 let started = Instant::now();
-                let deadline = started + Duration::from_millis(*timeout_ms);
-                loop {
-                    let shown = cx.update(|cx| {
-                        self.view.read(cx).active_repo().and_then(|repo| {
-                            repo.worktree_status_entries().map(|entries| {
-                                entries
-                                    .iter()
-                                    .any(|entry| entry.path.as_path() == path.as_path())
-                            })
-                        })
-                    });
-                    if shown == Some(*present) {
-                        record(
-                            "scenario_expect_status",
-                            json!({"path": path, "present": present,
-                                   "after_ms": started.elapsed().as_secs_f64() * 1000.0}),
-                        );
-                        break Ok(());
-                    }
-                    let now = Instant::now();
-                    if now > deadline {
-                        break Err(format!(
-                            "{} never became {} in the changes list",
-                            path.display(),
-                            if *present { "listed" } else { "unlisted" }
-                        ));
-                    }
-                    self.wait_for_change((deadline - now).min(WITNESS_POLL), cx)
-                        .await;
+                let timeout = Duration::from_millis(*timeout_ms);
+                if !self
+                    .wait_for_status(std::slice::from_ref(path), *present, timeout, cx)
+                    .await
+                {
+                    return Err(format!(
+                        "{} never became {} in the changes list",
+                        path.display(),
+                        if *present { "listed" } else { "unlisted" }
+                    ));
                 }
+                record(
+                    "scenario_expect_status",
+                    json!({"path": path, "present": present,
+                           "after_ms": started.elapsed().as_secs_f64() * 1000.0}),
+                );
+                Ok(())
             }
             Step::Command { id, witness } => {
                 let view = self.view.clone();
@@ -785,12 +772,10 @@ impl Driver {
                 };
                 let witness = match witness {
                     WitnessKind::RepoClosed { path } => WitnessKind::RepoClosed {
-                        path: std::fs::canonicalize(path)
-                            .map_err(|e| format!("{}: {e}", path.display()))?,
+                        path: canonical(path)?,
                     },
                     WitnessKind::RepoOpen { path } => WitnessKind::RepoOpen {
-                        path: std::fs::canonicalize(path)
-                            .map_err(|e| format!("{}: {e}", path.display()))?,
+                        path: canonical(path)?,
                     },
                     other => other.clone(),
                 };
@@ -810,8 +795,7 @@ impl Driver {
                 Ok(())
             }
             Step::OpenRepo { path, wait } => {
-                let path =
-                    std::fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))?;
+                let path = canonical(path)?;
                 let store = cx.update(|cx| Arc::clone(&self.view.read(cx).store));
                 let witness = WitnessKind::RepoOpen { path: path.clone() };
                 self.scheduled(1, 0, wait.then_some(witness), cx, move |_, _, _| {
@@ -1489,37 +1473,14 @@ impl Driver {
             }
             // The watcher, not this op, drives the refresh: wait for the
             // status list to reflect the round before the next one.
-            let deadline = Instant::now() + DEFAULT_WITNESS_TIMEOUT;
-            loop {
-                let reflected = cx.update(|cx| {
-                    // The lane the status list renders, not the combined status.
-                    self.view.read(cx).active_repo().is_some_and(|repo| {
-                        let Some(entries) = repo.worktree_status_entries() else {
-                            return false;
-                        };
-                        paths.iter().all(|path| {
-                            let listed = entries
-                                .iter()
-                                .any(|entry| entry.path.as_path() == path.as_path());
-                            listed == dirty
-                        })
-                    })
-                });
-                if reflected {
-                    op_trace::record(Stage::Witness, op, "status_reflects_save", 1, 0);
-                    break;
-                }
-                let now = Instant::now();
-                if now > deadline {
-                    result = Err(format!("round {ix} never reached the status list"));
-                    break;
-                }
-                self.wait_for_change((deadline - now).min(WITNESS_POLL), cx)
-                    .await;
-            }
-            if result.is_err() {
+            if !self
+                .wait_for_status(paths, dirty, DEFAULT_WITNESS_TIMEOUT, cx)
+                .await
+            {
+                result = Err(format!("round {ix} never reached the status list"));
                 break;
             }
+            op_trace::record(Stage::Witness, op, "status_reflects_save", 1, 0);
         }
         if keep && result.is_ok() {
             return result;
@@ -1531,6 +1492,46 @@ impl Driver {
             .await;
         result.and(restored)
     }
+
+    /// Waits until the active repository's changes list shows each of `paths`
+    /// exactly when `listed`; false once `timeout` passes.
+    async fn wait_for_status(
+        &self,
+        paths: &[PathBuf],
+        listed: bool,
+        timeout: Duration,
+        cx: &mut AsyncApp,
+    ) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            // The lane the status list renders, not the combined status.
+            let reflected = cx.update(|cx| {
+                self.view.read(cx).active_repo().is_some_and(|repo| {
+                    repo.worktree_status_entries().is_some_and(|entries| {
+                        paths.iter().all(|path| {
+                            entries
+                                .iter()
+                                .any(|entry| entry.path.as_path() == path.as_path())
+                                == listed
+                        })
+                    })
+                })
+            });
+            if reflected {
+                return true;
+            }
+            let now = Instant::now();
+            if now > deadline {
+                return false;
+            }
+            self.wait_for_change((deadline - now).min(WITNESS_POLL), cx)
+                .await;
+        }
+    }
+}
+
+fn canonical(path: &std::path::Path) -> Result<PathBuf, String> {
+    std::fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 fn write_fixture_files(

@@ -30,10 +30,10 @@ don't.
 | Change | Commit | Platforms | Tests | Evidence |
 |---|---|---|---|---|
 | Warm inactive repository monitors; tabs left mid-refresh, switch races and dead monitors refresh (`9f2b6ae4`) | `ecf54d9f`, `9f2b6ae4` | 2 on macOS, 0 elsewhere | `active_repo.rs`, `repo_monitor.rs`, monitor `synchronization.rs` | [macOS](#macos): switching between three tabs went from 190 to 56 ms/s CPU |
-| Session-file stamp (length + mtime) | `344bb4f9` | macOS | None | [macOS](#macos) |
-| File-line cache, notify-only hover, timer toasts, 30 fps spinner | `25521fb3` | All | Toast lifetime arithmetic only | [macOS](#macos) |
-| Pixel-aligned graph connectors | `a64ca402` | All | Three count tests in CI; the pixel test is `#[ignore]`d | [Linux](#linux) |
-| No shadows on floating surfaces or the window frame | `b0bf1604`, `4c5ea2fd` | All | Smoke tests | [Linux](#linux) (shadowless frame) |
+| Session-file stamp (length + mtime) | `344bb4f9` | macOS | `load_if_changed_rereads_only_a_written_file` | [macOS](#macos) |
+| File-line cache, notify-only hover, timer toasts, 30 fps spinner | `25521fb3` | All | `file_backed_lines_are_read_once_across_frames`, `expiring_toasts_fade_out_then_leave` | [macOS](#macos) |
+| Pixel-aligned graph connectors | `a64ca402` | All | Count tests for the quads and for each fallback to a path | [Linux](#linux) |
+| No shadows on floating surfaces or the window frame; tooltips get a stroke instead | `b0bf1604`, `4c5ea2fd` | All | Smoke tests | [Linux](#linux) (shadowless frame) |
 
 ## Measurements
 
