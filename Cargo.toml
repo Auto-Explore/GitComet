@@ -17,6 +17,8 @@ members = [
   "crates/gitcomet-ui-kit",
 ]
 exclude = [
+  "vendor/block",
+  "vendor/block/test_utils",
   "vendor/mermaid-rs-renderer",
   "crates/gitcomet-filesystem-native",
   "crates/win32-window-utils",
@@ -76,6 +78,10 @@ license = "AGPL-3.0-only"
 authors = ["AutoExplore Oy <info@autoexplore.ai>"]
 repository = "https://github.com/Auto-Explore/GitComet"
 rust-version = "1.99.0"
+
+[patch.crates-io]
+# block 0.1.6 has no released fix for its uninhabited extern class static.
+block = { path = "vendor/block" }
 
 [workspace.dependencies]
 # Internal crates

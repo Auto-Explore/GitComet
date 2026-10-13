@@ -20,7 +20,7 @@ pub(super) fn prepare(source: &Path) -> io::Result<Receipt> {
     prepare_in(source, &data.join("Trash"))
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
 pub(super) fn prepare(_source: &Path) -> io::Result<Receipt> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,

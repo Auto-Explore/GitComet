@@ -653,14 +653,19 @@ mod tests {
             let recorded_tree = git(d.path(), &["write-tree"]);
             let original_bytes = std::fs::read(d.path().join("file")).unwrap();
             let repo = crate::GixBackend.open(d.path()).unwrap();
-            std::fs::write(d.path().join("file"), "later unsaved edit\n").unwrap();
+            let unsaved_edit = if autocrlf == "true" {
+                "later unsaved edit\r\n"
+            } else {
+                "later unsaved edit\n"
+            };
+            std::fs::write(d.path().join("file"), unsaved_edit).unwrap();
             assert!(
                 repo.recover_branch_updates_with_output(std::slice::from_ref(&update))
                     .is_err()
             );
             assert_eq!(
                 std::fs::read_to_string(d.path().join("file")).unwrap(),
-                "later unsaved edit\n"
+                unsaved_edit
             );
             assert_eq!(git(d.path(), &["write-tree"]), recorded_tree);
             assert_eq!(

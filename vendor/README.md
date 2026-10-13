@@ -1,5 +1,41 @@
 # Vendored dependencies
 
+## Objective-C blocks
+
+`block/` contains the published MIT-licensed `block` 0.1.6 source from
+[SSheldon/rust-block](https://github.com/SSheldon/rust-block). That is still
+the latest release, and upstream's `master` retains the uninhabited `Class`
+declaration that Rust reports as a future compatibility warning on macOS.
+The root `[patch.crates-io]` keeps the existing GPUI and Metal dependencies.
+
+The technical fix replaces the private empty `Class` enum with an inhabited
+`#[repr(C)]` opaque struct, as in `objc` 0.2.7, and changes the stack-block
+class address from `&_NSConcreteStackBlock` to
+`ptr::addr_of!(_NSConcreteStackBlock)`. Only a pointer to that private type is
+stored in the block header, so the public API and pointer ABI are unchanged.
+The address follows [Clang's block ABI](https://clang.llvm.org/docs/Block-ABI-Apple.html)
+and avoids constructing a Rust reference to the external runtime storage.
+See [Rust issue #74840](https://github.com/rust-lang/rust/issues/74840).
+
+Extern declarations and function pointers spell the existing default `"C"` ABI
+explicitly to fix `missing_abi` warnings that become visible when the dependency
+is built from local source. No calling convention changes.
+
+The published crate's tests and `src/test_utils.rs` are unchanged. Its C test
+helper is copied from upstream revision
+`642ea4a4a5853a21b55b05c34832a5f1bb1af61c`, with `cc` replacing the deprecated
+`gcc` build crate. The MIT license text comes from upstream's
+[license-file PR #14](https://github.com/SSheldon/rust-block/pull/14), revision
+`0c123b7be1e5e5fb14d561352a461c909b931baf`; the published package declares MIT
+but omits a license file. Both manifests are normalized while preserving the
+upstream metadata and 2015 edition. These crates are excluded from the main
+workspace so workspace formatting and lints do not rewrite upstream source.
+
+`cargo test --manifest-path vendor/block/Cargo.toml` exercises the six upstream
+C interop tests, two documentation examples, and a regression that invokes a
+capturing block before and after copying it, retains the heap block, and checks
+that the captured value drops exactly once.
+
 ## GPUI text storage
 
 The root workspace manifest pins GPUI to a Havunen/gpui-ce revision. Since

@@ -727,7 +727,7 @@ fn interactive_rebase_reword_works_in_repo_path_with_spaces() {
     );
 }
 
-/// Runs git allowing a non-zero exit (a rebase pausing at a conflict).
+/// Captures an expected Git failure while preparing a paused rebase.
 #[cfg(unix)]
 fn run_git_allow_fail(repo: &Path, args: &[&str], envs: &[(&str, &str)]) {
     let mut cmd = Command::new("git");
@@ -740,7 +740,14 @@ fn run_git_allow_fail(repo: &Path, args: &[&str], envs: &[(&str, &str)]) {
     for (key, value) in envs {
         cmd.env(key, value);
     }
-    cmd.status().expect("git command to run");
+    let output = cmd.output().expect("git command to run");
+    assert!(
+        !output.status.success(),
+        "git {:?} unexpectedly succeeded:\n{}\n{}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 /// Writes a GIT_SEQUENCE_EDITOR script that installs `todo` verbatim,
