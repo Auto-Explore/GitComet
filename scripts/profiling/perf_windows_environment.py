@@ -1,6 +1,6 @@
 """Read-only Windows display/power metadata; unsupported fields stay explicit."""
 import ctypes as c
-from ctypes import wintypes as w
+import ctypes.wintypes as w
 import os
 import uuid
 

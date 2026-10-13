@@ -21,6 +21,7 @@ energy estimate (nJ, CPU only) and the physical footprint.
 Missing counters are None, never zero.
 """
 import ctypes as c
+import functools
 import platform
 import re
 import time
@@ -69,20 +70,16 @@ class _Timebase(c.Structure):
     _fields_ = [("numer", c.c_uint32), ("denom", c.c_uint32)]
 
 
-_libs = None
-
-
+@functools.cache
 def _load():
     """Bind the native functions once; None when unavailable."""
-    global _libs
-    if _libs is not None or not _SYSTEM:
-        return _libs or None
+    if not _SYSTEM:
+        return None
     try:
         system = c.CDLL("/usr/lib/libSystem.B.dylib")
         iokit = c.CDLL("/System/Library/Frameworks/IOKit.framework/IOKit")
         cf = c.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
     except OSError:
-        _libs = False
         return None
     system.proc_pid_rusage.argtypes = [c.c_int, c.c_int, c.c_void_p]
     system.proc_pid_rusage.restype = c.c_int
@@ -126,9 +123,8 @@ def _load():
                          "Device Utilization %", "Renderer Utilization %", "Tiler Utilization %",
                          "In use system memory", "Alloc system memory")}
     types = {name: getattr(cf, f"CF{name}GetTypeID")() for name in ("Array", "Dictionary", "Number", "String")}
-    _libs = {"system": system, "iokit": iokit, "cf": cf, "keys": keys, "types": types,
-             "tick_ns": timebase.numer / timebase.denom}
-    return _libs
+    return {"system": system, "iokit": iokit, "cf": cf, "keys": keys, "types": types,
+            "tick_ns": timebase.numer / timebase.denom}
 
 
 def available():

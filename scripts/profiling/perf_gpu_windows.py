@@ -5,7 +5,7 @@ Empty/invalid counters are unavailable, never idle zero. Shared process memory
 cannot be added across processes because shared surfaces would be counted twice.
 """
 import ctypes as c
-from ctypes import wintypes as w
+import ctypes.wintypes as w
 from collections import defaultdict
 import json
 import math
