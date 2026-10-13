@@ -11,6 +11,8 @@ pub struct UiSettings {
     pub repo_sidebar_pinned_branches: Option<BTreeMap<PathBuf, BTreeSet<String>>>,
     pub theme_mode: Option<String>,
     pub ui_scale_percent: Option<u32>,
+    pub image_sampling_mode: Option<String>,
+    pub image_smooth_filter: Option<String>,
     pub window_controls_mode: Option<String>,
     pub windows_renderer: Option<String>,
     pub browser_open_target: Option<String>,
@@ -113,6 +115,8 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         }
         apply_setting!(settings, file, theme_mode);
         apply_setting!(settings, file, ui_scale_percent);
+        apply_setting!(settings, file, image_sampling_mode);
+        apply_setting!(settings, file, image_smooth_filter);
         apply_setting!(settings, file, window_controls_mode);
         apply_setting!(settings, file, windows_renderer);
         apply_setting!(settings, file, browser_open_target);

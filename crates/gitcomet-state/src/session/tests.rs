@@ -27,6 +27,35 @@ fn unique_session_test_dir(label: &str) -> PathBuf {
 }
 
 #[test]
+fn image_sampling_settings_round_trip_and_survive_other_writers() {
+    let dir = unique_session_test_dir("image-sampling");
+    let path = dir.join("session.json");
+    assert!(load_from_path(&path).image_sampling_mode.is_none());
+    persist_ui_settings_to_path(
+        UiSettings {
+            image_sampling_mode: Some("smooth".into()),
+            image_smooth_filter: Some("hann".into()),
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+    persist_ui_settings_to_path(
+        UiSettings {
+            theme_mode: Some("dark".into()),
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+    let session = load_from_path(&path);
+    assert_eq!(session.image_sampling_mode.as_deref(), Some("smooth"));
+    assert_eq!(session.image_smooth_filter.as_deref(), Some("hann"));
+    assert_eq!(session.theme_mode.as_deref(), Some("dark"));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn signature_verification_requires_fresh_opt_in_and_survives_other_writers() {
     let dir = unique_session_test_dir("signature-opt-in");
     let path = dir.join("session.json");
