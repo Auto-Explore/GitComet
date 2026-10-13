@@ -458,11 +458,7 @@ On macOS, `--gpu` uses IOKit and IOReport instead, without root:
 - whole-device utilization;
 - whole-GPU energy and performance-state residency.
 
-`perf_macos.py` has the details. `macos-usage.py` runs the hover, scroll,
-selection, diff-open, repo-tab and idle set with interleaved repeats, and
-`macos-usage-report.py` prints GPU ms/s, GPU ms per frame, GPU mW and the mean
-P-state per phase. See [macOS CPU and GPU usage](../../docs/macos-gpu-usage.md)
-for the method and results. Launch the executable inside an app bundle
+`perf_macos.py` has the details. Launch the executable inside an app bundle
 (`GitComet.app/Contents/MacOS/gitcomet`). A bare binary relaunches itself from
 a bundle and exits.
 
@@ -489,183 +485,28 @@ rest of the interface. Both settings apply only to the disposable session and
 are recorded with the capture. Hiding the graph does not necessarily release
 path textures: window decorations can use the same renderer resources.
 
-### Paired history, diff and repository-tab captures
+### Paired GPU comparisons
 
-`gpu-interactions.py` compares two frozen release binaries using the production
-input handlers. Supply two disposable repositories; the first needs at least
-two unstaged tracked files. It sweeps history rows, switches between those diffs
-and alternates repository tabs. Diff-loaded and repository-open witnesses must
-complete, and binary/fixture fingerprints must stay unchanged. It uses isolated
-profiles and a private headless Mutter display; it does not edit the fixtures.
-
-```sh
-python3 scripts/profiling/gpu-interactions.py \
-  --baseline /path/to/frozen-original --candidate /path/to/frozen-optimized \
-  --repository /path/to/modified-fixture --secondary-repository /path/to/second-fixture \
-  --sizes 1400x900 2560x1440 --pairs 3 --seconds 30 --changes-per-second 20 \
-  --output target/performance/gpu-interactions
-```
-
-Pairs alternate execution order. `report.json` contains every run and median
-per-run GPU activity, VRAM, clocks and CPU/input timings. Raw counters, frame
-records, scenario steps and environment metadata remain in each capture.
-Insufficient samples fail the capture. GPU reductions are reported only when
-graphics and memory clocks agree within 5%; these are process SM activity
-percentages, not GPU execution times. Repeat with `--reverse` in a fresh output
-directory to confirm the result, and with `--clean` to check CPU/input timings
-without vendor monitoring. `--scales 100 125 200` changes application UI scale;
-native display scaling requires separate validation.
-`--refresh-hz 144` selects a 144 Hz private display; its default is 60 Hz.
-Compare the same display rate within a pair. No renderer experiment override is
-set by this harness; the pinned renderer uses its normal Linux path cropping.
-The default switch rate is 10 per second. `--changes-per-second` selects a
-sustained stress rate; increase duration when the driver leaves missing buckets,
-and keep the rate identical within a comparison. Missing counters stay missing.
-
-The connector regression compares actual hardware-rendered pixels against the
-previous drawing behavior. It is explicitly selected because normal unit tests
-must not require a GPU:
+`live-ui.py measure --gpu` compares two frozen builds on the GPU-bound
+scenarios. `diff-open` needs at least two unstaged tracked files, and
+`repo-tabs` needs `--secondary-repository`. GPUI has no run-time renderer
+switches, so an off/on comparison needs two builds. Measure a matched A/A (the
+same binary on both sides) for the noise floor. `report` needs at least six
+pairs over two sessions. `--display headless` is Linux-only; use
+`--display desktop` on Windows and macOS.
 
 ```sh
-cargo test -p gitcomet-ui-gpui --lib pixel_aligned_connectors_match_original_gpu_paths -- --include-ignored --nocapture
+python3 scripts/profiling/live-ui.py measure --gpu \
+  --baseline /path/to/frozen-baseline --candidate /path/to/frozen-candidate \
+  --repository /path/to/fixture --session first --pairs 3 \
+  --scenarios history-hover history-scroll history-select diff-open still \
+  --output target/profiling/gpu/s1
+python3 scripts/profiling/live-ui.py measure ... --session second --reverse --output target/profiling/gpu/s2
+python3 scripts/profiling/live-ui.py report target/profiling/gpu/s1 target/profiling/gpu/s2
 ```
 
-Application window frames omit shadows. The native connector comparisons cover
-fractional scales, endpoints, clipping and alpha. GPUI clips quad and shadow
-vertices to their content mask, since fragment masking alone still rasterized
-and blended transparent rectangles. In a gpui-ce checkout,
-`cargo test -p gpui_ce_wgpu --features test-support --lib vertex_clipping`
-checks that clipping against unmasked frames. The Linux captures below used GPUI
-`f7474ab` with the shadow clip applied as a local renderer patch, since removed.
-Straight graph connectors use ordinary quads only when every physical edge is
-aligned and the stroke is fully inside a mask without fades. Other connectors
-retain the previous path rasterization and antialiasing.
-
-### Linux shadow and connector results (2026-10-11)
-
-These measurements describe the earlier frozen candidate with clipped window
-shadows and connector quads. Window-frame shadows were subsequently removed
-entirely at the user's request. The numbers below apply to that earlier
-candidate; measurements of the shadowless frame follow in the next section.
-The obsolete edge-band renderer and shadow-only tests/benchmark were removed.
-
-The [Linux evidence record](gpu-efficiency-linux.json) preserves the frozen
-binary/source hashes, fixture fingerprints, individual 2560×1440 runs, both
-sessions, other window sizes, clock comparisons and validation results. Raw
-captures and frozen binaries remain under `target/performance/gpu-efficiency/`.
-Windows and macOS results will be supplied separately for consolidation.
-
-Release builds used the same GPUI pin, NVIDIA GTX 1080 / driver 580.178.04,
-Vulkan/Wayland, a private 60 Hz Mutter display and 100% application UI scale.
-Each active phase ran for 30 seconds: 125 pointer events per second, or 600
-witnessed diff/repository changes at 20 per second. No runtime experiment
-overrides were set. These are sustained interaction measurements.
-
-Initial-session medians of three paired runs at **2560×1440**, using application
-process [SM utilization](https://docs.nvidia.com/deploy/nvidia-smi/index.html#process-monitoring):
-
-| Interaction | Original GPU activity | Optimized GPU activity | Reduction |
-| --- | ---: | ---: | ---: |
-| History hover | 15.33% | 9.00% | 41.3% |
-| Diff changes | 12.37% | 7.61% | 38.5% |
-| Repository tabs | 7.48% | 4.93% | 34.1% |
-
-Graphics and memory clocks matched at 1240 / 5005 MHz in that session. Two
-additional pairs in a second session confirmed savings in every interaction.
-Across all five pairs, the median paired reductions were **41.1% hover, 34.3%
-diffs and 34.1% tabs**. The exact run-pair bootstrap 95% intervals were 39.9–43.9%,
-32.4–40.5% and 29.0–48.7%, respectively. These intervals describe this small
-host/workload sample, not variation across hardware.
-
-Hover/diff GPU framebuffer usage fell from 117 MB to 85 MB in the first session.
-The history graph's path count fell from one per frame to zero for this fixture;
-the equivalent connector became a quad. Repository tabs can still retain path
-textures for their curved outlines. Input counts, completion witnesses and
-frame counts stayed comparable. Instrumented first-session diff draw p95 was
-7.53 → 7.56 ms and witnessed input-to-draw p95 was 17.98 → 17.93 ms; tab values
-were 8.26 → 8.11 ms and 14.20 → 13.02 ms. Hover has no per-row completion witness.
-
-At 1400×900, the initial session measured 31–35% lower process activity. At 4K,
-the builds boosted to different GPU clocks; the record retains raw activity
-and clock data without attributing a percentage reduction. The isolated frame
-diagnostic reduced submission-plus-GPU-completion p50 from 1.18–1.36 ms to
-0.61–0.64 ms; it is not a pure GPU execution timer.
-
-Validation passed: 4,644 UI tests, 34 renderer shader/ABI tests, 41 graph tests,
-four shadow tests and 21 GPU collector tests. The native image tests performed
-336 comparisons with at most one channel value of difference. All 22 completed
-application captures were valid, with 26,400 witnessed diff/repository inputs.
-The record identifies the production and test source hashes of that frozen
-optimized release, before window-frame shadow removal.
-
-The extended dense-merge queue was interrupted when wrap-up was requested;
-its partial capture is excluded. Separate clean CPU/input and 144 Hz performance
-captures were not run before wrap-up. Native fractional display scales are
-represented in connector pixel comparisons, rather than live performance data.
-Linux results establish no Windows or macOS performance claim.
-
-### Linux results after removing the window-frame shadow (2026-10-11)
-
-The shadowless release was measured against both the earlier optimized release
-and the original baseline. The renderer clipping patch and graph connector
-optimizations were retained. Fourteen native application captures used the same
-GTX 1080, driver, disposable repositories, 2560×1440 window, private 60 Hz display,
-100% application UI scale and 30-second interaction phases described above.
-Every capture passed, including all **16,800 witnessed diff/repository switches**.
-Paired frame counts differed by less than 0.5%.
-
-The [Linux evidence record](gpu-efficiency-linux.json), under
-`window_frame_shadow_removal`, contains every run, source/binary fingerprints,
-clock exclusions, individual paired ratios and timing distributions. The frozen
-current binary is `target/performance/gpu-efficiency/binaries/candidate-shadowless`
-(SHA-256 `df71e1abc0646f2d7bf4a2218ad1af1b65c6d7e97ea694dc16c3a7be6e33815d`).
-Its source patch and archive are stored alongside it. Raw captures remain in
-`paired-shadowless-frame`, `paired-shadowless-baseline` and
-`paired-shadowless-baseline-confirm` under the same artifact directory.
-
-**Effect of removing the frame shadow**, with three clock-comparable pairs:
-
-| Interaction | Optimized with frame shadow | Shadowless | Paired activity reduction |
-| --- | ---: | ---: | ---: |
-| History hover | 7.81% | 6.68% | 5.7% |
-| Diff changes | 6.71% | 7.48% | −2.2%; no consistent gain |
-| Repository tabs | 4.54% | 4.00% | 11.8% |
-
-Activity columns show medians of per-run process SM means. Reduction columns
-show medians of individual paired ratios; each pair's values are preserved in
-the record. The run-pair bootstrap 95% intervals for the reductions are
-5.4–18.0% for hover, −26.5–0.3% for diffs and 9.7–18.6% for tabs. The diff results
-do not support an additional saving from frame-shadow removal. Framebuffer
-usage was unchanged from the optimized shadow-enabled release.
-
-**Total improvement from the original build**:
-
-| Interaction | Original | Current shadowless release | Paired activity reduction |
-| --- | ---: | ---: | ---: |
-| History hover | 13.43% | 7.32% | 46.9% |
-| Diff changes | 10.44% | 6.56% | 38.6% |
-| Repository tabs | 6.45% | 4.38% | 32.1% |
-
-All attributed comparisons passed the 5% graphics/memory-clock threshold. The
-last pair of the initial baseline repeat boosted to different clocks for hover
-and tabs. Those two phase comparisons were retained and excluded from the
-aggregate savings, then a confirmation pair was run in reverse order. Hover
-and tabs therefore use three clock-comparable pairs; diffs use four. Their
-run-pair bootstrap 95% intervals are 39.1–47.7%, 35.2–40.8% and 17.1–46.5%,
-respectively. Hover/diff framebuffer usage remains **117 → 85 MB** relative to
-the original; tab framebuffer usage remains 117 MB.
-
-These percentages measure application-process SM activity from vendor sampling.
-They describe this small Linux host/workload sample. GPU execution timestamps,
-separate clean CPU/input timings, 144 Hz performance captures and Windows/macOS
-results were not added by this repeat. The release build and all 21 targeted
-frame, resize, focus and component tests passed.
-
-The Linux captures above used GPUI revision `f7474ab`; the consolidated
-workspace uses a newer pin with the renderer optimizations described below.
-Archived measurements describe their frozen binaries. For new captures, record
-the GPUI revision and active settings rather than assuming support from an
-older revision.
+Results and the reference builds are in the
+[GPU performance inventory](../../docs/gpu-performance-inventory.md).
 
 ## Windows GPU measurements
 
@@ -684,15 +525,9 @@ redraw but no retained copy or cropped paths. Retained copy remains guarded by
 the actual target format, copy support and alpha mode. Unsupported scenes,
 target changes or retention budgets use a full redraw.
 
-Earlier experimental builds read `GITCOMET_GPU_GRAPH_QUADS=1`; pixel-aligned
-straight graph connectors now always use quads, while fractional, clipped and
-faded connectors keep paths.
-
-Until 2026-10-12 these optimizations were opt-in `GPUI_GPU_EXPERIMENTS` tokens
-(`partial-redraw,retained-copy,cropped-paths`) that `gitcomet.exe` set on
-Windows. GPUI no longer reads that variable or
-`GPUI_WINDOWS_DX12_PRESENT_MODE`; archived captures retain their original
-policy.
+Archived captures may record `GPUI_GPU_EXPERIMENTS`,
+`GPUI_WINDOWS_DX12_PRESENT_MODE` or `GITCOMET_GPU_GRAPH_QUADS`; nothing reads
+them any more.
 
 GPUI no longer carries in-process GPU timestamps, renderer capability records,
 diagnostic ablations or native input hooks. Measure GPU work with samplers
@@ -733,95 +568,6 @@ and collector DPI. Missing API fields remain explicit. Nominal refresh
 does not establish VRR state, and GPU clocks/thermals/HAGS still need a separate
 collector. Preserve the separate GPUI checkout's source identity as well as the
 GitComet source identity when using a local dependency checkout.
-
-### Linux comparison of GPUI 325cedb (2026-10-05)
-
-The requested `325cedb8a5c57104578f557d4652b1e5800e01b3` was compared with the
-current `2ba9c0718644c28852f898402d92b40ba5cc4b57`. Both release executables
-include the repository-sharing review fixes and the compact text patch. Only
-the GPUI revision, its profiler implementation and the reported revision
-constant differ in executable sources. The candidate was built in an isolated
-worktree; the main workspace dependency pin was preserved.
-This four-window workload confirmed that the new scratch-pool expiry releases
-unused textures, but did not establish a meaningful Linux gain with shipping
-defaults. The revision was not promoted to the main workspace.
-
-Five alternating pairs per setting use four windows on the same 204,001-commit
-repository, at 1400 x 900 in isolated Mutter Wayland sessions. The host has a
-Ryzen 9 5950X and a GTX 1080 using hardware Vulkan, NVIDIA 580.178.04. Settings
-are all experiments disabled, and
-`cropped-paths,shared-resources,pooled-targets` enabled together. Connector quads
-remain disabled. GPU diagnostics use 240 selection/scroll inputs and 480 hover
-moves; separate clean runs use 120 inputs and 240 hover moves without GPU
-queries, vendor monitoring or allocation instrumentation. Each additional
-window receives 60 selections after native focus changes.
-
-All 40 captures passed the scenario and window-isolation checks. The 20 clean
-captures passed every `max(5%, 1 ms)` input-to-draw, input-to-submit and CPU draw
-p95 guard for both revision comparisons. Comparing the candidate with and
-without the flags also passed those clean guards. Values below are medians of
-the five per-run measurements, shown as baseline to candidate:
-
-| Setting | Selection input-to-draw p95 (ms) | Scroll input-to-draw p95 (ms) | Hover draw p95 (ms) | Settled process PSS (MiB) |
-| --- | ---: | ---: | ---: | ---: |
-| Default | 18.99 → 18.93 | 17.04 → 17.08 | 1.55 → 1.56 | 538.1 → 534.1 |
-| Cropping + sharing + pooling | 18.97 → 18.95 | 16.88 → 17.12 | 1.52 → 1.58 | 530.6 → 526.6 |
-
-Startup to indexed readiness was 813 → 815 ms at defaults and 815 → 811 ms
-with flags. The roughly 4 MiB PSS median differences have overlapping run
-ranges; they do not establish a consistent memory reduction. File descriptors
-remained at 134 for both revisions/settings. The raw runs and all focus-phase
-guards remain in the analysis.
-
-All 20 GPU captures completed. Across their 120 active phases, 20,817 frames
-had timestamps: coverage was 100%, every phase had at least 110 timed frames,
-and there were no query drops, record drops or submission gaps. Optional device
-retention peaked at 13.18 MiB, below the 32 MiB limit. The allocation estimates
-show a concrete pooling improvement: the current revision still retained
-13.18 MiB at the end of selection and at the final settled frame sample in
-every run, while the candidate retained zero in all five runs. The new expiry
-therefore releases unused scratch textures as intended. Both revisions had the
-same peak retention, and driver-reported app framebuffer memory remained
-205 MB with pooling enabled. This benefit requires the opt-in pool; default
-rendering retained no optional textures on either revision.
-
-Automatic GPU clocks prevent attributing the raw timing differences to the
-revision: memory clocks alternated between 405/810 and 5,005 MHz in both
-executables. For example, default hover time was about 5.54 ms at the lower
-memory clock and 1.32 ms at the higher clock for both revisions. The analysis
-retains every capture and fails the GPU comparison when paired graphics or
-memory clocks differ by more than 5%. The following high-clock hover groups
-are descriptive only, with two baseline and three candidate samples; they do
-not replace the five-pair acceptance gate.
-
-| Setting | Baseline hover GPU p50 | Candidate hover GPU p50 | Baseline app framebuffer | Candidate app framebuffer |
-| --- | ---: | ---: | ---: | ---: |
-| Default | 1.319 ms | 1.319 ms | 269 MB | 269 MB |
-| Cropping + sharing + pooling | 0.917 ms | 0.915 ms | 205 MB | 205 MB |
-
-Hover groups use steady sampled graphics/memory clocks of 1,721/5,005 MHz.
-Framebuffer values are medians across all five settled runs per side, in
-NVIDIA `pmon`'s reported MB units. The memory reduction from these existing
-flags is present in both revisions. Process SM activity also differed with
-clocks and does not establish reduced work. Missing utilization samples in
-short phases stay unavailable; whole-device utilization and board power are
-not attributed to GitComet.
-
-The candidate passed 51 shared renderer tests and all four upstream source
-audits. Its native wgpu suite passed 54 tests, ignored one, and failed three
-existing alpha-contract cases, which also failed on the current revision:
-`quad_backgrounds_match_legacy_metal_pixels`,
-`quad_border_backgrounds_use_the_fill_coordinate_space`, and
-`underline_opacity_is_applied_once`. New optimization fixtures and resource
-lifetime tests passed. macOS font loading/Metal shader startup and native
-Windows behavior were not measured on this host. Frozen macOS controls and
-shipping GPU/allocator defaults remain unchanged.
-
-Captures, native test logs, source archives, hashes and frozen executables are
-under `target/performance/gpui-325cedb/`. `measurements.json` preserves the
-individual runs; `analysis.json` includes clean latency comparisons, memory,
-GPU coverage/budgets and clock diagnostics. `measure.py` and `analyze.py` in
-that directory reproduce the comparison with the frozen executables.
 
 ## GUI and process captures
 

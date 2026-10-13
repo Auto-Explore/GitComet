@@ -589,16 +589,12 @@ def find_app_pid(parent, binary):
     return None
 
 
-def load_average():
-    return perf_platform.load_average()
-
-
 def wait_for_quiet(max_load, timeout_s=4 * 3600, poll_s=5.0):
     """Blocks until the 1-minute load average drops below `max_load`: on a
     shared machine other builds would otherwise land inside a run."""
     deadline = time.monotonic() + timeout_s
     while True:
-        load = load_average()
+        load = perf_platform.load_average()
         if load is None:
             raise ValueError("--max-load needs a native load-average counter on this platform")
         if float(load[0]) < max_load:
@@ -755,7 +751,7 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
                "probe_interval_ms": int(env["GITCOMET_UI_PROBE_INTERVAL_MS"]),
                "measurement_kind": "diagnostic" if wrap or gpu else "live_application",
                "ping_ms": ping_ms, "wrap": wrap, "gpu_cache": "cold" if cold_gpu_cache else "warm",
-               "load_before": load_average(), "outcome": "failed",
+               "load_before": perf_platform.load_average(), "outcome": "failed",
                "cycles": cycles if name == "lifecycle" else None, "extra_env": extra_env or {}}
     capture["gpu_capture"] = {"requested": gpu}
     if metadata:
@@ -823,7 +819,7 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
                         capture.setdefault("cleanup_errors", []).append(str(error))
             capture["exit_code"] = process.returncode
             capture["wall_s"] = time.time() - started
-            capture["load_after"] = load_average()
+            capture["load_after"] = perf_platform.load_average()
             (output / "process.jsonl").write_text("".join(json.dumps(s) + "\n" for s in samples), encoding="utf-8")
             (output / "capture.json").write_text(json.dumps(capture, indent=2) + "\n", encoding="utf-8")
     crash_dir = output / "profile/state/gitcomet/crashes"
@@ -1202,20 +1198,14 @@ COMPLETION_SENSITIVE = ("inputs.input_to_", "inputs.apply_ms", "inputs.dispatch_
 LAUNCH_METRICS = [("spawn_to_first_draw_ms", "lower"), ("spawn_to_ready_ms", "lower")]
 
 
-def lookup(data, dotted):
-    for key in dotted.split("."):
-        data = data.get(key) if isinstance(data, dict) else None
-    return data
-
-
 def app_gpu_load(phase):
     """The app's GPU load on its busiest adapter: GPU ms per second on macOS,
     otherwise the interval-weighted NVIDIA SM or Windows busiest-engine percent."""
     loads = []
-    for adapter in (lookup(phase, "gpu.processes.app") or {}).values():
+    for adapter in (perf_metadata.lookup(phase, "gpu.processes.app") or {}).values():
         load = adapter.get("gpu_ms_per_s")
         for metric in ("sm_percent", "busiest_engine_percent"):
-            load = load if load is not None else lookup(adapter, metric + ".duration_weighted_mean")
+            load = load if load is not None else perf_metadata.lookup(adapter, metric + ".duration_weighted_mean")
         # Memory-only Windows adapters are harmless, but an observed active
         # adapter with unavailable counters could be the busiest one.
         if load is None and (adapter.get("engine_instances_observed") or 0) > 0:
@@ -1226,7 +1216,7 @@ def app_gpu_load(phase):
 
 
 def phase_metric(phase, metric):
-    return app_gpu_load(phase) if metric == "gpu.app_load" else lookup(phase, metric)
+    return app_gpu_load(phase) if metric == "gpu.app_load" else perf_metadata.lookup(phase, metric)
 
 
 def bootstrap_ratio(pairs, rounds=4000, seed=7):
@@ -1268,8 +1258,8 @@ def compare(samples, scenarios):
                     "candidate_median": statistics.median(c for _, c in values),
                     "ratio": bootstrap_ratio(values)}
                 if metric.startswith(COMPLETION_SENSITIVE):
-                    completed = [(lookup(p["baseline"]["summary"]["phases"][phase], "inputs.witnessed"),
-                                  lookup(p["candidate"]["summary"]["phases"].get(phase, {}), "inputs.witnessed"))
+                    completed = [(perf_metadata.lookup(p["baseline"]["summary"]["phases"][phase], "inputs.witnessed"),
+                                  perf_metadata.lookup(p["candidate"]["summary"]["phases"].get(phase, {}), "inputs.witnessed"))
                                  for p in pairs]
                     if any(b is None or c is None or abs(b - c) > 0.05 * max(b, c, 1) for b, c in completed):
                         entry["not_comparable"] = "variants completed different inputs; compare inputs.witnessed"
