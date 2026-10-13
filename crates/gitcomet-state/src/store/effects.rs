@@ -11,6 +11,7 @@ mod repo_commands;
 mod repo_load;
 mod unavailable;
 mod util;
+mod worktree_list;
 
 /// Called by the reducer as it drops a repo's handle, so the worktree scan's
 /// cached repository handles go with it. See [`repo_load`].
@@ -763,15 +764,19 @@ pub(super) fn schedule_effect(
             }
         }
         Effect::LoadWorktrees { repo_id } => {
-            if let Some((msg_tx, cancellation)) =
-                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
-            {
+            if let Some((msg_tx, cancellation, publisher)) = load_tokens::worktree_list_load_context(
+                thread_state,
+                repo_task_tokens,
+                msg_tx,
+                repo_id,
+            ) {
                 repo_load::schedule_load_worktrees(
                     repo_load_executor,
                     repos,
                     msg_tx,
                     repo_id,
                     cancellation,
+                    publisher,
                 );
             }
         }
@@ -781,9 +786,12 @@ pub(super) fn schedule_effect(
             scope,
             files_for,
         } => {
-            if let Some((msg_tx, cancellation)) =
-                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
-            {
+            if let Some((msg_tx, cancellation, publisher)) = load_tokens::worktree_list_load_context(
+                thread_state,
+                repo_task_tokens,
+                msg_tx,
+                repo_id,
+            ) {
                 repo_load::schedule_load_worktree_dirty(
                     worktree_scan_executor,
                     backend.clone(),
@@ -794,6 +802,7 @@ pub(super) fn schedule_effect(
                     scope,
                     files_for,
                     cancellation,
+                    publisher,
                 );
             }
         }

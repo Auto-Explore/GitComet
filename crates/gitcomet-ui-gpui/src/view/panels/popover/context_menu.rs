@@ -651,6 +651,9 @@ impl PopoverHost {
                 path,
                 branch.as_deref(),
                 self.external_editor_available(),
+                self.worktree_menu_location
+                    .as_ref()
+                    .is_some_and(|(cached_path, available)| cached_path == path && *available),
             )),
             PopoverKind::Repo {
                 repo_id,

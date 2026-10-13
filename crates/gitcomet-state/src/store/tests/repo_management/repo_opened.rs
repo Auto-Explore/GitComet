@@ -111,6 +111,16 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
     assert!(repo_state.rebase_in_progress.is_loading());
     assert!(repo_state.merge_commit_message.is_loading());
     assert!(repo_state.worktrees.is_loading());
+    assert!(
+        repo_state
+            .loads_in_flight
+            .is_in_flight(RepoLoadsInFlight::WORKTREE_DIRTY)
+    );
+    assert!(
+        repo_state
+            .loads_in_flight
+            .is_in_flight(RepoLoadsInFlight::WORKTREES)
+    );
     assert!(repo_state.submodules.is_loading());
     assert!(matches!(
         repo_state.history_state.file_history,
@@ -191,6 +201,7 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
         }
     ));
     assert!(has_worktree_refresh_effect(&effects, RepoId(1)));
+    assert_independent_worktree_list_load(&effects, RepoId(1));
     assert!(has_submodule_load_effect(&effects, RepoId(1)));
 }
 

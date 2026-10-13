@@ -7,6 +7,7 @@ struct RepoActivationCallCounts {
     log: std::sync::atomic::AtomicUsize,
     branches: std::sync::atomic::AtomicUsize,
     remote_branches: std::sync::atomic::AtomicUsize,
+    worktree_lists: std::sync::atomic::AtomicUsize,
 }
 
 impl RepoActivationCallCounts {
@@ -15,6 +16,8 @@ impl RepoActivationCallCounts {
         self.log.store(0, std::sync::atomic::Ordering::Relaxed);
         self.branches.store(0, std::sync::atomic::Ordering::Relaxed);
         self.remote_branches
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        self.worktree_lists
             .store(0, std::sync::atomic::Ordering::Relaxed);
     }
 
@@ -105,6 +108,18 @@ impl GitRepository for RepoActivationRecordingRepo {
             staged: std::sync::Arc::new(Vec::new()),
             unstaged: std::sync::Arc::new(Vec::new()),
         })
+    }
+
+    fn list_worktrees(&self) -> Result<Vec<gitcomet_core::domain::Worktree>> {
+        self.calls
+            .worktree_lists
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(vec![gitcomet_core::domain::Worktree {
+            path: self.spec.workdir.clone(),
+            head: None,
+            branch: Some("main".into()),
+            detached: false,
+        }])
     }
 
     fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -398,6 +413,59 @@ fn repo_monitor_unavailable_repo_activation_falls_back_to_git_state_refresh() {
     assert!(
         remote_branches > 0,
         "fallback should schedule remote-branch loading"
+    );
+}
+
+#[test]
+fn repo_activation_reuses_one_worktree_listing_and_file_edits_add_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let workdir = canonicalize_or_original(dir.path().to_path_buf());
+    let repo_id = RepoId(23);
+    let calls = Arc::new(RepoActivationCallCounts::default());
+    let mut state = active_ready_repo_state(repo_id, workdir.clone());
+    state.repos[0].set_worktrees(Loadable::Ready(Vec::new()));
+    let (store, _events) = AppStore::new_test(Arc::new(FailingBackend));
+    store.disable_repo_monitors_for_test();
+    store.replace_snapshot_for_test(Arc::new(state));
+    store.insert_repo_for_test(
+        repo_id,
+        Arc::new(RepoActivationRecordingRepo::new(
+            workdir.clone(),
+            calls.clone(),
+        )),
+    );
+    store.dispatch(Msg::RepoActivated { repo_id });
+    super::worktree_redirect::wait_until("focus to refresh the worktree list", || {
+        let state = store.snapshot();
+        state.repos[0]
+            .worktrees
+            .ready()
+            .is_some_and(|list| list.len() == 1 && list[0].path == workdir)
+            && !state.repos[0].loads_in_flight.any_in_flight()
+    });
+    for change in [
+        crate::msg::RepoExternalChange::Worktree,
+        crate::msg::RepoExternalChange::Index,
+    ] {
+        store.dispatch(Msg::RepoExternallyChanged { repo_id, change });
+    }
+    store
+        .barrier_for_test()
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap();
+    super::worktree_redirect::wait_until("file edit refreshes to finish", || {
+        !store.snapshot().repos[0].loads_in_flight.any_in_flight()
+    });
+    store
+        .shutdown_for_test()
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap();
+    assert_eq!(
+        calls
+            .worktree_lists
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "focus must reuse the dirty scan's one list query, and edit/stage must add none"
     );
 }
 

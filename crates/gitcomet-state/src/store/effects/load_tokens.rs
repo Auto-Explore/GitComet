@@ -1,6 +1,7 @@
 //! Per-repository load tokens: the cancellation scope of a repository's loads,
 //! the contexts load effects are scheduled under, and the effects that manage them.
 
+use super::worktree_list::WorktreeListPublisher;
 use super::{repo_load, selected_diff_target};
 use crate::model::{AppState, Loadable, LogLoadSeq, RepoId};
 use crate::store::executor::{LatestTaskSlot, SelectedDiffSlots, TaskExecutor};
@@ -30,6 +31,7 @@ pub(in crate::store) struct RepoTaskToken {
     selected_diff_key: Option<(DiffTarget, u64)>,
     selected_diff_slots: SelectedDiffSlots,
     commit_details_slot: LatestTaskSlot,
+    worktree_list_publisher: WorktreeListPublisher,
 }
 
 impl RepoTaskToken {
@@ -43,6 +45,7 @@ impl RepoTaskToken {
             selected_diff_key: None,
             selected_diff_slots: SelectedDiffSlots::default(),
             commit_details_slot: LatestTaskSlot::default(),
+            worktree_list_publisher: WorktreeListPublisher::default(),
         }
     }
 
@@ -196,6 +199,17 @@ pub(super) fn commit_details_load_context(
     let token = ensure_repo_task_token(thread_state, repo_task_tokens, repo_id)?;
     let msg_tx = msg_tx.with_repo_load_guard(repo_id, token.load_epoch, token.cancellation);
     Some((msg_tx, token.commit_details_slot))
+}
+
+pub(super) fn worktree_list_load_context(
+    thread_state: &Arc<RwLock<Arc<AppState>>>,
+    repo_task_tokens: &mut FxHashMap<RepoId, RepoTaskToken>,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+) -> Option<(StoreWorkerSender, CancellationToken, WorktreeListPublisher)> {
+    let token = ensure_repo_task_token(thread_state, repo_task_tokens, repo_id)?;
+    let msg_tx = msg_tx.with_repo_load_guard(repo_id, token.load_epoch, token.cancellation.clone());
+    Some((msg_tx, token.cancellation, token.worktree_list_publisher))
 }
 
 /// Like [`repo_load_context`], but for the log walk: the returned token covers

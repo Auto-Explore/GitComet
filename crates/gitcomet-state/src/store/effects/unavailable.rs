@@ -274,6 +274,7 @@ pub(super) fn send_unavailable_git_effect_result(
         Effect::LoadWorktrees { repo_id } => {
             send(Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded {
                 repo_id,
+                read: crate::msg::WorktreeListRead::explicit(),
                 result: Err(git_unavailable_error(runtime)),
             }))
         }

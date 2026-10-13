@@ -7,6 +7,7 @@ mod runtime_recovery;
 mod setup_recovery;
 mod storage_and_links;
 mod synchronization;
+mod worktree_list;
 use super::super::test_sync::{DrainAck, QUIET_WINDOW, SYNC_TIMEOUT};
 
 fn repository() -> (tempfile::TempDir, PathBuf) {

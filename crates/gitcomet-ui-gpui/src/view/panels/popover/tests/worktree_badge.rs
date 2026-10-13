@@ -41,6 +41,74 @@ fn repo_with_worktrees(repo_id: RepoId) -> RepoState {
     repo
 }
 
+#[gpui::test]
+fn worktree_folder_location_is_cached_until_menu_reopens(cx: &mut gpui::TestAppContext) {
+    let repo_id = RepoId(1);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("checkout");
+    std::fs::create_dir(&path).unwrap();
+    let (view, cx) = open_worktree_badge_picker(cx, repo_with_worktrees(repo_id), repo_id);
+    let host = cx.update(|_window, app| view.read(app).popover_host.clone());
+    let kind = PopoverKind::worktree(
+        repo_id,
+        WorktreePopoverKind::Menu {
+            path: path.clone(),
+            branch: None,
+        },
+    );
+    let open = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, app| {
+            host.update(app, |host, cx| {
+                host.open_popover_at(
+                    kind.clone(),
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+            })
+        });
+        cx.run_until_parked();
+    };
+    let disabled = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            host.update(app, |host, cx| {
+                host.context_menu_model(&kind, cx)
+                    .unwrap()
+                    .items
+                    .iter()
+                    .find_map(|item| match item {
+                        ContextMenuItem::Entry {
+                            action, disabled, ..
+                        } if matches!(
+                            action.as_ref(),
+                            ContextMenuAction::OpenRepositoryLocation { .. }
+                        ) =>
+                        {
+                            Some(*disabled)
+                        }
+                        _ => None,
+                    })
+                    .unwrap()
+            })
+        })
+    };
+    open(cx);
+    assert!(!disabled(cx));
+    std::fs::remove_dir(&path).unwrap();
+    for _ in 0..3 {
+        redraw(cx);
+        assert!(
+            !disabled(cx),
+            "repainting a menu must not check the filesystem again"
+        );
+    }
+    open(cx);
+    assert!(
+        disabled(cx),
+        "reopening must refresh the cached availability"
+    );
+}
+
 /// Opens the workspace badge picker over a state containing `repo`.
 fn open_worktree_badge_picker(
     cx: &mut gpui::TestAppContext,

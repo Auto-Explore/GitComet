@@ -1,5 +1,5 @@
 use crate::model::{AppState, ConflictFileLoadMode, WorktreeDirtyScope};
-use crate::msg::Msg;
+use crate::msg::{Msg, WorktreeListRead};
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession, ConflictStageParts};
 use gitcomet_core::domain::{
     DiffArea, DiffPreviewTextSide, DiffTarget, LogCursor, LogScope, RepoStatus, Worktree,
@@ -23,6 +23,7 @@ use super::util::{
     RepoMap, missing_repo_error, send_or_log, spawn_detached_with_repo_or_else, spawn_with_repo,
     spawn_with_repo_or_else,
 };
+use super::worktree_list::WorktreeListPublisher;
 
 pub(super) struct SelectedDiffLoadOptions {
     /// Read the file's `.gitattributes` and text config.
@@ -1164,6 +1165,7 @@ pub(super) fn schedule_load_worktrees(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
+    publisher: WorktreeListPublisher,
 ) {
     spawn_detached_with_repo_or_else(
         executor,
@@ -1172,19 +1174,16 @@ pub(super) fn schedule_load_worktrees(
         repo_id,
         msg_tx,
         move |repo, msg_tx| {
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded {
-                    repo_id,
-                    result: repo.list_worktrees_cancellable(&cancellation),
-                }),
-            );
+            let read = WorktreeListRead::explicit();
+            let result = repo.list_worktrees_cancellable(&cancellation).map(Arc::new);
+            publisher.publish(&msg_tx, repo_id, read, result);
         },
         move |msg_tx| {
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded {
                     repo_id,
+                    read: WorktreeListRead::explicit(),
                     result: Err(missing_repo_error(repo_id)),
                 }),
             );
@@ -1196,12 +1195,14 @@ pub(super) fn schedule_load_worktrees(
 ///
 /// The worktree list is re-read inside the task rather than passed in from
 /// state: this way the scan can never disagree with the paths it walks, and it
-/// has no ordering dependency on `LoadWorktrees` having landed first. One `git
-/// worktree list` is negligible next to the per-worktree status scans that
-/// follow.
+/// has no ordering dependency on `LoadWorktrees` having landed first. Full scans
+/// publish changed listings before status work, keeping the sidebar current
+/// even when checkouts are inaccessible. Targeted scans avoid another state
+/// publication on every file edit; git-state changes already request full scans.
 ///
 /// A worktree that cannot be opened or stat'd is skipped rather than failing the
 /// whole scan — removed directories and unmounted volumes are routine.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn schedule_load_worktree_dirty(
     executor: &TaskExecutor,
     backend: Arc<dyn GitBackend>,
@@ -1212,6 +1213,7 @@ pub(super) fn schedule_load_worktree_dirty(
     scope: WorktreeDirtyScope,
     files_for: Option<PathBuf>,
     cancellation: CancellationToken,
+    publisher: WorktreeListPublisher,
 ) {
     let missing_scope = scope.clone();
     spawn_detached_with_repo_or_else(
@@ -1222,6 +1224,7 @@ pub(super) fn schedule_load_worktree_dirty(
         msg_tx,
         move |repo, msg_tx| {
             let own_workdir = canonicalize_or_original(own_workdir);
+            let read = WorktreeListRead::from_dirty_scan();
             let result = repo
                 .list_worktrees_cancellable(&cancellation)
                 .inspect_err(|_| {
@@ -1238,9 +1241,15 @@ pub(super) fn schedule_load_worktree_dirty(
                     }
                 })
                 .and_then(|worktrees| {
+                    let worktrees = Arc::new(worktrees);
+                    if matches!(scope, WorktreeDirtyScope::All) {
+                        // Background failures must not change the explicit list's
+                        // state or produce a diagnostic on every focus/flush.
+                        publisher.publish(&msg_tx, repo_id, read, Ok(worktrees.clone()));
+                    }
                     let mut summaries = Vec::new();
                     let mut scanned = Vec::with_capacity(worktrees.len());
-                    for worktree in worktrees {
+                    for worktree in worktrees.iter() {
                         // A scan that stops here has seen only a prefix of the
                         // list, and the reducer commits an `Ok` as the complete
                         // set of dirty worktrees: it would blank the rows for
@@ -1288,6 +1297,9 @@ pub(super) fn schedule_load_worktree_dirty(
                                 continue;
                             }
                         };
+                        if status.staged.is_empty() && status.unstaged.is_empty() {
+                            continue;
+                        }
                         // Only the selected worktree's files are carried back;
                         // see `WorktreeDirtySummary`.
                         let keep_files = files_for.as_deref() == Some(worktree.path.as_path());
@@ -1311,8 +1323,12 @@ pub(super) fn schedule_load_worktree_dirty(
                         } else {
                             Default::default()
                         };
-                        let summary =
-                            worktree_dirty_summary(worktree, status, keep_files, line_stats);
+                        let summary = worktree_dirty_summary(
+                            worktree.clone(),
+                            status,
+                            keep_files,
+                            line_stats,
+                        );
                         if summary.is_dirty() {
                             summaries.push(summary);
                         }
@@ -3264,6 +3280,72 @@ mod worktree_dirty_files_tests {
     use super::*;
     use gitcomet_core::domain::{CommitId, FileStatus, FileStatusKind};
 
+    #[test]
+    fn unchanged_full_scans_do_not_republish_the_list() {
+        let (_dir, own, _) = crate::store::tests::repo_with_linked_worktree();
+        let repo_id = RepoId(4107);
+        let worker = ScanTestWorker::new(repo_id);
+        let backend: Arc<dyn GitBackend> = Arc::new(gitcomet_git_gix::GixBackend);
+        let repos = FxHashMap::from_iter([(repo_id, backend.open(&own).unwrap())]);
+        for expected in [1, 0, 0] {
+            let (tx, rx) = std::sync::mpsc::channel();
+            schedule_load_worktree_dirty(
+                &worker.executor,
+                backend.clone(),
+                &repos,
+                StoreWorkerSender::for_test_msg_sender(tx),
+                repo_id,
+                own.clone(),
+                WorktreeDirtyScope::All,
+                None,
+                CancellationToken::new(),
+                worker.publisher.clone(),
+            );
+            let mut listings = 0;
+            loop {
+                match rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap() {
+                    Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded { .. }) => listings += 1,
+                    Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+                        result, ..
+                    }) => {
+                        result.unwrap();
+                        break;
+                    }
+                    other => panic!("unexpected reply: {other:?}"),
+                }
+            }
+            assert_eq!(
+                listings, expected,
+                "unchanged scans must not cause extra state copies"
+            );
+        }
+    }
+
+    struct ScanTestWorker {
+        executor: TaskExecutor,
+        repo_id: RepoId,
+        publisher: WorktreeListPublisher,
+    }
+
+    impl ScanTestWorker {
+        fn new(repo_id: RepoId) -> Self {
+            Self {
+                executor: TaskExecutor::new(1),
+                repo_id,
+                publisher: WorktreeListPublisher::default(),
+            }
+        }
+    }
+
+    impl Drop for ScanTestWorker {
+        fn drop(&mut self) {
+            // Finish writes to the shared cache before releasing ownership,
+            // including when a test assertion unwinds.
+            self.executor.join_workers();
+            release_worktree_scan_handles(self.repo_id);
+        }
+    }
+
     fn status(paths: &[&str]) -> RepoStatus {
         RepoStatus {
             staged: std::sync::Arc::new(Vec::new()),
@@ -3287,6 +3369,142 @@ mod worktree_dirty_files_tests {
             branch: Some("side".into()),
             detached: false,
         }
+    }
+
+    #[test]
+    fn failed_scan_does_not_publish_a_worktree_listing() {
+        use crate::msg::InternalMsg;
+        use crate::store::tests::{DummyRepo, FailingBackend};
+        let repo_id = RepoId(4106);
+        let worker = ScanTestWorker::new(repo_id);
+        let repo: Arc<dyn GitRepository> = Arc::new(DummyRepo::new("/unavailable"));
+        let repos = FxHashMap::from_iter([(repo_id, repo)]);
+        for scope in [
+            WorktreeDirtyScope::All,
+            WorktreeDirtyScope::Paths(vec!["/linked".into()]),
+        ] {
+            let (tx, rx) = std::sync::mpsc::channel();
+            schedule_load_worktree_dirty(
+                &worker.executor,
+                Arc::new(FailingBackend),
+                &repos,
+                StoreWorkerSender::for_test_msg_sender(tx),
+                repo_id,
+                "/unavailable".into(),
+                scope,
+                None,
+                CancellationToken::new(),
+                worker.publisher.clone(),
+            );
+            let reply = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+            assert!(
+                matches!(
+                    reply,
+                    Msg::Internal(InternalMsg::WorktreeDirtyLoaded { result: Err(_), .. })
+                ),
+                "a failed scan must only finish its dirty-scan request: {reply:?}"
+            );
+            assert!(rx.recv_timeout(std::time::Duration::from_secs(5)).is_err());
+        }
+    }
+
+    #[test]
+    fn scan_publishes_complete_worktree_list_before_opening_checkouts() {
+        use crate::msg::InternalMsg;
+        use crate::store::tests::repo_with_linked_worktree;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        struct BlockingBackend {
+            started: mpsc::Sender<()>,
+            release: Mutex<Option<mpsc::Receiver<()>>>,
+            opens: AtomicUsize,
+        }
+        impl GitBackend for BlockingBackend {
+            fn open(&self, path: &Path) -> Result<Arc<dyn GitRepository>, Error> {
+                self.opens.fetch_add(1, Ordering::Relaxed);
+                if let Some(release) = self.release.lock().unwrap().take() {
+                    self.started.send(()).unwrap();
+                    release.recv_timeout(Duration::from_secs(10)).unwrap();
+                }
+                gitcomet_git_gix::GixBackend.open(path)
+            }
+        }
+
+        let (dir, own, _) = repo_with_linked_worktree();
+        let missing = dir.path().join("missing");
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&own)
+            .args(["worktree", "add", "--detach"])
+            .arg(&missing)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        std::fs::remove_dir_all(&missing).unwrap();
+        let repo_id = RepoId(4105);
+        let worker = ScanTestWorker::new(repo_id);
+        let repo = gitcomet_git_gix::GixBackend.open(&own).unwrap();
+        let expected = repo.list_worktrees().unwrap();
+        let repos = FxHashMap::from_iter([(repo_id, repo)]);
+        let (started, started_rx) = mpsc::channel();
+        let (release_tx, release) = mpsc::channel();
+        let backend = Arc::new(BlockingBackend {
+            started,
+            release: Mutex::new(Some(release)),
+            opens: AtomicUsize::new(0),
+        });
+        let (tx, rx) = mpsc::channel();
+        schedule_load_worktree_dirty(
+            &worker.executor,
+            backend.clone(),
+            &repos,
+            StoreWorkerSender::for_test_msg_sender(tx),
+            repo_id,
+            own,
+            WorktreeDirtyScope::All,
+            None,
+            CancellationToken::new(),
+            worker.publisher.clone(),
+        );
+        started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let first = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let premature = rx.try_recv();
+        release_tx.send(()).unwrap();
+        match first {
+            Msg::Internal(InternalMsg::WorktreesLoaded {
+                read,
+                result: Ok(list),
+                ..
+            }) => {
+                assert!(!read.completes_load);
+                assert_eq!(list.as_ref(), &expected);
+                assert_eq!(
+                    list.len(),
+                    3,
+                    "own, clean, and missing checkouts all belong in the list"
+                );
+            }
+            other => panic!("expected listing before status work, got {other:?}"),
+        }
+        assert!(matches!(premature, Err(mpsc::TryRecvError::Empty)));
+        match rx.recv_timeout(Duration::from_secs(10)).unwrap() {
+            Msg::Internal(InternalMsg::WorktreeDirtyLoaded {
+                result: Ok(dirty), ..
+            }) => assert!(dirty.is_empty()),
+            other => panic!("expected clean dirty-summary result, got {other:?}"),
+        }
+        drop(worker);
+        assert_eq!(
+            backend.opens.load(Ordering::Relaxed),
+            2,
+            "each other checkout is opened only once"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "reading the list must not queue more work"
+        );
     }
 
     #[test]
@@ -3329,11 +3547,11 @@ mod worktree_dirty_files_tests {
         let backend = Arc::new(CountingBackend {
             opened: Mutex::new(Vec::new()),
         });
-        let executor = TaskExecutor::new(1);
+        let worker = ScanTestWorker::new(repo_id);
         let scan = |scope: WorktreeDirtyScope, files_for| {
             let (tx, rx) = std::sync::mpsc::channel();
             schedule_load_worktree_dirty(
-                &executor,
+                &worker.executor,
                 backend.clone(),
                 &repos,
                 StoreWorkerSender::for_test_msg_sender(tx),
@@ -3342,9 +3560,14 @@ mod worktree_dirty_files_tests {
                 scope.clone(),
                 files_for,
                 CancellationToken::new(),
+                worker.publisher.clone(),
             );
+            let mut listings = 0;
             loop {
                 let msg = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                if matches!(&msg, Msg::Internal(InternalMsg::WorktreesLoaded { .. })) {
+                    listings += 1;
+                }
                 if let Msg::Internal(InternalMsg::WorktreeDirtyLoaded {
                     scope: returned,
                     result,
@@ -3352,6 +3575,11 @@ mod worktree_dirty_files_tests {
                 }) = msg
                 {
                     assert_eq!(returned, scope);
+                    assert_eq!(
+                        listings,
+                        usize::from(matches!(scope, WorktreeDirtyScope::All)),
+                        "targeted file edits must not publish an extra state snapshot"
+                    );
                     break result.unwrap();
                 }
             }
@@ -3375,8 +3603,7 @@ mod worktree_dirty_files_tests {
         // A removed target returns a scoped empty result; it cannot erase other rows.
         let missing = dir.path().join("missing");
         assert!(scan(WorktreeDirtyScope::Paths(vec![missing]), None).is_empty());
-        executor.join();
-        release_worktree_scan_handles(repo_id);
+        drop(worker);
     }
 
     /// The file lists are the expensive part of a summary -- an un-ignored build

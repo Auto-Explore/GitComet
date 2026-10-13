@@ -1733,8 +1733,8 @@ fn wait_for_repo_open(store: &AppStore, repo_id: RepoId) {
     }
 }
 
-/// Hand-fed `BranchesLoaded`/`WorktreesLoaded` must land after the backend's own
-/// replies, which have no generation guard and would overwrite them.
+/// Hand-fed sidebar results must land after startup loads have settled; another
+/// queued backend refresh could otherwise replace the fixture.
 fn wait_for_sidebar_loads_to_settle(
     cx: &mut gpui::VisualTestContext,
     store: &AppStore,
@@ -1751,6 +1751,11 @@ fn wait_for_sidebar_loads_to_settle(
             repo.sidebar_data_request.worktrees
                 && !matches!(repo.worktrees, Loadable::Loading | Loadable::NotLoaded)
                 && !matches!(repo.branches, Loadable::Loading | Loadable::NotLoaded)
+                && !repo.loads_in_flight.is_in_flight(
+                    gitcomet_state::model::RepoLoadsInFlight::WORKTREES
+                        | gitcomet_state::model::RepoLoadsInFlight::WORKTREE_DIRTY
+                        | gitcomet_state::model::RepoLoadsInFlight::BRANCHES,
+                )
         });
         if settled {
             return;
@@ -1770,6 +1775,16 @@ fn wait_for_sidebar_loads_to_settle(
         cx.run_until_parked();
         std::thread::yield_now();
     }
+}
+
+fn publish_worktrees_for_test(store: &AppStore, repo_id: RepoId, worktrees: Vec<Worktree>) {
+    store.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
+            repo_id,
+            read: gitcomet_state::msg::WorktreeListRead::observation_for_test(),
+            result: Ok(Arc::new(worktrees)),
+        },
+    ));
 }
 
 fn wait_until(description: &str, ready: impl Fn() -> bool) {
@@ -2414,17 +2429,16 @@ fn listed_worktree_badge_double_click_opens_closed_repo_tab(cx: &mut gpui::TestA
             }]),
         },
     ));
-    store_for_test.dispatch(Msg::Internal(
-        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
-            repo_id,
-            result: Ok(vec![Worktree {
-                path: linked_repo.clone(),
-                head: None,
-                branch: Some("feature/workspace".to_string()),
-                detached: false,
-            }]),
-        },
-    ));
+    publish_worktrees_for_test(
+        &store_for_test,
+        repo_id,
+        vec![Worktree {
+            path: linked_repo.clone(),
+            head: None,
+            branch: Some("feature/workspace".to_string()),
+            detached: false,
+        }],
+    );
 
     let badge_ix = wait_for_debug_index(cx, &_view, "branch_worktree_badge", 64);
     let badge_selector = debug_selector("branch_worktree_badge", badge_ix);
@@ -2474,17 +2488,16 @@ fn branch_worktree_badge_aligns_to_edge_and_branch_menu_opens_on_right_click(
             }]),
         },
     ));
-    store_for_test.dispatch(Msg::Internal(
-        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
-            repo_id,
-            result: Ok(vec![Worktree {
-                path: base.join("repo-feature"),
-                head: None,
-                branch: Some("feature/workspace".to_string()),
-                detached: false,
-            }]),
-        },
-    ));
+    publish_worktrees_for_test(
+        &store_for_test,
+        repo_id,
+        vec![Worktree {
+            path: base.join("repo-feature"),
+            head: None,
+            branch: Some("feature/workspace".to_string()),
+            detached: false,
+        }],
+    );
 
     let badge_ix = wait_for_debug_index(cx, &view, "branch_worktree_badge", 64);
     let row_selector = Box::leak(format!("branch_row_{}_{}", repo_id.0, badge_ix).into_boxed_str());
@@ -2572,17 +2585,16 @@ fn worktree_branch_badge_shows_full_tooltip_when_truncated(cx: &mut gpui::TestAp
         .join("repo-feature")
         .join("nested")
         .join("workspace-with-a-long-path");
-    store_for_test.dispatch(Msg::Internal(
-        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
-            repo_id,
-            result: Ok(vec![Worktree {
-                path: linked_repo,
-                head: None,
-                branch: Some(branch.clone()),
-                detached: false,
-            }]),
-        },
-    ));
+    publish_worktrees_for_test(
+        &store_for_test,
+        repo_id,
+        vec![Worktree {
+            path: linked_repo,
+            head: None,
+            branch: Some(branch.clone()),
+            detached: false,
+        }],
+    );
 
     let section_ix = wait_for_debug_index(cx, &view, "worktrees_section", 64);
     // The fixture backend reports unsupported loads as errors, which stay
@@ -2636,17 +2648,16 @@ fn worktree_branch_and_path_stay_within_one_sidebar_row(cx: &mut gpui::TestAppCo
 
     let worktree_root = base.join("ae");
     let branch = "feature/badge-expands".to_string();
-    store_for_test.dispatch(Msg::Internal(
-        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
-            repo_id,
-            result: Ok(vec![Worktree {
-                path: worktree_root.join("agent4"),
-                head: None,
-                branch: Some(branch.clone()),
-                detached: false,
-            }]),
-        },
-    ));
+    publish_worktrees_for_test(
+        &store_for_test,
+        repo_id,
+        vec![Worktree {
+            path: worktree_root.join("agent4"),
+            head: None,
+            branch: Some(branch.clone()),
+            detached: false,
+        }],
+    );
 
     let section_ix = wait_for_debug_index(cx, &view, "worktrees_section", 64);
     // The fixture backend reports unsupported loads as errors, which stay
@@ -2737,17 +2748,16 @@ fn worktree_badge_appears_when_worktree_added_for_branch(cx: &mut gpui::TestAppC
             }]),
         },
     ));
-    store_for_test.dispatch(Msg::Internal(
-        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
-            repo_id,
-            result: Ok(vec![Worktree {
-                path: base.join("repo-feature"),
-                head: None,
-                branch: Some("feature/workspace".to_string()),
-                detached: false,
-            }]),
-        },
-    ));
+    publish_worktrees_for_test(
+        &store_for_test,
+        repo_id,
+        vec![Worktree {
+            path: base.join("repo-feature"),
+            head: None,
+            branch: Some("feature/workspace".to_string()),
+            detached: false,
+        }],
+    );
 
     let badge_ix = wait_for_debug_index(cx, &view, "branch_worktree_badge", 64);
     assert!(
@@ -2786,17 +2796,16 @@ fn worktree_badge_disappears_when_worktree_removed(cx: &mut gpui::TestAppContext
             }]),
         },
     ));
-    store_for_test.dispatch(Msg::Internal(
-        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
-            repo_id,
-            result: Ok(vec![Worktree {
-                path: base.join("repo-feature"),
-                head: None,
-                branch: Some("feature/workspace".to_string()),
-                detached: false,
-            }]),
-        },
-    ));
+    publish_worktrees_for_test(
+        &store_for_test,
+        repo_id,
+        vec![Worktree {
+            path: base.join("repo-feature"),
+            head: None,
+            branch: Some("feature/workspace".to_string()),
+            detached: false,
+        }],
+    );
 
     let badge_ix = wait_for_debug_index(cx, &view, "branch_worktree_badge", 64);
     assert!(
@@ -2805,12 +2814,7 @@ fn worktree_badge_disappears_when_worktree_removed(cx: &mut gpui::TestAppContext
         "expected workspace badge to appear"
     );
 
-    store_for_test.dispatch(Msg::Internal(
-        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
-            repo_id,
-            result: Ok(vec![]),
-        },
-    ));
+    publish_worktrees_for_test(&store_for_test, repo_id, vec![]);
 
     let deadline = Instant::now() + Duration::from_secs(1);
     let disappeared = loop {
@@ -2862,17 +2866,16 @@ fn worktree_badge_disappears_when_worktree_detaches(cx: &mut gpui::TestAppContex
             }]),
         },
     ));
-    store_for_test.dispatch(Msg::Internal(
-        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
-            repo_id,
-            result: Ok(vec![Worktree {
-                path: base.join("repo-feature"),
-                head: None,
-                branch: Some("feature/workspace".to_string()),
-                detached: false,
-            }]),
-        },
-    ));
+    publish_worktrees_for_test(
+        &store_for_test,
+        repo_id,
+        vec![Worktree {
+            path: base.join("repo-feature"),
+            head: None,
+            branch: Some("feature/workspace".to_string()),
+            detached: false,
+        }],
+    );
 
     let badge_ix = wait_for_debug_index(cx, &view, "branch_worktree_badge", 64);
     assert!(
@@ -2881,17 +2884,16 @@ fn worktree_badge_disappears_when_worktree_detaches(cx: &mut gpui::TestAppContex
         "expected workspace badge to appear"
     );
 
-    store_for_test.dispatch(Msg::Internal(
-        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
-            repo_id,
-            result: Ok(vec![Worktree {
-                path: base.join("repo-feature"),
-                head: None,
-                branch: None,
-                detached: true,
-            }]),
-        },
-    ));
+    publish_worktrees_for_test(
+        &store_for_test,
+        repo_id,
+        vec![Worktree {
+            path: base.join("repo-feature"),
+            head: None,
+            branch: None,
+            detached: true,
+        }],
+    );
 
     let deadline = Instant::now() + Duration::from_secs(1);
     let disappeared = loop {
@@ -2951,17 +2953,16 @@ fn worktree_badge_moves_when_worktree_branch_renames(cx: &mut gpui::TestAppConte
             ]),
         },
     ));
-    store_for_test.dispatch(Msg::Internal(
-        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
-            repo_id,
-            result: Ok(vec![Worktree {
-                path: base.join("repo-feature"),
-                head: None,
-                branch: Some("feature/old".to_string()),
-                detached: false,
-            }]),
-        },
-    ));
+    publish_worktrees_for_test(
+        &store_for_test,
+        repo_id,
+        vec![Worktree {
+            path: base.join("repo-feature"),
+            head: None,
+            branch: Some("feature/old".to_string()),
+            detached: false,
+        }],
+    );
 
     let badge_ix = wait_for_debug_index(cx, &view, "branch_worktree_badge", 64);
     assert!(
@@ -2970,17 +2971,16 @@ fn worktree_badge_moves_when_worktree_branch_renames(cx: &mut gpui::TestAppConte
         "expected workspace badge to appear on old branch"
     );
 
-    store_for_test.dispatch(Msg::Internal(
-        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
-            repo_id,
-            result: Ok(vec![Worktree {
-                path: base.join("repo-feature"),
-                head: None,
-                branch: Some("feature/new".to_string()),
-                detached: false,
-            }]),
-        },
-    ));
+    publish_worktrees_for_test(
+        &store_for_test,
+        repo_id,
+        vec![Worktree {
+            path: base.join("repo-feature"),
+            head: None,
+            branch: Some("feature/new".to_string()),
+            detached: false,
+        }],
+    );
 
     let deadline = Instant::now() + Duration::from_secs(1);
     let index = loop {
@@ -3022,17 +3022,16 @@ fn worktree_branch_badge_hidden_for_detached_worktree_item(cx: &mut gpui::TestAp
     wait_for_repo_open(&store_for_test, repo_id);
     wait_for_sidebar_loads_to_settle(cx, &store_for_test, &view, repo_id);
 
-    store_for_test.dispatch(Msg::Internal(
-        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
-            repo_id,
-            result: Ok(vec![Worktree {
-                path: base.join("repo-detached"),
-                head: None,
-                branch: None,
-                detached: true,
-            }]),
-        },
-    ));
+    publish_worktrees_for_test(
+        &store_for_test,
+        repo_id,
+        vec![Worktree {
+            path: base.join("repo-detached"),
+            head: None,
+            branch: None,
+            detached: true,
+        }],
+    );
 
     let section_ix = wait_for_debug_index(cx, &view, "worktrees_section", 64);
     click_debug_selector(cx, debug_selector("worktrees_section", section_ix), 1);
@@ -3079,17 +3078,16 @@ fn worktree_badge_survives_reload_repo_and_manual_worktree_resupply(cx: &mut gpu
             }]),
         },
     ));
-    store_for_test.dispatch(Msg::Internal(
-        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
-            repo_id,
-            result: Ok(vec![Worktree {
-                path: base.join("repo-feature"),
-                head: None,
-                branch: Some("feature/workspace".to_string()),
-                detached: false,
-            }]),
-        },
-    ));
+    publish_worktrees_for_test(
+        &store_for_test,
+        repo_id,
+        vec![Worktree {
+            path: base.join("repo-feature"),
+            head: None,
+            branch: Some("feature/workspace".to_string()),
+            detached: false,
+        }],
+    );
 
     let badge_ix = wait_for_debug_index(cx, &view, "branch_worktree_badge", 64);
     assert!(
@@ -3125,17 +3123,16 @@ fn worktree_badge_survives_reload_repo_and_manual_worktree_resupply(cx: &mut gpu
             }]),
         },
     ));
-    store_for_test.dispatch(Msg::Internal(
-        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
-            repo_id,
-            result: Ok(vec![Worktree {
-                path: base.join("repo-feature"),
-                head: None,
-                branch: Some("feature/workspace".to_string()),
-                detached: false,
-            }]),
-        },
-    ));
+    publish_worktrees_for_test(
+        &store_for_test,
+        repo_id,
+        vec![Worktree {
+            path: base.join("repo-feature"),
+            head: None,
+            branch: Some("feature/workspace".to_string()),
+            detached: false,
+        }],
+    );
 
     let badge_ix = wait_for_debug_index(cx, &view, "branch_worktree_badge", 64);
     assert!(
@@ -3174,17 +3171,16 @@ fn worktree_badge_reappears_after_sidebar_data_request_cycle(cx: &mut gpui::Test
             }]),
         },
     ));
-    store_for_test.dispatch(Msg::Internal(
-        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
-            repo_id,
-            result: Ok(vec![Worktree {
-                path: base.join("repo-feature"),
-                head: None,
-                branch: Some("feature/workspace".to_string()),
-                detached: false,
-            }]),
-        },
-    ));
+    publish_worktrees_for_test(
+        &store_for_test,
+        repo_id,
+        vec![Worktree {
+            path: base.join("repo-feature"),
+            head: None,
+            branch: Some("feature/workspace".to_string()),
+            detached: false,
+        }],
+    );
 
     let badge_ix = wait_for_debug_index(cx, &view, "branch_worktree_badge", 64);
     assert!(

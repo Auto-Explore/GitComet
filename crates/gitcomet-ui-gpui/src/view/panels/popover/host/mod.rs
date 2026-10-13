@@ -885,6 +885,8 @@ impl PopoverHost {
             prompt_tab_group_focus_handle,
             prompt_tab_wrap_end_focus_handle,
             context_menu_selected_ix: None,
+            worktree_menu_location: None,
+            worktree_menu_location_task: None,
             context_menu_scroll: ScrollHandle::new(),
             context_menu_placement: Default::default(),
             context_menu_arrows: Default::default(),
@@ -1341,6 +1343,7 @@ impl PopoverHost {
     }
 
     fn close_popover_with_resolution(&mut self, resolved: bool, cx: &mut gpui::Context<Self>) {
+        self.prepare_worktree_menu_location(None, cx);
         let application_close = match self.popover.as_ref() {
             Some(PopoverKind::UnsavedFileEditsConfirm(prompt)) => {
                 matches!(prompt.action, UnsavedFileEditsAction::QuitApp)
@@ -1795,6 +1798,7 @@ impl PopoverHost {
             });
         }
         let is_context_menu = popover_is_context_menu(&kind);
+        self.prepare_worktree_menu_location(Some(&kind), cx);
         self.menu_invoker_focus = if is_context_menu
             || matches!(
                 &kind,
