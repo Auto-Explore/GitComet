@@ -130,6 +130,14 @@ Raw captures stay under `target/performance/gpu-efficiency/`.
   at matched clocks (two and three samples, so descriptive only), and app
   framebuffer from 269 to 205 MB.
 
+The final pin was checked on 2026-10-13. `f875b32a` (gpui-ce `020fb167`) ran
+against `c0303d87` (`28045891`) with `live-ui.py measure --gpu`: 6 pairs over
+two sessions, at 1400×900, with A/A runs for hover and diff-open.
+- App GPU load: ×0.92 for hover and ×0.89 for scroll. Both intervals span 1.
+- Board power and frame rates: unchanged.
+- Draw time and process CPU: within ±3%, inside the A/A bands. Hover draw p50
+  was ×1.03, against the A/A's [0.95, 1.11].
+
 ## Reference builds
 
 In each of these, the manifest and lock agree. `ef3328ac` and `1b460071` don't
