@@ -1,10 +1,13 @@
 # GPU performance inventory
 
 This is every rendering optimization on `perf/consolidate_results` as of
-2026-10-12: GitComet after the vendored renderer's removal, and GPUI at
-`28045891bf`. "Default" means the behavior with no environment overrides. The
-macOS runs and the Windows off/on run include matched A/A sessions; the Linux
-runs and the Windows single-run spot checks don't.
+2026-10-13: GitComet after the vendored renderer's removal, and GPUI at
+`020fb167`, the fork's `main`. There, gpui-ce PR #29 is squashed into
+`6900056152` and followed by the upstream merge #30. The GPUI commits below are
+#29's own, which the pull request keeps reachable. "Default" means the behavior
+with no environment overrides. The macOS runs and the Windows off/on run include
+matched A/A sessions; the Linux runs and the Windows single-run spot checks
+don't.
 
 ## GPUI (gpui-ce)
 

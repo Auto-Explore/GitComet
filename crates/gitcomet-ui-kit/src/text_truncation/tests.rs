@@ -349,6 +349,8 @@ fn truncated_layout_cache_distinguishes_fractional_widths(cx: &mut gpui::TestApp
     clear_truncated_layout_cache_for_test();
 }
 
+/// gpui-ce reports underline offsets below the baseline as positive (y-down)
+/// since `020fb167`; GitComet used to flip Parley's font-space offsets itself.
 #[gpui::test]
 fn sha_link_underlines_stay_below_the_baseline(cx: &mut gpui::TestAppContext) {
     crate::test_support::use_real_text_backend(cx);
