@@ -7,7 +7,7 @@ GitComet shows a badge next to signed commits in the history list and in the com
 
 A badge appears only when the matching program is installed and knows the signer's public key. **Settings → Executables** shows which programs GitComet found. When a program is **Not found**, commits signed in that format get no badge and GitComet does not try to verify them.
 
-Verification is disabled by default, including when upgrading from a version that enabled it automatically. Enable **Settings → Git log → Verify commit signatures** to opt in. Only visible commits and the selected commit are verified; offscreen history is not verified in the background. Disabling the setting stops verification and signing-tool discovery.
+Verification can slow down the Git log, so it is disabled by default, including when upgrading from a version that enabled it automatically. Enable **Settings → Git log → Verify commit signatures** to opt in. Only visible commits and the selected commit are verified; offscreen history is not verified in the background. Disabling the setting stops verification and signing-tool discovery.
 
 ## Badges
 
@@ -124,7 +124,8 @@ A commit signed by a key that is not in the file shows **Untrusted key**.
 
 | Symptom | Fix |
 | --- | --- |
+| **Settings → Executables** shows **GPG** or **ssh-keygen** as **Not checked** | Enable **Settings → Git log → Verify commit signatures**. |
 | **Settings → Executables** shows **GPG** or **ssh-keygen** as **Not found** | Install the program, or set `gpg.program` or `gpg.ssh.program` to its full path. |
-| No badges on commits you know are signed | Import the signer's public key, then reopen the repository. |
+| No badges on commits you know are signed | Enable **Settings → Git log → Verify commit signatures**. If verification is already enabled, import the signer's public key, then reopen the repository. |
 | Yellow **Untrusted key** badges | [Trust the key](#trust-a-gpg-key). |
 | Badges did not change after importing or trusting a key | Reopen the repository. |
