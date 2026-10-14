@@ -1,0 +1,102 @@
+# Rust Architecture Refactor
+
+This records the approved refactor, its implementation status, and source migrations.
+
+## Contract
+
+The owner approved staged implementation and coordinated Rust API breaks. Preserve
+the crate graph, GPUI, gix, MVU snapshots, executor topology, user-visible features,
+persisted formats, CLI behavior, native paths, subprocess bytes, and performance.
+Keep Rust 1.99 and edition 2024. Preserve vendor patches and documented filesystem
+ownership. Public facades and useful API documentation remain supported.
+
+Every slice migrates its production callers, test doubles, examples and documentation
+together. Replaced implementation paths are removed. Behavior corrections receive
+separate regression tests and commits. Independent review precedes each completed
+subsystem's acceptance. No release, merge, or push is part of this implementation.
+
+## Implementation checklist
+
+- [ ] Establish baseline tests and representative performance evidence.
+- [x] Fix ConfiguredBackend object-store release delegation with a regression test.
+- [x] Fix worktree-cache ownership collisions between stores using process-unique repository lifetimes.
+- [ ] Canonicalize repository API families: cancellation-aware reads; encoded text/conflict reads; fetch/pull pruning; remote/submodule policies.
+- [ ] Preserve error causes and operation/path context while retaining classifications and cloning.
+- [ ] Replace public raw load masks with LoadKind; give logs, line statistics and scoped worktree refreshes dedicated protocols.
+- [ ] Introduce distinct log IDs, load epochs, line-stat generations and repository lifetime types; completion methods reject stale IDs.
+- [ ] Group persistence/control, status, reference metadata and repository-command effects; each family owns runtime requirements and completion construction.
+- [ ] Centralize repository runtime resources and accepted close/shutdown handling, keeping refresh cancellation distinct from closure.
+- [ ] Prepare filesystem/Git inputs outside the state write lock while preserving synchronous worker ordering.
+- [ ] Encapsulate backend history cache construction/invalidation without changing locks, keys, bounds or sharing.
+- [ ] Establish one document owner per window with stable BufferId, load/save generations, disk versions, encoding, dirty state and retention.
+- [ ] Connect sidebar/close guards directly to document ownership and emit dirty changes at mutation time.
+- [ ] Extract a root-independent DiffRenderer after document ownership; preserve MainPaneView composition.
+- [ ] Migrate normal/hosted/settings/pop-out diff contexts, removing fake repository snapshots, projected AppState clones and duplicate rendering/search.
+- [x] Remove deprecated launch wrappers replaced by UiLaunch.
+- [ ] Gate backend test overrides behind test-support and enable only test/probe configurations.
+- [ ] Narrow internal visibility/imports in refactored modules and update architecture/build/migration documentation.
+- [ ] Complete targeted and workspace validation and independent review.
+
+## Target interfaces and ownership
+
+GitBackend and GitRepository remain object-safe external extension points.
+ConfiguredBackend binds product-wide RepositoryOptions. Equivalent overload-style
+methods become one base-named method accepting cancellation, encoding, pruning or
+URL policy explicitly. Streaming versus indexed history and unified versus parsed
+diffs remain separate capabilities. Optional capabilities retain explicit absent or
+unsupported results.
+
+Ordinary load kinds use compact private masks. Log requests, line statistics and
+worktree dirty scopes have dedicated state transitions. StatusLane determines its
+own replay effect. Preserve log cancellation completions, file-browser stale-result
+suppression, complementary selected-diff slots and signature work lifetimes.
+
+RepositoryRuntime owns a checked lifetime identity, backend handle, task scope and
+worktree-cache lease. The shared cache stays canonical-path keyed and capped at its
+existing capacity. Close, bulk close and shutdown use the same owner operations.
+Refreshes and tab switches retain reusable resources. Prepare canonical paths,
+saved preferences, timestamps and required gitlink classification before acquiring
+the state write lock; drop temporary snapshots before copy-on-write mutation.
+
+The document owner keeps BufferId distinct from DocumentIdentity: retained buffers
+may share a path. Repository association is optional; closing a repository retains
+dirty buffers. Presenters retain input widgets, syntax and geometry, with existing
+undo/stashing/clean-buffer eviction semantics. Operations cover activation, editing,
+saving, discarding, dirty summaries and pending writes.
+
+DiffPaneInput distinguishes a real Arc<AppState> plus checked repository/session
+binding from a standalone Arc<DiffState> plus path. DiffRenderer takes explicit
+services, preferences, document ownership and weak command routing, never the root
+GitCometView. Keep live linked-worktree mutation checks, annotations, event ordering,
+independent cancellation, SharedFileDiffCache and retained view boundaries.
+
+## Validation
+
+- Existing CI contexts: core, state, backend, app, UI, example and workspace.
+- Formatting, Clippy, source layout, dependency boundaries, rustdoc and native platform suites.
+- Regression tests: backend release delegation and equal RepoId values in separate stores.
+- Protocols: stale/repeated requests, A-B-A selection, coalesced refresh, failure cleanup and shutdown ordering.
+- Cache lifetimes: closing during a blocked repository open cannot restore a released owner; store shutdown releases ownership.
+- Concurrency: snapshots remain readable during blocking preparation.
+- Documents: edits during saves, failed saves, encoding errors, rename/deletion, save-as collisions and close waiting for writes.
+- Diff surfaces: stale retargets, linked worktrees, repository-free settings snapshots, pop-outs and one row/search preparation per update.
+- Performance: existing deterministic budgets plus matched release history/scroll/select/warm-tab/idle/memory workloads.
+
+## Implementation status
+
+The starting revision is `3b31ffb8`. Planning-stage formatting, source layout and
+dependency-boundary checks passed. The immutable baseline passed 3,290 core, state
+and backend tests, with 28 existing skipped tests. Both new lifecycle regressions
+failed against the original behavior before their fixes. The UI baseline passed
+4,708 tests with 22 existing ignored tests, and the UI kit passed 502 tests. The
+baseline release app and backend probe are built; matched performance comparisons
+follow the implementation. The work is on the existing `refactor` branch.
+
+## Migration notes
+
+The deprecated `gitcomet_ui_gpui::run` and `run_with_startup_crash_report*`
+entry points are replaced by `UiLaunch::new(backend)`. Configure the builder with
+`initial_request`, `startup_crash_report`, `browser_requests`, and, when present,
+`on_shutdown`, then call `run`. The return value is `Result<UiRunOutcome,
+UiLaunchError>`; callers of the former unit-returning `run` can map the outcome
+to `()` at their own boundary. These wrappers had no remaining in-tree callers.

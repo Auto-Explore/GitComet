@@ -41,12 +41,6 @@ pub use app::{
     run_focused_mergetool,
 };
 pub use app::{FocusedDiffConfig, run_focused_diff};
-#[allow(deprecated)]
-pub use app::{
-    run, run_with_startup_crash_report, run_with_startup_crash_report_and_shutdown_callback,
-    run_with_startup_crash_report_shutdown_callback_and_browser_requests,
-    run_with_startup_crash_report_shutdown_callback_and_initial_browser_request,
-};
 pub use assets::{BRAND_ASSETS, GitCometAssets};
 pub use launch_guard::UiLaunchError;
 pub use view::StartupCrashReport;
