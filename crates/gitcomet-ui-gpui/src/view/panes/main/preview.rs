@@ -1,5 +1,6 @@
-use super::file_disk::{DiskIdentity, DiskStamp, DiskSurface, disk_content_hash, disk_stamp};
+use super::file_disk::DiskSurface;
 use super::*;
+use crate::view::documents::disk::{DiskIdentity, DiskStamp, disk_content_hash, disk_stamp};
 use crate::view::markdown_preview::{
     MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind, MarkdownTaskMarker,
 };

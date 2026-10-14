@@ -12,7 +12,8 @@ ownership. Public facades and useful API documentation remain supported.
 
 Every slice migrates its production callers, test doubles, examples and documentation
 together. Replaced implementation paths are removed. Behavior corrections receive
-separate regression tests and commits. Independent review precedes each completed
+regression tests and separate commits where separation needs no compatibility shim.
+Independent review precedes each completed
 subsystem's acceptance. No release, merge, or push is part of this implementation.
 
 ## Implementation checklist
@@ -29,8 +30,8 @@ subsystem's acceptance. No release, merge, or push is part of this implementatio
 - [ ] Centralize repository runtime resources and accepted close/shutdown handling, keeping refresh cancellation distinct from closure.
 - [ ] Prepare filesystem/Git inputs outside the state write lock while preserving synchronous worker ordering.
 - [x] Encapsulate backend history cache construction/invalidation without changing locks, keys, bounds or sharing.
-- [ ] Establish one document owner per window with stable BufferId, load/save generations, disk versions, encoding, dirty state and retention.
-- [ ] Connect sidebar/close guards directly to document ownership and emit dirty changes at mutation time.
+- [x] Establish one document owner per WindowHost with stable BufferId, load/save generations, disk versions, encoding, dirty state and retention.
+- [x] Connect sidebar/close guards directly to document ownership and emit dirty changes at mutation time.
 - [ ] Extract a root-independent DiffRenderer after document ownership; preserve MainPaneView composition.
 - [ ] Migrate normal/hosted/settings/pop-out diff contexts, removing fake repository snapshots, projected AppState clones and duplicate rendering/search.
 - [x] Remove deprecated launch wrappers replaced by UiLaunch.
@@ -59,11 +60,16 @@ Refreshes and tab switches retain reusable resources. Prepare canonical paths,
 saved preferences, timestamps and required gitlink classification before acquiring
 the state write lock; drop temporary snapshots before copy-on-write mutation.
 
-The document owner keeps BufferId distinct from DocumentIdentity: retained buffers
-may share a path. Repository association is optional; closing a repository retains
-dirty buffers. Presenters retain input widgets, syntax and geometry, with existing
-undo/stashing/clean-buffer eviction semantics. Operations cover activation, editing,
-saving, discarding, dirty summaries and pending writes.
+Each WindowHost has one document owner. Independent GitCometView hosts have
+independent owners; extension pop-outs share their originating host and close with
+it. Settings snapshots remain read-only and create no document records. The owner
+keeps BufferId distinct from DocumentIdentity: retained buffers may share a path.
+Repository association is optional; closing a repository retains dirty buffers
+with the same IDs. Presenters retain input widgets, syntax and geometry, with
+existing undo/stashing/clean-buffer eviction semantics. Named owner operations
+cover loading, editing, saving, discarding, dirty summaries and pending writes.
+Read and save completion are independent; a receipt cannot replace a newer read
+or clear edits made after the saved revision.
 
 DiffPaneInput distinguishes a real Arc<AppState> plus checked repository/session
 binding from a standalone Arc<DiffState> plus path. DiffRenderer takes explicit
@@ -120,6 +126,17 @@ The canonical repository API migration passed 1,971 core/backend tests with
 before-work and after-success checks were deliberately removed. The same profiling
 driver source builds against both the original and current APIs, with identical
 dependency versions and explicit adapter hashes recorded in the build output.
+
+The document owner now routes close and filesystem operations to weakly registered
+presenters, including hosted panes. This also fixes hosted saves and receipts that
+the previous message filter and diff-revision update path dropped. The owner
+delivers an immutable completion snapshot to all presenters before acknowledging
+its receipts. Attached saves require current policy, repository lifetime, session
+and worktree permission before becoming pending; detached documents keep their
+save path, and already queued writes still complete after permission changes.
+Dirty changes notify the sidebar directly. Independent review accepted this slice;
+the full UI run passed 4,721 tests with 22 existing ignores, and the final admission
+fix passed all 233 focused tests and strict Clippy. Renderer extraction follows.
 
 ## Migration notes
 

@@ -125,20 +125,20 @@ fn navigate_during_filesystem_pause(cx: &mut gpui::TestAppContext, second_conten
             pane.update(app, |pane, cx| {
                 pane.ensure_file_editor_loaded(cx);
                 assert_eq!(
-                    pane.file_editor_key,
+                    pane.file_editor_key(),
                     Some(DocumentIdentity(workdir.join(relative)))
                 );
                 if relative == first {
-                    assert!(!pane.file_editor_loading);
-                    assert!(pane.file_editor_dirty);
+                    assert!(!pane.file_editor_loading());
+                    assert!(pane.file_editor_dirty());
                     pane.file_editor_input.update(cx, |input, cx| {
                         assert_eq!(input.text(), "unsaved A");
                         input.replace_utf8_range(input.text().len()..input.text().len(), "!", cx);
                         assert_eq!(input.text(), "unsaved A!");
                     });
                 } else {
-                    assert!(pane.file_editor_loading);
-                    assert!(!pane.file_editor_dirty);
+                    assert!(pane.file_editor_loading());
+                    assert!(!pane.file_editor_dirty());
                     pane.file_editor_input.update(cx, |input, cx| {
                         assert!(input.text().is_empty());
                         input.replace_utf8_range(0..0, "wrong file edit", cx);
@@ -148,7 +148,7 @@ fn navigate_during_filesystem_pause(cx: &mut gpui::TestAppContext, second_conten
                         );
                     });
                     pane.save_file_editor_buffer(cx);
-                    assert!(pane.file_editor_saves.is_empty());
+                    assert!(pane.editor_documents.pending().is_empty());
                 }
             });
         });
@@ -156,7 +156,7 @@ fn navigate_during_filesystem_pause(cx: &mut gpui::TestAppContext, second_conten
     }
     cx.update(|_, app| {
         pane.update(app, |pane, cx| {
-            assert!(pane.file_editor_loading);
+            assert!(pane.file_editor_loading());
             pane.filesystem_finish(pauses[0], &[], &Default::default(), cx);
         });
     });
@@ -164,7 +164,7 @@ fn navigate_during_filesystem_pause(cx: &mut gpui::TestAppContext, second_conten
     cx.update(|_, app| {
         pane.update(app, |pane, cx| {
             assert!(
-                pane.file_editor_loading,
+                pane.file_editor_loading(),
                 "one operation still holds a pause"
             );
             assert!(pane.file_editor_input.read(cx).text().is_empty());
@@ -174,10 +174,10 @@ fn navigate_during_filesystem_pause(cx: &mut gpui::TestAppContext, second_conten
     cx.run_until_parked();
     cx.update(|_, app| {
         pane.update(app, |pane, cx| {
-            assert!(!pane.file_editor_loading);
-            assert!(pane.file_editor_error.is_none());
+            assert!(!pane.file_editor_loading());
+            assert!(pane.file_editor_error().is_none());
             assert_eq!(
-                pane.file_editor_stash[&DocumentIdentity(workdir.join(first))]
+                pane.file_editor_stash()[&DocumentIdentity(workdir.join(first))]
                     .text
                     .as_ref(),
                 "unsaved A!"
@@ -250,7 +250,7 @@ fn renaming_the_active_editor_refreshes_its_language_without_replacing_edits(
         (
             input.text_snapshot(),
             input.cursor_offset(),
-            pane.file_editor_saved_fingerprint,
+            pane.file_editor_saved_fingerprint(),
         )
     });
     // Exercise plain text, two grammars, and the heuristic provider. The last
@@ -280,7 +280,7 @@ fn renaming_the_active_editor_refreshes_its_language_without_replacing_edits(
                 assert!(result.succeeded(), "{:?}", result.items);
                 pane.filesystem_finish(result.id, &result.changes, &result.moved_versions, cx);
                 assert_eq!(
-                    pane.file_editor_key,
+                    pane.file_editor_key(),
                     Some(DocumentIdentity(workdir.join(name)))
                 );
                 assert_eq!(pane.file_editor_language, language);
@@ -304,9 +304,9 @@ fn renaming_the_active_editor_refreshes_its_language_without_replacing_edits(
         cx.update(|_, app| {
             pane.update(app, |pane, cx| {
                 pane.ensure_file_editor_loaded(cx);
-                assert!(!pane.file_editor_loading);
-                assert!(pane.file_editor_dirty);
-                assert_eq!(pane.file_editor_saved_fingerprint, saved);
+                assert!(!pane.file_editor_loading());
+                assert!(pane.file_editor_dirty());
+                assert_eq!(pane.file_editor_saved_fingerprint(), saved);
                 let input = pane.file_editor_input.read(cx);
                 assert_eq!(input.text_snapshot().model_id(), snapshot.model_id());
                 assert_eq!(input.text_snapshot().revision(), snapshot.revision());
@@ -387,8 +387,8 @@ fn rename_during_editor_load(cx: &mut gpui::TestAppContext, parent: bool, overla
         view.read(app).main_pane.clone().update(app, |pane, cx| {
             pane.auto_save_file_edits = false;
             pane.ensure_file_editor_loaded(cx);
-            assert!(pane.file_editor_loading);
-            let sequence = pane.file_editor_reread_seq;
+            assert!(pane.file_editor_loading());
+            let sequence = pane.file_editor_reread_seq();
             let request = Request::new(Operation::Rename {
                 source: if parent {
                     original.parent().unwrap().to_path_buf()
@@ -409,13 +409,13 @@ fn rename_during_editor_load(cx: &mut gpui::TestAppContext, parent: bool, overla
             std::fs::write(&original, "obsolete path contents\n").unwrap();
             pane.filesystem_finish(result.id, &result.changes, &result.moved_versions, cx);
             assert_eq!(
-                pane.file_editor_key,
+                pane.file_editor_key(),
                 Some(DocumentIdentity(renamed.clone()))
             );
             if overlapping {
-                assert_eq!(pane.file_editor_reread_seq, sequence);
+                assert_eq!(pane.file_editor_reread_seq(), sequence);
             } else {
-                assert!(pane.file_editor_reread_seq > sequence);
+                assert!(pane.file_editor_reread_seq() > sequence);
             }
             sequence
         })
@@ -429,12 +429,12 @@ fn rename_during_editor_load(cx: &mut gpui::TestAppContext, parent: bool, overla
     if overlapping {
         cx.update(|_, app| {
             view.read(app).main_pane.clone().update(app, |pane, cx| {
-                assert!(pane.file_editor_loading);
+                assert!(pane.file_editor_loading());
                 assert!(pane.file_editor_input.read(cx).text().is_empty());
                 pane.ensure_file_editor_loaded(cx);
-                assert_eq!(pane.file_editor_reread_seq, initial_sequence);
+                assert_eq!(pane.file_editor_reread_seq(), initial_sequence);
                 pane.filesystem_finish(other_pause, &[], &Default::default(), cx);
-                assert!(pane.file_editor_reread_seq > initial_sequence);
+                assert!(pane.file_editor_reread_seq() > initial_sequence);
             })
         });
         cx.run_until_parked();
@@ -442,9 +442,9 @@ fn rename_during_editor_load(cx: &mut gpui::TestAppContext, parent: bool, overla
     cx.update(|_, app| {
         view.read(app).main_pane.clone().update(app, |pane, cx| {
             pane.ensure_file_editor_loaded(cx);
-            assert!(!pane.file_editor_loading);
-            assert!(pane.file_editor_error.is_none());
-            assert!(!pane.file_editor_dirty);
+            assert!(!pane.file_editor_loading());
+            assert!(pane.file_editor_error().is_none());
+            assert!(!pane.file_editor_dirty());
             assert_eq!(
                 pane.file_editor_input.read(cx).text(),
                 "fn renamed_file() {}\n"
@@ -545,7 +545,7 @@ fn replace_active_destination(cx: &mut gpui::TestAppContext, dirty_destination: 
     cx.update(|_, app| {
         view.read(app).main_pane.clone().update(app, |pane, cx| {
             pane.filesystem_finish(result.id, &result.changes, &result.moved_versions, cx);
-            assert_eq!(pane.file_editor_dirty, dirty_destination);
+            assert_eq!(pane.file_editor_dirty(), dirty_destination);
             assert_eq!(
                 pane.file_editor_input.read(cx).text(),
                 if dirty_destination {
@@ -555,7 +555,7 @@ fn replace_active_destination(cx: &mut gpui::TestAppContext, dirty_destination: 
                 }
             );
             assert_eq!(
-                pane.file_editor_disk_versions
+                pane.file_editor_disk_versions()
                     .get(&DocumentIdentity(destination.clone())),
                 Some(&destination_version),
                 "the active destination must keep its own baseline"
@@ -593,7 +593,7 @@ fn replace_active_destination(cx: &mut gpui::TestAppContext, dirty_destination: 
             "the recovered source must use its moved disk baseline"
         );
         assert_eq!(
-            view.read(app).main_pane.read(app).file_editor_dirty,
+            view.read(app).main_pane.read(app).file_editor_dirty(),
             dirty_destination
         );
     });
@@ -656,8 +656,8 @@ fn repository_editor_rejects_saves_through_a_symlinked_directory(cx: &mut gpui::
     finish_editor_saves(&view, cx);
     cx.update(|_, app| {
         let pane = view.read(app).main_pane.read(app);
-        assert!(pane.file_editor_dirty);
-        assert!(pane.file_editor_error.is_some());
+        assert!(pane.file_editor_dirty());
+        assert!(pane.file_editor_error().is_some());
         assert_eq!(
             pane.file_editor_input.read(app).text(),
             "edit external contents\n"
@@ -755,14 +755,18 @@ fn failed_autosaves_reach_the_unsaved_edits_prompt_without_retrying_forever(
     cx.update(|_, app| {
         view.update(app, |view, cx| {
             assert!(view.main_pane.read(cx).file_editor_is_dirty());
-            assert!(view.main_pane.read(cx).file_editor_error.is_some());
+            assert!(view.main_pane.read(cx).file_editor_error().is_some());
             assert!(view.request_unsaved_file_edits_prompt(UnsavedFileEditsAction::QuitApp, cx));
             assert!(
                 view.pending_unsaved_file_edits_prompt.is_some(),
                 "a failed autosave must allow Save/Discard"
             );
             assert!(
-                view.main_pane.read(cx).file_editor_saves.is_empty(),
+                view.main_pane
+                    .read(cx)
+                    .editor_documents
+                    .pending()
+                    .is_empty(),
                 "closing must not silently retry the failed write"
             );
             assert_eq!(
@@ -791,6 +795,160 @@ fn stashed_autosaves_resume_after_the_final_filesystem_pause(cx: &mut gpui::Test
 #[gpui::test]
 fn releasing_filesystem_pauses_keeps_manual_stashed_edits_unsaved(cx: &mut gpui::TestAppContext) {
     save_completion_after_navigation(cx, false, true);
+}
+
+#[gpui::test]
+fn discarding_an_inactive_pending_save_never_restores_empty_edits(cx: &mut gpui::TestAppContext) {
+    let _guard = lock_visual_test();
+    cx.skip_drawing();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let directory = tempfile::tempdir().unwrap();
+    let workdir = directory.path().canonicalize().unwrap();
+    let repo = RepoId(1943);
+    let first = Path::new("first.txt");
+    let second = Path::new("second.txt");
+    for path in [first, second] {
+        std::fs::write(workdir.join(path), "original").unwrap();
+    }
+    let pane = cx.update(|_, app| view.read(app).main_pane.clone());
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            push_test_state(view, editor_state(repo, &workdir, first), cx)
+        })
+    });
+    cx.update(|_, app| pane.update(app, |pane, cx| pane.ensure_file_editor_loaded(cx)));
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            pane.auto_save_file_edits = false;
+            pane.file_editor_input.update(cx, |input, cx| {
+                input.replace_utf8_range(0..input.text().len(), "saved before discard", cx)
+            });
+        })
+    });
+    cx.run_until_parked();
+    let held = hold_editor_saves();
+    cx.update(|_, app| pane.update(app, |pane, cx| pane.save_file_editor_buffer(cx)));
+    cx.update(|_, app| {
+        view.read(app).ui_model.clone().update(app, |model, cx| {
+            model.set_state(editor_state(repo, &workdir, second), cx)
+        })
+    });
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            pane.ensure_file_editor_loaded(cx);
+            pane.discard_file_edits_for(repo, first, cx);
+            assert_eq!(pane.editor_documents.pending().len(), 1);
+            assert!(pane.unsaved_file_edit_keys().is_empty());
+        })
+    });
+    held.release();
+    finish_editor_saves(&view, cx);
+    cx.update(|_, app| {
+        assert!(
+            view.read(app)
+                .ui_model
+                .read(app)
+                .documents
+                .unsaved_documents()
+                .is_empty()
+        );
+        view.update(app, |view, cx| {
+            push_test_state(view, Arc::new(AppState::test_default()), cx)
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        std::fs::read_to_string(workdir.join(first)).unwrap(),
+        "saved before discard"
+    );
+    assert_eq!(
+        std::fs::read_to_string(workdir.join(second)).unwrap(),
+        "original"
+    );
+}
+
+#[gpui::test]
+fn a_save_receipt_before_the_discard_read_cannot_turn_the_placeholder_into_an_edit(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_core::filesystem::{ItemOutcome, ItemResult, OperationResult};
+    let _guard = lock_visual_test();
+    cx.skip_drawing();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let directory = tempfile::tempdir().unwrap();
+    let workdir = directory.path().canonicalize().unwrap();
+    let path = Path::new("file.txt");
+    std::fs::write(workdir.join(path), "original").unwrap();
+    let pane = cx.update(|_, app| view.read(app).main_pane.clone());
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            push_test_state(view, editor_state(RepoId(1944), &workdir, path), cx)
+        })
+    });
+    cx.update(|_, app| pane.update(app, |pane, cx| pane.ensure_file_editor_loaded(cx)));
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            pane.auto_save_file_edits = true;
+            pane.file_editor_input.update(cx, |input, cx| {
+                input.replace_utf8_range(0..input.text().len(), "saved revision", cx)
+            });
+        })
+    });
+    cx.run_until_parked();
+    let held = hold_editor_saves();
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            pane.save_file_editor_buffer(cx);
+            let operation = pane.editor_documents.pending()[0]
+                .read()
+                .saving()
+                .as_ref()
+                .unwrap()
+                .operation;
+            pane.discard_file_editor_buffer(cx);
+            let generation = pane.file_editor_reread_seq();
+            let mut state = (*pane.store.snapshot()).clone();
+            state.filesystem.completed.push_back(OperationResult {
+                id: operation,
+                saved_version: None,
+                moved_versions: Default::default(),
+                items: vec![ItemResult {
+                    source: workdir.join(path),
+                    destination: None,
+                    outcome: ItemOutcome::Completed,
+                }],
+                changes: Vec::new(),
+                undo_available: false,
+                redo_available: false,
+            });
+            pane.process_file_editor_saves(&state, cx);
+            assert!(
+                pane.editor_documents
+                    .active()
+                    .unwrap()
+                    .read()
+                    .accepts_read(generation)
+            );
+            pane.on_file_editor_edited(cx);
+            assert!(pane.file_editor_loading());
+            assert!(!pane.file_editor_dirty());
+            assert!(pane.file_editor_autosave.is_none());
+        })
+    });
+    held.release();
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        let pane = pane.read(app);
+        assert!(!pane.file_editor_loading());
+        assert!(!pane.file_editor_input.read(app).text().is_empty());
+        assert!(!pane.file_editor_dirty());
+    });
 }
 
 fn save_completion_after_navigation(cx: &mut gpui::TestAppContext, autosave: bool, paused: bool) {
@@ -833,9 +991,9 @@ fn save_completion_after_navigation(cx: &mut gpui::TestAppContext, autosave: boo
     let key = cx.update(|_, app| {
         pane.update(app, |pane, cx| {
             pane.save_file_editor_buffer(cx);
-            let key = pane.file_editor_key.clone().unwrap();
+            let key = pane.file_editor_key().clone().unwrap();
             assert!(
-                pane.file_editor_stash.contains_key(&key),
+                pane.file_editor_stash().contains_key(&key),
                 "in-flight writes retain recovery text"
             );
             pane.file_editor_input.update(cx, |input, cx| {
@@ -848,18 +1006,24 @@ fn save_completion_after_navigation(cx: &mut gpui::TestAppContext, autosave: boo
     // worker's snapshot. The navigation flush still sees the first write pending.
     cx.update(|_, app| {
         view.read(app).ui_model.clone().update(app, |model, cx| {
-            model.set_state(editor_state(repo_id, &workdir, &second), cx);
+            let mut state = (*model.state).clone();
+            state.repos[0].diff_state.diff_target =
+                Some(gitcomet_core::domain::DiffTarget::working_tree(
+                    second.clone(),
+                    gitcomet_core::domain::DiffArea::Unstaged,
+                ));
+            model.set_state(Arc::new(state), cx);
         });
     });
     cx.update(|_, app| {
         pane.update(app, |pane, cx| {
             pane.ensure_file_editor_loaded(cx);
-            assert_eq!(pane.file_editor_saves.len(), 1);
+            assert_eq!(pane.editor_documents.pending().len(), 1);
             assert_eq!(
-                pane.file_editor_key.as_ref().unwrap().0,
+                pane.file_editor_key().as_ref().unwrap().0,
                 workdir.join(&second)
             );
-            assert_eq!(pane.file_editor_stash[&key].text.as_ref(), "newer edits");
+            assert_eq!(pane.file_editor_stash()[&key].text.as_ref(), "newer edits");
             if paused {
                 for id in pauses {
                     pane.filesystem_pause(id, cx);
@@ -875,11 +1039,11 @@ fn save_completion_after_navigation(cx: &mut gpui::TestAppContext, autosave: boo
         );
         cx.update(|_, app| {
             pane.update(app, |pane, cx| {
-                assert!(pane.file_editor_stash[&key].is_dirty());
+                assert!(pane.file_editor_stash()[&key].is_dirty());
                 pane.filesystem_finish(pauses[0], &[], &Default::default(), cx);
-                assert!(pane.file_editor_saves.is_empty());
+                assert!(pane.editor_documents.pending().is_empty());
                 pane.filesystem_finish(pauses[1], &[], &Default::default(), cx);
-                assert_eq!(pane.file_editor_saves.len(), usize::from(autosave));
+                assert_eq!(pane.editor_documents.pending().len(), usize::from(autosave));
             });
         });
         finish_editor_saves(&view, cx);
@@ -890,7 +1054,7 @@ fn save_completion_after_navigation(cx: &mut gpui::TestAppContext, autosave: boo
             "first save"
         );
         cx.update(|_, app| {
-            let stashed = &pane.read(app).file_editor_stash[&key];
+            let stashed = &pane.read(app).file_editor_stash()[&key];
             assert_eq!(stashed.text.as_ref(), "newer edits");
             assert!(stashed.is_dirty());
         });
@@ -906,9 +1070,9 @@ fn save_completion_after_navigation(cx: &mut gpui::TestAppContext, autosave: boo
         "original"
     );
     cx.update(|_, app| {
-        assert!(pane.read(app).file_editor_stash.is_empty());
+        assert!(pane.read(app).file_editor_stash().is_empty());
         assert!(pane.read(app).unsaved_file_edit_labels().is_empty());
-        assert!(pane.read(app).file_editor_error.is_none());
+        assert!(pane.read(app).file_editor_error().is_none());
     });
 }
 
@@ -946,11 +1110,11 @@ fn oversized_repository_editor_files_fail_without_capturing_a_baseline(
     cx.update(|_, app| {
         let pane = view.read(app).main_pane.read(app);
         assert!(
-            pane.file_editor_error
+            pane.file_editor_error()
                 .as_ref()
                 .is_some_and(|error| error.contains("32 MB"))
         );
-        assert!(pane.file_editor_disk_versions.is_empty());
+        assert!(pane.file_editor_disk_versions().is_empty());
         assert!(!pane.file_editor_is_dirty());
     });
 }
@@ -1015,7 +1179,7 @@ async fn file_editor_marks_dirty_on_edit_and_clean_after_save(cx: &mut gpui::Tes
         );
         assert!(pane.unsaved_file_edit_labels().is_empty());
         assert!(
-            pane.file_editor_stash.is_empty(),
+            pane.file_editor_stash().is_empty(),
             "acknowledged clean buffers must be released"
         );
     });
@@ -1133,7 +1297,7 @@ async fn file_editor_refuses_a_binary_file(cx: &mut gpui::TestAppContext) {
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         assert!(
-            pane.file_editor_error.is_some(),
+            pane.file_editor_error().is_some(),
             "a binary file must surface an error instead of an empty buffer"
         );
         assert!(!pane.file_editor_is_dirty());
@@ -2377,8 +2541,9 @@ async fn the_load_placeholder_is_never_saved_over_the_file(cx: &mut gpui::TestAp
             pane.file_editor_input.update(cx, |input, cx| {
                 input.set_text("", cx);
             });
-            pane.file_editor_loading = true;
-            pane.file_editor_dirty = true;
+            let document = pane.editor_documents.active().unwrap();
+            document.seat_text(1, Some(2), cx);
+            document.begin_read(true, cx);
 
             assert!(
                 pane.unsaved_file_edit_labels()
@@ -2839,7 +3004,12 @@ fn request_action_with_dirty_auto_saved_buffer(
                 "the pending auto-save write must hold the action"
             );
             assert!(
-                !this.main_pane.read(cx).file_editor_saves.is_empty(),
+                !this
+                    .main_pane
+                    .read(cx)
+                    .editor_documents
+                    .pending()
+                    .is_empty(),
                 "the flush queues the write"
             );
         })
@@ -3002,7 +3172,7 @@ fn check_move_waits_for_existing_saves(
     }
     cx.update(|_, app| {
         let pane = view.read(app).main_pane.read(app);
-        assert_eq!(pane.file_editor_saves.len(), 2);
+        assert_eq!(pane.editor_documents.pending().len(), 2);
         assert_eq!(
             pane.unsaved_file_edit_keys().len(),
             2,
@@ -3045,7 +3215,7 @@ fn check_move_waits_for_existing_saves(
         assert_eq!(owners[0] == window_id, !succeeds);
         if !succeeds {
             let pane = view.read(app).main_pane.read(app);
-            assert!(pane.file_editor_dirty);
+            assert!(pane.file_editor_dirty());
             assert_eq!(
                 pane.file_editor_input.read(app).text(),
                 "edited\noriginal\n"
@@ -3201,7 +3371,12 @@ fn check_discard_after_save_timeout(
                 view.resolve_unsaved_file_edits(action.clone(), false, cx);
                 assert!(view.main_pane.read(cx).unsaved_file_edit_keys().is_empty());
                 assert!(
-                    !view.main_pane.read(cx).file_editor_saves.is_empty(),
+                    !view
+                        .main_pane
+                        .read(cx)
+                        .editor_documents
+                        .pending()
+                        .is_empty(),
                     "discard cannot cancel the queued write"
                 );
             });
@@ -3492,7 +3667,7 @@ async fn editing_mid_file_keeps_blame_above_the_edit(cx: &mut gpui::TestAppConte
     let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
     cx.update(|_window, app| {
         assert_eq!(
-            main_pane.read(app).file_editor_first_dirty_line,
+            main_pane.read(app).file_editor_first_dirty_line(),
             None,
             "a buffer that matches disk has no watermark"
         );
@@ -3513,7 +3688,7 @@ async fn editing_mid_file_keeps_blame_above_the_edit(cx: &mut gpui::TestAppConte
         let pane = main_pane.read(app);
         assert!(pane.file_editor_is_dirty());
         assert_eq!(
-            pane.file_editor_first_dirty_line,
+            pane.file_editor_first_dirty_line(),
             Some(2),
             "the watermark is the first line the edit touched"
         );
@@ -3531,7 +3706,7 @@ async fn editing_mid_file_keeps_blame_above_the_edit(cx: &mut gpui::TestAppConte
     cx.run_until_parked();
     cx.update(|_window, app| {
         assert_eq!(
-            main_pane.read(app).file_editor_first_dirty_line,
+            main_pane.read(app).file_editor_first_dirty_line(),
             Some(2),
             "a later edit must not raise the watermark"
         );
@@ -3548,7 +3723,7 @@ async fn editing_mid_file_keeps_blame_above_the_edit(cx: &mut gpui::TestAppConte
     cx.run_until_parked();
     cx.update(|_window, app| {
         assert_eq!(
-            main_pane.read(app).file_editor_first_dirty_line,
+            main_pane.read(app).file_editor_first_dirty_line(),
             Some(0),
             "an earlier edit lowers the watermark"
         );
@@ -3562,7 +3737,7 @@ async fn editing_mid_file_keeps_blame_above_the_edit(cx: &mut gpui::TestAppConte
     cx.update(|_window, app| {
         let pane = main_pane.read(app);
         assert!(!pane.file_editor_is_dirty());
-        assert_eq!(pane.file_editor_first_dirty_line, None);
+        assert_eq!(pane.file_editor_first_dirty_line(), None);
     });
 
     let _ = std::fs::remove_dir_all(&workdir);
@@ -3607,8 +3782,7 @@ async fn a_stashed_buffer_brings_its_blame_watermark_back(cx: &mut gpui::TestApp
     cx.update(|_window, app| {
         main_pane.update(app, |pane, cx| {
             pane.stash_current_file_editor_buffer(cx);
-            pane.file_editor_key = None;
-            pane.file_editor_first_dirty_line = None;
+            pane.editor_documents.deactivate();
             pane.ensure_file_editor_loaded(cx);
         });
     });
@@ -3618,7 +3792,7 @@ async fn a_stashed_buffer_brings_its_blame_watermark_back(cx: &mut gpui::TestApp
         let pane = main_pane.read(app);
         assert!(pane.file_editor_is_dirty(), "the stashed edit came back");
         assert_eq!(
-            pane.file_editor_first_dirty_line,
+            pane.file_editor_first_dirty_line(),
             Some(2),
             "and so did the line it started at"
         );
@@ -5020,10 +5194,10 @@ fn file_editor_saves_stay_paused_until_rename_retargets_the_unsaved_buffer(
     cx.run_until_parked();
     cx.update(|_, app| {
         view.read(app).main_pane.clone().update(app, |pane, cx| {
-            assert!(pane.file_editor_dirty);
+            assert!(pane.file_editor_dirty());
             pane.filesystem_pause(request.id, cx);
             pane.save_file_editor_buffer(cx);
-            assert!(pane.file_editor_saves.is_empty());
+            assert!(pane.editor_documents.pending().is_empty());
         });
     });
     let result = Filesystem::default().execute(request, |_| {});
@@ -5038,10 +5212,10 @@ fn file_editor_saves_stay_paused_until_rename_retargets_the_unsaved_buffer(
             this.main_pane.update(cx, |pane, cx| {
                 pane.filesystem_finish(result.id, &result.changes, &result.moved_versions, cx);
                 assert_eq!(
-                    pane.file_editor_key,
+                    pane.file_editor_key(),
                     Some(DocumentIdentity(renamed.clone()))
                 );
-                assert!(pane.file_editor_dirty);
+                assert!(pane.file_editor_dirty());
                 assert_eq!(
                     pane.file_editor_input.read(cx).text(),
                     "// retained edit\nfn original() {}\n"
@@ -5170,10 +5344,10 @@ fn syntax_builds_coalesce_edits_and_file_switch_discards_obsolete_completion(
             pane.read(app).live_syntax_background_jobs_started,
             1,
             "loading={} language={:?} text={:?} error={:?}",
-            pane.read(app).file_editor_loading,
+            pane.read(app).file_editor_loading(),
             pane.read(app).file_editor_language,
             pane.read(app).file_editor_input.read(app).text(),
-            pane.read(app).file_editor_error
+            pane.read(app).file_editor_error()
         )
     });
     release.try_send(()).unwrap();

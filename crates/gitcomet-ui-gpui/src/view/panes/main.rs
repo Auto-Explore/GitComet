@@ -33,12 +33,11 @@ pub(in crate::view) use diff_search::{
 };
 // The editor's free functions are exercised directly by the panel tests; the
 // pane itself reaches them through `impl MainPaneView`.
+use crate::view::documents::disk::DiskIdentity;
 pub(in crate::view) use core_impl::MainPaneInit;
 #[cfg(test)]
 pub(in crate::view) use diff_text::take_opened_web_links_for_tests;
-pub(in crate::view) use file_disk::{
-    DiskCheckCause, DiskIdentity, DiskSurface, FileDiskNotice, FileDiskSeen,
-};
+pub(in crate::view) use file_disk::{DiskCheckCause, DiskSurface, FileDiskNotice, FileDiskSeen};
 #[cfg(test)]
 pub(in crate::view) use file_editor::*;
 pub(crate) use helpers::*;
@@ -137,12 +136,6 @@ impl Render for MainPaneView {
         ));
         self.last_window_size = window.viewport_size();
         self.sync_root_layout_snapshot(cx);
-        // The file explorer marks and pins files with unsaved buffers, and those
-        // buffers live here rather than in the store, so nothing else can notice
-        // them changing.
-        if self.store.binding.is_none() {
-            self.sync_unsaved_file_edits_rev(cx);
-        }
         let history_content_width = self.main_pane_content_width(cx);
         self.history_view.update(cx, |v, _| {
             v.set_last_window_size(self.last_window_size);

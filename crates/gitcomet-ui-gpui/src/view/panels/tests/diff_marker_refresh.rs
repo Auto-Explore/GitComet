@@ -292,7 +292,7 @@ fn markers_are_current_after_editing_reloading_and_reopening_the_diff(
     super::shortcuts::wait_until(cx, "the editor text", |cx| {
         cx.update(|_, app| {
             let pane = view.read(app).main_pane.read(app);
-            !pane.file_editor_loading
+            !pane.file_editor_loading()
                 && pane.file_editor_input.read(app).text() == lines(&[(35, "changed near the end")])
         })
     });
@@ -331,7 +331,7 @@ fn markers_are_current_after_editing_reloading_and_reopening_the_diff(
     super::shortcuts::wait_until(cx, "the reloaded editor text", |cx| {
         cx.update(|_, app| {
             let pane = view.read(app).main_pane.read(app);
-            !pane.file_editor_loading
+            !pane.file_editor_loading()
                 && pane.file_editor_input.read(app).text()
                     == lines(&[(5, "asdads;"), (35, "changed near the end")])
         })

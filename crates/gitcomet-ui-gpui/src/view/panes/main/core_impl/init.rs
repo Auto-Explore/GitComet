@@ -29,6 +29,12 @@ impl MainPaneView {
             root_view,
             tooltip_host,
         } = init;
+        ui_model
+            .read(cx)
+            .documents
+            .register_repository(cx.entity().downgrade());
+        cx.on_release(|pane, cx| pane.release_document_presenter(cx))
+            .detach();
         let preferences = ui_model.read(cx).preferences.clone();
         let date_time_format = preferences.appearance.date_time_format;
         let timezone = preferences.appearance.timezone;
@@ -68,7 +74,6 @@ impl MainPaneView {
             });
         let subscription = cx.observe(&ui_model, |this, model, cx| {
             let next = Arc::clone(&model.read(cx).state);
-            this.process_file_editor_saves(&next, cx);
             let next_fingerprint = Self::notify_fingerprint_for(&next);
             if next_fingerprint == this.notify_fingerprint {
                 this.state = next;
@@ -316,6 +321,9 @@ impl MainPaneView {
         let image_preview_group = cx.new(crate::view::image_preview::Group::new);
         cx.observe(&image_preview_group, |_, _, cx| cx.notify())
             .detach();
+        let editor_documents = crate::view::documents::repository::RepositoryDocuments::new(
+            ui_model.read(cx).documents.clone(),
+        );
         let mut pane = Self {
             store: store.into(),
             hosted_content_width: None,
@@ -562,29 +570,14 @@ impl MainPaneView {
             worktree_preview_restore_scroll_offset: None,
             file_editor_input,
             _file_editor_input_subscription: file_editor_subscription,
-            file_editor_key: None,
-            filesystem_pauses: std::collections::BTreeSet::new(),
-            file_editor_disk_versions: FxHashMap::default(),
-            file_editor_saves: std::collections::BTreeMap::new(),
+            editor_documents,
             file_editor_language: None,
-            file_editor_loading: false,
-            file_editor_reread_seq: 0,
-            file_editor_disk: DiskIdentity::default(),
-            file_editor_error: None,
-            file_editor_text_format: None,
-            file_editor_source_text_format: None,
             file_editor_decode_key: None,
             file_editor_waiting_for_attributes: false,
-            file_editor_dirty: false,
-            file_editor_first_dirty_line: None,
-            file_editor_save_error: None,
-            unsaved_file_edits_rev: 0,
-            file_editor_saved_fingerprint: None,
             file_disk_notice: None,
             file_disk_check_seq: 0,
             file_disk_check_in_flight: None,
             file_disk_seen: None,
-            file_editor_stash: FxHashMap::default(),
             file_editor_autosave: None,
             file_editor_live_syntax: None,
             file_editor_live_syntax_source: None,

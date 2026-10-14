@@ -1046,7 +1046,7 @@ mod view_tests {
         let state = seeded_state(repo_id, entries);
 
         let (host, cx) = cx.add_window_view(|_window, cx| {
-            let ui_model = cx.new(|_cx| {
+            let ui_model = cx.new(|cx| {
                 AppUiModel::new_with_preferences(
                     Arc::clone(&state),
                     UiPreferences {
@@ -1058,6 +1058,8 @@ mod view_tests {
                         },
                         ..UiPreferences::default()
                     },
+                    Arc::downgrade(&store),
+                    cx,
                 )
             });
             let pane = cx.new(|cx| {

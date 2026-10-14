@@ -193,11 +193,10 @@ impl Harness {
             cx.run_until_parked();
             let drained = cx.update(|_, app| {
                 let main = self.view.read(app).main_pane.clone();
-                main.update(app, |pane, cx| {
-                    let snapshot = pane.store.snapshot();
-                    pane.process_file_editor_saves(&snapshot, cx);
-                    pane.file_editor_saves.is_empty()
-                })
+                let owner = self.view.read(app).ui_model.read(app).documents.clone();
+                let snapshot = main.read(app).store.snapshot();
+                owner.finish_saves(&snapshot, app);
+                main.read(app).editor_documents.pending().is_empty()
             });
             if drained {
                 cx.run_until_parked();
@@ -210,7 +209,7 @@ impl Harness {
 
     fn editor_error(&self, cx: &mut gpui::VisualTestContext) -> Option<String> {
         self.with_pane(cx, |pane, _| {
-            pane.file_editor_error.as_ref().map(|e| e.to_string())
+            pane.file_editor_error().as_ref().map(|e| e.to_string())
         })
     }
 
@@ -620,13 +619,13 @@ async fn a_failed_read_retries_when_the_file_comes_back(cx: &mut gpui::TestAppCo
 
     h.update_pane(cx, |pane, cx| pane.reload_file_from_disk_notice(cx));
     assert!(
-        h.with_pane(cx, |pane, _| pane.file_editor_error.is_some()),
+        h.with_pane(cx, |pane, _| pane.file_editor_error().is_some()),
         "reloading a deleted file shows why there is nothing to edit"
     );
 
     std::fs::write(h.file(), "fn main() { back(); }\n").expect("recreate");
     h.bump(cx, 2, 0);
-    assert!(h.with_pane(cx, |pane, _| pane.file_editor_error.is_none()));
+    assert!(h.with_pane(cx, |pane, _| pane.file_editor_error().is_none()));
     assert_eq!(h.editor_text(cx), "fn main() { back(); }\n");
     assert_eq!(h.notice(cx), None);
     h.cleanup();
@@ -800,8 +799,8 @@ async fn review_regression_auto_saved_repo_move_keeps_stashed_edits_for_explicit
                 .document_identity(repo_id, &h.file_rel)
                 .expect("open repository");
             let stashed = pane
-                .file_editor_stash
-                .get(&key)
+                .editor_documents
+                .stashed(&key)
                 .expect("keep the stashed edits");
             assert!(stashed.is_dirty());
             assert_eq!(stashed.text.as_ref(), "// my edits\nfn main() {}\n");
@@ -838,7 +837,14 @@ async fn review_regression_auto_saved_repo_move_waits_for_a_nonconflicting_write
                 this.pending_unsaved_file_edits_flush.is_some(),
                 "the move must wait for the pending auto-save write"
             );
-            assert!(!this.main_pane.read(cx).file_editor_saves.is_empty());
+            assert!(
+                !this
+                    .main_pane
+                    .read(cx)
+                    .editor_documents
+                    .pending()
+                    .is_empty()
+            );
             assert!(
                 this.state.repos.iter().any(|repo| repo.id == repo_id),
                 "the repository must stay attached while its save is in flight"
@@ -1132,9 +1138,9 @@ async fn a_failed_read_retries_once_per_worktree_change(cx: &mut gpui::TestAppCo
     std::fs::remove_file(h.file()).expect("delete");
     h.bump(cx, 1, 0);
     h.update_pane(cx, |pane, cx| pane.reload_file_from_disk_notice(cx));
-    assert!(h.with_pane(cx, |pane, _| pane.file_editor_error.is_some()));
+    assert!(h.with_pane(cx, |pane, _| pane.file_editor_error().is_some()));
 
-    let seq_before = h.with_pane(cx, |pane, _| pane.file_editor_reread_seq);
+    let seq_before = h.with_pane(cx, |pane, _| pane.file_editor_reread_seq());
     // One worktree change, then a status reload publishing more snapshots
     // before the retry has landed.
     let mut first = AppState::clone(&h.current());
@@ -1150,7 +1156,7 @@ async fn a_failed_read_retries_once_per_worktree_change(cx: &mut gpui::TestAppCo
         });
     }
     cx.run_until_parked();
-    let rereads = h.with_pane(cx, |pane, _| pane.file_editor_reread_seq) - seq_before;
+    let rereads = h.with_pane(cx, |pane, _| pane.file_editor_reread_seq()) - seq_before;
     assert_eq!(rereads, 1, "one change, one retry");
     h.cleanup();
 }

@@ -1364,8 +1364,8 @@ impl MainPaneView {
             // With auto-save on, leaving is a save; one that cannot be written
             // keeps the editor open instead of hiding the edits in the stash.
             if self.auto_save_file_edits
-                && self.file_editor_dirty
-                && !self.file_editor_loading
+                && self.file_editor_dirty()
+                && !self.file_editor_loading()
                 && !self.file_disk_notice_awaits_editor()
                 && !self.save_file_editor_buffer(cx)
             {
@@ -1423,9 +1423,9 @@ impl MainPaneView {
         // The toolbar button is disabled in these states, but the keyboard
         // shortcut can still arrive. A no-op save must not unexpectedly act as
         // an editor-close shortcut.
-        if self.file_editor_loading
+        if self.file_editor_loading()
             || !self.file_editor_is_dirty()
-            || self.file_editor_key.is_none()
+            || self.file_editor_key().is_none()
         {
             return;
         }
@@ -1457,7 +1457,7 @@ impl MainPaneView {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "this file".to_string());
         // Read live, not at notice time: the user may have typed since.
-        let discards_edits = notice.surface == DiskSurface::Editor && self.file_editor_dirty;
+        let discards_edits = notice.surface == DiskSurface::Editor && self.file_editor_dirty();
         let actor = if notice.by_git_operation {
             "A git operation"
         } else {

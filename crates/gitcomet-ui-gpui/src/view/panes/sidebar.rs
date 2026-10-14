@@ -347,6 +347,8 @@ pub(in super::super) struct SidebarPaneView {
     pub(in super::super) theme: AppTheme,
     sidebar_focus: gpui::FocusHandle,
     _ui_model_subscription: gpui::Subscription,
+    documents: crate::view::documents::buffers::DocumentOwner,
+    _documents_subscription: gpui::Subscription,
     // Only one surface is mounted at a time. Park the other handle when
     // switching between the expanded tree and a rail popover.
     branches_scroll: UniformListScrollHandle,
@@ -468,6 +470,8 @@ impl SidebarPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let state = Arc::clone(&ui_model.read(cx).state);
+        let documents = ui_model.read(cx).documents.clone();
+        let documents_subscription = cx.observe(documents.changes(), |_, _, cx| cx.notify());
         let mut sidebar_presentation_cache = SidebarPresentationCache::default();
         let initial_fingerprint = SidebarNotifyFingerprint::from_state_with_cache(
             &state,
@@ -618,6 +622,8 @@ impl SidebarPaneView {
             theme,
             sidebar_focus: cx.focus_handle(),
             _ui_model_subscription: subscription,
+            documents,
+            _documents_subscription: documents_subscription,
             branches_scroll: UniformListScrollHandle::default(),
             inactive_branches_scroll: UniformListScrollHandle::default(),
             sticky_context: None,
@@ -2416,29 +2422,27 @@ impl SidebarPaneView {
         rows
     }
 
-    /// Paths in the active repo the editor is holding unsaved buffers for.
-    ///
-    /// Read through the root view because the buffers belong to the main pane,
-    /// which is a sibling entity — the same hop the sidebar's click handlers
-    /// already make, done here at render time.
-    fn unsaved_file_edit_paths(&self, cx: &gpui::App) -> Vec<PathBuf> {
-        let Some(repo_id) = self.active_repo_id() else {
+    fn unsaved_file_edit_paths(&self, _: &gpui::App) -> Vec<PathBuf> {
+        let Some(repo) = self.active_repo() else {
             return Vec::new();
         };
-        let Some(root) = self.root_view.upgrade() else {
-            return Vec::new();
-        };
-        root.read(cx)
-            .main_pane
-            .read(cx)
-            .unsaved_file_edit_paths(repo_id)
+        let mut paths: Vec<_> = self
+            .documents
+            .dirty_paths(repo.id)
+            .into_iter()
+            .filter_map(|path| {
+                path.strip_prefix(&repo.spec.workdir)
+                    .ok()
+                    .map(std::path::Path::to_path_buf)
+            })
+            .collect();
+        paths.sort();
+        paths.dedup();
+        paths
     }
 
     fn unsaved_file_edits_rev(&self, cx: &gpui::App) -> u64 {
-        self.root_view
-            .upgrade()
-            .map(|root| root.read(cx).main_pane.read(cx).unsaved_file_edits_rev)
-            .unwrap_or(0)
+        self.documents.revision(cx)
     }
 
     /// Collapsed state rides in the same per-repo map the branch tree's sections

@@ -49,11 +49,10 @@ pub(super) fn finish_editor_saves(
         cx.run_until_parked();
         let drained = cx.update(|_, app| {
             let main = view.read(app).main_pane.clone();
-            main.update(app, |pane, cx| {
-                let snapshot = pane.store.snapshot();
-                pane.process_file_editor_saves(&snapshot, cx);
-                pane.file_editor_saves.is_empty()
-            })
+            let owner = view.read(app).ui_model.read(app).documents.clone();
+            let snapshot = main.read(app).store.snapshot();
+            owner.finish_saves(&snapshot, app);
+            main.read(app).editor_documents.pending().is_empty()
         });
         if drained {
             return;

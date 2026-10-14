@@ -221,11 +221,11 @@ fn read_only_line_ending_conversion_preserves_buffer_and_format(cx: &mut gpui::T
     );
     cx.update(|_, app| {
         view.read(app).main_pane.clone().update(app, |pane, cx| {
-            let before = pane.file_editor_text_format;
+            let before = pane.file_editor_text_format();
             assert!(!before.unwrap().is_writable());
             let text = pane.file_editor_input.read(cx).text().to_owned();
             pane.convert_file_editor_line_endings(LineEnding::CrLf, cx);
-            assert_eq!(pane.file_editor_text_format, before);
+            assert_eq!(pane.file_editor_text_format(), before);
             assert_eq!(pane.file_editor_input.read(cx).text(), text);
             assert!(!pane.file_editor_is_dirty());
         });
@@ -630,7 +630,12 @@ fn auto_save_close_waits_only_for_dispatched_writes(cx: &mut gpui::TestAppContex
                     // Unsaved until the worker confirms the write.
                     assert!(view.main_pane.read(cx).file_editor_is_dirty());
                     assert_eq!(
-                        !view.main_pane.read(cx).file_editor_saves.is_empty(),
+                        !view
+                            .main_pane
+                            .read(cx)
+                            .editor_documents
+                            .pending()
+                            .is_empty(),
                         writable
                     );
                     if writable {
@@ -718,8 +723,8 @@ fn save_all_encoding_failure_cancels_quit_and_preserves_stashed_edits(
                 .document_identity(repo_id, Path::new(FILE))
                 .expect("open repository");
             let edit = pane
-                .file_editor_stash
-                .get(&key)
+                .editor_documents
+                .stashed(&key)
                 .expect("retain recovery text");
             assert_eq!(edit.text.as_ref(), "Ācafé\n");
             assert!(edit.is_dirty());
@@ -854,10 +859,10 @@ fn check_unsaved_buffer_roundtrip(cx: &mut gpui::TestAppContext, auto_save: bool
                 assert!(!input.is_read_only());
                 assert!(pane.file_editor_is_dirty());
                 assert_eq!(
-                    pane.file_editor_text_format.unwrap().format.encoding,
+                    pane.file_editor_text_format().unwrap().format.encoding,
                     TextEncoding::WINDOWS_1252
                 );
-                assert_eq!(pane.file_editor_first_dirty_line, Some(0));
+                assert_eq!(pane.file_editor_first_dirty_line(), Some(0));
                 // The restored buffer accepts edits again, and removing the
                 // unsavable character returns to the original clean contents.
                 pane.file_editor_input.update(cx, |input, cx| {
@@ -941,7 +946,7 @@ async fn restored_edits_resume_encoding_refresh_after_attributes_arrive(
         let pane = view.read(app).main_pane.read(app);
         assert_eq!(pane.file_editor_input.read(app).text(), "edit cafИ\n");
         assert_eq!(
-            pane.file_editor_text_format.unwrap().format.encoding,
+            pane.file_editor_text_format().unwrap().format.encoding,
             koi8()
         );
     });
@@ -1095,7 +1100,7 @@ async fn the_editor_edits_a_latin1_file_and_refuses_to_save_what_it_cannot_encod
         assert_eq!(pane.file_editor_input.read(app).text(), "café\n");
         assert!(!pane.file_editor_input.read(app).is_read_only());
         assert_eq!(
-            pane.file_editor_text_format
+            pane.file_editor_text_format()
                 .map(|format| format.format.encoding),
             Some(TextEncoding::WINDOWS_1252)
         );
@@ -1218,7 +1223,7 @@ async fn save_with_encoding_converts_on_the_next_save(cx: &mut gpui::TestAppCont
             "a conversion is unsaved until it is written"
         );
         assert_eq!(
-            pane.file_editor_text_format.map(|format| format.format),
+            pane.file_editor_text_format().map(|format| format.format),
             Some(gitcomet_core::text_format::TextFormat::UTF_8)
         );
         assert_eq!(
@@ -1286,7 +1291,7 @@ async fn the_editor_rereads_when_the_files_attributes_change(cx: &mut gpui::Test
         let pane = view.read(app).main_pane.read(app);
         assert_eq!(pane.file_editor_input.read(app).text(), "cafИ\n");
         assert_eq!(
-            pane.file_editor_text_format.map(|format| format.source),
+            pane.file_editor_text_format().map(|format| format.source),
             Some(FormatSource::EncodingAttribute)
         );
     });
@@ -1314,7 +1319,7 @@ async fn the_editor_rereads_when_the_files_attributes_change(cx: &mut gpui::Test
         assert_eq!(pane.file_editor_input.read(app).text(), "ЖcafИ\n");
         assert!(pane.file_editor_is_dirty());
         assert_eq!(
-            pane.file_editor_text_format
+            pane.file_editor_text_format()
                 .map(|format| format.format.encoding),
             Some(koi8())
         );
@@ -1462,7 +1467,7 @@ async fn picking_an_encoding_with_unsaved_edits_sets_the_save_format(
         view.read(app).main_pane.clone().update(app, |pane, cx| {
             pane.set_text_encoding_override(Some(TextEncoding::UTF_8), cx);
             assert_eq!(
-                pane.file_editor_text_format.map(|format| format.format),
+                pane.file_editor_text_format().map(|format| format.format),
                 Some(gitcomet_core::text_format::TextFormat::UTF_8),
                 "the pick is what Save writes"
             );
@@ -1635,7 +1640,7 @@ async fn the_error_dialog_goes_to_the_character_and_saves_as_utf8(cx: &mut gpui:
             "Save as UTF-8 wrote the buffer"
         );
         assert_eq!(
-            pane.file_editor_text_format.map(|format| format.format),
+            pane.file_editor_text_format().map(|format| format.format),
             Some(gitcomet_core::text_format::TextFormat::UTF_8)
         );
         assert!(root.toast_host.read(app).error_notices().is_empty());
@@ -1667,7 +1672,7 @@ fn review_editor_returning_to_lossy_encoding_stays_read_only(cx: &mut gpui::Test
     );
     cx.update(|_, app| {
         view.read(app).main_pane.clone().update(app, |pane, cx| {
-            assert!(pane.file_editor_text_format.unwrap().lossy);
+            assert!(pane.file_editor_text_format().unwrap().lossy);
             pane.set_file_editor_save_format(TextFormat::UTF_8, cx);
             assert!(!pane.file_editor_input.read(cx).is_read_only());
             pane.set_file_editor_save_format(
@@ -1926,7 +1931,7 @@ fn review_converted_save_keeps_decode_key_while_attributes_load(cx: &mut gpui::T
             let pane = view.read(app).main_pane.read(app);
             assert_eq!(pane.file_editor_input.read(app).text(), "saved café\n");
             assert_eq!(
-                pane.file_editor_text_format.unwrap().format,
+                pane.file_editor_text_format().unwrap().format,
                 TextFormat::UTF_8
             );
         });

@@ -1,5 +1,6 @@
 //! A pane routes diff messages to its binding; it never owns the window store.
 use super::*;
+use crate::view::documents::buffers::SaveOrigin;
 use gitcomet_extension_api::DiffPanePolicy;
 use gitcomet_state::diff_session::{DiffSessionMsg, DiffViewId};
 
@@ -105,6 +106,29 @@ impl PaneStore {
     pub fn shows_linked_worktree(&self, state: &AppState) -> bool {
         self.binding
             .is_some_and(|binding| bound_worktree(state, binding).is_some())
+    }
+
+    pub(in crate::view) fn document_save_origin(
+        &self,
+        repo_id: RepoId,
+        lifetime: u64,
+    ) -> Option<SaveOrigin> {
+        if self.snapshot.is_some() || !self.policy.allow_edit {
+            return None;
+        }
+        let session = if let Some(binding) = self.binding {
+            if binding.repo_id != repo_id || binding.lifetime != lifetime {
+                return None;
+            }
+            Some(binding.view)
+        } else {
+            None
+        };
+        Some(SaveOrigin::Repository {
+            repo_id,
+            lifetime,
+            session,
+        })
     }
 
     pub fn snapshot(&self) -> Arc<AppState> {

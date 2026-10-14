@@ -171,7 +171,7 @@ fn wait_for_displayed_content(cx: &mut gpui::VisualTestContext, view: &View) {
                 return false;
             };
             if repo.diff_state.edit_mode {
-                !pane.file_editor_loading && pane.file_editor_key.is_some()
+                !pane.file_editor_loading() && pane.file_editor_key().is_some()
             } else {
                 // Untracked files and content views read directly from disk in
                 // the pane; their store diff loadables deliberately stay empty.
@@ -334,7 +334,7 @@ fn exercise_with_failure(
         super::shortcuts::wait_until(cx, "editor loaded before typing", |cx| {
             cx.update(|_, app| {
                 let pane = view.read(app).main_pane.read(app);
-                !pane.file_editor_loading
+                !pane.file_editor_loading()
                     && pane.file_editor_input.read(app).text() == "base\nstaged\nunstaged\n"
             })
         });

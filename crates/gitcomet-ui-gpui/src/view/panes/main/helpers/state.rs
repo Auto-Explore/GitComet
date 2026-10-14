@@ -795,53 +795,10 @@ pub(crate) struct MainPaneView {
     /// The editable working-tree buffer. See `super::super::file_editor`.
     pub(in crate::view) file_editor_input: Entity<components::TextInput>,
     pub(in crate::view::panes::main) _file_editor_input_subscription: gpui::Subscription,
-    /// Which repo/path the input currently holds, so a target change is one
-    /// comparison rather than a reload every frame.
-    pub(in crate::view) file_editor_key: Option<gitcomet_core::filesystem::DocumentIdentity>,
-    pub(crate) filesystem_pauses:
-        std::collections::BTreeSet<gitcomet_core::filesystem::OperationId>,
-    pub(in crate::view) file_editor_disk_versions: FxHashMap<
-        gitcomet_core::filesystem::DocumentIdentity,
-        gitcomet_core::filesystem::DiskVersion,
-    >,
-    pub(in crate::view) file_editor_saves: std::collections::BTreeMap<
-        gitcomet_core::filesystem::OperationId,
-        (gitcomet_core::filesystem::DocumentIdentity, u64),
-    >,
+    pub(in crate::view) editor_documents: crate::view::documents::repository::RepositoryDocuments,
     pub(in crate::view) file_editor_language: Option<rows::DiffSyntaxLanguage>,
-    pub(in crate::view) file_editor_loading: bool,
-    /// Generation of the last disk read, so a superseded read is dropped.
-    pub(in crate::view) file_editor_reread_seq: u64,
-    /// What the buffer was read from (or last wrote). See `super::super::file_disk`.
-    pub(in crate::view) file_editor_disk: DiskIdentity,
-    pub(in crate::view) file_editor_error: Option<SharedString>,
-    /// How the buffer's file was read, and so how it is written back.
-    pub(in crate::view) file_editor_text_format: Option<gitcomet_core::text_format::SideTextFormat>,
-    pub(in crate::view) file_editor_source_text_format:
-        Option<gitcomet_core::text_format::SideTextFormat>,
-    /// What the buffer was decoded with; a new choice re-reads it.
     pub(in crate::view) file_editor_decode_key: Option<super::super::preview::TextDecodeKey>,
-    /// A read is waiting for the file's attributes.
     pub(in crate::view) file_editor_waiting_for_attributes: bool,
-    pub(in crate::view) file_editor_dirty: bool,
-    /// The topmost 0-based line an unsaved edit has touched, or `None` while the
-    /// buffer matches disk.
-    ///
-    /// Blame is indexed by committed line number, so an insertion or deletion
-    /// shifts the attribution of everything under it — but only under it. This
-    /// watermark is what lets the gutter keep showing blame for the untouched
-    /// head of the file instead of blanking the whole column on the first
-    /// keystroke. Deliberately pessimistic: an edit that changed no line count
-    /// still moves it, because tracking that precisely costs more than the
-    /// attribution below it is worth.
-    pub(in crate::view) file_editor_first_dirty_line: Option<u32>,
-    /// Why the last save wrote nothing (the text has no bytes in the file's
-    /// encoding). Shows Save/Discard under auto-save and stops auto-save
-    /// re-reporting the same failure every pause.
-    pub(in crate::view) file_editor_save_error: Option<SharedString>,
-    /// Fingerprint of the text last known to be on disk. `None` before the
-    /// first read lands, which reads as "everything is unsaved".
-    pub(in crate::view) file_editor_saved_fingerprint: Option<u64>,
     /// "File changed on disk", for the surface it names. See `super::super::file_disk`.
     pub(in crate::view) file_disk_notice: Option<FileDiskNotice>,
     /// Generation of the last disk check, so a superseded check is dropped.
@@ -852,20 +809,6 @@ pub(crate) struct MainPaneView {
     /// checked at. `None` until a read lands, so bumps that predate the read
     /// never fire a check.
     pub(in crate::view) file_disk_seen: Option<FileDiskSeen>,
-    /// Unsaved buffers the user navigated away from, keyed by path. This is what
-    /// makes leaving a file and coming back non-destructive with auto-save off.
-    /// Keyed by repo *and* path: two repo tabs can hold the same relative path,
-    /// and one must not restore over the other's buffer.
-    pub(in crate::view) file_editor_stash: FxHashMap<
-        gitcomet_core::filesystem::DocumentIdentity,
-        super::super::file_editor::StashedFileEdit,
-    >,
-    /// Bumped whenever the set of files with unsaved edits changes.
-    ///
-    /// That set lives here rather than in the store, so nothing outside this
-    /// pane can notice it moving on its own — the sidebar keys its file-row
-    /// cache off this counter and repaints on the notify that bumps it.
-    pub(in crate::view) unsaved_file_edits_rev: u64,
     /// The pending quiet-period timer for auto-save. Dropping it cancels it, so
     /// every keystroke simply replaces it.
     pub(in crate::view) file_editor_autosave: Option<gpui::Task<()>>,

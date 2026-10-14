@@ -13,7 +13,7 @@ enum PickerEntry {
     /// An absolute (or `~`) path typed into the query.
     Typed(PathBuf),
     /// Unsaved text, addressed by buffer so a missing file cannot hide it.
-    Unsaved(PathBuf, gpui::EntityId),
+    Unsaved(PathBuf, super::buffers::BufferId),
     Recent(PathBuf),
 }
 

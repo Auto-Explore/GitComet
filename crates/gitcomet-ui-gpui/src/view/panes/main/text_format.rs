@@ -202,7 +202,10 @@ impl MainPaneView {
         text: String,
         cx: &mut gpui::Context<Self>,
     ) -> Option<gitcomet_state::msg::ContentBytes> {
-        match super::file_editor::encode_for_save(text.into(), self.conflict_output_text_format()) {
+        match crate::view::documents::text::encode_for_save(
+            text.into(),
+            self.conflict_output_text_format(),
+        ) {
             Ok((bytes, _)) => Some(bytes),
             Err(error) => {
                 let (repo_id, path) = (
@@ -235,7 +238,7 @@ impl MainPaneView {
     /// a whole-file view.
     fn shown_text_formats(&self) -> Option<(Option<SideTextFormat>, SideTextFormat, bool)> {
         match self.main_pane_surface().body {
-            MainPaneBody::FileEditor => Some((None, self.file_editor_text_format?, true)),
+            MainPaneBody::FileEditor => Some((None, self.file_editor_text_format()?, true)),
             MainPaneBody::FilePreview => Some((None, self.worktree_preview_text_format?, false)),
             MainPaneBody::Conflict => Some((None, self.conflict_output_text_format()?, false)),
             MainPaneBody::FileDiff | MainPaneBody::Patch => {
@@ -418,7 +421,7 @@ impl MainPaneView {
         let unsaved = if resolver {
             self.conflict_resolved_output_is_modified()
         } else {
-            self.file_editor_dirty
+            self.file_editor_dirty()
         };
         Some(TextEncodingMenuState {
             editor,
@@ -461,7 +464,7 @@ impl MainPaneView {
             return;
         };
         let unsaved_editor =
-            self.main_pane_surface().body == MainPaneBody::FileEditor && self.file_editor_dirty;
+            self.main_pane_surface().body == MainPaneBody::FileEditor && self.file_editor_dirty();
         if unsaved_editor {
             match encoding {
                 Some(encoding) => self.set_file_editor_save_format(
@@ -518,10 +521,10 @@ impl MainPaneView {
         format: gitcomet_core::text_format::TextFormat,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.main_pane_surface().body != MainPaneBody::FileEditor || self.file_editor_loading {
+        if self.main_pane_surface().body != MainPaneBody::FileEditor || self.file_editor_loading() {
             return;
         }
-        let Some(mut current) = self.file_editor_text_format else {
+        let Some(mut current) = self.file_editor_text_format() else {
             return;
         };
         // Text with replacement characters would write them into the file.
@@ -531,17 +534,16 @@ impl MainPaneView {
         current = SideTextFormat {
             line_endings: current.line_endings,
             ..self
-                .file_editor_source_text_format
+                .file_editor_source_text_format()
                 .unwrap_or(current)
                 .for_save_as(format)
         };
-        self.file_editor_text_format = Some(current);
+        if let Some(document) = self.editor_documents.active() {
+            document.change_text_format(current, cx);
+        }
         self.file_editor_input.update(cx, |input, cx| {
             input.set_read_only(!current.is_writable(), cx)
         });
-        self.file_editor_dirty = true;
-        self.file_editor_saved_fingerprint = None;
-        self.file_editor_save_error = None;
         if self.auto_save_file_edits {
             self.schedule_file_editor_autosave(cx);
         }
@@ -557,6 +559,7 @@ impl MainPaneView {
         path: &Path,
         bytes: &[u8],
         saved: gitcomet_core::text_format::TextFormat,
+        cx: &mut gpui::Context<Self>,
     ) {
         use gitcomet_core::text_format::{ContentSniff, SideKind};
 
@@ -593,10 +596,13 @@ impl MainPaneView {
             return;
         }
         let encoding = (reads_as(None) != saved.encoding).then_some(saved.encoding);
-        if let Some(format) = self.file_editor_text_format.as_mut() {
-            format.source = sniff
-                .resolve(SideKind::Worktree, &attributes, encoding)
-                .source;
+        if let Some(document) = self.editor_documents.active() {
+            document.follow_format_source(
+                sniff
+                    .resolve(SideKind::Worktree, &attributes, encoding)
+                    .source,
+                cx,
+            );
         }
         self.file_editor_decode_key = decode_key.map(|key| key.with_encoding(encoding));
         self.store.dispatch(Msg::SetTextOverride {
@@ -616,7 +622,7 @@ impl MainPaneView {
         ending: LineEnding,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.main_pane_surface().body != MainPaneBody::FileEditor || self.file_editor_loading {
+        if self.main_pane_surface().body != MainPaneBody::FileEditor || self.file_editor_loading() {
             return;
         }
         let converted = self.file_editor_input.update(cx, |input, cx| {
@@ -634,8 +640,10 @@ impl MainPaneView {
             input.replace_utf8_range(0..len, &converted, cx);
             Some(LineEndingStats::from_bytes(converted.as_bytes()))
         });
-        if let (Some(stats), Some(format)) = (converted, self.file_editor_text_format.as_mut()) {
-            format.line_endings = stats;
+        if let Some(stats) = converted
+            && let Some(document) = self.editor_documents.active()
+        {
+            document.set_line_endings(stats, cx);
         }
         cx.notify();
     }
@@ -647,9 +655,9 @@ impl MainPaneView {
             ErrorAction::SaveEditorAs { repo_id, path, .. }
             | ErrorAction::RevealInEditor { repo_id, path, .. } => {
                 self.main_pane_surface().body == MainPaneBody::FileEditor
-                    && !self.file_editor_loading
+                    && !self.file_editor_loading()
                     && self
-                        .file_editor_key
+                        .file_editor_key()
                         .as_ref()
                         .and_then(|key| self.document_repo_path(key))
                         .is_some_and(|(key_repo, key_path)| {

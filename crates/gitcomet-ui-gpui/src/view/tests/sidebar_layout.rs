@@ -1892,21 +1892,11 @@ fn file_explorer_pins_and_marks_files_with_unsaved_editor_buffers(cx: &mut gpui:
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
-                pane.file_editor_stash.insert(
-                    pane.document_identity(RepoId(1), std::path::Path::new("b.rs"))
-                        .unwrap(),
-                    crate::view::panes::main::StashedFileEdit {
-                        text: SharedString::from("edited\n"),
-                        text_format: None,
-                        source_text_format: None,
-                        cursor: 0,
-                        text_fingerprint: 1,
-                        saved_fingerprint: 2,
-                        first_dirty_line: Some(0),
-                        disk: Default::default(),
-                    },
-                );
-                pane.sync_unsaved_file_edits_rev(cx);
+                let identity = pane
+                    .document_identity(RepoId(1), std::path::Path::new("b.rs"))
+                    .unwrap();
+                pane.editor_documents
+                    .retain_for_tests(identity, RepoId(1), "edited\n".into(), cx);
             });
         });
     });
@@ -2076,21 +2066,11 @@ fn clicking_a_file_with_unsaved_edits_opens_the_editor(cx: &mut gpui::TestAppCon
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
-                pane.file_editor_stash.insert(
-                    pane.document_identity(RepoId(1), std::path::Path::new("b.rs"))
-                        .unwrap(),
-                    crate::view::panes::main::StashedFileEdit {
-                        text: SharedString::from("edited\n"),
-                        text_format: None,
-                        source_text_format: None,
-                        cursor: 0,
-                        text_fingerprint: 1,
-                        saved_fingerprint: 2,
-                        first_dirty_line: Some(0),
-                        disk: Default::default(),
-                    },
-                );
-                pane.sync_unsaved_file_edits_rev(cx);
+                let identity = pane
+                    .document_identity(RepoId(1), std::path::Path::new("b.rs"))
+                    .unwrap();
+                pane.editor_documents
+                    .retain_for_tests(identity, RepoId(1), "edited\n".into(), cx);
             });
         });
     });

@@ -343,6 +343,428 @@ fn selector(text: String) -> &'static str {
     Box::leak(text.into_boxed_str())
 }
 
+fn hosted_editor(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<GitCometView>,
+    store: &AppStore,
+) -> (DiffPane, gpui::Entity<MainPaneView>) {
+    let pane = cx.update(|_, app| {
+        let host = view.read(app).extension_window.as_ref().unwrap().host();
+        let repository = host.active_repository(app).unwrap().unwrap();
+        host.create_diff_pane(
+            &repository,
+            DiffTarget::working_tree("a.rs".into(), DiffArea::Unstaged),
+            DiffPaneOptions::default(),
+            app,
+        )
+        .unwrap()
+    });
+    settle(cx, view, store, "hosted file", |cx| {
+        cx.update(|_, app| !pane.is_loading(app))
+    });
+    let renderer = cx.update(|window, app| {
+        let entity = pane
+            .view()
+            .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+            .unwrap_or_else(|_| panic!("hosted pane"));
+        let renderer = entity.update(app, |pane, cx| pane.renderer_for_test(window, cx));
+        renderer.update(app, |renderer, _| {
+            renderer.auto_save_file_edits = false;
+            renderer.store.dispatch(Msg::OpenFileEditor {
+                repo_id: RepoId(1),
+                path: "a.rs".into(),
+            });
+        });
+        renderer
+    });
+    settle(cx, view, store, "hosted editor", |cx| {
+        cx.update(|_, app| {
+            renderer.update(app, |pane, cx| {
+                pane.ensure_file_editor_loaded(cx);
+                pane.file_editor_key().is_some() && !pane.file_editor_loading()
+            })
+        })
+    });
+    (pane, renderer)
+}
+
+fn edit_hosted(
+    renderer: &gpui::Entity<MainPaneView>,
+    text: &str,
+    cx: &mut gpui::VisualTestContext,
+) {
+    cx.update(|_, app| {
+        renderer.update(app, |pane, cx| {
+            pane.file_editor_input.update(cx, |input, cx| {
+                input.replace_utf8_range(0..input.text().len(), text, cx);
+            });
+        })
+    });
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn hosted_save_admission_follows_policy_and_keeps_admitted_receipts(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (dir, store, view, cx) = open_repository(cx);
+    let (pane, renderer) = hosted_editor(cx, &view, &store);
+    let path = dir.path().join("a.rs");
+    let original = std::fs::read_to_string(&path).unwrap();
+    let owner = cx.update(|_, app| view.read(app).ui_model.read(app).documents.clone());
+    edit_hosted(&renderer, "admitted before policy changed\n", cx);
+
+    cx.update(|_, app| {
+        pane.set_policy(DiffPanePolicy::read_only(), app);
+        owner.resolve(None, None, true, app);
+        assert!(
+            owner.saves_drained(None),
+            "read-only policy refused the write"
+        );
+        assert!(renderer.read(app).file_editor_dirty());
+    });
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+
+    let held = gitcomet_core::filesystem::global()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    cx.update(|_, app| {
+        pane.set_policy(DiffPanePolicy::default(), app);
+        owner.resolve(None, None, true, app);
+        assert!(
+            !owner.saves_drained(None),
+            "editable policy admitted the write"
+        );
+        pane.set_policy(DiffPanePolicy::read_only(), app);
+    });
+    drop(held);
+    settle(cx, &view, &store, "receipt after policy changed", |_| {
+        owner.saves_drained(None) && owner.unsaved_documents().is_empty()
+    });
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "admitted before policy changed\n"
+    );
+}
+
+#[gpui::test]
+fn hosted_save_admission_checks_linked_worktree_before_renderer_sync(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (dir, store, view, cx) = open_repository(cx);
+    let (pane, renderer) = hosted_editor(cx, &view, &store);
+    let (_linked_dir, linked) = add_linked_worktree(dir.path());
+    let path = dir.path().join("a.rs");
+    let original = std::fs::read_to_string(&path).unwrap();
+    let owner = cx.update(|_, app| view.read(app).ui_model.read(app).documents.clone());
+    edit_hosted(&renderer, "main checkout only\n", cx);
+    let before_retarget = store.snapshot();
+    let binding = cx.update(|_, app| renderer.read(app).store.binding.unwrap());
+    let mut retargeted = (*before_retarget).clone();
+    let session = Arc::make_mut(&mut retargeted.repos[0].diff_sessions)
+        .get_mut(&binding.view)
+        .unwrap();
+    session.target = session.target.clone().in_worktree(linked.clone());
+    store.replace_snapshot_for_test(Arc::new(retargeted));
+
+    cx.update(|_, app| {
+        assert!(renderer.read(app).store.policy.allow_edit);
+        owner.resolve(None, None, true, app);
+        assert!(
+            owner.saves_drained(None),
+            "live linked session refused the write"
+        );
+        assert!(renderer.read(app).file_editor_dirty());
+    });
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    assert_eq!(
+        std::fs::read_to_string(linked.join("a.rs")).unwrap(),
+        "linked edit\n"
+    );
+
+    store.replace_snapshot_for_test(before_retarget);
+    cx.update(|_, app| owner.resolve(None, None, true, app));
+    settle(cx, &view, &store, "main checkout save", |_| {
+        owner.saves_drained(None) && owner.unsaved_documents().is_empty()
+    });
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "main checkout only\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(linked.join("a.rs")).unwrap(),
+        "linked edit\n"
+    );
+    drop(pane);
+}
+
+#[gpui::test]
+fn hosted_save_admission_rejects_a_reopened_repository(cx: &mut gpui::TestAppContext) {
+    hosted_save_admission_rejects_stale_binding(cx, false);
+}
+
+#[gpui::test]
+fn hosted_save_admission_rejects_a_removed_session(cx: &mut gpui::TestAppContext) {
+    hosted_save_admission_rejects_stale_binding(cx, true);
+}
+
+fn hosted_save_admission_rejects_stale_binding(
+    cx: &mut gpui::TestAppContext,
+    remove_session: bool,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (dir, store, view, cx) = open_repository(cx);
+    let (_pane, renderer) = hosted_editor(cx, &view, &store);
+    let path = dir.path().join("a.rs");
+    let original = std::fs::read_to_string(&path).unwrap();
+    let owner = cx.update(|_, app| view.read(app).ui_model.read(app).documents.clone());
+    edit_hosted(&renderer, "current binding only\n", cx);
+    let current = store.snapshot();
+    let binding = cx.update(|_, app| renderer.read(app).store.binding.unwrap());
+    let mut stale = (*current).clone();
+    if remove_session {
+        Arc::make_mut(&mut stale.repos[0].diff_sessions).remove(&binding.view);
+    } else {
+        let mut replacement = RepoState::new_opening(RepoId(1), current.repos[0].spec.clone());
+        replacement.open = Loadable::Ready(());
+        replacement.diff_sessions = current.repos[0].diff_sessions.clone();
+        assert_ne!(replacement.lifetime(), binding.lifetime);
+        stale.repos[0] = replacement;
+    }
+    store.replace_snapshot_for_test(Arc::new(stale));
+    cx.update(|_, app| {
+        owner.resolve(None, None, true, app);
+        assert!(owner.saves_drained(None), "stale binding refused the write");
+        assert!(renderer.read(app).file_editor_dirty());
+    });
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+
+    store.replace_snapshot_for_test(current);
+    cx.update(|_, app| owner.resolve(None, None, true, app));
+    settle(cx, &view, &store, "current binding save", |_| {
+        owner.saves_drained(None) && owner.unsaved_documents().is_empty()
+    });
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "current binding only\n"
+    );
+}
+
+#[gpui::test]
+fn hosted_edits_are_saved_and_discarded_by_the_window_close_guard(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (dir, store, view, cx) = open_repository(cx);
+    let (_pane, renderer) = hosted_editor(cx, &view, &store);
+    edit_hosted(&renderer, "saved by close\n", cx);
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            assert!(view.request_quit_unsaved_file_edits_prompt(cx));
+            assert!(
+                view.pending_unsaved_file_edits_prompt
+                    .as_ref()
+                    .is_some_and(|prompt| prompt.files == vec![SharedString::from("a.rs")])
+            );
+            view.resolve_unsaved_file_edits(UnsavedFileEditsAction::QuitApp, true, cx);
+        })
+    });
+    settle(cx, &view, &store, "hosted close save", |cx| {
+        cx.update(|_, app| {
+            let owner = &view.read(app).ui_model.read(app).documents;
+            owner.saves_drained(None) && owner.unsaved_documents().is_empty()
+        })
+    });
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.rs")).unwrap(),
+        "saved by close\n"
+    );
+    edit_hosted(&renderer, "discarded by close\n", cx);
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.resolve_unsaved_file_edits(UnsavedFileEditsAction::QuitApp, false, cx);
+        })
+    });
+    settle(cx, &view, &store, "hosted close discard", |cx| {
+        cx.update(|_, app| {
+            !renderer.read(app).file_editor_loading()
+                && view
+                    .read(app)
+                    .ui_model
+                    .read(app)
+                    .documents
+                    .unsaved_documents()
+                    .is_empty()
+        })
+    });
+    cx.update(|_, app| {
+        assert_eq!(
+            renderer.read(app).file_editor_input.read(app).text(),
+            "saved by close\n"
+        )
+    });
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.rs")).unwrap(),
+        "saved by close\n"
+    );
+}
+
+#[gpui::test]
+fn filesystem_resolution_and_rename_reach_hosted_editors(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::filesystem::{Operation, Request};
+    let _guard = crate::test_support::lock_visual_test();
+    let (dir, store, view, cx) = open_repository(cx);
+    let (_pane, renderer) = hosted_editor(cx, &view, &store);
+    let path = canonicalize_or_original(dir.path().join("a.rs"));
+    let moved = path.with_file_name("moved.rs");
+    edit_hosted(&renderer, "saved before rename\n", cx);
+    cx.update(|_, app| {
+        assert!(crate::app::filesystem_has_unsaved_buffers(
+            std::slice::from_ref(&path),
+            app
+        ));
+        crate::app::resolve_filesystem_buffers(std::slice::from_ref(&path), true, app);
+    });
+    settle(cx, &view, &store, "hosted filesystem save", |cx| {
+        cx.update(|_, app| {
+            crate::app::filesystem_saves_drained(app)
+                && !crate::app::filesystem_has_unsaved_buffers(std::slice::from_ref(&path), app)
+        })
+    });
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "saved before rename\n"
+    );
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            view.submit_filesystem_operation(
+                Request::new(Operation::Rename {
+                    source: path.clone(),
+                    name: "moved.rs".into(),
+                }),
+                None,
+                window,
+                cx,
+            );
+        })
+    });
+    settle(cx, &view, &store, "hosted rename", |cx| {
+        cx.update(|_, app| {
+            renderer
+                .read(app)
+                .file_editor_key()
+                .is_some_and(|identity| identity.0 == moved)
+                && !view.read(app).file_operations.has_pending()
+        })
+    });
+    edit_hosted(&renderer, "discarded after rename\n", cx);
+    cx.update(|_, app| {
+        crate::app::resolve_filesystem_buffers(std::slice::from_ref(&moved), false, app)
+    });
+    settle(cx, &view, &store, "hosted filesystem discard", |cx| {
+        cx.update(|_, app| {
+            !renderer.read(app).file_editor_loading()
+                && !crate::app::filesystem_has_unsaved_buffers(std::slice::from_ref(&moved), app)
+        })
+    });
+    assert_eq!(
+        std::fs::read_to_string(&moved).unwrap(),
+        "saved before rename\n"
+    );
+    assert!(!path.exists());
+}
+
+#[gpui::test]
+fn disposing_a_hosted_editor_transfers_dirty_text_and_releases_clean_records(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (dir, store, view, cx) = open_repository(cx);
+    let (pane, renderer) = hosted_editor(cx, &view, &store);
+    let path = canonicalize_or_original(dir.path().join("a.rs"));
+    drop(renderer);
+    drop(pane);
+    cx.update(|_, _| {});
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        assert!(
+            view.read(app)
+                .ui_model
+                .read(app)
+                .documents
+                .at_path(&path)
+                .is_empty()
+        )
+    });
+
+    let (pane, renderer) = hosted_editor(cx, &view, &store);
+    edit_hosted(&renderer, "retained after disposal\n", cx);
+    let id = cx.update(|_, app| renderer.read(app).editor_documents.active().unwrap().id());
+    drop(renderer);
+    drop(pane);
+    cx.update(|_, _| {});
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        let owner = view.read(app).ui_model.read(app).documents.clone();
+        let buffers = owner.at_path(&path);
+        assert_eq!(buffers.len(), 1);
+        assert_eq!(buffers[0].id(), id);
+        assert_eq!(buffers[0].read().repository(), None);
+        assert_eq!(
+            buffers[0].stashed().unwrap().text.as_ref(),
+            "retained after disposal\n"
+        );
+        assert!(owner.resolve(None, None, true, app));
+    });
+    settle(cx, &view, &store, "detached hosted save", |cx| {
+        cx.update(|_, app| {
+            let owner = &view.read(app).ui_model.read(app).documents;
+            owner.saves_drained(None) && owner.unsaved_documents().is_empty()
+        })
+    });
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "retained after disposal\n"
+    );
+}
+
+#[gpui::test]
+fn disposing_a_hosted_editor_keeps_its_pending_write_receipt(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (dir, store, view, cx) = open_repository(cx);
+    let (pane, renderer) = hosted_editor(cx, &view, &store);
+    let path = canonicalize_or_original(dir.path().join("a.rs"));
+    edit_hosted(&renderer, "pending at disposal\n", cx);
+    let held = gitcomet_core::filesystem::global()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    cx.update(|_, app| renderer.update(app, |pane, cx| pane.save_file_editor_buffer(cx)));
+    drop(renderer);
+    drop(pane);
+    cx.update(|_, _| {});
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        let owner = &view.read(app).ui_model.read(app).documents;
+        assert!(!owner.saves_drained(None));
+        let buffers = owner.at_path(&path);
+        assert_eq!(buffers.len(), 1);
+        assert_eq!(buffers[0].read().repository(), None);
+        assert_eq!(
+            buffers[0].stashed().unwrap().text.as_ref(),
+            "pending at disposal\n"
+        );
+    });
+    drop(held);
+    settle(cx, &view, &store, "released hosted save", |cx| {
+        cx.update(|_, app| {
+            let owner = &view.read(app).ui_model.read(app).documents;
+            owner.saves_drained(None) && owner.unsaved_documents().is_empty()
+        })
+    });
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "pending at disposal\n"
+    );
+}
+
 #[gpui::test]
 fn retargeting_ignores_old_notifications_and_clears_files_before_loading(
     cx: &mut gpui::TestAppContext,

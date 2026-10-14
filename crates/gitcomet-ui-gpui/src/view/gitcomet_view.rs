@@ -1412,8 +1412,13 @@ impl GitCometView {
         if !initial_state.repos.is_empty() {
             startup_repo_bootstrap_pending = false;
         }
-        let ui_model = cx.new(|_cx| {
-            AppUiModel::new_with_preferences(Arc::clone(&initial_state), ui_preferences.clone())
+        let ui_model = cx.new(|cx| {
+            AppUiModel::new_with_preferences(
+                Arc::clone(&initial_state),
+                ui_preferences.clone(),
+                Arc::downgrade(&store),
+                cx,
+            )
         });
 
         let ui_model_subscription = cx.observe(&ui_model, |this, model, cx| {
@@ -1829,7 +1834,6 @@ impl GitCometView {
             documents::DocumentsView::new(
                 initial_theme,
                 documents_root.clone(),
-                store.clone(),
                 ui_model.clone(),
                 cx,
             )
@@ -2180,19 +2184,6 @@ impl GitCometView {
         // overlays that must composite over the same color.
         self.title_bar.update(cx, |_bar, cx| cx.notify());
         self.repo_tabs_bar.update(cx, |_bar, cx| cx.notify());
-        cx.notify();
-    }
-
-    /// Repaint the panes that show which files have unsaved editor buffers.
-    ///
-    /// The main pane owns those buffers and the sidebar draws them, and the two
-    /// are separate entities with no store snapshot between them to carry the
-    /// change — so the pane that changed it says so, here.
-    pub(in crate::view) fn notify_unsaved_file_edits_changed(
-        &mut self,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.sidebar_pane.update(cx, |_pane, cx| cx.notify());
         cx.notify();
     }
 

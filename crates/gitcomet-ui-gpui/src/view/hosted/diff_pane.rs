@@ -219,11 +219,12 @@ impl DiffPaneView {
         let Some(root) = self.root.clone() else {
             return;
         };
-        let Ok((mut preferences, tooltip, store)) = root.read_with(cx, |root, cx| {
+        let Ok((mut preferences, tooltip, store, documents)) = root.read_with(cx, |root, cx| {
             (
                 root.ui_model.read(cx).preferences.clone(),
                 root.tooltip_host.downgrade(),
                 root.store.clone(),
+                root.ui_model.read(cx).documents.clone(),
             )
         }) else {
             return;
@@ -255,7 +256,11 @@ impl DiffPaneView {
         };
         preferences.diff.content_mode = DiffContentMode::Full;
         let preferred = preferences.diff.view_mode;
-        let model = cx.new(|_| AppUiModel::new_with_preferences(state, preferences));
+        let model = cx.new(|_| AppUiModel {
+            state,
+            preferences,
+            documents,
+        });
         let theme = self.host.theme(cx);
         let renderer = cx.new(|cx| {
             let mut pane = MainPaneView::new(
@@ -914,6 +919,16 @@ impl DiffPaneView {
             renderer.diff_stage_gutter_area().is_some(),
             renderer.editable_path_for_current_target().is_some(),
         ))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn renderer_for_test(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Entity<MainPaneView> {
+        self.prepare_renderer(window, cx);
+        self.renderer.clone().expect("hosted renderer")
     }
 
     /// The checkout the renderer resolves the file's paths against.

@@ -9,15 +9,20 @@
 //! for unresolved blocks. The one overlay it does add is the delimiter pair the
 //! caret sits in.
 //!
-//! Buffers are keyed by path and survive switching files, so an unsaved edit is
-//! still there when the user comes back. Only the text and caret are stashed —
+//! Stable document buffers survive switching files. The document owner keeps
+//! their lifecycle state; only text and caret move between presenters.
 //! `TextInput`'s undo stack does not leave the widget.
 
-use super::file_disk::{DiskCheckCause, DiskIdentity, DiskSurface, PendingWrite};
+use super::file_disk::{DiskCheckCause, DiskSurface};
 use super::*;
 use crate::kit::rope::Rope;
 use crate::kit::text_model::TextModelSnapshot;
 use crate::kit::{HighlightProvider, HighlightProviderResult};
+use crate::view::documents::buffers::{DocumentBuffer, StashedFileEdit};
+use crate::view::documents::disk::DiskIdentity;
+use crate::view::documents::text::{
+    SaveEncodeError, encode_for_save, file_editor_text_fingerprint,
+};
 use gitcomet_core::filesystem::{DiskVersion, DocumentIdentity};
 use gitcomet_core::text_format::{FormatSource, SideKind, SideTextFormat};
 use palette::IntoColor;
@@ -25,6 +30,97 @@ use rustc_hash::FxHasher;
 use std::path::{Path, PathBuf};
 
 impl MainPaneView {
+    pub(in crate::view) fn file_editor_key(&self) -> Option<DocumentIdentity> {
+        self.editor_documents
+            .active()
+            .map(|buffer| buffer.read().identity().clone())
+    }
+
+    pub(in crate::view) fn file_editor_dirty(&self) -> bool {
+        self.editor_documents
+            .active()
+            .is_some_and(|buffer| buffer.read().dirty())
+    }
+
+    pub(in crate::view) fn file_editor_loading(&self) -> bool {
+        self.editor_documents
+            .active()
+            .is_some_and(|buffer| buffer.read().loading())
+    }
+
+    pub(in crate::view) fn file_editor_error(&self) -> Option<SharedString> {
+        self.editor_documents
+            .active()
+            .and_then(|buffer| buffer.read().error().cloned())
+    }
+
+    pub(in crate::view) fn file_editor_text_format(&self) -> Option<SideTextFormat> {
+        self.editor_documents
+            .active()
+            .and_then(|buffer| buffer.read().text_format())
+    }
+
+    pub(in crate::view) fn file_editor_source_text_format(&self) -> Option<SideTextFormat> {
+        self.editor_documents
+            .active()
+            .and_then(|buffer| buffer.read().source_text_format())
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn file_editor_saved_fingerprint(&self) -> Option<u64> {
+        self.editor_documents
+            .active()
+            .and_then(|buffer| buffer.read().saved_fingerprint())
+    }
+
+    pub(in crate::view) fn file_editor_first_dirty_line(&self) -> Option<u32> {
+        self.editor_documents
+            .active()
+            .and_then(|buffer| buffer.read().first_dirty_line())
+    }
+
+    pub(in crate::view) fn file_editor_save_error(&self) -> Option<SharedString> {
+        self.editor_documents
+            .active()
+            .and_then(|buffer| buffer.read().save_error().clone())
+    }
+
+    pub(in crate::view) fn file_editor_disk(&self) -> DiskIdentity {
+        self.editor_documents
+            .active()
+            .map(|buffer| buffer.read().disk().clone())
+            .unwrap_or_default()
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn file_editor_reread_seq(&self) -> u64 {
+        self.editor_documents
+            .active()
+            .map(|buffer| buffer.read().generation())
+            .unwrap_or_default()
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn file_editor_stash(
+        &self,
+    ) -> std::collections::BTreeMap<DocumentIdentity, StashedFileEdit> {
+        self.editor_documents.stashes().into_iter().collect()
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn file_editor_disk_versions(
+        &self,
+    ) -> std::collections::BTreeMap<DocumentIdentity, DiskVersion> {
+        self.editor_documents
+            .all()
+            .into_iter()
+            .filter_map(|buffer| {
+                let state = buffer.read();
+                Some((state.identity().clone(), state.version().clone()?))
+            })
+            .collect()
+    }
+
     pub(in crate::view) fn document_identity(
         &self,
         repo_id: RepoId,
@@ -35,12 +131,6 @@ impl MainPaneView {
             .iter()
             .find(|r| r.id == repo_id)
             .map(|r| DocumentIdentity(r.spec.workdir.join(path)))
-    }
-
-    pub(crate) fn filesystem_has_unsaved(&self, sources: &[PathBuf]) -> bool {
-        self.unsaved_document_identities()
-            .iter()
-            .any(|key| sources.iter().any(|source| key.0.starts_with(source)))
     }
 
     pub(crate) fn filesystem_resolve_unsaved(
@@ -55,25 +145,22 @@ impl MainPaneView {
                 continue;
             }
             if save {
-                if let Some(buffer) = self.file_editor_stash.get(&key).cloned() {
+                if let Some(buffer) = self.editor_documents.stashed(&key) {
                     let _ = self.enqueue_file_editor_save(key, &buffer, false, true, cx);
                 }
-            } else if self.file_editor_key.as_ref() == Some(&key) {
+            } else if self.file_editor_key().as_ref() == Some(&key) {
                 self.discard_file_editor_buffer(cx);
             } else {
-                self.file_editor_stash.remove(&key);
+                self.editor_documents.discard(&key, cx);
             }
         }
-        self.sync_unsaved_file_edits_rev(cx);
     }
 
     pub(crate) fn filesystem_saves_drained(&self) -> bool {
-        self.file_editor_saves.is_empty()
-            && self
-                .state
-                .repos
-                .iter()
-                .all(|r| r.local_actions_in_flight == 0)
+        self.state
+            .repos
+            .iter()
+            .all(|r| r.local_actions_in_flight == 0)
     }
 
     pub(crate) fn filesystem_pause(
@@ -83,7 +170,7 @@ impl MainPaneView {
     ) {
         self.file_editor_autosave = None;
         self.stash_current_file_editor_buffer(cx);
-        self.filesystem_pauses.insert(id);
+        self.editor_documents.pause(id, cx);
     }
 
     pub(crate) fn filesystem_finish(
@@ -94,72 +181,12 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         self.stash_current_file_editor_buffer(cx);
-        let active = self
-            .file_editor_key
-            .as_ref()
-            .map(|key| key.retarget(changes));
-        let old_versions = std::mem::take(&mut self.file_editor_disk_versions);
-        let retarget_version = |key: &DocumentIdentity, version: DiskVersion| {
-            versions
-                .get(&key.0)
-                .filter(|v| v.same_contents(&version))
-                .cloned()
-                .unwrap_or(version)
-        };
-        let active_version = self
-            .file_editor_key
-            .as_ref()
-            .and_then(|key| old_versions.get(key))
-            .zip(active.as_ref())
-            .map(|(version, key)| retarget_version(key, version.clone()));
-        let mut entries: Vec<_> = std::mem::take(&mut self.file_editor_stash)
-            .into_iter()
-            .collect();
-        // The active identity owns its slot even when its clean/loading buffer
-        // has no stash. Other collisions prefer dirty, then moved buffers.
-        // Every displaced dirty buffer keeps its own baseline in Documents.
-        entries.sort_by_key(|(key, buffer)| (buffer.is_dirty(), key.retarget(changes) != *key));
-        let mut stashes = FxHashMap::default();
-        let mut mapped_versions = FxHashMap::default();
-        for (key, buffer) in entries {
-            let next = key.retarget(changes);
-            let version = old_versions
-                .get(&key)
-                .map(|version| retarget_version(&next, version.clone()));
-            if active.as_ref() == Some(&next) && self.file_editor_key.as_ref() != Some(&key) {
-                if buffer.is_dirty() {
-                    self.detach_file_edit(next, buffer, version, cx);
-                }
-                continue;
-            }
-            if let Some(existing) = stashes.remove(&next)
-                && StashedFileEdit::is_dirty(&existing)
-            {
-                let version = mapped_versions.remove(&next);
-                self.detach_file_edit(next.clone(), existing, version, cx);
-            }
-            if let Some(version) = version {
-                mapped_versions.insert(next.clone(), version);
-            }
-            stashes.insert(next, buffer);
+        self.editor_documents.resume(id, cx);
+        for buffer in self.editor_documents.retarget(changes, versions, cx) {
+            self.detach_file_edit(buffer, cx);
         }
-        for (key, version) in old_versions {
-            let next = key.retarget(changes);
-            mapped_versions
-                .entry(next.clone())
-                .or_insert_with(|| retarget_version(&next, version));
-        }
-        self.file_editor_stash = stashes;
-        if let Some(key) = &active {
-            mapped_versions.remove(key);
-            if let Some(version) = active_version {
-                mapped_versions.insert(key.clone(), version);
-            }
-        }
-        self.file_editor_disk_versions = mapped_versions;
-        self.file_editor_key = active;
         let language = self
-            .file_editor_key
+            .file_editor_key()
             .as_ref()
             .and_then(|key| rows::diff_syntax_language_for_path(&key.0));
         if self.file_editor_language != language {
@@ -167,32 +194,27 @@ impl MainPaneView {
             let snapshot = self.file_editor_input.read(cx).text_snapshot();
             self.refresh_file_editor_syntax(&snapshot, None, cx);
         }
-        for (key, _) in self.file_editor_saves.values_mut() {
-            *key = key.retarget(changes);
-        }
-        self.filesystem_pauses.remove(&id);
         self.prune_orphaned_file_editor_stash(cx);
-        if self.filesystem_pauses.is_empty() {
-            if self.file_editor_loading {
+        if !self.editor_documents.paused() {
+            if self.file_editor_loading() {
                 // The old read belongs to its original path. Reissue it under
                 // the current key once every operation has released its pause;
                 // the read sequence also prevents the old result from landing.
                 self.reread_file_editor_from_disk(cx);
-            } else if self.file_editor_dirty {
+            } else if self.file_editor_dirty() {
                 self.schedule_file_editor_autosave(cx);
             }
             if self.auto_save_file_edits {
                 // Navigation and save acknowledgments can leave newer edits
                 // waiting behind a pause. The active buffer uses its debounce;
                 // inactive buffers have no timer to resume them.
-                for (key, stashed) in self.file_editor_stash.clone() {
-                    if self.file_editor_key.as_ref() != Some(&key) && stashed.is_dirty() {
+                for (key, stashed) in self.editor_documents.stashes() {
+                    if self.file_editor_key().as_ref() != Some(&key) && stashed.is_dirty() {
                         let _ = self.enqueue_file_editor_save(key, &stashed, false, false, cx);
                     }
                 }
             }
         }
-        self.sync_unsaved_file_edits_rev(cx);
         cx.notify();
     }
 }
@@ -202,57 +224,6 @@ impl MainPaneView {
 /// Long enough that typing a word is one write rather than five, short enough
 /// that "I stopped typing" and "it is on disk" feel like the same moment.
 pub(in crate::view) const FILE_EDITOR_AUTOSAVE_DEBOUNCE_MS: u64 = 800;
-
-/// A buffer the editor is holding for a file that is not on screen.
-///
-/// Carries the fingerprint the text was last known to agree with on disk, so
-/// dirtiness survives the round trip: a single "last saved" slot on the pane
-/// would be the *other* file's by the time this one comes back.
-#[derive(Clone, Debug)]
-pub(in crate::view) struct StashedFileEdit {
-    pub(in crate::view) text: SharedString,
-    pub(in crate::view) cursor: usize,
-    /// Fingerprint of `text` itself, recorded when the entry was made rather
-    /// than recomputed on read. A second entry point that hashed the flat
-    /// string could not agree with the rope one anyway: `FxHasher` folds each
-    /// `write` call separately, so N chunks and one slice of the same bytes
-    /// give different results.
-    pub(in crate::view) text_fingerprint: u64,
-    pub(in crate::view) saved_fingerprint: u64,
-    /// The blame watermark from when this buffer was on screen. Carried across
-    /// the round trip for the same reason `saved_fingerprint` is: recomputing it
-    /// on restore is impossible — the edits it summarizes are gone — and
-    /// defaulting it to line 0 would blank the annotation column of every file
-    /// the user has ever come back to.
-    pub(in crate::view) first_dirty_line: Option<u32>,
-    /// What the buffer was read from, so the disk check has a baseline the
-    /// moment the buffer comes back.
-    pub(in crate::view) disk: DiskIdentity,
-    /// How the file was read, so it is written back the same way.
-    pub(in crate::view) text_format: Option<SideTextFormat>,
-    pub(in crate::view) source_text_format: Option<SideTextFormat>,
-}
-
-/// Why text cannot be written in its file's encoding.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(in crate::view) enum SaveEncodeError {
-    /// The file did not read back byte for byte, so writing it changes bytes.
-    Unwritable(gitcomet_core::text_format::TextEncoding),
-    /// A character has no bytes in the encoding.
-    Unmappable(gitcomet_core::text_format::Unmappable),
-}
-
-impl std::fmt::Display for SaveEncodeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Unwritable(encoding) => write!(
-                f,
-                "It can't be written in {encoding} without changing bytes it already has."
-            ),
-            Self::Unmappable(unmappable) => write!(f, "{unmappable}."),
-        }
-    }
-}
 
 /// The error the user sees for a save that wrote nothing. With `editor`, the
 /// dialog offers to save as UTF-8 and to go to the character.
@@ -289,62 +260,6 @@ pub(in crate::view) fn save_error_report(
         }
     }
     report
-}
-
-/// The bytes to write for `text` in the file's encoding, and the same bytes as
-/// the disk check will see them.
-pub(in crate::view) fn encode_for_save(
-    text: SharedString,
-    format: Option<SideTextFormat>,
-) -> Result<(gitcomet_state::msg::ContentBytes, PendingWrite), SaveEncodeError> {
-    if let Some(format) = format
-        && !format.is_writable()
-    {
-        return Err(SaveEncodeError::Unwritable(format.format.encoding));
-    }
-    let Some(format) = format.filter(|format| !format.format.is_plain_utf8()) else {
-        return Ok((text.to_string().into(), PendingWrite::Text(text)));
-    };
-    let bytes: Arc<[u8]> = Arc::from(
-        gitcomet_core::text_format::encode(&text, format.format)
-            .map_err(SaveEncodeError::Unmappable)?
-            .as_ref(),
-    );
-    Ok((Arc::clone(&bytes).into(), PendingWrite::Encoded(bytes)))
-}
-
-impl StashedFileEdit {
-    /// Whether this buffer still differs from what was last written.
-    ///
-    /// Clean entries only survive while a save is in flight. Once the write is
-    /// acknowledged, buffers matching that saved version can be released.
-    pub(in crate::view) fn is_dirty(&self) -> bool {
-        self.text_fingerprint != self.saved_fingerprint
-    }
-}
-
-/// Identity of the text a save or a dirty check was computed over.
-///
-/// A hash rather than the text: the comparison runs on every keystroke, and
-/// keeping a second copy of the file around to `==` against it would double the
-/// buffer's memory for a question that a `u64` answers.
-///
-/// Fed the raw bytes rather than `str::hash`, which writes a `0xff` terminator
-/// per call. Chunk boundaries are an artifact of the rope's edit history — the
-/// same text reached by typing a character and deleting it again is split
-/// differently — so hashing chunk-wise made a byte-identical buffer read as
-/// permanently modified.
-pub(in crate::view) fn file_editor_text_fingerprint(snapshot: &TextModelSnapshot) -> u64 {
-    use std::hash::Hasher;
-
-    let mut hasher = FxHasher::default();
-    hasher.write_usize(snapshot.len());
-    // Chunk-wise, so a large file is never flattened into one string just to be
-    // fingerprinted. `TextModelSnapshot::rope()` is an `Arc` bump.
-    for chunk in snapshot.rope().chunks() {
-        hasher.write(chunk.as_bytes());
-    }
-    hasher.finish()
 }
 
 /// The provider binding key for the editor's highlights.
@@ -610,14 +525,14 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn file_editor_is_dirty(&self) -> bool {
-        self.file_editor_dirty
+        self.file_editor_dirty()
     }
 
     /// Whether the toolbar shows Save and Discard for the editor: always
     /// without auto-save, and with it while the buffer cannot be written.
     pub(in crate::view) fn file_editor_shows_save_controls(&self) -> bool {
         !self.auto_save_file_edits
-            || (self.file_editor_dirty && self.file_editor_save_error.is_some())
+            || (self.file_editor_dirty() && self.file_editor_save_error().is_some())
     }
 
     pub(in crate::view) fn set_auto_save_file_edits(
@@ -654,7 +569,7 @@ impl MainPaneView {
         // Only a *different* file is loaded here. The buffer never follows the
         // disk on its own: an external write raises the "File changed on disk"
         // notice (`super::file_disk`) and the user chooses to reload.
-        if self.file_editor_key.as_ref() == Some(&identity) {
+        if self.file_editor_key().as_ref() == Some(&identity) {
             self.refresh_file_editor_decoding(cx);
             return;
         }
@@ -665,19 +580,9 @@ impl MainPaneView {
 
         // Invalidate outgoing reads even when a filesystem pause defers the
         // incoming read, including navigation away from and back to one path.
-        self.file_editor_reread_seq = self.file_editor_reread_seq.wrapping_add(1);
-        self.file_editor_key = Some(identity.clone());
-        // The outgoing file's disk identity says nothing about this one.
-        self.file_editor_disk = DiskIdentity::default();
-        // The buffer is about to be blanked and refilled asynchronously. Until
-        // the read lands it holds nothing that belongs to this file, so it must
-        // not read as unsaved content for it — carrying the *previous* file's
-        // dirty flag across here let a save write the empty placeholder over the
-        // file that was just opened.
-        self.file_editor_dirty = false;
-        self.file_editor_first_dirty_line = None;
-        self.file_editor_save_error = None;
-        self.file_editor_saved_fingerprint = None;
+        self.editor_documents
+            .activate(identity.clone(), repo_id, cx);
+        let retained = self.editor_documents.stashed(&identity);
         // Likewise the search: these offsets belong to the outgoing file and mean
         // nothing in the incoming one. The reload re-seats both.
         self.file_editor_search_source = None;
@@ -692,8 +597,6 @@ impl MainPaneView {
             self.rendered_preview_modes
                 .set(kind, RenderedPreviewMode::Source);
         }
-        self.file_editor_error = None;
-        self.set_file_editor_text_format(None, cx);
         self.file_editor_decode_key = None;
         self.file_editor_waiting_for_attributes = false;
         // The incremental tree belongs to the outgoing file. A same-file
@@ -702,60 +605,27 @@ impl MainPaneView {
         self.reset_file_editor_syntax(rows::diff_syntax_language_for_path(&path));
         self.file_editor_autosave = None;
 
-        // Restore unsaved or in-flight buffers. A pending write can change the
-        // baseline even if the user has undone the buffer back to clean.
-        match self.file_editor_stash.get(&identity).cloned() {
-            Some(stashed)
-                if stashed.is_dirty()
-                    || self
-                        .file_editor_saves
-                        .values()
-                        .any(|(pending, _)| pending == &identity) =>
-            {
-                // The stash holds only buffers that are *not* on screen, so
-                // taking one back hands ownership to the input — leaving the
-                // entry behind would report the file as unsaved even after the
-                // user undid the edit by hand.
-                self.file_editor_stash.remove(&identity);
-                self.file_editor_loading = false;
-                self.file_editor_disk = stashed.disk;
-                // The buffer keeps the encoding it was read in; the current
-                // choice must not re-read over it.
-                self.set_file_editor_text_format(stashed.text_format, cx);
-                self.file_editor_source_text_format = stashed.source_text_format;
-                self.file_editor_decode_key = self
-                    .selected_text_decode_request(SideKind::Worktree)
-                    .map(|(_, key)| key);
-                self.apply_file_editor_text(
-                    stashed.text,
-                    Some(stashed.cursor),
-                    Some(stashed.saved_fingerprint),
-                    cx,
-                );
-                // After `apply_file_editor_text`, which resets it: the buffer
-                // being seated is not a fresh read but the one the user left,
-                // and its edits are still under the same lines.
-                self.file_editor_first_dirty_line = stashed.first_dirty_line;
-                // The disk may have moved while the buffer was away.
-                let revs = self.current_file_disk_revs();
-                self.file_disk_read_landed(DiskSurface::Editor, revs, cx);
-                self.spawn_file_disk_check(DiskCheckCause::CameIntoView, cx);
-                return;
-            }
-            Some(_) => {
-                self.file_editor_stash.remove(&identity);
-            }
-            None => {}
+        if let Some(stashed) = retained {
+            self.file_editor_decode_key = self
+                .selected_text_decode_request(SideKind::Worktree)
+                .map(|(_, key)| key);
+            self.present_file_editor_text(stashed.text, Some(stashed.cursor), cx);
+            let revs = self.current_file_disk_revs();
+            self.file_disk_read_landed(DiskSurface::Editor, revs, cx);
+            self.spawn_file_disk_check(DiskCheckCause::CameIntoView, cx);
+            return;
         }
 
         // Blank the buffer and show the loading state: nothing in it belongs
         // to the incoming file.
-        self.file_editor_loading = true;
+        if let Some(document) = self.editor_documents.active() {
+            document.prepare_reload(cx);
+        }
         self.file_editor_input.update(cx, |input, cx| {
             input.set_read_only(true, cx);
             input.set_text("", cx);
         });
-        if self.filesystem_pauses.is_empty() {
+        if !self.editor_documents.paused() {
             self.reread_file_editor_from_disk(cx);
         }
     }
@@ -767,7 +637,7 @@ impl MainPaneView {
     /// resets the caret and the undo stack), otherwise the caret is kept,
     /// clamped, rather than thrown back to the top.
     pub(in crate::view) fn reread_file_editor_from_disk(&mut self, cx: &mut gpui::Context<Self>) {
-        let Some(load_key) = self.file_editor_key.clone() else {
+        let Some(load_key) = self.file_editor_key().clone() else {
             return;
         };
         let absolute = load_key.0.clone();
@@ -778,12 +648,16 @@ impl MainPaneView {
         };
         self.file_editor_waiting_for_attributes = false;
         self.file_editor_decode_key = Some(decode_key);
-        self.file_editor_reread_seq = self.file_editor_reread_seq.wrapping_add(1);
-        let seq = self.file_editor_reread_seq;
+        let document = self
+            .editor_documents
+            .active()
+            .cloned()
+            .expect("selected editor document");
+        let seq = document.begin_read(self.file_editor_loading(), cx);
         let revs = self.current_file_disk_revs();
         // A re-read of the file on screen (not a first load into a blank
         // buffer) must not replace text typed while it ran.
-        let text_at_start = (!self.file_editor_loading).then(|| {
+        let text_at_start = (!self.file_editor_loading()).then(|| {
             self.file_editor_input.read_with(cx, |input, _| {
                 let snapshot = input.text_snapshot();
                 (snapshot.model_id(), snapshot.revision())
@@ -818,8 +692,8 @@ impl MainPaneView {
                 // another file, or to another repo tab holding the same relative
                 // path, which is why this compares the whole key and not just
                 // the path. A newer read supersedes this one outright.
-                if this.file_editor_key.as_ref() != Some(&load_key)
-                    || seq != this.file_editor_reread_seq
+                if this.file_editor_key().as_ref() != Some(&load_key)
+                    || !document.read().accepts_read(seq)
                 {
                     return;
                 }
@@ -835,15 +709,15 @@ impl MainPaneView {
                     this.spawn_file_disk_check(DiskCheckCause::WorktreeChanged, cx);
                     return;
                 }
-                this.file_editor_loading = false;
                 match result {
                     Ok((text, stamp, hash, format, version)) => {
-                        this.file_editor_disk_versions
-                            .insert(load_key.clone(), version);
-                        this.file_editor_disk = DiskIdentity::loaded(stamp, Some(hash));
-                        this.set_file_editor_text_format(Some(format), cx);
-                        // A retry after a failed read (the file came back).
-                        this.file_editor_error = None;
+                        document.finish_read(
+                            seq,
+                            version,
+                            Some(format),
+                            DiskIdentity::loaded(stamp, Some(hash)),
+                            cx,
+                        );
                         // Compared as text, not by fingerprint: the buffer's
                         // fingerprint is folded chunk-by-chunk off the rope and
                         // a flat string cannot reproduce it. The whole file was
@@ -857,20 +731,18 @@ impl MainPaneView {
                                 input.set_read_only(read_only, cx);
                                 file_editor_text_fingerprint(&input.text_snapshot())
                             });
-                            this.file_editor_saved_fingerprint = Some(fingerprint);
-                            this.file_editor_dirty = false;
-                            this.file_editor_first_dirty_line = None;
+                            document.seat_text(fingerprint, None, cx);
                             cx.notify();
                         } else {
                             let cursor = this
                                 .file_editor_input
                                 .read_with(cx, |input, _| input.cursor_offset())
                                 .min(text.len());
-                            this.apply_file_editor_text(text, Some(cursor), None, cx);
+                            this.apply_file_editor_text(text, Some(cursor), cx);
                         }
                     }
                     Err(message) => {
-                        this.file_editor_error = Some(message.into());
+                        document.fail_read(seq, message.into(), cx);
                         cx.notify();
                     }
                 }
@@ -894,7 +766,7 @@ impl MainPaneView {
         if self.file_editor_decode_key == Some(key) {
             return;
         }
-        if self.file_editor_dirty {
+        if self.file_editor_dirty() {
             self.file_editor_decode_key = Some(key);
         } else {
             self.reread_file_editor_from_disk(cx);
@@ -904,22 +776,22 @@ impl MainPaneView {
     /// Reload the file on screen from disk, dropping unsaved edits, keeping
     /// the caret. Not `discard_file_editor_buffer`: that blanks the buffer.
     pub(in crate::view) fn reload_file_editor_from_disk(&mut self, cx: &mut gpui::Context<Self>) {
-        let Some(key) = self.file_editor_key.clone() else {
+        let Some(key) = self.file_editor_key().clone() else {
             return;
         };
-        self.file_editor_stash.remove(&key);
+        self.editor_documents.discard(&key, cx);
         // A pending auto-save would write the discarded edits straight back.
         self.file_editor_autosave = None;
-        self.file_editor_dirty = false;
-        self.file_editor_first_dirty_line = None;
-        self.file_editor_save_error = None;
-        self.file_editor_saved_fingerprint = None;
+
         self.reread_file_editor_from_disk(cx);
     }
 
     /// Take what is on disk now as the version the next save may replace.
     pub(super) fn refresh_file_editor_disk_version(&mut self, cx: &mut gpui::Context<Self>) {
-        let Some(key) = self.file_editor_key.clone() else {
+        let Some(key) = self.file_editor_key().clone() else {
+            return;
+        };
+        let Some(document) = self.editor_documents.find(&key) else {
             return;
         };
         cx.spawn(async move |view: WeakEntity<MainPaneView>, cx| {
@@ -940,15 +812,17 @@ impl MainPaneView {
             } else {
                 read()
             };
-            let _ = view.update(cx, |this, _| match version {
-                Ok(version) => {
-                    this.file_editor_disk_versions.insert(key, version);
+            let _ = view.update(cx, |_, cx| {
+                if document.read().identity() != &key {
+                    return;
                 }
-                // Deleted: the save recreates it, which expects no version.
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    this.file_editor_disk_versions.remove(&key);
+                match version {
+                    Ok(version) => document.set_disk_version(Some(version), cx),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        document.set_disk_version(None, cx);
+                    }
+                    Err(_) => {}
                 }
-                Err(_) => {}
             });
         })
         .detach();
@@ -956,35 +830,31 @@ impl MainPaneView {
 
     /// Keep the buffer's format and editability together on reads, restores,
     /// and encoding changes.
-    pub(super) fn set_file_editor_text_format(
-        &mut self,
-        format: Option<SideTextFormat>,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.file_editor_text_format = format;
-        self.file_editor_source_text_format = format;
-        // The loading placeholder stays locked until its read lands.
-        let read_only = self.file_editor_loading || self.file_editor_format_read_only();
-        self.file_editor_input
-            .update(cx, |input, cx| input.set_read_only(read_only, cx));
-    }
-
     /// Text read in a format it cannot be written back in is view-only.
     fn file_editor_format_read_only(&self) -> bool {
-        self.file_editor_text_format
+        self.file_editor_text_format()
             .is_some_and(|format| !format.is_writable())
     }
 
-    /// Seat `text` in the input.
-    ///
-    /// `baseline` is the fingerprint the text is measured against for
-    /// dirtiness: `None` when `text` *is* what was just read off disk, and the
-    /// stashed buffer's own recorded baseline when one is being restored.
+    /// Seat freshly read text in the input and establish its disk baseline.
     fn apply_file_editor_text(
         &mut self,
         text: SharedString,
         cursor: Option<usize>,
-        baseline: Option<u64>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.present_file_editor_text(text, cursor, cx);
+        let fingerprint =
+            file_editor_text_fingerprint(&self.file_editor_input.read(cx).text_snapshot());
+        if let Some(document) = self.editor_documents.active() {
+            document.seat_text(fingerprint, None, cx);
+        }
+    }
+
+    fn present_file_editor_text(
+        &mut self,
+        text: SharedString,
+        cursor: Option<usize>,
         cx: &mut gpui::Context<Self>,
     ) {
         // Enter must insert what the file already uses. Without this the input
@@ -1006,13 +876,6 @@ impl MainPaneView {
             let _ = input.drain_recent_utf8_edit_deltas();
             input.text_snapshot()
         });
-        let fingerprint = file_editor_text_fingerprint(&snapshot);
-        let baseline = baseline.unwrap_or(fingerprint);
-        self.file_editor_saved_fingerprint = Some(baseline);
-        self.file_editor_dirty = baseline != fingerprint;
-        // Wholesale replacement: whatever edits the old watermark described are
-        // not in this text. A restored stash puts its own back afterwards.
-        self.file_editor_first_dirty_line = None;
         self.file_editor_search_source_changed(snapshot.clone(), cx);
         self.refresh_file_editor_syntax(&snapshot, None, cx);
         cx.notify();
@@ -1029,7 +892,7 @@ impl MainPaneView {
 
     /// Called from the input's observer on every keystroke.
     pub(in crate::view) fn on_file_editor_edited(&mut self, cx: &mut gpui::Context<Self>) {
-        if self.file_editor_key.is_none() {
+        if self.file_editor_key().is_none() {
             return;
         }
         let (snapshot, deltas) = self.file_editor_input.update(cx, |input, _| {
@@ -1056,26 +919,10 @@ impl MainPaneView {
         if !text_moved {
             return;
         }
-        let dirty =
-            self.file_editor_saved_fingerprint != Some(file_editor_text_fingerprint(&snapshot));
-        if self.file_editor_dirty != dirty {
-            self.file_editor_dirty = dirty;
-            cx.notify();
+        if let Some(document) = self.editor_documents.active() {
+            document.edit(file_editor_text_fingerprint(&snapshot), edited_row, cx);
         }
-        if dirty {
-            // Running minimum: blame below the *first* line the session touched
-            // is the part whose attribution has moved, and undoing back to a
-            // later edit does not restore the earlier one's line numbering.
-            if let Some(row) = edited_row {
-                self.file_editor_first_dirty_line = Some(
-                    self.file_editor_first_dirty_line
-                        .map_or(row, |current| current.min(row)),
-                );
-            }
-        } else {
-            // Back to what is on disk — every line is attributable again.
-            self.file_editor_first_dirty_line = None;
-        }
+        let dirty = self.file_editor_dirty();
         if dirty && self.auto_save_file_edits {
             self.schedule_file_editor_autosave(cx);
         }
@@ -1083,7 +930,7 @@ impl MainPaneView {
 
     /// Restart the quiet-period timer that auto-save writes on.
     pub(super) fn schedule_file_editor_autosave(&mut self, cx: &mut gpui::Context<Self>) {
-        if !self.filesystem_pauses.is_empty() {
+        if self.editor_documents.paused() {
             return;
         }
         if !crate::ui_runtime::current().uses_cursor_blink() {
@@ -1102,7 +949,7 @@ impl MainPaneView {
                 // Not while "File changed on disk" is asking: writing now
                 // would answer it for the user. Dismissing reschedules.
                 if this.auto_save_file_edits
-                    && this.file_editor_dirty
+                    && this.file_editor_dirty()
                     && !this.file_disk_notice_awaits_editor()
                 {
                     this.write_file_editor_buffer(false, cx);
@@ -1128,11 +975,11 @@ impl MainPaneView {
         repeat_failure: bool,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        if !self.filesystem_pauses.is_empty() || self.file_editor_loading || !self.file_editor_dirty
+        if self.editor_documents.paused() || self.file_editor_loading() || !self.file_editor_dirty()
         {
             return false;
         }
-        let Some(key) = self.file_editor_key.clone() else {
+        let Some(key) = self.file_editor_key().clone() else {
             return false;
         };
         // Every caller that gets here on purpose (button, Ctrl+S, Save all)
@@ -1142,7 +989,7 @@ impl MainPaneView {
         self.answer_file_disk_notice_by_saving();
         self.file_editor_autosave = None;
         self.stash_current_file_editor_buffer(cx);
-        let Some(stashed) = self.file_editor_stash.get(&key).cloned() else {
+        let Some(stashed) = self.editor_documents.stashed(&key) else {
             return false;
         };
         matches!(
@@ -1151,8 +998,8 @@ impl MainPaneView {
         )
     }
 
-    /// Queue `buffer`'s write, encoded as it was read. `Ok(false)` means it
-    /// waits for a pause or an earlier write; an encoding error is reported.
+    /// Queue `buffer`'s write, encoded as it was read. `Ok(false)` means its
+    /// origin no longer permits saving or it waits for a pause or earlier write.
     fn enqueue_file_editor_save(
         &mut self,
         key: DocumentIdentity,
@@ -1161,28 +1008,26 @@ impl MainPaneView {
         repeat_failure: bool,
         cx: &mut gpui::Context<Self>,
     ) -> Result<bool, SaveEncodeError> {
-        if !self.filesystem_pauses.is_empty()
-            || self
-                .file_editor_saves
-                .values()
-                .any(|(pending, _)| pending == &key)
-        {
+        if self.editor_documents.paused() || buffer.document.read().saving().is_some() {
             return Ok(false);
         }
-        let Some(worktree) = self
+        let Some((repo_id, lifetime, worktree)) = self
             .state
             .repos
             .iter()
             .filter(|repo| key.0.starts_with(&repo.spec.workdir))
             .max_by_key(|repo| repo.spec.workdir.components().count())
-            .map(|repo| repo.spec.workdir.clone())
+            .map(|repo| (repo.id, repo.lifetime(), repo.spec.workdir.clone()))
         else {
             self.prune_orphaned_file_editor_stash(cx);
             return Ok(false);
         };
-        let current = self.file_editor_key.as_ref() == Some(&key);
-        let (bytes, pending_write) = match encode_for_save(buffer.text.clone(), buffer.text_format)
-        {
+        let Some(origin) = self.store.document_save_origin(repo_id, lifetime) else {
+            return Ok(false);
+        };
+        let current = self.file_editor_key().as_ref() == Some(&key);
+        let text_format = buffer.document.read().text_format();
+        let (bytes, pending_write) = match encode_for_save(buffer.text.clone(), text_format) {
             Ok(encoded) => encoded,
             Err(error) => {
                 // Kept dirty: nothing was written.
@@ -1191,15 +1036,16 @@ impl MainPaneView {
             }
         };
         if current {
-            self.file_editor_save_error = None;
+            if let Some(document) = self.editor_documents.active() {
+                document.set_save_error(None, cx);
+            }
             // A converted buffer, or one read in a chosen encoding, may need
             // that choice moved so the new bytes read back as written.
-            if let Some(format) = buffer
-                .text_format
-                .filter(|format| format.source == FormatSource::Override)
+            if let Some(format) =
+                text_format.filter(|format| format.source == FormatSource::Override)
                 && let Some((_, path)) = self.document_repo_path(&key)
             {
-                self.follow_saved_text_format(&path, bytes.as_bytes(), format.format);
+                self.follow_saved_text_format(&path, bytes.as_bytes(), format.format, cx);
             }
         }
         let request =
@@ -1207,21 +1053,19 @@ impl MainPaneView {
                 path: key.0.clone(),
                 worktree: Some(worktree),
                 contents: Arc::from(bytes.as_bytes()),
-                expected: self.file_editor_disk_versions.get(&key).cloned(),
+                expected: buffer.document.read().version().clone(),
                 overwrite,
             });
-        // The disk check must not mistake this write for someone else's,
-        // whether it looks before or after the bytes land.
-        if current {
-            self.file_editor_disk
-                .note_pending_write(pending_write.clone());
+        if !self.editor_documents.save(
+            &buffer.document,
+            origin,
+            request,
+            buffer.text_fingerprint,
+            pending_write,
+            cx,
+        ) {
+            return Ok(false);
         }
-        if let Some(stashed) = self.file_editor_stash.get_mut(&key) {
-            stashed.disk.note_pending_write(pending_write);
-        }
-        self.file_editor_saves
-            .insert(request.id, (key, buffer.text_fingerprint));
-        self.store.dispatch(Msg::FilesystemRequest(request));
         cx.notify();
         Ok(true)
     }
@@ -1233,7 +1077,7 @@ impl MainPaneView {
         repeat_failure: bool,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.file_editor_key.as_ref() == Some(key) {
+        if self.file_editor_key().as_ref() == Some(key) {
             self.file_editor_autosave = None;
         }
         let Some((repo_id, path)) = self.document_repo_path(key) else {
@@ -1242,9 +1086,11 @@ impl MainPaneView {
         let report = save_error_report(repo_id, &path, error, true);
         let message = SharedString::from(report.message.clone());
         let mut repeat = false;
-        if self.file_editor_key.as_ref() == Some(key) {
-            repeat = self.file_editor_save_error.as_ref() == Some(&message);
-            self.file_editor_save_error = Some(message);
+        if self.file_editor_key().as_ref() == Some(key) {
+            repeat = self.file_editor_save_error().as_ref() == Some(&message);
+            if let Some(document) = self.editor_documents.active() {
+                document.set_save_error(Some(message), cx);
+            }
         }
         if repeat_failure || !repeat {
             self.show_error_report(report, cx);
@@ -1270,103 +1116,85 @@ impl MainPaneView {
             .min_by_key(|(_, path)| path.components().count())
     }
 
-    /// Closing and quitting wait for every queued write; a move waits only for
-    /// the moving repository's, so the destination reads the final contents.
-    pub(in crate::view) fn file_editor_saves_block_action(
-        &self,
-        action: &UnsavedFileEditsAction,
-    ) -> bool {
-        match action {
-            UnsavedFileEditsAction::MoveRepo {
-                repo_id: moving_repo,
-                ..
-            } => self.file_editor_saves.values().any(|(key, _)| {
-                self.document_repo_path(key)
-                    .is_some_and(|(repo_id, _)| repo_id == *moving_repo)
-            }),
-            UnsavedFileEditsAction::CloseWindow(_)
-            | UnsavedFileEditsAction::DeleteWorkspace { .. }
-            | UnsavedFileEditsAction::QuitApp => !self.file_editor_saves.is_empty(),
-        }
-    }
-
     pub(in crate::view) fn process_file_editor_saves(
         &mut self,
         state: &AppState,
         cx: &mut gpui::Context<Self>,
-    ) {
+    ) -> Vec<gitcomet_core::filesystem::OperationId> {
+        let mut completed = Vec::new();
         for result in &state.filesystem.completed {
-            let Some((key, fingerprint)) = self.file_editor_saves.remove(&result.id) else {
+            let Some(document) = self.editor_documents.pending().into_iter().find(|buffer| {
+                buffer
+                    .read()
+                    .saving()
+                    .as_ref()
+                    .is_some_and(|save| save.operation == result.id)
+            }) else {
                 continue;
             };
-            self.store
-                .dispatch(Msg::AcknowledgeFilesystemResults(vec![result.id]));
-            if result.succeeded() {
-                if let Some(version) = &result.saved_version {
-                    self.file_editor_disk_versions
-                        .insert(key.clone(), version.clone());
-                }
-                if let Some(stashed) = self.file_editor_stash.get_mut(&key) {
-                    stashed.saved_fingerprint = fingerprint;
-                    if !stashed.is_dirty() {
-                        self.file_editor_stash.remove(&key);
-                    }
-                }
-                if self.file_editor_key.as_ref() == Some(&key) {
-                    self.file_editor_saved_fingerprint = Some(fingerprint);
-                    self.file_editor_dirty = self.file_editor_input.read_with(cx, |input, _| {
-                        file_editor_text_fingerprint(&input.text_snapshot()) != fingerprint
-                    });
-                    self.file_editor_error = None;
-                    if !self.file_editor_dirty {
-                        self.file_editor_first_dirty_line = None;
-                    }
-                    if self.file_editor_dirty && self.auto_save_file_edits {
-                        self.schedule_file_editor_autosave(cx);
-                    }
-                } else if self.auto_save_file_edits
-                    && let Some(stashed) = self.file_editor_stash.get(&key).cloned()
-                {
-                    // Navigation may have tried to flush newer edits while
-                    // this write was pending. Save them against its new baseline.
-                    let _ = self.enqueue_file_editor_save(key.clone(), &stashed, false, false, cx);
-                }
-                if let Some(relative) = self
-                    .active_repo()
-                    .and_then(|repo| key.0.strip_prefix(&repo.spec.workdir).ok())
-                    .map(Path::to_path_buf)
-                {
-                    self.invalidate_worktree_preview_for_saved_path(&relative);
-                }
+            let key = document.read().identity().clone();
+            let current = self
+                .editor_documents
+                .active()
+                .is_some_and(|active| active.id() == document.id());
+            if current {
+                document.capture_fingerprint(
+                    file_editor_text_fingerprint(&self.file_editor_input.read(cx).text_snapshot()),
+                    cx,
+                );
+            }
+            let outcome = if result.succeeded() {
+                Ok(result.saved_version.clone())
             } else {
-                self.file_editor_autosave = None;
-                let message = result
+                Err(result
                     .items
                     .iter()
-                    .filter_map(|item| {
-                        if let gitcomet_core::filesystem::ItemOutcome::Failed(message) =
-                            &item.outcome
-                        {
+                    .filter_map(|item| match &item.outcome {
+                        gitcomet_core::filesystem::ItemOutcome::Failed(message) => {
                             Some(message.as_str())
-                        } else {
-                            None
                         }
+                        _ => None,
                     })
                     .collect::<Vec<_>>()
-                    .join("\n");
-                if self.file_editor_key.as_ref() == Some(&key) {
-                    self.file_editor_error = Some(message.clone().into());
+                    .join("\n")
+                    .into())
+            };
+            document.finish_save(result.id, outcome.clone(), cx);
+            completed.push(result.id);
+            match outcome {
+                Ok(_) => {
+                    if current && self.file_editor_dirty() && self.auto_save_file_edits {
+                        self.schedule_file_editor_autosave(cx);
+                    } else if !current
+                        && self.auto_save_file_edits
+                        && let Some(stashed) = document.stashed()
+                    {
+                        let _ =
+                            self.enqueue_file_editor_save(key.clone(), &stashed, false, false, cx);
+                    }
+                    if let Some(relative) = self
+                        .active_repo()
+                        .and_then(|repo| key.0.strip_prefix(&repo.spec.workdir).ok())
+                        .map(Path::to_path_buf)
+                    {
+                        self.invalidate_worktree_preview_for_saved_path(&relative);
+                    }
                 }
-                let root = self.root_view.clone();
-                cx.defer(move |cx| {
-                    let _ = root.update(cx, |root, cx| {
-                        root.push_toast(components::ToastKind::Error, message, cx)
+                Err(message) => {
+                    self.file_editor_autosave = None;
+                    let root = self.root_view.clone();
+                    cx.defer(move |cx| {
+                        let _ = root.update(cx, |root, cx| {
+                            root.push_toast(components::ToastKind::Error, message.to_string(), cx)
+                        });
                     });
-                });
+                }
             }
+            self.editor_documents.release_inactive_clean();
             self.prune_orphaned_file_editor_stash(cx);
             cx.notify();
         }
+        completed
     }
 
     /// Keep an unsaved buffer around under its path.
@@ -1374,46 +1202,28 @@ impl MainPaneView {
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.file_editor_loading {
+        if self.file_editor_loading() {
             return;
         }
-        let Some(key) = self.file_editor_key.clone() else {
+        let Some(document) = self.editor_documents.active() else {
             return;
         };
-        if !self.file_editor_dirty
-            && !self
-                .file_editor_saves
-                .values()
-                .any(|(pending, _)| pending == &key)
-        {
-            // A clean buffer is the truth for this file now — the user may have
-            // undone their way back to disk. Drop any *dirty* entry left from an
-            // earlier flush, or returning here would restore edits they threw
-            // away. Only an in-flight write still needs a recovery copy.
-            self.file_editor_stash.remove(&key);
+        document.capture_fingerprint(
+            file_editor_text_fingerprint(&self.file_editor_input.read(cx).text_snapshot()),
+            cx,
+        );
+        let state = document.read();
+        if !state.dirty() && state.saving().is_none() {
+            drop(state);
+            document.clear_retained();
             return;
         }
-        let (text, cursor, text_fingerprint) = self.file_editor_input.read_with(cx, |input, _| {
-            let snapshot = input.text_snapshot();
-            (
-                SharedString::from(input.text().to_string()),
-                input.cursor_offset(),
-                file_editor_text_fingerprint(&snapshot),
-            )
-        });
-        let saved_fingerprint = self.file_editor_saved_fingerprint.unwrap_or_default();
-        self.file_editor_stash.insert(
-            key,
-            StashedFileEdit {
-                text,
-                cursor,
-                text_fingerprint,
-                saved_fingerprint,
-                first_dirty_line: self.file_editor_first_dirty_line,
-                disk: self.file_editor_disk.clone(),
-                text_format: self.file_editor_text_format,
-                source_text_format: self.file_editor_source_text_format,
-            },
+        drop(state);
+        let input = self.file_editor_input.read(cx);
+        document.retain_text(
+            input.text().to_string().into(),
+            input.cursor_offset(),
+            file_editor_text_fingerprint(&input.text_snapshot()),
         );
     }
 
@@ -1428,98 +1238,76 @@ impl MainPaneView {
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        // `file_editor_loading` for the same reason `save_file_editor_buffer`
-        // checks it: between blanking the buffer and the read landing, the
-        // buffer holds a placeholder that reads as *dirty* — the saved
-        // fingerprint was cleared just before the blanking, so the empty text
-        // does not match it. Flushing there stashed that empty placeholder under
-        // the file's own path, and the next open restored it over the file.
-        if self.file_editor_loading || self.file_editor_key.is_none() {
+        // A loading widget contains a placeholder. It cannot supply editable
+        // text until the owner's read generation lands.
+        if self.file_editor_loading() || self.file_editor_key().is_none() {
             return false;
         }
         // With "File changed on disk" open the buffer is kept, not written:
         // leaving the file is not an answer to the question.
         let dispatched = self.auto_save_file_edits
-            && self.file_editor_error.is_none()
+            && self.file_editor_error().is_none()
             && !self.file_disk_notice_awaits_editor()
             && self.write_file_editor_buffer(false, cx);
         self.stash_current_file_editor_buffer(cx);
         dispatched
     }
 
-    fn detach_file_edit(
-        &self,
-        identity: DocumentIdentity,
-        buffer: StashedFileEdit,
-        version: Option<DiskVersion>,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let root = self.root_view.clone();
-        cx.defer(move |cx| {
-            let _ = root.update(cx, |root, cx| {
-                root.documents
-                    .update(cx, |docs, cx| docs.adopt(identity, buffer, version, cx));
-            });
-        });
+    fn detach_file_edit(&self, document: DocumentBuffer, cx: &mut gpui::Context<Self>) {
+        self.editor_documents.adopt(document, cx);
     }
 
-    /// Closing a repository only detaches its buffers. Documents owns them
-    /// afterwards, so history removal and tab lifetime cannot lose edits.
+    pub(in crate::view) fn release_document_presenter(&mut self, cx: &mut gpui::App) {
+        if let Some(document) = self.editor_documents.active()
+            && !document.read().loading()
+        {
+            let input = self.file_editor_input.read(cx);
+            let fingerprint = file_editor_text_fingerprint(&input.text_snapshot());
+            let text = input.text().to_string().into();
+            let cursor = input.cursor_offset();
+            document.capture_fingerprint(fingerprint, cx);
+            document.retain_text(text, cursor, fingerprint);
+        }
+        self.editor_documents.release(cx);
+    }
+
     pub(in crate::view) fn prune_orphaned_file_editor_stash(
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) {
-        if !self.file_editor_saves.is_empty() || !self.filesystem_pauses.is_empty() {
+        if !self.editor_documents.pending().is_empty() || self.editor_documents.paused() {
             return;
         }
         self.stash_current_file_editor_buffer(cx);
-        let is_attached = |key: &DocumentIdentity| {
-            self.state
-                .repos
-                .iter()
-                .any(|r| key.0.starts_with(&r.spec.workdir))
-        };
-        let orphaned: Vec<_> = self
-            .file_editor_stash
-            .keys()
-            .filter(|key| !is_attached(key))
-            .cloned()
-            .collect();
-        let active_detached = self
-            .file_editor_key
-            .as_ref()
-            .is_some_and(|key| !is_attached(key));
-        for key in orphaned {
-            let version = self.file_editor_disk_versions.remove(&key);
-            if let Some(buffer) = self.file_editor_stash.remove(&key)
-                && buffer.is_dirty()
-            {
-                self.detach_file_edit(key, buffer, version, cx);
+        for document in self.editor_documents.all() {
+            let repository = self
+                .document_repo_path(document.read().identity())
+                .map(|(repo, _)| repo);
+            if let Some(repository) = repository {
+                document.attach(repository, cx);
+                continue;
+            }
+            self.editor_documents.detach(&document, cx);
+            if document.read().dirty() {
+                self.detach_file_edit(document, cx);
             }
         }
-        if active_detached {
-            self.file_editor_key = None;
-            self.file_editor_dirty = false;
-            self.file_editor_save_error = None;
-            self.file_editor_loading = false;
+        self.editor_documents.release_inactive_clean();
+        if self.editor_documents.active().is_none() {
             self.file_editor_autosave = None;
-            self.file_editor_saved_fingerprint = None;
         }
     }
 
     fn unsaved_document_identities(&self) -> Vec<DocumentIdentity> {
         let mut keys: Vec<_> = self
-            .file_editor_stash
+            .editor_documents
+            .all()
             .iter()
-            .filter(|(_, buffer)| buffer.is_dirty())
-            .map(|(key, _)| key.clone())
+            .filter_map(|buffer| {
+                let state = buffer.read();
+                (state.dirty() && !state.loading()).then(|| state.identity().clone())
+            })
             .collect();
-        if self.file_editor_dirty
-            && !self.file_editor_loading
-            && let Some(key) = &self.file_editor_key
-        {
-            keys.push(key.clone());
-        }
         keys.sort();
         keys.dedup();
         keys
@@ -1561,12 +1349,10 @@ impl MainPaneView {
         let Some(key) = self.document_identity(repo_id, path) else {
             return false;
         };
-        self.file_editor_stash
-            .get(&key)
-            .is_some_and(StashedFileEdit::is_dirty)
-            || (self.file_editor_dirty
-                && !self.file_editor_loading
-                && self.file_editor_key.as_ref() == Some(&key))
+        self.editor_documents.find(&key).is_some_and(|buffer| {
+            let state = buffer.read();
+            state.dirty() && !state.loading()
+        })
     }
 
     /// Throw away the unsaved edits for one file, wherever they are being held.
@@ -1582,58 +1368,20 @@ impl MainPaneView {
         let Some(key) = self.document_identity(repo_id, path) else {
             return;
         };
-        if self.file_editor_key.as_ref() == Some(&key) {
+        if self.file_editor_key().as_ref() == Some(&key) {
             // On screen: re-reads from disk, which is what puts the text back.
             self.discard_file_editor_buffer(cx);
             return;
         }
-        if self.file_editor_stash.remove(&key).is_some() {
-            // Ahead of the next frame's sync so the row disappears on the click
-            // that asked for it.
-            self.sync_unsaved_file_edits_rev(cx);
-            cx.notify();
-        }
-    }
-
-    /// Recompute [`Self::unsaved_file_edits_rev`] and repaint the explorer when
-    /// it moved.
-    ///
-    /// Derived once per frame rather than bumped at each mutation. The set
-    /// changes from a dozen places — load, keystroke, undo back to clean, save,
-    /// auto-save, stash, flush, discard, discard-all, orphan prune — and a
-    /// missed bump is an explorer that keeps showing a pen on a file the user
-    /// already saved, with nothing to point at. Hashing the keys is trivial on a
-    /// set that is empty in the overwhelming majority of frames.
-    pub(in crate::view) fn sync_unsaved_file_edits_rev(&mut self, cx: &mut gpui::Context<Self>) {
-        use std::hash::{Hash, Hasher};
-
-        let mut hasher = FxHasher::default();
-        for (repo_id, path) in self.unsaved_file_edit_keys() {
-            repo_id.0.hash(&mut hasher);
-            path.hash(&mut hasher);
-        }
-        let next = hasher.finish();
-        if self.unsaved_file_edits_rev == next {
-            return;
-        }
-        self.unsaved_file_edits_rev = next;
-        // Deferred: the set also changes from handlers the root view is already
-        // inside — the explorer's own discard button reaches this pane through
-        // `root_view.update`, and updating an entity from within its own update
-        // panics. Deferring runs the notify once that borrow is gone, on the
-        // same flush, so the explorer still repaints before the next frame.
-        let root_view = self.root_view.clone();
-        cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| {
-                root.notify_unsaved_file_edits_changed(cx);
-            });
-        });
+        self.editor_documents.discard(&key, cx);
+        cx.notify();
     }
 
     /// Every path with edits that are not on disk, labelled for display.
     ///
     /// Sorted and de-duplicated so the confirmation dialog lists each file once
     /// and in a stable order.
+    #[cfg(test)]
     pub(in crate::view) fn unsaved_file_edit_labels(&self) -> Vec<SharedString> {
         let identities = self.unsaved_document_identities();
         let multiple = self.state.repos.len() > 1;
@@ -1666,6 +1414,7 @@ impl MainPaneView {
     /// Display labels for dirty buffers that belong to one repository. A move
     /// only detaches that repository, so unrelated tabs must neither block the
     /// move nor be discarded by its confirmation dialog.
+    #[cfg(test)]
     pub(in crate::view) fn unsaved_file_edit_labels_for_repo(
         &self,
         repo_id: RepoId,
@@ -1673,26 +1422,6 @@ impl MainPaneView {
         self.unsaved_file_edit_paths(repo_id)
             .into_iter()
             .map(|path| SharedString::from(path.display().to_string()))
-            .collect()
-    }
-
-    /// Paths of `repo_id` whose writes are still queued.
-    pub(in crate::view) fn pending_file_edit_labels_for_repo(
-        &self,
-        repo_id: RepoId,
-    ) -> Vec<SharedString> {
-        let mut paths: Vec<_> = self
-            .file_editor_saves
-            .values()
-            .filter_map(|(key, _)| self.document_repo_path(key))
-            .filter(|(id, _)| *id == repo_id)
-            .map(|(_, path)| path)
-            .collect();
-        paths.sort();
-        paths.dedup();
-        paths
-            .into_iter()
-            .map(|path| path.display().to_string().into())
             .collect()
     }
 
@@ -1727,7 +1456,7 @@ impl MainPaneView {
         // Saving on purpose answers "File changed on disk" for the buffer on
         // screen, as `save_file_editor_buffer` does.
         let current_in_scope = self
-            .file_editor_key
+            .file_editor_key()
             .as_ref()
             .is_some_and(|key| in_scope(self, key));
         let overwrite_current = current_in_scope && self.file_disk_notice_awaits_editor();
@@ -1736,12 +1465,12 @@ impl MainPaneView {
         }
         self.stash_current_file_editor_buffer(cx);
         let mut failed = None;
-        for (key, stashed) in self.file_editor_stash.clone() {
+        for (key, stashed) in self.editor_documents.stashes() {
             if !in_scope(self, &key) {
                 continue;
             }
-            let current = self.file_editor_key.as_ref() == Some(&key);
-            if self.file_editor_loading && current {
+            let current = self.file_editor_key().as_ref() == Some(&key);
+            if self.file_editor_loading() && current {
                 continue;
             }
             if stashed.is_dirty()
@@ -1770,8 +1499,12 @@ impl MainPaneView {
 
     /// Throw away every unsaved buffer.
     pub(in crate::view) fn discard_all_file_edits(&mut self, cx: &mut gpui::Context<Self>) {
-        self.file_editor_stash.clear();
-        if self.file_editor_dirty {
+        for (key, _) in self.editor_documents.stashes() {
+            if self.file_editor_key().as_ref() != Some(&key) {
+                self.editor_documents.discard(&key, cx);
+            }
+        }
+        if self.file_editor_dirty() {
             self.discard_file_editor_buffer(cx);
         }
     }
@@ -1790,17 +1523,21 @@ impl MainPaneView {
 
     /// Drop an unsaved buffer, reloading the file from disk.
     pub(in crate::view) fn discard_file_editor_buffer(&mut self, cx: &mut gpui::Context<Self>) {
-        let Some(key) = self.file_editor_key.clone() else {
+        let Some(key) = self.file_editor_key().clone() else {
             return;
         };
-        self.file_editor_stash.remove(&key);
-        self.file_editor_dirty = false;
-        self.file_editor_first_dirty_line = None;
-        self.file_editor_save_error = None;
-        self.file_editor_saved_fingerprint = None;
-        // Forget which file is loaded so the next `ensure` re-reads it.
-        self.file_editor_key = None;
-        self.ensure_file_editor_loaded(cx);
+        self.editor_documents.discard(&key, cx);
+        self.file_editor_autosave = None;
+        if let Some(document) = self.editor_documents.active() {
+            document.prepare_reload(cx);
+        }
+        self.file_editor_input.update(cx, |input, cx| {
+            input.set_read_only(true, cx);
+            input.set_text("", cx);
+        });
+        if !self.editor_documents.paused() {
+            self.reread_file_editor_from_disk(cx);
+        }
     }
 
     fn reset_file_editor_syntax(&mut self, language: Option<rows::DiffSyntaxLanguage>) {
@@ -1834,7 +1571,7 @@ impl MainPaneView {
         // and a budgeted parse that missed left that empty tree paired with the
         // full rope. `apply_file_editor_text` calls this itself once the real
         // text is seated, which is the only moment worth parsing.
-        if self.file_editor_loading {
+        if self.file_editor_loading() {
             return;
         }
         let revision = (snapshot.model_id(), snapshot.revision());
@@ -2192,11 +1929,11 @@ impl MainPaneView {
         window: &gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        if let Some(message) = self.file_editor_error.clone() {
+        if let Some(message) = self.file_editor_error().clone() {
             return div().flex().flex_col().p_4().gap_2()
                 .child(components::empty_state(theme, "Edit", message))
-                .when(self.file_editor_dirty, |d| d.child(div().flex().gap_2()
-                    .child(components::Button::new("editor_keep_buffer", "Return to buffer").on_click(theme, cx, |this, _, _, cx| { this.file_editor_error = None; cx.notify(); }))
+                .when(self.file_editor_dirty(), |d| d.child(div().flex().gap_2()
+                    .child(components::Button::new("editor_keep_buffer", "Return to buffer").on_click(theme, cx, |this, _, _, cx| { if let Some(document) = this.editor_documents.active() { document.dismiss_error(cx); } cx.notify(); }))
                     .child(components::Button::new("editor_reload_disk", "Reload disk contents…").on_click(theme, cx, |_, _, window, cx| {
                         let answer = window.prompt(gpui::PromptLevel::Warning, "Discard this buffer and reload?", None, &[gpui::PromptButton::cancel("Cancel"), gpui::PromptButton::new("Reload")], cx);
                         cx.spawn_in(window, async move |view, cx| { if answer.await.ok() == Some(1) { let _ = view.update_in(cx, |this, _, cx| this.discard_file_editor_buffer(cx)); } }).detach();
@@ -2205,12 +1942,12 @@ impl MainPaneView {
                         let answer = window.prompt(gpui::PromptLevel::Warning, "Replace the current disk contents?", Some("This replaces the version saved by another editor."), &[gpui::PromptButton::cancel("Cancel"), gpui::PromptButton::new("Replace")], cx);
                         cx.spawn_in(window, async move |view, cx| { if answer.await.ok() == Some(1) { let _ = view.update_in(cx, |this, _, cx| {
                             this.stash_current_file_editor_buffer(cx);
-                            if let Some(key) = this.file_editor_key.clone() && let Some(buffer) = this.file_editor_stash.get(&key).cloned() { let _ = this.enqueue_file_editor_save(key, &buffer, true, true, cx); }
+                            if let Some(key) = this.file_editor_key().clone() && let Some(buffer) = this.editor_documents.stashed(&key) { let _ = this.enqueue_file_editor_save(key, &buffer, true, true, cx); }
                         }); } }).detach();
                     }))
                 )).into_any_element();
         }
-        if self.file_editor_loading {
+        if self.file_editor_loading() {
             return components::empty_state(theme, "Edit", "Loading").into_any_element();
         }
 
@@ -2466,7 +2203,7 @@ impl MainPaneView {
         let blame_width = this.file_editor_blame_width;
         let blame_ctx = this.file_editor_blame.clone();
         let ui_scale_percent = ui_scale::current(cx).percent;
-        let first_dirty_line = this.file_editor_first_dirty_line;
+        let first_dirty_line = this.file_editor_first_dirty_line();
         let annot_hover = this.blame_annot_hover;
         // How many lines the unsaved buffer has gained (or lost) against the
         // revision blame was computed for. Below the first edit, this is what
@@ -2686,87 +2423,4 @@ pub(in crate::view) fn file_editor_gutter_width(
     // scaled by `resolved_output_line_no_width`.
     let padding = ui_scale::design_px_from_percent(8.0 + 8.0, ui_scale_percent);
     rows::resolved_output_line_no_width(line_count, scale) + padding
-}
-
-#[cfg(test)]
-mod encode_for_save_tests {
-    use super::*;
-    use gitcomet_core::text_format::{
-        FormatSource, LineEndingStats, SideTextFormat, TextEncoding, TextFormat,
-    };
-
-    fn read_as(encoding: TextEncoding, bom: bool) -> SideTextFormat {
-        SideTextFormat {
-            format: TextFormat { encoding, bom },
-            source: FormatSource::Detected { confident: true },
-            binary: false,
-            malformed: false,
-            lossy: false,
-            line_endings: LineEndingStats::default(),
-        }
-    }
-
-    #[test]
-    fn utf8_is_written_as_the_buffer_text() {
-        for format in [None, Some(read_as(TextEncoding::UTF_8, false))] {
-            let (bytes, pending) = encode_for_save("é\n".into(), format).unwrap();
-            assert_eq!(bytes.as_bytes(), "é\n".as_bytes());
-            assert!(matches!(pending, PendingWrite::Text(_)));
-        }
-    }
-
-    #[test]
-    fn utf8_fast_path_rejects_unwritable_formats() {
-        for bom in [false, true] {
-            let format = read_as(TextEncoding::UTF_8, bom);
-            for unwritable in [
-                SideTextFormat {
-                    malformed: true,
-                    ..format
-                },
-                SideTextFormat {
-                    lossy: true,
-                    ..format
-                },
-                SideTextFormat {
-                    binary: true,
-                    ..format
-                },
-            ] {
-                assert!(encode_for_save("caf�\n".into(), Some(unwritable)).is_err());
-            }
-        }
-    }
-
-    #[test]
-    fn other_encodings_write_their_own_bytes_and_bom() {
-        let (bytes, pending) = encode_for_save(
-            "café\n".into(),
-            Some(read_as(TextEncoding::WINDOWS_1252, false)),
-        )
-        .unwrap();
-        assert_eq!(bytes.as_bytes(), b"caf\xe9\n");
-        assert_eq!(pending, PendingWrite::Encoded(Arc::from(&b"caf\xe9\n"[..])));
-
-        let (bytes, _) =
-            encode_for_save("a".into(), Some(read_as(TextEncoding::UTF_16LE, true))).unwrap();
-        assert_eq!(bytes.as_bytes(), b"\xff\xfea\x00");
-        let (bytes, _) =
-            encode_for_save("a".into(), Some(read_as(TextEncoding::UTF_8, true))).unwrap();
-        assert_eq!(bytes.as_bytes(), b"\xef\xbb\xbfa");
-    }
-
-    #[test]
-    fn unwritable_text_or_lossy_files_are_refused() {
-        let error = encode_for_save(
-            "ok\nĀ".into(),
-            Some(read_as(TextEncoding::WINDOWS_1252, false)),
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("line 2, column 1"), "{error}");
-
-        let mut lossy = read_as(TextEncoding::from_label("shift_jis").unwrap(), false);
-        lossy.lossy = true;
-        assert!(encode_for_save("x".into(), Some(lossy)).is_err());
-    }
 }
