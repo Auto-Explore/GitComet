@@ -1632,19 +1632,10 @@ impl HistoryView {
         source_bounds: Bounds<Pixels>,
         items: Arc<[HistoryRefListItem]>,
         pointer: Point<Pixels>,
-        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
-            root.show_history_refs_hover(
-                repo_id,
-                commit_id,
-                source_bounds,
-                items,
-                pointer,
-                window,
-                cx,
-            );
+            root.show_history_refs_hover(repo_id, commit_id, source_bounds, items, pointer, cx);
         });
     }
 

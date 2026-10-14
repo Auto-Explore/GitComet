@@ -185,6 +185,8 @@ impl GitCometView {
                             theme_mode: Some(this.theme_mode.key().to_string()),
                             // The default is the settings window's; a window's own zoom is not saved.
                             ui_scale_percent: None,
+                            image_sampling_mode: None,
+                            image_smooth_filter: None,
                             // Owned by the settings window; None preserves it.
                             windows_renderer: None,
                             window_controls_mode: None,

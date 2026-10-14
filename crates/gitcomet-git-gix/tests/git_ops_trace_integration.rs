@@ -3,10 +3,9 @@ use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 fn run_git(repo: &Path, args: &[&str], empty_config: &Path) {
-    let status = Command::new("git")
+    let status = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(repo)
         .args(args)

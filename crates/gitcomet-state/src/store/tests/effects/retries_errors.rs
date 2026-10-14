@@ -175,6 +175,7 @@ fn worktree_and_submodule_effects_report_missing_repo_handle() {
         Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded {
             repo_id: got_repo_id,
             result: Err(error),
+            ..
         }) => {
             assert_eq!(got_repo_id, repo_id);
             assert!(

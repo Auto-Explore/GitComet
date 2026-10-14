@@ -1042,7 +1042,7 @@ fn unstage_all_leaves_conflicted_paths_and_the_merge_alone() {
     );
 
     // Conflict on c.txt, plus an unrelated staged change.
-    let _ = std::process::Command::new("git")
+    let _ = gitcomet_core::test_support::git_fixture::git_command()
         .current_dir(repo)
         .args(["merge", "feature"])
         .output();
@@ -1129,7 +1129,7 @@ fn unstage_all_during_a_merge_resets_both_sides_of_a_staged_rename() {
     );
 
     // Conflict on c.txt, plus a staged rename that has nothing to do with it.
-    let _ = std::process::Command::new("git")
+    let _ = gitcomet_core::test_support::git_fixture::git_command()
         .current_dir(repo)
         .args(["merge", "feature"])
         .output();

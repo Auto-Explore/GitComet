@@ -827,7 +827,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo_path = dir.path();
 
-        let ok = std::process::Command::new("git")
+        let ok = gitcomet_core::test_support::git_fixture::git_command()
             .args(["init", "-b", "main"])
             .current_dir(repo_path)
             .status()
@@ -843,7 +843,7 @@ mod tests {
         );
 
         // Explicit disable via diff.renames=false.
-        let ok = std::process::Command::new("git")
+        let ok = gitcomet_core::test_support::git_fixture::git_command()
             .args(["-C"])
             .arg(repo_path.to_string_lossy().as_ref())
             .args(["config", "diff.renames", "false"])

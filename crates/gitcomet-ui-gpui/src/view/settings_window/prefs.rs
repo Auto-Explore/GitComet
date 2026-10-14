@@ -23,6 +23,8 @@ impl SettingsWindowView {
             repo_sidebar_pinned_branches: None,
             theme_mode: Some(self.theme_mode.key().to_string()),
             ui_scale_percent: Some(self.default_ui_scale_percent),
+            image_sampling_mode: None,
+            image_smooth_filter: None,
             window_controls_mode: Some(self.window_controls_mode.key().to_string()),
             // Renderer changes are persisted separately; ordinary preferences must not overwrite a fallback.
             windows_renderer: None,

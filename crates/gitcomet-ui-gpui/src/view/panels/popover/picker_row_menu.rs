@@ -246,6 +246,8 @@ pub(super) fn open(
     position: gpui::Point<gpui::Pixels>,
     cx: &mut gpui::Context<PopoverHost>,
 ) {
+    let kind = target.popover_kind(this);
+    this.prepare_worktree_menu_location(kind.as_ref(), cx);
     this.picker_row_menu = Some(PickerRowMenu {
         target,
         position,
@@ -278,6 +280,7 @@ pub(super) fn close(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         // whatever the arrow keys were on alone.
         return;
     };
+    this.prepare_worktree_menu_location(None, cx);
     // The rows can have been re-filtered, re-sorted or closed out from under the
     // menu while it floated over them, so look the invoking row up again rather
     // than trusting the index it had when the menu opened. Gone means gone: a
@@ -311,6 +314,7 @@ pub(super) fn close_on_query_change(
 /// this drops the selection: pinning, closing and forgetting all reorder the
 /// rows, so the invoking row's index no longer names the same repository.
 fn close_for_action(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) {
+    this.prepare_worktree_menu_location(None, cx);
     this.picker_row_menu = None;
     if let Some(index) = this.open_picker_selected_index() {
         *index = None;

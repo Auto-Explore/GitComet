@@ -104,7 +104,7 @@ class GitHandler(BaseHTTPRequestHandler):
                                REMOTE_ADDR="127.0.0.1", REMOTE_USER="performance", SERVER_PROTOCOL="HTTP/1.0")
                     if self.headers.get("Git-Protocol"):
                         env["HTTP_GIT_PROTOCOL"] = self.headers["Git-Protocol"]
-                    process = subprocess.Popen(["git", "http-backend"], stdin=body, stdout=subprocess.PIPE,
+                    process = subprocess.Popen(["git", "-c", "maintenance.auto=false", "http-backend"], stdin=body, stdout=subprocess.PIPE,
                                                stderr=errors, env=env, start_new_session=True)
                     with self.server.lock:
                         self.server.children.add(process)

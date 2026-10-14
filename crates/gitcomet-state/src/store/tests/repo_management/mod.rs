@@ -32,9 +32,24 @@ fn has_worktree_refresh_effect(effects: &[Effect], repo_id: RepoId) -> bool {
     effects.iter().any(|effect| {
         matches!(
             effect,
-            Effect::LoadWorktrees { repo_id: candidate } if *candidate == repo_id
+            Effect::LoadWorktrees { repo_id: candidate }
+                | Effect::LoadWorktreeDirty { repo_id: candidate, scope: crate::model::WorktreeDirtyScope::All, .. }
+                if *candidate == repo_id
         )
     })
+}
+
+fn assert_independent_worktree_list_load(effects: &[Effect], repo_id: RepoId) {
+    assert_eq!(
+        effects
+            .iter()
+            .filter(|effect| matches!(effect,
+                Effect::LoadWorktrees { repo_id: candidate } if *candidate == repo_id
+            ))
+            .count(),
+        1,
+        "activation must request one independent list load: {effects:?}"
+    );
 }
 
 fn has_cancel_repo_loads_effect(effects: &[Effect], repo_id: RepoId, load_epoch: u64) -> bool {

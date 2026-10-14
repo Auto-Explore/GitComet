@@ -2586,7 +2586,10 @@ impl SvgDualPathFirstWindowFixture {
         let mut rasterize_success = 0u64;
 
         // Path 1: render the valid SVG through the live file-diff preview path.
-        if let Some(render) = render_svg_image_diff_preview(&self.old_svg) {
+        if let Some(render) = crate::view::image_preview::svg::parse(&self.old_svg)
+            .ok()
+            .and_then(|tree| render_svg_image_diff_preview(&tree))
+        {
             let size = render.size(0);
             1u8.hash(&mut h); // rasterize-success marker
             size.width.0.hash(&mut h);

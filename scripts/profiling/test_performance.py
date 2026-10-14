@@ -88,9 +88,10 @@ class ReportingTests(unittest.TestCase):
         self.assertEqual(perf_report.findings(result), [])
 
     def test_unsupported_headless_mode_does_not_silently_use_the_desktop(self):
-        with patch.object(live.platform, "system", return_value="Windows"):
-            with self.assertRaisesRegex(ValueError, "Headless captures require Linux"):
-                live.run_once(Path("app"), Path("repo"), "startup", Path("unused"), 1)
+        for system in ("Windows", "Darwin"):
+            with self.subTest(system=system), patch.object(live.platform, "system", return_value=system):
+                with self.assertRaisesRegex(ValueError, "Headless captures require Linux"):
+                    live.run_once(Path("app"), Path("repo"), "startup", Path("unused"), 1)
 
     def test_profiler_loss_or_missing_quality_is_not_a_valid_capture(self):
         self.assertTrue(perf_report.perf_quality("# Total Lost Samples: 0\n")["valid"])
@@ -526,14 +527,14 @@ class FixtureTests(unittest.TestCase):
 
     def test_real_snapshot_detached_head_is_cloneable(self):
         seed = self.root / "detached-seed"
-        subprocess.run(["git", "clone", "-q", str(self.seed), str(seed)], check=True)
+        subprocess.run(["git", "-c", "maintenance.auto=false", "clone", "-q", str(self.seed), str(seed)], check=True)
         perf_workloads.git(seed, live.fixture_env(), "checkout", "--detach", "HEAD")
         with perf_workloads.transfer(self.root / "detached-clone", seed, "clone", live) as fixture:
             perf_workloads.git(fixture["repo"], fixture["env"], *fixture["cli"])
             self.assertIn("expected_head", fixture["verify"]())
 
     def test_lfs_download_upload_and_checkout_hash_the_content(self):
-        if subprocess.run(["git", "lfs", "version"], capture_output=True).returncode:
+        if subprocess.run(["git", "-c", "maintenance.auto=false", "lfs", "version"], capture_output=True).returncode:
             self.skipTest("git-lfs not installed")
         for operation in ("lfs-fetch", "lfs-push", "lfs-pull"):
             with self.subTest(operation=operation):
@@ -542,7 +543,7 @@ class FixtureTests(unittest.TestCase):
                     self.assertEqual(fixture["verify"]()["objects"], 4)
 
     def test_lfs_warm_and_mixed_destinations_transfer_only_missing_content(self):
-        if subprocess.run(["git", "lfs", "version"], capture_output=True).returncode:
+        if subprocess.run(["git", "-c", "maintenance.auto=false", "lfs", "version"], capture_output=True).returncode:
             self.skipTest("git-lfs not installed")
         for operation in ("lfs-fetch", "lfs-pull", "lfs-push"):
             for cache, transfers in (("mixed", 2), ("warm", 0)):
@@ -555,7 +556,7 @@ class FixtureTests(unittest.TestCase):
                         self.assertEqual(len(fixture["server"].records), transfers)
 
     def test_annex_warm_and_mixed_destinations_preserve_content_witnesses(self):
-        if subprocess.run(["git", "annex", "version"], capture_output=True).returncode:
+        if subprocess.run(["git", "-c", "maintenance.auto=false", "annex", "version"], capture_output=True).returncode:
             self.skipTest("git-annex not installed")
         for operation in ("annex-get", "annex-copy"):
             for cache, missing in (("mixed", 2), ("warm", 0)):
@@ -568,7 +569,7 @@ class FixtureTests(unittest.TestCase):
                         self.assertEqual(fixture["verify"]()["required_content_bytes"], missing * 4096)
 
     def test_annex_uses_real_content_and_directory_remote(self):
-        if subprocess.run(["git", "annex", "version"], capture_output=True).returncode:
+        if subprocess.run(["git", "-c", "maintenance.auto=false", "annex", "version"], capture_output=True).returncode:
             self.skipTest("git-annex not installed")
         for operation in ("annex-get", "annex-copy", "annex-pull", "annex-push", "annex-sync"):
             with self.subTest(operation=operation):

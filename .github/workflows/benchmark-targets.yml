@@ -6,28 +6,19 @@ on:
       cold-cache:
         type: boolean
         default: false
-      benchmark-profile:
-        description: Compile/link profile (candidate disables UI optimization)
-        type: string
-        default: ci-bench
   workflow_dispatch:
     inputs:
       cold-cache:
         description: Bypass dependency caches
         type: boolean
         default: false
-      benchmark-profile:
-        description: Compile/link profile (candidate disables UI optimization)
-        type: choice
-        options: [ci-bench, ci-bench-candidate]
-        default: ci-bench
 
 permissions:
   contents: read
 
 env:
   CARGO_TERM_COLOR: always
-  CI_BENCHMARK_PROFILE: ${{ inputs.benchmark-profile || 'ci-bench' }}
+  CI_BENCHMARK_PROFILE: ci-bench
 
 jobs:
   compile:

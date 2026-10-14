@@ -6,16 +6,13 @@ use gitcomet_git_gix::GixBackend;
 mod test_git_env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::OnceLock;
 
 fn run_git(repo: &Path, args: &[&str]) {
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut cmd);
-    // Fixtures must not run git's own detached maintenance: it would repack
-    // behind the test's back.
     let output = cmd
-        .args(["-c", "maintenance.auto=false", "-C"])
+        .arg("-C")
         .arg(repo)
         .args(args)
         .output()

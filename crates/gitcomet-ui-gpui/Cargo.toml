@@ -40,6 +40,7 @@ gitcomet-ui-kit = { workspace = true }
 gpui = { workspace = true, features = ["profiler"] }
 gpui_platform = { workspace = true }
 image = { workspace = true }
+fast_image_resize = { workspace = true }
 jiff = { workspace = true }
 lru = { workspace = true }
 memchr = { workspace = true }

@@ -6,7 +6,7 @@ pub(crate) use gitcomet_ui_kit::test_support::{
 
 /// Runs `git -C dir args…`, asserting it succeeds; returns its stdout.
 pub(crate) fn git(dir: &std::path::Path, args: &[&str]) -> Vec<u8> {
-    let output = std::process::Command::new("git")
+    let output = gitcomet_core::test_support::git_fixture::git_command()
         .args(["-c", "commit.gpgsign=false"])
         .arg("-C")
         .arg(dir)

@@ -4,10 +4,9 @@ use gitcomet_core::tag_push::{TagPushMode, TagPushRequest};
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(repo)
         .args([

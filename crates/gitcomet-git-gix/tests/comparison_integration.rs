@@ -11,11 +11,10 @@ use gitcomet_git_gix::GixBackend;
 mod test_git_env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut cmd);
     let output = cmd
         .arg("-C")

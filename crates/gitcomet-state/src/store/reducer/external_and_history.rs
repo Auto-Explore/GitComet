@@ -126,14 +126,14 @@ pub(super) fn reload_repo(
     super::refresh_selected_head_gitlink(repos, state, repo_id);
     let repo_state = &mut state.repos[repo_ix];
     effects.extend(refresh_full_effects(repo_state, git_log_settings));
+    if let Some(effect) = super::effects::request_worktrees_effect(repo_state) {
+        effects.push(effect);
+    }
     effects.extend(super::effects::request_large_file_support_effect(
         repo_state,
     ));
     effects.extend(super::util::reload_selected_text_attributes(repo_state));
     append_auto_background_metadata_effects(repo_state, git_log_settings, &mut effects);
-    // The view re-requests sidebar data only when its request changes, so
-    // worktrees and stashes reset above would otherwise stay NotLoaded.
-    append_ensure_sidebar_data_effects(repo_state, &mut effects);
     // Linked-worktree rows survive a reload, so their dirty counts have to be
     // refreshed along with everything else. The monitor only flushes for this
     // repo's own `.git`, so a commit or stash made inside a linked worktree
@@ -141,6 +141,9 @@ pub(super) fn reload_repo(
     if let Some(effect) = super::effects::request_worktree_dirty_effect(repo_state) {
         effects.push(effect);
     }
+    // The view only re-requests sections when its request changes, so ensure
+    // the remaining reset sections here too.
+    append_ensure_sidebar_data_effects(repo_state, &mut effects);
     effects
 }
 
@@ -891,6 +894,15 @@ fn finish_repo_action(
     completion: RepoActionCompletion,
 ) -> Vec<Effect> {
     let rebuild_selected_head_gitlink = repo_action_clears_head_dependent_state(action);
+    let refresh_worktrees = matches!(completion, RepoActionCompletion::Succeeded)
+        && matches!(
+            action,
+            RepoActionKind::CheckoutBranch
+                | RepoActionKind::CheckoutRemoteBranch
+                | RepoActionKind::CheckoutCommit
+                | RepoActionKind::CreateBranchAndCheckout
+                | RepoActionKind::RenameBranch
+        );
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_sub(1);
         repo_state.bump_ops_rev();
@@ -937,6 +949,14 @@ fn finish_repo_action(
     // Re-issue the primary panes (head branch, ahead/behind, rebase/merge, status, log). The flags
     // were just cleared, so request_* dispatches fresh loads under the new epoch.
     effects.extend(refresh_primary_effects(repo_state));
+
+    // Only queue the scan after cancellation above. Its successful full listing
+    // refreshes branch badges too, without a second list request from the worker.
+    if refresh_worktrees
+        && let Some(effect) = super::effects::request_worktree_dirty_effect(repo_state)
+    {
+        effects.push(effect);
+    }
 
     // Selected views (branch lists, history, diff) only matter for the repo the user is viewing. A
     // non-active repo's in-flight views were reset to `NotLoaded` and reload when it is next

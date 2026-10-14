@@ -8,7 +8,6 @@ use gitcomet_git_gix::GixBackend;
 #[path = "support/test_git_env.rs"]
 mod test_git_env;
 use std::path::Path;
-use std::process::Command;
 use std::sync::Arc;
 #[path = "log_integration/authors.rs"]
 mod authors;
@@ -27,7 +26,7 @@ fn run_git(repo: &Path, args: &[&str]) {
 
 fn run_git_with_env(repo: &Path, args: &[&str], envs: &[(&str, &str)]) {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut cmd);
     let cmd = cmd
         .arg("-C")
@@ -52,7 +51,7 @@ fn run_git_with_env(repo: &Path, args: &[&str], envs: &[(&str, &str)]) {
 
 fn git_stdout(repo: &Path, args: &[&str]) -> String {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut cmd);
     let output = cmd
         .arg("-C")
@@ -114,7 +113,7 @@ fn fast_import_linear_history_with_authors(
 ) {
     let messages: Vec<_> = (0..count).map(|i| format!("c{i}")).collect();
     let bodies: Vec<_> = (0..count).map(|i| format!("v{i}\n")).collect();
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut cmd);
     cmd.arg("-C").arg(repo);
     import_linear_history(
@@ -1173,7 +1172,7 @@ fn a_missing_ancestor_object_still_renders_the_rows_above_it() {
         .collect::<Vec<_>>()
         .join("\n")
         + "\n";
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut cmd);
     let mut child = cmd
         .arg("-C")
@@ -1190,7 +1189,7 @@ fn a_missing_ancestor_object_still_renders_the_rows_above_it() {
         std::fs::remove_file(&pack).unwrap();
         std::fs::remove_file(pack.with_extension("idx")).unwrap();
     }
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut cmd);
     assert!(
         !cmd.arg("-C")
@@ -1996,7 +1995,7 @@ fn commit_details_preserves_shallow_boundary_merge_metadata_without_parent_objec
     );
     assert_eq!(git_stdout(&shallow, &["rev-parse", "HEAD"]), merge_id);
     let first_parent_spec = format!("{first_parent_id}^{{commit}}");
-    let mut parent_check = Command::new("git");
+    let mut parent_check = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut parent_check);
     let parent_check = parent_check
         .arg("-C")

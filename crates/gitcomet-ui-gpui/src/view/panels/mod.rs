@@ -67,6 +67,15 @@ pub(in crate::view) enum ContextMenuAction {
         id: SharedString,
         repo_id: RepoId,
     },
+    SetImageSampling {
+        mode: crate::view::image_preview::ImageSamplingMode,
+    },
+    SetImageSmoothFilter {
+        filter: crate::view::image_preview::ImageSmoothFilter,
+    },
+    ImageZoom {
+        zoom: crate::view::image_preview::Zoom,
+    },
     /// Read the open file in this encoding; `None` goes back to attributes
     /// and detection.
     SetTextEncoding {

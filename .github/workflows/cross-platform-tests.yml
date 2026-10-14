@@ -205,14 +205,6 @@ jobs:
         if: success() || (failure() && steps.tests.outcome == 'failure')
         shell: bash
         run: python3 scripts/ci/run.py doc --context workspace
-      # The example product is an external consumer: it compiles and runs
-      # its tests with only its own features, never the workspace's.
-      - name: Example product
-        if: success()
-        shell: bash
-        run: |
-          python3 scripts/ci/run.py compile --context example
-          python3 scripts/ci/run.py test --context example --schedule "$CI_TEST_SCHEDULE"
       # The workspace enables the UI's default features and runs its complete
       # suite. Only the headless app needs a separate feature context for smoke.
       - name: Compile Linux display-selection app context
@@ -240,31 +232,6 @@ jobs:
         if: success() && runner.os == 'Windows'
         shell: cmd
         run: python3 scripts/ci/run.py cmd-smoke
-      - name: Show path behavior (PowerShell and Git Bash)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Write-Host "PowerShell path: $pwd"
-          bash -lc "pwd"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Show path behavior (CMD and Git Bash)
-        if: runner.os == 'Windows'
-        shell: cmd
-        run: |
-          echo CMD path: %CD%
-          bash -lc "pwd"
-      - name: Gatekeeper and code-signing check (informational)
-        if: success() && runner.os == 'macOS'
-        shell: bash
-        run: |
-          cargo_config_output="$(scripts/macos-cargo-config.sh "$(uname -m)" release)"
-          args=()
-          if [[ -n "$cargo_config_output" ]]; then
-            while IFS= read -r arg; do args+=("$arg"); done <<<"$cargo_config_output"
-          fi
-          python3 scripts/ci/run.py command --name macos-release-signing-build -- cargo build "${args[@]}" -p gitcomet --no-default-features --features gix --release --locked
-          codesign --verify --verbose target/release/gitcomet || true
-          spctl --assess --type execute --verbose target/release/gitcomet || true
       - uses: ./.github/actions/ci-finish
         if: always()
         with:

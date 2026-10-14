@@ -119,16 +119,10 @@ fn append_repo_switch_worktree_refresh_effect(
     repo_state: &mut RepoState,
     effects: &mut SetActiveRepoEffects,
 ) {
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::WORKTREES)
-    {
-        if !matches!(repo_state.worktrees, Loadable::Ready(_)) {
-            repo_state.set_worktrees(Loadable::Loading);
-        }
-        effects.push(Effect::LoadWorktrees {
-            repo_id: repo_state.id,
-        });
+    // Keep list loading independent of the serial scan worker: a checkout on
+    // an unavailable filesystem can block that worker across repo switches.
+    if let Some(effect) = super::effects::request_worktrees_effect(repo_state) {
+        effects.push(effect);
     }
     if let Some(effect) = super::effects::request_worktree_dirty_effect(repo_state) {
         effects.push(effect);
@@ -701,6 +695,7 @@ fn remove_repo(
                 active_repo_id,
                 &mut activation_effects,
                 false,
+                false,
             );
             effects.extend(activation_effects);
         } else {
@@ -817,6 +812,7 @@ pub(super) fn close_repos(
                 active_repo_id,
                 &mut activation_effects,
                 false,
+                false,
             );
             effects.extend(activation_effects);
         } else {
@@ -840,7 +836,7 @@ pub(super) fn set_active_repo(
     repo_id: RepoId,
 ) -> Vec<Effect> {
     let mut effects = SetActiveRepoEffects::new();
-    fill_set_active_repo_inline(repos, state, repo_id, &mut effects);
+    fill_set_active_repo_inline(repos, state, repo_id, false, &mut effects);
     effects.into_vec()
 }
 
@@ -862,9 +858,24 @@ pub(super) fn fill_set_active_repo_inline(
     repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
     state: &mut AppState,
     repo_id: RepoId,
+    unchanged: bool,
     effects: &mut SetActiveRepoEffects,
 ) {
-    fill_set_active_repo_inline_impl(repos, state, repo_id, effects, true);
+    fill_set_active_repo_inline_impl(repos, state, repo_id, effects, true, unchanged);
+}
+
+/// Everything a switch would reload is loaded, nothing for the repository is
+/// in flight and nothing was cancelled when it was left, so its retained state
+/// can be shown as is.
+fn repo_switch_state_complete(repo_state: &RepoState, git_log_settings: GitLogSettings) -> bool {
+    !repo_state.left_mid_refresh
+        && repo_switch_secondary_metadata_ready(repo_state, git_log_settings)
+        && matches!(repo_state.head_branch, Loadable::Ready(_))
+        && matches!(repo_state.upstream_divergence, Loadable::Ready(_))
+        && matches!(repo_state.status, Loadable::Ready(_))
+        && matches!(repo_state.log, Loadable::Ready(_))
+        && matches!(repo_state.worktrees, Loadable::Ready(_))
+        && !repo_state.loads_in_flight.any_in_flight()
 }
 
 fn fill_set_active_repo_inline_impl(
@@ -873,6 +884,7 @@ fn fill_set_active_repo_inline_impl(
     repo_id: RepoId,
     effects: &mut SetActiveRepoEffects,
     persist_on_change: bool,
+    unchanged: bool,
 ) {
     enum SelectedDiffReload {
         Conflict(PathBuf),
@@ -894,8 +906,16 @@ fn fill_set_active_repo_inline_impl(
         // attached to it. Refresh its retained path before capturing the diff
         // reload plan below.
         super::refresh_selected_head_gitlink(repos, state, repo_id);
-    }
-    if changed {
+        // Leaving cancels whatever is in flight, but keeps the values it was
+        // about to replace.
+        if let Some(previous) = state
+            .repos
+            .iter_mut()
+            .find(|repo| Some(repo.id) == previous_active)
+        {
+            previous.left_mid_refresh = previous.loads_in_flight.any_in_flight()
+                || previous.diff_state.diff_reload_in_flight;
+        }
         append_cancel_loads_for_deactivated_repo(state, previous_active, effects);
     }
     if changed && state.git_log_settings.verify_commit_signatures {
@@ -967,9 +987,22 @@ fn fill_set_active_repo_inline_impl(
         return;
     }
 
-    let use_full_refresh =
-        changed && !repo_switch_can_use_primary_refresh(repo_state, git_log_settings, now);
+    // A monitor kept running while this tab was inactive saw nothing change:
+    // its status, history, refs and worktree list are what the refresh below
+    // would load again. The retained diff is current for the same reason.
+    let reuse_retained =
+        changed && unchanged && repo_switch_state_complete(repo_state, git_log_settings);
+    repo_state.left_mid_refresh = false;
+    let use_full_refresh = changed
+        && !reuse_retained
+        && !repo_switch_can_use_primary_refresh(repo_state, git_log_settings, now);
     repo_state.last_active_at = Some(now);
+    let selected_diff_reload = selected_diff_reload.filter(|reload| {
+        !(reuse_retained
+            && matches!(reload, SelectedDiffReload::Diff(_))
+            && matches!(repo_state.diff_state.diff, Loadable::Ready(_))
+            && !matches!(repo_state.diff_state.diff_file, Loadable::Loading))
+    });
 
     let selected_history_reloads = if changed {
         selected_history_reloads_for_activation(repo_state)
@@ -986,6 +1019,7 @@ fn fill_set_active_repo_inline_impl(
         + selected_history_reloads.len()
         + usize::from(persist_effect.is_some())
         + usize::from(changed)
+        + usize::from(changed)
         + usize::from(changed && !use_full_refresh)
         + usize::from(file_browser_load.is_some())
         + usize::from(repo_state.sidebar_data_request.worktrees)
@@ -1000,21 +1034,28 @@ fn fill_set_active_repo_inline_impl(
     debug_assert!(
         base_effect_capacity + extra_effect_capacity <= SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY
     );
-    if use_full_refresh {
-        append_refresh_full_effects(repo_state, git_log_settings, effects);
+    if reuse_retained {
+        // Linked worktrees live outside this repository's monitor.
+        if let Some(effect) = super::effects::request_worktree_dirty_effect(repo_state) {
+            effects.push(effect);
+        }
     } else {
-        append_refresh_primary_effects(repo_state, effects);
-    }
-    if changed
-        && !use_full_refresh
-        && repo_state
-            .loads_in_flight
-            .request(RepoLoadsInFlight::BRANCHES)
-    {
-        effects.push(Effect::LoadBranches { repo_id });
-    }
-    if changed {
-        append_repo_switch_worktree_refresh_effect(repo_state, effects);
+        if use_full_refresh {
+            append_refresh_full_effects(repo_state, git_log_settings, effects);
+        } else {
+            append_refresh_primary_effects(repo_state, effects);
+        }
+        if changed
+            && !use_full_refresh
+            && repo_state
+                .loads_in_flight
+                .request(RepoLoadsInFlight::BRANCHES)
+        {
+            effects.push(Effect::LoadBranches { repo_id });
+        }
+        if changed {
+            append_repo_switch_worktree_refresh_effect(repo_state, effects);
+        }
     }
     append_ensure_sidebar_data_effects(repo_state, effects);
     if let Some(effect) = file_browser_load {
@@ -1376,13 +1417,8 @@ pub(super) fn repo_opened_ok(
     let follow_selection = state.file_browser_settings.follow_selected_commit;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         effects.extend(refresh_full_effects(repo_state, git_log_settings));
-        if should_refresh_worktrees
-            && repo_state
-                .loads_in_flight
-                .request(RepoLoadsInFlight::WORKTREES)
-        {
-            repo_state.set_worktrees(Loadable::Loading);
-            effects.push(Effect::LoadWorktrees { repo_id });
+        if let Some(effect) = super::effects::request_worktrees_effect(repo_state) {
+            effects.push(effect);
         }
         // The history rows want this from the moment the repo opens, and the
         // switch-time trigger fires before the handle exists, so this is the
@@ -1481,6 +1517,7 @@ fn discard_failed_repo_open(
                     state,
                     active_repo_id,
                     &mut activation_effects,
+                    false,
                     false,
                 );
                 effects.extend(activation_effects);

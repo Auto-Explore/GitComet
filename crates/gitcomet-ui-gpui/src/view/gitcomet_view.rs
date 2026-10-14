@@ -971,7 +971,6 @@ impl GitCometView {
         source_bounds: Bounds<Pixels>,
         items: Arc<[HistoryRefListItem]>,
         pointer: Point<Pixels>,
-        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         // Don't surface the refs hover while an overlay (popover, dialog, or
@@ -984,15 +983,7 @@ impl GitCometView {
             return;
         }
         self.history_refs_hover_host.update(cx, |host, cx| {
-            host.show(
-                repo_id,
-                commit_id,
-                source_bounds,
-                items,
-                pointer,
-                window,
-                cx,
-            )
+            host.show(repo_id, commit_id, source_bounds, items, pointer, cx)
         });
     }
 
@@ -1222,6 +1213,7 @@ impl GitCometView {
                 ui_session.active_repo = None;
             }
         }
+        image_preview::Preferences::initialize(&ui_session, cx);
         let mut ui_preferences = UiPreferences::from_session(&ui_session);
         crate::session_ui::initialize_appearance(&ui_session, cx);
         ui_preferences.appearance.metrics = crate::appearance::current(cx);
@@ -1515,7 +1507,7 @@ impl GitCometView {
                     cancel.store(true, std::sync::atomic::Ordering::Release);
                 }
                 pane.conflict_image_preview_task = None;
-                pane.file_image_preview_animation_task = None;
+                pane.file_image_preview_timer = Default::default();
 
                 let mut images = Vec::new();
                 if let Some(image) = pane.file_image_diff_cache_old.take() {
@@ -2037,6 +2029,8 @@ impl GitCometView {
             startup_crash_report,
             #[cfg(target_os = "macos")]
             recent_repos_menu_fingerprint: ui_session.recent_repos.clone(),
+            #[cfg(target_os = "macos")]
+            recent_repos_session_stamp: None,
             auth_prompt_username_input,
             auth_prompt_secret_input,
             auth_prompt_key: None,

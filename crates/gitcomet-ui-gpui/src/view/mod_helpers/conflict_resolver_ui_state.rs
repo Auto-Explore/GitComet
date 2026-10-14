@@ -125,6 +125,7 @@ impl std::fmt::Debug for ConflictMarkdownColumn {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ConflictResolverImagePreviewState {
+    pub(crate) sources: [Option<Arc<crate::view::image_preview::Source>>; 3],
     pub(crate) source_hash: Option<u64>,
     pub(crate) path: Option<std::path::PathBuf>,
     pub(crate) conflict_rev: u64,
@@ -134,6 +135,7 @@ pub(crate) struct ConflictResolverImagePreviewState {
 impl Default for ConflictResolverImagePreviewState {
     fn default() -> Self {
         Self {
+            sources: Default::default(),
             source_hash: None,
             path: None,
             conflict_rev: 0,

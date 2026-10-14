@@ -651,6 +651,9 @@ impl PopoverHost {
                 path,
                 branch.as_deref(),
                 self.external_editor_available(),
+                self.worktree_menu_location
+                    .as_ref()
+                    .is_some_and(|(cached_path, available)| cached_path == path && *available),
             )),
             PopoverKind::Repo {
                 repo_id,
@@ -1529,6 +1532,19 @@ impl PopoverHost {
                 self.details_pane.update(cx, |pane, cx| {
                     pane.set_list_file_layout(repo_id, list, layout, cx);
                 });
+            }
+            ContextMenuAction::SetImageSampling { mode } => {
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.set_image_preferences(Some(mode), None, cx)
+                });
+            }
+            ContextMenuAction::SetImageSmoothFilter { filter } => {
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.set_image_preferences(None, Some(filter), cx)
+                });
+            }
+            ContextMenuAction::ImageZoom { zoom } => {
+                crate::view::image_preview::apply_menu_zoom(zoom, window, cx);
             }
             ContextMenuAction::SetTextEncoding { encoding } => {
                 let main_pane = self.main_pane.clone();

@@ -7,6 +7,7 @@ struct RepoActivationCallCounts {
     log: std::sync::atomic::AtomicUsize,
     branches: std::sync::atomic::AtomicUsize,
     remote_branches: std::sync::atomic::AtomicUsize,
+    worktree_lists: std::sync::atomic::AtomicUsize,
 }
 
 impl RepoActivationCallCounts {
@@ -15,6 +16,8 @@ impl RepoActivationCallCounts {
         self.log.store(0, std::sync::atomic::Ordering::Relaxed);
         self.branches.store(0, std::sync::atomic::Ordering::Relaxed);
         self.remote_branches
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        self.worktree_lists
             .store(0, std::sync::atomic::Ordering::Relaxed);
     }
 
@@ -105,6 +108,18 @@ impl GitRepository for RepoActivationRecordingRepo {
             staged: std::sync::Arc::new(Vec::new()),
             unstaged: std::sync::Arc::new(Vec::new()),
         })
+    }
+
+    fn list_worktrees(&self) -> Result<Vec<gitcomet_core::domain::Worktree>> {
+        self.calls
+            .worktree_lists
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(vec![gitcomet_core::domain::Worktree {
+            path: self.spec.workdir.clone(),
+            head: None,
+            branch: Some("main".into()),
+            detached: false,
+        }])
     }
 
     fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -398,6 +413,59 @@ fn repo_monitor_unavailable_repo_activation_falls_back_to_git_state_refresh() {
     assert!(
         remote_branches > 0,
         "fallback should schedule remote-branch loading"
+    );
+}
+
+#[test]
+fn repo_activation_reuses_one_worktree_listing_and_file_edits_add_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let workdir = canonicalize_or_original(dir.path().to_path_buf());
+    let repo_id = RepoId(23);
+    let calls = Arc::new(RepoActivationCallCounts::default());
+    let mut state = active_ready_repo_state(repo_id, workdir.clone());
+    state.repos[0].set_worktrees(Loadable::Ready(Vec::new()));
+    let (store, _events) = AppStore::new_test(Arc::new(FailingBackend));
+    store.disable_repo_monitors_for_test();
+    store.replace_snapshot_for_test(Arc::new(state));
+    store.insert_repo_for_test(
+        repo_id,
+        Arc::new(RepoActivationRecordingRepo::new(
+            workdir.clone(),
+            calls.clone(),
+        )),
+    );
+    store.dispatch(Msg::RepoActivated { repo_id });
+    super::worktree_redirect::wait_until("focus to refresh the worktree list", || {
+        let state = store.snapshot();
+        state.repos[0]
+            .worktrees
+            .ready()
+            .is_some_and(|list| list.len() == 1 && list[0].path == workdir)
+            && !state.repos[0].loads_in_flight.any_in_flight()
+    });
+    for change in [
+        crate::msg::RepoExternalChange::Worktree,
+        crate::msg::RepoExternalChange::Index,
+    ] {
+        store.dispatch(Msg::RepoExternallyChanged { repo_id, change });
+    }
+    store
+        .barrier_for_test()
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap();
+    super::worktree_redirect::wait_until("file edit refreshes to finish", || {
+        !store.snapshot().repos[0].loads_in_flight.any_in_flight()
+    });
+    store
+        .shutdown_for_test()
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap();
+    assert_eq!(
+        calls
+            .worktree_lists
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "focus must reuse the dirty scan's one list query, and edit/stage must add none"
     );
 }
 
@@ -766,4 +834,112 @@ fn linked_worktree_leases_count_and_do_not_cross_repository_lifetimes() {
         state.worktree_watch_leases[&(repo_id, new_lifetime, path.clone())],
         1
     );
+}
+
+#[test]
+fn repo_monitor_manager_reports_unchanged_since_inactive_once() {
+    let mut monitors = monitor_impl::RepoMonitorManager::new();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let (exited_tx, exited_rx) = std::sync::mpsc::channel();
+    monitors.insert_blocked_monitor_for_test(RepoId(7), release_rx, exited_tx);
+
+    // No mark: never left while watched.
+    assert!(!monitors.unchanged_since_inactive(RepoId(7)));
+    monitors.mark_inactive(RepoId(7));
+    assert!(monitors.unchanged_since_inactive(RepoId(7)));
+    // The mark is consumed by the switch that reads it.
+    assert!(!monitors.unchanged_since_inactive(RepoId(7)));
+
+    monitors.mark_inactive(RepoId(7));
+    monitors.bump_change_generation_for_test(RepoId(7));
+    assert!(!monitors.unchanged_since_inactive(RepoId(7)));
+
+    // Degraded coverage may have missed a change.
+    monitors.mark_inactive(RepoId(7));
+    monitors.set_degraded_for_test(RepoId(7), true);
+    assert!(!monitors.unchanged_since_inactive(RepoId(7)));
+    monitors.set_degraded_for_test(RepoId(7), false);
+
+    // A stopped monitor proves nothing.
+    monitors.mark_inactive(RepoId(7));
+    monitors.stop(RepoId(7));
+    assert!(!monitors.unchanged_since_inactive(RepoId(7)));
+    // Unknown repositories are never unchanged.
+    monitors.mark_inactive(RepoId(8));
+    assert!(!monitors.unchanged_since_inactive(RepoId(8)));
+
+    release_tx
+        .send(())
+        .expect("test monitor release signal should send");
+    exited_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("test monitor thread should exit after release");
+}
+
+#[test]
+fn repo_monitor_manager_never_reuses_a_dead_monitor() {
+    let mut monitors = monitor_impl::RepoMonitorManager::new();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let (exited_tx, exited_rx) = std::sync::mpsc::channel();
+    monitors.insert_blocked_monitor_for_test(RepoId(7), release_rx, exited_tx);
+
+    // The thread ends while the monitor stays enabled, as after a panic.
+    monitors.revalidate(RepoId(7));
+    release_tx
+        .send(())
+        .expect("test monitor release signal should send");
+    exited_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("test monitor thread should exit after release");
+    // The exit signal precedes the thread's end by a few instructions.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        monitors.mark_inactive(RepoId(7));
+        if !monitors.unchanged_since_inactive(RepoId(7)) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "a dead monitor still reports its tab unchanged"
+        );
+        std::thread::yield_now();
+    }
+}
+
+#[test]
+fn warm_inactive_repos_keeps_the_most_recently_active_tabs() {
+    let mut state = AppState::test_default();
+    let now = SystemTime::now();
+    for (id, seconds_ago, open) in [
+        (1, Some(0), true),
+        (2, Some(30), true),
+        (3, Some(10), true),
+        (4, Some(20), true),
+        (5, Some(5), true),
+        (6, None, true),
+        (7, Some(1), false),
+    ] {
+        let mut repo = RepoState::new_opening(
+            RepoId(id),
+            RepoSpec {
+                workdir: format!("/tmp/warm-{id}").into(),
+            },
+        );
+        if open {
+            repo.open = Loadable::Ready(());
+        }
+        repo.last_active_at = seconds_ago.map(|ago| now - Duration::from_secs(ago));
+        state.repos.push(repo);
+    }
+    state.active_repo = Some(RepoId(1));
+    // Leased tabs are watched anyway; never-active and opening tabs have
+    // nothing to reuse.
+    Arc::make_mut(&mut state.watch_leases).insert(RepoId(5), 1);
+
+    assert_eq!(
+        warm_inactive_repos(&state, 2),
+        vec![RepoId(3), RepoId(4)],
+        "the least recently active tab is evicted"
+    );
+    assert!(warm_inactive_repos(&state, 0).is_empty());
 }

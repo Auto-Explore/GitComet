@@ -3,7 +3,8 @@ use super::panes::main::file_editor::{
     file_editor_text_fingerprint,
 };
 use super::panes::main::{
-    TextDecodeRequest, preflight_worktree_file_for_editing, read_worktree_file_version_for_editing,
+    FileImagePreviewAnimationSide, TextDecodeRequest, preflight_worktree_file_for_editing,
+    read_worktree_file_version_for_editing,
 };
 use super::*;
 use crate::kit::{TextInput, TextInputOptions};
@@ -15,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 #[cfg(test)]
 mod diagram_tests;
+mod image_preview;
 mod picker;
 pub(crate) use picker::DocumentPicker;
 
@@ -345,6 +347,10 @@ fn wraps_by_default(path: &Path) -> bool {
 }
 
 struct StandaloneBuffer {
+    image_group: Option<Entity<crate::view::image_preview::Group>>,
+    image_input: crate::view::image_preview::Input,
+    image_animation: FileImagePreviewAnimationSide,
+    image_timer: crate::view::image_preview::FrameTimer,
     identity: DocumentIdentity,
     theme: AppTheme,
     root: WeakEntity<GitCometView>,
@@ -485,7 +491,17 @@ impl StandaloneBuffer {
         ];
         let image = initial.is_none() && image_format_for_path(&path).is_some();
         let wrap = wraps_by_default(&path);
+        cx.on_release(|this, cx| {
+            if let Some(image) = this.image_input.preview.take() {
+                cx.drop_image(image, None);
+            }
+        })
+        .detach();
         let mut buffer = Self {
+            image_group: None,
+            image_input: Default::default(),
+            image_animation: Default::default(),
+            image_timer: Default::default(),
             identity: DocumentIdentity(path),
             theme,
             root,
@@ -549,9 +565,12 @@ impl StandaloneBuffer {
         self.load_task = Some(cx.spawn(async move |view, cx| {
             let result = crate::ui_runtime::background_compute(move || {
                 preflight_worktree_file_for_editing(&path)?;
-                let _guard = gitcomet_core::filesystem::global()
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
+                let lock = || {
+                    gitcomet_core::filesystem::global()
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                };
+                let guard = lock();
                 let version = read_worktree_file_version_for_editing(&path)?;
                 // Outside a repository there are no attributes: detect only.
                 let request = TextDecodeRequest {
@@ -566,10 +585,31 @@ impl StandaloneBuffer {
                         panes::read_worktree_file_for_editing(&path, &request)?;
                     (text, Some(format))
                 };
+                // Image bytes are read without holding up other file operations;
+                // the version check below still ties them to `version`.
+                let (guard, image_bytes) = if image {
+                    drop(guard);
+                    use std::io::Read as _;
+                    let file = std::fs::File::open(&path).map_err(|error| error.to_string())?;
+                    let mut bytes = Vec::new();
+                    file.take(512 * 1024 * 1024 + 1)
+                        .read_to_end(&mut bytes)
+                        .map_err(|error| error.to_string())?;
+                    if bytes.len() > 512 * 1024 * 1024 {
+                        return Err("Image exceeds the preview limit".into());
+                    }
+                    (lock(), Some(bytes))
+                } else {
+                    (guard, None)
+                };
                 if read_worktree_file_version_for_editing(&path)? != version {
                     return Err("File changed while reading. Open it again.".into());
                 }
-                Ok::<_, String>((version, text, format))
+                drop(guard);
+                let image_input = image_bytes
+                    .map(|bytes| image_preview::decode_image(&path, &bytes))
+                    .transpose()?;
+                Ok::<_, String>((version, text, format, image_input))
             })
             .await;
             let _ = view.update(cx, |this: &mut StandaloneBuffer, cx| {
@@ -582,7 +622,15 @@ impl StandaloneBuffer {
                 }
                 this.loading = false;
                 match result {
-                    Ok((version, text, format)) => {
+                    Ok((version, text, format, image_input)) => {
+                        if let Some(old) = this.image_input.preview.take() {
+                            cx.defer(move |cx| {
+                                cx.drop_image(old, None);
+                            });
+                        }
+                        this.image_input = image_input.unwrap_or_default();
+                        this.image_animation = Default::default();
+                        this.image_timer = Default::default();
                         this.version = Some(version);
                         this.text_format = format;
                         // Text that cannot be written back as it was read is view-only.
@@ -1320,7 +1368,7 @@ impl StandaloneBuffer {
 }
 
 impl Render for StandaloneBuffer {
-    fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let ui_scale_percent = ui_scale::current(cx).percent;
         let _ = self.subscriptions.len();
@@ -1333,26 +1381,23 @@ impl Render for StandaloneBuffer {
                 || self.version.is_some()
                 || self.dirty
                 || self.saving.is_some());
-        let image_ready = self.image && !self.loading && self.error.is_none();
         let notice = self
             .error
             .clone()
             .filter(|_| has_text)
             .map(|error| self.render_notice(error, cx));
         let header = self.render_header(ui_scale_percent, cx);
+        let mut image_controls = None;
         let body: AnyElement = if self.loading {
             components::empty_state_message(theme, "Loading…")
                 .size_full()
                 .into_any_element()
-        } else if image_ready {
+        } else if self.image_ready() {
+            let (image, controls) = self.render_image(window, cx);
+            image_controls = controls;
             super::rendered_preview::render(
                 "document_image",
-                super::rendered_preview::PreviewContent::File(
-                    gpui::img(self.identity.0.clone())
-                        .size_full()
-                        .object_fit(gpui::ObjectFit::Contain)
-                        .into_any_element(),
-                ),
+                super::rendered_preview::PreviewContent::File(image),
                 theme,
                 ui_scale_percent,
             )
@@ -1409,6 +1454,18 @@ impl Render for StandaloneBuffer {
             .child(header)
             .when_some(notice, |d, notice| d.child(notice))
             .child(div().flex_1().min_h(px(0.0)).min_w(px(0.0)).child(body))
+            .when_some(image_controls, |d, controls| {
+                d.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .py_1()
+                        .border_t_1()
+                        .border_color(theme.colors.stroke.default)
+                        .child(controls),
+                )
+            })
     }
 }
 

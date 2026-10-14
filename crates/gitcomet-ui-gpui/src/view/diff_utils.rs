@@ -163,8 +163,6 @@ pub(super) fn image_format_for_path(path: &std::path::Path) -> Option<gpui::Imag
 
 const SVG_PREVIEW_MIN_RASTER_WIDTH_PX: f32 = 1024.0;
 const SVG_PREVIEW_MAX_RASTER_EDGE_PX: f32 = 4096.0;
-static SVG_PREVIEW_USVG_OPTIONS: std::sync::LazyLock<resvg::usvg::Options<'static>> =
-    std::sync::LazyLock::new(resvg::usvg::Options::default);
 
 pub(in crate::view) fn fill_svg_viewport_white(pixmap: &mut resvg::tiny_skia::Pixmap) {
     pixmap.fill(resvg::tiny_skia::Color::WHITE);
@@ -175,7 +173,7 @@ pub(in crate::view) fn rasterize_svg_png(
     target_width_px: f32,
     max_edge_px: f32,
 ) -> Option<Vec<u8>> {
-    let tree = resvg::usvg::Tree::from_data(svg_bytes, &SVG_PREVIEW_USVG_OPTIONS).ok()?;
+    let tree = super::image_preview::svg::parse(svg_bytes).ok()?;
     let svg_size = tree.size();
     let svg_width = svg_size.width();
     let svg_height = svg_size.height();

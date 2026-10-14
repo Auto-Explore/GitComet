@@ -20,6 +20,7 @@ impl MainPaneView {
         repo_id: RepoId,
         path: std::path::PathBuf,
         file: &gitcomet_state::model::ConflictFile,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
@@ -220,10 +221,18 @@ impl MainPaneView {
                 .image(ThreeWayColumn::Theirs)
                 .clone();
 
-            let image_cell = |id: &'static str,
-                              label: &'static str,
-                              image: Loadable<Option<ConflictPreviewImage>>,
-                              has_source: bool| {
+            let group = self.prepare_conflict_image_preview(window, cx);
+            let sources = self
+                .conflict_resolver
+                .image_preview
+                .sources
+                .each_ref()
+                .map(Option::is_some);
+            let mut image_cell = |side: usize,
+                                  id: &'static str,
+                                  label: &'static str,
+                                  image: Loadable<Option<ConflictPreviewImage>>,
+                                  has_source: bool| {
                 div()
                     .id(id)
                     .flex_1()
@@ -255,40 +264,46 @@ impl MainPaneView {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(match image {
-                                Loadable::Ready(Some(ConflictPreviewImage::Encoded(image))) => {
-                                    gpui::img(image)
-                                        .w_full()
-                                        .h_full()
-                                        .object_fit(gpui::ObjectFit::Contain)
-                                        .into_any_element()
+                            .child(if sources[side] {
+                                self.image_preview_viewport(group.clone(), side, cx)
+                            } else {
+                                match image {
+                                    Loadable::Ready(Some(ConflictPreviewImage::Encoded(image))) => {
+                                        gpui::img(image)
+                                            .w_full()
+                                            .h_full()
+                                            .object_fit(gpui::ObjectFit::Contain)
+                                            .into_any_element()
+                                    }
+                                    Loadable::Ready(Some(ConflictPreviewImage::Rendered(
+                                        image,
+                                    ))) => {
+                                        preview_render_image_element(image, 0, clamp_preview_size)
+                                            .w_full()
+                                            .h_full()
+                                            .into_any_element()
+                                    }
+                                    Loadable::NotLoaded | Loadable::Loading if has_source => div()
+                                        .text_size(theme.ui_text(12.0))
+                                        .text_color(theme.colors.foreground.secondary)
+                                        .child("Processing image...")
+                                        .into_any_element(),
+                                    Loadable::Error(error) => div()
+                                        .text_size(theme.ui_text(12.0))
+                                        .text_color(theme.colors.foreground.secondary)
+                                        .child(error)
+                                        .into_any_element(),
+                                    Loadable::Ready(None) if has_source => div()
+                                        .text_size(theme.ui_text(12.0))
+                                        .text_color(theme.colors.foreground.secondary)
+                                        .child("Preview unavailable.")
+                                        .into_any_element(),
+                                    _ => div()
+                                        .text_size(theme.ui_text(12.0))
+                                        .text_color(theme.colors.foreground.secondary)
+                                        .child("No image")
+                                        .into_any_element(),
                                 }
-                                Loadable::Ready(Some(ConflictPreviewImage::Rendered(image))) => {
-                                    preview_render_image_element(image, 0, clamp_preview_size)
-                                        .w_full()
-                                        .h_full()
-                                        .into_any_element()
-                                }
-                                Loadable::NotLoaded | Loadable::Loading if has_source => div()
-                                    .text_size(theme.ui_text(12.0))
-                                    .text_color(theme.colors.foreground.secondary)
-                                    .child("Processing image...")
-                                    .into_any_element(),
-                                Loadable::Error(error) => div()
-                                    .text_size(theme.ui_text(12.0))
-                                    .text_color(theme.colors.foreground.secondary)
-                                    .child(error)
-                                    .into_any_element(),
-                                Loadable::Ready(None) if has_source => div()
-                                    .text_size(theme.ui_text(12.0))
-                                    .text_color(theme.colors.foreground.secondary)
-                                    .child("Preview unavailable.")
-                                    .into_any_element(),
-                                _ => div()
-                                    .text_size(theme.ui_text(12.0))
-                                    .text_color(theme.colors.foreground.secondary)
-                                    .child("No image")
-                                    .into_any_element(),
                             }),
                     )
             };
@@ -311,18 +326,21 @@ impl MainPaneView {
                         .flex()
                         .gap_2()
                         .child(image_cell(
+                            0,
                             "binary_conflict_preview_base",
                             "Base (A)",
                             base_image,
                             has_base,
                         ))
                         .child(image_cell(
+                            1,
                             "binary_conflict_preview_ours",
                             "Ours (B)",
                             ours_image,
                             has_ours,
                         ))
                         .child(image_cell(
+                            2,
                             "binary_conflict_preview_theirs",
                             "Theirs (C)",
                             theirs_image,

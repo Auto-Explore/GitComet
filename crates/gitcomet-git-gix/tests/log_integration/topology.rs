@@ -80,7 +80,7 @@ fn indexed_history_compact_order_matches_gix_with_skew_ties_and_redundant_tips()
             }
             stream.push('\n');
         }
-        let mut command = Command::new("git");
+        let mut command = gitcomet_core::test_support::git_fixture::git_command();
         test_git_env::apply(&mut command);
         let mut child = command
             .arg("-C")

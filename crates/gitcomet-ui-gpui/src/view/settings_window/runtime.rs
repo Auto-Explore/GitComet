@@ -410,7 +410,7 @@ fn signing_tool_info(
     match &tool.availability {
         SigningToolAvailability::NotChecked => SigningToolInfo {
             status: SigningToolStatus::NotChecked, version_display: "Not checked".into(),
-            detail: Some("Enable commit signature verification in History settings to check signing tools.".into()),
+            detail: Some("Enable \"Verify commit signatures\" in Settings > Git log to check signing tools.".into()),
         },
         SigningToolAvailability::Available { version } => SigningToolInfo {
             status: SigningToolStatus::Found,

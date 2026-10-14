@@ -56,7 +56,7 @@ where
 }
 
 fn git_config_get(repo_dir: &Path, key: &str) -> Option<String> {
-    let output = no_window_command("git")
+    let output = gitcomet_core::test_support::git_fixture::git_command()
         .args(["-C"])
         .arg(repo_dir)
         .args(["config", "--get", key])
@@ -70,7 +70,7 @@ fn git_config_get(repo_dir: &Path, key: &str) -> Option<String> {
 }
 
 fn git_config_get_local(repo_dir: &Path, key: &str) -> Option<String> {
-    let output = no_window_command("git")
+    let output = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(repo_dir)
         .args(["config", "--local", "--get", key])
@@ -84,7 +84,7 @@ fn git_config_get_local(repo_dir: &Path, key: &str) -> Option<String> {
 }
 
 fn git_config_set_local(repo_dir: &Path, key: &str, value: &str) {
-    let output = no_window_command("git")
+    let output = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(repo_dir)
         .args(["config", "--local", key, value])
@@ -1500,7 +1500,7 @@ fn setup_dry_run_local_uses_local_scope() {
 fn setup_dry_run_commands_execute_verbatim_in_shell() {
     let dir = tempfile::tempdir().unwrap();
 
-    let init = no_window_command("git")
+    let init = gitcomet_core::test_support::git_fixture::git_command()
         .args(["init", dir.path().to_str().unwrap()])
         .output()
         .unwrap();
@@ -1595,7 +1595,7 @@ fn setup_local_writes_config_to_repo() {
     let dir = tempfile::tempdir().unwrap();
 
     // Initialize a git repo.
-    let init = no_window_command("git")
+    let init = gitcomet_core::test_support::git_fixture::git_command()
         .args(["init", dir.path().to_str().unwrap()])
         .output()
         .unwrap();
@@ -1735,7 +1735,12 @@ fn setup_local_mergetool_tool_help_lists_headless_and_gui_entries() {
     let setup_text = output_text(&setup);
     assert_eq!(setup.status.code(), Some(0), "setup failed\n{setup_text}");
 
-    let tool_help = capture_tool_help(no_window_command("git").arg("-C").arg(repo), "mergetool");
+    let tool_help = capture_tool_help(
+        gitcomet_core::test_support::git_fixture::git_command()
+            .arg("-C")
+            .arg(repo),
+        "mergetool",
+    );
     let text = output_text(&tool_help);
     assert!(
         tool_help.status.success(),
@@ -1770,7 +1775,12 @@ fn setup_local_difftool_tool_help_lists_headless_and_gui_entries() {
     let setup_text = output_text(&setup);
     assert_eq!(setup.status.code(), Some(0), "setup failed\n{setup_text}");
 
-    let tool_help = capture_tool_help(no_window_command("git").arg("-C").arg(repo), "difftool");
+    let tool_help = capture_tool_help(
+        gitcomet_core::test_support::git_fixture::git_command()
+            .arg("-C")
+            .arg(repo),
+        "difftool",
+    );
     let text = output_text(&tool_help);
     assert!(
         tool_help.status.success(),
@@ -2361,7 +2371,7 @@ fn standalone_mergetool_auto_crlf_subchunk_preserves_line_endings() {
 /// Run a git command in a repo; assert success.
 fn setup_e2e_git(repo: &Path, args: &[&str]) {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let output = no_window_command("git")
+    let output = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -2381,7 +2391,7 @@ fn setup_e2e_git(repo: &Path, args: &[&str]) {
 /// Run a git command in a repo; return output (may succeed or fail).
 fn setup_e2e_git_capture(repo: &Path, args: &[&str]) -> Output {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    no_window_command("git")
+    gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -2481,7 +2491,7 @@ fn setup_e2e_git_capture_with_env(
     env: &IsolatedGlobalGitEnv,
 ) -> Output {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let mut command = no_window_command("git");
+    let mut command = gitcomet_core::test_support::git_fixture::git_command();
     env.apply_to_command(&mut command);
     command
         .arg("-C")
@@ -2524,7 +2534,7 @@ fn setup_e2e_commit_with_env(repo: &Path, message: &str, env: &IsolatedGlobalGit
 }
 
 fn git_config_get_global_with_env(env: &IsolatedGlobalGitEnv, key: &str) -> Option<String> {
-    let mut command = no_window_command("git");
+    let mut command = gitcomet_core::test_support::git_fixture::git_command();
     env.apply_to_command(&mut command);
     let output = command
         .args(["config", "--global", "--get", key])
@@ -2556,7 +2566,12 @@ fn setup_local_enables_git_mergetool_end_to_end() {
     assert_eq!(setup.status.code(), Some(0), "setup failed\n{text}");
 
     // 2. Create a merge conflict (both sides modify line 2).
-    setup_e2e_import_base_and_ours(no_window_command("git").arg("-C").arg(repo), "file.txt");
+    setup_e2e_import_base_and_ours(
+        gitcomet_core::test_support::git_fixture::git_command()
+            .arg("-C")
+            .arg(repo),
+        "file.txt",
+    );
     setup_e2e_git(repo, &["checkout", "-B", "main", "ours^"]);
     write_file(&repo.join("file.txt"), "line1\nTHEIRS_CHANGE\nline3\n");
     setup_e2e_commit(repo, "theirs");
@@ -2650,7 +2665,12 @@ fn setup_local_mergetool_handles_spaced_unicode_path_end_to_end() {
     let setup_text = output_text(&setup);
     assert_eq!(setup.status.code(), Some(0), "setup failed\n{setup_text}");
 
-    setup_e2e_import_base_and_ours(no_window_command("git").arg("-C").arg(repo), conflict_path);
+    setup_e2e_import_base_and_ours(
+        gitcomet_core::test_support::git_fixture::git_command()
+            .arg("-C")
+            .arg(repo),
+        conflict_path,
+    );
     setup_e2e_git(repo, &["checkout", "-B", "main", "ours^"]);
     write_file(&repo.join(conflict_path), "line1\nTHEIRS_CHANGE\nline3\n");
     setup_e2e_commit(repo, "theirs");
@@ -2767,7 +2787,7 @@ fn setup_global_enables_git_mergetool_end_to_end_with_isolated_global_config() {
         "setup without --local should not set repo-local merge.tool"
     );
 
-    let mut command = no_window_command("git");
+    let mut command = gitcomet_core::test_support::git_fixture::git_command();
     env.apply_to_command(&mut command);
     setup_e2e_import_base_and_ours(command.arg("-C").arg(&repo), "file.txt");
     setup_e2e_git_with_env(&repo, &["checkout", "-B", "main", "ours^"], &env);
@@ -2878,7 +2898,7 @@ fn setup_global_mergetool_tool_help_lists_headless_and_gui_entries() {
         "expected mergetool.guiDefault=auto in isolated global config"
     );
 
-    let mut command = no_window_command("git");
+    let mut command = gitcomet_core::test_support::git_fixture::git_command();
     env.apply_to_command(&mut command);
     let tool_help = capture_tool_help(command.arg("-C").arg(&repo), "mergetool");
     let text = output_text(&tool_help);
@@ -2929,7 +2949,7 @@ fn setup_global_difftool_tool_help_lists_headless_and_gui_entries() {
         "expected difftool.guiDefault=auto in isolated global config"
     );
 
-    let mut command = no_window_command("git");
+    let mut command = gitcomet_core::test_support::git_fixture::git_command();
     env.apply_to_command(&mut command);
     let tool_help = capture_tool_help(command.arg("-C").arg(&repo), "difftool");
     let text = output_text(&tool_help);

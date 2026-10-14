@@ -323,10 +323,9 @@ mod tests {
     use gitcomet_core::services::CancellationToken;
     use rustc_hash::FxHashSet;
     use std::path::Path;
-    use std::process::Command;
 
     fn run_git(workdir: &Path, args: &[&str]) {
-        let output = Command::new("git")
+        let output = gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(args)

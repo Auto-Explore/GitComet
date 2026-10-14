@@ -2439,18 +2439,24 @@ fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
     repo_state.open = Loadable::Ready(());
     state.repos.push(repo_state);
     state.active_repo = Some(repo_id);
+    let mut repos = FxHashMap::from_iter([(repo_id, repo)]);
+    let effects = reduce(
+        &mut repos,
+        &AtomicU64::new(2),
+        &mut state,
+        Msg::ReloadRepo { repo_id },
+    );
     let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
-    let repos = FxHashMap::from_iter([(repo_id, repo)]);
-    let foreground = TaskExecutor::new(1);
-    let scans: std::sync::LazyLock<TaskExecutor> =
+    let mut foreground = TaskExecutor::new(1);
+    let mut scans: std::sync::LazyLock<TaskExecutor> =
         std::sync::LazyLock::new(|| TaskExecutor::new(1));
-    let other = TaskExecutor::new(1);
+    let mut other = TaskExecutor::new(1);
     let find: std::sync::LazyLock<TaskExecutor> = std::sync::LazyLock::new(|| TaskExecutor::new(1));
     let (started_tx, started_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     scans.spawn(move || {
         started_tx.send(()).unwrap();
-        let _ = release_rx.recv_timeout(Duration::from_secs(5));
+        let _ = release_rx.recv_timeout(Duration::from_secs(30));
     });
     started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
@@ -2465,15 +2471,14 @@ fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
         signature_executor: &other,
         history_find_executor: &find,
     };
-    for effect in [
-        Effect::LoadWorktreeDirty {
-            repo_id,
-            scope: crate::model::WorktreeDirtyScope::All,
-            workdir,
-            files_for: None,
-        },
-        Effect::LoadHeadBranch { repo_id },
-    ] {
+    for effect in effects.into_iter().filter(|effect| {
+        matches!(
+            effect,
+            Effect::LoadWorktreeDirty { .. }
+                | Effect::LoadWorktrees { .. }
+                | Effect::LoadHeadBranch { .. }
+        )
+    }) {
         crate::store::effects::schedule_effect(
             executors,
             &thread_state,
@@ -2485,8 +2490,19 @@ fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
         );
     }
     let first = recv_effect_message(&rx, Duration::from_secs(3));
+    let listing = recv_effect_message(&rx, Duration::from_secs(3));
     let premature = rx.try_recv();
     release_tx.send(()).unwrap();
+    assert!(
+        matches!(
+            listing,
+            Ok(Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded {
+                result: Ok(_),
+                ..
+            }))
+        ),
+        "reload must load the list while the scan worker is blocked: {listing:?}"
+    );
     assert!(
         matches!(
             first,
@@ -2501,6 +2517,7 @@ fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
         matches!(premature, Err(std::sync::mpsc::TryRecvError::Empty)),
         "scan must stay on its own pool: {premature:?}"
     );
+    // An unchanged full-scan listing is suppressed after the explicit reply.
     assert!(matches!(
         recv_effect_message(&rx, Duration::from_secs(5)),
         Ok(Msg::Internal(
@@ -2538,4 +2555,40 @@ fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
         matches!(cancelled_reply, Err(std::sync::mpsc::TryRecvError::Empty)),
         "a cancelled queued scan cannot publish stale results: {cancelled_reply:?}"
     );
+    // The next epoch must publish again, even if the previous epoch's identical
+    // list was cached. Reload may have cleared the view in the meantime.
+    {
+        let mut state = thread_state.write().unwrap();
+        Arc::make_mut(&mut state).repos[0].load_epoch += 1;
+    }
+    crate::store::effects::schedule_effect(
+        executors,
+        &thread_state,
+        &backend,
+        &repos,
+        &mut tokens,
+        tx,
+        Effect::LoadWorktreeDirty {
+            repo_id,
+            scope: crate::model::WorktreeDirtyScope::All,
+            workdir: repos[&repo_id].spec().workdir.clone(),
+            files_for: None,
+        },
+    );
+    assert!(matches!(
+        recv_effect_message(&rx, Duration::from_secs(5)),
+        Ok(Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded {
+            result: Ok(_),
+            ..
+        }))
+    ));
+    assert!(matches!(
+        recv_effect_message(&rx, Duration::from_secs(5)),
+        Ok(Msg::Internal(
+            crate::msg::InternalMsg::WorktreeDirtyLoaded { result: Ok(_), .. }
+        ))
+    ));
+    foreground.join_workers();
+    scans.join_workers();
+    other.join_workers();
 }

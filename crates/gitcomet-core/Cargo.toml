@@ -40,6 +40,8 @@ thiserror = { workspace = true }
 rustix = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
+# Make the shared fixture helpers available to this crate's integration tests.
+gitcomet-core = { path = ".", features = ["test-support"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 

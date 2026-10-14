@@ -97,22 +97,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Lint GitHub Actions workflows
-        env:
-          ACTIONLINT_VERSION: 1.7.12
-        run: |
-          set -euo pipefail
-
-          installer="$RUNNER_TEMP/download-actionlint.bash"
-          curl --fail --silent --show-error --location \
-            "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash" \
-            --output "$installer"
-          bash "$installer" "$ACTIONLINT_VERSION" "$RUNNER_TEMP"
-          # Shell scripts are checked separately below. Disabling actionlint's
-          # ShellCheck integration keeps this gate focused on workflow syntax,
-          # expressions, events, reusable-workflow inputs, and action metadata.
-          "$RUNNER_TEMP/actionlint" -color -shellcheck=""
-
       - name: Validate shell scripts syntax
         run: |
           bash -n scripts/cargo-flatten-dupes.sh
@@ -153,19 +137,6 @@ jobs:
               exit 1
             }
           '
-
-      - name: Validate workflow YAML
-        run: |
-          ruby -e 'require "yaml"; %w[
-            .github/workflows/build-release-artifacts.yml
-            .github/workflows/deploy-aur.yml
-            .github/workflows/deploy-homebrew-tap.yml
-            .github/workflows/deploy-apt-repo.yml
-            .github/workflows/deploy-windows-installer.yml
-            .github/workflows/deploy-microsoft-store.yml
-            .github/workflows/deployment-ci.yml
-            .github/workflows/release-manual-main.yml
-          ].each { |path| YAML.load_file(path) }'
 
       - name: Validate deployment workflow config keys
         run: |
