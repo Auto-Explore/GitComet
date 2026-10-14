@@ -4,6 +4,7 @@ use crate::model::{
     GitLogTagFetchMode, InlineSubmoduleDiffState, RangeSelection, SidebarDataRequest, SidebarMode,
     ViewNavDir,
 };
+use crate::msg::{ControlEffect, ReferenceEffect};
 use gitcomet_core::domain::{CommitFileChange, FileStatusKind};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -21,8 +22,8 @@ fn has_full_refresh_only_effects(effects: &[Effect], repo_id: RepoId) -> bool {
     effects.iter().any(|effect| {
         matches!(
             effect,
-            Effect::LoadRemotes { repo_id: candidate }
-                | Effect::LoadRemoteBranches { repo_id: candidate }
+            Effect::References(ReferenceEffect::LoadRemotes { repo_id: candidate })
+                | Effect::References(ReferenceEffect::LoadRemoteBranches { repo_id: candidate })
                 if *candidate == repo_id
         )
     })
@@ -60,10 +61,10 @@ fn has_cancel_repo_loads_effect(
     effects.iter().any(|effect| {
         matches!(
             effect,
-            Effect::CancelRepoLoads {
+            Effect::Control(ControlEffect::CancelRepoLoads {
                 repo_id: candidate,
                 load_epoch: candidate_epoch,
-            } if *candidate == repo_id && *candidate_epoch == load_epoch
+            }) if *candidate == repo_id && *candidate_epoch == load_epoch
         )
     })
 }

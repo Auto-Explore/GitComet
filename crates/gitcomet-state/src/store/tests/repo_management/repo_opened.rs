@@ -1,5 +1,6 @@
 use super::*;
 use crate::model::LoadKind;
+use crate::msg::{PersistenceEffect, ReferenceEffect};
 
 #[test]
 fn pr530_observed_open_failures_are_released_without_losing_newer_failures() {
@@ -124,7 +125,7 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
         &effects,
         RepoId(1),
         |effect, repo_id| {
-            matches!(effect, Effect::LoadHeadBranch { repo_id: candidate } if *candidate == repo_id)
+            matches!(effect, Effect::References(ReferenceEffect::LoadHeadBranch { repo_id: candidate }) if *candidate == repo_id)
         }
     ));
     assert!(has_effect_for_repo(
@@ -133,9 +134,9 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
         |effect, repo_id| {
             matches!(
                 effect,
-                Effect::LoadUpstreamDivergence {
+                Effect::References(ReferenceEffect::LoadUpstreamDivergence {
                     repo_id: candidate
-                } if *candidate == repo_id
+                }) if *candidate == repo_id
             )
         }
     ));
@@ -151,22 +152,22 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
         &effects,
         RepoId(1),
         |effect, repo_id| {
-            matches!(effect, Effect::LoadBranches { repo_id: candidate } if *candidate == repo_id)
+            matches!(effect, Effect::References(ReferenceEffect::LoadBranches { repo_id: candidate }) if *candidate == repo_id)
         }
     ));
     assert!(effects.iter().any(|effect| matches!(
         effect,
-        Effect::LoadTags { repo_id } if *repo_id == RepoId(1)
+        Effect::References(ReferenceEffect::LoadTags { repo_id }) if *repo_id == RepoId(1)
     )));
     assert!(effects.iter().any(|effect| matches!(
         effect,
-        Effect::LoadRemoteTags { repo_id } if *repo_id == RepoId(1)
+        Effect::References(ReferenceEffect::LoadRemoteTags { repo_id }) if *repo_id == RepoId(1)
     )));
     assert!(has_effect_for_repo(
         &effects,
         RepoId(1),
         |effect, repo_id| {
-            matches!(effect, Effect::LoadRemotes { repo_id: candidate } if *candidate == repo_id)
+            matches!(effect, Effect::References(ReferenceEffect::LoadRemotes { repo_id: candidate }) if *candidate == repo_id)
         }
     ));
     assert!(has_effect_for_repo(
@@ -175,9 +176,9 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
         |effect, repo_id| {
             matches!(
                 effect,
-                Effect::LoadRemoteBranches {
+                Effect::References(ReferenceEffect::LoadRemoteBranches {
                     repo_id: candidate
-                } if *candidate == repo_id
+                }) if *candidate == repo_id
             )
         }
     ));
@@ -238,11 +239,11 @@ fn repo_opened_ok_auto_loads_tags_when_enabled() {
     assert!(repo_state.submodules.is_loading());
     assert!(effects.iter().any(|effect| matches!(
         effect,
-        Effect::LoadTags { repo_id } if *repo_id == RepoId(1)
+        Effect::References(ReferenceEffect::LoadTags { repo_id }) if *repo_id == RepoId(1)
     )));
     assert!(effects.iter().any(|effect| matches!(
         effect,
-        Effect::LoadRemoteTags { repo_id } if *repo_id == RepoId(1)
+        Effect::References(ReferenceEffect::LoadRemoteTags { repo_id }) if *repo_id == RepoId(1)
     )));
     assert!(effects.iter().any(|effect| matches!(
         effect,
@@ -446,7 +447,7 @@ fn create_branch_collision_opens_prompt_without_recording_a_repo_error() {
     assert!(
         effects
             .iter()
-            .any(|effect| matches!(effect, Effect::LoadBranches { repo_id: id } if *id == repo_id)),
+            .any(|effect| matches!(effect, Effect::References(ReferenceEffect::LoadBranches { repo_id: id }) if *id == repo_id)),
         "expected collision handling to refresh the potentially stale branch snapshot"
     );
 }
@@ -807,13 +808,13 @@ fn repo_action_finished_reissues_inflight_non_status_loads() {
     assert!(
         effects
             .iter()
-            .any(|e| matches!(e, Effect::LoadHeadBranch { repo_id: r } if *r == repo_id)),
+            .any(|e| matches!(e, Effect::References(ReferenceEffect::LoadHeadBranch { repo_id: r }) if *r == repo_id)),
         "head branch should be re-loaded, not stranded in flight"
     );
     assert!(
         effects
             .iter()
-            .any(|e| matches!(e, Effect::LoadBranches { repo_id: r } if *r == repo_id)),
+            .any(|e| matches!(e, Effect::References(ReferenceEffect::LoadBranches { repo_id: r }) if *r == repo_id)),
         "branch list should be re-loaded, not stranded in flight"
     );
     assert!(has_status_refresh_effects(&effects, repo_id));
@@ -1037,7 +1038,7 @@ fn repo_action_finished_invalidates_but_does_not_reissue_views_for_non_active_re
     assert!(
         !effects
             .iter()
-            .any(|e| matches!(e, Effect::LoadBranches { repo_id: r } if *r == background)),
+            .any(|e| matches!(e, Effect::References(ReferenceEffect::LoadBranches { repo_id: r }) if *r == background)),
         "a non-active repo should not eagerly re-load its branch list"
     );
 }
@@ -1254,11 +1255,10 @@ fn repo_opened_err_not_a_repository_allows_opening_another_repo_afterwards() {
             .iter()
             .any(|e| matches!(e, Effect::OpenRepo { repo_id, .. } if *repo_id == RepoId(2)))
     );
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::PersistSession { .. }))
-    );
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::Persistence(PersistenceEffect::PersistSession { .. })
+    )));
 }
 
 #[test]
@@ -1364,7 +1364,7 @@ fn rename_branch_collision_opens_prompt_without_recording_a_repo_error() {
     assert!(
         effects
             .iter()
-            .any(|effect| matches!(effect, Effect::LoadBranches { repo_id: id } if *id == repo_id))
+            .any(|effect| matches!(effect, Effect::References(ReferenceEffect::LoadBranches { repo_id: id }) if *id == repo_id))
     );
 }
 

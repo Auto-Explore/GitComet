@@ -1,4 +1,5 @@
 use super::*;
+use crate::msg::PersistenceEffect;
 
 #[test]
 fn close_repo_removes_and_moves_active() {
@@ -45,11 +46,10 @@ fn close_repo_removes_and_moves_active() {
     assert!(effects.iter().any(
         |effect| matches!(effect, Effect::OpenRepo { repo_id, .. } if *repo_id == RepoId(10))
     ));
-    assert!(
-        effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::PersistSession { .. }))
-    );
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::Persistence(PersistenceEffect::PersistSession { .. })
+    )));
     assert_eq!(state.repos.len(), 1);
     assert_eq!(state.active_repo, Some(RepoId(10)));
 }
@@ -58,7 +58,9 @@ fn recent_repo_effect_workdirs(effects: &[Effect]) -> Vec<PathBuf> {
     effects
         .iter()
         .filter_map(|effect| match effect {
-            Effect::PersistRecentRepo { workdir, .. } => Some(workdir.clone()),
+            Effect::Persistence(PersistenceEffect::PersistRecentRepo { workdir, .. }) => {
+                Some(workdir.clone())
+            }
             _ => None,
         })
         .collect()
@@ -142,11 +144,10 @@ fn moving_repo_out_removes_it_without_recording_a_recent_close() {
         vec![std::env::temp_dir().join("repo1")]
     );
     assert_eq!(state.active_repo, Some(RepoId(1)));
-    assert!(
-        effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::PersistSession { .. }))
-    );
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::Persistence(PersistenceEffect::PersistSession { .. })
+    )));
 }
 
 /// Bulk closes walk the tab strip left to right rather than the `FxHashSet` of
@@ -247,11 +248,10 @@ fn close_repo_selects_right_neighbor_when_closing_first_active_tab() {
     assert!(effects.iter().any(
         |effect| matches!(effect, Effect::OpenRepo { repo_id, .. } if *repo_id == RepoId(21))
     ));
-    assert!(
-        effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::PersistSession { .. }))
-    );
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::Persistence(PersistenceEffect::PersistSession { .. })
+    )));
     assert_eq!(state.repos.len(), 2);
     assert_eq!(state.active_repo, Some(RepoId(21)));
 }
@@ -301,7 +301,10 @@ fn close_repos_ignores_unknown_ids_and_persists_once() {
     assert_eq!(
         effects
             .iter()
-            .filter(|effect| matches!(effect, Effect::PersistSession { .. }))
+            .filter(|effect| matches!(
+                effect,
+                Effect::Persistence(PersistenceEffect::PersistSession { .. })
+            ))
             .count(),
         1
     );
@@ -453,7 +456,10 @@ fn close_repos_closing_all_repos_clears_active_and_persists_once() {
     assert_eq!(
         effects
             .iter()
-            .filter(|effect| matches!(effect, Effect::PersistSession { .. }))
+            .filter(|effect| matches!(
+                effect,
+                Effect::Persistence(PersistenceEffect::PersistSession { .. })
+            ))
             .count(),
         1
     );
@@ -502,7 +508,9 @@ fn reorder_repo_tabs_moves_repo_and_keeps_active() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::PersistSession { .. }]
+        [Effect::Persistence(
+            PersistenceEffect::PersistSession { .. }
+        )]
     ));
     assert_eq!(
         state.repos.iter().map(|r| r.id).collect::<Vec<_>>(),
@@ -522,7 +530,9 @@ fn reorder_repo_tabs_moves_repo_and_keeps_active() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::PersistSession { .. }]
+        [Effect::Persistence(
+            PersistenceEffect::PersistSession { .. }
+        )]
     ));
     assert_eq!(
         state.repos.iter().map(|r| r.id).collect::<Vec<_>>(),

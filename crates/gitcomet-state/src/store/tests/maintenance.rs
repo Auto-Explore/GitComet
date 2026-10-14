@@ -1,5 +1,6 @@
 use super::*;
 use crate::msg::RepoExternalChange;
+use crate::msg::{PersistenceEffect, RepoCommandEffect};
 use gitcomet_core::services::{GitRepository, Result};
 use rustc_hash::FxHashMap;
 use std::sync::atomic::AtomicU64;
@@ -152,7 +153,7 @@ fn opening_the_active_tab_requests_one_maintenance_check_an_hour() {
     assert!(
         effects
             .iter()
-            .any(|effect| matches!(effect, Effect::CheckRepoMaintenance { repo_id: id } if *id == repo_id)),
+            .any(|effect| matches!(effect, Effect::RepoCommand(RepoCommandEffect::CheckRepoMaintenance { repo_id: id }) if *id == repo_id)),
         "{effects:?}"
     );
     assert_eq!(
@@ -205,7 +206,7 @@ fn recommendation_start_and_snooze_cover_every_tab_of_the_repository() {
     assert!(!repo(&state, linked).maintenance.recommended);
     assert!(matches!(
         effects.as_slice(),
-        [Effect::PersistRepoMaintenanceSnooze { common_dir }] if common_dir == Path::new("/work/app/.git")
+        [Effect::Persistence(PersistenceEffect::PersistRepoMaintenanceSnooze { common_dir })] if common_dir == Path::new("/work/app/.git")
     ));
 
     reduce(&mut repos, &id_alloc, &mut state, checked(true));
@@ -215,7 +216,9 @@ fn recommendation_start_and_snooze_cover_every_tab_of_the_repository() {
         &mut state,
         Msg::StartRepoMaintenance { repo_id: main },
     );
-    assert!(matches!(effects.as_slice(), [Effect::RunMaintenance { repo_id }] if *repo_id == main));
+    assert!(
+        matches!(effects.as_slice(), [Effect::RepoCommand(RepoCommandEffect::RunMaintenance { repo_id })] if *repo_id == main)
+    );
     assert!(repo(&state, main).maintenance.running);
     assert!(!repo(&state, linked).maintenance.recommended);
     // One run per repository, whichever tab asks.
@@ -383,7 +386,12 @@ fn recommendations_turned_off_ask_nothing_and_withdraw_cards() {
     let checks = effects
         .iter()
         .chain(&switched)
-        .filter(|effect| matches!(effect, Effect::CheckRepoMaintenance { .. }))
+        .filter(|effect| {
+            matches!(
+                effect,
+                Effect::RepoCommand(RepoCommandEffect::CheckRepoMaintenance { .. })
+            )
+        })
         .count();
     assert_eq!(checks, 0, "open: {effects:?}, switch: {switched:?}");
     assert!(super::reducer::maintenance::request_check(&mut state, opened).is_none());

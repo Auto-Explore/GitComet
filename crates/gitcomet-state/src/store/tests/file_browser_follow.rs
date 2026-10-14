@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::model::{FileBrowserSettings, SidebarMode};
+use crate::msg::ControlEffect;
 use gitcomet_core::domain::{FileEntry, FileEntryKind, FileSource};
 use std::sync::atomic::AtomicU64;
 
@@ -20,11 +21,10 @@ fn opening_a_background_document_preserves_the_active_repository_and_its_loads()
         },
     );
     assert_eq!(state.active_repo, Some(repo_id));
-    assert!(
-        !effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::CancelRepoLoads { .. }))
-    );
+    assert!(!effects.iter().any(|effect| matches!(
+        effect,
+        Effect::Control(ControlEffect::CancelRepoLoads { .. })
+    )));
     assert!(
         effects
             .iter()

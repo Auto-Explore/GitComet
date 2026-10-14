@@ -1,4 +1,5 @@
 use super::*;
+use crate::msg::RepoCommandEffect;
 use gitcomet_core::domain::{
     CommitDetails, CommitFileChange, CommitId, FileConflictKind, FileDiffImage, FileSource,
     FileStatus, FileStatusKind, Submodule, SubmoduleDiffSummary, SubmoduleDiffSummaryMode,
@@ -1730,10 +1731,10 @@ fn stage_hunk_emits_effect() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::StageHunk {
+        [Effect::RepoCommand(RepoCommandEffect::StageHunk {
             repo_id: RepoId(1),
             patch: _
-        }]
+        })]
     ));
 }
 
@@ -1762,10 +1763,10 @@ fn unstage_hunk_emits_effect() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::UnstageHunk {
+        [Effect::RepoCommand(RepoCommandEffect::UnstageHunk {
             repo_id: RepoId(1),
             patch: _
-        }]
+        })]
     ));
 }
 
@@ -2635,11 +2636,11 @@ fn apply_worktree_patch_emits_effect() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::ApplyWorktreePatch {
+        [Effect::RepoCommand(RepoCommandEffect::ApplyWorktreePatch {
             repo_id: RepoId(1),
             reverse: false,
             ..
-        }]
+        })]
     ));
 }
 

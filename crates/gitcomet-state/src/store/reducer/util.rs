@@ -4,6 +4,7 @@ use crate::model::{
     DiagnosticEntry, DiagnosticKind, GitLogSettings, Loadable, RepoId, RepoState,
 };
 use crate::msg::{ConflictAutosolveMode, ConflictAutosolveStats, Effect, RepoCommandKind};
+use crate::msg::{ReferenceEffect, StatusEffect};
 #[cfg(test)]
 use gitcomet_core::domain::Upstream;
 use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, FileStatusKind, SignatureFormats};
@@ -770,9 +771,13 @@ pub(super) fn append_requested_status_refresh_effects(
     let load_staged = repo_state.loads_in_flight.request(LoadKind::StagedStatus);
 
     match (load_worktree, load_staged) {
-        (true, true) => effects.push_effect(Effect::LoadStatus { repo_id }),
-        (true, false) => effects.push_effect(Effect::LoadWorktreeStatus { repo_id }),
-        (false, true) => effects.push_effect(Effect::LoadStagedStatus { repo_id }),
+        (true, true) => effects.push_effect(Effect::Status(StatusEffect::LoadStatus { repo_id })),
+        (true, false) => {
+            effects.push_effect(Effect::Status(StatusEffect::LoadWorktreeStatus { repo_id }))
+        }
+        (false, true) => {
+            effects.push_effect(Effect::Status(StatusEffect::LoadStagedStatus { repo_id }))
+        }
         (false, false) => {}
     }
     repo_state.loads_in_flight.invalidate_line_stats();
@@ -802,7 +807,7 @@ pub(super) fn append_ready_line_stats_effect(
             unstaged.len()
         );
         let large_files = repo_state.large_file_support_active();
-        effects.push_effect(Effect::LoadUncommittedLineStats {
+        effects.push_effect(Effect::Status(StatusEffect::LoadUncommittedLineStats {
             repo_id,
             generation,
             status: std::sync::Arc::new(gitcomet_core::domain::RepoStatus {
@@ -810,7 +815,7 @@ pub(super) fn append_ready_line_stats_effect(
                 unstaged: std::sync::Arc::clone(unstaged),
             }),
             large_files,
-        });
+        }));
     }
 }
 
@@ -907,10 +912,14 @@ pub(super) fn append_refresh_primary_effects(
         .request_primary_refresh_batch(log_request.clone())
     {
         repo_state.set_log_loading_more(false);
-        effects.push_effect(Effect::LoadHeadBranch { repo_id });
-        effects.push_effect(Effect::LoadUpstreamDivergence { repo_id });
+        effects.push_effect(Effect::References(ReferenceEffect::LoadHeadBranch {
+            repo_id,
+        }));
+        effects.push_effect(Effect::References(
+            ReferenceEffect::LoadUpstreamDivergence { repo_id },
+        ));
         push_rebase_and_merge_refresh_effect(effects, repo_id);
-        effects.push_effect(Effect::LoadStatus { repo_id });
+        effects.push_effect(Effect::Status(StatusEffect::LoadStatus { repo_id }));
         // This batch short-circuits the status-refresh funnel.
         repo_state.loads_in_flight.invalidate_line_stats();
         effects.push_effect(Effect::LoadLog {
@@ -925,13 +934,17 @@ pub(super) fn append_refresh_primary_effects(
     }
 
     if repo_state.loads_in_flight.request(LoadKind::HeadBranch) {
-        effects.push_effect(Effect::LoadHeadBranch { repo_id });
+        effects.push_effect(Effect::References(ReferenceEffect::LoadHeadBranch {
+            repo_id,
+        }));
     }
     if repo_state
         .loads_in_flight
         .request(LoadKind::UpstreamDivergence)
     {
-        effects.push_effect(Effect::LoadUpstreamDivergence { repo_id });
+        effects.push_effect(Effect::References(
+            ReferenceEffect::LoadUpstreamDivergence { repo_id },
+        ));
     }
     append_requested_rebase_and_merge_refresh_effects(repo_state, effects);
     append_requested_status_refresh_effects(repo_state, effects);
@@ -970,13 +983,17 @@ pub(super) fn append_refresh_full_effects(
     // Prioritize UI-critical loads (status + log) early. The executor is a FIFO queue, so this
     // ordering can materially impact perceived responsiveness when switching repositories.
     if repo_state.loads_in_flight.request(LoadKind::HeadBranch) {
-        effects.push_effect(Effect::LoadHeadBranch { repo_id });
+        effects.push_effect(Effect::References(ReferenceEffect::LoadHeadBranch {
+            repo_id,
+        }));
     }
     if repo_state
         .loads_in_flight
         .request(LoadKind::UpstreamDivergence)
     {
-        effects.push_effect(Effect::LoadUpstreamDivergence { repo_id });
+        effects.push_effect(Effect::References(
+            ReferenceEffect::LoadUpstreamDivergence { repo_id },
+        ));
     }
     append_requested_status_refresh_effects(repo_state, effects);
     let log_request = refresh_log_request(repo_state);
@@ -985,13 +1002,17 @@ pub(super) fn append_refresh_full_effects(
         effects.push_effect(effect);
     }
     if repo_state.loads_in_flight.request(LoadKind::Branches) {
-        effects.push_effect(Effect::LoadBranches { repo_id });
+        effects.push_effect(Effect::References(ReferenceEffect::LoadBranches {
+            repo_id,
+        }));
     }
     if repo_state.loads_in_flight.request(LoadKind::Remotes) {
-        effects.push_effect(Effect::LoadRemotes { repo_id });
+        effects.push_effect(Effect::References(ReferenceEffect::LoadRemotes { repo_id }));
     }
     if repo_state.loads_in_flight.request(LoadKind::RemoteBranches) {
-        effects.push_effect(Effect::LoadRemoteBranches { repo_id });
+        effects.push_effect(Effect::References(ReferenceEffect::LoadRemoteBranches {
+            repo_id,
+        }));
     }
     append_requested_rebase_and_merge_refresh_effects(repo_state, effects);
 }
@@ -1010,7 +1031,7 @@ pub(super) fn append_auto_background_metadata_effects(
         if matches!(repo_state.tags, Loadable::NotLoaded | Loadable::Error(_)) {
             repo_state.set_tags(Loadable::Loading);
             if repo_state.loads_in_flight.request(LoadKind::Tags) {
-                effects.push_effect(Effect::LoadTags { repo_id });
+                effects.push_effect(Effect::References(ReferenceEffect::LoadTags { repo_id }));
             }
         }
 
@@ -1020,7 +1041,9 @@ pub(super) fn append_auto_background_metadata_effects(
         ) {
             repo_state.set_remote_tags(Loadable::Loading);
             if repo_state.loads_in_flight.request(LoadKind::RemoteTags) {
-                effects.push_effect(Effect::LoadRemoteTags { repo_id });
+                effects.push_effect(Effect::References(ReferenceEffect::LoadRemoteTags {
+                    repo_id,
+                }));
             }
         }
     }
@@ -2067,17 +2090,21 @@ mod tests {
         let primary_effects = refresh_primary_effects(&mut primary);
         assert_eq!(primary_effects.len(), 5);
         assert!(!primary.log_loading_more);
-        assert!(matches!(primary_effects[0], Effect::LoadHeadBranch { .. }));
+        assert!(matches!(
+            primary_effects[0],
+            Effect::References(ReferenceEffect::LoadHeadBranch { .. })
+        ));
         assert!(
             primary_effects
                 .iter()
-                .any(|effect| matches!(effect, Effect::LoadStatus { .. }))
+                .any(|effect| matches!(effect, Effect::Status(StatusEffect::LoadStatus { .. })))
         );
         // Counts wait for the status snapshot, including on the batch path.
         assert!(
-            !primary_effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::LoadUncommittedLineStats { .. })),
+            !primary_effects.iter().any(|effect| matches!(
+                effect,
+                Effect::Status(StatusEffect::LoadUncommittedLineStats { .. })
+            )),
             "counts must not launch a second worktree walk"
         );
         assert!(matches!(
@@ -2091,7 +2118,8 @@ mod tests {
             !primary_effects.iter().any(|effect| {
                 matches!(
                     effect,
-                    Effect::LoadWorktreeStatus { .. } | Effect::LoadStagedStatus { .. }
+                    Effect::Status(StatusEffect::LoadWorktreeStatus { .. })
+                        | Effect::Status(StatusEffect::LoadStagedStatus { .. })
                 )
             }),
             "primary refresh should coalesce staged and worktree status into LoadStatus"
@@ -2110,32 +2138,34 @@ mod tests {
         assert!(
             full_effects
                 .iter()
-                .any(|effect| matches!(effect, Effect::LoadStatus { .. }))
+                .any(|effect| matches!(effect, Effect::Status(StatusEffect::LoadStatus { .. })))
         );
-        assert!(
-            !full_effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::LoadUncommittedLineStats { .. }))
-        );
+        assert!(!full_effects.iter().any(|effect| matches!(
+            effect,
+            Effect::Status(StatusEffect::LoadUncommittedLineStats { .. })
+        )));
         assert!(
             !full_effects.iter().any(|effect| {
                 matches!(
                     effect,
-                    Effect::LoadWorktreeStatus { .. } | Effect::LoadStagedStatus { .. }
+                    Effect::Status(StatusEffect::LoadWorktreeStatus { .. })
+                        | Effect::Status(StatusEffect::LoadStagedStatus { .. })
                 )
             }),
             "full refresh should coalesce staged and worktree status into LoadStatus"
         );
         assert!(
-            !full_effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::LoadTags { .. })),
+            !full_effects.iter().any(|effect| matches!(
+                effect,
+                Effect::References(ReferenceEffect::LoadTags { .. })
+            )),
             "tags should lazy-load by default instead of refresh_full_effects"
         );
         assert!(
-            !full_effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::LoadRemoteTags { .. })),
+            !full_effects.iter().any(|effect| matches!(
+                effect,
+                Effect::References(ReferenceEffect::LoadRemoteTags { .. })
+            )),
             "remote tags should lazy-load from tag-specific UI instead of refresh_full_effects"
         );
         assert!(
@@ -2159,15 +2189,17 @@ mod tests {
             &mut metadata_effects,
         );
         assert!(
-            metadata_effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::LoadTags { .. })),
+            metadata_effects.iter().any(|effect| matches!(
+                effect,
+                Effect::References(ReferenceEffect::LoadTags { .. })
+            )),
             "auto-idle metadata should request LoadTags"
         );
         assert!(
-            metadata_effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::LoadRemoteTags { .. })),
+            metadata_effects.iter().any(|effect| matches!(
+                effect,
+                Effect::References(ReferenceEffect::LoadRemoteTags { .. })
+            )),
             "auto-idle metadata should request LoadRemoteTags"
         );
         assert!(

@@ -1,4 +1,5 @@
 use super::*;
+use crate::msg::PersistenceEffect;
 
 #[test]
 fn pr530_restore_preserves_repositories_opened_while_waiting_for_git() {
@@ -124,7 +125,10 @@ fn restore_session_opens_only_active_repo_and_selects_active_repo() {
     assert_eq!(
         effects
             .iter()
-            .filter(|e| matches!(e, Effect::PersistSession { .. }))
+            .filter(|e| matches!(
+                e,
+                Effect::Persistence(PersistenceEffect::PersistSession { .. })
+            ))
             .count(),
         1
     );
@@ -397,7 +401,10 @@ fn restore_session_resolves_history_mode_precedence_per_repository() {
     let updates = effects
         .iter()
         .find_map(|effect| match effect {
-            Effect::PersistRepoHistoryModesBatch { updates, .. } => Some(updates),
+            Effect::Persistence(PersistenceEffect::PersistRepoHistoryModesBatch {
+                updates,
+                ..
+            }) => Some(updates),
             _ => None,
         })
         .expect("expected async history mode batch persist effect");

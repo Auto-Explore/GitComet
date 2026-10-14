@@ -16,6 +16,7 @@ use crate::model::{
     RepoId, SidebarMode,
 };
 use crate::msg::{Effect, RepoActionKind, RepoExternalChange, RepoPathList};
+use crate::msg::{PersistenceEffect, ReferenceEffect, StatusEffect};
 use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogPage, LogScope};
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{GitRepository, InteractiveRebaseEntry, SequencerState};
@@ -227,10 +228,14 @@ pub(super) fn repo_externally_changed(
         repo_state.set_recent_commit_messages(Loadable::NotLoaded);
         let mut effects = refresh_primary_effects(repo_state);
         if repo_state.loads_in_flight.request(LoadKind::Branches) {
-            effects.push(Effect::LoadBranches { repo_id });
+            effects.push(Effect::References(ReferenceEffect::LoadBranches {
+                repo_id,
+            }));
         }
         if repo_state.loads_in_flight.request(LoadKind::RemoteBranches) {
-            effects.push(Effect::LoadRemoteBranches { repo_id });
+            effects.push(Effect::References(ReferenceEffect::LoadRemoteBranches {
+                repo_id,
+            }));
         }
         if let Some(effect) = super::effects::request_worktree_dirty_effect(repo_state) {
             effects.push(effect);
@@ -248,7 +253,7 @@ pub(super) fn repo_externally_changed(
         } else if change.worktree {
             repo_state.loads_in_flight.invalidate_line_stats();
             if repo_state.loads_in_flight.request(LoadKind::WorktreeStatus) {
-                effects.push(Effect::LoadWorktreeStatus { repo_id });
+                effects.push(Effect::Status(StatusEffect::LoadWorktreeStatus { repo_id }));
             }
         }
         effects
@@ -272,7 +277,7 @@ pub(super) fn repo_externally_changed(
     // reload lands: every activation sets the flag, and a reset showed no tags
     // in history for that window and rebuilt its decorations twice.
     if change.tags && repo_state.loads_in_flight.request(LoadKind::Tags) {
-        effects.push(Effect::LoadTags { repo_id });
+        effects.push(Effect::References(ReferenceEffect::LoadTags { repo_id }));
     }
 
     let should_reload_diff = repo_state
@@ -399,10 +404,12 @@ pub(super) fn set_history_scope(
         // Another tab's choice may still be queued. Every explicit shared
         // selection must reach the queue, even when this tab needs no reload.
         return shared_key
-            .map(|key| Effect::UpdateRepositoryPreferences {
-                repo_id,
-                key,
-                update: crate::model::RepositoryPreferenceUpdate::HistoryMode(scope),
+            .map(|key| {
+                Effect::Persistence(PersistenceEffect::UpdateRepositoryPreferences {
+                    repo_id,
+                    key,
+                    update: crate::model::RepositoryPreferenceUpdate::HistoryMode(scope),
+                })
             })
             .into_iter()
             .collect();
@@ -410,17 +417,17 @@ pub(super) fn set_history_scope(
     state.repos[repo_ix].set_log_scope(scope);
 
     restart_history_load(state, repo_ix, |workdir| match shared_key {
-        Some(key) => Effect::UpdateRepositoryPreferences {
+        Some(key) => Effect::Persistence(PersistenceEffect::UpdateRepositoryPreferences {
             repo_id,
             key,
             update: crate::model::RepositoryPreferenceUpdate::HistoryMode(scope),
-        },
-        None => Effect::PersistRepoHistoryMode {
+        }),
+        None => Effect::Persistence(PersistenceEffect::PersistRepoHistoryMode {
             repo_id: Some(repo_id),
             workdir,
             mode: scope,
             action: "updating history mode",
-        },
+        }),
     })
 }
 
@@ -438,12 +445,12 @@ pub(super) fn set_history_author_filter(
     state.repos[repo_ix].set_history_author_filter(author.clone());
 
     restart_history_load(state, repo_ix, |workdir| {
-        Effect::PersistRepoHistoryAuthorFilter {
+        Effect::Persistence(PersistenceEffect::PersistRepoHistoryAuthorFilter {
             repo_id: Some(repo_id),
             workdir,
             author,
             action: "updating history author filter",
-        }
+        })
     })
 }
 
@@ -952,10 +959,14 @@ fn finish_repo_action(
         // Re-issue branch lists when one was in flight before (refresh_primary_effects does not
         // cover them); request() returns true now that the flag was cleared.
         if repo_state.loads_in_flight.request(LoadKind::Branches) {
-            effects.push(Effect::LoadBranches { repo_id });
+            effects.push(Effect::References(ReferenceEffect::LoadBranches {
+                repo_id,
+            }));
         }
         if repo_state.loads_in_flight.request(LoadKind::RemoteBranches) {
-            effects.push(Effect::LoadRemoteBranches { repo_id });
+            effects.push(Effect::References(ReferenceEffect::LoadRemoteBranches {
+                repo_id,
+            }));
         }
 
         // Re-issue sidebar data loads (worktrees, submodules, stashes) that were

@@ -8,6 +8,7 @@ use crate::model::{
     RangeSelection, RepoId, RepoState, SidebarDataRequest, SidebarMode, WorktreeDirtyScope,
 };
 use crate::msg::{CommitSelectMode, ConflictAutosolveMode, Effect, WorktreeListRead};
+use crate::msg::{ReferenceEffect, RepoCommandEffect, StatusEffect};
 use gitcomet_core::conflict_session::{
     ConflictPayload, ConflictRegionResolution, ConflictRegionSourceRanges,
     ConflictResolverStrategy, ConflictSession, reconstruct_conflict_marker_sides,
@@ -840,7 +841,9 @@ pub(super) fn ref_metadata_loaded(
         };
         repo_state.set_ref_metadata(ref_metadata);
         if repo_state.loads_in_flight.finish(LoadKind::RefMetadata) {
-            effects.push(Effect::LoadRefMetadata { repo_id });
+            effects.push(Effect::References(ReferenceEffect::LoadRefMetadata {
+                repo_id,
+            }));
         }
     }
     effects
@@ -1480,7 +1483,9 @@ pub(super) fn refresh_branches(state: &mut AppState, repo_id: RepoId) -> Vec<Eff
     };
 
     if repo_state.loads_in_flight.request(LoadKind::Branches) {
-        vec![Effect::LoadBranches { repo_id }]
+        vec![Effect::References(ReferenceEffect::LoadBranches {
+            repo_id,
+        })]
     } else {
         Vec::new()
     }
@@ -1495,7 +1500,7 @@ pub(super) fn load_tags(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
     }
     repo_state.set_tags(Loadable::Loading);
     if repo_state.loads_in_flight.request(LoadKind::Tags) {
-        vec![Effect::LoadTags { repo_id }]
+        vec![Effect::References(ReferenceEffect::LoadTags { repo_id })]
     } else {
         Vec::new()
     }
@@ -1510,7 +1515,9 @@ pub(super) fn load_remote_tags(state: &mut AppState, repo_id: RepoId) -> Vec<Eff
     }
     repo_state.set_remote_tags(Loadable::Loading);
     if repo_state.loads_in_flight.request(LoadKind::RemoteTags) {
-        vec![Effect::LoadRemoteTags { repo_id }]
+        vec![Effect::References(ReferenceEffect::LoadRemoteTags {
+            repo_id,
+        })]
     } else {
         Vec::new()
     }
@@ -1809,7 +1816,9 @@ pub(super) fn load_ref_metadata(state: &mut AppState, repo_id: RepoId) -> Vec<Ef
     }
     repo_state.set_ref_metadata(Loadable::Loading);
     if repo_state.loads_in_flight.request(LoadKind::RefMetadata) {
-        vec![Effect::LoadRefMetadata { repo_id }]
+        vec![Effect::References(ReferenceEffect::LoadRefMetadata {
+            repo_id,
+        })]
     } else {
         Vec::new()
     }
@@ -2397,7 +2406,9 @@ pub(super) fn branches_loaded(
         };
         repo_state.set_branches(branches);
         if repo_state.loads_in_flight.finish(LoadKind::Branches) {
-            effects.push(Effect::LoadBranches { repo_id });
+            effects.push(Effect::References(ReferenceEffect::LoadBranches {
+                repo_id,
+            }));
         }
     }
     effects
@@ -2419,7 +2430,7 @@ pub(super) fn remotes_loaded(
         };
         repo_state.set_remotes(remotes);
         if repo_state.loads_in_flight.finish(LoadKind::Remotes) {
-            effects.push(Effect::LoadRemotes { repo_id });
+            effects.push(Effect::References(ReferenceEffect::LoadRemotes { repo_id }));
         }
     }
     effects
@@ -2442,7 +2453,9 @@ pub(super) fn remote_branches_loaded(
         // replace it atomically instead of flashing an intermediate list.
         if remote_mutation_in_flight || refresh_pending {
             if refresh_pending {
-                effects.push(Effect::LoadRemoteBranches { repo_id });
+                effects.push(Effect::References(ReferenceEffect::LoadRemoteBranches {
+                    repo_id,
+                }));
             }
             return effects;
         }
@@ -2744,8 +2757,8 @@ impl StatusLane {
         if repo_state.loads_in_flight.finish(kind) {
             let repo_id = repo_state.id;
             effects.push(match self {
-                Self::Worktree => Effect::LoadWorktreeStatus { repo_id },
-                Self::Staged => Effect::LoadStagedStatus { repo_id },
+                Self::Worktree => Effect::Status(StatusEffect::LoadWorktreeStatus { repo_id }),
+                Self::Staged => Effect::Status(StatusEffect::LoadStagedStatus { repo_id }),
             });
         }
         super::util::append_ready_line_stats_effect(repo_state, effects);
@@ -2813,7 +2826,9 @@ pub(super) fn head_branch_loaded(
         );
         repo_state.set_head_branch(head_branch);
         if repo_state.loads_in_flight.finish(LoadKind::HeadBranch) {
-            effects.push(Effect::LoadHeadBranch { repo_id });
+            effects.push(Effect::References(ReferenceEffect::LoadHeadBranch {
+                repo_id,
+            }));
         }
         if moved && let Some(effect) = request_large_file_support_effect(repo_state) {
             effects.push(effect);
@@ -2841,7 +2856,9 @@ pub(super) fn upstream_divergence_loaded(
             .loads_in_flight
             .finish(LoadKind::UpstreamDivergence)
         {
-            effects.push(Effect::LoadUpstreamDivergence { repo_id });
+            effects.push(Effect::References(
+                ReferenceEffect::LoadUpstreamDivergence { repo_id },
+            ));
         }
     }
     effects
@@ -2869,7 +2886,7 @@ pub(super) fn tags_loaded(
         };
         repo_state.set_tags(tags);
         if repo_state.loads_in_flight.finish(LoadKind::Tags) {
-            effects.push(Effect::LoadTags { repo_id });
+            effects.push(Effect::References(ReferenceEffect::LoadTags { repo_id }));
         }
     }
     effects
@@ -2897,7 +2914,9 @@ pub(super) fn remote_tags_loaded(
         };
         repo_state.set_remote_tags(remote_tags);
         if repo_state.loads_in_flight.finish(LoadKind::RemoteTags) {
-            effects.push(Effect::LoadRemoteTags { repo_id });
+            effects.push(Effect::References(ReferenceEffect::LoadRemoteTags {
+                repo_id,
+            }));
         }
     }
     effects
@@ -3086,13 +3105,13 @@ pub(super) fn squash_rebase_setup_loaded(
     }
 
     super::begin_local_action(state, repo_id);
-    vec![Effect::InteractiveRebase {
+    vec![Effect::RepoCommand(RepoCommandEffect::InteractiveRebase {
         repo_id,
         base,
         entries: todo,
         // Automated squash rebase — no editor window; reports as "Rebase".
         interactive: false,
-    }]
+    })]
 }
 
 /// Start revealing a commit referenced from elsewhere.

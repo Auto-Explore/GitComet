@@ -11,6 +11,7 @@ use crate::model::{
     submodule_inline_diff_entries,
 };
 use crate::msg::Effect;
+use crate::msg::RepoCommandEffect;
 use gitcomet_core::domain::{
     Diff, DiffArea, DiffPreviewTextFile, DiffPreviewTextSide, DiffTarget, FileDiffImage,
     FileDiffText, SubmoduleDiffSummary,
@@ -885,11 +886,17 @@ pub(super) fn close_inline_submodule_diff(state: &mut AppState, repo_id: RepoId)
 }
 
 pub(super) fn stage_hunk(repo_id: RepoId, patch: crate::msg::ContentBytes) -> Vec<Effect> {
-    vec![Effect::StageHunk { repo_id, patch }]
+    vec![Effect::RepoCommand(RepoCommandEffect::StageHunk {
+        repo_id,
+        patch,
+    })]
 }
 
 pub(super) fn unstage_hunk(repo_id: RepoId, patch: crate::msg::ContentBytes) -> Vec<Effect> {
-    vec![Effect::UnstageHunk { repo_id, patch }]
+    vec![Effect::RepoCommand(RepoCommandEffect::UnstageHunk {
+        repo_id,
+        patch,
+    })]
 }
 
 pub(super) fn apply_worktree_patch(
@@ -897,11 +904,11 @@ pub(super) fn apply_worktree_patch(
     patch: crate::msg::ContentBytes,
     reverse: bool,
 ) -> Vec<Effect> {
-    vec![Effect::ApplyWorktreePatch {
+    vec![Effect::RepoCommand(RepoCommandEffect::ApplyWorktreePatch {
         repo_id,
         patch,
         reverse,
-    }]
+    })]
 }
 
 pub(super) fn diff_loaded(

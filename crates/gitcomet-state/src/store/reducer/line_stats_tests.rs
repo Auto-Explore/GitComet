@@ -2,6 +2,7 @@ use super::*;
 use crate::model::LoadKind;
 use crate::model::RepoState;
 use crate::msg::RepoCommandKind;
+use crate::msg::StatusEffect;
 use gitcomet_core::domain::{RepoSpec, RepoStatus};
 use gitcomet_core::error::{Error, ErrorKind};
 use std::path::PathBuf;
@@ -33,9 +34,9 @@ fn stats_job(effects: &[Effect]) -> (crate::model::LineStatsGeneration, Arc<Repo
     let jobs: Vec<_> = effects
         .iter()
         .filter_map(|effect| match effect {
-            Effect::LoadUncommittedLineStats {
+            Effect::Status(StatusEffect::LoadUncommittedLineStats {
                 generation, status, ..
-            } => Some((*generation, Arc::clone(status))),
+            }) => Some((*generation, Arc::clone(status))),
             _ => None,
         })
         .collect();
@@ -44,11 +45,10 @@ fn stats_job(effects: &[Effect]) -> (crate::model::LineStatsGeneration, Arc<Repo
 }
 
 fn no_stats(effects: &[Effect]) {
-    assert!(
-        !effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::LoadUncommittedLineStats { .. }))
-    );
+    assert!(!effects.iter().any(|effect| matches!(
+        effect,
+        Effect::Status(StatusEffect::LoadUncommittedLineStats { .. })
+    )));
 }
 
 #[test]
@@ -64,7 +64,7 @@ fn initial_refresh_publishes_status_before_counts_and_reuses_its_arcs() {
         assert_eq!(
             requested
                 .iter()
-                .filter(|e| matches!(e, Effect::LoadStatus { .. }))
+                .filter(|e| matches!(e, Effect::Status(StatusEffect::LoadStatus { .. })))
                 .count(),
             1
         );
@@ -186,7 +186,7 @@ fn worktree_only_change_updates_counts_and_failed_lane_never_uses_combined_fallb
     assert!(
         requested
             .iter()
-            .any(|e| matches!(e, Effect::LoadWorktreeStatus { .. }))
+            .any(|e| matches!(e, Effect::Status(StatusEffect::LoadWorktreeStatus { .. })))
     );
     no_stats(&effects::worktree_status_loaded(
         &mut state,
@@ -283,7 +283,7 @@ fn already_up_to_date_pull_still_refreshes_once_and_counts_settle_after_status()
     assert_eq!(
         requested
             .iter()
-            .filter(|e| matches!(e, Effect::LoadStatus { .. }))
+            .filter(|e| matches!(e, Effect::Status(StatusEffect::LoadStatus { .. })))
             .count(),
         1
     );
@@ -333,7 +333,9 @@ fn stats_job_large_files(effects: &[Effect]) -> bool {
     effects
         .iter()
         .find_map(|effect| match effect {
-            Effect::LoadUncommittedLineStats { large_files, .. } => Some(*large_files),
+            Effect::Status(StatusEffect::LoadUncommittedLineStats { large_files, .. }) => {
+                Some(*large_files)
+            }
             _ => None,
         })
         .expect("a line-stats job")

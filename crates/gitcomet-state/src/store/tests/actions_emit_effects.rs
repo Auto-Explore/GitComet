@@ -1,4 +1,5 @@
 use super::*;
+use crate::msg::{ReferenceEffect, RepoCommandEffect};
 use gitcomet_core::domain::Upstream;
 
 #[test]
@@ -27,9 +28,11 @@ fn markdown_save_uses_the_callers_disk_baseline_without_a_loaded_conflict() {
             completion: None,
         },
     );
-    assert!(matches!(effects.as_slice(), [Effect::SaveWorktreeFile {
+    assert!(
+        matches!(effects.as_slice(), [Effect::RepoCommand(RepoCommandEffect::SaveWorktreeFile {
         expected_contents: Some(baseline), contents, stage: false, ..
-    }] if baseline == &original && contents == "- [x] ship it\n"));
+    })] if baseline == &original && contents == "- [x] ship it\n")
+    );
 }
 
 fn upstream_target(remote: &str, branch: &str) -> Upstream {
@@ -465,11 +468,11 @@ fn fetch_all_emits_effect_with_global_prune_setting() {
     );
     assert!(matches!(
         fetch_without_prune.as_slice(),
-        [Effect::FetchAll {
+        [Effect::RepoCommand(RepoCommandEffect::FetchAll {
             repo_id: RepoId(1),
             prune: false,
             ..
-        }]
+        })]
     ));
     assert_eq!(state.repos[0].pull_in_flight, 1);
 
@@ -482,11 +485,11 @@ fn fetch_all_emits_effect_with_global_prune_setting() {
     );
     assert!(matches!(
         fetch_with_prune.as_slice(),
-        [Effect::FetchAll {
+        [Effect::RepoCommand(RepoCommandEffect::FetchAll {
             repo_id: RepoId(1),
             prune: true,
             ..
-        }]
+        })]
     ));
     assert_eq!(state.repos[0].pull_in_flight, 2);
 }
@@ -518,7 +521,7 @@ fn a_refspec_fetch_is_a_fetch_in_flight_and_refreshes_remote_branches_when_done(
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::FetchRefspecs { remote, refspecs: sent, auth: None, .. }]
+        [Effect::RepoCommand(RepoCommandEffect::FetchRefspecs { remote, refspecs: sent, auth: None, .. })]
             if remote == "origin" && sent == &refspecs
     ));
     assert_eq!(state.repos[0].pull_in_flight, 1);
@@ -569,12 +572,12 @@ fn pull_variants_snapshot_the_global_remote_prune_setting() {
     );
     assert!(matches!(
         pull.as_slice(),
-        [Effect::Pull {
+        [Effect::RepoCommand(RepoCommandEffect::Pull {
             repo_id: RepoId(1),
             mode: PullMode::Rebase,
             prune: false,
             ..
-        }]
+        })]
     ));
 
     state.remote_settings.prune_deleted_remote_branches_on_fetch = true;
@@ -590,13 +593,13 @@ fn pull_variants_snapshot_the_global_remote_prune_setting() {
     );
     assert!(matches!(
         pull_branch.as_slice(),
-        [Effect::PullBranch {
+        [Effect::RepoCommand(RepoCommandEffect::PullBranch {
             repo_id: RepoId(1),
             remote,
             branch,
             prune: true,
             ..
-        }] if remote == "origin" && branch == "feature"
+        })] if remote == "origin" && branch == "feature"
     ));
 }
 
@@ -656,7 +659,7 @@ fn checkout_conflict_base_emits_effect() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::CheckoutConflictBase { repo_id: RepoId(1), path: effect_path }] if effect_path == &path
+        [Effect::RepoCommand(RepoCommandEffect::CheckoutConflictBase { repo_id: RepoId(1), path: effect_path })] if effect_path == &path
     ));
 }
 
@@ -686,7 +689,7 @@ fn accept_conflict_deletion_emits_effect() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::AcceptConflictDeletion { repo_id: RepoId(1), path: effect_path }] if effect_path == &path
+        [Effect::RepoCommand(RepoCommandEffect::AcceptConflictDeletion { repo_id: RepoId(1), path: effect_path })] if effect_path == &path
     ));
 }
 
@@ -716,7 +719,7 @@ fn reset_emits_effect() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::Reset { repo_id: RepoId(1), target, mode: gitcomet_core::services::ResetMode::Hard }]
+        [Effect::RepoCommand(RepoCommandEffect::Reset { repo_id: RepoId(1), target, mode: gitcomet_core::services::ResetMode::Hard })]
             if target == "HEAD~1"
     ));
 }
@@ -749,14 +752,14 @@ fn revert_commit_emits_effect() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::RevertCommit {
+        [Effect::RepoCommand(RepoCommandEffect::RevertCommit {
             repo_id: RepoId(1),
             commit_id: _,
             commit: false,
             mainline: Some(2),
             summary,
             auth: None,
-        }] if summary == "revert me"
+        })] if summary == "revert me"
     ));
     assert_eq!(state.repos[0].local_actions_in_flight, 1);
 }
@@ -798,13 +801,13 @@ fn apply_file_change_emits_effect_and_keeps_the_diff_target() {
         assert!(
             matches!(
                 effects.as_slice(),
-                [Effect::ApplyFileChange {
+                [Effect::RepoCommand(RepoCommandEffect::ApplyFileChange {
                     commit_retry: None,
                     repo_id: RepoId(1),
                     target: effect_target,
                     commit: effect_commit,
                     auth: None,
-                }] if effect_target == &apply_target && *effect_commit == commit
+                })] if effect_target == &apply_target && *effect_commit == commit
             ),
             "commit={commit}: {effects:?}"
         );
@@ -1394,7 +1397,7 @@ fn merge_ref_emits_effect() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::MergeRef { repo_id: RepoId(1), reference }] if reference == "feature"
+        [Effect::RepoCommand(RepoCommandEffect::MergeRef { repo_id: RepoId(1), reference })] if reference == "feature"
     ));
 }
 
@@ -1423,7 +1426,7 @@ fn squash_ref_emits_effect() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::SquashRef { repo_id: RepoId(1), reference }] if reference == "feature"
+        [Effect::RepoCommand(RepoCommandEffect::SquashRef { repo_id: RepoId(1), reference })] if reference == "feature"
     ));
     assert_eq!(state.repos[0].local_actions_in_flight, 1);
 }
@@ -1453,7 +1456,7 @@ fn rebase_emits_effect() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::Rebase { repo_id: RepoId(1), onto }] if onto == "master"
+        [Effect::RepoCommand(RepoCommandEffect::Rebase { repo_id: RepoId(1), onto })] if onto == "master"
     ));
 }
 
@@ -1566,7 +1569,7 @@ fn create_and_delete_tag_emit_effects() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::CreateTag { repo_id: RepoId(1), name, target, message: None, annotated: false }] if name == "v1.0.0" && target == "HEAD"
+        [Effect::RepoCommand(RepoCommandEffect::CreateTag { repo_id: RepoId(1), name, target, message: None, annotated: false })] if name == "v1.0.0" && target == "HEAD"
     ));
 
     let effects = reduce(
@@ -1580,7 +1583,7 @@ fn create_and_delete_tag_emit_effects() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::DeleteTag { repo_id: RepoId(1), name }] if name == "v1.0.0"
+        [Effect::RepoCommand(RepoCommandEffect::DeleteTag { repo_id: RepoId(1), name })] if name == "v1.0.0"
     ));
 
     let effects = reduce(
@@ -1595,7 +1598,7 @@ fn create_and_delete_tag_emit_effects() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::PushTag { repo_id: RepoId(1), remote, name, .. }] if remote == "origin" && name == "v1.0.0"
+        [Effect::RepoCommand(RepoCommandEffect::PushTag { repo_id: RepoId(1), remote, name, .. })] if remote == "origin" && name == "v1.0.0"
     ));
 
     let effects = reduce(
@@ -1610,7 +1613,7 @@ fn create_and_delete_tag_emit_effects() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::DeleteRemoteTag { repo_id: RepoId(1), remote, name, .. }] if remote == "origin" && name == "v1.0.0"
+        [Effect::RepoCommand(RepoCommandEffect::DeleteRemoteTag { repo_id: RepoId(1), remote, name, .. })] if remote == "origin" && name == "v1.0.0"
     ));
 }
 
@@ -1827,10 +1830,10 @@ fn repo_operations_emit_effects() {
     );
     assert!(matches!(
         pull.as_slice(),
-        [Effect::Pull {
+        [Effect::RepoCommand(RepoCommandEffect::Pull {
             repo_id: RepoId(1),
             ..
-        }]
+        })]
     ));
 
     let prune_branches = reduce(
@@ -1841,7 +1844,9 @@ fn repo_operations_emit_effects() {
     );
     assert!(matches!(
         prune_branches.as_slice(),
-        [Effect::PruneMergedBranches { repo_id: RepoId(1) }]
+        [Effect::RepoCommand(
+            RepoCommandEffect::PruneMergedBranches { repo_id: RepoId(1) }
+        )]
     ));
 
     let prune_tags = reduce(
@@ -1852,7 +1857,9 @@ fn repo_operations_emit_effects() {
     );
     assert!(matches!(
         prune_tags.as_slice(),
-        [Effect::PruneLocalTags { repo_id: RepoId(1) }]
+        [Effect::RepoCommand(RepoCommandEffect::PruneLocalTags {
+            repo_id: RepoId(1)
+        })]
     ));
 
     let push = reduce(
@@ -1863,10 +1870,10 @@ fn repo_operations_emit_effects() {
     );
     assert!(matches!(
         push.as_slice(),
-        [Effect::Push {
+        [Effect::RepoCommand(RepoCommandEffect::Push {
             repo_id: RepoId(1),
             ..
-        }]
+        })]
     ));
 
     let force_push = reduce(
@@ -1877,10 +1884,10 @@ fn repo_operations_emit_effects() {
     );
     assert!(matches!(
         force_push.as_slice(),
-        [Effect::ForcePush {
+        [Effect::RepoCommand(RepoCommandEffect::ForcePush {
             repo_id: RepoId(1),
             ..
-        }]
+        })]
     ));
 
     let push_set_upstream = reduce(
@@ -1895,10 +1902,10 @@ fn repo_operations_emit_effects() {
     );
     assert!(matches!(
         push_set_upstream.as_slice(),
-        [Effect::PushSetUpstream {
+        [Effect::RepoCommand(RepoCommandEffect::PushSetUpstream {
             repo_id: RepoId(1),
             ..
-        }]
+        })]
     ));
 
     let set_upstream_branch = reduce(
@@ -1913,11 +1920,11 @@ fn repo_operations_emit_effects() {
     );
     assert!(matches!(
         set_upstream_branch.as_slice(),
-        [Effect::SetUpstreamBranch {
+        [Effect::RepoCommand(RepoCommandEffect::SetUpstreamBranch {
             repo_id: RepoId(1),
             branch,
             upstream,
-        }] if branch == "feature/local" && upstream == &upstream_target("origin", "feature/foo")
+        })] if branch == "feature/local" && upstream == &upstream_target("origin", "feature/foo")
     ));
 
     let unset_upstream = reduce(
@@ -1931,10 +1938,10 @@ fn repo_operations_emit_effects() {
     );
     assert!(matches!(
         unset_upstream.as_slice(),
-        [Effect::UnsetUpstreamBranch {
+        [Effect::RepoCommand(RepoCommandEffect::UnsetUpstreamBranch {
             repo_id: RepoId(1),
             branch,
-        }] if branch == "feature/foo"
+        })] if branch == "feature/foo"
     ));
 
     let stash = reduce(
@@ -2229,7 +2236,7 @@ fn commit_finished_clears_commit_state_and_requests_primary_refreshes() {
     assert!(
         effects
             .iter()
-            .any(|e| matches!(e, Effect::LoadHeadBranch { repo_id: id } if *id == repo_id))
+            .any(|e| matches!(e, Effect::References(ReferenceEffect::LoadHeadBranch { repo_id: id }) if *id == repo_id))
     );
     assert!(effects.iter().any(|e| matches!(
         e,
@@ -2483,11 +2490,11 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::ApplyWorktreePatch {
+        [Effect::RepoCommand(RepoCommandEffect::ApplyWorktreePatch {
             repo_id: RepoId(1),
             reverse: true,
             ..
-        }]
+        })]
     ));
 
     let effects = reduce(
@@ -2525,13 +2532,13 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::CherryPickCommit {
+        [Effect::RepoCommand(RepoCommandEffect::CherryPickCommit {
             repo_id: RepoId(1),
             commit: true,
             mainline: Some(2),
             summary,
             ..
-        }] if summary == "pick me"
+        })] if summary == "pick me"
     ));
 
     let effects = reduce(
@@ -2640,11 +2647,11 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::SetUpstreamBranch {
+        [Effect::RepoCommand(RepoCommandEffect::SetUpstreamBranch {
             repo_id: RepoId(1),
             branch,
             upstream,
-        }] if branch == "feature/current" && upstream == &upstream_target("origin", "feature/current")
+        })] if branch == "feature/current" && upstream == &upstream_target("origin", "feature/current")
     ));
 
     let effects = reduce(
@@ -2658,10 +2665,10 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::UnsetUpstreamBranch {
+        [Effect::RepoCommand(RepoCommandEffect::UnsetUpstreamBranch {
             repo_id: RepoId(1),
             branch,
-        }] if branch == "feature/current"
+        })] if branch == "feature/current"
     ));
 
     assert_eq!(
@@ -2681,10 +2688,10 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::ExportPatch {
+        [Effect::RepoCommand(RepoCommandEffect::ExportPatch {
             repo_id: RepoId(1),
             ..
-        }]
+        })]
     ));
 
     let effects = reduce(
@@ -2698,10 +2705,10 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::ApplyPatch {
+        [Effect::RepoCommand(RepoCommandEffect::ApplyPatch {
             repo_id: RepoId(1),
             ..
-        }]
+        })]
     ));
 
     let effects = reduce(
@@ -2716,10 +2723,10 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::AddWorktree {
+        [Effect::RepoCommand(RepoCommandEffect::AddWorktree {
             repo_id: RepoId(1),
             ..
-        }]
+        })]
     ));
     assert_eq!(state.repos[0].worktrees_in_flight, 1);
 
@@ -2734,10 +2741,10 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::RemoveWorktree {
+        [Effect::RepoCommand(RepoCommandEffect::RemoveWorktree {
             repo_id: RepoId(1),
             path
-        }] if path == &PathBuf::from("/tmp/repo/nested/worktree")
+        })] if path == &PathBuf::from("/tmp/repo/nested/worktree")
     ));
     assert_eq!(state.repos[0].worktrees_in_flight, 2);
 
@@ -2756,11 +2763,11 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::SaveWorktreeFile {
+        [Effect::RepoCommand(RepoCommandEffect::SaveWorktreeFile {
             repo_id: RepoId(1),
             stage: true,
             ..
-        }]
+        })]
     ));
 
     let effects = reduce(
@@ -2775,10 +2782,10 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     assert!(
         matches!(
             effects.as_slice(),
-            [Effect::AppendGitignorePatterns {
+            [Effect::RepoCommand(RepoCommandEffect::AppendGitignorePatterns {
                 repo_id: RepoId(1),
                 patterns,
-            }] if patterns.as_slice() == ["/build/out.log", "*.tmp"]
+            })] if patterns.as_slice() == ["/build/out.log", "*.tmp"]
         ),
         "the patterns must reach the effect verbatim: the reducer is not allowed \
          to re-derive or reorder them"
@@ -2795,10 +2802,10 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::RebaseContinue {
+        [Effect::RepoCommand(RepoCommandEffect::RebaseContinue {
             repo_id: RepoId(1),
             auth: None,
-        }]
+        })]
     ));
     state.repos[0].sequencer_actions_in_flight = 0;
 
@@ -2810,7 +2817,9 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::RebaseAbort { repo_id: RepoId(1) }]
+        [Effect::RepoCommand(RepoCommandEffect::RebaseAbort {
+            repo_id: RepoId(1)
+        })]
     ));
     state.repos[0].sequencer_actions_in_flight = 0;
 
@@ -2822,7 +2831,9 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::MergeAbort { repo_id: RepoId(1) }]
+        [Effect::RepoCommand(RepoCommandEffect::MergeAbort {
+            repo_id: RepoId(1)
+        })]
     ));
 
     let effects = reduce(
@@ -2837,10 +2848,10 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::AddRemote {
+        [Effect::RepoCommand(RepoCommandEffect::AddRemote {
             repo_id: RepoId(1),
             ..
-        }]
+        })]
     ));
 
     let effects = reduce(
@@ -2854,10 +2865,10 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::RemoveRemote {
+        [Effect::RepoCommand(RepoCommandEffect::RemoveRemote {
             repo_id: RepoId(1),
             ..
-        }]
+        })]
     ));
 
     let effects = reduce(
@@ -2873,11 +2884,11 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::SetRemoteUrl {
+        [Effect::RepoCommand(RepoCommandEffect::SetRemoteUrl {
             repo_id: RepoId(1),
             kind: gitcomet_core::services::RemoteUrlKind::Push,
             ..
-        }]
+        })]
     ));
 
     let effects = reduce(
@@ -2892,11 +2903,11 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::SetUpstreamBranch {
+        [Effect::RepoCommand(RepoCommandEffect::SetUpstreamBranch {
             repo_id: RepoId(1),
             branch,
             upstream,
-        }] if branch == "feature/current" && upstream == &upstream_target("origin", "feature/current")
+        })] if branch == "feature/current" && upstream == &upstream_target("origin", "feature/current")
     ));
 
     let effects = reduce(
@@ -2910,10 +2921,10 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::UnsetUpstreamBranch {
+        [Effect::RepoCommand(RepoCommandEffect::UnsetUpstreamBranch {
             repo_id: RepoId(1),
             branch,
-        }] if branch == "feature/current"
+        })] if branch == "feature/current"
     ));
 
     let effects = reduce(
@@ -2928,11 +2939,13 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::CheckoutConflictSide {
-            repo_id: RepoId(1),
-            side: gitcomet_core::services::ConflictSide::Theirs,
-            ..
-        }]
+        [Effect::RepoCommand(
+            RepoCommandEffect::CheckoutConflictSide {
+                repo_id: RepoId(1),
+                side: gitcomet_core::services::ConflictSide::Theirs,
+                ..
+            }
+        )]
     ));
 
     let effects = reduce(
@@ -2946,10 +2959,10 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::LaunchMergetool {
+        [Effect::RepoCommand(RepoCommandEffect::LaunchMergetool {
             repo_id: RepoId(1),
             ..
-        }]
+        })]
     ));
 }
 
@@ -3542,13 +3555,13 @@ fn checkout_branch_and_submodule_messages_emit_effects() {
     );
     assert!(matches!(
         add_submodule.as_slice(),
-        [Effect::CheckSubmoduleAddTrust {
+        [Effect::RepoCommand(RepoCommandEffect::CheckSubmoduleAddTrust {
             repo_id: RepoId(1),
             url,
             path,
             branch,
             ..
-        }] if url == "https://example.com/sub.git"
+        })] if url == "https://example.com/sub.git"
             && path == &PathBuf::from("mods/sub")
             && branch.as_deref() == Some("feature")
     ));
@@ -3561,10 +3574,12 @@ fn checkout_branch_and_submodule_messages_emit_effects() {
     );
     assert!(matches!(
         update_submodules.as_slice(),
-        [Effect::CheckSubmoduleUpdateTrust {
-            repo_id: RepoId(1),
-            ..
-        }]
+        [Effect::RepoCommand(
+            RepoCommandEffect::CheckSubmoduleUpdateTrust {
+                repo_id: RepoId(1),
+                ..
+            }
+        )]
     ));
 
     let remove_submodule = reduce(
@@ -3578,10 +3593,10 @@ fn checkout_branch_and_submodule_messages_emit_effects() {
     );
     assert!(matches!(
         remove_submodule.as_slice(),
-        [Effect::RemoveSubmodule {
+        [Effect::RepoCommand(RepoCommandEffect::RemoveSubmodule {
             repo_id: RepoId(1),
             path
-        }] if path == &PathBuf::from("mods/sub")
+        })] if path == &PathBuf::from("mods/sub")
     ));
 }
 
@@ -3645,14 +3660,14 @@ fn local_submodule_add_trust_prompt_confirms_into_add_effect() {
     assert!(state.submodule_trust_prompt.is_none());
     assert!(matches!(
         effects.as_slice(),
-        [Effect::AddSubmodule {
+        [Effect::RepoCommand(RepoCommandEffect::AddSubmodule {
             repo_id: RepoId(1),
             url,
             path,
             branch,
             approved_sources,
             ..
-        }] if url == "../local-sub"
+        })] if url == "../local-sub"
             && path == &PathBuf::from("mods/sub")
             && branch.as_deref() == Some("feature")
             && approved_sources == &vec![source]
@@ -3695,10 +3710,12 @@ fn submodule_trust_check_pending_marks_and_clears_around_the_check() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::CheckSubmoduleAddTrust {
-            repo_id: RepoId(1),
-            ..
-        }]
+        [Effect::RepoCommand(
+            RepoCommandEffect::CheckSubmoduleAddTrust {
+                repo_id: RepoId(1),
+                ..
+            }
+        )]
     ));
     assert_eq!(
         state.submodule_trust_check_pending,
@@ -3850,14 +3867,14 @@ fn submodule_add_progress_starts_when_trust_check_proceeds() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::AddSubmodule {
+        [Effect::RepoCommand(RepoCommandEffect::AddSubmodule {
             repo_id: RepoId(1),
             url,
             path,
             name,
             force,
             ..
-        }] if url == "https://example.com/sub.git"
+        })] if url == "https://example.com/sub.git"
             && path == &PathBuf::from("mods/sub")
             && name.as_deref() == Some("deps/sub")
             && *force
@@ -3991,12 +4008,12 @@ fn pull_branch_and_push_variants_mark_in_flight_when_repo_is_opened() {
     );
     assert!(matches!(
         pull_branch.as_slice(),
-        [Effect::PullBranch {
+        [Effect::RepoCommand(RepoCommandEffect::PullBranch {
             repo_id: RepoId(1),
             remote,
             branch,
             ..
-        }] if remote == "origin" && branch == "main"
+        })] if remote == "origin" && branch == "main"
     ));
     assert_eq!(state.repos[0].pull_in_flight, 1);
 
@@ -4008,10 +4025,10 @@ fn pull_branch_and_push_variants_mark_in_flight_when_repo_is_opened() {
     );
     assert!(matches!(
         force_push.as_slice(),
-        [Effect::ForcePush {
+        [Effect::RepoCommand(RepoCommandEffect::ForcePush {
             repo_id: RepoId(1),
             ..
-        }]
+        })]
     ));
     assert_eq!(state.repos[0].push_in_flight, 1);
 
@@ -4027,12 +4044,12 @@ fn pull_branch_and_push_variants_mark_in_flight_when_repo_is_opened() {
     );
     assert!(matches!(
         push_set_upstream.as_slice(),
-        [Effect::PushSetUpstream {
+        [Effect::RepoCommand(RepoCommandEffect::PushSetUpstream {
             repo_id: RepoId(1),
             remote,
             branch,
             ..
-        }] if remote == "origin" && branch == "feature/xyz"
+        })] if remote == "origin" && branch == "feature/xyz"
     ));
     assert_eq!(state.repos[0].push_in_flight, 2);
 
@@ -4048,11 +4065,11 @@ fn pull_branch_and_push_variants_mark_in_flight_when_repo_is_opened() {
     );
     assert!(matches!(
         set_upstream_branch.as_slice(),
-        [Effect::SetUpstreamBranch {
+        [Effect::RepoCommand(RepoCommandEffect::SetUpstreamBranch {
             repo_id: RepoId(1),
             branch,
             upstream
-        }] if branch == "feature/local" && upstream == &upstream_target("origin", "feature/xyz")
+        })] if branch == "feature/local" && upstream == &upstream_target("origin", "feature/xyz")
     ));
     assert_eq!(state.repos[0].push_in_flight, 2);
 }
@@ -4230,7 +4247,7 @@ fn commit_finished_push_after_commit_enqueues_safe_push_only_on_success() {
     assert!(
         effects
             .iter()
-            .any(|effect| matches!(effect, Effect::SafePushAfterCommit { repo_id: id, context, .. } if *id == repo_id
+            .any(|effect| matches!(effect, Effect::RepoCommand(RepoCommandEffect::SafePushAfterCommit { repo_id: id, context, .. }) if *id == repo_id
                 && !context.amend
                 && context.local_branch.as_deref() == Some("main")
                 && context.pre_head.as_ref().is_some_and(|id| id.as_ref() == "1111111111111111111111111111111111111111")
@@ -4258,11 +4275,10 @@ fn commit_finished_push_after_commit_enqueues_safe_push_only_on_success() {
         }),
     );
 
-    assert!(
-        !effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::SafePushAfterCommit { .. }))
-    );
+    assert!(!effects.iter().any(|effect| matches!(
+        effect,
+        Effect::RepoCommand(RepoCommandEffect::SafePushAfterCommit { .. })
+    )));
     assert_eq!(state.repos[0].push_in_flight, 0);
 }
 
@@ -4312,12 +4328,12 @@ fn safe_push_after_commit_decision_push_enqueues_checked_push() {
 
     assert!(effects.iter().any(|effect| matches!(
         effect,
-        Effect::PushAfterCommit {
+        Effect::RepoCommand(RepoCommandEffect::PushAfterCommit {
             repo_id: id,
             target: effect_target,
             set_upstream: false,
             auth: Some(effect_auth),
-        } if *id == repo_id && effect_target == &target && effect_auth == &auth
+        }) if *id == repo_id && effect_target == &target && effect_auth == &auth
     )));
     assert_eq!(state.repos[0].push_in_flight, 1);
 }
@@ -4365,12 +4381,12 @@ fn safe_push_after_commit_decision_push_set_upstream_enqueues_checked_push() {
 
     assert!(effects.iter().any(|effect| matches!(
         effect,
-        Effect::PushAfterCommit {
+        Effect::RepoCommand(RepoCommandEffect::PushAfterCommit {
             repo_id: id,
             target: effect_target,
             set_upstream: true,
             ..
-        } if *id == repo_id && effect_target == &target
+        }) if *id == repo_id && effect_target == &target
     )));
     assert_eq!(state.repos[0].push_in_flight, 1);
 }
@@ -4420,7 +4436,9 @@ fn safe_push_after_commit_published_amend_block_stores_lease_offer() {
 
     assert!(!effects.iter().any(|effect| matches!(
         effect,
-        Effect::Push { .. } | Effect::PushAfterCommit { .. } | Effect::PushSetUpstream { .. }
+        Effect::RepoCommand(RepoCommandEffect::Push { .. })
+            | Effect::RepoCommand(RepoCommandEffect::PushAfterCommit { .. })
+            | Effect::RepoCommand(RepoCommandEffect::PushSetUpstream { .. })
     )));
     assert_eq!(state.repos[0].pending.force_push_lease, Some(lease));
     assert!(
@@ -4638,7 +4656,10 @@ fn continue_and_abort_wait_only_for_sequencer_commands() {
         Msg::RebaseAbort { repo_id },
     );
     assert!(
-        matches!(effects.as_slice(), [Effect::RebaseAbort { .. }]),
+        matches!(
+            effects.as_slice(),
+            [Effect::RepoCommand(RepoCommandEffect::RebaseAbort { .. })]
+        ),
         "a running merge tool must not block Abort: {effects:?}"
     );
 }
@@ -4973,11 +4994,11 @@ fn interactive_cherry_pick_carries_the_commit_choice_to_its_effect() {
         assert!(
             matches!(
                 effects.as_slice(),
-                [Effect::InteractiveCherryPick {
+                [Effect::RepoCommand(RepoCommandEffect::InteractiveCherryPick {
                     repo_id: RepoId(1),
                     entries: sent,
                     commit: sent_commit,
-                }] if sent == &entries && *sent_commit == commit
+                })] if sent == &entries && *sent_commit == commit
             ),
             "commit={commit}: {effects:?}"
         );
@@ -5388,16 +5409,16 @@ fn fetch_completion_reloads_remote_refs_and_loaded_tag_metadata() {
     assert!(matches!(state.repos[0].tags, Loadable::Loading));
     assert!(matches!(state.repos[0].remote_tags, Loadable::Loading));
     assert!(effects.iter().any(
-        |effect| matches!(effect, Effect::LoadRemoteBranches { repo_id: id } if *id == repo_id)
+        |effect| matches!(effect, Effect::References(ReferenceEffect::LoadRemoteBranches { repo_id: id }) if *id == repo_id)
     ));
     assert!(
         effects
             .iter()
-            .any(|effect| matches!(effect, Effect::LoadTags { repo_id: id } if *id == repo_id))
+            .any(|effect| matches!(effect, Effect::References(ReferenceEffect::LoadTags { repo_id: id }) if *id == repo_id))
     );
     assert!(
         effects.iter().any(
-            |effect| matches!(effect, Effect::LoadRemoteTags { repo_id: id } if *id == repo_id)
+            |effect| matches!(effect, Effect::References(ReferenceEffect::LoadRemoteTags { repo_id: id }) if *id == repo_id)
         )
     );
 }
@@ -5435,7 +5456,7 @@ fn create_tag_command_finished_reloads_tags() {
     assert!(
         effects
             .iter()
-            .any(|e| matches!(e, Effect::LoadTags { repo_id: id } if *id == repo_id)),
+            .any(|e| matches!(e, Effect::References(ReferenceEffect::LoadTags { repo_id: id }) if *id == repo_id)),
         "expected LoadTags effect after CreateTag"
     );
 }
@@ -5468,7 +5489,7 @@ fn delete_tag_command_finished_reloads_tags() {
     assert!(
         effects
             .iter()
-            .any(|e| matches!(e, Effect::LoadTags { repo_id: id } if *id == repo_id)),
+            .any(|e| matches!(e, Effect::References(ReferenceEffect::LoadTags { repo_id: id }) if *id == repo_id)),
         "expected LoadTags effect after DeleteTag"
     );
 }
@@ -5501,7 +5522,7 @@ fn prune_local_tags_command_finished_reloads_tags() {
     assert!(
         effects
             .iter()
-            .any(|e| matches!(e, Effect::LoadTags { repo_id: id } if *id == repo_id)),
+            .any(|e| matches!(e, Effect::References(ReferenceEffect::LoadTags { repo_id: id }) if *id == repo_id)),
         "expected LoadTags effect after PruneLocalTags"
     );
 }
@@ -5566,7 +5587,7 @@ fn create_tag_with_message_propagates_to_effect() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::CreateTag { repo_id: RepoId(1), name, target, message: Some(msg), annotated: true }]
+        [Effect::RepoCommand(RepoCommandEffect::CreateTag { repo_id: RepoId(1), name, target, message: Some(msg), annotated: true })]
             if name == "v1.0.0" && target == "HEAD" && msg == "Release 1.0"
     ));
 }

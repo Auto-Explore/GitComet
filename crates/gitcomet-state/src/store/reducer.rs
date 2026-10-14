@@ -1,3 +1,4 @@
+use crate::msg::RepoCommandEffect;
 mod actions_emit_effects;
 mod auth;
 mod branch_exists_prompt;
@@ -162,24 +163,24 @@ fn begin_local_action(state: &mut AppState, repo_id: RepoId) {
 /// [`crate::msg::RepoCommandKind`] in `repo_command_finished`.
 fn sequencer_effect_repo(effect: &Effect) -> Option<RepoId> {
     match effect {
-        Effect::MergeRef { repo_id, .. }
-        | Effect::SquashRef { repo_id, .. }
-        | Effect::SquashCommits { repo_id, .. }
-        | Effect::Reset { repo_id, .. }
-        | Effect::Rebase { repo_id, .. }
-        | Effect::RebaseContinue { repo_id, .. }
-        | Effect::RebaseAbort { repo_id }
-        | Effect::InteractiveRebase { repo_id, .. }
-        | Effect::InteractiveCherryPick { repo_id, .. }
-        | Effect::CherryPickCommit { repo_id, .. }
-        | Effect::RevertCommit { repo_id, .. }
+        Effect::RepoCommand(RepoCommandEffect::MergeRef { repo_id, .. })
+        | Effect::RepoCommand(RepoCommandEffect::SquashRef { repo_id, .. })
+        | Effect::RepoCommand(RepoCommandEffect::SquashCommits { repo_id, .. })
+        | Effect::RepoCommand(RepoCommandEffect::Reset { repo_id, .. })
+        | Effect::RepoCommand(RepoCommandEffect::Rebase { repo_id, .. })
+        | Effect::RepoCommand(RepoCommandEffect::RebaseContinue { repo_id, .. })
+        | Effect::RepoCommand(RepoCommandEffect::RebaseAbort { repo_id })
+        | Effect::RepoCommand(RepoCommandEffect::InteractiveRebase { repo_id, .. })
+        | Effect::RepoCommand(RepoCommandEffect::InteractiveCherryPick { repo_id, .. })
+        | Effect::RepoCommand(RepoCommandEffect::CherryPickCommit { repo_id, .. })
+        | Effect::RepoCommand(RepoCommandEffect::RevertCommit { repo_id, .. })
         // Its commit step can wait on a signer after the worktree changed.
-        | Effect::ApplyFileChange {
+        | Effect::RepoCommand(RepoCommandEffect::ApplyFileChange {
             repo_id,
             commit: true,
             ..
-        }
-        | Effect::MergeAbort { repo_id } => Some(*repo_id),
+        })
+        | Effect::RepoCommand(RepoCommandEffect::MergeAbort { repo_id }) => Some(*repo_id),
         _ => None,
     }
 }
@@ -1547,7 +1548,9 @@ fn reduce_inner(
         }
         Msg::AppendGitattributesRule { repo_id, rule } => {
             begin_local_action(state, repo_id);
-            vec![Effect::AppendGitattributesRule { repo_id, rule }]
+            vec![Effect::RepoCommand(
+                RepoCommandEffect::AppendGitattributesRule { repo_id, rule },
+            )]
         }
         Msg::Commit {
             repo_id,

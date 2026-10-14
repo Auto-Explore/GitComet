@@ -1,6 +1,7 @@
 //! Git's maintenance recommendation, and the runs the user starts from it.
 use crate::model::{AppState, MaintenanceSettings, RepoId, RepoState};
 use crate::msg::{Effect, RepoExternalChange};
+use crate::msg::{PersistenceEffect, RepoCommandEffect};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -64,7 +65,9 @@ pub(super) fn request_check_for(
         return None;
     }
     maintenance.check_requested_at = Some(now);
-    Some(Effect::CheckRepoMaintenance { repo_id })
+    Some(Effect::RepoCommand(
+        RepoCommandEffect::CheckRepoMaintenance { repo_id },
+    ))
 }
 
 pub(super) fn checked(state: &mut AppState, repo_id: RepoId, needed: bool) -> Vec<Effect> {
@@ -98,9 +101,11 @@ pub(super) fn snooze(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
     for repo in same_repository(state, &common_dir) {
         repo.maintenance.recommended = false;
     }
-    vec![Effect::PersistRepoMaintenanceSnooze {
-        common_dir: common_dir.to_path_buf(),
-    }]
+    vec![Effect::Persistence(
+        PersistenceEffect::PersistRepoMaintenanceSnooze {
+            common_dir: common_dir.to_path_buf(),
+        },
+    )]
 }
 
 pub(super) fn start(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
@@ -118,7 +123,9 @@ pub(super) fn start(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
     };
     repo.maintenance.running = true;
     repo.bump_ops_rev();
-    vec![Effect::RunMaintenance { repo_id }]
+    vec![Effect::RepoCommand(RepoCommandEffect::RunMaintenance {
+        repo_id,
+    })]
 }
 
 /// While maintenance rewrites a repository's packs, watcher refreshes of its

@@ -1,4 +1,5 @@
 use super::*;
+use crate::msg::ControlEffect;
 
 #[test]
 fn clone_repo_sets_running_state_and_emits_effect() {
@@ -247,7 +248,7 @@ fn abort_clone_repo_marks_operation_cancelling_and_emits_effect() {
     assert!(matches!(op.status, CloneOpStatus::Cancelling));
     assert_eq!(op.seq, 1);
     assert!(
-        matches!(effects.as_slice(), [Effect::AbortCloneRepo { dest: effect_dest }] if effect_dest == &dest)
+        matches!(effects.as_slice(), [Effect::Control(ControlEffect::AbortCloneRepo { dest: effect_dest })] if effect_dest == &dest)
     );
 }
 

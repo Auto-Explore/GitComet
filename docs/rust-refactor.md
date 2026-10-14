@@ -24,7 +24,7 @@ subsystem's acceptance. No release, merge, or push is part of this implementatio
 - [ ] Preserve error causes and operation/path context while retaining classifications and cloning.
 - [x] Replace public raw load masks with LoadKind; give logs, line statistics and scoped worktree refreshes dedicated protocols.
 - [x] Introduce distinct log IDs, load epochs, line-stat generations and repository lifetime types; completion methods reject stale IDs.
-- [ ] Group persistence/control, status, reference metadata and repository-command effects; each family owns runtime requirements and completion construction.
+- [x] Group persistence/control, status, reference metadata and repository-command effects; each family owns runtime requirements and completion construction.
 - [ ] Centralize repository runtime resources and accepted close/shutdown handling, keeping refresh cancellation distinct from closure.
 - [ ] Prepare filesystem/Git inputs outside the state write lock while preserving synchronous worker ordering.
 - [x] Encapsulate backend history cache construction/invalidation without changing locks, keys, bounds or sharing.
@@ -126,6 +126,22 @@ when forwarding requests and completions. Their tuple constructors are internal.
 `finish_log` takes its request identity and rejects stale completions itself.
 `RepoState::lifetime_id()` provides a process-unique `RepoLifetime`; the existing
 scalar `lifetime()` accessor remains available to consumers that only compare it.
+
+Persistence, control, status, reference and repository-command requests now use
+typed `Effect` payloads exported from `gitcomet_state::msg`. For example,
+`Effect::LoadBranches { repo_id }` becomes
+`Effect::References(ReferenceEffect::LoadBranches { repo_id })`; saving a session
+uses `Effect::Persistence(PersistenceEffect::PersistSession { repo_id, action })`.
+The other envelopes are `Control(ControlEffect)`, `Status(StatusEffect)` and
+`RepoCommand(RepoCommandEffect)`. Match the same nested shape when inspecting
+effects. Completion messages keep their existing `InternalMsg` variants.
+
+The runtime requirement match covers every effect envelope explicitly. Persistence
+and controls remain usable without Git. Status and reference owners construct
+both missing-handle and unavailable-Git failures, retaining load guards and the
+foreground/metadata executor split. Command scheduling retains its existing
+operation progress, authentication retries and special completion paths. Operation
+trace labels continue to name the individual request.
 
 `Error::kind()` retains its existing classifications. Use `Error::from(io_error)`
 to keep an I/O cause, then `with_context(operation, path)` to identify the failed

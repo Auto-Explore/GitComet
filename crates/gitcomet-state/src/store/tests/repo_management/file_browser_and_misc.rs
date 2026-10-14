@@ -1,4 +1,5 @@
 use super::*;
+use crate::msg::RepoCommandEffect;
 
 #[test]
 fn dropped_existing_repo_focuses_its_tab_without_creating_a_duplicate() {
@@ -481,9 +482,11 @@ fn delete_remote_branches_keeps_the_batch_under_one_remote() {
     let batched = effects
         .iter()
         .find_map(|effect| match effect {
-            Effect::DeleteRemoteBranches {
-                remote, branches, ..
-            } => Some((remote.clone(), branches.clone())),
+            Effect::RepoCommand(RepoCommandEffect::DeleteRemoteBranches {
+                remote,
+                branches,
+                ..
+            }) => Some((remote.clone(), branches.clone())),
             _ => None,
         })
         .expect("expected a batched remote delete effect");

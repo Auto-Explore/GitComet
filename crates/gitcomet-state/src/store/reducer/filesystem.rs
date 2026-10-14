@@ -1,5 +1,6 @@
 use crate::model::{AppState, Loadable};
 use crate::msg::Effect;
+use crate::msg::StatusEffect;
 use gitcomet_core::domain::{DiffArea, DiffTarget, FileSource};
 use gitcomet_core::filesystem::PathChange;
 use std::path::{Path, PathBuf};
@@ -117,7 +118,9 @@ pub(super) fn paths_changed(state: &mut AppState, changes: &[PathChange]) -> Vec
                 source: repo.file_browser.source.clone(),
             });
         }
-        effects.push(Effect::LoadStatus { repo_id: repo.id });
+        effects.push(Effect::Status(StatusEffect::LoadStatus {
+            repo_id: repo.id,
+        }));
     }
     effects
 }

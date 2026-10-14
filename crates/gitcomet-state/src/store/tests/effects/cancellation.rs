@@ -1,6 +1,7 @@
 //! Cancellation: aborted loads and actions release their workers.
 
 use super::*;
+use crate::msg::{ControlEffect, ReferenceEffect, StatusEffect};
 
 #[test]
 fn signature_work_survives_repo_load_cancellation_and_does_not_use_primary_workers() {
@@ -71,7 +72,7 @@ fn signature_work_survives_repo_load_cancellation_and_does_not_use_primary_worke
                 &repos,
                 &mut tokens,
                 sender.clone(),
-                Effect::LoadHeadBranch { repo_id },
+                Effect::References(ReferenceEffect::LoadHeadBranch { repo_id }),
             );
             assert!(
                 tokens.contains_key(&repo_id),
@@ -84,10 +85,10 @@ fn signature_work_survives_repo_load_cancellation_and_does_not_use_primary_worke
                 &repos,
                 &mut tokens,
                 sender,
-                Effect::CancelRepoLoads {
+                Effect::Control(ControlEffect::CancelRepoLoads {
                     repo_id,
                     load_epoch: crate::model::RepoLoadEpoch(0),
-                },
+                }),
             );
         }
         drop(release_signatures);
@@ -197,7 +198,7 @@ fn clone_repo_effect_abort_removes_partially_created_destination() {
                 &backend,
                 &repos,
                 msg_tx.clone(),
-                Effect::AbortCloneRepo { dest: dest.clone() },
+                Effect::Control(ControlEffect::AbortCloneRepo { dest: dest.clone() }),
             );
             abort_sent = true;
         }
@@ -407,10 +408,10 @@ fn open_repo_effect_suppresses_result_after_cancellation() {
         &repos,
         &mut repo_task_tokens,
         msg_tx,
-        Effect::CancelRepoLoads {
+        Effect::Control(ControlEffect::CancelRepoLoads {
             repo_id,
             load_epoch: crate::model::RepoLoadEpoch(0),
-        },
+        }),
     );
     {
         let (lock, condvar) = &*release;
@@ -533,10 +534,10 @@ fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
         &repos,
         &mut repo_task_tokens,
         msg_tx.clone(),
-        Effect::CancelRepoLoads {
+        Effect::Control(ControlEffect::CancelRepoLoads {
             repo_id: repo_a,
             load_epoch: crate::model::RepoLoadEpoch(0),
-        },
+        }),
     );
     super::super::effects::schedule_effect(
         executors,
@@ -654,12 +655,12 @@ fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
         &repos,
         &mut repo_task_tokens,
         msg_tx.clone(),
-        Effect::LoadUncommittedLineStats {
+        Effect::Status(StatusEffect::LoadUncommittedLineStats {
             repo_id: repo_a,
             generation: crate::model::LineStatsGeneration(1),
             status: Arc::clone(&snapshot),
             large_files: false,
-        },
+        }),
     );
     assert_eq!(
         started_rx
@@ -675,10 +676,10 @@ fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
         &repos,
         &mut repo_task_tokens,
         msg_tx.clone(),
-        Effect::CancelRepoLoads {
+        Effect::Control(ControlEffect::CancelRepoLoads {
             repo_id: repo_a,
             load_epoch: crate::model::RepoLoadEpoch(0),
-        },
+        }),
     );
     super::super::effects::schedule_effect(
         executors,
@@ -687,12 +688,12 @@ fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
         &repos,
         &mut repo_task_tokens,
         msg_tx,
-        Effect::LoadUncommittedLineStats {
+        Effect::Status(StatusEffect::LoadUncommittedLineStats {
             repo_id: repo_b,
             generation: crate::model::LineStatsGeneration(1),
             status: snapshot,
             large_files: false,
-        },
+        }),
     );
 
     assert_eq!(

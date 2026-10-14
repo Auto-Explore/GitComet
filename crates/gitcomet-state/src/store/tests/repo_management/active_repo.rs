@@ -1,5 +1,6 @@
 use super::*;
 use crate::model::LoadKind;
+use crate::msg::{PersistenceEffect, ReferenceEffect, StatusEffect};
 
 #[test]
 fn set_active_repo_waits_for_repo_open_before_refreshing() {
@@ -33,17 +34,16 @@ fn set_active_repo_waits_for_repo_open_before_refreshing() {
         effect,
         Effect::OpenRepo { repo_id, .. } if *repo_id == repo1
     )));
-    assert!(
-        effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::PersistSession { .. }))
-    );
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::Persistence(PersistenceEffect::PersistSession { .. })
+    )));
     assert!(
         !effects.iter().any(|effect| matches!(
             effect,
-            Effect::LoadWorktreeStatus { .. }
-                | Effect::LoadStagedStatus { .. }
-                | Effect::LoadBranches { .. }
+            Effect::Status(StatusEffect::LoadWorktreeStatus { .. })
+                | Effect::Status(StatusEffect::LoadStagedStatus { .. })
+                | Effect::References(ReferenceEffect::LoadBranches { .. })
                 | Effect::LoadWorktrees { .. }
                 | Effect::LoadSelectedDiff { .. }
         )),
@@ -216,7 +216,7 @@ fn closing_active_repo_refreshes_open_neighbor_with_cancelled_loads() {
     assert!(
         effects
             .iter()
-            .any(|effect| matches!(effect, Effect::LoadBranches { repo_id } if *repo_id == repo1)),
+            .any(|effect| matches!(effect, Effect::References(ReferenceEffect::LoadBranches { repo_id }) if *repo_id == repo1)),
         "expected branch refresh when close selects already-open repo"
     );
 }
@@ -570,7 +570,7 @@ fn load_ref_metadata_emits_effect_and_result_builds_the_lookup_map() {
         Msg::LoadRefMetadata { repo_id },
     );
     assert!(effects.iter().any(
-        |effect| matches!(effect, Effect::LoadRefMetadata { repo_id: rid } if *rid == repo_id)
+        |effect| matches!(effect, Effect::References(ReferenceEffect::LoadRefMetadata { repo_id: rid }) if *rid == repo_id)
     ));
     assert!(state.repos[0].ref_metadata.is_loading());
 
@@ -759,7 +759,7 @@ fn branch_change_during_an_in_flight_metadata_load_schedules_a_refetch() {
 
     assert!(
         effects.iter().any(
-            |effect| matches!(effect, Effect::LoadRefMetadata { repo_id: rid } if *rid == repo_id)
+            |effect| matches!(effect, Effect::References(ReferenceEffect::LoadRefMetadata { repo_id: rid }) if *rid == repo_id)
         ),
         "expected a refetch to be scheduled, got {effects:?}"
     );
@@ -1046,7 +1046,7 @@ fn set_active_repo_full_refresh_with_sidebar_request_and_selected_diff_does_not_
     )));
     assert!(effects.iter().any(|effect| matches!(
         effect,
-        Effect::PersistSession { repo_id, .. } if *repo_id == Some(repo1)
+        Effect::Persistence(PersistenceEffect::PersistSession { repo_id, .. }) if *repo_id == Some(repo1)
     )));
 
     let repo1_state = state
@@ -1108,9 +1108,12 @@ fn set_active_repo_refreshes_repo_state_and_selected_diff() {
             } if *repo_id == repo1
         )
     });
-    let has_persist = effects
-        .iter()
-        .any(|e| matches!(e, Effect::PersistSession { .. }));
+    let has_persist = effects.iter().any(|e| {
+        matches!(
+            e,
+            Effect::Persistence(PersistenceEffect::PersistSession { .. })
+        )
+    });
 
     assert!(has_status, "expected status refresh on activation");
     assert!(has_log, "expected log refresh on activation");
@@ -1928,7 +1931,7 @@ fn set_active_repo_hot_switch_skips_secondary_refresh_when_metadata_is_ready() {
     assert!(
         effects
             .iter()
-            .any(|effect| matches!(effect, Effect::LoadBranches { repo_id } if *repo_id == repo1)),
+            .any(|effect| matches!(effect, Effect::References(ReferenceEffect::LoadBranches { repo_id }) if *repo_id == repo1)),
         "expected local branches refresh on activation"
     );
     assert!(
@@ -2260,11 +2263,11 @@ fn switch_reloads(effects: &[Effect]) -> Vec<&'static str> {
     effects
         .iter()
         .filter_map(|effect| match effect {
-            Effect::LoadStatus { .. } => Some("status"),
+            Effect::Status(StatusEffect::LoadStatus { .. }) => Some("status"),
             Effect::LoadLog { .. } => Some("log"),
-            Effect::LoadHeadBranch { .. } => Some("head"),
-            Effect::LoadUpstreamDivergence { .. } => Some("upstream"),
-            Effect::LoadBranches { .. } => Some("branches"),
+            Effect::References(ReferenceEffect::LoadHeadBranch { .. }) => Some("head"),
+            Effect::References(ReferenceEffect::LoadUpstreamDivergence { .. }) => Some("upstream"),
+            Effect::References(ReferenceEffect::LoadBranches { .. }) => Some("branches"),
             Effect::LoadWorktrees { .. } => Some("worktrees"),
             _ => None,
         })

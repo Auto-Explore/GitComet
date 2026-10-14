@@ -1,6 +1,7 @@
 //! Load scheduling: executors, streaming, and conflict-file loads.
 
 use super::*;
+use crate::msg::{ReferenceEffect, RepoCommandEffect, StatusEffect};
 
 #[test]
 fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
@@ -1551,7 +1552,7 @@ fn activation_load_effect_is_not_blocked_by_main_executor_queue() {
         &backend,
         &repos,
         msg_tx,
-        Effect::LoadStatus { repo_id },
+        Effect::Status(StatusEffect::LoadStatus { repo_id }),
     );
 
     let msg = msg_rx.recv_timeout(Duration::from_secs(1));
@@ -1575,9 +1576,9 @@ fn activation_load_effect_is_not_blocked_by_main_executor_queue() {
 fn slow_large_file_and_remote_tag_loads_do_not_block_other_repo_metadata() {
     for (load, expected) in [
         (
-            Effect::LoadRemoteTags {
+            Effect::References(ReferenceEffect::LoadRemoteTags {
                 repo_id: RepoId(510),
-            },
+            }),
             "remote_tags",
         ),
         (
@@ -1688,7 +1689,7 @@ fn slow_large_file_and_remote_tag_loads_do_not_block_other_repo_metadata() {
             &repos,
             &mut repo_task_tokens,
             msg_tx,
-            Effect::LoadTags { repo_id: repo_b },
+            Effect::References(ReferenceEffect::LoadTags { repo_id: repo_b }),
         );
 
         assert_eq!(
@@ -1743,12 +1744,27 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
     state.repos.push(repo_state);
     let commit_id = CommitId("deadbeef".into());
     let effect_specs: Vec<(Effect, usize)> = vec![
-        (Effect::LoadBranches { repo_id }, 1),
-        (Effect::LoadRemotes { repo_id }, 1),
-        (Effect::LoadRemoteBranches { repo_id }, 1),
-        (Effect::LoadStatus { repo_id }, 1),
-        (Effect::LoadHeadBranch { repo_id }, 1),
-        (Effect::LoadUpstreamDivergence { repo_id }, 1),
+        (
+            Effect::References(ReferenceEffect::LoadBranches { repo_id }),
+            1,
+        ),
+        (
+            Effect::References(ReferenceEffect::LoadRemotes { repo_id }),
+            1,
+        ),
+        (
+            Effect::References(ReferenceEffect::LoadRemoteBranches { repo_id }),
+            1,
+        ),
+        (Effect::Status(StatusEffect::LoadStatus { repo_id }), 1),
+        (
+            Effect::References(ReferenceEffect::LoadHeadBranch { repo_id }),
+            1,
+        ),
+        (
+            Effect::References(ReferenceEffect::LoadUpstreamDivergence { repo_id }),
+            1,
+        ),
         (
             Effect::LoadLog {
                 repo_id,
@@ -1775,8 +1791,11 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             },
             1,
         ),
-        (Effect::LoadTags { repo_id }, 1),
-        (Effect::LoadRemoteTags { repo_id }, 1),
+        (Effect::References(ReferenceEffect::LoadTags { repo_id }), 1),
+        (
+            Effect::References(ReferenceEffect::LoadRemoteTags { repo_id }),
+            1,
+        ),
         (Effect::LoadStashes { repo_id, limit: 3 }, 1),
         (Effect::LoadReflog { repo_id, limit: 5 }, 1),
         (
@@ -1856,14 +1875,14 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             1,
         ),
         (
-            Effect::SaveWorktreeFile {
+            Effect::RepoCommand(RepoCommandEffect::SaveWorktreeFile {
                 repo_id,
                 path: PathBuf::from("nested/new.txt"),
                 expected_contents: None,
                 contents: "content".to_string().into(),
                 stage: true,
                 completion: None,
-            },
+            }),
             1,
         ),
         (
@@ -1891,29 +1910,29 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             1,
         ),
         (
-            Effect::CherryPickCommit {
+            Effect::RepoCommand(RepoCommandEffect::CherryPickCommit {
                 repo_id,
                 commit_id: commit_id.clone(),
                 commit: true,
                 mainline: None,
                 summary: "pick me".into(),
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::RevertCommit {
+            Effect::RepoCommand(RepoCommandEffect::RevertCommit {
                 repo_id,
                 commit_id: commit_id.clone(),
                 commit: true,
                 mainline: None,
                 summary: "revert me".into(),
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::ApplyFileChange {
+            Effect::RepoCommand(RepoCommandEffect::ApplyFileChange {
                 commit_retry: None,
                 repo_id,
                 target: gitcomet_core::domain::ApplyChangeTarget::commit(
@@ -1922,7 +1941,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 ),
                 commit: false,
                 auth: None,
-            },
+            }),
             1,
         ),
         (
@@ -1966,37 +1985,37 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             1,
         ),
         (
-            Effect::ExportPatch {
+            Effect::RepoCommand(RepoCommandEffect::ExportPatch {
                 repo_id,
                 commit_id: commit_id.clone(),
                 dest: PathBuf::from("out.patch"),
-            },
+            }),
             1,
         ),
         (
-            Effect::ApplyPatch {
+            Effect::RepoCommand(RepoCommandEffect::ApplyPatch {
                 repo_id,
                 patch: PathBuf::from("change.patch"),
-            },
+            }),
             1,
         ),
         (
-            Effect::AddWorktree {
+            Effect::RepoCommand(RepoCommandEffect::AddWorktree {
                 repo_id,
                 path: PathBuf::from("wt"),
                 reference: Some("main".to_string()),
-            },
+            }),
             1,
         ),
         (
-            Effect::RemoveWorktree {
+            Effect::RepoCommand(RepoCommandEffect::RemoveWorktree {
                 repo_id,
                 path: PathBuf::from("wt"),
-            },
+            }),
             1,
         ),
         (
-            Effect::AddSubmodule {
+            Effect::RepoCommand(RepoCommandEffect::AddSubmodule {
                 repo_id,
                 url: "https://example.com/repo.git".to_string(),
                 path: PathBuf::from("sub"),
@@ -2006,45 +2025,45 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 approved_sources: Vec::new(),
                 remote_url_policy: Default::default(),
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::UpdateSubmodules {
+            Effect::RepoCommand(RepoCommandEffect::UpdateSubmodules {
                 approved_sources: Vec::new(),
                 repo_id,
                 remote_url_policy: Default::default(),
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::RemoveSubmodule {
+            Effect::RepoCommand(RepoCommandEffect::RemoveSubmodule {
                 repo_id,
                 path: PathBuf::from("sub"),
-            },
+            }),
             1,
         ),
         (
-            Effect::StageHunk {
+            Effect::RepoCommand(RepoCommandEffect::StageHunk {
                 repo_id,
                 patch: "@@ -1 +1 @@".to_string().into(),
-            },
+            }),
             1,
         ),
         (
-            Effect::UnstageHunk {
+            Effect::RepoCommand(RepoCommandEffect::UnstageHunk {
                 repo_id,
                 patch: "@@ -1 +1 @@".to_string().into(),
-            },
+            }),
             1,
         ),
         (
-            Effect::ApplyWorktreePatch {
+            Effect::RepoCommand(RepoCommandEffect::ApplyWorktreePatch {
                 repo_id,
                 patch: "@@ -1 +1 @@".to_string().into(),
                 reverse: true,
-            },
+            }),
             1,
         ),
         (
@@ -2108,7 +2127,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             1,
         ),
         (
-            Effect::SafePushAfterCommit {
+            Effect::RepoCommand(RepoCommandEffect::SafePushAfterCommit {
                 repo_id,
                 context: gitcomet_core::services::SafePushAfterCommitContext {
                     amend: false,
@@ -2117,61 +2136,67 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                     post_head: None,
                 },
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::FetchAll {
+            Effect::RepoCommand(RepoCommandEffect::FetchAll {
                 repo_id,
                 prune: true,
                 auth: None,
-            },
+            }),
             1,
         ),
-        (Effect::PruneMergedBranches { repo_id }, 1),
-        (Effect::PruneLocalTags { repo_id }, 1),
         (
-            Effect::Pull {
+            Effect::RepoCommand(RepoCommandEffect::PruneMergedBranches { repo_id }),
+            1,
+        ),
+        (
+            Effect::RepoCommand(RepoCommandEffect::PruneLocalTags { repo_id }),
+            1,
+        ),
+        (
+            Effect::RepoCommand(RepoCommandEffect::Pull {
                 repo_id,
                 mode: PullMode::FastForwardOnly,
                 prune: true,
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::PullBranch {
+            Effect::RepoCommand(RepoCommandEffect::PullBranch {
                 repo_id,
                 remote: "origin".to_string(),
                 branch: "main".to_string(),
                 prune: true,
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::MergeRef {
+            Effect::RepoCommand(RepoCommandEffect::MergeRef {
                 repo_id,
                 reference: "origin/main".to_string(),
-            },
+            }),
             1,
         ),
         (
-            Effect::SquashRef {
+            Effect::RepoCommand(RepoCommandEffect::SquashRef {
                 repo_id,
                 reference: "origin/main".to_string(),
-            },
+            }),
             1,
         ),
         (
-            Effect::Push {
+            Effect::RepoCommand(RepoCommandEffect::Push {
                 repo_id,
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::PushAfterCommit {
+            Effect::RepoCommand(RepoCommandEffect::PushAfterCommit {
                 repo_id,
                 target: gitcomet_core::services::SafePushAfterCommitTarget {
                     remote: "origin".to_string(),
@@ -2181,18 +2206,18 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 },
                 set_upstream: false,
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::ForcePush {
+            Effect::RepoCommand(RepoCommandEffect::ForcePush {
                 repo_id,
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::ForcePushWithLease {
+            Effect::RepoCommand(RepoCommandEffect::ForcePushWithLease {
                 repo_id,
                 lease: gitcomet_core::services::ForcePushLease {
                     remote: "origin".to_string(),
@@ -2202,157 +2227,163 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                     local_head: CommitId("2222222222222222222222222222222222222222".into()),
                 },
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::PushSetUpstream {
+            Effect::RepoCommand(RepoCommandEffect::PushSetUpstream {
                 repo_id,
                 remote: "origin".to_string(),
                 branch: "main".to_string(),
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::SetUpstreamBranch {
+            Effect::RepoCommand(RepoCommandEffect::SetUpstreamBranch {
                 repo_id,
                 branch: "main".to_string(),
                 upstream: Upstream {
                     remote: "origin".to_string(),
                     branch: "main".to_string(),
                 },
-            },
+            }),
             1,
         ),
         (
-            Effect::UnsetUpstreamBranch {
+            Effect::RepoCommand(RepoCommandEffect::UnsetUpstreamBranch {
                 repo_id,
                 branch: "main".to_string(),
-            },
+            }),
             1,
         ),
         (
-            Effect::DeleteRemoteBranch {
+            Effect::RepoCommand(RepoCommandEffect::DeleteRemoteBranch {
                 repo_id,
                 remote: "origin".to_string(),
                 branch: "main".to_string(),
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::Reset {
+            Effect::RepoCommand(RepoCommandEffect::Reset {
                 repo_id,
                 target: "HEAD~1".to_string(),
                 mode: gitcomet_core::services::ResetMode::Mixed,
-            },
+            }),
             1,
         ),
         (
-            Effect::Rebase {
+            Effect::RepoCommand(RepoCommandEffect::Rebase {
                 repo_id,
                 onto: "main".to_string(),
-            },
+            }),
             1,
         ),
         (
-            Effect::RebaseContinue {
+            Effect::RepoCommand(RepoCommandEffect::RebaseContinue {
                 repo_id,
                 auth: None,
-            },
+            }),
             1,
         ),
-        (Effect::RebaseAbort { repo_id }, 1),
-        (Effect::MergeAbort { repo_id }, 1),
         (
-            Effect::CreateTag {
+            Effect::RepoCommand(RepoCommandEffect::RebaseAbort { repo_id }),
+            1,
+        ),
+        (
+            Effect::RepoCommand(RepoCommandEffect::MergeAbort { repo_id }),
+            1,
+        ),
+        (
+            Effect::RepoCommand(RepoCommandEffect::CreateTag {
                 repo_id,
                 name: "v1.0.0".to_string(),
                 target: "HEAD".to_string(),
                 message: None,
                 annotated: false,
-            },
+            }),
             1,
         ),
         (
-            Effect::DeleteTag {
+            Effect::RepoCommand(RepoCommandEffect::DeleteTag {
                 repo_id,
                 name: "v1.0.0".to_string(),
-            },
+            }),
             1,
         ),
         (
-            Effect::PushTag {
-                repo_id,
-                remote: "origin".to_string(),
-                name: "v1.0.0".to_string(),
-                auth: None,
-            },
-            1,
-        ),
-        (
-            Effect::DeleteRemoteTag {
+            Effect::RepoCommand(RepoCommandEffect::PushTag {
                 repo_id,
                 remote: "origin".to_string(),
                 name: "v1.0.0".to_string(),
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::AddRemote {
+            Effect::RepoCommand(RepoCommandEffect::DeleteRemoteTag {
+                repo_id,
+                remote: "origin".to_string(),
+                name: "v1.0.0".to_string(),
+                auth: None,
+            }),
+            1,
+        ),
+        (
+            Effect::RepoCommand(RepoCommandEffect::AddRemote {
                 repo_id,
                 name: "origin".to_string(),
                 url: "https://example.com/repo.git".to_string(),
                 remote_url_policy: Default::default(),
-            },
+            }),
             1,
         ),
         (
-            Effect::RemoveRemote {
+            Effect::RepoCommand(RepoCommandEffect::RemoveRemote {
                 repo_id,
                 name: "origin".to_string(),
-            },
+            }),
             1,
         ),
         (
-            Effect::SetRemoteUrl {
+            Effect::RepoCommand(RepoCommandEffect::SetRemoteUrl {
                 repo_id,
                 name: "origin".to_string(),
                 url: "https://example.com/repo.git".to_string(),
                 kind: gitcomet_core::services::RemoteUrlKind::Fetch,
                 remote_url_policy: Default::default(),
-            },
+            }),
             1,
         ),
         (
-            Effect::CheckoutConflictSide {
+            Effect::RepoCommand(RepoCommandEffect::CheckoutConflictSide {
                 repo_id,
                 path: PathBuf::from("conflicted.txt"),
                 side: gitcomet_core::services::ConflictSide::Ours,
-            },
+            }),
             1,
         ),
         (
-            Effect::AcceptConflictDeletion {
+            Effect::RepoCommand(RepoCommandEffect::AcceptConflictDeletion {
                 repo_id,
                 path: PathBuf::from("conflicted.txt"),
-            },
+            }),
             1,
         ),
         (
-            Effect::CheckoutConflictBase {
+            Effect::RepoCommand(RepoCommandEffect::CheckoutConflictBase {
                 repo_id,
                 path: PathBuf::from("conflicted.txt"),
-            },
+            }),
             1,
         ),
         (
-            Effect::LaunchMergetool {
+            Effect::RepoCommand(RepoCommandEffect::LaunchMergetool {
                 repo_id,
                 path: PathBuf::from("conflicted.txt"),
-            },
+            }),
             1,
         ),
         (
@@ -2480,7 +2511,7 @@ fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
             effect,
             Effect::LoadWorktreeDirty { .. }
                 | Effect::LoadWorktrees { .. }
-                | Effect::LoadHeadBranch { .. }
+                | Effect::References(ReferenceEffect::LoadHeadBranch { .. })
         )
     }) {
         crate::store::effects::schedule_effect(

@@ -14,6 +14,7 @@ use crate::model::{
     SidebarMode,
 };
 use crate::msg::Effect;
+use crate::msg::{ControlEffect, PersistenceEffect, ReferenceEffect};
 use crate::session;
 use crate::store::repo_load_trace;
 use gitcomet_core::domain::RepoSpec;
@@ -91,15 +92,15 @@ fn persist_session_effect(
     repo_id: Option<RepoId>,
     action: &'static str,
 ) -> Effect {
-    Effect::PersistSession { repo_id, action }
+    Effect::Persistence(PersistenceEffect::PersistSession { repo_id, action })
 }
 
 fn persist_recent_repo_effect(repo_id: Option<RepoId>, workdir: PathBuf) -> Effect {
-    Effect::PersistRecentRepo {
+    Effect::Persistence(PersistenceEffect::PersistRecentRepo {
         repo_id,
         workdir,
         action: "updating recent repositories",
-    }
+    })
 }
 
 fn persist_repo_history_mode_effect(
@@ -107,12 +108,12 @@ fn persist_repo_history_mode_effect(
     workdir: PathBuf,
     mode: gitcomet_core::domain::HistoryMode,
 ) -> Effect {
-    Effect::PersistRepoHistoryMode {
+    Effect::Persistence(PersistenceEffect::PersistRepoHistoryMode {
         repo_id,
         workdir,
         mode,
         action: "updating history mode",
-    }
+    })
 }
 
 fn append_repo_switch_worktree_refresh_effect(
@@ -267,10 +268,12 @@ pub(in crate::store::reducer) fn append_cancel_repo_loads_effect_for_repo(
         repo_state.spec.workdir.display()
     );
     clear_cancelled_repo_loading(repo_state);
-    effects.extend(std::iter::once(Effect::CancelRepoLoads {
-        repo_id,
-        load_epoch,
-    }));
+    effects.extend(std::iter::once(Effect::Control(
+        ControlEffect::CancelRepoLoads {
+            repo_id,
+            load_epoch,
+        },
+    )));
 }
 
 /// Cancels the loads of the tab being switched away from, except a dropped
@@ -602,11 +605,13 @@ pub(super) fn restore_session(
     }
 
     if !history_mode_persist_updates.is_empty() {
-        effects.push(Effect::PersistRepoHistoryModesBatch {
-            repo_id: state.active_repo,
-            updates: history_mode_persist_updates,
-            action: "updating history mode",
-        });
+        effects.push(Effect::Persistence(
+            PersistenceEffect::PersistRepoHistoryModesBatch {
+                repo_id: state.active_repo,
+                updates: history_mode_persist_updates,
+                action: "updating history mode",
+            },
+        ));
     }
 
     effects.push(persist_session_effect(
@@ -1049,7 +1054,9 @@ fn fill_set_active_repo_inline_impl(
             append_refresh_primary_effects(repo_state, effects);
         }
         if changed && !use_full_refresh && repo_state.loads_in_flight.request(LoadKind::Branches) {
-            effects.push(Effect::LoadBranches { repo_id });
+            effects.push(Effect::References(ReferenceEffect::LoadBranches {
+                repo_id,
+            }));
         }
         if changed {
             append_repo_switch_worktree_refresh_effect(repo_state, effects);
@@ -1234,7 +1241,7 @@ pub(super) fn abort_clone_repo(state: &mut AppState, dest: PathBuf) -> Vec<Effec
 
     op.status = CloneOpStatus::Cancelling;
     op.seq = op.seq.wrapping_add(1);
-    vec![Effect::AbortCloneRepo { dest }]
+    vec![Effect::Control(ControlEffect::AbortCloneRepo { dest })]
 }
 
 pub(super) fn clone_repo_progress(

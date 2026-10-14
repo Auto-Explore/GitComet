@@ -1,4 +1,5 @@
 use super::*;
+use crate::msg::ControlEffect;
 
 #[test]
 fn selecting_a_new_diff_cancels_only_the_previous_diff() {
@@ -146,17 +147,21 @@ fn messages_without_selected_diff_work_skip_the_selection_index() {
 
 #[test]
 fn abort_clone_repo_does_not_require_available_git() {
-    assert!(!effect_requires_available_git(&Effect::AbortCloneRepo {
-        dest: std::path::PathBuf::from("/tmp/example"),
-    }));
+    assert!(
+        !Effect::Control(ControlEffect::AbortCloneRepo {
+            dest: std::path::PathBuf::from("/tmp/example"),
+        })
+        .requires_available_git()
+    );
 }
 
 #[test]
 fn cancel_git_operation_does_not_require_available_git() {
-    assert!(!effect_requires_available_git(
-        &Effect::CancelGitOperation {
+    assert!(
+        !Effect::Control(ControlEffect::CancelGitOperation {
             repo_id: RepoId(1),
             operation_id: gitcomet_core::git_operation::GitOperationId(7),
-        }
-    ));
+        })
+        .requires_available_git()
+    );
 }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::msg::{ControlEffect, PersistenceEffect, ReferenceEffect, StatusEffect};
 
 #[test]
 fn checkout_and_rename_start_one_worktree_scan_after_cancelling_old_loads() {
@@ -45,7 +46,12 @@ fn checkout_and_rename_start_one_worktree_scan_after_cancelling_old_loads() {
             );
             let cancel = effects
                 .iter()
-                .position(|effect| matches!(effect, Effect::CancelRepoLoads { .. }))
+                .position(|effect| {
+                    matches!(
+                        effect,
+                        Effect::Control(ControlEffect::CancelRepoLoads { .. })
+                    )
+                })
                 .unwrap();
             let scans: Vec<_> = effects
                 .iter()
@@ -336,21 +342,24 @@ fn external_worktree_change_refreshes_status_and_selected_diff() {
         "did not expect history refresh on pure worktree changes"
     );
     assert!(
-        !effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadHeadBranch { .. })),
+        !effects.iter().any(|e| matches!(
+            e,
+            Effect::References(ReferenceEffect::LoadHeadBranch { .. })
+        )),
         "did not expect head-branch refresh on pure worktree changes"
     );
     assert!(
-        !effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadUpstreamDivergence { .. })),
+        !effects.iter().any(|e| matches!(
+            e,
+            Effect::References(ReferenceEffect::LoadUpstreamDivergence { .. })
+        )),
         "did not expect upstream divergence refresh on pure worktree changes"
     );
     assert!(
         !effects.iter().any(|e| matches!(
             e,
-            Effect::LoadBranches { .. } | Effect::LoadRemoteBranches { .. }
+            Effect::References(ReferenceEffect::LoadBranches { .. })
+                | Effect::References(ReferenceEffect::LoadRemoteBranches { .. })
         )),
         "did not expect branch refresh on pure worktree changes"
     );
@@ -780,12 +789,12 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
     assert!(
         effects
             .iter()
-            .any(|e| matches!(e, Effect::LoadHeadBranch { repo_id } if *repo_id == RepoId(1))),
+            .any(|e| matches!(e, Effect::References(ReferenceEffect::LoadHeadBranch { repo_id }) if *repo_id == RepoId(1))),
         "expected head-branch refresh"
     );
     assert!(
         effects.iter().any(|e| {
-            matches!(e, Effect::LoadUpstreamDivergence { repo_id } if *repo_id == RepoId(1))
+            matches!(e, Effect::References(ReferenceEffect::LoadUpstreamDivergence { repo_id }) if *repo_id == RepoId(1))
         }),
         "expected upstream divergence refresh"
     );
@@ -799,12 +808,12 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
     assert!(
         effects
             .iter()
-            .any(|e| matches!(e, Effect::LoadBranches { repo_id } if *repo_id == RepoId(1))),
+            .any(|e| matches!(e, Effect::References(ReferenceEffect::LoadBranches { repo_id }) if *repo_id == RepoId(1))),
         "expected local branches refresh"
     );
     assert!(
         effects.iter().any(|e| {
-            matches!(e, Effect::LoadRemoteBranches { repo_id } if *repo_id == RepoId(1))
+            matches!(e, Effect::References(ReferenceEffect::LoadRemoteBranches { repo_id }) if *repo_id == RepoId(1))
         }),
         "expected remote branches refresh"
     );
@@ -848,16 +857,14 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
         },
     );
 
-    assert!(
-        effects1
-            .iter()
-            .any(|e| matches!(e, Effect::LoadHeadBranch { .. }))
-    );
-    assert!(
-        effects1
-            .iter()
-            .any(|e| matches!(e, Effect::LoadUpstreamDivergence { .. }))
-    );
+    assert!(effects1.iter().any(|e| matches!(
+        e,
+        Effect::References(ReferenceEffect::LoadHeadBranch { .. })
+    )));
+    assert!(effects1.iter().any(|e| matches!(
+        e,
+        Effect::References(ReferenceEffect::LoadUpstreamDivergence { .. })
+    )));
     assert!(
         effects1
             .iter()
@@ -899,7 +906,9 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::LoadHeadBranch { repo_id: RepoId(1) }]
+        [Effect::References(ReferenceEffect::LoadHeadBranch {
+            repo_id: RepoId(1)
+        })]
     ));
 
     let effects = reduce(
@@ -913,7 +922,9 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::LoadUpstreamDivergence { repo_id: RepoId(1) }]
+        [Effect::References(
+            ReferenceEffect::LoadUpstreamDivergence { repo_id: RepoId(1) }
+        )]
     ));
 
     let effects = reduce(
@@ -955,7 +966,9 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::LoadWorktreeStatus { repo_id: RepoId(1) }]
+        [Effect::Status(StatusEffect::LoadWorktreeStatus {
+            repo_id: RepoId(1)
+        })]
     ));
 
     let effects = reduce(
@@ -969,7 +982,9 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::LoadStagedStatus { repo_id: RepoId(1) }]
+        [Effect::Status(StatusEffect::LoadStagedStatus {
+            repo_id: RepoId(1)
+        })]
     ));
 
     let history_scope = state.repos[0].history_state.history_scope;
@@ -1083,13 +1098,15 @@ fn external_worktree_refresh_replays_coalesced_change_then_settles() {
     assert!(
         effects
             .iter()
-            .all(|e| !matches!(e, Effect::LoadWorktreeStatus { repo_id: rid } if *rid == repo_id)),
+            .all(|e| !matches!(e, Effect::Status(StatusEffect::LoadWorktreeStatus { repo_id: rid }) if *rid == repo_id)),
         "with no pending change the lane should stop replaying, got {effects:?}"
     );
     let generation = effects
         .iter()
         .find_map(|effect| match effect {
-            Effect::LoadUncommittedLineStats { generation, .. } => Some(*generation),
+            Effect::Status(StatusEffect::LoadUncommittedLineStats { generation, .. }) => {
+                Some(*generation)
+            }
             _ => None,
         })
         .expect("settled worktree status should schedule counts");
@@ -1257,14 +1274,14 @@ fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
     assert!(
         effects.iter().any(|effect| matches!(
             effect,
-            Effect::LoadTags { repo_id } if *repo_id == RepoId(1)
+            Effect::References(ReferenceEffect::LoadTags { repo_id }) if *repo_id == RepoId(1)
         )),
         "tags should auto-load in the background on repo reload"
     );
     assert!(
         effects.iter().any(|effect| matches!(
             effect,
-            Effect::LoadRemoteTags { repo_id } if *repo_id == RepoId(1)
+            Effect::References(ReferenceEffect::LoadRemoteTags { repo_id }) if *repo_id == RepoId(1)
         )),
         "remote tags should auto-load in the background on repo reload"
     );
@@ -2101,11 +2118,11 @@ fn set_history_scope_emits_load_log_effect_for_every_history_mode() {
         assert!(
             effects.iter().any(|effect| matches!(
                 effect,
-                Effect::PersistRepoHistoryMode {
+                Effect::Persistence(PersistenceEffect::PersistRepoHistoryMode {
                     repo_id: Some(RepoId(1)),
                     mode,
                     ..
-                } if *mode == target_scope
+                }) if *mode == target_scope
             )),
             "expected async history mode persist effect for {target_scope:?}, got {effects:?}"
         );
@@ -3421,7 +3438,7 @@ fn external_tags_change_reloads_tags() {
     assert!(
         effects
             .iter()
-            .any(|e| matches!(e, Effect::LoadTags { repo_id: id } if *id == repo_id)),
+            .any(|e| matches!(e, Effect::References(ReferenceEffect::LoadTags { repo_id: id }) if *id == repo_id)),
         "expected LoadTags effect on external tags change"
     );
 
@@ -3472,7 +3489,9 @@ fn external_git_state_change_without_tags_flag_does_not_reload_tags() {
     );
 
     assert!(
-        !effects.iter().any(|e| matches!(e, Effect::LoadTags { .. })),
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::References(ReferenceEffect::LoadTags { .. }))),
         "LoadTags should not fire for a git_state change without tags flag"
     );
     assert!(
@@ -3522,7 +3541,7 @@ fn external_tags_change_without_git_state_flag_reloads_tags() {
     assert!(
         effects
             .iter()
-            .any(|e| matches!(e, Effect::LoadTags { repo_id: id } if *id == repo_id)),
+            .any(|e| matches!(e, Effect::References(ReferenceEffect::LoadTags { repo_id: id }) if *id == repo_id)),
         "expected LoadTags effect when only the tags flag is set"
     );
 }
@@ -3833,9 +3852,10 @@ fn cancelling_repo_loads_clears_the_scan_progress() {
     );
 
     assert!(
-        effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::CancelRepoLoads { .. })),
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::Control(ControlEffect::CancelRepoLoads { .. })
+        )),
         "the completed action must cancel the loads in flight, got {effects:?}"
     );
     assert_eq!(
@@ -4428,7 +4448,10 @@ fn line_stats_completion_replays_one_pending_refresh_then_settles() {
         assert_eq!(
             effects
                 .iter()
-                .filter(|e| matches!(e, Effect::LoadUncommittedLineStats { .. }))
+                .filter(|e| matches!(
+                    e,
+                    Effect::Status(StatusEffect::LoadUncommittedLineStats { .. })
+                ))
                 .count(),
             expected_replays
         );
@@ -4436,9 +4459,10 @@ fn line_stats_completion_replays_one_pending_refresh_then_settles() {
             state.repos[0].loads_in_flight.line_stats_in_flight(),
             expected_replays == 1
         );
-        if let Some(Effect::LoadUncommittedLineStats {
-            generation: next, ..
-        }) = effects.first()
+        if let Some(Effect::Status(StatusEffect::LoadUncommittedLineStats {
+            generation: next,
+            ..
+        })) = effects.first()
         {
             generation = *next;
         }

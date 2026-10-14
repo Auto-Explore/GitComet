@@ -1,5 +1,6 @@
 use super::*;
 use crate::model::{CloneOpStatus, CloneProgressStage, DiagnosticKind, Loadable, RepoState};
+use crate::msg::StatusEffect;
 use crate::msg::{Effect, RepoActionKind, RepoCommandKind};
 use gitcomet_core::domain::{
     Branch, Commit, CommitDetails, CommitId, DiffArea, DiffTarget, LogCursor, LogPage, LogScope,
@@ -86,7 +87,7 @@ fn has_worktree_status_effect(effects: &[Effect], repo_id: RepoId) -> bool {
     effects.iter().any(|effect| {
         matches!(
             effect,
-            Effect::LoadWorktreeStatus { repo_id: candidate } if *candidate == repo_id
+            Effect::Status(StatusEffect::LoadWorktreeStatus { repo_id: candidate }) if *candidate == repo_id
         )
     })
 }
@@ -95,7 +96,7 @@ fn has_staged_status_effect(effects: &[Effect], repo_id: RepoId) -> bool {
     effects.iter().any(|effect| {
         matches!(
             effect,
-            Effect::LoadStagedStatus { repo_id: candidate } if *candidate == repo_id
+            Effect::Status(StatusEffect::LoadStagedStatus { repo_id: candidate }) if *candidate == repo_id
         )
     })
 }
@@ -104,7 +105,7 @@ fn has_combined_status_effect(effects: &[Effect], repo_id: RepoId) -> bool {
     effects.iter().any(|effect| {
         matches!(
             effect,
-            Effect::LoadStatus { repo_id: candidate } if *candidate == repo_id
+            Effect::Status(StatusEffect::LoadStatus { repo_id: candidate }) if *candidate == repo_id
         )
     })
 }

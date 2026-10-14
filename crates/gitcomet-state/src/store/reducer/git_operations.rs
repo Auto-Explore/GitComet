@@ -3,6 +3,7 @@
 
 use super::{external_and_history, git_hook_activity, reduce};
 use crate::model::{AppState, GitOperationOuterOutcome, RepoId};
+use crate::msg::ControlEffect;
 use crate::msg::{Effect, InternalMsg, Msg};
 use gitcomet_core::git_operation::{GitOperationEvent, GitOperationId};
 use gitcomet_core::services::GitRepository;
@@ -22,10 +23,10 @@ pub(super) fn cancel_git_operation(
         .find(|repo| repo.id == repo_id)
         .is_some_and(|repo| git_hook_activity::request_cancel(repo, operation_id));
     requested
-        .then_some(Effect::CancelGitOperation {
+        .then_some(Effect::Control(ControlEffect::CancelGitOperation {
             repo_id,
             operation_id,
-        })
+        }))
         .into_iter()
         .collect()
 }

@@ -1,6 +1,7 @@
 //! Repository operations: stash, branches, checkout, clone, saves, attributes.
 
 use super::*;
+use crate::msg::{PersistenceEffect, RepoCommandEffect};
 
 /// Exercise a worker effect and feed all its replies through the reducer.
 fn apply_effect_with_state_for_test(
@@ -411,14 +412,14 @@ fn file_save_receipts_wait_for_execution_and_report_success_or_failure() {
             &backend,
             &repos,
             msg_tx,
-            Effect::SaveWorktreeFile {
+            Effect::RepoCommand(RepoCommandEffect::SaveWorktreeFile {
                 repo_id,
                 path: PathBuf::from(path),
                 contents: "saved contents".to_string().into(),
                 expected_contents: None,
                 stage: false,
                 completion: Some(completion),
-            },
+            }),
         );
         assert_eq!(received.try_recv(), Err(smol::channel::TryRecvError::Empty));
         release.send(()).unwrap();
@@ -471,11 +472,11 @@ fn session_update_effects_persist_on_session_executor() {
         &backend,
         &repos,
         msg_tx.clone(),
-        Effect::PersistRecentRepo {
+        Effect::Persistence(PersistenceEffect::PersistRecentRepo {
             repo_id: Some(RepoId(1)),
             workdir: repo_a.clone(),
             action: "test recent",
-        },
+        }),
     );
     schedule_effect_for_test(
         &executor,
@@ -483,12 +484,12 @@ fn session_update_effects_persist_on_session_executor() {
         &backend,
         &repos,
         msg_tx.clone(),
-        Effect::PersistRepoHistoryMode {
+        Effect::Persistence(PersistenceEffect::PersistRepoHistoryMode {
             repo_id: Some(RepoId(1)),
             workdir: repo_a.clone(),
             mode: LogScope::NoMerges,
             action: "test history mode",
-        },
+        }),
     );
     schedule_effect_for_test(
         &executor,
@@ -496,11 +497,11 @@ fn session_update_effects_persist_on_session_executor() {
         &backend,
         &repos,
         msg_tx,
-        Effect::PersistRepoHistoryModesBatch {
+        Effect::Persistence(PersistenceEffect::PersistRepoHistoryModesBatch {
             repo_id: Some(RepoId(1)),
             updates: vec![(repo_b.clone(), LogScope::FirstParent)],
             action: "test history batch",
-        },
+        }),
     );
 
     let (completed_tx, completed_rx) = std::sync::mpsc::channel();
@@ -566,11 +567,11 @@ fn safe_push_after_commit_effect_carries_auth_to_finished_message() {
         &backend,
         &repos,
         msg_tx,
-        Effect::SafePushAfterCommit {
+        Effect::RepoCommand(RepoCommandEffect::SafePushAfterCommit {
             repo_id,
             context: context.clone(),
             auth: Some(auth.clone()),
-        },
+        }),
     );
 
     let msg = msg_rx
@@ -822,14 +823,14 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         &backend,
         &repos,
         msg_tx.clone(),
-        Effect::SaveWorktreeFile {
+        Effect::RepoCommand(RepoCommandEffect::SaveWorktreeFile {
             repo_id,
             path: rel.clone(),
             expected_contents: None,
             contents: contents.to_string().into(),
             stage: true,
             completion: None,
-        },
+        }),
     );
 
     let mut saw_write_and_stage = false;
@@ -882,14 +883,14 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         &backend,
         &repos,
         msg_tx,
-        Effect::SaveWorktreeFile {
+        Effect::RepoCommand(RepoCommandEffect::SaveWorktreeFile {
             repo_id,
             path: escaped_path,
             expected_contents: None,
             contents: "escape".to_string().into(),
             stage: false,
             completion: None,
-        },
+        }),
     );
 
     let start = Instant::now();
@@ -1056,7 +1057,7 @@ fn append_gitignore_patterns_effect_creates_appends_and_dedupes() {
             &backend,
             &repos,
             msg_tx,
-            Effect::AppendGitignorePatterns { repo_id, patterns },
+            Effect::RepoCommand(RepoCommandEffect::AppendGitignorePatterns { repo_id, patterns }),
         );
         let start = Instant::now();
         while start.elapsed() < Duration::from_secs(5) {
@@ -1259,10 +1260,10 @@ fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
         &backend,
         &repos,
         msg_tx,
-        Effect::CheckoutConflictBase {
+        Effect::RepoCommand(RepoCommandEffect::CheckoutConflictBase {
             repo_id,
             path: rel.clone(),
-        },
+        }),
     );
 
     let start = Instant::now();
@@ -1422,10 +1423,10 @@ fn accept_conflict_deletion_effect_calls_repo_and_emits_finished() {
         &backend,
         &repos,
         msg_tx,
-        Effect::AcceptConflictDeletion {
+        Effect::RepoCommand(RepoCommandEffect::AcceptConflictDeletion {
             repo_id,
             path: rel.clone(),
-        },
+        }),
     );
 
     let start = Instant::now();
@@ -2519,13 +2520,13 @@ fn run_apply_file_change_effect_with_retry(
         &backend,
         &repos,
         msg_tx,
-        Effect::ApplyFileChange {
+        Effect::RepoCommand(RepoCommandEffect::ApplyFileChange {
             commit_retry,
             repo_id,
             target,
             commit,
             auth: None,
-        },
+        }),
     );
     let mut msgs = Vec::new();
     loop {
@@ -2703,10 +2704,10 @@ fn push_lifecycle_uses_cached_tracking_branch_context() {
             ..AppState::test_default()
         },
         msg_tx,
-        Effect::Push {
+        Effect::RepoCommand(RepoCommandEffect::Push {
             repo_id,
             auth: None,
-        },
+        }),
     );
 
     match msg_rx
@@ -3487,12 +3488,12 @@ fn pull_releases_the_object_store_before_its_refresh() {
         &backend,
         &repos,
         msg_tx,
-        Effect::Pull {
+        Effect::RepoCommand(RepoCommandEffect::Pull {
             repo_id: RepoId(1),
             mode: PullMode::Default,
             prune: false,
             auth: None,
-        },
+        }),
     );
 
     let finished = loop {

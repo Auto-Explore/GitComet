@@ -4,6 +4,7 @@ use crate::model::{
     RepositoryFileSort, RepositoryKey, RepositoryListKind, RepositoryPreferenceUpdate,
     RepositoryPreferencesSnapshot, SharedRepositoryPreferences,
 };
+use crate::msg::PersistenceEffect;
 use gitcomet_core::domain::HistoryMode;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -529,16 +530,23 @@ fn same_history_selection_overrides_a_queued_worktree_choice_without_reloading()
     );
     assert!(matches!(
         second.as_slice(),
-        [Effect::UpdateRepositoryPreferences {
-            repo_id: RepoId(2),
-            update: RepositoryPreferenceUpdate::HistoryMode(HistoryMode::FullReachable),
-            ..
-        }]
+        [Effect::Persistence(
+            PersistenceEffect::UpdateRepositoryPreferences {
+                repo_id: RepoId(2),
+                update: RepositoryPreferenceUpdate::HistoryMode(HistoryMode::FullReachable),
+                ..
+            }
+        )]
     ));
     assert_eq!(state.repos[1].log_rev, linked_log_rev);
     assert!(matches!(state.repos[1].log, Loadable::Ready(_)));
     for effect in first.iter().chain(&second) {
-        if let Effect::UpdateRepositoryPreferences { key, update, .. } = effect {
+        if let Effect::Persistence(PersistenceEffect::UpdateRepositoryPreferences {
+            key,
+            update,
+            ..
+        }) = effect
+        {
             hub.update(key.clone(), update).unwrap();
         }
     }

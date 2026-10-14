@@ -1,4 +1,5 @@
 use super::*;
+use crate::msg::{ControlEffect, PersistenceEffect, ReferenceEffect};
 
 #[test]
 fn open_repo_sets_opening_and_emits_effect() {
@@ -22,11 +23,10 @@ fn open_repo_sets_opening_and_emits_effect() {
             .iter()
             .any(|e| matches!(e, Effect::OpenRepo { repo_id, .. } if *repo_id == RepoId(1)))
     );
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::PersistSession { .. }))
-    );
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::Persistence(PersistenceEffect::PersistSession { .. })
+    )));
 }
 
 #[test]
@@ -56,9 +56,9 @@ fn dropped_repo_stays_provisional_until_the_backend_opens_it() {
     ));
     assert!(!effects.iter().any(|effect| matches!(
         effect,
-        Effect::PersistRecentRepo { .. }
-            | Effect::PersistSession { .. }
-            | Effect::PersistRepoHistoryMode { .. }
+        Effect::Persistence(PersistenceEffect::PersistRecentRepo { .. })
+            | Effect::Persistence(PersistenceEffect::PersistSession { .. })
+            | Effect::Persistence(PersistenceEffect::PersistRepoHistoryMode { .. })
     )));
 }
 
@@ -83,11 +83,10 @@ fn repeating_or_closing_a_provisional_drop_never_records_it_as_recent() {
     );
     assert_eq!(state.repos.len(), 1);
     assert!(state.repos[0].is_provisional_external_drop_open());
-    assert!(
-        !repeated_effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::PersistRecentRepo { .. }))
-    );
+    assert!(!repeated_effects.iter().any(|effect| matches!(
+        effect,
+        Effect::Persistence(PersistenceEffect::PersistRecentRepo { .. })
+    )));
 
     let close_effects = reduce(
         &mut repos,
@@ -96,16 +95,14 @@ fn repeating_or_closing_a_provisional_drop_never_records_it_as_recent() {
         Msg::CloseRepo { repo_id: RepoId(1) },
     );
     assert!(state.repos.is_empty());
-    assert!(
-        !close_effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::PersistRecentRepo { .. }))
-    );
-    assert!(
-        close_effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::PersistSession { .. }))
-    );
+    assert!(!close_effects.iter().any(|effect| matches!(
+        effect,
+        Effect::Persistence(PersistenceEffect::PersistRecentRepo { .. })
+    )));
+    assert!(close_effects.iter().any(|effect| matches!(
+        effect,
+        Effect::Persistence(PersistenceEffect::PersistSession { .. })
+    )));
 }
 
 #[test]
@@ -140,7 +137,7 @@ fn bulk_close_skips_provisional_drop_when_recording_recents() {
     let recent_repo_ids: Vec<_> = effects
         .iter()
         .filter_map(|effect| match effect {
-            Effect::PersistRecentRepo { repo_id, .. } => *repo_id,
+            Effect::Persistence(PersistenceEffect::PersistRecentRepo { repo_id, .. }) => *repo_id,
             _ => None,
         })
         .collect();
@@ -177,24 +174,24 @@ fn successful_dropped_repo_commits_and_emits_deferred_persistence() {
     assert!(!state.repos[0].is_provisional_external_drop_open());
     assert!(effects.iter().any(|effect| matches!(
         effect,
-        Effect::PersistRecentRepo {
+        Effect::Persistence(PersistenceEffect::PersistRecentRepo {
             repo_id: Some(RepoId(1)),
             ..
-        }
+        })
     )));
     assert!(effects.iter().any(|effect| matches!(
         effect,
-        Effect::PersistSession {
+        Effect::Persistence(PersistenceEffect::PersistSession {
             repo_id: Some(RepoId(1)),
             ..
-        }
+        })
     )));
     assert!(effects.iter().any(|effect| matches!(
         effect,
-        Effect::PersistRepoHistoryMode {
+        Effect::Persistence(PersistenceEffect::PersistRepoHistoryMode {
             repo_id: Some(RepoId(1)),
             ..
-        }
+        })
     )));
 }
 
@@ -325,7 +322,7 @@ fn failed_dropped_repo_restores_the_repo_active_before_the_drop() {
         |effect| matches!(effect, Effect::LoadLog { repo_id, .. } if *repo_id == original_active)
     ));
     assert!(failure_effects.iter().any(
-        |effect| matches!(effect, Effect::LoadBranches { repo_id } if *repo_id == original_active)
+        |effect| matches!(effect, Effect::References(ReferenceEffect::LoadBranches { repo_id }) if *repo_id == original_active)
     ));
 }
 
@@ -398,11 +395,10 @@ fn open_repo_allows_same_basename_in_different_folders() {
             .iter()
             .any(|e| matches!(e, Effect::OpenRepo { repo_id, .. } if *repo_id == RepoId(2)))
     );
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::PersistSession { .. }))
-    );
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::Persistence(PersistenceEffect::PersistSession { .. })
+    )));
     assert_eq!(state.repos.len(), 2);
     assert_eq!(state.active_repo, Some(RepoId(2)));
 
@@ -572,7 +568,11 @@ fn open_repo_persists_resolved_history_mode_and_keeps_it_sticky() {
     let persist_history = effects
         .iter()
         .find_map(|effect| match effect {
-            Effect::PersistRepoHistoryMode { workdir, mode, .. } => Some((workdir, mode)),
+            Effect::Persistence(PersistenceEffect::PersistRepoHistoryMode {
+                workdir,
+                mode,
+                ..
+            }) => Some((workdir, mode)),
             _ => None,
         })
         .expect("expected async history mode persist effect");
@@ -652,7 +652,7 @@ fn fail_drop_as_not_a_repository(
 
 fn cancels_loads_of(effects: &[Effect], repo_id: RepoId) -> bool {
     effects.iter().any(
-        |effect| matches!(effect, Effect::CancelRepoLoads { repo_id: id, .. } if *id == repo_id),
+        |effect| matches!(effect, Effect::Control(ControlEffect::CancelRepoLoads { repo_id: id, .. }) if *id == repo_id),
     )
 }
 

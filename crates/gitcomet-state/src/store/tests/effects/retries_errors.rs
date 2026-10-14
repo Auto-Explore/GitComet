@@ -1,6 +1,7 @@
 //! Errors: unavailable Git, missing handles, stale worktree routing.
 
 use super::*;
+use crate::msg::{PersistenceEffect, RepoCommandEffect};
 
 #[test]
 fn history_author_filter_persistence_does_not_depend_on_available_git() {
@@ -30,12 +31,12 @@ fn history_author_filter_persistence_does_not_depend_on_available_git() {
         &FxHashMap::default(),
         state,
         tx,
-        Effect::PersistRepoHistoryAuthorFilter {
+        Effect::Persistence(PersistenceEffect::PersistRepoHistoryAuthorFilter {
             repo_id: Some(RepoId(7)),
             workdir: workdir.clone(),
             author: Some("alice".into()),
             action: "remember author filter",
-        },
+        }),
     );
     session_executor.join();
     executor.join();
@@ -81,11 +82,11 @@ fn unavailable_git_effect_emits_synthetic_repo_command_error() {
         &repos,
         state,
         msg_tx,
-        Effect::FetchAll {
+        Effect::RepoCommand(RepoCommandEffect::FetchAll {
             repo_id: RepoId(7),
             prune: true,
             auth: None,
-        },
+        }),
     );
 
     let msg = msg_rx
@@ -141,14 +142,14 @@ fn unavailable_git_revert_emits_synthetic_revert_command_error() {
         &repos,
         state,
         msg_tx,
-        Effect::RevertCommit {
+        Effect::RepoCommand(RepoCommandEffect::RevertCommit {
             repo_id: RepoId(7),
             commit_id: commit_id.clone(),
             commit: false,
             mainline: Some(1),
             summary: "revert me".into(),
             auth: None,
-        },
+        }),
     );
 
     let msg = msg_rx

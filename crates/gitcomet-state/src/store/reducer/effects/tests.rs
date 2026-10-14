@@ -3,6 +3,7 @@ use crate::model::LoadKind;
 use crate::model::{
     ConflictFile, PendingFileBrowserReopen, RepoState, SidebarDataRequest, SidebarMode,
 };
+use crate::msg::{ReferenceEffect, StatusEffect};
 use gitcomet_core::domain::{
     DiffArea, DiffTarget, FileConflictKind, FileEntry, FileEntryKind, FileSource, FileStatus,
     LogScope, RemoteBranch, RepoSpec,
@@ -779,7 +780,7 @@ fn load_requests_set_loading_and_emit_effects() {
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadTags { repo_id: rid } if rid == repo_id
+        Effect::References(ReferenceEffect::LoadTags { repo_id: rid }) if rid == repo_id
     ));
     assert!(repo_mut(&mut state, repo_id).tags.is_loading());
     assert!(load_tags(&mut state, repo_id).is_empty());
@@ -801,7 +802,7 @@ fn load_requests_set_loading_and_emit_effects() {
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadBranches { repo_id: rid } if rid == repo_id
+        Effect::References(ReferenceEffect::LoadBranches { repo_id: rid }) if rid == repo_id
     ));
     assert!(refresh_branches(&mut state, repo_id).is_empty());
 
@@ -1449,7 +1450,7 @@ fn loaded_handlers_reschedule_when_pending() {
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadBranches { repo_id: rid } if rid == repo_id
+        Effect::References(ReferenceEffect::LoadBranches { repo_id: rid }) if rid == repo_id
     ));
     assert!(matches!(
         repo_mut(&mut state, repo_id).branches,
@@ -1461,7 +1462,7 @@ fn loaded_handlers_reschedule_when_pending() {
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadRemotes { repo_id: rid } if rid == repo_id
+        Effect::References(ReferenceEffect::LoadRemotes { repo_id: rid }) if rid == repo_id
     ));
     assert!(matches!(
         repo_mut(&mut state, repo_id).remotes,
@@ -1473,7 +1474,7 @@ fn loaded_handlers_reschedule_when_pending() {
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadRemoteBranches { repo_id: rid } if rid == repo_id
+        Effect::References(ReferenceEffect::LoadRemoteBranches { repo_id: rid }) if rid == repo_id
     ));
     assert!(matches!(
         repo_mut(&mut state, repo_id).remote_branches,
@@ -1510,7 +1511,7 @@ fn loaded_handlers_reschedule_when_pending() {
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadHeadBranch { repo_id: rid } if rid == repo_id
+        Effect::References(ReferenceEffect::LoadHeadBranch { repo_id: rid }) if rid == repo_id
     ));
     assert!(matches!(
         repo_mut(&mut state, repo_id).head_branch,
@@ -1529,7 +1530,7 @@ fn loaded_handlers_reschedule_when_pending() {
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadUpstreamDivergence { repo_id: rid } if rid == repo_id
+        Effect::References(ReferenceEffect::LoadUpstreamDivergence { repo_id: rid }) if rid == repo_id
     ));
     assert!(matches!(
         repo_mut(&mut state, repo_id).upstream_divergence,
@@ -1571,7 +1572,7 @@ fn loaded_handlers_reschedule_when_pending() {
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadTags { repo_id: rid } if rid == repo_id
+        Effect::References(ReferenceEffect::LoadTags { repo_id: rid }) if rid == repo_id
     ));
     assert!(matches!(
         repo_mut(&mut state, repo_id).tags,
@@ -1583,7 +1584,7 @@ fn loaded_handlers_reschedule_when_pending() {
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadRemoteTags { repo_id: rid } if rid == repo_id
+        Effect::References(ReferenceEffect::LoadRemoteTags { repo_id: rid }) if rid == repo_id
     ));
     assert!(matches!(
         repo_mut(&mut state, repo_id).remote_tags,
@@ -1609,7 +1610,7 @@ fn status_lanes_replay_pending_refresh_even_when_payload_unchanged() {
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadWorktreeStatus { repo_id: rid } if rid == repo_id
+        Effect::Status(StatusEffect::LoadWorktreeStatus { repo_id: rid }) if rid == repo_id
     ));
     assert!(
         repo_mut(&mut state, repo_id)
@@ -1626,7 +1627,7 @@ fn status_lanes_replay_pending_refresh_even_when_payload_unchanged() {
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadWorktreeStatus { repo_id: rid } if rid == repo_id
+        Effect::Status(StatusEffect::LoadWorktreeStatus { repo_id: rid }) if rid == repo_id
     ));
 
     // Staged-only lane.
@@ -1637,7 +1638,7 @@ fn status_lanes_replay_pending_refresh_even_when_payload_unchanged() {
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadStagedStatus { repo_id: rid } if rid == repo_id
+        Effect::Status(StatusEffect::LoadStagedStatus { repo_id: rid }) if rid == repo_id
     ));
 }
 
@@ -1739,7 +1740,7 @@ fn superseded_remote_branch_load_keeps_the_last_complete_snapshot() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::LoadRemoteBranches { repo_id: id }] if *id == repo_id
+        [Effect::References(ReferenceEffect::LoadRemoteBranches { repo_id: id })] if *id == repo_id
     ));
     assert!(matches!(
         &repo_mut(&mut state, repo_id).remote_branches,
@@ -1900,7 +1901,7 @@ fn status_loaded_clears_resolved_conflicts_and_preserves_unresolved_ones() {
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
-        Effect::LoadWorktreeStatus { repo_id: rid } if rid == repo_id
+        Effect::Status(StatusEffect::LoadWorktreeStatus { repo_id: rid }) if rid == repo_id
     ));
     {
         let repo = repo_mut(&mut state, repo_id);
