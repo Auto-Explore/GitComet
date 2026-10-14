@@ -251,7 +251,7 @@ fn promote_within_recents_cap<T: PartialEq>(list: &mut Vec<T>, value: T) {
     list.truncate(MAX_RECENT_REPOS);
 }
 
-/// [`promote_within_recents_cap`] for a caller holding its own copy of what
+/// `promote_within_recents_cap` for a caller holding its own copy of what
 /// [`UiSession::recent_repos`] last returned: applies one recents bump to that
 /// copy so it still matches the file after [`persist_recent_repo`] writes it.
 pub fn promote_recent_repo(recents: &mut Vec<PathBuf>, workdir: &Path) {
