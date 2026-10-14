@@ -29,7 +29,7 @@ impl Reservation {
         // watched roots. Keep the same process-wide /12 margin as notify.
         let budget = (limit.rlim_cur as usize / 12).min(MAX_REGISTRATIONS);
         ACTIVE_STREAMS
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
                 count.checked_add(1).filter(|next| *next <= budget)
             })
             .map_err(|_| notify::Error::generic("FSEvents process path budget exhausted"))?;

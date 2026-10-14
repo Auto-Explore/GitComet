@@ -119,16 +119,10 @@ fn append_repo_switch_worktree_refresh_effect(
     repo_state: &mut RepoState,
     effects: &mut SetActiveRepoEffects,
 ) {
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::WORKTREES)
-    {
-        if !matches!(repo_state.worktrees, Loadable::Ready(_)) {
-            repo_state.set_worktrees(Loadable::Loading);
-        }
-        effects.push(Effect::LoadWorktrees {
-            repo_id: repo_state.id,
-        });
+    // Keep list loading independent of the serial scan worker: a checkout on
+    // an unavailable filesystem can block that worker across repo switches.
+    if let Some(effect) = super::effects::request_worktrees_effect(repo_state) {
+        effects.push(effect);
     }
     if let Some(effect) = super::effects::request_worktree_dirty_effect(repo_state) {
         effects.push(effect);
@@ -1025,6 +1019,7 @@ fn fill_set_active_repo_inline_impl(
         + selected_history_reloads.len()
         + usize::from(persist_effect.is_some())
         + usize::from(changed)
+        + usize::from(changed)
         + usize::from(changed && !use_full_refresh)
         + usize::from(file_browser_load.is_some())
         + usize::from(repo_state.sidebar_data_request.worktrees)
@@ -1419,13 +1414,8 @@ pub(super) fn repo_opened_ok(
     let follow_selection = state.file_browser_settings.follow_selected_commit;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         effects.extend(refresh_full_effects(repo_state, git_log_settings));
-        if should_refresh_worktrees
-            && repo_state
-                .loads_in_flight
-                .request(RepoLoadsInFlight::WORKTREES)
-        {
-            repo_state.set_worktrees(Loadable::Loading);
-            effects.push(Effect::LoadWorktrees { repo_id });
+        if let Some(effect) = super::effects::request_worktrees_effect(repo_state) {
+            effects.push(effect);
         }
         // The history rows want this from the moment the repo opens, and the
         // switch-time trigger fires before the handle exists, so this is the

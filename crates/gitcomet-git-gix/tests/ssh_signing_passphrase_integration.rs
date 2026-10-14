@@ -25,7 +25,7 @@ fn auth_test_lock() -> MutexGuard<'static, ()> {
 }
 
 fn run_git(repo: &Path, args: &[&str]) {
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     cmd.arg("-C").arg(repo).args(args);
     test_git_env::apply(&mut cmd);
     let output = cmd.output().expect("run git command");
@@ -37,7 +37,7 @@ fn run_git(repo: &Path, args: &[&str]) {
 }
 
 fn git_stdout(repo: &Path, args: &[&str]) -> String {
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     cmd.arg("-C").arg(repo).args(args);
     test_git_env::apply(&mut cmd);
     let output = cmd.output().expect("run git command");

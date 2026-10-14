@@ -1301,12 +1301,11 @@ fn sidebar_rows(
                     });
                 }
             }
-            Loadable::Loading => rows.push(BranchSidebarRow::WorktreePlaceholder {
-                message: "Loading".into(),
-            }),
-            Loadable::NotLoaded => rows.push(BranchSidebarRow::WorktreePlaceholder {
-                message: "Loading".into(),
-            }),
+            Loadable::Loading | Loadable::NotLoaded => {
+                rows.push(BranchSidebarRow::WorktreePlaceholder {
+                    message: "Loading".into(),
+                })
+            }
             Loadable::Error(error) => rows.push(BranchSidebarRow::WorktreePlaceholder {
                 message: error.clone().into(),
             }),
@@ -3161,6 +3160,32 @@ mod tests {
             branch_sidebar_worktree_label(None, true, "/tmp/repo").as_ref(),
             "(detached)  /tmp/repo"
         );
+    }
+
+    #[test]
+    fn expanded_worktrees_show_loading_until_a_list_arrives() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            gitcomet_core::domain::RepoSpec {
+                workdir: "/repo".into(),
+            },
+        );
+        for worktrees in [Loadable::NotLoaded, Loadable::Loading] {
+            repo.worktrees = worktrees;
+            let mut collapsed = BTreeSet::new();
+            set_collapse_state(&mut collapsed, worktrees_section_storage_key(), false);
+            let rows = branch_sidebar_rows(&repo, &collapsed, &BTreeSet::new(), "");
+            assert!(rows.iter().any(|row| matches!(row,
+                BranchSidebarRow::WorktreePlaceholder { message } if message.as_ref() == "Loading"
+            )), "an expanded section must explain why there are no rows");
+            set_collapse_state(&mut collapsed, worktrees_section_storage_key(), true);
+            let rows = branch_sidebar_rows(&repo, &collapsed, &BTreeSet::new(), "");
+            assert!(
+                !rows
+                    .iter()
+                    .any(|row| matches!(row, BranchSidebarRow::WorktreePlaceholder { .. }))
+            );
+        }
     }
 
     #[test]

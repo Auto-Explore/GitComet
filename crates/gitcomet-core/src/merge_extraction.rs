@@ -11,8 +11,6 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
-#[cfg(test)]
-use std::process::Command;
 use std::process::Output;
 
 /// A merge commit with exactly two parents.
@@ -594,7 +592,7 @@ mod tests {
     }
 
     fn run_git(repo: &Path, args: &[&str]) {
-        let output = Command::new("git")
+        let output = crate::test_support::git_fixture::git_command()
             .arg("-c")
             .arg("commit.gpgsign=false")
             .args(args)
@@ -645,7 +643,7 @@ mod tests {
         run_git(repo, &["add", "a.txt", "z.txt", "img.bin"]);
         run_git(repo, &["commit", "-m", "branch-b changes"]);
 
-        let output = Command::new("git")
+        let output = crate::test_support::git_fixture::git_command()
             .args(["merge", "branch-a", "--no-edit"])
             .current_dir(repo)
             .output()
@@ -691,7 +689,7 @@ mod tests {
         run_git(repo, &["add", "moddel.txt", "addadd.txt"]);
         run_git(repo, &["commit", "-m", "branch-b modify+add"]);
 
-        let output = Command::new("git")
+        let output = crate::test_support::git_fixture::git_command()
             .args(["merge", "branch-a", "--no-edit"])
             .current_dir(repo)
             .output()

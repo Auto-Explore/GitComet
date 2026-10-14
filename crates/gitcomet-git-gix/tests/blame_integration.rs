@@ -5,10 +5,9 @@ use gitcomet_git_gix::GixBackend;
 #[path = "support/test_git_env.rs"]
 mod test_git_env;
 use std::path::Path;
-use std::process::Command;
 
 fn run_git(repo: &Path, args: &[&str]) {
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut cmd);
     let status = cmd
         .arg("-C")
@@ -24,7 +23,7 @@ fn run_git(repo: &Path, args: &[&str]) {
 }
 
 fn git_stdout(repo: &Path, args: &[&str]) -> String {
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut cmd);
     let output = cmd
         .arg("-C")
@@ -55,7 +54,7 @@ fn blame_file_reports_head_and_explicit_revision() {
         ],
     );
 
-    let mut import = Command::new("git");
+    let mut import = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut import);
     import.arg("-C").arg(repo);
     import_linear_history(
@@ -470,7 +469,7 @@ fn blame_worktree_staged_succeeds_for_conflicted_file() {
     );
 
     // The merge conflicts; do not assert success.
-    let mut merge = Command::new("git");
+    let mut merge = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut merge);
     let _ = merge
         .arg("-C")

@@ -734,8 +734,6 @@ dependencies = [
 [[package]]
 name = "block"
 version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d8c1fef690941d3e7788d328517591fecc684c084084702d6ff1641e993699a"
 
 [[package]]
 name = "block-buffer"
@@ -1869,6 +1867,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "fast_image_resize"
+version = "6.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9c50201dc184ba6553da1695aac20a042efffbe2d84542cee31917c86c3ab1e"
+dependencies = [
+ "bytemuck",
+ "cfg-if",
+ "document-features",
+ "image",
+ "num-traits",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "faster-hex"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2390,6 +2402,7 @@ dependencies = [
  "faster-hex 1.0.0",
  "filetime",
  "fnv",
+ "gitcomet-core",
  "gitcomet-filesystem-native",
  "gix-quote",
  "jiff",
@@ -2547,6 +2560,7 @@ dependencies = [
  "anyhow",
  "criterion",
  "dekobon-tree-sitter-groovy",
+ "fast_image_resize",
  "fontdb 0.24.0",
  "futures",
  "gitcomet-core",

@@ -324,8 +324,6 @@ pub(in crate::view) struct FileImagePreviewAnimationSide {
 pub(in crate::view) struct FileImagePreviewAnimation {
     pub(in crate::view) old: FileImagePreviewAnimationSide,
     pub(in crate::view) new: FileImagePreviewAnimationSide,
-    pub(in crate::view) scheduled_deadline: Option<std::time::Instant>,
-    pub(in crate::view) generation: u64,
 }
 
 impl DiffHorizontalScrollState {
@@ -737,6 +735,10 @@ pub(crate) struct MainPaneView {
     /// [`MainPaneView::main_pane_surface`].
     pub(in crate::view) main_pane_surface_memo: RefCell<Option<MainPaneSurfaceMemo>>,
 
+    pub(in crate::view) image_preview_group: Entity<crate::view::image_preview::Group>,
+    pub(in crate::view) image_preview_active: bool,
+    pub(in crate::view) file_image_sources: [Option<Arc<crate::view::image_preview::Source>>; 2],
+
     // Image diff decoding and animation.
     pub(in crate::view) file_image_diff_cache_repo_id: Option<RepoId>,
     pub(in crate::view) file_image_diff_cache_rev: u64,
@@ -752,7 +754,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_image_diff_cache_old_svg_path: Option<std::path::PathBuf>,
     pub(in crate::view) file_image_diff_cache_new_svg_path: Option<std::path::PathBuf>,
     pub(in crate::view) file_image_preview_animation: FileImagePreviewAnimation,
-    pub(in crate::view) file_image_preview_animation_task: Option<gpui::Task<()>>,
+    pub(in crate::view) file_image_preview_timer: crate::view::image_preview::FrameTimer,
 
     // Conflict image preview loading.
     pub(in crate::view) conflict_image_preview_seq: u64,

@@ -262,6 +262,8 @@ pub(in super::super) struct PopoverHost {
     prompt_tab_group_focus_handle: FocusHandle,
     prompt_tab_wrap_end_focus_handle: FocusHandle,
     context_menu_selected_ix: Option<usize>,
+    worktree_menu_location: Option<(std::path::PathBuf, bool)>,
+    worktree_menu_location_task: Option<gpui::Task<()>>,
     context_menu_scroll: ScrollHandle,
     /// Where the open context menu sits, measured and resolved each frame by
     /// the kit's `menu_placement` element.

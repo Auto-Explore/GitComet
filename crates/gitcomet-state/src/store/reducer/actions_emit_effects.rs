@@ -1484,8 +1484,11 @@ pub(super) fn repo_command_finished(
     }
 
     if refresh_worktrees {
-        repo_state.set_worktrees(Loadable::Loading);
-        extra_effects.push(Effect::LoadWorktrees { repo_id });
+        // Keep the sidebar's rows and scroll range intact until the new list
+        // arrives. Blanking them after a removal makes the viewport jump.
+        if let Some(effect) = super::effects::request_worktrees_effect(repo_state) {
+            extra_effects.push(effect);
+        }
     }
     if command_succeeded
         && let Some(target) = selected_submodule_target_changed_by_command(repo_state, &command)

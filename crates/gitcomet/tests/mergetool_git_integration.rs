@@ -44,7 +44,7 @@ fn is_effectively_absolute_path(value: &str) -> bool {
 
 fn run_git(repo: &Path, args: &[&str]) {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let mut cmd = no_window_command("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     apply_isolated_git_config_env(&mut cmd);
     let output = cmd
         .arg("-C")
@@ -63,7 +63,7 @@ fn run_git(repo: &Path, args: &[&str]) {
 
 fn run_git_capture(repo: &Path, args: &[&str]) -> Output {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let mut cmd = no_window_command("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     apply_isolated_git_config_env(&mut cmd);
     cmd.arg("-C")
         .arg(repo)
@@ -74,7 +74,7 @@ fn run_git_capture(repo: &Path, args: &[&str]) -> Output {
 
 fn run_git_capture_with_env(repo: &Path, args: &[&str], env_vars: &[(&str, &str)]) -> Output {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let mut cmd = no_window_command("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     apply_isolated_git_config_env(&mut cmd);
     cmd.arg("-C").arg(repo).args(args);
     for (key, value) in env_vars {
@@ -85,7 +85,7 @@ fn run_git_capture_with_env(repo: &Path, args: &[&str], env_vars: &[(&str, &str)
 
 fn run_git_capture_in(cwd: &Path, args: &[&str]) -> Output {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let mut cmd = no_window_command("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     apply_isolated_git_config_env(&mut cmd);
     cmd.current_dir(cwd)
         .args(args)
@@ -107,7 +107,7 @@ fn run_git_expect_failure(repo: &Path, args: &[&str]) -> Output {
 
 fn run_git_capture_with_display(repo: &Path, args: &[&str], display: Option<&str>) -> Output {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let mut cmd = no_window_command("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     apply_isolated_git_config_env(&mut cmd);
     cmd.arg("-C").arg(repo).args(args);
     if let Some(display) = display {
@@ -129,7 +129,7 @@ fn run_git_with_stdin_and_env(
     env_vars: &[(&str, &str)],
 ) -> Output {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let mut cmd = no_window_command("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     apply_isolated_git_config_env(&mut cmd);
     for (key, value) in env_vars {
         cmd.env(key, value);
@@ -513,7 +513,7 @@ fn setup_whitespace_only_conflict_at_path(repo: &Path, path: &str) {
 }
 
 fn import_conflict_base_and_theirs(repo: &Path, path: &str, theirs: &str, message: &str) {
-    let mut command = no_window_command("git");
+    let mut command = gitcomet_core::test_support::git_fixture::git_command();
     apply_isolated_git_config_env(&mut command);
     command.arg("-C").arg(repo);
     import_linear_history(
@@ -1648,7 +1648,7 @@ fn git_mergetool_tool_help_lists_gitcomet_tool() {
     init_repo(repo);
     configure_gitcomet_mergetool(repo);
 
-    let mut command = no_window_command("git");
+    let mut command = gitcomet_core::test_support::git_fixture::git_command();
     apply_isolated_git_config_env(&mut command);
     let output = capture_tool_help(command.arg("-C").arg(repo), "mergetool");
     let text = output_text(&output);

@@ -576,12 +576,13 @@ impl MainPaneView {
         conflict_target_path: Option<std::path::PathBuf>,
         repo_id: Option<RepoId>,
         theme: AppTheme,
-        ui_scale_percent: u32,
         editor_font_family: String,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let _perf_scope =
             crate::view::perf::span(crate::view::perf::ViewPerfSpan::RenderConflictResolverPane);
+        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
         let repo = self.active_repo();
         match (repo, conflict_target_path) {
             (None, _) => {
@@ -615,6 +616,7 @@ impl MainPaneView {
                                     repo_id,
                                     path,
                                     &file,
+                                    window,
                                     cx,
                                 )
                             }
@@ -1217,7 +1219,7 @@ impl MainPaneView {
                             } else if is_rendered_preview_active {
                                 match preview_kind {
                                     Some(RenderedPreviewKind::Svg) => self
-                                        .render_conflict_resolver_svg_preview(theme, cx),
+                                        .render_conflict_resolver_svg_preview(theme, window, cx),
                                     Some(RenderedPreviewKind::Markdown) => self
                                         .render_conflict_resolver_markdown_preview(theme, cx),
                                     None | Some(RenderedPreviewKind::Diagram) => components::empty_state(
@@ -2241,6 +2243,7 @@ impl MainPaneView {
     fn render_conflict_resolver_svg_preview(
         &mut self,
         theme: AppTheme,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
@@ -2270,10 +2273,18 @@ impl MainPaneView {
             .image(ThreeWayColumn::Theirs)
             .clone();
 
-        let preview_cell = |id: &'static str,
-                            label: &'static str,
-                            image: Loadable<Option<ConflictPreviewImage>>,
-                            has_source: bool| {
+        let group = self.prepare_conflict_image_preview(window, cx);
+        let sources = self
+            .conflict_resolver
+            .image_preview
+            .sources
+            .each_ref()
+            .map(Option::is_some);
+        let mut preview_cell = |side: usize,
+                                id: &'static str,
+                                label: &'static str,
+                                image: Loadable<Option<ConflictPreviewImage>>,
+                                has_source: bool| {
             div()
                 .id(id)
                 .flex_1()
@@ -2304,40 +2315,44 @@ impl MainPaneView {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(match image {
-                            Loadable::Ready(Some(ConflictPreviewImage::Encoded(image))) => {
-                                gpui::img(image)
-                                    .w_full()
-                                    .h_full()
-                                    .object_fit(gpui::ObjectFit::Contain)
-                                    .into_any_element()
+                        .child(if sources[side] {
+                            self.image_preview_viewport(group.clone(), side, cx)
+                        } else {
+                            match image {
+                                Loadable::Ready(Some(ConflictPreviewImage::Encoded(image))) => {
+                                    gpui::img(image)
+                                        .w_full()
+                                        .h_full()
+                                        .object_fit(gpui::ObjectFit::Contain)
+                                        .into_any_element()
+                                }
+                                Loadable::Ready(Some(ConflictPreviewImage::Rendered(image))) => {
+                                    preview_render_image_element(image, 0, clamp_preview_size)
+                                        .w_full()
+                                        .h_full()
+                                        .into_any_element()
+                                }
+                                Loadable::NotLoaded | Loadable::Loading if has_source => div()
+                                    .text_size(theme.ui_text(12.0))
+                                    .text_color(theme.colors.foreground.secondary)
+                                    .child("Processing preview...")
+                                    .into_any_element(),
+                                Loadable::Error(error) => div()
+                                    .text_size(theme.ui_text(12.0))
+                                    .text_color(theme.colors.foreground.secondary)
+                                    .child(error)
+                                    .into_any_element(),
+                                Loadable::Ready(None) if has_source => div()
+                                    .text_size(theme.ui_text(12.0))
+                                    .text_color(theme.colors.foreground.secondary)
+                                    .child("Preview unavailable.")
+                                    .into_any_element(),
+                                _ => div()
+                                    .text_size(theme.ui_text(12.0))
+                                    .text_color(theme.colors.foreground.secondary)
+                                    .child("(empty)")
+                                    .into_any_element(),
                             }
-                            Loadable::Ready(Some(ConflictPreviewImage::Rendered(image))) => {
-                                preview_render_image_element(image, 0, clamp_preview_size)
-                                    .w_full()
-                                    .h_full()
-                                    .into_any_element()
-                            }
-                            Loadable::NotLoaded | Loadable::Loading if has_source => div()
-                                .text_size(theme.ui_text(12.0))
-                                .text_color(theme.colors.foreground.secondary)
-                                .child("Processing preview...")
-                                .into_any_element(),
-                            Loadable::Error(error) => div()
-                                .text_size(theme.ui_text(12.0))
-                                .text_color(theme.colors.foreground.secondary)
-                                .child(error)
-                                .into_any_element(),
-                            Loadable::Ready(None) if has_source => div()
-                                .text_size(theme.ui_text(12.0))
-                                .text_color(theme.colors.foreground.secondary)
-                                .child("Preview unavailable.")
-                                .into_any_element(),
-                            _ => div()
-                                .text_size(theme.ui_text(12.0))
-                                .text_color(theme.colors.foreground.secondary)
-                                .child("(empty)")
-                                .into_any_element(),
                         }),
                 )
         };
@@ -2352,18 +2367,21 @@ impl MainPaneView {
             .p_2()
             .bg(theme.colors.surface.canvas)
             .child(preview_cell(
+                0,
                 "conflict_preview_base",
                 "Base (A)",
                 base_img,
                 base_has_source,
             ))
             .child(preview_cell(
+                1,
                 "conflict_preview_ours",
                 "Local (B)",
                 ours_img,
                 ours_has_source,
             ))
             .child(preview_cell(
+                2,
                 "conflict_preview_theirs",
                 "Remote (C)",
                 theirs_img,

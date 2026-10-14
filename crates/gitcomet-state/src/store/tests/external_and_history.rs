@@ -1,6 +1,83 @@
 use super::*;
 
 #[test]
+fn checkout_and_rename_start_one_worktree_scan_after_cancelling_old_loads() {
+    for action in [
+        RepoActionKind::CheckoutBranch,
+        RepoActionKind::CheckoutRemoteBranch,
+        RepoActionKind::CheckoutCommit,
+        RepoActionKind::CreateBranchAndCheckout,
+        RepoActionKind::RenameBranch,
+    ] {
+        for active in [false, true] {
+            let repo_id = RepoId(1);
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                RepoSpec {
+                    workdir: "/repo".into(),
+                },
+            );
+            repo.set_open(Loadable::Ready(()));
+            repo.set_worktrees(Loadable::Ready(Vec::new()));
+            let mut state = AppState {
+                repos: vec![repo],
+                active_repo: active.then_some(repo_id),
+                ..AppState::test_default()
+            };
+            let mut repos = FxHashMap::default();
+            let ids = AtomicU64::new(2);
+            reduce(
+                &mut repos,
+                &ids,
+                &mut state,
+                Msg::LoadWorktreeDirty { repo_id },
+            );
+            let old_epoch = state.repos[0].load_epoch;
+            let effects = reduce(
+                &mut repos,
+                &ids,
+                &mut state,
+                Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+                    repo_id,
+                    action,
+                    result: Ok(()),
+                }),
+            );
+            let cancel = effects
+                .iter()
+                .position(|effect| matches!(effect, Effect::CancelRepoLoads { .. }))
+                .unwrap();
+            let scans: Vec<_> = effects
+                .iter()
+                .enumerate()
+                .filter(|(_, effect)| {
+                    matches!(
+                        effect,
+                        Effect::LoadWorktreeDirty {
+                            scope: crate::model::WorktreeDirtyScope::All,
+                            ..
+                        }
+                    )
+                })
+                .collect();
+            assert_eq!(scans.len(), 1, "{action:?}: {effects:?}");
+            assert!(cancel < scans[0].0);
+            assert!(
+                !effects
+                    .iter()
+                    .any(|effect| matches!(effect, Effect::LoadWorktrees { .. }))
+            );
+            assert!(state.repos[0].load_epoch > old_epoch);
+            assert!(
+                state.repos[0]
+                    .loads_in_flight
+                    .is_in_flight(crate::model::RepoLoadsInFlight::WORKTREE_DIRTY)
+            );
+        }
+    }
+}
+
+#[test]
 fn activation_refresh_scans_worktrees_once_and_real_follow_up_changes_are_retained() {
     for external_change_during_scan in [false, true] {
         let mut state = AppState::test_default();
@@ -25,7 +102,14 @@ fn activation_refresh_scans_worktrees_once_and_real_follow_up_changes_are_retain
                 .filter(|effect| matches!(effect, Effect::LoadWorktreeDirty { .. }))
                 .count()
         };
-        assert_eq!(count(&reduce(&mut repos, &ids, &mut state, refresh())), 1);
+        let effects = reduce(&mut repos, &ids, &mut state, refresh());
+        assert_eq!(count(&effects), 1);
+        assert!(
+            effects
+                .iter()
+                .all(|effect| !matches!(effect, Effect::LoadWorktrees { .. })),
+            "external refresh reuses the scan's listing, without a second Git command"
+        );
         if external_change_during_scan {
             assert_eq!(count(&reduce(&mut repos, &ids, &mut state, refresh())), 0);
         }
@@ -1232,8 +1316,14 @@ fn reload_repo_reloads_requested_sidebar_data() {
     assert!(state.repos[0].stashes.is_loading());
     assert!(effects.iter().any(|effect| matches!(
         effect,
-        Effect::LoadWorktrees { repo_id: id } if *id == repo_id
+        Effect::LoadWorktreeDirty { repo_id: id, scope: crate::model::WorktreeDirtyScope::All, .. } if *id == repo_id
     )));
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadWorktrees { .. })),
+        "reload must not depend on the dirty scan's worker"
+    );
     assert!(effects.iter().any(|effect| matches!(
         effect,
         Effect::LoadStashes { repo_id: id, .. } if *id == repo_id

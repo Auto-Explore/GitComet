@@ -539,11 +539,8 @@ fn pre_open_worktree_lazy_load_retries_after_repo_opened() {
     );
 
     assert!(state.repos[0].worktrees.is_loading());
-    assert!(
-        effects.iter().any(
-            |effect| matches!(effect, Effect::LoadWorktrees { repo_id: rid } if *rid == repo_id)
-        )
-    );
+    assert!(has_worktree_refresh_effect(&effects, repo_id));
+    assert_independent_worktree_list_load(&effects, repo_id);
 }
 
 #[test]
@@ -1945,6 +1942,7 @@ fn set_active_repo_hot_switch_skips_secondary_refresh_when_metadata_is_ready() {
         has_worktree_refresh_effect(&effects, repo1),
         "expected worktrees refresh on activation"
     );
+    assert_independent_worktree_list_load(&effects, repo1);
     assert!(has_status_refresh_effects(&effects, repo1));
     assert!(
         effects
@@ -1991,6 +1989,7 @@ fn set_active_repo_uses_full_refresh_when_hot_switch_metadata_is_incomplete() {
         has_worktree_refresh_effect(&effects, repo1),
         "expected worktrees refresh even on the full refresh path"
     );
+    assert_independent_worktree_list_load(&effects, repo1);
 }
 
 #[test]

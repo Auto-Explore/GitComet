@@ -17,6 +17,8 @@ members = [
   "crates/gitcomet-ui-kit",
 ]
 exclude = [
+  "vendor/block",
+  "vendor/block/test_utils",
   "vendor/mermaid-rs-renderer",
   "crates/gitcomet-filesystem-native",
   "crates/win32-window-utils",
@@ -77,6 +79,10 @@ authors = ["AutoExplore Oy <info@autoexplore.ai>"]
 repository = "https://github.com/Auto-Explore/GitComet"
 rust-version = "1.99.0"
 
+[patch.crates-io]
+# block 0.1.6 has no released fix for its uninhabited extern class static.
+block = { path = "vendor/block" }
+
 [workspace.dependencies]
 # Internal crates
 gitcomet-app = { path = "crates/gitcomet-app", default-features = false }
@@ -125,6 +131,7 @@ gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havune
 gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "020fb167b57bfd743e4b86208c42490d0dbdd216" }
 gpui_parley = { package = "gpui_ce_parley", git = "https://github.com/Havunen/gpui-ce.git", rev = "020fb167b57bfd743e4b86208c42490d0dbdd216", default-features = false }
 image = "0.25.10"
+fast_image_resize = { version = "6.1.0", features = ["image"] }
 # Already in the dependency graph; merges sorted reference streams lazily.
 itertools = "0.15.0"
 # Already in the tree via gix-date; used directly for system-timezone lookups.

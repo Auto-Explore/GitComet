@@ -60,7 +60,7 @@ fn attribute_refresh_redecodes_staged_and_commit_diffs() {
     repos.insert(repo_id, repo.clone());
     let executor = super::super::executor::TaskExecutor::new(1);
     let resolve_commit = |revision: &str| {
-        let output = Command::new("git")
+        let output = gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["rev-parse", revision])
@@ -2470,7 +2470,7 @@ fn apply_file_change_fixture(repo: &Path) -> String {
     run_git(repo, &["checkout", "-q", "-b", "feature"]);
     fs::write(repo.join("a.txt"), "one\nTWO\n").expect("write feature");
     run_git(repo, &["commit", "-q", "-am", "feature subject\n\nbody"]);
-    let output = Command::new("git")
+    let output = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "HEAD"])
@@ -2740,11 +2740,9 @@ fn wait_for_checkout_refresh_messages(
     msg_rx: &std::sync::mpsc::Receiver<Msg>,
     repo_id: RepoId,
     expect_refresh_branches: bool,
-    expect_load_worktrees: bool,
 ) {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut saw_refresh_branches = false;
-    let mut saw_load_worktrees = false;
     let mut saw_finished = false;
 
     while Instant::now() < deadline {
@@ -2759,7 +2757,10 @@ fn wait_for_checkout_refresh_messages(
                 saw_refresh_branches = true;
             }
             Msg::LoadWorktrees { repo_id: rid } if rid == repo_id => {
-                saw_load_worktrees = true;
+                panic!("worktree refreshes must be requested after action completion");
+            }
+            Msg::LoadWorktreeDirty { repo_id: rid } if rid == repo_id => {
+                panic!("dirty scans must be requested after action completion");
             }
             Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id: rid,
@@ -2771,10 +2772,7 @@ fn wait_for_checkout_refresh_messages(
             _ => {}
         }
 
-        if saw_finished
-            && saw_refresh_branches == expect_refresh_branches
-            && saw_load_worktrees == expect_load_worktrees
-        {
+        if saw_finished && saw_refresh_branches == expect_refresh_branches {
             return;
         }
     }
@@ -2783,10 +2781,6 @@ fn wait_for_checkout_refresh_messages(
         saw_refresh_branches, expect_refresh_branches,
         "unexpected RefreshBranches emission for repo {repo_id:?}"
     );
-    assert_eq!(
-        saw_load_worktrees, expect_load_worktrees,
-        "unexpected LoadWorktrees emission for repo {repo_id:?}"
-    );
     assert!(
         saw_finished,
         "expected RepoActionFinished for repo {repo_id:?}"
@@ -2794,7 +2788,7 @@ fn wait_for_checkout_refresh_messages(
 }
 
 #[test]
-fn checkout_branch_effect_requests_branch_and_worktree_reload_on_success() {
+fn checkout_branch_effect_defers_worktree_refresh_until_completion() {
     let repo_id = RepoId(700);
     let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
     let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
@@ -2828,7 +2822,7 @@ fn checkout_branch_effect_requests_branch_and_worktree_reload_on_success() {
         },
     );
 
-    wait_for_checkout_refresh_messages(&msg_rx, repo_id, true, true);
+    wait_for_checkout_refresh_messages(&msg_rx, repo_id, true);
     assert_eq!(
         *calls.lock().expect("checkout recording mutex"),
         vec!["checkout feature".to_string()]
@@ -2836,7 +2830,7 @@ fn checkout_branch_effect_requests_branch_and_worktree_reload_on_success() {
 }
 
 #[test]
-fn checkout_remote_branch_effect_requests_branch_and_worktree_reload_on_success() {
+fn checkout_remote_branch_effect_defers_worktree_refresh_until_completion() {
     let repo_id = RepoId(701);
     let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
     let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
@@ -2873,7 +2867,7 @@ fn checkout_remote_branch_effect_requests_branch_and_worktree_reload_on_success(
         },
     );
 
-    wait_for_checkout_refresh_messages(&msg_rx, repo_id, true, true);
+    wait_for_checkout_refresh_messages(&msg_rx, repo_id, true);
     assert_eq!(
         *calls.lock().expect("checkout recording mutex"),
         vec!["checkout_remote origin/feature -> feature (Overwrite)".to_string()]
@@ -2881,7 +2875,7 @@ fn checkout_remote_branch_effect_requests_branch_and_worktree_reload_on_success(
 }
 
 #[test]
-fn checkout_commit_effect_requests_worktree_reload_on_success() {
+fn checkout_commit_effect_defers_worktree_refresh_until_completion() {
     let repo_id = RepoId(702);
     let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
     let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
@@ -2916,7 +2910,7 @@ fn checkout_commit_effect_requests_worktree_reload_on_success() {
         },
     );
 
-    wait_for_checkout_refresh_messages(&msg_rx, repo_id, false, true);
+    wait_for_checkout_refresh_messages(&msg_rx, repo_id, false);
     assert_eq!(
         *calls.lock().expect("checkout recording mutex"),
         vec![format!("checkout_commit {}", commit_id.as_ref())]
@@ -2924,7 +2918,7 @@ fn checkout_commit_effect_requests_worktree_reload_on_success() {
 }
 
 #[test]
-fn create_branch_and_checkout_effect_requests_branch_and_worktree_reload_on_success() {
+fn create_branch_and_checkout_effect_defers_worktree_refresh_until_completion() {
     let repo_id = RepoId(703);
     let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
     let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
@@ -2960,7 +2954,7 @@ fn create_branch_and_checkout_effect_requests_branch_and_worktree_reload_on_succ
         },
     );
 
-    wait_for_checkout_refresh_messages(&msg_rx, repo_id, true, true);
+    wait_for_checkout_refresh_messages(&msg_rx, repo_id, true);
     assert_eq!(
         *calls.lock().expect("checkout recording mutex"),
         vec![
@@ -3007,7 +3001,7 @@ fn create_branch_and_checkout_force_effect_skips_separate_create_and_checkout() 
         },
     );
 
-    wait_for_checkout_refresh_messages(&msg_rx, repo_id, true, true);
+    wait_for_checkout_refresh_messages(&msg_rx, repo_id, true);
     assert_eq!(
         *calls.lock().expect("checkout recording mutex"),
         vec!["force-create-and-checkout feature HEAD".to_string()]
@@ -3078,22 +3072,10 @@ fn create_branch_and_checkout_effect_routes_collision_with_original_target() {
     );
 }
 
-fn assert_refreshes_branches_and_worktrees(others: &[Msg], repo_id: RepoId) {
-    assert_eq!(others.len(), 3, "unexpected messages: {others:?}");
+fn assert_only_branches_refresh_before_completion(others: &[Msg], repo_id: RepoId) {
     assert!(
-        others
-            .iter()
-            .any(|msg| matches!(msg, Msg::RefreshBranches { repo_id: id } if *id == repo_id))
-    );
-    assert!(
-        others
-            .iter()
-            .any(|msg| matches!(msg, Msg::LoadWorktrees { repo_id: id } if *id == repo_id))
-    );
-    assert!(
-        others
-            .iter()
-            .any(|msg| matches!(msg, Msg::LoadWorktreeDirty { repo_id: id } if *id == repo_id))
+        matches!(others, [Msg::RefreshBranches { repo_id: id }] if *id == repo_id),
+        "worktree refreshes must wait for action completion: {others:?}"
     );
 }
 
@@ -3144,7 +3126,7 @@ fn create_branch_and_checkout_force_effect_runs_in_other_worktree() {
     );
 
     let (others, finished) = recv_until_action_finished(&msg_rx);
-    assert_refreshes_branches_and_worktrees(&others, repo_id);
+    assert_only_branches_refresh_before_completion(&others, repo_id);
     assert!(matches!(
         &finished,
         Msg::Internal(crate::msg::InternalMsg::RepoActionFinishedInWorktree {
@@ -3186,7 +3168,7 @@ fn checkout_remote_branch_overwrite_effect_runs_in_other_worktree() {
     );
 
     let (others, finished) = recv_until_action_finished(&msg_rx);
-    assert_refreshes_branches_and_worktrees(&others, repo_id);
+    assert_only_branches_refresh_before_completion(&others, repo_id);
     assert!(matches!(
         &finished,
         Msg::Internal(crate::msg::InternalMsg::RepoActionFinishedInWorktree {
@@ -3220,7 +3202,7 @@ fn checkout_remote_branch_create_effect_runs_here_even_when_branch_is_elsewhere(
     );
 
     let (others, finished) = recv_until_action_finished(&msg_rx);
-    assert_refreshes_branches_and_worktrees(&others, repo_id);
+    assert_only_branches_refresh_before_completion(&others, repo_id);
     assert!(matches!(
         &finished,
         Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
@@ -3331,7 +3313,7 @@ fn rename_branch_effect_finishes_normally_without_collision() {
     );
 
     let (others, finished) = recv_until_action_finished(&msg_rx);
-    assert_refreshes_branches_and_worktrees(&others, repo_id);
+    assert_only_branches_refresh_before_completion(&others, repo_id);
     assert!(matches!(
         &finished,
         Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
@@ -3362,7 +3344,7 @@ fn rename_branch_force_effect_runs_in_other_worktree() {
     );
 
     let (others, finished) = recv_until_action_finished(&msg_rx);
-    assert_refreshes_branches_and_worktrees(&others, repo_id);
+    assert_only_branches_refresh_before_completion(&others, repo_id);
     assert!(matches!(
         &finished,
         Msg::Internal(crate::msg::InternalMsg::RepoActionFinishedInWorktree {

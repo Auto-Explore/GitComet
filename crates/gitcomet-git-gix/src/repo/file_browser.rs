@@ -279,7 +279,6 @@ mod tests {
     use gitcomet_core::domain::{CommitId, FileEntry, FileEntryKind};
     use std::fs;
     use std::path::Path;
-    use std::process::Command;
 
     fn paths_of(entries: &[FileEntry]) -> Vec<String> {
         entries
@@ -289,7 +288,7 @@ mod tests {
     }
 
     fn git_success(workdir: &Path, args: &[&str]) {
-        let output = Command::new("git")
+        let output = gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(args)
@@ -449,7 +448,7 @@ mod tests {
 
         let head_entries = repo.list_worktree_files_impl().expect("head tree");
 
-        let output = Command::new("git")
+        let output = gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["rev-parse", "HEAD"])
@@ -482,7 +481,7 @@ mod tests {
 
         commit_file(workdir, "only_in_first.txt", "first", "first commit");
 
-        let output = Command::new("git")
+        let output = gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["rev-parse", "HEAD"])

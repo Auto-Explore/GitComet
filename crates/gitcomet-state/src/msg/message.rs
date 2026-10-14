@@ -27,6 +27,40 @@ use super::repo_command_kind::RepoCommandKind;
 use super::repo_external_change::RepoExternalChange;
 use super::{RepoPath, RepoPathList};
 
+/// Orders worktree lists read by the explicit loader and the dirty scanner.
+/// Construct immediately before reading, inside the worker, so queue delays
+/// do not give an older snapshot precedence over a newer one.
+#[derive(Clone, Copy, Debug)]
+pub struct WorktreeListRead {
+    pub(crate) seq: u64,
+    pub(crate) completes_load: bool,
+}
+
+impl WorktreeListRead {
+    pub(crate) fn explicit() -> Self {
+        Self::start(true)
+    }
+
+    /// Inject a test observation without completing a real loader's request.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn observation_for_test() -> Self {
+        Self::from_dirty_scan()
+    }
+
+    pub(crate) fn from_dirty_scan() -> Self {
+        Self::start(false)
+    }
+
+    fn start(completes_load: bool) -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_READ: AtomicU64 = AtomicU64::new(1);
+        Self {
+            seq: NEXT_READ.fetch_add(1, Ordering::Relaxed),
+            completes_load,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RepoActionKind {
     CheckoutBranch,
@@ -1456,7 +1490,8 @@ pub enum InternalMsg {
     },
     WorktreesLoaded {
         repo_id: RepoId,
-        result: Result<Vec<Worktree>, Error>,
+        read: WorktreeListRead,
+        result: Result<Arc<Vec<Worktree>>, Error>,
     },
     WorktreeDirtyLoaded {
         repo_id: RepoId,

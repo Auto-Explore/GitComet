@@ -67,7 +67,7 @@ GPU_SHADER_CACHE = ROOT / "target/profiling/gpu-shader-cache"
 # ---------------------------------------------------------------- fixtures
 
 def git(repo, *args, env=None, input=None):
-    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True,
+    return subprocess.run(["git", "-c", "maintenance.auto=false", "-C", str(repo), *args], check=True, capture_output=True,
                           env=env, input=input)
 
 
@@ -124,7 +124,7 @@ def create_fixture(path, commits, files):
             main_head = commit("main", [main_head] if main_head else [], index, name)
     stream.seek(0)
     try:
-        subprocess.run(["git", "-C", str(path), "fast-import", "--quiet"], stdin=stream,
+        subprocess.run(["git", "-c", "maintenance.auto=false", "-C", str(path), "fast-import", "--quiet"], stdin=stream,
                        capture_output=True, check=True, env=env)
     finally:
         stream.close()
@@ -149,7 +149,7 @@ def clone_fixture(source, path, revision):
     """A disposable copy pinned to one revision; objects are hard-linked, so
     the source is never written."""
     path = path.resolve()
-    subprocess.run(["git", "clone", "-q", "--local", "--no-checkout", str(source), str(path)],
+    subprocess.run(["git", "-c", "maintenance.auto=false", "clone", "-q", "--local", "--no-checkout", str(source), str(path)],
                    check=True, env=fixture_env())
     git(path, "config", "gc.auto", "0", env=fixture_env())
     git(path, "config", "maintenance.auto", "false", env=fixture_env())

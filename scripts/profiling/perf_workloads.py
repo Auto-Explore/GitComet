@@ -37,7 +37,7 @@ def add_history(repo, env, count=256):
         body = f"revision {index}\n"
         lines.append(f"commit {branch}\nmark :{index + 1}\ncommitter Performance <perf@example.invalid> 1600000000 +0000\ndata 7\nhistory\nfrom {parent}\nM 100644 inline history.txt\ndata {len(body)}\n{body}\n")
         parent = f":{index + 1}"
-    subprocess.run(["git", "-C", str(repo), "fast-import", "--quiet"], env=env,
+    subprocess.run(["git", "-c", "maintenance.auto=false", "-C", str(repo), "fast-import", "--quiet"], env=env,
                    input="".join(lines).encode(), capture_output=True, check=True)
     git(repo, env, "read-tree", "HEAD")
     (repo / "history.txt").write_text(body, encoding="utf-8", newline="\n")
@@ -153,15 +153,15 @@ def transfer(root, seed, operation, live, shape="smoke", latency_ms=0, bandwidth
         return
     # Smart HTTP guarantees clone/fetch use pack transport rather than local hardlinks.
     remote, repo = root / "remote.git", root / "client"
-    subprocess.run(["git", "clone", "--quiet", "--bare", str(seed), str(remote)], env=env, check=True)
+    subprocess.run(["git", "-c", "maintenance.auto=false", "clone", "--quiet", "--bare", str(seed), str(remote)], env=env, check=True)
     git(remote, env, "config", "http.receivepack", "true")
-    if subprocess.run(["git", "-C", str(remote), "symbolic-ref", "-q", "HEAD"], env=env, capture_output=True).returncode:
+    if subprocess.run(["git", "-c", "maintenance.auto=false", "-C", str(remote), "symbolic-ref", "-q", "HEAD"], env=env, capture_output=True).returncode:
         # Real snapshots are pinned detached checkouts. Give only this remote
         # fixture a branch so clone/pull witnesses have an unambiguous tip.
         head = git(remote, env, "rev-parse", "HEAD").decode().strip()
         git(remote, env, "update-ref", "refs/heads/performance-main", head)
         git(remote, env, "symbolic-ref", "HEAD", "refs/heads/performance-main")
-    subprocess.run(["git", "clone", "--quiet", str(remote), str(repo)], env=env, check=True)
+    subprocess.run(["git", "-c", "maintenance.auto=false", "clone", "--quiet", str(remote), str(repo)], env=env, check=True)
     configure(repo, env)
     branch = git(repo, env, "symbolic-ref", "--short", "HEAD").decode().strip()
     payload = hashlib.shake_256(b"gitcomet-transfer").digest(4 * 1024**2 if shape == "smoke" else 64 * 1024**2)
@@ -173,7 +173,7 @@ def transfer(root, seed, operation, live, shape="smoke", latency_ms=0, bandwidth
         # push leaves both the objects and remote-tracking ref locally, making
         # an alleged fetch benchmark a no-op with a pre-satisfied witness.
         producer = root / "publisher"
-        subprocess.run(["git", "clone", "--quiet", str(remote), str(producer)], env=env, check=True)
+        subprocess.run(["git", "-c", "maintenance.auto=false", "clone", "--quiet", str(remote), str(producer)], env=env, check=True)
         configure(producer, env)
     if changed:
         (producer / "performance-payload.bin").write_bytes(payload)

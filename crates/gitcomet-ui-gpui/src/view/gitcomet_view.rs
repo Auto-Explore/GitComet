@@ -1213,6 +1213,7 @@ impl GitCometView {
                 ui_session.active_repo = None;
             }
         }
+        image_preview::Preferences::initialize(&ui_session, cx);
         let mut ui_preferences = UiPreferences::from_session(&ui_session);
         crate::session_ui::initialize_appearance(&ui_session, cx);
         ui_preferences.appearance.metrics = crate::appearance::current(cx);
@@ -1506,7 +1507,7 @@ impl GitCometView {
                     cancel.store(true, std::sync::atomic::Ordering::Release);
                 }
                 pane.conflict_image_preview_task = None;
-                pane.file_image_preview_animation_task = None;
+                pane.file_image_preview_timer = Default::default();
 
                 let mut images = Vec::new();
                 if let Some(image) = pane.file_image_diff_cache_old.take() {

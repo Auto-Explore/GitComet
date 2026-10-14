@@ -959,6 +959,136 @@ fn hosted_renderer(
     cx.update(|_, app| view.read(app).renderer().cloned().unwrap())
 }
 
+#[gpui::test]
+fn image_preview_regression_hosted_panes_zoom_without_changing_window_scale(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (dir, store, view, cx) = open_repository(cx);
+    let paths = ["first.png", "second.png"];
+    for path in paths {
+        image::RgbaImage::from_pixel(64, 64, image::Rgba([200, 100, 50, 255]))
+            .save(dir.path().join(path))
+            .unwrap();
+    }
+    git(dir.path(), &["add", "first.png", "second.png"]);
+    git(dir.path(), &["commit", "-q", "-m", "image fixtures"]);
+    for path in paths {
+        image::RgbaImage::from_pixel(64, 64, image::Rgba([50, 100, 200, 255]))
+            .save(dir.path().join(path))
+            .unwrap();
+    }
+    let (list_id, changes) = open_changes_view(cx, &view, &store);
+    for path in paths {
+        let file = selector(format!("hosted_file_list_{list_id}_file_{path}"));
+        assert!(
+            cx.debug_bounds(file).is_some(),
+            "image fixture appears in the hosted list"
+        );
+        click_debug_selector(cx, file);
+        settle(cx, &view, &store, "hosted image preview", |cx| {
+            cx.update(|_, app| {
+                let current = changes.read(app).current().unwrap();
+                let pane = current
+                    .view()
+                    .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+                    .unwrap();
+                pane.read(app)
+                    .renderer()
+                    .is_some_and(|renderer| renderer.read(app).image_preview_active)
+            })
+        });
+    }
+    let panes = cx.update(|_, app| {
+        let changes = changes.read(app);
+        [
+            changes.current().cloned().unwrap(),
+            changes.previous().cloned().unwrap(),
+        ]
+    });
+    let before = cx.update(|_, app| crate::ui_scale::current(app).percent);
+    for (pane, modifiers) in panes.iter().zip([
+        gpui::Modifiers {
+            control: true,
+            ..Default::default()
+        },
+        gpui::Modifiers::secondary_key(),
+    ]) {
+        let renderer = hosted_renderer(cx, pane);
+        cx.update(|_, app| {
+            renderer.update(app, |pane, cx| {
+                pane.image_zoom(crate::view::image_preview::Zoom::Scale(1.0), cx)
+            });
+        });
+        crate::view::test_support::redraw(cx);
+        let id = cx.update(|_, app| {
+            pane.view()
+                .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+                .unwrap()
+                .read(app)
+                .view_id()
+        });
+        let bounds = cx
+            .debug_bounds(selector(format!("hosted_diff_{id}")))
+            .unwrap();
+        let position =
+            bounds.origin + gpui::point(bounds.size.width * 0.75, bounds.size.height * 0.6);
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position,
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(60.0))),
+            modifiers,
+            touch_phase: gpui::TouchPhase::Moved,
+        });
+        cx.update(|_, app| {
+            assert_eq!(
+                crate::ui_scale::current(app).percent,
+                before,
+                "image wheel zoom must leave application scale unchanged"
+            );
+            assert_eq!(
+                renderer
+                    .read(app)
+                    .image_preview_group
+                    .read(app)
+                    .zoom_label(),
+                "125%"
+            );
+        });
+    }
+    // A retained hosted pane has old bounds after switching back to History;
+    // those bounds must no longer claim wheel events.
+    let id = cx.update(|_, app| {
+        panes[0]
+            .view()
+            .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+            .unwrap()
+            .read(app)
+            .view_id()
+    });
+    let bounds = cx
+        .debug_bounds(selector(format!("hosted_diff_{id}")))
+        .unwrap();
+    let hidden_position =
+        bounds.origin + gpui::point(bounds.size.width * 0.75, bounds.size.height * 0.6);
+    click_debug_selector(cx, "repository_view_history");
+    crate::view::test_support::redraw(cx);
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: hidden_position,
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(60.0))),
+        modifiers: gpui::Modifiers {
+            control: true,
+            ..Default::default()
+        },
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    cx.update(|_, app| {
+        assert_eq!(
+            crate::ui_scale::current(app).percent,
+            crate::ui_scale::step_up(before)
+        )
+    });
+}
+
 /// A bar's owner position, and whether each file arrow is enabled.
 type BarNav = (Option<(usize, usize)>, bool, bool);
 

@@ -3,10 +3,9 @@ use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 fn run_git(repo: &Path, args: &[&str]) {
-    let output = Command::new("git")
+    let output = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(repo)
         .args(args)

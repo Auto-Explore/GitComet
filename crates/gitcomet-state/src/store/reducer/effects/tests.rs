@@ -10,6 +10,8 @@ use gitcomet_core::error::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+mod worktrees;
+
 /// No backends: these tests exercise browse-point bookkeeping, not the HEAD
 /// gitlink classification that `open_file_content` performs behind it.
 fn no_repos() -> FxHashMap<RepoId, Arc<dyn GitRepository>> {
@@ -161,7 +163,15 @@ fn unknown_repo_handlers_are_noops() {
         .is_empty()
     );
     assert!(conflict_file_loaded(&mut state, repo_id, path.clone(), Ok(None), None).is_empty());
-    assert!(worktrees_loaded(&mut state, repo_id, Ok(Vec::new())).is_empty());
+    assert!(
+        worktrees_loaded(
+            &mut state,
+            repo_id,
+            WorktreeListRead::explicit(),
+            Ok(Arc::new(Vec::new()))
+        )
+        .is_empty()
+    );
     assert!(submodules_loaded(&mut state, repo_id, Ok(Vec::new())).is_empty());
     assert!(select_commit(&mut state, repo_id, commit_id.clone()).is_empty());
     assert!(clear_commit_selection(&mut state, repo_id).is_empty());
@@ -853,14 +863,22 @@ fn worktree_refresh_retains_badge_data_until_results_arrive() {
         ..old_worktree
     };
     assert!(matches!(
-        worktrees_loaded(&mut state, repo_id, Ok(vec![updated.clone()])).as_slice(),
+        worktrees_loaded(&mut state, repo_id, WorktreeListRead::explicit(), Ok(Arc::new(vec![updated.clone()]))).as_slice(),
         [Effect::LoadWorktrees { repo_id: id }] if *id == repo_id
     ));
     assert_eq!(
         repo_mut(&mut state, repo_id).worktrees,
         Loadable::Ready(Arc::new(vec![updated]))
     );
-    assert!(worktrees_loaded(&mut state, repo_id, Ok(Vec::new())).is_empty());
+    assert!(
+        worktrees_loaded(
+            &mut state,
+            repo_id,
+            WorktreeListRead::explicit(),
+            Ok(Arc::new(Vec::new()))
+        )
+        .is_empty()
+    );
     assert_eq!(
         repo_mut(&mut state, repo_id).worktrees,
         Loadable::Ready(Arc::new(Vec::new()))
@@ -1470,7 +1488,12 @@ fn loaded_handlers_reschedule_when_pending() {
     ));
 
     mark_pending(&mut state, repo_id, RepoLoadsInFlight::WORKTREES);
-    let effects = worktrees_loaded(&mut state, repo_id, Ok(Vec::new()));
+    let effects = worktrees_loaded(
+        &mut state,
+        repo_id,
+        WorktreeListRead::explicit(),
+        Ok(Arc::new(Vec::new())),
+    );
     assert_eq!(effects.len(), 1);
     assert!(matches!(
         effects[0],
@@ -1789,7 +1812,15 @@ fn loaded_handler_error_paths_record_diagnostics() {
     );
     assert!(stashes_loaded(&mut state, repo_id, Err(backend_error("stashes"))).is_empty());
     assert!(reflog_loaded(&mut state, repo_id, Err(backend_error("reflog"))).is_empty());
-    assert!(worktrees_loaded(&mut state, repo_id, Err(backend_error("worktrees"))).is_empty());
+    assert!(
+        worktrees_loaded(
+            &mut state,
+            repo_id,
+            WorktreeListRead::explicit(),
+            Err(backend_error("worktrees"))
+        )
+        .is_empty()
+    );
     assert!(submodules_loaded(&mut state, repo_id, Err(backend_error("submodules"))).is_empty());
     assert!(
         file_browser_loaded(

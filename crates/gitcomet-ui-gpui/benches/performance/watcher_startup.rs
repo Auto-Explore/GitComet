@@ -15,6 +15,7 @@ pub(crate) fn bench_watcher_startup(c: &mut Criterion) {
         let root = temp.path().canonicalize().unwrap();
         assert!(
             std::process::Command::new("git")
+                .args(["-c", "maintenance.auto=false"])
                 .args(["init", "--quiet"])
                 .arg(&root)
                 .status()

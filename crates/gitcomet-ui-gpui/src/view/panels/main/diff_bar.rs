@@ -198,7 +198,9 @@ impl MainPaneView {
         let theme = self.theme;
         let scale = crate::ui_scale::UiScale::current(cx);
         let nav = self.diff_bar_nav(repo_id, cx);
-        let chips = self.text_format_chips(cx);
+        let image_chips = self.image_format_chips(cx);
+        let image_toolbar = image_chips.is_some();
+        let chips = image_chips.or_else(|| self.text_format_chips(cx));
         let viewer_nav = self.diff_viewer_nav_cluster(theme, cx);
         let stats = (self.diff_view == DiffViewMode::Split
             && self.is_collapsed_diff_projection_active())
@@ -295,18 +297,22 @@ impl MainPaneView {
                         .child(format!("+{added}")),
                 )
         });
-        // Equal-width side slots keep the format strip at the bar's centre
-        // regardless of how much navigation or how many actions are present.
+        // Text chips stay centred between equal-width side slots. Image controls
+        // wrap into the remaining space without shrinking navigation or actions;
+        // in narrow hosted panes the bar can also wrap those slots onto new rows.
         Some(
             components::bottom_bar(theme, scale)
                 .id("diff_bottom_bar")
                 .debug_selector(|| "diff_bottom_bar".to_string())
+                .flex_shrink_0()
+                .when(image_toolbar, |d| d.flex_wrap())
                 .child(
                     div()
                         .flex()
                         .flex_1()
                         .flex_basis(px(0.0))
                         .min_w(px(0.0))
+                        .when(image_toolbar, |d| d.flex_none())
                         .items_center()
                         .overflow_hidden()
                         .gap(scale.px(6.0))
@@ -314,7 +320,13 @@ impl MainPaneView {
                         .children(viewer_nav)
                         .children(stats),
                 )
-                .children(chips)
+                .children(chips.map(|chips| {
+                    if image_toolbar {
+                        div().flex_1().child(chips).into_any_element()
+                    } else {
+                        chips
+                    }
+                }))
                 .child(
                     div()
                         .id("diff_bar_actions")
@@ -322,6 +334,7 @@ impl MainPaneView {
                         .flex_1()
                         .flex_basis(px(0.0))
                         .min_w(px(0.0))
+                        .when(image_toolbar, |d| d.flex_none().ml_auto())
                         .items_center()
                         .justify_end()
                         .overflow_hidden()

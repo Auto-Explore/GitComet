@@ -1313,7 +1313,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
 
         // Initialize a git repo.
-        let init = std::process::Command::new("git")
+        let init = gitcomet_core::test_support::git_fixture::git_command()
             .arg("init")
             .arg(dir.path())
             .output()
@@ -1321,7 +1321,7 @@ mod tests {
         assert!(init.status.success());
 
         let entries = build_config_entries("/test/gitcomet");
-        let result = std::process::Command::new("git")
+        let result = gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(dir.path())
             .args(["config", "--local", entries[0].key, &entries[0].value])
@@ -1330,7 +1330,7 @@ mod tests {
         assert!(result.status.success());
 
         // Verify the value was written.
-        let check = std::process::Command::new("git")
+        let check = gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(dir.path())
             .args(["config", "--get", entries[0].key])

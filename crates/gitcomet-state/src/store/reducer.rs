@@ -2149,9 +2149,11 @@ fn reduce_inner(
             *result,
             conflict_session.map(|session| *session),
         ),
-        Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded { repo_id, result }) => {
-            effects::worktrees_loaded(state, repo_id, result)
-        }
+        Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded {
+            repo_id,
+            read,
+            result,
+        }) => effects::worktrees_loaded(state, repo_id, read, result),
         Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
             repo_id,
             scope,

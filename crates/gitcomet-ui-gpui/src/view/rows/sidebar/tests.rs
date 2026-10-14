@@ -1045,7 +1045,8 @@ fn branch_badges_are_static_and_worktree_badge_remains_interactive(cx: &mut gpui
     }));
     store_for_assert.dispatch(Msg::Internal(InternalMsg::WorktreesLoaded {
         repo_id,
-        result: Ok(vec![
+        read: gitcomet_state::msg::WorktreeListRead::observation_for_test(),
+        result: Ok(std::sync::Arc::new(vec![
             Worktree {
                 path: repo_path,
                 head: None,
@@ -1058,7 +1059,7 @@ fn branch_badges_are_static_and_worktree_badge_remains_interactive(cx: &mut gpui
                 branch: Some("feature".to_string()),
                 detached: false,
             },
-        ]),
+        ])),
     }));
     wait_until(cx, "sidebar badges loaded", |_cx| {
         let snapshot = store_for_assert.snapshot();

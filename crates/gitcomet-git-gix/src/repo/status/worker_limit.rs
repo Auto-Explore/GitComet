@@ -122,12 +122,11 @@ fn benchmark_override() -> Option<Option<usize>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
 
     fn fixture(attributes: &str) -> (tempfile::TempDir, gix::Repository) {
         let dir = tempfile::tempdir().unwrap();
         let git = |args: &[&str]| {
-            let output = Command::new("git")
+            let output = gitcomet_core::test_support::git_fixture::git_command()
                 .arg("-C")
                 .arg(dir.path())
                 .args(args)
@@ -192,7 +191,7 @@ mod tests {
         std::fs::write(&global, "*.bin filter=lfs\n").unwrap();
         let git = |args: &[&std::ffi::OsStr]| {
             assert!(
-                Command::new("git")
+                gitcomet_core::test_support::git_fixture::git_command()
                     .arg("-C")
                     .arg(dir.path())
                     .args(args)

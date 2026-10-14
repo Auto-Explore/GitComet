@@ -356,92 +356,98 @@ impl MainPaneView {
                         components::empty_state(theme, "Diff", "Preview unavailable.")
                             .into_any_element()
                     } else {
-                        enum CachedDiffImageSource {
-                            Path(std::path::PathBuf),
-                            Render(Arc<gpui::RenderImage>, usize),
-                        }
-
+                        use crate::view::image_preview::Input;
                         let old_render = self.file_image_diff_cache_old.clone();
                         let new_render = self.file_image_diff_cache_new.clone();
+                        let fallbacks = [old_render.clone(), new_render.clone()];
                         let [old_frame, new_frame] = self.update_file_image_preview_animation(
                             old_render.as_ref(),
                             new_render.as_ref(),
                             window,
                             cx,
                         );
-                        let old = self
-                            .file_image_diff_cache_old_svg_path
-                            .clone()
-                            .map(CachedDiffImageSource::Path)
-                            .or_else(|| {
-                                old_render
-                                    .map(|image| CachedDiffImageSource::Render(image, old_frame))
-                            });
-                        let new = self
-                            .file_image_diff_cache_new_svg_path
-                            .clone()
-                            .map(CachedDiffImageSource::Path)
-                            .or_else(|| {
-                                new_render
-                                    .map(|image| CachedDiffImageSource::Render(image, new_frame))
-                            });
-
-                        let clamp_preview_size = self
+                        let is_content_view = self
+                            .active_repo()
+                            .is_some_and(|repo| self.bound_diff_state(repo).content_preview);
+                        let cap = self
                             .file_image_diff_cache_path
                             .as_deref()
                             .is_some_and(preview_path_uses_scale_down);
-                        let image = |image: Option<CachedDiffImageSource>| {
-                            let muted = theme.colors.foreground.secondary;
-                            match image {
-                                Some(CachedDiffImageSource::Path(path)) => gpui::img(path)
-                                    .w_full()
-                                    .h_full()
+                        let mut inputs = [
+                            Input {
+                                source: self.file_image_sources[0].clone(),
+                                preview: old_render,
+                                frame: old_frame,
+                            },
+                            Input {
+                                source: self.file_image_sources[1].clone(),
+                                preview: new_render,
+                                frame: new_frame,
+                            },
+                            Input::default(),
+                        ];
+                        let selected = if inputs[1].source.is_some()
+                            || inputs[1].preview.is_some()
+                            || self.file_image_diff_cache_new_svg_path.is_some()
+                        {
+                            1
+                        } else {
+                            0
+                        };
+                        if is_content_view {
+                            inputs[1 - selected] = Input::default();
+                        }
+                        let present = inputs.each_ref().map(|input| input.source.is_some());
+                        let group = self.prepare_image_preview(inputs, cap, cx);
+                        let mut image = |side: usize| {
+                            if present[side] {
+                                self.image_preview_viewport(group.clone(), side, cx)
+                            } else if let Some(path) = if side == 0 {
+                                self.file_image_diff_cache_old_svg_path.clone()
+                            } else {
+                                self.file_image_diff_cache_new_svg_path.clone()
+                            } {
+                                gpui::img(path)
+                                    .size_full()
                                     .object_fit(gpui::ObjectFit::Contain)
                                     .with_loading(move || {
                                         div()
                                             .text_size(theme.ui_text(14.0))
-                                            .text_color(muted)
+                                            .text_color(theme.colors.foreground.secondary)
                                             .child("Processing image...")
                                             .into_any_element()
                                     })
                                     .with_fallback(move || {
                                         div()
+                                            .debug_selector(|| "image_preview_unavailable".into())
                                             .text_size(theme.ui_text(14.0))
-                                            .text_color(muted)
+                                            .text_color(theme.colors.foreground.secondary)
                                             .child("Preview unavailable.")
                                             .into_any_element()
                                     })
-                                    .into_any_element(),
-                                Some(CachedDiffImageSource::Render(img_data, frame_index)) => {
-                                    preview_render_image_element(
-                                        img_data,
-                                        frame_index,
-                                        clamp_preview_size,
-                                    )
-                                    .w_full()
-                                    .h_full()
                                     .into_any_element()
-                                }
-                                None => div()
+                            } else if let Some(image) = fallbacks[side].as_ref() {
+                                preview_render_image_element(
+                                    image.clone(),
+                                    [old_frame, new_frame][side],
+                                    cap,
+                                )
+                                .size_full()
+                                .into_any_element()
+                            } else {
+                                div()
                                     .text_size(theme.ui_text(14.0))
-                                    .text_color(muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child("No image")
-                                    .into_any_element(),
+                                    .into_any_element()
                             }
                         };
-
-                        // A content view is one file, not a comparison: opening
-                        // a picture from the explorer shows the picture, with no
-                        // A/B header and no empty "before" half to explain away.
-                        let is_content_view = self
-                            .active_repo()
-                            .is_some_and(|repo| self.bound_diff_state(repo).content_preview);
                         let content = if is_content_view {
-                            crate::view::rendered_preview::PreviewContent::File(image(new.or(old)))
+                            crate::view::rendered_preview::PreviewContent::File(image(selected))
                         } else {
                             crate::view::rendered_preview::PreviewContent::Diff {
-                                old: image(old),
-                                new: image(new),
+                                old: image(0),
+                                new: image(1),
                             }
                         };
                         crate::view::rendered_preview::render(

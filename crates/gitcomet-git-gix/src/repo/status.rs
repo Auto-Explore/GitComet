@@ -1526,7 +1526,7 @@ pub(crate) mod tests {
 
     fn git_command() -> Command {
         let env = ensure_isolated_git_test_env();
-        let mut cmd = Command::new("git");
+        let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
         cmd.env("GIT_CONFIG_NOSYSTEM", "1");
         cmd.env("GIT_CONFIG_GLOBAL", &env.global_config);
         cmd.env("HOME", &env.home_dir);

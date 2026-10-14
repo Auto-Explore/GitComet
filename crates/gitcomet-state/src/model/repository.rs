@@ -130,6 +130,8 @@ pub struct RepoState {
     pub suggested_commit_message_rev: u64,
     pub worktrees: Loadable<Arc<Vec<Worktree>>>,
     pub worktrees_rev: u64,
+    /// Latest successful list read applied, shared by explicit loads and scans.
+    pub(crate) worktrees_read_seq: u64,
     /// Uncommitted-change counts for the *other* linked worktrees, so the
     /// history pane can show work left behind in a worktree that is not the one
     /// being viewed. Only worktrees with changes are kept.
@@ -316,6 +318,7 @@ impl RepoState {
             suggested_commit_message_rev: 0,
             worktrees: Loadable::NotLoaded,
             worktrees_rev: 0,
+            worktrees_read_seq: 0,
             worktree_dirty: Loadable::NotLoaded,
             worktree_dirty_rev: 0,
             ref_metadata: Loadable::NotLoaded,
@@ -509,7 +512,10 @@ impl RepoState {
     }
 
     pub(crate) fn set_worktrees(&mut self, worktrees: Loadable<Vec<Worktree>>) {
-        let worktrees = loadable_into_arc(worktrees);
+        self.set_worktrees_shared(loadable_into_arc(worktrees));
+    }
+
+    pub(crate) fn set_worktrees_shared(&mut self, worktrees: Loadable<Arc<Vec<Worktree>>>) {
         if self.worktrees == worktrees {
             return;
         }

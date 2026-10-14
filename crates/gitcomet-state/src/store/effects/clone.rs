@@ -706,7 +706,7 @@ mod tests {
     #[test]
     fn configure_clone_auth_prompt_sets_cached_passphrase_env_and_removes_username() {
         let askpass = create_askpass_script().expect("askpass script creation");
-        let mut cmd = Command::new("git");
+        let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
         cmd.env(GITCOMET_AUTH_USERNAME_ENV, "legacy-user");
         let auth = PromptAuth::CachedPassphrases(vec![
             CachedPassphraseEntry {

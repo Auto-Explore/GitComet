@@ -1,4 +1,3 @@
-use gitcomet_core::process::background_command as no_window_command;
 use gitcomet_core::test_support::git_fixture::{
     FixtureTimer, append_config, capture_tool_help, init_repository,
 };
@@ -24,7 +23,7 @@ fn shell_quote(value: &str) -> String {
 
 fn run_git(repo: &Path, args: &[&str]) {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let mut cmd = no_window_command("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     apply_isolated_git_config_env(&mut cmd);
     let output = cmd
         .arg("-C")
@@ -43,7 +42,7 @@ fn run_git(repo: &Path, args: &[&str]) {
 
 fn run_git_capture(repo: &Path, args: &[&str]) -> Output {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let mut cmd = no_window_command("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     apply_isolated_git_config_env(&mut cmd);
     cmd.arg("-C")
         .arg(repo)
@@ -54,7 +53,7 @@ fn run_git_capture(repo: &Path, args: &[&str]) -> Output {
 
 fn run_git_capture_with_display(repo: &Path, args: &[&str], display: Option<&str>) -> Output {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let mut cmd = no_window_command("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     apply_isolated_git_config_env(&mut cmd);
     cmd.arg("-C").arg(repo).args(args);
     if let Some(display) = display {
@@ -67,7 +66,7 @@ fn run_git_capture_with_display(repo: &Path, args: &[&str], display: Option<&str
 
 fn run_git_capture_in(cwd: &Path, args: &[&str]) -> Output {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let mut cmd = no_window_command("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     apply_isolated_git_config_env(&mut cmd);
     cmd.current_dir(cwd)
         .args(args)
@@ -1113,7 +1112,7 @@ fn git_difftool_tool_help_lists_gitcomet_tool() {
     init_repo(repo);
     configure_gitcomet_difftool(repo);
 
-    let mut command = no_window_command("git");
+    let mut command = gitcomet_core::test_support::git_fixture::git_command();
     apply_isolated_git_config_env(&mut command);
     let output = capture_tool_help(command.arg("-C").arg(repo), "difftool");
     let text = output_text(&output);
