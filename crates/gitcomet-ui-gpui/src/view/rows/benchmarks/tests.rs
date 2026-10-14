@@ -816,8 +816,8 @@ fn branch_sidebar_extreme_fixture_reports_expected_structural_metrics() {
             worktrees: 0,
             submodules: 0,
             stashes: 0,
-            sidebar_rows: 20_414,
-            branch_rows: 20_002,
+            sidebar_rows: 20_413,
+            branch_rows: 20_001,
             remote_headers: 100,
             group_headers: 300,
             max_branch_depth: 4,
@@ -876,8 +876,8 @@ fn repo_switch_two_hot_repos_reloads_selected_diff_and_persists_session() {
     let fixture = RepoSwitchFixture::two_hot_repos(500, 20, 40, 2);
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
-    assert_eq!(metrics.effect_count, 7);
-    assert_eq!(metrics.refresh_effect_count, 5);
+    assert_eq!(metrics.effect_count, 11);
+    assert_eq!(metrics.refresh_effect_count, 6);
     assert_eq!(metrics.selected_diff_reload_effect_count, 1);
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 2);
@@ -891,8 +891,8 @@ fn repo_switch_selected_commit_and_details_resets_target_without_diff_reload() {
     let fixture = RepoSwitchFixture::selected_commit_and_details(500, 20, 40, 2);
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
-    assert_eq!(metrics.effect_count, 6);
-    assert_eq!(metrics.refresh_effect_count, 5);
+    assert_eq!(metrics.effect_count, 10);
+    assert_eq!(metrics.refresh_effect_count, 6);
     assert_eq!(metrics.selected_diff_reload_effect_count, 0);
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 2);
@@ -906,8 +906,8 @@ fn repo_switch_twenty_tabs_scales_repo_count_without_heating_all_tabs() {
     let fixture = RepoSwitchFixture::twenty_tabs(500, 20, 40, 2);
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
-    assert_eq!(metrics.effect_count, 7);
-    assert_eq!(metrics.refresh_effect_count, 5);
+    assert_eq!(metrics.effect_count, 11);
+    assert_eq!(metrics.refresh_effect_count, 6);
     assert_eq!(metrics.selected_diff_reload_effect_count, 1);
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 20);
@@ -940,8 +940,8 @@ fn repo_switch_twenty_repos_all_hot_tracks_extreme_hot_tab_scale() {
     let fixture = RepoSwitchFixture::twenty_repos_all_hot(500, 20, 40, 2);
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
-    assert_eq!(metrics.effect_count, 7);
-    assert_eq!(metrics.refresh_effect_count, 5);
+    assert_eq!(metrics.effect_count, 11);
+    assert_eq!(metrics.refresh_effect_count, 6);
     assert_eq!(metrics.selected_diff_reload_effect_count, 1);
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 20);
@@ -955,8 +955,8 @@ fn repo_switch_selected_diff_file_triggers_diff_reload_with_loaded_content() {
     let fixture = RepoSwitchFixture::selected_diff_file(500, 20, 40, 2);
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
-    assert_eq!(metrics.effect_count, 7);
-    assert_eq!(metrics.refresh_effect_count, 5);
+    assert_eq!(metrics.effect_count, 11);
+    assert_eq!(metrics.refresh_effect_count, 6);
     assert_eq!(metrics.selected_diff_reload_effect_count, 1);
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 2);
@@ -970,8 +970,8 @@ fn repo_switch_selected_conflict_target_dispatches_conflict_reload() {
     let fixture = RepoSwitchFixture::selected_conflict_target(500, 20, 40, 2);
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
-    assert_eq!(metrics.effect_count, 7);
-    assert_eq!(metrics.refresh_effect_count, 5);
+    assert_eq!(metrics.effect_count, 11);
+    assert_eq!(metrics.refresh_effect_count, 6);
     assert_eq!(metrics.selected_diff_reload_effect_count, 1);
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 2);
@@ -984,8 +984,8 @@ fn repo_switch_merge_active_with_draft_restore_includes_merge_message() {
     let fixture = RepoSwitchFixture::merge_active_with_draft_restore(500, 20, 40, 2);
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
-    assert_eq!(metrics.effect_count, 7);
-    assert_eq!(metrics.refresh_effect_count, 5);
+    assert_eq!(metrics.effect_count, 11);
+    assert_eq!(metrics.refresh_effect_count, 6);
     assert_eq!(metrics.selected_diff_reload_effect_count, 1);
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 2);

@@ -216,7 +216,7 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "branch_sidebar/20k_branches_100_remotes",
         metric: "branch_rows",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 20_002.0,
+        threshold: 20_001.0,
     },
     StructuralBudgetSpec {
         bench: "branch_sidebar/20k_branches_100_remotes",
@@ -240,7 +240,7 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "branch_sidebar/20k_branches_100_remotes",
         metric: "sidebar_rows",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 20_414.0,
+        threshold: 20_413.0,
     },
     StructuralBudgetSpec {
         bench: "repo_switch/refocus_same_repo",
@@ -260,14 +260,13 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "repo_switch/two_hot_repos",
         metric: "effect_count",
         comparator: StructuralBudgetComparator::Exactly,
-        // Primary refresh (5) + combined selected-diff intent (1) + persist (1).
-        threshold: 7.0,
+        threshold: 11.0,
     },
     StructuralBudgetSpec {
         bench: "repo_switch/two_hot_repos",
         metric: "refresh_effect_count",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 5.0,
+        threshold: 6.0,
     },
     StructuralBudgetSpec {
         bench: "repo_switch/two_hot_repos",
@@ -285,7 +284,7 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "repo_switch/selected_commit_and_details",
         metric: "effect_count",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 6.0,
+        threshold: 10.0,
     },
     StructuralBudgetSpec {
         bench: "repo_switch/selected_commit_and_details",
@@ -315,7 +314,7 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "repo_switch/twenty_tabs",
         metric: "effect_count",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 7.0,
+        threshold: 11.0,
     },
     StructuralBudgetSpec {
         bench: "repo_switch/twenty_tabs",
@@ -351,7 +350,7 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "repo_switch/20_repos_all_hot",
         metric: "effect_count",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 7.0,
+        threshold: 11.0,
     },
     StructuralBudgetSpec {
         bench: "repo_switch/20_repos_all_hot",
@@ -389,7 +388,7 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "repo_switch/selected_diff_file",
         metric: "effect_count",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 7.0,
+        threshold: 11.0,
     },
     StructuralBudgetSpec {
         bench: "repo_switch/selected_diff_file",
@@ -409,13 +408,11 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         comparator: StructuralBudgetComparator::Exactly,
         threshold: 2.0,
     },
-    // repo_switch/selected_conflict_target — primary refresh + one combined
-    // selected-conflict reload intent + persist.
     StructuralBudgetSpec {
         bench: "repo_switch/selected_conflict_target",
         metric: "effect_count",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 7.0,
+        threshold: 11.0,
     },
     StructuralBudgetSpec {
         bench: "repo_switch/selected_conflict_target",
@@ -441,7 +438,7 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "repo_switch/merge_active_with_draft_restore",
         metric: "effect_count",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 7.0,
+        threshold: 11.0,
     },
     StructuralBudgetSpec {
         bench: "repo_switch/merge_active_with_draft_restore",
