@@ -32,11 +32,11 @@ subsystem's acceptance. No release, merge, or push is part of this implementatio
 - [x] Encapsulate backend history cache construction/invalidation without changing locks, keys, bounds or sharing.
 - [x] Establish one document owner per WindowHost with stable BufferId, load/save generations, disk versions, encoding, dirty state and retention.
 - [x] Connect sidebar/close guards directly to document ownership and emit dirty changes at mutation time.
-- [ ] Extract a root-independent DiffRenderer after document ownership; preserve MainPaneView composition.
-- [ ] Migrate normal/hosted/settings/pop-out diff contexts, removing fake repository snapshots, projected AppState clones and duplicate rendering/search.
+- [x] Extract a root-independent DiffRenderer after document ownership; preserve MainPaneView composition.
+- [x] Migrate normal/hosted/settings/pop-out diff contexts, removing fake repository snapshots, projected AppState clones and duplicate rendering/search.
 - [x] Remove deprecated launch wrappers replaced by UiLaunch.
 - [x] Gate backend test overrides behind test-support and enable only test/probe configurations.
-- [ ] Narrow internal visibility/imports in refactored modules and update architecture/build/migration documentation.
+- [x] Narrow internal visibility/imports in refactored modules and update architecture/build/migration documentation.
 - [ ] Complete targeted and workspace validation and independent review.
 
 ## Target interfaces and ownership
@@ -79,7 +79,7 @@ independent cancellation, SharedFileDiffCache and retained view boundaries.
 
 ## Validation
 
-- Existing CI contexts: core, state, backend, app, UI, example and workspace.
+- Existing CI contexts: core, diagrams, state, backend, app, UI, example and workspace.
 - Formatting, Clippy, source layout, dependency boundaries, rustdoc and native platform suites.
 - Regression tests: backend release delegation and equal RepoId values in separate stores.
 - Protocols: stale/repeated requests, A-B-A selection, coalesced refresh, failure cleanup and shutdown ordering.
@@ -169,7 +169,36 @@ and worktree permission before becoming pending; detached documents keep their
 save path, and already queued writes still complete after permission changes.
 Dirty changes notify the sidebar directly. Independent review accepted this slice;
 the full UI run passed 4,721 tests with 22 existing ignores, and the final admission
-fix passed all 233 focused tests and strict Clippy. Renderer extraction follows.
+fix passed all 233 focused tests and strict Clippy.
+
+`MainPaneView` now composes retained history and diff children. `DiffRenderer`
+receives explicit input, services, preferences and document ownership without a
+root-view or `AppUiModel` dependency. Repository inputs retain the original
+`Arc<AppState>` and check repository lifetime and session; standalone inputs carry
+only the supplied diff state and path. Settings and hosted panes use the same
+renderer. Projected application states, fabricated repository identities and the
+duplicate hosted row/search implementation are removed.
+
+The shared search engine preserves source-line counts for the public hosted API
+and visual-row navigation for the UI. Hosted presentation and live repository
+authority are separate: snapshot menus offer Copy, pane settings target their
+invoker, and saves retain their bound repository. Original-byte indexing follows
+its shared content cache across metadata updates. Relative snapshot paths retain
+one base/path composition, and stale summary caches are released on input changes
+even when the retained renderer is hidden. Independent source review accepted
+these corrections; all 70 focused renderer and summary cases pass. The four
+remaining staging fixtures now seed their models before backend insertion, and
+all 16 existing staging cases pass.
+
+The final UI CI context passed 4,733 library tests and 111 performance-report
+tests, with 22 existing ignores. Its compile, doctest command and strict
+all-target/all-feature Clippy checks pass against the same source. The doctest
+command contains no examples. The independent integration source review found
+no remaining issues across the completed subsystems.
+
+The [architecture guide](architecture.md) describes the owners and their contracts;
+[CONTRIBUTING](../CONTRIBUTING.md) records the current workspace and build contexts.
+Final workspace, native and performance validation remains in progress.
 
 ## Migration notes
 
