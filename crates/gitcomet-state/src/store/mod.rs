@@ -1052,8 +1052,9 @@ impl AppStore {
         &self,
         file: &std::path::Path,
     ) -> gitcomet_core::services::Result<Option<PathBuf>> {
-        let file = gitcomet_core::filesystem::absolute_identity(file).map_err(|e| {
-            gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Io(e.kind()))
+        let file = gitcomet_core::filesystem::absolute_identity(file).map_err(|error| {
+            gitcomet_core::error::Error::from(error)
+                .with_context("resolve file path for repository discovery", Some(file))
         })?;
         for parent in file.parent().into_iter().flat_map(|p| p.ancestors()) {
             if parent.join(".git").symlink_metadata().is_ok() {

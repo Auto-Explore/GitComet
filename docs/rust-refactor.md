@@ -23,7 +23,7 @@ subsystem's acceptance. No release, merge, or push is part of this implementatio
 - [x] Fix worktree-cache ownership collisions between stores using process-unique repository lifetimes.
 - [x] Reject late cache insertions after repository close and release cache leases on shutdown.
 - [x] Canonicalize repository API families: cancellation-aware reads; encoded text/conflict reads; fetch/pull pruning; remote/submodule policies.
-- [ ] Preserve error causes and operation/path context while retaining classifications and cloning.
+- [x] Preserve error causes and operation/path context while retaining classifications and cloning.
 - [x] Replace public raw load masks with LoadKind; give logs, line statistics and scoped worktree refreshes dedicated protocols.
 - [x] Introduce distinct log IDs, load epochs, line-stat generations and repository lifetime types; completion methods reject stale IDs.
 - [x] Group persistence/control, status, reference metadata and repository-command effects; each family owns runtime requirements and completion construction.
@@ -150,6 +150,15 @@ The canonical repository API migration passed 1,971 core/backend tests with
 before-work and after-success checks were deliberately removed. The same profiling
 driver source builds against both the original and current APIs, with identical
 dependency versions and explicit adapter hashes recorded in the build output.
+
+Native I/O adapters and backend wrappers retain the original typed causes and
+native operation/path context. Cleanup, recovery and fallback errors keep both
+the original failure and subsequent failures in their attempt order. Error kinds
+and raw Git output remain available for recovery decisions; formatted details
+include the retained causes. The full core/backend run and corrected source-path
+guard passed 1,976 tests, with 22 existing ignores, and strict Clippy passed.
+Repository discovery also preserves its I/O cause and original native path;
+its failure and nested/linked/standalone discovery tests pass.
 
 The document owner now routes close and filesystem operations to weakly registered
 presenters, including hosted panes. This also fixes hosted saves and receipts that
