@@ -608,7 +608,7 @@ pub(super) fn gix_unmerged_conflicts(
     repo: &gix::Repository,
 ) -> Result<Vec<(PathBuf, FileConflictKind)>> {
     let index = crate::refs::index_or_load_from_head_or_empty(repo)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))).with_source(e))?;
     let path_backing = index.path_backing();
     let mut stage_entries = Vec::new();
 

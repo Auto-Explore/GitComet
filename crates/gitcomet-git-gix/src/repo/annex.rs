@@ -875,8 +875,11 @@ impl super::GixRepo {
                     "git annex unused",
                     |mut stdout| {
                         let mut json = String::new();
-                        std::io::Read::read_to_string(&mut stdout, &mut json)
-                            .map_err(|error| backend(format!("git annex unused: {error}")))?;
+                        std::io::Read::read_to_string(&mut stdout, &mut json).map_err(|error| {
+                            backend(format!("git annex unused: {error}"))
+                                .with_source(error)
+                                .with_context("read git annex unused output", None)
+                        })?;
                         parse_unused(&json)
                     },
                 )?;
@@ -940,9 +943,11 @@ impl super::GixRepo {
         cmd.stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| backend(format!("could not start git annex webapp: {e}")))?;
+        let mut child = cmd.spawn().map_err(|e| {
+            backend(format!("could not start git annex webapp: {e}"))
+                .with_source(e)
+                .with_context("start git annex webapp", Some(Path::new(cmd.get_program())))
+        })?;
         std::thread::Builder::new()
             .name("git-annex-webapp".into())
             .spawn(move || {

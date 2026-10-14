@@ -24,8 +24,9 @@ fn local_branch_ref_name(branch: &str) -> String {
 }
 
 fn head_targets_branch(repo: &gix::Repository, branch_ref_name: &str) -> Result<bool> {
-    let head_name = crate::refs::head_name(repo)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix head_name: {e}"))))?;
+    let head_name = crate::refs::head_name(repo).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix head_name: {e}"))).with_source(e)
+    })?;
     Ok(head_name.is_some_and(|name| name.as_bstr() == branch_ref_name))
 }
 
@@ -263,7 +264,7 @@ fn branch_target_missing_error(repo: &gix::Repository, target: &str) -> Error {
 
 fn resolve_branch_target_commit_id(repo: &gix::Repository, target: &str) -> Result<gix::ObjectId> {
     let object = crate::refs::resolve_required(repo, target)
-        .map_err(|_| branch_target_missing_error(repo, target))?
+        .map_err(|error| branch_target_missing_error(repo, target).with_source(error))?
         .object()
         .map_err(|e| {
             Error::new(ErrorKind::Backend(format!(
@@ -291,6 +292,7 @@ fn resolve_stash_commit(repo: &gix::Repository, index: usize) -> Result<gix::Com
             Error::new(ErrorKind::Backend(format!(
                 "gix rev-parse {stash_spec}: {e}"
             )))
+            .with_source(e)
         })?
         .object()
         .map_err(|e| {
@@ -477,6 +479,7 @@ impl GixRepo {
                 Error::new(ErrorKind::Backend(format!(
                     "gix try_find_reference {ref_name}: {e}"
                 )))
+                .with_source(e)
             })?
             .is_some())
     }
@@ -515,7 +518,8 @@ impl GixRepo {
             }
             return Err(Error::new(ErrorKind::Backend(format!(
                 "gix create branch {branch}: {e}"
-            ))));
+            )))
+            .with_source(e));
         }
         Ok(())
     }

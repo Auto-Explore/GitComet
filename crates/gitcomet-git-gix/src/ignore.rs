@@ -182,9 +182,9 @@ pub(crate) fn repository_watch_info(
         {
             info.ignore_inputs.push(path);
         }
-        if let Some(submodules) = crate::refs::submodules(&repo)
-            .map_err(|error| Error::new(ErrorKind::Backend(format!("watch submodules: {error}"))))?
-        {
+        if let Some(submodules) = crate::refs::submodules(&repo).map_err(|error| {
+            Error::new(ErrorKind::Backend(format!("watch submodules: {error}"))).with_source(error)
+        })? {
             for submodule in submodules {
                 if let Some(child) = submodule.open().map_err(|error| {
                     Error::new(ErrorKind::Backend(format!("watch submodule: {error}")))

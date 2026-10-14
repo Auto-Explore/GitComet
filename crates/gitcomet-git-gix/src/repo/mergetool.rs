@@ -134,6 +134,8 @@ impl GixRepo {
                     Error::new(ErrorKind::Backend(format!(
                         "Failed to launch mergetool '{tool_name}' ({tool_executable}): {e}"
                     )))
+                    .with_source(e)
+                    .with_context("launch mergetool", Some(Path::new(tool_executable)))
                 })?
         };
 
@@ -750,6 +752,8 @@ fn validated_mergetool_path(path: &Path) -> Result<PathBuf> {
             "invalid mergetool conflict path '{}': {err}",
             path.display()
         )))
+        .with_source(err)
+        .with_context("validate mergetool conflict path", Some(path))
     })
 }
 
@@ -783,6 +787,8 @@ fn mergetool_worktree_target(workdir: &Path, path: &Path) -> Result<PathBuf> {
             "unsafe mergetool conflict path '{}': {err}",
             path.display()
         )))
+        .with_source(err)
+        .with_context("resolve mergetool conflict path", Some(&workdir.join(path)))
     })
 }
 

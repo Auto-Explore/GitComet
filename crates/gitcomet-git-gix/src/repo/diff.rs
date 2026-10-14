@@ -151,6 +151,8 @@ impl GixRepo {
                         Error::new(ErrorKind::Backend(format!(
                             "failed to read unified git diff output: {err}"
                         )))
+                        .with_source(err)
+                        .with_context("read unified Git diff output", None)
                     })
             },
         )
@@ -205,6 +207,8 @@ impl GixRepo {
                     Error::new(ErrorKind::Backend(format!(
                         "failed to read unified git diff output: {err}"
                     )))
+                    .with_source(err)
+                    .with_context("read unified Git diff output", None)
                 })
             },
         )?;
@@ -1744,7 +1748,7 @@ fn gix_index_unconflicted_image_blob_bytes_optional(
     path: &Path,
 ) -> Result<IndexUnconflictedBlob> {
     let index = crate::refs::index_or_load_from_head_or_empty(repo)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))).with_source(e))?;
 
     let path_key = gix::path::os_str_into_bstr(path.as_os_str())
         .map_err(|_| Error::new(ErrorKind::Unsupported("path is not valid UTF-8")))?;
@@ -1772,7 +1776,7 @@ fn gix_index_unconflicted_blob_id_optional(
     path: &Path,
 ) -> Result<IndexUnconflictedBlobId> {
     let index = crate::refs::index_or_load_from_head_or_empty(repo)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))).with_source(e))?;
 
     let path = gix::path::os_str_into_bstr(path.as_os_str())
         .map_err(|_| Error::new(ErrorKind::Unsupported("path is not valid UTF-8")))?;

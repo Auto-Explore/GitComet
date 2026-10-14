@@ -271,7 +271,11 @@ impl<'r> RefsView<'r> {
             let bytes = match std::fs::read(&path) {
                 Ok(bytes) => bytes,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-                Err(e) => return Err(failure(e)),
+                Err(error) => {
+                    return Err(failure(&error)
+                        .with_source(error)
+                        .with_context("read Git pseudoref", Some(&path)));
+                }
             };
             let hex = bytes
                 .split(|b| b.is_ascii_whitespace())

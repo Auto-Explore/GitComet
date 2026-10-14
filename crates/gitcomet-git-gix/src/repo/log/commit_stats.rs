@@ -261,8 +261,9 @@ pub(crate) fn tree_diff_file_changes(
     old_tree: Option<&gix::Tree<'_>>,
     new_tree: &gix::Tree<'_>,
 ) -> Result<Vec<CommitFileChange>> {
-    let changes = crate::refs::diff_tree_to_tree(repo, old_tree, new_tree)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix diff_tree_to_tree: {e}"))))?;
+    let changes = crate::refs::diff_tree_to_tree(repo, old_tree, new_tree).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix diff_tree_to_tree: {e}"))).with_source(e)
+    })?;
 
     if changes.is_empty() {
         return Ok(Vec::new());
@@ -354,6 +355,7 @@ pub(crate) fn commit_tree_for_id<'repo>(
             Error::new(ErrorKind::Backend(format!(
                 "{context} rev-parse {spec}: {e}"
             )))
+            .with_source(e)
         })?
         .object()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("{context} object {spec}: {e}"))))?

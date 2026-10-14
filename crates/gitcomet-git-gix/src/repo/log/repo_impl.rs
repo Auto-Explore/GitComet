@@ -692,7 +692,9 @@ impl GixRepo {
 
         let refs =
             crate::refs::view_cancellable(repo, cancellation.unwrap_or(&CancellationToken::new()))
-                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
+                .map_err(|e| {
+                    Error::new(ErrorKind::Backend(format!("gix references: {e}"))).with_source(e)
+                })?;
 
         // Refs the product leaves out of History. Every all-branches reader
         // (pages, authors, the index, snapshots) starts from these tips, so
@@ -1162,7 +1164,9 @@ fn find_commit_by_id<'repo>(
             Error::new(ErrorKind::Backend(format!("gix commit object {spec}: {e}")))
         })?,
         None => crate::refs::resolve_required(repo, spec)
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}"))))?
+            .map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}"))).with_source(e)
+            })?
             .object()
             .map_err(|e| {
                 Error::new(ErrorKind::Backend(format!("gix commit object {spec}: {e}")))

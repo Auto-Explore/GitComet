@@ -87,7 +87,9 @@ pub(crate) fn shallow_snapshot(repo: &gix::Repository) -> Result<super::ShallowS
             return Err(Error::new(ErrorKind::Backend(format!(
                 "read shallow boundary {}: {error}",
                 path.display()
-            ))));
+            )))
+            .with_source(error)
+            .with_context("read shallow boundary", Some(&path)));
         }
     };
 

@@ -40,7 +40,9 @@ const MSG_EDITOR_NAME: &str = "gitcomet-msg-editor.sh";
 
 pub(super) fn peel_commit<'r>(repo: &'r gix::Repository, spec: &str) -> Result<gix::Commit<'r>> {
     crate::refs::resolve_required(repo, spec)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}"))))?
+        .map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}"))).with_source(e)
+        })?
         .object()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix commit object {spec}: {e}"))))?
         .peel_to_commit()
@@ -386,8 +388,9 @@ impl GixRepo {
         }
         cmd.arg("--").arg(id.as_ref());
 
-        let output = run_git_raw_output(cmd, &label)
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("failed to run {label}: {e}"))))?;
+        let output = run_git_raw_output(cmd, &label).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("failed to run {label}: {e}"))).with_source(e)
+        })?;
         if output.status.success() {
             if !started_with_sequencer {
                 self.clear_persisted_cherry_pick_mainline();
@@ -1491,6 +1494,8 @@ impl GixRepo {
             Error::new(ErrorKind::Backend(format!(
                 "failed to create rebase scripts: {e}"
             )))
+            .with_source(e)
+            .with_context("create rebase scripts", None)
         })?;
 
         let mut cmd = self.git_workdir_cmd();
