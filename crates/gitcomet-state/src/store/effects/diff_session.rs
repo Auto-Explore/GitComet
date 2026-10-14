@@ -12,6 +12,7 @@ pub(super) fn schedule(
     repos: &util::RepoMap,
     backend: Arc<dyn GitBackend>,
     msg_tx: StoreWorkerSender,
+    repo_lifetime: crate::model::RepoLifetime,
     work: DiffSessionEffect,
     parent: CancellationToken,
 ) {
@@ -27,7 +28,7 @@ pub(super) fn schedule(
                 None => repo,
                 Some(path) => match repo_load::linked_worktree_handle(
                     backend.as_ref(),
-                    work.repo_id,
+                    repo_lifetime,
                     repo.as_ref(),
                     path,
                 ) {
@@ -212,6 +213,7 @@ mod tests {
             &repos,
             Arc::new(crate::store::tests::FailingBackend),
             msg_tx,
+            crate::model::RepoLifetime::allocate(),
             work,
             parent,
         );
@@ -292,6 +294,7 @@ mod tests {
                 &repos,
                 Arc::new(crate::store::tests::FailingBackend),
                 msg_tx.clone(),
+                crate::model::RepoLifetime::allocate(),
                 work,
                 CancellationToken::new(),
             );

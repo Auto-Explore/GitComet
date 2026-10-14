@@ -70,6 +70,19 @@ fn selected_diff_target(
         })
 }
 
+fn repo_lifetime(
+    thread_state: &Arc<RwLock<Arc<AppState>>>,
+    repo_id: RepoId,
+) -> Option<crate::model::RepoLifetime> {
+    thread_state
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .map(|repo| repo.lifetime_id())
+}
+
 fn selected_conflict_file_path(
     thread_state: &Arc<RwLock<Arc<AppState>>>,
     repo_id: RepoId,
@@ -565,14 +578,16 @@ pub(super) fn schedule_effect(
             }
         }
         Effect::DiffSession(work) => {
-            if let Some((msg_tx, cancellation)) =
-                repo_load_context(thread_state, repo_task_tokens, msg_tx, work.repo_id)
+            if let Some(lifetime) = repo_lifetime(thread_state, work.repo_id)
+                && let Some((msg_tx, cancellation)) =
+                    repo_load_context(thread_state, repo_task_tokens, msg_tx, work.repo_id)
             {
                 diff_session::schedule(
                     repo_load_executor,
                     repos,
                     Arc::clone(backend),
                     msg_tx,
+                    lifetime,
                     work,
                     cancellation,
                 );
@@ -786,18 +801,22 @@ pub(super) fn schedule_effect(
             scope,
             files_for,
         } => {
-            if let Some((msg_tx, cancellation, publisher)) = load_tokens::worktree_list_load_context(
-                thread_state,
-                repo_task_tokens,
-                msg_tx,
-                repo_id,
-            ) {
+            if let Some(lifetime) = repo_lifetime(thread_state, repo_id)
+                && let Some((msg_tx, cancellation, publisher)) =
+                    load_tokens::worktree_list_load_context(
+                        thread_state,
+                        repo_task_tokens,
+                        msg_tx,
+                        repo_id,
+                    )
+            {
                 repo_load::schedule_load_worktree_dirty(
                     worktree_scan_executor,
                     backend.clone(),
                     repos,
                     msg_tx,
                     repo_id,
+                    lifetime,
                     workdir,
                     scope,
                     files_for,

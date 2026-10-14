@@ -18,6 +18,28 @@ use std::time::SystemTime;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct RepoId(pub u64);
 
+/// Identifies one repository lifetime across all stores in this process.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub struct RepoLifetime(u64);
+
+impl RepoLifetime {
+    pub(crate) fn allocate() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_LIFETIME: AtomicU64 = AtomicU64::new(1);
+        Self(
+            NEXT_LIFETIME
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                    next.checked_add(1)
+                })
+                .expect("repository lifetime identity space exhausted"),
+        )
+    }
+
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
 /// GitComet's side of a repository's maintenance: git's recommendation and a
 /// run the user started. Git never runs it by itself for GitComet's commands.
 #[derive(Clone, Debug, Default)]
@@ -37,9 +59,8 @@ pub struct RepoMaintenanceState {
 pub struct RepoState {
     pub id: RepoId,
     pub spec: RepoSpec,
-    /// Unique per repository opened in this process. `RepoId`s are per store
-    /// and may be reused; the pair (window, id, lifetime) never is.
-    lifetime: u64,
+    /// Unique per repository opened in this process, including across stores.
+    lifetime: RepoLifetime,
     session_workdir_key: Arc<str>,
     /// A loading tab created from an external folder drop. It remains visible
     /// while the backend validates it, but session persistence must ignore it
@@ -245,16 +266,19 @@ pub enum DiagnosticKind {
 impl RepoState {
     /// See the `lifetime` field.
     pub fn lifetime(&self) -> u64 {
+        self.lifetime.get()
+    }
+
+    pub fn lifetime_id(&self) -> RepoLifetime {
         self.lifetime
     }
 
     pub fn new_opening(id: RepoId, spec: RepoSpec) -> Self {
-        static NEXT_LIFETIME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let session_workdir_key = session::path_storage_key_shared(&spec.workdir);
         Self {
             id,
             spec,
-            lifetime: NEXT_LIFETIME.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            lifetime: RepoLifetime::allocate(),
             session_workdir_key,
             provisional_external_drop_open: false,
             external_drop_previous_active_repo: None,
