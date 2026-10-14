@@ -1,9 +1,10 @@
 //! Load orchestration: repository loads gated on their load epoch, and tag
 //! push previews superseded by generation and cancellation token.
 
-use super::reduce;
+use super::reduce_prepared;
 use crate::model::{AppState, Loadable, RepoId};
 use crate::msg::{Effect, InternalMsg, Msg};
+use crate::store::reducer::prepared::ReducerInputs;
 use crate::store::repo_load_trace;
 use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::services::CancellationToken;
@@ -63,6 +64,7 @@ pub(super) fn tag_push_preview_loaded(
 }
 
 pub(super) fn repo_load_finished(
+    inputs: &ReducerInputs,
     repos: &mut RepositoryRuntimes,
     id_alloc: &AtomicU64,
     state: &mut AppState,
@@ -82,7 +84,7 @@ pub(super) fn repo_load_finished(
             load_epoch,
             repo_load_trace::internal_msg_name(&message)
         );
-        reduce(repos, id_alloc, state, Msg::Internal(*message))
+        reduce_prepared(inputs, repos, id_alloc, state, Msg::Internal(*message))
     } else {
         repo_load_trace::trace!(
             "drop_stale_repo_load_finished repo_id={:?} load_epoch={} current_load_epoch={:?} inner={}",

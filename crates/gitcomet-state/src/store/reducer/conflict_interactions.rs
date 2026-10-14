@@ -4,6 +4,7 @@ use crate::msg::{
     ConflictAutosolveMode, ConflictAutosolveStats, ConflictBulkChoice, ConflictBulkScope,
     ConflictRegionChoice, ConflictRegionResolutionUpdate, Effect, RepoPath,
 };
+use crate::store::reducer::prepared::ReducerInputs;
 use gitcomet_core::conflict_session::{
     AutosolveConfidence, AutosolveRule, ConflictRegion, ConflictRegionEditOutcome,
     ConflictRegionResolution, ConflictRegionSplitBoundaries, ConflictResolverStrategy,
@@ -774,19 +775,34 @@ fn reset_session_resolutions(
     reset
 }
 
+pub(super) struct AutosolveTelemetry {
+    pub path: Option<PathBuf>,
+    pub mode: ConflictAutosolveMode,
+    pub total_conflicts_before: usize,
+    pub total_conflicts_after: usize,
+    pub unresolved_before: usize,
+    pub unresolved_after: usize,
+    pub stats: ConflictAutosolveStats,
+}
+
 pub(super) fn record_autosolve_telemetry(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
-    path: Option<PathBuf>,
-    mode: ConflictAutosolveMode,
-    total_conflicts_before: usize,
-    total_conflicts_after: usize,
-    unresolved_before: usize,
-    unresolved_after: usize,
-    stats: ConflictAutosolveStats,
+    telemetry: AutosolveTelemetry,
 ) -> Vec<Effect> {
+    let AutosolveTelemetry {
+        path,
+        mode,
+        total_conflicts_before,
+        total_conflicts_after,
+        unresolved_before,
+        unresolved_after,
+        stats,
+    } = telemetry;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         util::push_action_log(
+            inputs,
             repo_state,
             true,
             util::conflict_autosolve_telemetry_command(mode, path.as_deref()),

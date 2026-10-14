@@ -1356,7 +1356,7 @@ fn set_active_repo_inline_retires_the_activated_worktrees_orphaned_diff() {
     });
 
     let mut effects = crate::store::reducer::SetActiveRepoEffects::new();
-    crate::store::reducer::fill_set_active_repo_inline(
+    crate::store::tests::fill_set_active_repo_inline(
         &repos,
         &mut state,
         target_repo,
@@ -1405,7 +1405,7 @@ fn set_active_repo_inline_folds_the_reset_selection_into_navigation_tail() {
         .record(snapshot(Some(stale_commit.clone())));
 
     let mut effects = crate::store::reducer::SetActiveRepoEffects::new();
-    crate::store::reducer::fill_set_active_repo_inline(
+    crate::store::tests::fill_set_active_repo_inline(
         &repos,
         &mut state,
         target_repo,
@@ -1507,7 +1507,7 @@ fn set_active_repo_inline_realigns_a_mid_stack_reset_before_new_navigation() {
     );
 
     let mut effects = crate::store::reducer::SetActiveRepoEffects::new();
-    crate::store::reducer::fill_set_active_repo_inline(
+    crate::store::tests::fill_set_active_repo_inline(
         &repos,
         &mut state,
         target_repo,
@@ -2282,7 +2282,7 @@ fn switch_to(
     unchanged: bool,
 ) -> Vec<Effect> {
     let mut effects = crate::store::reducer::SetActiveRepoEffects::new();
-    crate::store::reducer::fill_set_active_repo_inline(
+    crate::store::tests::fill_set_active_repo_inline(
         repos,
         state,
         repo_id,

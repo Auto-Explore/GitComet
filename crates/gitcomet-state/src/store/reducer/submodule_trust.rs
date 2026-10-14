@@ -8,6 +8,7 @@ use crate::model::{
 };
 use crate::msg::Effect;
 use crate::msg::RepoCommandEffect;
+use crate::store::reducer::prepared::ReducerInputs;
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{SubmoduleTrustDecision, SubmoduleTrustTarget};
 use std::path::PathBuf;
@@ -176,6 +177,7 @@ pub(super) fn cancel_prompt(state: &mut AppState) -> Vec<Effect> {
 }
 
 pub(super) fn add_trust_checked(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     url: String,
@@ -217,6 +219,7 @@ pub(super) fn add_trust_checked(
         }
         Err(error) => {
             report_error(
+                inputs,
                 state,
                 Some(repo_id),
                 util::format_failure_summary("Submodule trust check", &error),
@@ -227,6 +230,7 @@ pub(super) fn add_trust_checked(
 }
 
 pub(super) fn update_trust_checked(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     result: Result<SubmoduleTrustDecision, Error>,
@@ -247,6 +251,7 @@ pub(super) fn update_trust_checked(
         }
         Err(error) => {
             report_error(
+                inputs,
                 state,
                 Some(repo_id),
                 util::format_failure_summary("Submodule trust check", &error),
@@ -257,6 +262,7 @@ pub(super) fn update_trust_checked(
 }
 
 pub(super) fn load_trust_checked(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     path: PathBuf,
@@ -278,6 +284,7 @@ pub(super) fn load_trust_checked(
         }
         Err(error) => {
             report_error(
+                inputs,
                 state,
                 Some(repo_id),
                 util::format_failure_summary("Submodule trust check", &error),

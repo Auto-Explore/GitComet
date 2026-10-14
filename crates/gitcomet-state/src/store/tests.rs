@@ -15,6 +15,17 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
+fn fill_set_active_repo_inline(
+    repos: &RepositoryRuntimes,
+    state: &mut AppState,
+    repo_id: RepoId,
+    unchanged: bool,
+    effects: &mut reducer::SetActiveRepoEffects,
+) {
+    let inputs = reducer::test_inputs::for_message(state, repos, Msg::SetActiveRepo { repo_id });
+    reducer::fill_set_active_repo_inline(&inputs, state, repo_id, unchanged, effects);
+}
+
 /// The empty workspace snapshot the history-switch tests seed nav histories
 /// with: no diff target, no preview/edit mode, no selection besides the
 /// commit. Kept beside the other store fixtures so tests do not re-write the
@@ -192,6 +203,7 @@ mod effects;
 mod external_and_history;
 mod file_browser_follow;
 mod maintenance;
+mod prepared_inputs;
 mod reducer_diagnostics;
 mod repo_management;
 mod repo_monitor;

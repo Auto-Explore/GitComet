@@ -9,7 +9,7 @@ use crate::model::{
 };
 use crate::msg::{CommitSelectMode, ConflictAutosolveMode, Effect, WorktreeListRead};
 use crate::msg::{ReferenceEffect, RepoCommandEffect, StatusEffect};
-use crate::store::repository_runtime::RepositoryRuntimes;
+use crate::store::reducer::prepared::ReducerInputs;
 use gitcomet_core::conflict_session::{
     ConflictPayload, ConflictRegionResolution, ConflictRegionSourceRanges,
     ConflictResolverStrategy, ConflictSession, reconstruct_conflict_marker_sides,
@@ -33,6 +33,7 @@ use std::sync::Arc;
 const FILE_HISTORY_REMAINDER_LIMIT: usize = usize::MAX;
 
 pub(super) fn file_history_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     path: PathBuf,
@@ -50,7 +51,7 @@ pub(super) fn file_history_loaded(
         None => match result {
             Ok(page) => page,
             Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                 repo_state.history_state.file_history = Loadable::Error(e.to_string());
                 return Vec::new();
             }
@@ -75,7 +76,7 @@ pub(super) fn file_history_loaded(
                 Err(e) => {
                     // Keep what is loaded; clearing the cursor stops the
                     // picker from reporting that older commits are coming.
-                    push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                     None
                 }
             };
@@ -102,6 +103,7 @@ pub(super) fn file_history_loaded(
 }
 
 pub(super) fn blame_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     path: PathBuf,
@@ -122,7 +124,7 @@ pub(super) fn blame_loaded(
                 _ => Arc::new(v),
             }),
             Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                 Loadable::Error(e.to_string())
             }
         };
@@ -131,6 +133,7 @@ pub(super) fn blame_loaded(
 }
 
 pub(super) fn conflict_file_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     path: PathBuf,
@@ -171,7 +174,7 @@ pub(super) fn conflict_file_loaded(
         let value = match result {
             Ok(v) => Loadable::Ready(v),
             Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                 Loadable::Error(e.to_string())
             }
         };
@@ -185,7 +188,7 @@ pub(super) fn conflict_file_loaded(
             && !session_is_provisional
             && repo_state.conflict_state.conflict_session.is_some()
         {
-            auto_resolve_session_on_open(repo_state, &path);
+            auto_resolve_session_on_open(inputs, repo_state, &path);
         }
     }
     Vec::new()
@@ -207,7 +210,7 @@ pub(super) fn conflict_file_loaded(
 /// [`restore_conflict_session_resolutions`] and are never re-autosolved, so a
 /// region the user deliberately un-resolved stays unresolved. A provisional
 /// CurrentOnly session waits to run this policy until its Full upgrade.
-fn auto_resolve_session_on_open(repo_state: &mut RepoState, path: &Path) {
+fn auto_resolve_session_on_open(inputs: &ReducerInputs, repo_state: &mut RepoState, path: &Path) {
     let Some(session) = repo_state.conflict_state.conflict_session.as_mut() else {
         return;
     };
@@ -233,6 +236,7 @@ fn auto_resolve_session_on_open(repo_state: &mut RepoState, path: &Path) {
     let total_after = session.total_regions();
 
     super::util::push_action_log(
+        inputs,
         repo_state,
         true,
         format!("telemetry.conflict_autosolve.on_open {}", path.display()),
@@ -565,6 +569,7 @@ fn build_conflict_session(
 }
 
 pub(super) fn worktrees_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     read: WorktreeListRead,
@@ -581,7 +586,7 @@ pub(super) fn worktrees_loaded(
                 Err(e) => {
                     // Only explicit loads publish errors. Cancelled replies are
                     // suppressed by the worker's repo-load guard.
-                    push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                     // An unavailable listing is not evidence that the worktrees
                     // disappeared. Keep rows and badges until a read succeeds.
                     if !matches!(repo_state.worktrees, Loadable::Ready(_)) {
@@ -851,6 +856,7 @@ pub(super) fn ref_metadata_loaded(
 }
 
 pub(super) fn submodules_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     result: std::result::Result<Vec<Submodule>, Error>,
@@ -863,7 +869,7 @@ pub(super) fn submodules_loaded(
                 if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) {
                     Loadable::NotLoaded
                 } else {
-                    push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                     Loadable::Error(e.to_string())
                 }
             }
@@ -1225,6 +1231,7 @@ pub(super) fn compare_with_marked(
 }
 
 pub(super) fn range_files_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     from: CommitId,
@@ -1272,7 +1279,7 @@ pub(super) fn range_files_loaded(
             Loadable::Ready(Arc::new(comparison.files))
         }
         Err(e) => {
-            push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+            push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
             Loadable::Error(e.to_string())
         }
     };
@@ -1629,6 +1636,7 @@ pub(super) fn load_recent_commit_messages(
 }
 
 pub(super) fn recent_commit_messages_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     request_rev: u64,
@@ -1640,7 +1648,7 @@ pub(super) fn recent_commit_messages_loaded(
         let value = match result {
             Ok(v) => Loadable::Ready(v),
             Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                 Loadable::Error(e.to_string())
             }
         };
@@ -2259,62 +2267,63 @@ fn browse_open_content_path(repo: &RepoState) -> Option<PendingFileBrowserReopen
     })
 }
 
-enum ReopenDecision {
+pub(super) enum ReopenDecision {
     Skip,
     Open,
     Close,
+}
+
+pub(super) fn reopen_decision(
+    repo: &RepoState,
+    source: &FileSource,
+    entries: &[FileEntry],
+    reopen: &PendingFileBrowserReopen,
+) -> ReopenDecision {
+    if repo.diff_state.diff_target_rev != reopen.diff_target_rev
+        || repo.diff_state.edit_mode
+        || !repo.diff_state.content_preview
+    {
+        ReopenDecision::Skip
+    } else if !entries.iter().any(|entry| {
+        entry.kind == gitcomet_core::domain::FileEntryKind::File
+            && entry.path.as_path() == reopen.path.as_path()
+    }) {
+        ReopenDecision::Close
+    } else if super::diff_selection::content_view_target(source.clone(), reopen.path.clone(), None)
+        == repo.diff_state.diff_target
+    {
+        ReopenDecision::Skip
+    } else {
+        ReopenDecision::Open
+    }
 }
 
 /// Settle the preview captured at retarget time now that the listing for
 /// `source` is in: show the same file there, or close the view when the file
 /// does not exist at that point.
 fn reopen_after_retarget(
-    repos: &RepositoryRuntimes,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     source: FileSource,
     entries: &[FileEntry],
     reopen: PendingFileBrowserReopen,
 ) -> Vec<Effect> {
-    let decision = {
-        let Some(repo) = state.repos.iter().find(|r| r.id == repo_id) else {
-            return Vec::new();
-        };
-        // The user moved on meanwhile: opened something else, closed the
-        // view, or entered the editor.
-        if repo.diff_state.diff_target_rev != reopen.diff_target_rev
-            || repo.diff_state.edit_mode
-            || !repo.diff_state.content_preview
-        {
-            ReopenDecision::Skip
-        } else if !entries.iter().any(|entry| {
-            entry.kind == gitcomet_core::domain::FileEntryKind::File
-                && entry.path.as_path() == reopen.path.as_path()
-        }) {
-            ReopenDecision::Close
-        } else if super::diff_selection::content_view_target(
-            source.clone(),
-            reopen.path.clone(),
-            None,
-        ) == repo.diff_state.diff_target
-        {
-            // Already showing this file at this point (retarget bounced back).
-            ReopenDecision::Skip
-        } else {
-            ReopenDecision::Open
-        }
+    let Some(repo) = state.repos.iter().find(|repo| repo.id == repo_id) else {
+        return Vec::new();
     };
+    let decision = reopen_decision(repo, &source, entries, &reopen);
     match decision {
         ReopenDecision::Skip => Vec::new(),
         ReopenDecision::Close => super::diff_selection::clear_diff_selection(state, repo_id),
         ReopenDecision::Open => {
-            super::diff_selection::open_file_content(repos, state, repo_id, source, reopen.path)
+            super::diff_selection::open_file_content(inputs, state, repo_id, source, reopen.path)
         }
     }
 }
 
 pub(super) fn file_browser_loaded(
-    repos: &RepositoryRuntimes,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     source: FileSource,
@@ -2365,7 +2374,7 @@ pub(super) fn file_browser_loaded(
                     Loadable::Ready(entries)
                 }
                 Err(e) => {
-                    push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                     Loadable::Error(e.to_string())
                 }
             };
@@ -2378,7 +2387,7 @@ pub(super) fn file_browser_loaded(
     let mut effects = Vec::new();
     if let Some((entries, pending)) = reopen {
         effects.extend(reopen_after_retarget(
-            repos, state, repo_id, source, &entries, pending,
+            inputs, state, repo_id, source, &entries, pending,
         ));
     }
 
@@ -2392,6 +2401,7 @@ pub(super) fn file_browser_loaded(
 }
 
 pub(super) fn branches_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     result: std::result::Result<Vec<Branch>, Error>,
@@ -2401,7 +2411,7 @@ pub(super) fn branches_loaded(
         let branches = match result {
             Ok(v) => Loadable::Ready(v),
             Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                 Loadable::Error(e.to_string())
             }
         };
@@ -2416,6 +2426,7 @@ pub(super) fn branches_loaded(
 }
 
 pub(super) fn remotes_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     result: std::result::Result<Vec<Remote>, Error>,
@@ -2425,7 +2436,7 @@ pub(super) fn remotes_loaded(
         let remotes = match result {
             Ok(v) => Loadable::Ready(v),
             Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                 Loadable::Error(e.to_string())
             }
         };
@@ -2438,6 +2449,7 @@ pub(super) fn remotes_loaded(
 }
 
 pub(super) fn remote_branches_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     result: std::result::Result<Vec<RemoteBranch>, Error>,
@@ -2464,7 +2476,7 @@ pub(super) fn remote_branches_loaded(
         let branches = match result {
             Ok(v) => Loadable::Ready(v),
             Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                 Loadable::Error(e.to_string())
             }
         };
@@ -2474,6 +2486,7 @@ pub(super) fn remote_branches_loaded(
 }
 
 pub(super) fn status_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     result: std::result::Result<RepoStatus, Error>,
@@ -2488,7 +2501,7 @@ pub(super) fn status_loaded(
                 clear_resolved_conflict_context(repo_state);
             }
             Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                 repo_state.set_status(Loadable::Error(e.to_string()));
             }
         }
@@ -2499,6 +2512,7 @@ pub(super) fn status_loaded(
 }
 
 pub(super) fn worktree_status_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     result: std::result::Result<Vec<gitcomet_core::domain::FileStatus>, Error>,
@@ -2514,7 +2528,7 @@ pub(super) fn worktree_status_loaded(
                 clear_resolved_conflict_context(repo_state);
             }
             Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                 repo_state.set_worktree_status(Loadable::Error(e.to_string()));
             }
         }
@@ -2559,7 +2573,17 @@ pub(super) fn uncommitted_line_stats_loaded(
     effects
 }
 
+pub(super) fn large_file_support_changes_content(
+    repo: &RepoState,
+    support: &gitcomet_core::large_files::LargeFileSupport,
+) -> bool {
+    repo.large_file_support
+        .ready()
+        .is_none_or(|old| old.lfs != support.lfs || old.annex.in_use() != support.annex.in_use())
+}
+
 pub(super) fn large_file_support_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     result: std::result::Result<gitcomet_core::large_files::LargeFileSupport, Error>,
@@ -2570,13 +2594,9 @@ pub(super) fn large_file_support_loaded(
         return effects;
     };
     let was_active = repo_state.large_file_support_active();
-    let support_changed = result.as_ref().is_ok_and(|support| {
-        repo_state.large_file_support.ready().is_none_or(|old| {
-            // Repository descriptions, trust, numcopies, restage and
-            // assistant state affect the sidebar, not content resolution.
-            old.lfs != support.lfs || old.annex.in_use() != support.annex.in_use()
-        })
-    });
+    let support_changed = result
+        .as_ref()
+        .is_ok_and(|support| large_file_support_changes_content(repo_state, support));
     match result {
         Ok(support) => {
             repo_state.set_large_file_support(Loadable::Ready(support));
@@ -2614,7 +2634,7 @@ pub(super) fn large_file_support_loaded(
         repo_state.loads_in_flight.invalidate_line_stats();
         super::util::append_ready_line_stats_effect(repo_state, &mut effects);
         if let Some(target) = repo_state.diff_state.diff_target.clone() {
-            let plan = super::util::selected_diff_load_plan(repo_state, &target);
+            let plan = super::util::selected_diff_load_plan(inputs, repo_state, &target);
             super::util::apply_selected_diff_load_plan_state_with_reload_mode(
                 repo_state,
                 plan,
@@ -2622,7 +2642,7 @@ pub(super) fn large_file_support_loaded(
             );
             repo_state.bump_diff_state_rev();
             effects.extend(super::util::diff_reload_effects(
-                repo_state, repo_id, target,
+                inputs, repo_state, repo_id, target,
             ));
         }
         if let Some(commit_id) = repo_state.history_state.selected_commit.clone() {
@@ -2710,6 +2730,7 @@ pub(super) fn request_large_file_support_effect(repo_state: &mut RepoState) -> O
 }
 
 pub(super) fn staged_status_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     result: std::result::Result<Vec<gitcomet_core::domain::FileStatus>, Error>,
@@ -2724,7 +2745,7 @@ pub(super) fn staged_status_loaded(
                 }
             }
             Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                 repo_state.set_staged_status(Loadable::Error(e.to_string()));
             }
         }
@@ -2790,6 +2811,7 @@ fn clear_resolved_conflict_context(repo_state: &mut crate::model::RepoState) {
 }
 
 pub(super) fn head_branch_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     result: std::result::Result<String, Error>,
@@ -2815,7 +2837,7 @@ pub(super) fn head_branch_loaded(
                 Loadable::Ready(v)
             }
             Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                 Loadable::Error(e.to_string())
             }
         };
@@ -2839,6 +2861,7 @@ pub(super) fn head_branch_loaded(
 }
 
 pub(super) fn upstream_divergence_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     result: std::result::Result<Option<UpstreamDivergence>, Error>,
@@ -2848,7 +2871,7 @@ pub(super) fn upstream_divergence_loaded(
         let value = match result {
             Ok(v) => Loadable::Ready(v),
             Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                 Loadable::Error(e.to_string())
             }
         };
@@ -2866,6 +2889,7 @@ pub(super) fn upstream_divergence_loaded(
 }
 
 pub(super) fn tags_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     result: std::result::Result<Vec<Tag>, Error>,
@@ -2880,7 +2904,7 @@ pub(super) fn tags_loaded(
                 } else if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) {
                     Loadable::NotLoaded
                 } else {
-                    push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                     Loadable::Error(e.to_string())
                 }
             }
@@ -2894,6 +2918,7 @@ pub(super) fn tags_loaded(
 }
 
 pub(super) fn remote_tags_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     result: std::result::Result<Vec<RemoteTag>, Error>,
@@ -2908,7 +2933,7 @@ pub(super) fn remote_tags_loaded(
                 } else if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) {
                     Loadable::NotLoaded
                 } else {
-                    push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                     Loadable::Error(e.to_string())
                 }
             }
@@ -2924,6 +2949,7 @@ pub(super) fn remote_tags_loaded(
 }
 
 pub(super) fn stashes_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     result: std::result::Result<Vec<StashEntry>, Error>,
@@ -2933,7 +2959,7 @@ pub(super) fn stashes_loaded(
         let stashes = match result {
             Ok(v) => Loadable::Ready(v),
             Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                 Loadable::Error(e.to_string())
             }
         };
@@ -2946,6 +2972,7 @@ pub(super) fn stashes_loaded(
 }
 
 pub(super) fn reflog_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     result: std::result::Result<Vec<ReflogEntry>, Error>,
@@ -2955,7 +2982,7 @@ pub(super) fn reflog_loaded(
         let next = match result {
             Ok(v) => Loadable::Ready(v),
             Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                 Loadable::Error(e.to_string())
             }
         };
@@ -2999,6 +3026,7 @@ pub(super) fn prepare_squash(state: &mut AppState, repo_id: RepoId) -> Vec<Effec
 }
 
 pub(super) fn squash_message_preview_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     oldest: CommitId,
@@ -3026,7 +3054,7 @@ pub(super) fn squash_message_preview_loaded(
                     })
                 }
                 Err(e) => {
-                    push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                     Loadable::Error(e.to_string())
                 }
             };
@@ -3036,17 +3064,30 @@ pub(super) fn squash_message_preview_loaded(
     Vec::new()
 }
 
+pub(super) struct SquashRebaseSetup {
+    pub base: String,
+    pub actual_head: CommitId,
+    pub selected_ids: Vec<CommitId>,
+    pub reword_id: CommitId,
+    pub message: String,
+    pub count: usize,
+}
+
 pub(super) fn squash_rebase_setup_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
-    base: String,
-    actual_head: CommitId,
-    selected_ids: Vec<CommitId>,
-    reword_id: CommitId,
-    message: String,
-    count: usize,
+    setup: SquashRebaseSetup,
     result: std::result::Result<Vec<InteractiveRebaseEntry>, Error>,
 ) -> Vec<Effect> {
+    let SquashRebaseSetup {
+        base,
+        actual_head,
+        selected_ids,
+        reword_id,
+        message,
+        count,
+    } = setup;
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
@@ -3054,8 +3095,9 @@ pub(super) fn squash_rebase_setup_loaded(
     let entries = match result {
         Ok(entries) => entries,
         Err(e) => {
-            push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+            push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
             push_notification(
+                inputs,
                 state,
                 AppNotificationKind::Error,
                 format!("Failed to load commits for squash rebase: {e}"),
@@ -3098,6 +3140,7 @@ pub(super) fn squash_rebase_setup_loaded(
     // catches a selection count that disagrees with what was actually planned.
     if !head_unchanged || !reword_found || matched != count {
         push_notification(
+            inputs,
             state,
             AppNotificationKind::Warning,
             "Squash cancelled: the selected commits are no longer squashable.".to_string(),
@@ -3187,6 +3230,7 @@ pub(super) fn commit_lookup_resolved(
 }
 
 pub(super) fn commit_reveal_resolved(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     reference: CommitId,
@@ -3210,6 +3254,7 @@ pub(super) fn commit_reveal_resolved(
         Err(e) => {
             repo_state.set_reveal_target(None);
             push_notification(
+                inputs,
                 state,
                 crate::model::AppNotificationKind::Warning,
                 format!("Could not find commit {reference}: {e}"),
@@ -3235,6 +3280,7 @@ pub(super) fn commit_reveal_resolved(
 }
 
 pub(super) fn commit_details_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     commit_id: CommitId,
@@ -3251,11 +3297,11 @@ pub(super) fn commit_details_loaded(
         let selected_target = repo_state.diff_state.diff_target.clone();
         let previous_plan = selected_target
             .as_ref()
-            .map(|target| selected_diff_load_plan(repo_state, target));
+            .map(|target| selected_diff_load_plan(inputs, repo_state, target));
         let value = match result {
             Ok(v) => Loadable::Ready(Arc::new(v)),
             Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                 Loadable::Error(e.to_string())
             }
         };
@@ -3271,11 +3317,11 @@ pub(super) fn commit_details_loaded(
         );
 
         if let Some(target @ gitcomet_core::domain::DiffTarget::Commit { .. }) = selected_target {
-            let next_plan = selected_diff_load_plan(repo_state, &target);
+            let next_plan = selected_diff_load_plan(inputs, repo_state, &target);
             if previous_plan != Some(next_plan) {
                 apply_selected_diff_load_plan_state(repo_state, next_plan);
                 repo_state.bump_diff_state_rev();
-                let mut effects = diff_reload_effects(repo_state, repo_id, target);
+                let mut effects = diff_reload_effects(inputs, repo_state, repo_id, target);
                 effects.extend(signature_effect);
                 return effects;
             }

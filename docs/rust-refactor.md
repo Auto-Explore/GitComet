@@ -28,7 +28,7 @@ subsystem's acceptance. No release, merge, or push is part of this implementatio
 - [x] Introduce distinct log IDs, load epochs, line-stat generations and repository lifetime types; completion methods reject stale IDs.
 - [x] Group persistence/control, status, reference metadata and repository-command effects; each family owns runtime requirements and completion construction.
 - [x] Centralize repository runtime resources and accepted close/shutdown handling, keeping refresh cancellation distinct from closure.
-- [ ] Prepare filesystem/Git inputs outside the state write lock while preserving synchronous worker ordering.
+- [x] Prepare filesystem/Git inputs outside the state write lock while preserving synchronous worker ordering.
 - [x] Encapsulate backend history cache construction/invalidation without changing locks, keys, bounds or sharing.
 - [x] Establish one document owner per WindowHost with stable BufferId, load/save generations, disk versions, encoding, dirty state and retention.
 - [x] Connect sidebar/close guards directly to document ownership and emit dirty changes at mutation time.
@@ -127,7 +127,23 @@ regressions observe cleanup before store shutdown. Independent review accepted t
 runtime consolidation and lifecycle fixes; all 1,336 state tests passed, including
 the integration suites, with six existing skips, and strict Clippy passed. All six
 UI tests covering the five fixture ordering changes passed with the renderer build.
-Prepared reducer inputs remain in progress.
+
+The worker now captures owned input requests under brief read guards, releases
+those guards, and resolves canonical paths, saved preferences and gitlink
+classification before acquiring the state write lock. Preparation retains no
+application snapshot. The reducer applies facts at its existing planning points
+within the same serialized worker turn. Facts carry the repository lifetime and
+path; unavailable HEAD answers preserve the cache, while successful negative
+answers remove it. Failed-open persistence keeps its synchronous ordering.
+
+Cancellation preparation follows the nested completion's log admission and
+maintenance transition, including another running worktree's maintenance.
+Shared predicates keep preparation aligned with the actual log coalescer and
+selection-clearing commands. The final state suite passed 1,358 tests across all
+four binaries, with six existing ignores, and strict Clippy passed. Ten
+preservation cases also passed against the accepted runtime implementation.
+The blocked-query regression demonstrates that both snapshots and the state
+write lock remain available while Git classification waits.
 
 The canonical repository API migration passed 1,971 core/backend tests with
 22 existing skips and strict Clippy. Its cancellation regressions failed when the

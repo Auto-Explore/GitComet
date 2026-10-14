@@ -4,6 +4,7 @@
 use super::util;
 use crate::model::{AppState, RepoId};
 use crate::msg::{Effect, RepoWatchDegradedReason};
+use crate::store::reducer::prepared::ReducerInputs;
 use std::sync::Arc;
 
 pub(super) fn acquire_lease(state: &mut AppState, repo_id: RepoId, lifetime: u64) -> Vec<Effect> {
@@ -40,7 +41,11 @@ pub(super) fn release_lease(state: &mut AppState, repo_id: RepoId, lifetime: u64
     Vec::new()
 }
 
-pub(super) fn watch_degraded(state: &mut AppState, reason: RepoWatchDegradedReason) -> Vec<Effect> {
+pub(super) fn watch_degraded(
+    inputs: &ReducerInputs,
+    state: &mut AppState,
+    reason: RepoWatchDegradedReason,
+) -> Vec<Effect> {
     let message = match reason {
         crate::msg::RepoWatchDegradedReason::IgnorePolicyFailed =>
             "Live file watching is limited because repository ignore rules could not be read. Changes refresh when the window regains focus; watching will retry automatically.".into(),
@@ -57,7 +62,12 @@ pub(super) fn watch_degraded(state: &mut AppState, reason: RepoWatchDegradedReas
             )
         }
     };
-    util::push_notification(state, crate::model::AppNotificationKind::Warning, message);
+    util::push_notification(
+        inputs,
+        state,
+        crate::model::AppNotificationKind::Warning,
+        message,
+    );
     Vec::new()
 }
 

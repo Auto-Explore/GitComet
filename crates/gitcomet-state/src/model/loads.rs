@@ -277,6 +277,10 @@ impl RepoLoadsInFlight {
         self.log.request(next)
     }
 
+    pub(crate) fn log_request_starts(&self, next: &PendingLogLoad) -> bool {
+        self.log.request_starts(next)
+    }
+
     pub fn is_active_log_reply(&self, seq: LogLoadSeq) -> bool {
         self.active_log_seq() == Some(seq)
     }
@@ -304,6 +308,12 @@ impl RepoLoadsInFlight {
 }
 
 impl LogLoads {
+    fn request_starts(&self, next: &PendingLogLoad) -> bool {
+        self.active.as_ref().is_none_or(|active| {
+            active.request.scope != next.scope || active.request.author != next.author
+        })
+    }
+
     fn start(&mut self, request: PendingLogLoad) -> LogLoadSeq {
         self.last_seq = LogLoadSeq(self.last_seq.0.wrapping_add(1));
         self.active = Some(ActiveLogLoad {
@@ -315,12 +325,13 @@ impl LogLoads {
     }
 
     fn request(&mut self, next: PendingLogLoad) -> Option<LogLoadSeq> {
-        let Some(active) = self.active.as_mut() else {
-            return Some(self.start(next));
-        };
-        if active.request.scope != next.scope || active.request.author != next.author {
+        if self.request_starts(&next) {
             return Some(self.start(next));
         }
+        let active = self
+            .active
+            .as_mut()
+            .expect("coalesced log request has an active walk");
         match &active.pending {
             Some(existing) if existing.cursor.is_none() && next.cursor.is_some() => {}
             _ => active.pending = Some(next),

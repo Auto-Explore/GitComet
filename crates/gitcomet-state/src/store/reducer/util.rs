@@ -5,6 +5,7 @@ use crate::model::{
 };
 use crate::msg::{ConflictAutosolveMode, ConflictAutosolveStats, Effect, RepoCommandKind};
 use crate::msg::{ReferenceEffect, StatusEffect};
+use crate::store::reducer::prepared::ReducerInputs;
 #[cfg(test)]
 use gitcomet_core::domain::Upstream;
 use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, FileStatusKind, SignatureFormats};
@@ -15,6 +16,7 @@ use smallvec::{Array, SmallVec};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+#[cfg(test)]
 use std::time::SystemTime;
 
 /// Default page size for log fetches.
@@ -330,10 +332,11 @@ fn diff_target_preview_text_side(
 }
 
 pub(super) fn selected_diff_load_plan(
+    inputs: &ReducerInputs,
     repo_state: &RepoState,
     target: &DiffTarget,
 ) -> SelectedDiffLoadPlan {
-    if diff_target_is_submodule(repo_state, target) {
+    if diff_target_is_submodule(inputs, repo_state, target) {
         return SelectedDiffLoadPlan {
             load_patch_diff: false,
             load_file_text: false,
@@ -416,6 +419,7 @@ pub(super) fn reload_selected_text_attributes(repo_state: &mut RepoState) -> Opt
 /// conflict when it is one, otherwise as a new generation that keeps the
 /// content on screen and drops loads still reading it the old way.
 pub(super) fn reload_selected_file_text(
+    inputs: &ReducerInputs,
     repo_state: &mut RepoState,
     target: &DiffTarget,
 ) -> Vec<Effect> {
@@ -426,7 +430,7 @@ pub(super) fn reload_selected_file_text(
         };
     }
     repo_state.diff_state.diff_target_rev = repo_state.diff_state.diff_target_rev.wrapping_add(1);
-    let load_plan = selected_diff_load_plan(repo_state, target);
+    let load_plan = selected_diff_load_plan(inputs, repo_state, target);
     apply_selected_diff_load_plan_state_with_reload_mode(
         repo_state,
         load_plan,
@@ -517,29 +521,44 @@ pub(super) fn apply_selected_diff_load_plan_state_with_reload_mode(
     };
 }
 
-fn diff_target_is_submodule(repo_state: &RepoState, target: &DiffTarget) -> bool {
+pub(super) enum WorktreeSubmoduleSource {
+    Known(bool),
+    Marker,
+}
+
+pub(super) fn worktree_submodule_source(
+    repo_state: &RepoState,
+    area: DiffArea,
+    path: &Path,
+) -> WorktreeSubmoduleSource {
+    let Some(entry) = repo_state.status_entry_for_path(area, path) else {
+        return WorktreeSubmoduleSource::Known(false);
+    };
+    if entry.kind == FileStatusKind::Untracked {
+        return WorktreeSubmoduleSource::Known(false);
+    }
+    if let Loadable::Ready(submodules) = &repo_state.submodules
+        && submodules.iter().any(|submodule| submodule.path == path)
+    {
+        return WorktreeSubmoduleSource::Known(true);
+    }
+    if entry.kind == FileStatusKind::Deleted {
+        return WorktreeSubmoduleSource::Known(repo_state.head_gitlink_paths.contains(path));
+    }
+    WorktreeSubmoduleSource::Marker
+}
+
+fn diff_target_is_submodule(
+    inputs: &ReducerInputs,
+    repo_state: &RepoState,
+    target: &DiffTarget,
+) -> bool {
     match target {
         DiffTarget::WorkingTree { path, area, .. } => {
-            let Some(entry) = repo_state.status_entry_for_path(*area, path) else {
-                return false;
-            };
-            if entry.kind == FileStatusKind::Untracked {
-                return false;
+            match worktree_submodule_source(repo_state, *area, path) {
+                WorktreeSubmoduleSource::Known(value) => value,
+                WorktreeSubmoduleSource::Marker => inputs.worktree_marker(repo_state, path),
             }
-
-            if let Loadable::Ready(submodules) = &repo_state.submodules
-                && submodules.iter().any(|submodule| submodule.path == *path)
-            {
-                return true;
-            }
-
-            if entry.kind == FileStatusKind::Deleted {
-                return repo_state.head_gitlink_paths.contains(path);
-            }
-
-            let mut dot_git = repo_state.spec.workdir.join(path);
-            dot_git.push(".git");
-            std::fs::metadata(&dot_git).is_ok_and(|meta| meta.is_file() || meta.is_dir())
         }
         DiffTarget::Commit {
             commit_id, path, ..
@@ -685,8 +704,12 @@ fn append_start_conflict_target_reload_with_mode(
     });
 }
 
-pub(super) fn diff_reload_effect_count(repo_state: &RepoState, target: &DiffTarget) -> usize {
-    let plan = selected_diff_load_plan(repo_state, target);
+pub(super) fn diff_reload_effect_count(
+    inputs: &ReducerInputs,
+    repo_state: &RepoState,
+    target: &DiffTarget,
+) -> usize {
+    let plan = selected_diff_load_plan(inputs, repo_state, target);
 
     let mut count = usize::from(plan.load_patch_diff);
     if plan.load_submodule_summary {
@@ -707,22 +730,24 @@ pub(super) fn diff_reload_effect_count(repo_state: &RepoState, target: &DiffTarg
 }
 
 pub(super) fn diff_reload_effects(
+    inputs: &ReducerInputs,
     repo_state: &RepoState,
     repo_id: RepoId,
     target: DiffTarget,
 ) -> Vec<Effect> {
-    let mut effects = Vec::with_capacity(diff_reload_effect_count(repo_state, &target));
-    append_diff_reload_effects(&mut effects, repo_state, repo_id, target);
+    let mut effects = Vec::with_capacity(diff_reload_effect_count(inputs, repo_state, &target));
+    append_diff_reload_effects(inputs, &mut effects, repo_state, repo_id, target);
     effects
 }
 
 pub(super) fn append_diff_reload_effects(
+    inputs: &ReducerInputs,
     effects: &mut impl EffectAccumulator,
     repo_state: &RepoState,
     repo_id: RepoId,
     target: DiffTarget,
 ) {
-    let plan = selected_diff_load_plan(repo_state, &target);
+    let plan = selected_diff_load_plan(inputs, repo_state, &target);
 
     if plan.load_submodule_summary {
         effects.push_effect(Effect::LoadSubmoduleSummary {
@@ -1087,10 +1112,15 @@ pub(super) fn canonicalize_path(path: PathBuf) -> PathBuf {
     super::super::canonicalize_path(path)
 }
 
-pub(super) fn push_notification(state: &mut AppState, kind: AppNotificationKind, message: String) {
+pub(super) fn push_notification(
+    inputs: &ReducerInputs,
+    state: &mut AppState,
+    kind: AppNotificationKind,
+    message: String,
+) {
     const MAX_NOTIFICATIONS: usize = 200;
     state.notifications.push(AppNotification {
-        time: SystemTime::now(),
+        time: inputs.now(),
         kind,
         message,
     });
@@ -1100,11 +1130,16 @@ pub(super) fn push_notification(state: &mut AppState, kind: AppNotificationKind,
     }
 }
 
-pub(super) fn push_diagnostic(repo_state: &mut RepoState, kind: DiagnosticKind, message: String) {
+pub(super) fn push_diagnostic(
+    inputs: &ReducerInputs,
+    repo_state: &mut RepoState,
+    kind: DiagnosticKind,
+    message: String,
+) {
     const MAX_DIAGNOSTICS: usize = 200;
     repo_state.feedback.diagnostics_seq = repo_state.feedback.diagnostics_seq.wrapping_add(1);
     repo_state.feedback.diagnostics.push(DiagnosticEntry {
-        time: SystemTime::now(),
+        time: inputs.now(),
         kind,
         message,
     });
@@ -1115,6 +1150,7 @@ pub(super) fn push_diagnostic(repo_state: &mut RepoState, kind: DiagnosticKind, 
 }
 
 pub(super) fn handle_session_persist_result(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: Option<RepoId>,
     action: &'static str,
@@ -1124,11 +1160,11 @@ pub(super) fn handle_session_persist_result(
         return;
     };
     let message = format!("Failed to persist session state while {action}: {error}");
-    push_notification(state, AppNotificationKind::Error, message.clone());
+    push_notification(inputs, state, AppNotificationKind::Error, message.clone());
     if let Some(repo_id) = repo_id
         && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
     {
-        push_diagnostic(repo_state, DiagnosticKind::Error, message);
+        push_diagnostic(inputs, repo_state, DiagnosticKind::Error, message);
     }
 }
 
@@ -1143,6 +1179,7 @@ fn command_success_is_worth_announcing(command: &RepoCommandKind) -> bool {
 }
 
 pub(super) fn push_command_log(
+    inputs: &ReducerInputs,
     repo_state: &mut RepoState,
     ok: bool,
     command: &RepoCommandKind,
@@ -1154,7 +1191,7 @@ pub(super) fn push_command_log(
     let (command_text, summary) = summarize_command(command, output, ok, error);
 
     repo_state.feedback.command_log.push(CommandLogEntry {
-        time: SystemTime::now(),
+        time: inputs.now(),
         ok,
         command: command_text,
         summary,
@@ -1176,6 +1213,7 @@ pub(super) fn push_command_log(
 }
 
 pub(super) fn push_action_log(
+    inputs: &ReducerInputs,
     repo_state: &mut RepoState,
     ok: bool,
     command: String,
@@ -1185,7 +1223,7 @@ pub(super) fn push_action_log(
     const MAX_COMMAND_LOG: usize = 200;
 
     repo_state.feedback.command_log.push(CommandLogEntry {
-        time: SystemTime::now(),
+        time: inputs.now(),
         ok,
         command,
         summary,
@@ -1967,7 +2005,12 @@ mod tests {
         let repo_id = RepoId(7);
         let repo_state = repo_state(repo_id.0);
         let png = DiffTarget::working_tree(PathBuf::from("img.PNG"), DiffArea::Unstaged);
-        let png_effects = diff_reload_effects(&repo_state, repo_id, png.clone());
+        let png_effects = diff_reload_effects(
+            &crate::store::reducer::test_inputs::for_target(&repo_state, &png.clone()),
+            &repo_state,
+            repo_id,
+            png.clone(),
+        );
         assert!(diff_target_wants_image_preview(&png));
         assert!(!diff_target_is_svg(&png));
         assert_eq!(png_effects.len(), 2);
@@ -1975,7 +2018,12 @@ mod tests {
         assert!(matches!(png_effects[1], Effect::LoadDiffFileImage { .. }));
 
         let svg = DiffTarget::working_tree(PathBuf::from("diagram.svg"), DiffArea::Unstaged);
-        let svg_effects = diff_reload_effects(&repo_state, repo_id, svg.clone());
+        let svg_effects = diff_reload_effects(
+            &crate::store::reducer::test_inputs::for_target(&repo_state, &svg.clone()),
+            &repo_state,
+            repo_id,
+            svg.clone(),
+        );
         assert!(diff_target_wants_image_preview(&svg));
         assert!(diff_target_is_svg(&svg));
         assert_eq!(svg_effects.len(), 3);
@@ -1984,7 +2032,13 @@ mod tests {
         let text_no_ext = DiffTarget::working_tree(PathBuf::from("README"), DiffArea::Unstaged);
         assert!(!diff_target_wants_image_preview(&text_no_ext));
         assert_eq!(
-            diff_reload_effects(&repo_state, repo_id, text_no_ext).len(),
+            diff_reload_effects(
+                &crate::store::reducer::test_inputs::for_target(&repo_state, &text_no_ext),
+                &repo_state,
+                repo_id,
+                text_no_ext
+            )
+            .len(),
             2
         );
 
@@ -1996,7 +2050,13 @@ mod tests {
         assert!(!diff_target_wants_image_preview(&range_without_path));
         assert!(!diff_target_is_svg(&range_without_path));
         assert_eq!(
-            diff_reload_effects(&repo_state, repo_id, range_without_path).len(),
+            diff_reload_effects(
+                &crate::store::reducer::test_inputs::for_target(&repo_state, &range_without_path),
+                &repo_state,
+                repo_id,
+                range_without_path
+            )
+            .len(),
             0
         );
     }
@@ -2009,7 +2069,11 @@ mod tests {
         // Working-tree content is read from disk: no patch diff, no file text, no
         // preview-text-file load.
         let worktree = DiffTarget::working_tree(PathBuf::from("src/lib.rs"), DiffArea::Unstaged);
-        let plan = selected_diff_load_plan(&repo, &worktree);
+        let plan = selected_diff_load_plan(
+            &crate::store::reducer::test_inputs::for_target(&repo, &worktree),
+            &repo,
+            &worktree,
+        );
         assert!(!plan.load_patch_diff);
         assert!(!plan.load_file_text);
         assert_eq!(plan.preview_text_side, None);
@@ -2017,7 +2081,11 @@ mod tests {
 
         // Commit content reads the New-side blob via a preview text file.
         let commit = DiffTarget::commit(CommitId("abc123".into()), PathBuf::from("src/lib.rs"));
-        let plan = selected_diff_load_plan(&repo, &commit);
+        let plan = selected_diff_load_plan(
+            &crate::store::reducer::test_inputs::for_target(&repo, &commit),
+            &repo,
+            &commit,
+        );
         assert!(!plan.load_patch_diff);
         assert_eq!(
             plan.preview_text_side,
@@ -2026,13 +2094,24 @@ mod tests {
 
         // An image is still loaded as an image, not as text.
         let image = DiffTarget::commit(CommitId("abc123".into()), PathBuf::from("logo.png"));
-        let plan = selected_diff_load_plan(&repo, &image);
+        let plan = selected_diff_load_plan(
+            &crate::store::reducer::test_inputs::for_target(&repo, &image),
+            &repo,
+            &image,
+        );
         assert!(plan.load_file_image);
         assert_eq!(plan.preview_text_side, None);
 
         // Without the flag, a tracked file still gets a normal patch diff.
         repo.diff_state.content_preview = false;
-        assert!(selected_diff_load_plan(&repo, &worktree).load_patch_diff);
+        assert!(
+            selected_diff_load_plan(
+                &crate::store::reducer::test_inputs::for_target(&repo, &worktree),
+                &repo,
+                &worktree
+            )
+            .load_patch_diff
+        );
     }
 
     #[test]
@@ -2062,25 +2141,47 @@ mod tests {
         // An untracked SVG has no patch, but its source still has to load: the
         // Code view is the only place an SVG's text is ever shown.
         let svg = DiffTarget::working_tree(svg_path, DiffArea::Unstaged);
-        let plan = selected_diff_load_plan(&repo, &svg);
+        let plan = selected_diff_load_plan(
+            &crate::store::reducer::test_inputs::for_target(&repo, &svg),
+            &repo,
+            &svg,
+        );
         assert!(!plan.load_patch_diff);
         assert!(plan.load_file_text);
         assert!(plan.load_file_image);
         // Image + preview text + file text is the widest SVG fan-out; it has to
         // stay inside the reload cap that `diff_reload_effect_count` asserts.
         assert!(plan.preview_text_side.is_some());
-        assert_eq!(diff_reload_effect_count(&repo, &svg), 3);
+        assert_eq!(
+            diff_reload_effect_count(
+                &crate::store::reducer::test_inputs::for_target(&repo, &svg),
+                &repo,
+                &svg
+            ),
+            3
+        );
 
         // A non-SVG image has no text view at all.
         let png = DiffTarget::working_tree(png_path, DiffArea::Unstaged);
-        let plan = selected_diff_load_plan(&repo, &png);
+        let plan = selected_diff_load_plan(
+            &crate::store::reducer::test_inputs::for_target(&repo, &png),
+            &repo,
+            &png,
+        );
         assert!(!plan.load_patch_diff);
         assert!(!plan.load_file_text);
         assert!(plan.load_file_image);
 
         // Content preview does not suppress the SVG file text either.
         repo.diff_state.content_preview = true;
-        assert!(selected_diff_load_plan(&repo, &svg).load_file_text);
+        assert!(
+            selected_diff_load_plan(
+                &crate::store::reducer::test_inputs::for_target(&repo, &svg),
+                &repo,
+                &svg
+            )
+            .load_file_text
+        );
     }
 
     #[test]
@@ -2228,6 +2329,7 @@ mod tests {
         let mut state = AppState::test_default();
         for ix in 0..205 {
             push_notification(
+                &crate::store::reducer::test_inputs::clock(),
                 &mut state,
                 AppNotificationKind::Info,
                 format!("notification-{ix}"),
@@ -2238,7 +2340,12 @@ mod tests {
 
         let mut repo = repo_state(3);
         for ix in 0..205 {
-            push_diagnostic(&mut repo, DiagnosticKind::Info, format!("diagnostic-{ix}"));
+            push_diagnostic(
+                &crate::store::reducer::test_inputs::clock(),
+                &mut repo,
+                DiagnosticKind::Info,
+                format!("diagnostic-{ix}"),
+            );
         }
         assert_eq!(repo.feedback.diagnostics.len(), 200);
         assert_eq!(repo.feedback.diagnostics[0].message, "diagnostic-5");
@@ -2249,6 +2356,7 @@ mod tests {
         let mut repo = repo_state(4);
         repo.feedback.command_log = (0..200).map(dummy_log_entry).collect();
         push_command_log(
+            &crate::store::reducer::test_inputs::clock(),
             &mut repo,
             true,
             &RepoCommandKind::FetchAll,
@@ -2268,6 +2376,7 @@ mod tests {
 
         repo.feedback.command_log = (0..200).map(dummy_log_entry).collect();
         push_action_log(
+            &crate::store::reducer::test_inputs::clock(),
             &mut repo,
             false,
             "manual action".to_string(),

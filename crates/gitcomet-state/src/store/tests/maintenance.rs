@@ -218,7 +218,12 @@ fn opening_the_active_tab_requests_one_maintenance_check_an_hour() {
         Some(Path::new("/work/app/.git"))
     );
     assert!(
-        super::reducer::maintenance::request_check(&mut state, repo_id).is_none(),
+        super::reducer::maintenance::request_check(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id
+        )
+        .is_none(),
         "focus right after opening does not ask again"
     );
 }
@@ -451,5 +456,12 @@ fn recommendations_turned_off_ask_nothing_and_withdraw_cards() {
         })
         .count();
     assert_eq!(checks, 0, "open: {effects:?}, switch: {switched:?}");
-    assert!(super::reducer::maintenance::request_check(&mut state, opened).is_none());
+    assert!(
+        super::reducer::maintenance::request_check(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            opened
+        )
+        .is_none()
+    );
 }

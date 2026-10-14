@@ -1,10 +1,11 @@
 //! Git operation lifecycle: hook activity around an operation's completion,
 //! and cancelling a running operation.
 
-use super::{external_and_history, git_hook_activity, reduce};
+use super::{external_and_history, git_hook_activity, reduce_prepared};
 use crate::model::{AppState, GitOperationOuterOutcome, RepoId};
 use crate::msg::ControlEffect;
 use crate::msg::{Effect, InternalMsg, Msg};
+use crate::store::reducer::prepared::ReducerInputs;
 use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::git_operation::{GitOperationEvent, GitOperationId};
 use std::sync::atomic::AtomicU64;
@@ -57,6 +58,7 @@ pub(super) fn git_operation_event(
 }
 
 pub(super) fn git_operation_finished(
+    inputs: &ReducerInputs,
     repos: &mut RepositoryRuntimes,
     id_alloc: &AtomicU64,
     state: &mut AppState,
@@ -116,7 +118,7 @@ pub(super) fn git_operation_finished(
         repo.feedback.command_log_operation_id = is_reportable.then_some(operation_id);
     }
 
-    let mut effects = reduce(repos, id_alloc, state, Msg::Internal(*message));
+    let mut effects = reduce_prepared(inputs, repos, id_alloc, state, Msg::Internal(*message));
 
     if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
         repo.feedback.command_log_operation_id = None;
@@ -135,7 +137,7 @@ pub(super) fn git_operation_finished(
         // retained panes. Explicit Reload would discard history and
         // selection after the nested action already refreshed them.
         effects.extend(external_and_history::repo_externally_changed(
-            repos,
+            inputs,
             state,
             repo_id,
             crate::msg::RepoExternalChange::all(),

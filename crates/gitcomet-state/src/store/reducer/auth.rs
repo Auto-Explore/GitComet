@@ -2,12 +2,13 @@
 //! the credentials the user then enters.
 
 use super::{
-    actions_emit_effects, begin_commit_action, external_and_history, maintenance, reduce,
+    actions_emit_effects, begin_commit_action, external_and_history, maintenance, reduce_prepared,
     refresh_selected_head_gitlink, repo_management, util,
 };
 use crate::model::AuthPromptKind;
 use crate::model::{AppState, AuthPromptState, AuthRetryOperation, PendingCommitRetry, RepoId};
 use crate::msg::{Effect, Msg, RepoCommandKind};
+use crate::store::reducer::prepared::ReducerInputs;
 use crate::store::repository_runtime::RepositoryRuntimes;
 #[cfg(test)]
 use gitcomet_core::auth::stage_git_auth;
@@ -122,6 +123,7 @@ fn retry_msg_for_auth_operation(operation: AuthRetryOperation) -> Option<Msg> {
 /// plain merge would commit adjusted content to the wrong branch and a plain
 /// push would publish the adjusted branch. `None`: plain Git applies.
 pub(super) fn annex_takeover(
+    inputs: &ReducerInputs,
     repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
@@ -135,6 +137,7 @@ pub(super) fn annex_takeover(
     if state.large_file_tools.git_annex.is_not_found() {
         let action = if pull { "Pull" } else { "Push" };
         return annex_refusal(
+            inputs,
             state,
             repo_id,
             action,
@@ -148,13 +151,14 @@ pub(super) fn annex_takeover(
         gitcomet_core::large_files::LargeFileCommand::AnnexPush { content }
     };
     Some(actions_emit_effects::run_large_file_command(
-        repos, state, repo_id, command,
+        inputs, repos, state, repo_id, command,
     ))
 }
 
 /// Branch operations git-annex has no equivalent for are refused on an
 /// adjusted branch rather than run as plain Git.
 pub(super) fn annex_adjusted_refusal(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     action: &str,
@@ -165,6 +169,7 @@ pub(super) fn annex_adjusted_refusal(
         return None;
     }
     annex_refusal(
+        inputs,
         state,
         repo_id,
         action,
@@ -173,6 +178,7 @@ pub(super) fn annex_adjusted_refusal(
 }
 
 pub(super) fn annex_refusal(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     action: &str,
@@ -186,7 +192,7 @@ pub(super) fn annex_refusal(
         "{action} on a git-annex adjusted branch {reason}. Check out {base} to use plain Git."
     );
     repo.feedback.last_error = Some(summary.clone());
-    util::push_action_log(repo, false, action.to_string(), summary, None);
+    util::push_action_log(inputs, repo, false, action.to_string(), summary, None);
     Some(Vec::new())
 }
 
@@ -453,6 +459,7 @@ fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> 
 }
 
 pub(super) fn submit_auth_prompt(
+    inputs: &ReducerInputs,
     repos: &mut RepositoryRuntimes,
     id_alloc: &AtomicU64,
     state: &mut AppState,
@@ -475,6 +482,7 @@ pub(super) fn submit_auth_prompt(
                 .and_then(|repo_id| state.repos.iter_mut().find(|r| r.id == repo_id))
             {
                 util::push_diagnostic(
+                    inputs,
                     repo_state,
                     crate::model::DiagnosticKind::Error,
                     util::format_error_for_user(&err),
@@ -498,8 +506,9 @@ pub(super) fn submit_auth_prompt(
         _ => None,
     };
     match retry_msg_for_auth_operation(prompt.operation) {
-        Some(msg) => {
-            let effects = reduce(repos, id_alloc, state, msg);
+        Some(mut msg) => {
+            inputs.normalize_auth_retry(state, &mut msg);
+            let effects = reduce_prepared(inputs, repos, id_alloc, state, msg);
             if let Some((repo_id, before)) = queued_before
                 && let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id)
                 && repo.pending.large_file_commands.len() > before
@@ -574,6 +583,7 @@ pub(super) fn commit_amend(
 }
 
 pub(super) fn commit_finished(
+    inputs: &ReducerInputs,
     repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
@@ -595,7 +605,7 @@ pub(super) fn commit_finished(
         .err()
         .and_then(|error| auth_prompt_for_commit(repo_id, pending_commit.clone(), error));
     let mut effects =
-        actions_emit_effects::commit_finished(state, repo_id, result.map(|_| ()), amend);
+        actions_emit_effects::commit_finished(inputs, state, repo_id, result.map(|_| ()), amend);
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.pending.commit_retry = None;
     }
@@ -603,7 +613,7 @@ pub(super) fn commit_finished(
         clear_staged_git_auth_env();
         state.auth_prompt = Some(prompt);
     }
-    if push_after_commit && let Some(push) = annex_takeover(repos, state, repo_id, false) {
+    if push_after_commit && let Some(push) = annex_takeover(inputs, repos, state, repo_id, false) {
         effects.extend(push);
     } else if push_after_commit
         && let (Some(outcome), Some(pending_commit)) = (outcome, pending_commit)
@@ -622,6 +632,7 @@ pub(super) fn commit_finished(
 }
 
 pub(super) fn safe_push_after_commit_finished(
+    inputs: &ReducerInputs,
     repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
@@ -633,8 +644,9 @@ pub(super) fn safe_push_after_commit_finished(
         .as_ref()
         .err()
         .and_then(|error| auth_prompt_for_safe_push_after_commit(repo_id, context.clone(), error));
-    let effects =
-        actions_emit_effects::safe_push_after_commit_finished(repos, state, repo_id, auth, result);
+    let effects = actions_emit_effects::safe_push_after_commit_finished(
+        inputs, repos, state, repo_id, auth, result,
+    );
     if let Some(prompt) = auth_prompt {
         clear_staged_git_auth_env();
         state.auth_prompt = Some(prompt);
@@ -643,6 +655,7 @@ pub(super) fn safe_push_after_commit_finished(
 }
 
 pub(super) fn repo_command_finished(
+    inputs: &ReducerInputs,
     repos: &mut RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
@@ -666,15 +679,16 @@ pub(super) fn repo_command_finished(
             | RepoCommandKind::InteractiveCherryPick { .. }
             | RepoCommandKind::Revert { .. }
     ) {
-        refresh_selected_head_gitlink(repos, state, repo_id);
+        refresh_selected_head_gitlink(inputs, state, repo_id);
     }
 
     let maintenance_ended = matches!(command, RepoCommandKind::RunMaintenance);
-    let mut effects = actions_emit_effects::repo_command_finished(state, repo_id, command, result);
+    let mut effects =
+        actions_emit_effects::repo_command_finished(inputs, state, repo_id, command, result);
     if maintenance_ended {
         for (deferred_repo, change) in maintenance::finished(state, repo_id) {
             effects.extend(external_and_history::repo_externally_changed(
-                repos,
+                inputs,
                 state,
                 deferred_repo,
                 change,
@@ -683,7 +697,7 @@ pub(super) fn repo_command_finished(
     }
 
     effects.extend(actions_emit_effects::start_queued_large_file_commands(
-        repos, state, repo_id,
+        inputs, repos, state, repo_id,
     ));
 
     if let Some(path) = removed_worktree_path {
@@ -694,7 +708,7 @@ pub(super) fn repo_command_finished(
             .map(|repo| repo.id)
             .collect::<Vec<_>>();
         for repo_id in repo_ids_to_close {
-            let _ = repo_management::close_repo(repos, state, repo_id);
+            let _ = repo_management::close_repo(inputs, repos, state, repo_id);
         }
     }
 

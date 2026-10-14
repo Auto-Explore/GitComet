@@ -17,7 +17,7 @@ use crate::model::{
 };
 use crate::msg::{Effect, RepoActionKind, RepoExternalChange, RepoPathList};
 use crate::msg::{PersistenceEffect, ReferenceEffect, StatusEffect};
-use crate::store::repository_runtime::RepositoryRuntimes;
+use crate::store::reducer::prepared::ReducerInputs;
 use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogPage, LogScope};
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{InteractiveRebaseEntry, SequencerState};
@@ -68,7 +68,7 @@ fn reserve_initial_paginated_log_append_slack<T>(commits: &mut Vec<T>) {
 }
 
 pub(super) fn reload_repo(
-    repos: &RepositoryRuntimes,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
 ) -> Vec<Effect> {
@@ -125,7 +125,7 @@ pub(super) fn reload_repo(
     // Reload deliberately retains the working-tree diff target. Rebuild the
     // target's classification immediately, before later activation or status
     // results can use the freshly cleared cache.
-    super::refresh_selected_head_gitlink(repos, state, repo_id);
+    super::refresh_selected_head_gitlink(inputs, state, repo_id);
     let repo_state = &mut state.repos[repo_ix];
     effects.extend(refresh_full_effects(repo_state, git_log_settings));
     if let Some(effect) = super::effects::request_worktrees_effect(repo_state) {
@@ -172,8 +172,23 @@ fn file_browser_refresh_for_external_change(
     super::effects::request_file_browser_load(repo_state)
 }
 
+pub(super) fn external_change_reloads_diff(
+    target: &DiffTarget,
+    change: &RepoExternalChange,
+) -> bool {
+    match target {
+        DiffTarget::WorkingTree { area, .. } => {
+            change.git_state || change.index || (*area == DiffArea::Unstaged && change.worktree)
+        }
+        DiffTarget::Commit { .. } => false,
+        DiffTarget::CommitRange { to_commit_id, .. } => {
+            to_commit_id.is_none() && (change.git_state || change.index || change.worktree)
+        }
+    }
+}
+
 pub(super) fn repo_externally_changed(
-    repos: &RepositoryRuntimes,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     change: RepoExternalChange,
@@ -197,7 +212,7 @@ pub(super) fn repo_externally_changed(
         if let Some(repo_state) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
             repo_state.head_gitlink_paths.clear();
         }
-        super::refresh_selected_head_gitlink(repos, state, repo_id);
+        super::refresh_selected_head_gitlink(inputs, state, repo_id);
     }
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
@@ -285,18 +300,7 @@ pub(super) fn repo_externally_changed(
         .diff_state
         .diff_target
         .as_ref()
-        .is_some_and(|target| match target {
-            DiffTarget::WorkingTree { area, .. } => {
-                change.git_state || change.index || (*area == DiffArea::Unstaged && change.worktree)
-            }
-            DiffTarget::Commit { .. } => false,
-            // A commit↔commit range is immutable; a commit↔working-tree range
-            // (to == None) tracks the worktree, so reload it on any change that
-            // moves the index or worktree.
-            DiffTarget::CommitRange { to_commit_id, .. } => {
-                to_commit_id.is_none() && (change.git_state || change.index || change.worktree)
-            }
-        });
+        .is_some_and(|target| external_change_reloads_diff(target, &change));
 
     if should_reload_diff
         && let Some(target) = repo_state.diff_state.diff_target.clone()
@@ -330,7 +334,7 @@ pub(super) fn repo_externally_changed(
                 }
             }
         } else {
-            effects.extend(diff_reload_effects(repo_state, repo_id, target));
+            effects.extend(diff_reload_effects(inputs, repo_state, repo_id, target));
         }
     }
 
@@ -485,6 +489,7 @@ pub(super) fn load_more_history(
 }
 
 pub(super) fn rebase_state_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     result: std::result::Result<SequencerState, Error>,
@@ -498,7 +503,7 @@ pub(super) fn rebase_state_loaded(
             ),
             Err(e) => {
                 let error = e.to_string();
-                push_diagnostic(repo_state, DiagnosticKind::Error, error.clone());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, error.clone());
                 (Loadable::Error(error.clone()), Loadable::Error(error))
             }
         };
@@ -512,6 +517,7 @@ pub(super) fn rebase_state_loaded(
 }
 
 pub(super) fn interactive_rebase_setup_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     base: String,
@@ -529,7 +535,7 @@ pub(super) fn interactive_rebase_setup_loaded(
             let entries = match result {
                 Ok(v) => Loadable::Ready(v),
                 Err(e) => {
-                    push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                    push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                     Loadable::Error(e.to_string())
                 }
             };
@@ -613,6 +619,7 @@ pub(super) fn interactive_cherry_pick_messages_loaded(
 }
 
 pub(super) fn merge_commit_message_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     result: std::result::Result<Option<String>, Error>,
@@ -622,7 +629,7 @@ pub(super) fn merge_commit_message_loaded(
         let value = match result {
             Ok(v) => Loadable::Ready(v),
             Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                 Loadable::Error(e.to_string())
             }
         };
@@ -677,6 +684,7 @@ pub(super) fn log_chunk_loaded(
 }
 
 pub(super) fn log_loaded(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     seq: crate::model::LogLoadSeq,
@@ -750,7 +758,7 @@ pub(super) fn log_loaded(
                 repo_state.history_state.log_snapshot = snapshot;
             }
             Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
                 if !matches!(repo_state.log, Loadable::Ready(_)) {
                     repo_state.set_log(Loadable::Error(e.to_string()));
                 }
@@ -882,7 +890,7 @@ enum RepoActionCompletion {
 }
 
 fn finish_repo_action(
-    repos: &RepositoryRuntimes,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     action: RepoActionKind,
@@ -914,7 +922,7 @@ fn finish_repo_action(
             RepoActionCompletion::ExpectedNoop => {}
             RepoActionCompletion::Failed(e) => {
                 repo_state.feedback.last_error = Some(e.to_string());
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
             }
         }
     }
@@ -925,7 +933,7 @@ fn finish_repo_action(
     // may retain the staged deletion, while partial failures may still move
     // HEAD.
     if rebuild_selected_head_gitlink {
-        super::refresh_selected_head_gitlink(repos, state, repo_id);
+        super::refresh_selected_head_gitlink(inputs, state, repo_id);
     }
     let is_active = state.active_repo == Some(repo_id);
 
@@ -988,7 +996,7 @@ fn finish_repo_action(
                     }
                 }
             } else {
-                effects.extend(diff_reload_effects(repo_state, repo_id, target));
+                effects.extend(diff_reload_effects(inputs, repo_state, repo_id, target));
             }
         }
     }
@@ -997,7 +1005,7 @@ fn finish_repo_action(
 }
 
 pub(super) fn repo_action_finished(
-    repos: &RepositoryRuntimes,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     action: RepoActionKind,
@@ -1007,11 +1015,11 @@ pub(super) fn repo_action_finished(
         Ok(()) => RepoActionCompletion::Succeeded,
         Err(error) => RepoActionCompletion::Failed(error),
     };
-    finish_repo_action(repos, state, repo_id, action, completion)
+    finish_repo_action(inputs, state, repo_id, action, completion)
 }
 
 pub(super) fn branch_already_exists(
-    repos: &RepositoryRuntimes,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     action: RepoActionKind,
     prompt: BranchExistsPromptState,
@@ -1023,7 +1031,7 @@ pub(super) fn branch_already_exists(
     let repo_id = prompt.repo_id;
     state.branch_exists_prompt = Some(prompt);
     finish_repo_action(
-        repos,
+        inputs,
         state,
         repo_id,
         action,
@@ -1031,7 +1039,7 @@ pub(super) fn branch_already_exists(
     )
 }
 
-fn repo_action_clears_head_dependent_state(action: RepoActionKind) -> bool {
+pub(super) fn repo_action_clears_head_dependent_state(action: RepoActionKind) -> bool {
     matches!(
         action,
         RepoActionKind::CheckoutBranch
@@ -1044,7 +1052,7 @@ fn repo_action_clears_head_dependent_state(action: RepoActionKind) -> bool {
 }
 
 pub(super) fn repo_paths_action_finished(
-    repos: &RepositoryRuntimes,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     action: RepoActionKind,
@@ -1067,11 +1075,11 @@ pub(super) fn repo_paths_action_finished(
             );
         }
     }
-    repo_action_finished(repos, state, repo_id, action, result)
+    repo_action_finished(inputs, state, repo_id, action, result)
 }
 
 pub(super) fn repo_action_finished_in_worktree(
-    repos: &RepositoryRuntimes,
+    inputs: &ReducerInputs,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     repo_id: RepoId,
@@ -1082,11 +1090,11 @@ pub(super) fn repo_action_finished_in_worktree(
     // Open first so the origin tab is inactive when its action finishes and
     // only refreshes its primary state instead of reloading everything.
     let mut effects = if result.is_ok() {
-        repo_management::open_repo(repos, id_alloc, state, worktree_path)
+        repo_management::open_repo(inputs, id_alloc, state, worktree_path)
     } else {
         Vec::new()
     };
-    effects.extend(repo_action_finished(repos, state, repo_id, action, result));
+    effects.extend(repo_action_finished(inputs, state, repo_id, action, result));
     effects
 }
 

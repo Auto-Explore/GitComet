@@ -11,6 +11,7 @@ use crate::model::{
 };
 use crate::msg::{Effect, RepoCommandKind, RepoPathList};
 use crate::msg::{ReferenceEffect, RepoCommandEffect};
+use crate::store::reducer::prepared::ReducerInputs;
 use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::{ConflictRegionResolution, ConflictResolverStrategy};
@@ -382,15 +383,17 @@ fn bump_in_flight(
 }
 
 pub(super) fn run_large_file_command(
+    inputs: &ReducerInputs,
     repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     command: gitcomet_core::large_files::LargeFileCommand,
 ) -> Vec<Effect> {
-    run_large_file_command_with_auth(repos, state, repo_id, command, None)
+    run_large_file_command_with_auth(inputs, repos, state, repo_id, command, None)
 }
 
 fn run_large_file_command_with_auth(
+    inputs: &ReducerInputs,
     repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
@@ -408,6 +411,7 @@ fn run_large_file_command_with_auth(
             .push_back(crate::model::PendingLargeFileCommand { command, auth });
         repo.bump_ops_rev();
         super::util::push_notification(
+            inputs,
             state,
             crate::model::AppNotificationKind::Info,
             format!("{label} queued until the running pull or push finishes."),
@@ -431,6 +435,7 @@ fn run_large_file_command_with_auth(
 }
 
 pub(super) fn start_queued_large_file_commands(
+    inputs: &ReducerInputs,
     repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
@@ -449,6 +454,7 @@ pub(super) fn start_queued_large_file_commands(
             .pop_front()
             .expect("queued command");
         effects.extend(run_large_file_command_with_auth(
+            inputs,
             repos,
             state,
             repo_id,
@@ -713,6 +719,7 @@ pub(super) fn reset(repo_id: RepoId, target: String, mode: ResetMode) -> Vec<Eff
 }
 
 pub(super) fn squash_commits(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     oldest: gitcomet_core::domain::CommitId,
@@ -732,6 +739,7 @@ pub(super) fn squash_commits(
         .is_some_and(|p| p.oldest == oldest && p.head == expected_head);
     if !still_valid || message.trim().is_empty() {
         super::util::push_notification(
+            inputs,
             state,
             crate::model::AppNotificationKind::Warning,
             "Squash cancelled: the selected commits are no longer squashable.".to_string(),
@@ -1044,6 +1052,7 @@ pub(super) fn invalidate_loaded_blame(repo_state: &mut RepoState) {
 
 /// Completion handling for `Msg::CommitFinished` / `Msg::CommitAmendFinished`.
 pub(super) fn commit_finished(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     result: std::result::Result<(), Error>,
@@ -1074,6 +1083,7 @@ pub(super) fn commit_finished(
             repo_state.bump_diff_state_rev();
             invalidate_loaded_blame(repo_state);
             push_action_log(
+                inputs,
                 repo_state,
                 true,
                 label.to_string(),
@@ -1084,7 +1094,14 @@ pub(super) fn commit_finished(
         Err(e) => {
             let summary = format_failure_summary(label, &e);
             repo_state.feedback.last_error = Some(summary.clone());
-            push_action_log(repo_state, false, label.to_string(), summary, Some(&e));
+            push_action_log(
+                inputs,
+                repo_state,
+                false,
+                label.to_string(),
+                summary,
+                Some(&e),
+            );
         }
     }
     if succeeded {
@@ -1100,6 +1117,7 @@ pub(super) fn commit_finished(
 }
 
 pub(super) fn safe_push_after_commit_finished(
+    inputs: &ReducerInputs,
     repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
@@ -1128,6 +1146,7 @@ pub(super) fn safe_push_after_commit_finished(
             repo_state.pending.force_push_lease = lease;
             repo_state.feedback.last_error = Some(full_summary.clone());
             push_action_log(
+                inputs,
                 repo_state,
                 false,
                 "Push after commit".to_string(),
@@ -1145,6 +1164,7 @@ pub(super) fn safe_push_after_commit_finished(
             let summary = format_failure_summary("Push after commit", &e);
             repo_state.feedback.last_error = Some(summary.clone());
             push_action_log(
+                inputs,
                 repo_state,
                 false,
                 "Push after commit".to_string(),
@@ -1332,6 +1352,22 @@ fn command_clears_pending_force_push_lease(command: &RepoCommandKind) -> bool {
     )
 }
 
+pub(super) fn command_clears_diff_selection(command: &RepoCommandKind) -> bool {
+    matches!(
+        command,
+        RepoCommandKind::Reset { .. }
+            | RepoCommandKind::SquashCommits { .. }
+            | RepoCommandKind::Rebase { .. }
+            | RepoCommandKind::RebaseContinue
+            | RepoCommandKind::RebaseAbort
+            | RepoCommandKind::InteractiveRebase { .. }
+            | RepoCommandKind::InteractiveCherryPick { .. }
+            | RepoCommandKind::CherryPick { .. }
+            | RepoCommandKind::Revert { .. }
+            | RepoCommandKind::MergeAbort
+    )
+}
+
 fn changed_submodule_path(command: &RepoCommandKind) -> Option<&std::path::Path> {
     match command {
         RepoCommandKind::LoadSubmodule { path, .. }
@@ -1340,28 +1376,42 @@ fn changed_submodule_path(command: &RepoCommandKind) -> Option<&std::path::Path>
     }
 }
 
+pub(super) fn command_changes_selected_submodule(
+    target: &DiffTarget,
+    command: &RepoCommandKind,
+) -> bool {
+    let DiffTarget::WorkingTree { path, .. } = target else {
+        return false;
+    };
+    if let Some(changed_path) = changed_submodule_path(command) {
+        if path.as_path() != changed_path {
+            return false;
+        }
+    } else if !matches!(command, RepoCommandKind::UpdateSubmodules { .. }) {
+        return false;
+    }
+
+    true
+}
+
 fn selected_submodule_target_changed_by_command(
+    inputs: &ReducerInputs,
     repo_state: &RepoState,
     command: &RepoCommandKind,
 ) -> Option<DiffTarget> {
     let target = repo_state.diff_state.diff_target.as_ref()?;
-    let DiffTarget::WorkingTree { path, .. } = target else {
-        return None;
-    };
-    if let Some(changed_path) = changed_submodule_path(command) {
-        if path.as_path() != changed_path {
-            return None;
-        }
-    } else if !matches!(command, RepoCommandKind::UpdateSubmodules { .. }) {
+    if !command_changes_selected_submodule(target, command) {
         return None;
     }
 
     let summary_is_active = !matches!(repo_state.diff_state.submodule_summary, Loadable::NotLoaded);
-    (summary_is_active || selected_diff_load_plan(repo_state, target).load_submodule_summary)
+    (summary_is_active
+        || selected_diff_load_plan(inputs, repo_state, target).load_submodule_summary)
         .then(|| target.clone())
 }
 
 pub(super) fn repo_command_finished(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     command: RepoCommandKind,
@@ -1485,19 +1535,7 @@ pub(super) fn repo_command_finished(
                 repo_state.pending.force_push_lease = None;
             }
             repo_state.set_recent_commit_messages(Loadable::NotLoaded);
-            if matches!(
-                &command,
-                RepoCommandKind::Reset { .. }
-                    | RepoCommandKind::SquashCommits { .. }
-                    | RepoCommandKind::Rebase { .. }
-                    | RepoCommandKind::RebaseContinue
-                    | RepoCommandKind::RebaseAbort
-                    | RepoCommandKind::InteractiveRebase { .. }
-                    | RepoCommandKind::InteractiveCherryPick { .. }
-                    | RepoCommandKind::CherryPick { .. }
-                    | RepoCommandKind::Revert { .. }
-                    | RepoCommandKind::MergeAbort
-            ) {
+            if command_clears_diff_selection(&command) {
                 repo_state.set_diff_target(None);
                 repo_state.diff_state.diff = Loadable::NotLoaded;
                 repo_state.diff_state.diff_file = Loadable::NotLoaded;
@@ -1520,10 +1558,11 @@ pub(super) fn repo_command_finished(
                 repo_state.history_state.squash_preview_pending = None;
                 repo_state.set_squash_preview(Loadable::NotLoaded);
             }
-            push_command_log(repo_state, true, &command, &output, None);
+            push_command_log(inputs, repo_state, true, &command, &output, None);
         }
         Err(e) => {
             push_command_log(
+                inputs,
                 repo_state,
                 false,
                 &command,
@@ -1549,13 +1588,14 @@ pub(super) fn repo_command_finished(
         }
     }
     if command_succeeded
-        && let Some(target) = selected_submodule_target_changed_by_command(repo_state, &command)
+        && let Some(target) =
+            selected_submodule_target_changed_by_command(inputs, repo_state, &command)
     {
-        let load_plan = selected_diff_load_plan(repo_state, &target);
+        let load_plan = selected_diff_load_plan(inputs, repo_state, &target);
         apply_selected_diff_load_plan_state(repo_state, load_plan);
         repo_state.diff_state.inline_submodule_diff = None;
         repo_state.bump_diff_state_rev();
-        extra_effects.extend(diff_reload_effects(repo_state, repo_id, target));
+        extra_effects.extend(diff_reload_effects(inputs, repo_state, repo_id, target));
     }
     if command_succeeded
         && command_may_change_large_file_support(&command)
@@ -1598,14 +1638,14 @@ pub(super) fn repo_command_finished(
         RepoCommandKind::LargeFile { command } if command.changes_object_store()
     ) {
         if let Some(target) = repo_state.diff_state.diff_target.clone() {
-            let load_plan = selected_diff_load_plan(repo_state, &target);
+            let load_plan = selected_diff_load_plan(inputs, repo_state, &target);
             apply_selected_diff_load_plan_state_with_reload_mode(
                 repo_state,
                 load_plan,
                 DiffReloadMode::KeepLoaded,
             );
             repo_state.bump_diff_state_rev();
-            extra_effects.extend(diff_reload_effects(repo_state, repo_id, target));
+            extra_effects.extend(diff_reload_effects(inputs, repo_state, repo_id, target));
         }
         if let Some(commit_id) = repo_state.history_state.selected_commit.clone() {
             extra_effects.push(Effect::LoadCommitDetails { repo_id, commit_id });
@@ -1671,7 +1711,7 @@ pub(super) fn repo_command_finished(
                 }
             }
         } else {
-            let load_plan = selected_diff_load_plan(repo_state, &target);
+            let load_plan = selected_diff_load_plan(inputs, repo_state, &target);
             // The diff target did not change — only its contents did — so the
             // reload keeps showing what is already there. Blanking it would make
             // the pane flash "Loading" on every staged hunk or line.
@@ -1681,7 +1721,7 @@ pub(super) fn repo_command_finished(
                 DiffReloadMode::KeepLoaded,
             );
             repo_state.bump_diff_state_rev();
-            extra_effects.extend(diff_reload_effects(repo_state, repo_id, target));
+            extra_effects.extend(diff_reload_effects(inputs, repo_state, repo_id, target));
         }
     }
     let mut effects = refresh_full_effects(repo_state, state.git_log_settings);

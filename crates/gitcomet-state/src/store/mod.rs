@@ -31,9 +31,12 @@ use executor::{
 };
 #[cfg(feature = "benchmarks")]
 use reducer::fill_select_diff_inline;
+use reducer::prepared::PreparedReduction;
+#[cfg(any(test, feature = "benchmarks"))]
+use reducer::reduce;
 use reducer::{
     fill_reorder_repo_tabs_inline, fill_set_active_repo_inline, fill_stage_path_inline,
-    fill_stage_paths_inline, fill_unstage_path_inline, fill_unstage_paths_inline, reduce,
+    fill_stage_paths_inline, fill_unstage_path_inline, fill_unstage_paths_inline, reduce_prepared,
     reset_conflict_resolutions_inline, set_conflict_region_choice_inline,
 };
 use repo_monitor::RepoMonitorManager;
@@ -860,13 +863,16 @@ impl AppStore {
                         }
                         let unchanged = switching
                             && worker_ctx.repo_monitors.unchanged_since_inactive(repo_id);
+                        let (_, inputs) = PreparedReduction::for_worker(
+                            Msg::SetActiveRepo { repo_id }, worker_ctx.thread_state, &repos,
+                        ).into_parts();
                         worker_ctx.reduce_and_handle(
                             &mut repos,
                             &id_alloc,
-                            |app_state, repos, _| {
+                            |app_state, _, _| {
                                 let mut effects = reducer::SetActiveRepoEffects::new();
                                 fill_set_active_repo_inline(
-                                    repos,
+                                    &inputs,
                                     app_state,
                                     repo_id,
                                     unchanged,
@@ -955,30 +961,29 @@ impl AppStore {
                         // upstream (REPO_ACTIVATION_THROTTLE), so this does not run on every alt-tab.
                         worker_ctx.repo_monitors.revalidate(repo_id);
                         let change = RepoExternalChange::all();
+                        let (message, inputs) = PreparedReduction::for_worker(
+                            Msg::RepoExternallyChanged { repo_id, change }, worker_ctx.thread_state, &repos,
+                        ).into_parts();
                         worker_ctx.reduce_and_handle(
                             &mut repos,
                             &id_alloc,
                             |app_state, repos, id| {
-                                let mut effects = reduce(
-                                    repos,
-                                    id,
-                                    app_state,
-                                    Msg::RepoExternallyChanged { repo_id, change },
-                                );
+                                let mut effects = reduce_prepared(&inputs, repos, id, app_state, message);
                                 // A day-long session gets its daily check on
                                 // focus; the reducer throttles it hourly.
                                 effects.extend(reducer::maintenance::request_check(
-                                    app_state, repo_id,
+                                    &inputs, app_state, repo_id,
                                 ));
                                 effects
                             },
                         );
                     }
                     msg => {
+                        let (msg, inputs) = PreparedReduction::for_worker(msg, worker_ctx.thread_state, &repos).into_parts();
                         worker_ctx.reduce_and_handle(
                             &mut repos,
                             &id_alloc,
-                            |app_state, repos, id| reduce(repos, id, app_state, msg),
+                            |app_state, repos, id| reduce_prepared(&inputs, repos, id, app_state, msg),
                         );
                     }
                 }
@@ -1191,7 +1196,9 @@ pub(crate) fn with_set_active_repo_inline_for_bench<T>(
 ) -> T {
     let repos = RepositoryRuntimes::default();
     let mut effects = reducer::SetActiveRepoEffects::new();
-    fill_set_active_repo_inline(&repos, state, repo_id, false, &mut effects);
+    let (_, inputs) =
+        PreparedReduction::new(Msg::SetActiveRepo { repo_id }, state, &repos).into_parts();
+    fill_set_active_repo_inline(&inputs, state, repo_id, false, &mut effects);
     f(state, &effects)
 }
 
@@ -1216,7 +1223,12 @@ pub(crate) fn with_select_diff_inline_for_bench<T>(
 ) -> T {
     let repos = RepositoryRuntimes::default();
     let mut effects = reducer::SelectDiffEffects::new();
-    fill_select_diff_inline(&repos, state, repo_id, target, false, &mut effects);
+    let (message, inputs) =
+        PreparedReduction::new(Msg::SelectDiff { repo_id, target }, state, &repos).into_parts();
+    let Msg::SelectDiff { target, .. } = message else {
+        unreachable!("prepared selection retains its message")
+    };
+    fill_select_diff_inline(&inputs, state, repo_id, target, false, &mut effects);
     f(state, &effects)
 }
 

@@ -39,7 +39,12 @@ fn diagnostics_are_capped() {
     );
 
     for i in 0..205 {
-        super::reducer::push_diagnostic(&mut repo_state, DiagnosticKind::Error, format!("err-{i}"));
+        super::reducer::push_diagnostic(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut repo_state,
+            DiagnosticKind::Error,
+            format!("err-{i}"),
+        );
     }
 
     assert_eq!(repo_state.feedback.diagnostics.len(), 200);
@@ -61,6 +66,7 @@ fn session_persist_error_reports_notification_and_repo_diagnostic() {
     ));
 
     super::reducer::handle_session_persist_result(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         Some(RepoId(1)),
         "opening a repository",
@@ -96,6 +102,7 @@ fn session_persist_error_without_repo_still_reports_notification() {
     let mut state = AppState::test_default();
 
     super::reducer::handle_session_persist_result(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         Some(RepoId(999)),
         "closing a repository",
