@@ -345,7 +345,7 @@ pub(super) fn wait_for_child_with_timeout(
                     cancelled = true;
                     match terminate_process_tree_and_wait(child) {
                         Ok(status) => break status,
-                        Err(e) => return Err(io_err(e)),
+                        Err(e) => return Err(Error::from(e)),
                     }
                 }
                 let idle = liveness.idle();
@@ -353,7 +353,7 @@ pub(super) fn wait_for_child_with_timeout(
                     timed_out = true;
                     match terminate_process_tree_and_wait(child) {
                         Ok(status) => break status,
-                        Err(e) => return Err(io_err(e)),
+                        Err(e) => return Err(Error::from(e)),
                     }
                 }
                 if let Some(poll) =
@@ -362,7 +362,7 @@ pub(super) fn wait_for_child_with_timeout(
                     thread::sleep(poll);
                 }
             }
-            Err(e) => return Err(io_err(e)),
+            Err(e) => return Err(Error::from(e)),
         }
     };
     Ok(ChildWaitOutcome {
@@ -392,14 +392,14 @@ pub(super) fn wait_for_output_workers(
 ) -> Result<OutputDrainOutcome> {
     while !workers_finished() {
         if command_cancellation_requested(cancellation, operation_cancellation) {
-            terminate_process_tree_and_wait(child).map_err(io_err)?;
+            terminate_process_tree_and_wait(child).map_err(Error::from)?;
             return Ok(OutputDrainOutcome {
                 cancelled: true,
                 timed_out: false,
             });
         }
         if liveness.idle() >= timeout {
-            terminate_process_tree_and_wait(child).map_err(io_err)?;
+            terminate_process_tree_and_wait(child).map_err(Error::from)?;
             return Ok(OutputDrainOutcome {
                 cancelled: false,
                 timed_out: true,
@@ -642,7 +642,8 @@ fn run_command_with_timeout_auth_stdin(
     let lfs_progress = LfsProgressMonitor::start(&mut cmd, operation.as_ref(), &liveness);
     let askpass_context = if command_may_require_auth(&cmd) {
         let auth = if allow_auth { command_git_auth() } else { None };
-        let script = create_askpass_script().map_err(io_err)?;
+        let script = create_askpass_script()
+            .map_err(|error| Error::from(error).with_context("create Git askpass helper", None))?;
         configure_git_auth_prompt(&mut cmd, auth.as_ref(), &script);
         Some((script, auth))
     } else {
@@ -654,7 +655,9 @@ fn run_command_with_timeout_auth_stdin(
     let strip_progress = cmd.get_args().any(|arg| arg == "--progress");
 
     timing.stage("prepare");
-    let mut child = cmd.spawn().map_err(io_err)?;
+    let mut child = cmd.spawn().map_err(|error| {
+        Error::from(error).with_context(label, Some(Path::new(cmd.get_program())))
+    })?;
     timing.stage("spawn");
 
     let (activity_sender, activity_handle) = start_activity_output_aggregator(operation.as_ref());
@@ -782,7 +785,9 @@ pub(crate) fn run_git_with_stdin_capture(
         .stderr(Stdio::piped());
 
     timing.stage("prepare");
-    let mut child = cmd.spawn().map_err(io_err)?;
+    let mut child = cmd.spawn().map_err(|error| {
+        Error::from(error).with_context(label, Some(Path::new(cmd.get_program())))
+    })?;
     timing.stage("spawn");
 
     let stdin = child.stdin.take();
@@ -953,7 +958,8 @@ where
     let trace2 = Trace2Monitor::start(&mut cmd, operation.as_ref(), &liveness);
     let askpass_context = if command_may_require_auth(&cmd) {
         let auth = command_git_auth();
-        let script = create_askpass_script().map_err(io_err)?;
+        let script = create_askpass_script()
+            .map_err(|error| Error::from(error).with_context("create Git askpass helper", None))?;
         configure_git_auth_prompt(&mut cmd, auth.as_ref(), &script);
         Some((script, auth))
     } else {
@@ -962,7 +968,9 @@ where
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     timing.stage("prepare");
-    let mut child = cmd.spawn().map_err(io_err)?;
+    let mut child = cmd.spawn().map_err(|error| {
+        Error::from(error).with_context(label, Some(Path::new(cmd.get_program())))
+    })?;
     timing.stage("spawn");
     let stdout = child.stdout.take().ok_or_else(|| {
         Error::new(ErrorKind::Backend(format!(

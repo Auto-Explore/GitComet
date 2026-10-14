@@ -1439,14 +1439,20 @@ fn checkout_git_dir_reference(checkout_path: &Path) -> Result<Option<PathBuf>> {
     let metadata = match fs::metadata(&dot_git) {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(Error::new(ErrorKind::Io(err.kind()))),
+        Err(err) => {
+            return Err(
+                Error::from(err).with_context("inspect submodule Git directory", Some(&dot_git))
+            );
+        }
     };
 
     if metadata.is_dir() {
         return Ok(Some(canonicalize_or_original(dot_git)));
     }
 
-    let bytes = fs::read(&dot_git).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+    let bytes = fs::read(&dot_git).map_err(|error| {
+        Error::from(error).with_context("read submodule Git directory", Some(&dot_git))
+    })?;
     let text = bytes_to_text_preserving_utf8(&bytes);
     let Some(git_dir) = text.strip_prefix("gitdir:") else {
         return Ok(None);
@@ -1494,9 +1500,7 @@ fn remove_local_submodule_config_section_if_present(
         .arg("--local")
         .arg("--remove-section")
         .arg(&section);
-    let output = cmd
-        .output()
-        .map_err(|err| Error::new(ErrorKind::Io(err.kind())))?;
+    let output = cmd.output().map_err(Error::from)?;
     if output.status.success() {
         return Ok(());
     }
@@ -1642,7 +1646,8 @@ fn open_gitlink_repo(
         Err(e) if e.is_not_found() => Ok(None),
         Err(e) => Err(crate::open::map_open_error(
             e,
-            &format!("gix open nested submodule repo {}", path.display()),
+            "gix open nested submodule repo",
+            &path,
         )),
     }
 }
@@ -1851,9 +1856,7 @@ fn git_config_get_bool_global(trust_root: &Path, key: &str) -> Result<Option<boo
         .arg("--get")
         .arg(key);
 
-    let output = cmd
-        .output()
-        .map_err(|err| Error::new(ErrorKind::Io(err.kind())))?;
+    let output = cmd.output().map_err(Error::from)?;
 
     if output.status.success() {
         let value = bytes_to_text_preserving_utf8(&output.stdout);

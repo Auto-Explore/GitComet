@@ -345,9 +345,9 @@ impl GixRepo {
         target: &[u8],
     ) -> Result<FileDiffTextSource> {
         let mut tmp_file =
-            tempfile::NamedTempFile::new_in(std::env::temp_dir()).map_err(io_err_to_error)?;
-        tmp_file.write_all(target).map_err(io_err_to_error)?;
-        tmp_file.flush().map_err(io_err_to_error)?;
+            tempfile::NamedTempFile::new_in(std::env::temp_dir()).map_err(Error::from)?;
+        tmp_file.write_all(target).map_err(Error::from)?;
+        tmp_file.flush().map_err(Error::from)?;
         let mut content_hasher = FxHasher::default();
         target.hash(&mut content_hasher);
         let identity = worktree_source_identity(&self.spec.workdir, path, content_hasher.finish());
@@ -443,7 +443,7 @@ impl GixRepo {
             converted = worktree_encoding_to_git(repo, &index, path, &full, &attributes)?;
             gix::filter::plumbing::pipeline::convert::ToGitOutcome::Buffer(&converted)
         } else {
-            let file = std::fs::File::open(&full).map_err(io_err_to_error)?;
+            let file = std::fs::File::open(&full).map_err(Error::from)?;
             pipeline.convert_to_git(file, path, &index).map_err(|e| {
                 Error::new(ErrorKind::Backend(format!(
                     "gix worktree-to-git conversion: {e}"
@@ -452,7 +452,7 @@ impl GixRepo {
         };
 
         let mut tmp_file =
-            tempfile::NamedTempFile::new_in(std::env::temp_dir()).map_err(io_err_to_error)?;
+            tempfile::NamedTempFile::new_in(std::env::temp_dir()).map_err(Error::from)?;
         let mut content_hasher = FxHasher::default();
         match normalized {
             gix::filter::plumbing::pipeline::convert::ToGitOutcome::Unchanged(mut file) => {
@@ -465,12 +465,12 @@ impl GixRepo {
                 bytes.hash(&mut content_hasher);
                 for chunk in bytes.chunks(64 * 1024) {
                     cancellation.check_cancelled()?;
-                    tmp_file.write_all(chunk).map_err(io_err_to_error)?;
+                    tmp_file.write_all(chunk).map_err(Error::from)?;
                 }
             }
         }
         cancellation.check_cancelled()?;
-        tmp_file.flush().map_err(io_err_to_error)?;
+        tmp_file.flush().map_err(Error::from)?;
 
         let identity = worktree_source_identity(&self.spec.workdir, path, content_hasher.finish());
         let cache_path = worktree_git_cache_path(path, &identity);
@@ -1395,7 +1395,7 @@ fn worktree_encoding_to_git(
 ) -> Result<Vec<u8>> {
     use gix::filter::plumbing::eol;
 
-    let raw = std::fs::read(full).map_err(io_err_to_error)?;
+    let raw = std::fs::read(full).map_err(Error::from)?;
     // No override: resolving the attribute lets a UTF-16 label yield to the
     // file's BOM, as iconv does.
     let decoded = gitcomet_core::text_format::decode_bytes(
@@ -1505,19 +1505,19 @@ fn copy_git_stdout_to_temp_file(
     cancellation: &CancellationToken,
 ) -> Result<tempfile::NamedTempFile> {
     let mut tmp_file =
-        tempfile::NamedTempFile::new_in(std::env::temp_dir()).map_err(io_err_to_error)?;
+        tempfile::NamedTempFile::new_in(std::env::temp_dir()).map_err(Error::from)?;
     let mut tmp_file = run_git_parsed_stdout_cancellable(
         command,
         label,
         false,
         cancellation,
         move |mut stdout| {
-            std::io::copy(&mut stdout, &mut tmp_file).map_err(io_err_to_error)?;
+            std::io::copy(&mut stdout, &mut tmp_file).map_err(Error::from)?;
             Ok(tmp_file)
         },
     )?;
     cancellation.check_cancelled()?;
-    tmp_file.flush().map_err(io_err_to_error)?;
+    tmp_file.flush().map_err(Error::from)?;
     Ok(tmp_file)
 }
 
@@ -1552,7 +1552,7 @@ fn read_worktree_image_file_bytes_cancellable(
         // A git-annex locked file: its link text is the git form, which the
         // large-file side resolves to the content. Other links are not images.
         Ok(metadata) if metadata.file_type().is_symlink() => {
-            let target = std::fs::read_link(&full).map_err(io_err_to_error)?;
+            let target = std::fs::read_link(&full).map_err(Error::from)?;
             let target = gix::path::into_bstr(target)
                 .map_err(|_| {
                     Error::new(ErrorKind::Unsupported("symlink target is not valid UTF-8"))
@@ -1566,14 +1566,14 @@ fn read_worktree_image_file_bytes_cancellable(
         }
         Ok(_) => return Ok(None),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(Error::new(ErrorKind::Io(e.kind()))),
+        Err(e) => return Err(Error::from(e)),
     };
     ensure_image_diff_side_size(path, metadata.len())?;
 
     let mut file = match std::fs::File::open(&full) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(io_err_to_error(e)),
+        Err(e) => return Err(Error::from(e)),
     };
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     let mut chunk = [0u8; 64 * 1024];
@@ -1863,7 +1863,7 @@ fn read_chunk_cancellable(
         cancellation.check_cancelled()?;
         match reader.read(buffer) {
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            result => return result.map_err(io_err_to_error),
+            result => return result.map_err(Error::from),
         }
     }
 }
@@ -1883,7 +1883,7 @@ fn copy_and_hash(
             return Ok(());
         }
         buffer[..read].hash(hasher);
-        writer.write_all(&buffer[..read]).map_err(io_err_to_error)?;
+        writer.write_all(&buffer[..read]).map_err(Error::from)?;
     }
 }
 
@@ -2050,7 +2050,7 @@ pub(super) fn persist_worktree_git_cache_file(
     cache_path: &Path,
 ) -> Result<bool> {
     if let Some(parent) = cache_path.parent() {
-        std::fs::create_dir_all(parent).map_err(io_err_to_error)?;
+        std::fs::create_dir_all(parent).map_err(Error::from)?;
     }
     match tmp_file.persist_noclobber(cache_path) {
         Ok(_) => Ok(true),
@@ -2070,13 +2070,13 @@ pub(super) fn persist_worktree_git_cache_file(
 
             // A corrupt file or the exceptionally unlikely hash collision must
             // not make the cache return bytes that do not match its identity.
-            std::fs::remove_file(cache_path).map_err(io_err_to_error)?;
+            std::fs::remove_file(cache_path).map_err(Error::from)?;
             tmp_file
                 .persist_noclobber(cache_path)
                 .map(|_| true)
-                .map_err(|err| io_err_to_error(err.error))
+                .map_err(|err| Error::from(err.error))
         }
-        Err(err) => Err(io_err_to_error(err.error)),
+        Err(err) => Err(Error::from(err.error)),
     }
 }
 
@@ -2084,17 +2084,13 @@ fn worktree_git_cache_files_match(
     tmp_file: &tempfile::NamedTempFile,
     cache_path: &Path,
 ) -> Result<bool> {
-    let expected_len = tmp_file
-        .as_file()
-        .metadata()
-        .map_err(io_err_to_error)?
-        .len();
-    let cached_file = std::fs::File::open(cache_path).map_err(io_err_to_error)?;
-    if cached_file.metadata().map_err(io_err_to_error)?.len() != expected_len {
+    let expected_len = tmp_file.as_file().metadata().map_err(Error::from)?.len();
+    let cached_file = std::fs::File::open(cache_path).map_err(Error::from)?;
+    if cached_file.metadata().map_err(Error::from)?.len() != expected_len {
         return Ok(false);
     }
 
-    let mut expected = BufReader::new(tmp_file.reopen().map_err(io_err_to_error)?);
+    let mut expected = BufReader::new(tmp_file.reopen().map_err(Error::from)?);
     let mut cached = BufReader::new(cached_file);
     let mut expected_chunk = [0u8; 64 * 1024];
     let mut cached_chunk = [0u8; 64 * 1024];
@@ -2103,10 +2099,10 @@ fn worktree_git_cache_files_match(
         let chunk_len = remaining.min(expected_chunk.len() as u64) as usize;
         expected
             .read_exact(&mut expected_chunk[..chunk_len])
-            .map_err(io_err_to_error)?;
+            .map_err(Error::from)?;
         cached
             .read_exact(&mut cached_chunk[..chunk_len])
-            .map_err(io_err_to_error)?;
+            .map_err(Error::from)?;
         if expected_chunk[..chunk_len] != cached_chunk[..chunk_len] {
             return Ok(false);
         }
@@ -2163,10 +2159,6 @@ fn preview_blob_cache_path(
         .map(|ext| format!(".{ext}"))
         .unwrap_or_default();
     std::env::temp_dir().join(format!("gitcomet-diff-preview-{hash:016x}{suffix}"))
-}
-
-pub(super) fn io_err_to_error(error: std::io::Error) -> Error {
-    Error::new(ErrorKind::Io(error.kind()))
 }
 
 pub(super) fn gix_first_parent_optional(

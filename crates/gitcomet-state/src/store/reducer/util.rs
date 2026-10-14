@@ -1824,7 +1824,6 @@ fn summarize_command(
 pub(super) fn format_error_for_user(error: &Error) -> String {
     match error.kind() {
         ErrorKind::Git(failure) => failure.to_string(),
-        ErrorKind::Backend(message) => message.clone(),
         _ => error.to_string(),
     }
 }
@@ -3077,6 +3076,21 @@ mod tests {
             None,
         );
         assert_eq!(set_remote_url_summary, "Remote origin (push): URL updated");
+    }
+
+    #[test]
+    fn error_format_helpers_preserve_backend_operation_and_path() {
+        let error = Error::new(ErrorKind::Backend("reference target unavailable".into()))
+            .with_context("resolve HEAD", Some(std::path::Path::new("repository")));
+
+        assert_eq!(
+            format_error_for_user(&error),
+            "resolve HEAD (repository): reference target unavailable"
+        );
+        assert_eq!(
+            format_failure_summary("Refresh", &error),
+            "Refresh failed:\n\nresolve HEAD (repository): reference target unavailable"
+        );
     }
 
     #[test]

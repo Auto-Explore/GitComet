@@ -279,12 +279,12 @@ fn run_custom_mergetool_command(
         let script_dir = tempfile::Builder::new()
             .prefix("gitcomet-mergetool-shell-")
             .tempdir()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            .map_err(Error::from)?;
         let script_path = script_dir.path().join("run-mergetool.cmd");
         let mut script = String::from("@echo off\r\n");
         script.push_str(custom_cmd);
         script.push_str("\r\n");
-        std::fs::write(&script_path, script).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        std::fs::write(&script_path, script).map_err(Error::from)?;
 
         let mut command = no_window_command("cmd");
         command.arg("/C").arg(&script_path);
@@ -294,9 +294,7 @@ fn run_custom_mergetool_command(
             .env("REMOTE", remote_path)
             .env("MERGED", merged_path)
             .current_dir(workdir);
-        command
-            .output()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))
+        command.output().map_err(Error::from)
     }
     #[cfg(not(windows))]
     {
@@ -307,9 +305,7 @@ fn run_custom_mergetool_command(
             .env("REMOTE", remote_path)
             .env("MERGED", merged_path)
             .current_dir(workdir);
-        command
-            .output()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))
+        command.output().map_err(Error::from)
     }
 }
 
@@ -646,7 +642,7 @@ fn build_stage_paths(
         let tmp_dir = tempfile::Builder::new()
             .prefix("gitcomet-mergetool-")
             .tempdir()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            .map_err(Error::from)?;
         let (tmp_dir_path, temp_dir_guard) = if keep_temporaries {
             (tmp_dir.keep(), None)
         } else {
@@ -797,9 +793,9 @@ fn stage_path_to_fs_path(workdir: &Path, stage_path: &Path) -> Result<PathBuf> {
 fn write_stage_bytes(workdir: &Path, stage_path: &Path, bytes: &[u8]) -> Result<()> {
     let path = stage_path_to_fs_path(workdir, stage_path)?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        std::fs::create_dir_all(parent).map_err(Error::from)?;
     }
-    std::fs::write(path, bytes).map_err(|e| Error::new(ErrorKind::Io(e.kind())))
+    std::fs::write(path, bytes).map_err(Error::from)
 }
 
 /// Read a git config value. Returns `Ok(None)` if the key is not set.
@@ -909,7 +905,7 @@ fn read_merged_file_state(path: &Path) -> Result<MergedFileState> {
     match std::fs::read(path) {
         Ok(bytes) => Ok(MergedFileState::Present(bytes)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(MergedFileState::Missing),
-        Err(e) => Err(Error::new(ErrorKind::Io(e.kind()))),
+        Err(e) => Err(Error::from(e)),
     }
 }
 

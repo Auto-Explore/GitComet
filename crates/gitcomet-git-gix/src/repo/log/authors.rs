@@ -51,7 +51,7 @@ impl GixRepo {
         for info in &mut walk.walk {
             cancellation.check_cancelled()?;
             let info = info.map_err(|error| {
-                crate::repo::object_store::gix_error("gix history authors", &*error)
+                crate::repo::object_store::gix_error("gix history authors", error)
             })?;
             if !mode_includes(mode, info.parent_ids.len()) {
                 continue;
@@ -60,7 +60,7 @@ impl GixRepo {
                 .objects
                 .find_commit(info.id.as_ref(), &mut buffer)
                 .map_err(|error| {
-                    crate::repo::object_store::gix_error("gix history author", &error)
+                    crate::repo::object_store::gix_error("gix history author", error)
                 })?;
             let name = commit
                 .author()

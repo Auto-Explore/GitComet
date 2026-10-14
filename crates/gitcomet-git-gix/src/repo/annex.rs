@@ -550,7 +550,7 @@ impl super::GixRepo {
             // Ignore malformed records, including non-UTF-8 output from a
             // remote helper, while continuing to drain the transfer's pipe.
             for line in std::io::BufReader::new(stdout).split(b'\n') {
-                let line = line.map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+                let line = line.map_err(Error::from)?;
                 // Preserve item failures even if a filename or diagnostic
                 // inside its JSON string is not valid UTF-8.
                 let line = String::from_utf8_lossy(&line);
@@ -948,7 +948,7 @@ impl super::GixRepo {
             .spawn(move || {
                 let _ = child.wait();
             })
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            .map_err(Error::from)?;
         Ok(CommandOutput {
             command: "git annex webapp".to_string(),
             stdout: "Started the git-annex webapp; it opens in your browser.".to_string(),

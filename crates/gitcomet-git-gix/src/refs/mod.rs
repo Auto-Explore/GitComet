@@ -385,7 +385,7 @@ impl<'r> RefsView<'r> {
             // Classified so a pack I/O failure triggers the history store retry.
             let id = head
                 .try_peel_to_id()
-                .map_err(|e| crate::repo::object_store::gix_error("gix head peel", &e))?
+                .map_err(|e| crate::repo::object_store::gix_error("gix head peel", e))?
                 .map(|id| id.detach());
             return match (name, id) {
                 (Some(name), id) => Ok(HeadState::Symbolic { name, id }),

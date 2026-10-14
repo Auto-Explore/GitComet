@@ -723,13 +723,13 @@ impl GixRepo {
         let mut ref_count = 0usize;
         let iter = refs
             .all()
-            .map_err(|e| crate::repo::object_store::gix_error("gix references(all)", &e))?;
+            .map_err(|e| crate::repo::object_store::gix_error("gix references(all)", e))?;
         for reference in iter {
             if let Some(cancellation) = cancellation {
                 cancellation.check_cancelled()?;
             }
             let mut reference =
-                reference.map_err(|e| crate::repo::object_store::gix_error("gix ref iter", &e))?;
+                reference.map_err(|e| crate::repo::object_store::gix_error("gix ref iter", e))?;
             if matches!(
                 reference.name().category(),
                 Some(gix::reference::Category::Tag)
@@ -770,13 +770,13 @@ impl GixRepo {
 
         let iter = refs
             .all()
-            .map_err(|e| crate::repo::object_store::gix_error("gix references(all)", &e))?;
+            .map_err(|e| crate::repo::object_store::gix_error("gix references(all)", e))?;
         for reference in iter {
             if let Some(cancellation) = cancellation {
                 cancellation.check_cancelled()?;
             }
             let reference =
-                reference.map_err(|e| crate::repo::object_store::gix_error("gix ref iter", &e))?;
+                reference.map_err(|e| crate::repo::object_store::gix_error("gix ref iter", e))?;
             if matches!(
                 reference.name().category(),
                 Some(gix::reference::Category::Tag)

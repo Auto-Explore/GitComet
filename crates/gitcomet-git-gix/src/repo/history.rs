@@ -1219,7 +1219,9 @@ impl GixRepo {
                 }
                 fs::rename(&staging, &path)
             })
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))
+            .map_err(|error| {
+                Error::from(error).with_context("persist cherry-pick mainline", Some(&path))
+            })
     }
 
     fn persisted_cherry_pick_mainline_parent(&self, source: &str) -> Option<String> {
@@ -1816,7 +1818,11 @@ impl GixRepo {
         let contents = match std::fs::read_to_string(&merge_msg_path) {
             Ok(v) => v,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(Error::new(ErrorKind::Io(e.kind()))),
+            Err(e) => {
+                return Err(
+                    Error::from(e).with_context("read commit message", Some(&merge_msg_path))
+                );
+            }
         };
 
         let mut lines: Vec<&str> = Vec::new();

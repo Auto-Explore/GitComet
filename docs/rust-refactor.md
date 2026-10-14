@@ -88,11 +88,20 @@ The starting revision is `3b31ffb8`. Planning-stage formatting, source layout an
 dependency-boundary checks passed. The immutable baseline passed 3,290 core, state
 and backend tests, with 28 existing skipped tests. Both new lifecycle regressions
 failed against the original behavior before their fixes. The UI baseline passed
-4,708 tests with 22 existing ignored tests, and the UI kit passed 502 tests. The
-baseline release app and backend probe are built; matched performance comparisons
-follow the implementation. The work is on the existing `refactor` branch.
+4,708 tests with 22 existing ignored tests, the UI kit passed 502 tests, and all
+422 app tests passed. The CI/profiling Python suites passed with their existing
+platform skips. The baseline release app and backend probe are built, and the
+native history-selection driver passed. Matched performance comparisons follow
+the implementation. The work is on the existing `refactor` branch.
 
 ## Migration notes
+
+`Error::kind()` retains its existing classifications. Use `Error::from(io_error)`
+to keep an I/O cause, then `with_context(operation, path)` to identify the failed
+operation. `source()` exposes the original typed cause and `context()` keeps the
+native path. Clones share the error payload; adding context to one clone leaves
+other snapshots unchanged. Render diagnostics through `Error` rather than a raw
+`ErrorKind::Backend` string.
 
 The deprecated `gitcomet_ui_gpui::run` and `run_with_startup_crash_report*`
 entry points are replaced by `UiLaunch::new(backend)`. Configure the builder with

@@ -70,10 +70,6 @@ pub(crate) struct TestGitCommandEnvironment {
 pub(super) static TEST_GIT_COMMAND_ENVIRONMENT: OnceLock<TestGitCommandEnvironment> =
     OnceLock::new();
 
-pub(super) fn io_err(e: std::io::Error) -> Error {
-    Error::new(ErrorKind::Io(e.kind()))
-}
-
 mod args;
 mod log_parse;
 mod process;

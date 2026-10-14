@@ -756,7 +756,7 @@ impl GixRepo {
     /// Prefer [`Self::repo`]: an open re-parses every config file.
     pub(super) fn reopen_repo(&self) -> Result<gix::Repository> {
         crate::open::open_worktree_repo(&self.spec.workdir)
-            .map_err(|e| crate::open::map_open_error(e, "gix open fresh repo"))
+            .map_err(|e| crate::open::map_open_error(e, "gix open fresh repo", &self.spec.workdir))
     }
 
     /// The object store for indexed range reads, re-opened every

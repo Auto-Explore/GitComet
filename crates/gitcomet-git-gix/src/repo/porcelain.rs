@@ -577,8 +577,9 @@ impl GixRepo {
                 path.display()
             ))));
         }
-        let holder = crate::open::open_worktree_repo(&path)
-            .map_err(|e| crate::open::map_open_error(e, "gix open worktree holding branch"))?;
+        let holder = crate::open::open_worktree_repo(&path).map_err(|e| {
+            crate::open::map_open_error(e, "gix open worktree holding branch", &path)
+        })?;
         let same_repo = canonicalize_or_original(holder.common_dir().to_path_buf())
             == canonicalize_or_original(repo.common_dir().to_path_buf());
         if !same_repo {
@@ -871,8 +872,9 @@ impl GixRepo {
                 continue;
             }
 
-            let ours_bytes =
-                fs::read(&ours_path).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            let ours_bytes = fs::read(&ours_path).map_err(|error| {
+                Error::from(error).with_context("read untracked stash conflict", Some(&ours_path))
+            })?;
             let theirs_bytes = stashed_contents.remove(&path).ok_or_else(|| {
                 stash_apply_error(
                     GitFailureId::UntrackedRestoreConflict,
@@ -903,7 +905,9 @@ impl GixRepo {
             })?;
 
             let merged_text = build_untracked_conflict_markers(ours_text, theirs_text);
-            fs::write(&ours_path, merged_text).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            fs::write(&ours_path, merged_text).map_err(|error| {
+                Error::from(error).with_context("write untracked stash conflict", Some(&ours_path))
+            })?;
         }
 
         Ok(())
